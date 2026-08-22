@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "5.48.0"
+version = "5.49.0"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 requires-python = ">=3.14.0"
@@ -83,6 +83,17 @@ packages = ["src/my_claude_code", "src/free_claude_code"]
 
 [tool.hatch.build.targets.wheel.force-include]
 ".env.example" = "my_claude_code/config/env.example"
+# User-facing documentation, rendered by the dashboard's Docs page. Bundled
+# rather than fetched so the page works offline and shows the docs for the
+# version that is actually installed. Kept in sync by DOCUMENTS in
+# src/my_claude_code/api/docs_content.py; tests/api/test_docs_bundle_wheel.py
+# builds a real wheel and fails if any of them is missing from it.
+"README.md" = "my_claude_code/docs_bundle/README.md"
+"ARCHITECTURE.md" = "my_claude_code/docs_bundle/ARCHITECTURE.md"
+"CONTRIBUTING.md" = "my_claude_code/docs_bundle/CONTRIBUTING.md"
+"docs/USAGE.md" = "my_claude_code/docs_bundle/USAGE.md"
+"docs/CLAUDE-CODE-CONFIG.md" = "my_claude_code/docs_bundle/CLAUDE-CODE-CONFIG.md"
+"docs/ANTHROPIC-SUBSCRIPTION.md" = "my_claude_code/docs_bundle/ANTHROPIC-SUBSCRIPTION.md"
 
 [tool.uv]
 required-version = ">=0.11.0"

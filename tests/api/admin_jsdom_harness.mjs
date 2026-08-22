@@ -200,6 +200,41 @@ const ROUTES = {
     diverted_routes: [],
     coverage: {},
   },
+  /* The Docs page. The html here is what the *server* produced -- the point
+     of the assertions below is that the page places it and wires the two
+     link lists beside it, never that it parsed anything. */
+  "/admin/api/docs": {
+    documents: [
+      {
+        slug: "readme",
+        title: "README",
+        summary: "What MCC is.",
+        github_url: "https://github.com/FiredMosquito831/my-claude-code/blob/main/README.md",
+      },
+      {
+        slug: "usage",
+        title: "Usage",
+        summary: "Running the server.",
+        github_url: "https://github.com/FiredMosquito831/my-claude-code/blob/main/docs/USAGE.md",
+      },
+    ],
+  },
+  "/admin/api/docs/readme": {
+    slug: "readme",
+    title: "README",
+    summary: "What MCC is.",
+    github_url: "https://github.com/FiredMosquito831/my-claude-code/blob/main/README.md",
+    html:
+      '<h2 id="install">Install</h2><p>Text.</p>' +
+      '<h3 id="windows">Windows</h3>' +
+      '<table class="guide-table"><tbody><tr><td>1</td></tr></tbody></table>' +
+      '<a href="#doc-usage">see usage</a>' +
+      '<pre><code>long line</code></pre>',
+    headings: [
+      { anchor: "install", text: "Install", level: 2 },
+      { anchor: "windows", text: "Windows", level: 3 },
+    ],
+  },
   "/admin/api/requests": { rows: [], total: 0 },
   "/admin/api/requests/lifetime": { enabled: true, by_model: [], by_provider: [] },
   "/admin/api/requests/pulse": { enabled: true, total: 0, latest: null },
@@ -340,6 +375,39 @@ for (const link of navLinks) {
   };
 }
 
+const docsView = doc.querySelector('.admin-view[data-view="docs"]');
+const docs = docsView
+  ? {
+      present: true,
+      docLinks: Array.from(docsView.querySelectorAll("#docsList a")).map((a) =>
+        a.textContent.trim(),
+      ),
+      currentDoc: (docsView.querySelector("#docsList a[aria-current]") || {})
+        .textContent,
+      headingLinks: Array.from(docsView.querySelectorAll("#docsHeadings a")).map(
+        (a) => `${a.className}:${a.textContent.trim()}`,
+      ),
+      title: (doc.getElementById("docsTitle") || {}).textContent || "",
+      githubHref: (doc.getElementById("docsGithub") || {}).getAttribute
+        ? doc.getElementById("docsGithub").getAttribute("href")
+        : null,
+      statusHidden: (doc.getElementById("docsStatus") || {}).hidden,
+      // Every table must sit in its own scroll box or a wide one pushes the
+      // whole page sideways.
+      tables: docsView.querySelectorAll("#docsContent table").length,
+      scrollBoxes: docsView.querySelectorAll("#docsContent .docs-scroll").length,
+      unwrappedTables: docsView.querySelectorAll(
+        "#docsContent > table, #docsContent > * > table:not(.docs-scroll > table)",
+      ).length,
+      anchorIds: Array.from(docsView.querySelectorAll("#docsContent [id]")).map(
+        (el) => el.id,
+      ),
+      crossLinks: docsView.querySelectorAll('#docsContent a[href^="#doc-"]').length,
+      contentLength: (docsView.querySelector("#docsContent") || { textContent: "" })
+        .textContent.length,
+    }
+  : { present: false };
+
 const optimizer = doc.querySelector('.admin-view[data-view="optimizer"]');
 // `> table >` matters: the per-rule <details> holds a nested table, and an
 // unscoped selector reports its rows as extra rule rows.
@@ -383,6 +451,7 @@ console.log(
       consoleErrors,
       navLabels: navLinks.map((link) => link.textContent),
       views,
+      docs,
       optimizer: {
         present: Boolean(optimizer),
         kpis: optimizer ? optimizer.querySelectorAll(".opt-kpi").length : 0,
