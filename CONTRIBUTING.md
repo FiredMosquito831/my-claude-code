@@ -15,8 +15,8 @@ Thanks for helping improve My Claude Code. Keep changes focused, test the behavi
 Install [uv](https://docs.astral.sh/uv/) and Python 3.14, then run directly from the checkout:
 
 ```bash
-git clone https://github.com/Alishahryar1/free-claude-code.git
-cd free-claude-code
+git clone https://github.com/FiredMosquito831/my-claude-code.git
+cd my-claude-code
 uv python install 3.14.0
 uv run mcc-server
 ```

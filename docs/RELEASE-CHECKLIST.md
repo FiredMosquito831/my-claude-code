@@ -25,17 +25,22 @@
 
 The product rebrand does **not** rename the GitHub repository. The repo stays
 `free-claude-code`; only the package, product name, and command family rebrand.
-Two remotes stay in play:
+Two remotes stay in play, and the roles below are the ones actually in use —
+this section previously described them the other way round:
 
-- `Alishahryar1/free-claude-code` â€” primary fork / development remote.
-- `FiredMosquito831/my-claude-code` â€” **release repo** (`RELEASE_REPO`); the
-  release workflow publishes wheels and the "update available" banner here.
+- `FiredMosquito831/my-claude-code` — **development and release repo.** All
+  branches, pull requests, merges and GitHub releases happen here, and
+  `RELEASE_REPO` points at it, so this is what the installer and the "update
+  available" banner read.
+- `Alishahryar1/free-claude-code` — **upstream, for provenance.** Never pushed
+  to and never PR'd against. Note that `gh` defaults to it, so every `gh`
+  command needs an explicit `--repo`.
 
 Cutover steps (run at release time, NOT now):
 
 1. Ensure both remotes are configured locally:
-   `git remote -v` should list `origin` (Alishahryar1) and `upstream`/`release`
-   (FiredMosquito831).
+   `git remote -v` should list the development remote (FiredMosquito831) and
+   upstream (Alishahryar1).
 2. Land the v5 rebrand on the integration branch, pass CI (ruff-format,
    ruff-check, ty, pytest), then merge to `main`.
 3. Push `main` to both remotes so they stay mirrored:

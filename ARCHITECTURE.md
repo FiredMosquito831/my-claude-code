@@ -352,7 +352,7 @@ card and the tray menu both read and write this state.
 
 [config/rtk.py](src/my_claude_code/config/rtk.py) owns the persisted RTK token-optimizer state
 (`~/.fcc/rtk.json`) and machine reconciliation. It pins a RTK release
-(v0.44.2) with per-platform SHA-256 digests, downloads and verifies the binary
+(v0.45.0) with per-platform SHA-256 digests, downloads and verifies the binary
 into `~/.local/bin`, and runs the per-agent `init` commands (`claude`, `codex`,
 `pi`) that patch each agent's own config — always with telemetry disabled.
 `rtk_status()` reports installed binary metadata plus the desired per-agent
@@ -800,6 +800,15 @@ body/cause extraction, credential redaction, safe traceback formatting, and
 copyable request-ID diagnostics. Anthropic and Responses packages independently
 map the canonical kind and status to their wire error types.
 
+`FailureKind.CONTEXT_LENGTH` is classified separately from
+`INVALID_REQUEST` even though both usually arrive as HTTP 400. The distinction
+is what the fallback chain does next: a malformed body will be malformed for
+every model, so it aborts the chain, while a context overflow is a property of
+the *model that was tried* and a larger-window fallback may well serve it. Until
+5.43.0 every 400 aborted the chain, which silently truncated failover for long
+conversations. `FALLBACK_SKIP_KINDS` lists the kinds that abort rather than
+fall through; adding `context_length` to it restores the pre-5.43.0 behaviour.
+
 [providers/failure_policy.py](src/my_claude_code/providers/failure_policy.py)
 owns generic raw OpenAI SDK and `httpx` exception classification,
 transient status/body inference, stable provider wording, and final diagnostic
@@ -896,23 +905,50 @@ Provider code should delegate protocol details to these modules. Avoid copying
 conversion code into individual providers, and avoid provider-to-provider imports
 for shared Anthropic behavior.
 
+[core/anthropic/tool_result_trimming.py](src/my_claude_code/core/anthropic/tool_result_trimming.py)
+elides the middle of oversized `Read` / `Grep` / `Glob` tool results on the way
+upstream. It owns protocol manipulation only: policy — which rules run, at what
+size, and how many recent results are protected — is resolved in `config` and
+passed in as a `ToolResultTrimPolicy`, so `core` still imports nothing from
+`config`. Every elision is announced inline with a marker naming the proxy as
+the actor, and a `tool_result` is left byte-for-byte alone whenever its
+`tool_use_id` does not resolve to exactly one trimmable tool. `Bash` is
+deliberately never touched. The feature ships **off**, and the measured reason
+it ships off is recorded in that module's docstring rather than restated here.
+
 ## Local Optimizations And Server Tools
 
 [api/optimization_handlers.py](src/my_claude_code/api/optimization_handlers.py) short-circuits
 common low-value client requests before they reach a provider:
 
-- quota probes;
-- command prefix detection;
 - title generation;
-- suggestion mode;
-- filepath extraction.
+- suggestion mode.
+
+`OPTIMIZATION_RULES` is the single source of truth for that list, and
+`tests/contracts/test_removed_optimization_rules.py` holds it there. Three
+further rules — quota probes (`quota_mock`), command prefix detection
+(`prefix_detection`) and filepath extraction (`filepath_extraction_mock`) —
+were removed outright in 5.44.0 along with their settings, handlers and
+detectors: they matched zero requests across 153,198 logged production
+requests, because Claude Code no longer sends those shapes. A leftover
+`FAST_PREFIX_DETECTION`, `ENABLE_NETWORK_PROBE_MOCK` or
+`ENABLE_FILEPATH_EXTRACTION_MOCK` in a user's `.env` is ignored at startup and
+dropped on the next admin Save.
 
 Detection derives a read-only semantic view: inline `system` messages contribute
 system context but are not counted as conversational turns. The original
-request remains ordered and unchanged for provider execution.
+request remains ordered and unchanged for provider execution. The suggestion-mode
+rule matches only the final user turn, so an earlier turn that happens to carry
+the shape cannot short-circuit a live conversation.
 
 The Messages handler runs these only after model routing and after local server-tool
 handling. Each optimization is controlled by settings flags.
+
+A request answered by a rule **records no provider**, because none served it.
+The request log carries `optimization` (the rule that answered) and
+`optimization_tokens_saved` (prompt tokens no provider ever received) for
+exactly these rows, and the reported usage on them is counted rather than
+asserted — earlier releases wrote a hardcoded `100`/`5`.
 
 Claude Code auto-mode safety-classifier requests are a message-only routing
 policy, not a short-circuit response. After routing, the Messages handler detects the

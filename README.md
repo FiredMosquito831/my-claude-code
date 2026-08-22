@@ -62,7 +62,8 @@ Run your coding agents with free, paid, or local models. Choose and validate pro
 | **Messaging** | Optionally run Claude Code sessions through Discord or Telegram with voice-note transcription. |
 | **Version & updates** | The dashboard shows the running version, announces new releases, and installs them for you with checksum verification. |
 | **Desktop & server deployment** | Run `mcc-server` headless, or launch the `mcc-desktop` tray in one of three server modes — `spawn`, `attach`, or `off` — with per-platform start-at-login (HKCU Run key on Windows, LaunchAgent on macOS, `systemd --user` or `.desktop` autostart for `mcc-server` on WSL/Linux). See [docs/USAGE.md](docs/USAGE.md#running-the-server-with-the-desktop-tray). |
-| **Token optimizer (RTK)** | `mcc-rtk` installs and manages a Rust Token Killer binary (v0.44.2) that filters noisy terminal output before it reaches the model, per agent (Claude Code, Codex, Pi). Managed from the CLI, the dashboard "Token optimizer" card, and the desktop tray. See [docs/USAGE.md](docs/USAGE.md#the-rtk-token-optimizer). |
+| **Token Optimizer page** | A dashboard page measuring what never reached a provider: tokens never sent, per-rule fire counts, on-demand discovery of recurring request families no rule covers, and prompt-cache effectiveness per provider. Includes the opt-in tool-result trimming controls, which ship off — see [Tool-result trimming](#tool-result-trimming) for the measurement that says leave them off. |
+| **Token optimizer (RTK)** | `mcc-rtk` installs and manages a Rust Token Killer binary (v0.45.0) that filters noisy terminal output before it reaches the model, per agent (Claude Code, Codex, Pi). Managed from the CLI, the dashboard "Token optimizer" card, and the desktop tray. See [docs/USAGE.md](docs/USAGE.md#the-rtk-token-optimizer). |
 | **Security** | Optional token authentication for the local proxy. |
 
 Everything is configured through the same `.env` file (see [.env.example](.env.example)) and the Admin UI.
@@ -511,6 +512,12 @@ Requests that name a provider and model directly (`open_router/…`) are never r
 
 Ejection can never empty a chain: if every model on a route is benched, they are tried in order anyway — skipping a bad model is an optimisation, refusing to try anything is an outage.
 
+**A context overflow is not a malformed request.** Both usually arrive as HTTP `400`, and until 5.43.0 MCC treated every `400` the same way — as a client error that would fail identically everywhere, so the whole chain was abandoned. That is right for a malformed body and wrong for a conversation that outgrew the model's window, which is exactly the case a larger-window fallback exists to cover. Context-length failures are now classified as their own kind and fall through to the next model.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `FALLBACK_SKIP_KINDS` | `invalid_request` | Comma-separated failure kinds that abort the chain instead of falling through. Set `FALLBACK_SKIP_KINDS=invalid_request,context_length` to restore the pre-5.43.0 behaviour of giving up on any `400`. |
+
 Every attempt is recorded. **Analytics** shows the model that actually answered rather than the one the route started from, and the request detail draws the whole chain — see [Route tracing](#route-tracing).
 
 ### Vision Adapter
@@ -829,6 +836,17 @@ Every request records the **whole routing decision**, not just the model that ha
 
 The chain is stored **even when the primary answers**, because "a chain existed and was not needed" and "there was no chain" are different facts about a route, and only the first one tells you your fallbacks are configured.
 
+#### Requests Answered Locally
+
+Some requests never reach a provider at all — a local rule answers them inside the proxy. Two further fields record that:
+
+| Field | What it records |
+| --- | --- |
+| `optimization` | which local rule answered the request, when one did |
+| `optimization_tokens_saved` | prompt tokens no provider ever received on that request |
+
+Such a row has **no provider**, because none served it. The request table shows it as **answered locally · <rule>** rather than the provider `(unknown)` it used to read as, and that label is a real filter value: you can select it and see only the locally-answered traffic. Reported usage on these rows is now *counted* — earlier releases wrote a hardcoded `100` input and `5` output tokens, which made the savings figure fiction.
+
 Open any request and the chain is drawn as a path, each hop marked *answered*, *failed*, or *not needed* — in words as well as colour. A request the vision adapter diverted says so in a sentence naming the model that could not read the image.
 
 The Analytics view adds a **Served by fallback** card, a **Failover** panel pairing each failing primary with what covered for it, and a **Vision adapter** panel doing the same for image diversions. Rows in the request table carry a `fallback N` or `vision` badge.
@@ -850,6 +868,52 @@ Credentials are identified by a masked `first4…last4` label and their pool ind
   <img src="assets/admin-requests.png" alt="Request table showing the key that served each request" width="820">
   <p><em>The request table showing rotation in action: consecutive requests cycle across the three keys. Request and response bodies are not shown in the table — they live behind <strong>View</strong>.</em></p>
 </div>
+
+<a id="token-optimizer"></a>
+
+### Token Optimizer
+
+A dedicated dashboard page — **Admin UI → Token Optimizer** — reports what MCC kept off the wire, what is keeping it off, and what could keep more off. Every number on it is measured from your own request log. **Nothing on the page is enabled for you.**
+
+| Panel | What it shows |
+| --- | --- |
+| **Ledger** | "Tokens never sent" — prompt tokens no provider ever received. Not a bill estimate: what a provider *would* have charged for the reply is unknowable and is deliberately not guessed at. |
+| **Local rules** | Per-rule fire counts for the rules that answer a request inside the proxy. |
+| **Candidates** | Recurring request families that no rule covers, ranked by tokens actually spent. |
+| **Cache effectiveness** | Prompt-cache hit rates per provider — the largest lever on the page, and not one the optimizer controls. An em dash means the provider never reported the field, which is a different fact from reporting zero. |
+
+**Candidates are scanned on demand only.** Pressing **Scan the log** runs a fresh, bounded scan of the request log (`GET /admin/api/requests/discover-optimizations`). It is never scheduled and never runs on page load, it proposes nothing and changes nothing about how any request is answered, and asked for more rows than its ceiling it returns `422` rather than silently sampling a subset and reporting the result as if it were complete.
+
+The page also reports RTK's measured savings, read from `rtk gain --all --format json` and served at `GET /admin/api/rtk/gain`, and tells you when the RTK binary on your machine has drifted from the version MCC pins.
+
+<a id="tool-result-trimming"></a>
+
+#### Tool-Result Trimming — Off By Default, And Probably Should Stay Off
+
+Claude Code resends the whole conversation every turn, tool results included, so one large file read is paid for again on every later turn. MCC can shorten oversized `Read`, `Grep` and `Glob` results before they reach the model. The controls live on the Token Optimizer page (they were on **Limits** before 5.48.0).
+
+**This is not a recommended optimization, and it is not presented as one.** A controlled 24-turn experiment against a prefix-caching model found that at the shipped `TOOL_RESULT_TRIM_PROTECT_RECENT_RESULTS=2` trimming costs **10.9% more fresh input tokens than leaving it off entirely**. Rewriting bytes in the middle of an already-established prompt invalidates the prefix cache, and the cache is worth more than the bytes removed. Switching it on mid-conversation costs one near-total cache miss — a 3.8% hit rate on that turn. Break-even is a baseline cache hit rate of about **90.9%**: below that trimming wins, above it trimming loses, and a healthy provider is usually above it.
+
+The full measured table, including why the cheaper `protect_recent_results=0` was *not* made the default, is in the docstring of [`core/anthropic/tool_result_trimming.py`](src/my_claude_code/core/anthropic/tool_result_trimming.py) and in `.env.example`. Read it there before enabling anything.
+
+What it does **not** do:
+
+- It does not run unless you turn it on. The master switch `ENABLE_TOOL_RESULT_TRIMMING` defaults to `false` **and** all three per-tool rules default to `off`; both have to change.
+- It never touches `Bash` results — client-side compressors already own those, and two layers compressing the same bytes makes neither one's savings attributable.
+- It never trims silently. Every elision carries an inline marker naming MCC as the actor, stating how much was removed, and telling the model not to describe content it did not see.
+- It leaves anything ambiguous byte-for-byte alone — an unmatched or duplicated `tool_use_id`, an error result, or any content shape it does not fully understand.
+
+Each rule has three states rather than two, and the middle one is the point:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `ENABLE_TOOL_RESULT_TRIMMING` | `false` | Master switch. With this off, no rule runs whatever its own state. |
+| `TOOL_RESULT_TRIM_READ` / `_GREP` / `_GLOB` | `off` | Per-tool state: `off`, `observe`, or `on`. **`observe` measures what the rule *would* have removed against your real traffic while the bytes on the wire stay exactly as the client sent them** — the safe way to find out whether trimming would pay for you. |
+| `TOOL_RESULT_TRIM_THRESHOLD_CHARS` | `20000` | A result smaller than this is never touched. |
+| `TOOL_RESULT_TRIM_KEEP_HEAD_CHARS` / `_KEEP_TAIL_CHARS` | `4000` / `4000` | How much of the start and end survive the elision. |
+| `TOOL_RESULT_TRIM_PROTECT_RECENT_RESULTS` | `2` | How many of the most recent results are exempt. This is the setting the measurement above is about. |
+
+Measure with `observe`, check your cache hit rate on the Token Optimizer page against the 90.9% break-even, and only then decide.
 
 <a id="version--updates"></a>
 
@@ -1180,7 +1244,7 @@ Windows PowerShell:
 
 ## Configuration Reference
 
-Every setting documented above — model providers, rotation policies, web search providers and advanced options, request/websearch logging, messaging, and voice — lives in [.env.example](.env.example) with inline comments and cost notes. Deep-dive research documents for the web search system are under [research/](research/); the internal architecture is covered in [ARCHITECTURE.md](ARCHITECTURE.md).
+Every setting documented above — model providers, rotation policies, web search providers and advanced options, request/websearch logging, local optimizations and tool-result trimming, messaging, and voice — lives in [.env.example](.env.example) with inline comments and cost notes. Deep-dive research documents for the web search system are under [research/](research/); the internal architecture is covered in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Development
 
