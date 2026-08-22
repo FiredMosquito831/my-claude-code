@@ -13,6 +13,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from my_claude_code.api.docs_content import available_documents
+from my_claude_code.api.docs_render import render_document
 from my_claude_code.api.optimization_handlers import OPTIMIZATION_RULE_SPECS
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.release_updates import (
@@ -269,6 +271,54 @@ async def admin_image(filename: str, request: Request):
     if filename not in _bundled_image_names():
         raise HTTPException(status_code=404, detail="Admin image not found")
     return _asset_response(f"img/{filename}")
+
+
+@router.get("/admin/api/docs", include_in_schema=False)
+async def admin_docs_index(request: Request):
+    """List the curated documents that are actually bundled.
+
+    The dashboard renders its nav from this, so a document missing from the
+    wheel shows up as an absent entry rather than as a link that 404s.
+    """
+
+    require_loopback_admin(request)
+    return {
+        "documents": [
+            {
+                "slug": document.slug,
+                "title": document.title,
+                "summary": document.summary,
+                "github_url": document.github_url,
+            }
+            for document in available_documents()
+        ]
+    }
+
+
+@router.get("/admin/api/docs/{slug}", include_in_schema=False)
+async def admin_document(slug: str, request: Request):
+    """Serve one rendered document.
+
+    ``slug`` is looked up in the curated table and never joined onto a
+    directory path, so a crafted value cannot escape the bundle -- the same
+    shape as the guide screenshots above. An unknown slug is a plain 404.
+    """
+
+    require_loopback_admin(request)
+    rendered = render_document(slug)
+    if rendered is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {
+        "slug": rendered.slug,
+        "title": rendered.title,
+        "summary": rendered.summary,
+        "html": rendered.html,
+        "github_url": rendered.github_url,
+        "headings": [
+            {"anchor": h.anchor, "text": h.text, "level": h.level}
+            for h in rendered.headings
+        ],
+    }
 
 
 @router.get("/admin/api/config")

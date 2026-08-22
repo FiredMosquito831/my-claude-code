@@ -197,6 +197,16 @@ const VIEW_GROUPS = [
     sections: [],
     containerId: null,
   },
+  {
+    // The project's documentation, rendered by the server from files bundled
+    // in the wheel. Like the other static views it owns no settings section,
+    // so containerId stays null and renderSections() skips it.
+    id: "docs",
+    label: "Docs",
+    title: "Documentation",
+    sections: [],
+    containerId: null,
+  },
 ];
 
 const byId = (id) => document.getElementById(id);
@@ -408,6 +418,168 @@ function setActiveView(viewId, { scroll = false } = {}) {
   if (activeView.id === "optimizer") {
     loadOptimizerView().catch((error) => showMessage(error.message, "error"));
   }
+
+  if (activeView.id === "docs") {
+    loadDocsView().catch((error) => showMessage(error.message, "error"));
+  }
+}
+
+/* ------------------------------------------------------------------- docs
+   The Docs page shows the documentation shipped inside this install. The
+   markdown is parsed on the server (see api/docs_render.py) with raw HTML
+   disabled; this file only ever places the result and wires the two lists
+   of links beside it. Nothing here parses markdown. */
+
+const docsState = { index: null, slug: null, loading: false };
+
+async function loadDocsView() {
+  if (docsState.index === null && !docsState.loading) {
+    docsState.loading = true;
+    try {
+      const data = await api("/admin/api/docs");
+      docsState.index = Array.isArray(data.documents) ? data.documents : [];
+    } finally {
+      docsState.loading = false;
+    }
+    renderDocsList();
+  }
+  if (docsState.index && docsState.index.length === 0) {
+    setDocsStatus(
+      "No documentation is bundled with this install. Use the GitHub link above.",
+    );
+    return;
+  }
+  if (docsState.slug === null && docsState.index && docsState.index.length) {
+    await selectDocument(docsState.index[0].slug);
+  }
+}
+
+function setDocsStatus(text) {
+  const status = byId("docsStatus");
+  if (!status) return;
+  status.textContent = text || "";
+  status.hidden = !text;
+}
+
+function renderDocsList() {
+  const list = byId("docsList");
+  if (!list) return;
+  list.innerHTML = "";
+  (docsState.index || []).forEach((document_) => {
+    const link = document.createElement("a");
+    link.href = `#doc-${document_.slug}`;
+    link.textContent = document_.title;
+    link.title = document_.summary || "";
+    link.dataset.docSlug = document_.slug;
+    if (document_.slug === docsState.slug) {
+      link.setAttribute("aria-current", "true");
+    }
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      selectDocument(document_.slug).catch((error) =>
+        showMessage(error.message, "error"),
+      );
+    });
+    list.appendChild(link);
+  });
+}
+
+function renderDocsHeadings(headings) {
+  const container = byId("docsHeadings");
+  const label = byId("docsHeadingsLabel");
+  if (!container) return;
+  container.innerHTML = "";
+  const entries = Array.isArray(headings) ? headings : [];
+  if (label) label.hidden = entries.length === 0;
+  entries.forEach((heading) => {
+    const link = document.createElement("a");
+    link.href = `#${heading.anchor}`;
+    link.textContent = heading.text;
+    // Level 3 sits under level 2. One step of indent is the whole hierarchy
+    // this needs; anything deeper is not in the table of contents at all.
+    link.className = heading.level >= 3 ? "docs-heading-sub" : "docs-heading-top";
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      scrollToDocsAnchor(heading.anchor);
+    });
+    container.appendChild(link);
+  });
+}
+
+function scrollToDocsAnchor(anchor) {
+  const content = byId("docsContent");
+  if (!content || !anchor) return;
+  const target = content.querySelector(`[id="${anchor}"]`);
+  if (!target) return;
+  const reduced =
+    window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  target.scrollIntoView({
+    behavior: reduced ? "auto" : "smooth",
+    block: "start",
+  });
+}
+
+async function selectDocument(slug) {
+  const content = byId("docsContent");
+  if (!content) return;
+  setDocsStatus("Loading…");
+  let data;
+  try {
+    data = await api(`/admin/api/docs/${encodeURIComponent(slug)}`);
+  } catch (error) {
+    content.innerHTML = "";
+    renderDocsHeadings([]);
+    setDocsStatus(`That document could not be loaded: ${error.message}`);
+    return;
+  }
+  docsState.slug = data.slug;
+  setDocsStatus("");
+  const title = byId("docsTitle");
+  if (title) title.textContent = data.title || "Documentation";
+  const summary = byId("docsSummary");
+  if (summary) summary.textContent = data.summary || "";
+  const github = byId("docsGithub");
+  if (github && data.github_url) github.href = data.github_url;
+  // Server-rendered, raw HTML disabled at the parser -- see the module
+  // docstring in api/docs_render.py for why that is not negotiable.
+  content.innerHTML = data.html || "";
+  wrapDocsTables(content);
+  bindDocsCrossLinks(content);
+  renderDocsList();
+  renderDocsHeadings(data.headings);
+  window.scrollTo({ top: 0, behavior: "auto" });
+}
+
+/* A wide table is the one thing in a document that can push the whole page
+   sideways. Each one gets its own scroll box so the body never does. */
+function wrapDocsTables(root) {
+  root.querySelectorAll("table").forEach((table) => {
+    if (table.parentElement && table.parentElement.classList.contains("docs-scroll")) {
+      return;
+    }
+    const box = document.createElement("div");
+    box.className = "docs-scroll";
+    table.replaceWith(box);
+    box.appendChild(table);
+  });
+}
+
+/* A cross-reference to another bundled document switches documents in place
+   rather than throwing the reader out to a browser tab. The server emits
+   these as `#doc-<slug>`; everything else it emits is a real external link
+   and is left alone. */
+function bindDocsCrossLinks(root) {
+  root.querySelectorAll('a[href^="#doc-"]').forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      const [, slug, anchor] = link.getAttribute("href").split("#");
+      selectDocument(slug.replace(/^doc-/, ""))
+        .then(() => {
+          if (anchor) scrollToDocsAnchor(anchor);
+        })
+        .catch((error) => showMessage(error.message, "error"));
+    });
+  });
 }
 
 // Providers now render inline as searchable, grouped cards inside

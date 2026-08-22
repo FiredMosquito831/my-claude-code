@@ -1082,7 +1082,8 @@
                 <a href="#guide-other">Codex &amp; Pi</a>
                 <a href="#guide-websearch">Search the web</a>
                 <a href="#guide-analytics">See what happened</a>
-                <a href="#guide-deploy">Desktop &amp; token optimizer</a>
+                <a href="#guide-deploy">Desktop &amp; RTK</a>
+                <a href="#guide-optimizer">Token Optimizer page</a>
                 <a href="#guide-limits">Set the limits</a>
                 <a href="#guide-rotation">Rotate keys safely</a>
                 <a href="#guide-updates">Update the server</a>
@@ -1235,6 +1236,21 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   not, because switching then would splice two different replies together
                   &mdash; so a chain rescues the failures that happen before the first
                   word, not the ones that happen at word five hundred.
+                </p>
+                <p class="guide-note">
+                  <strong>A context-length rejection no longer ends the chain.</strong>
+                  A model that answers &ldquo;this prompt is too long&rdquo; with an HTTP
+                  400 used to stop the route dead, because a 400 normally means <em>you
+                  sent something invalid</em> and retrying it elsewhere is pointless. A
+                  prompt that overflows one model&rsquo;s window is the exception: the very
+                  next model on the chain may hold twice as much. Those rejections are now
+                  classified as <code>context_length</code> and the chain continues, so a
+                  long session falls through to a roomier model instead of failing. The
+                  reason is spelled out when it happens &mdash; <em>Request exceeds this
+                  model&rsquo;s context window. Needed about N tokens; this model holds
+                  M.</em> To get the old fail-fast behaviour back, add
+                  <code>context_length</code> to <code>FALLBACK_SKIP_KINDS</code>, which
+                  defaults to <code>invalid_request</code>.
                 </p>
                 <p>
                   <strong>Images are routed separately.</strong> Plenty of fast text models
@@ -1433,6 +1449,14 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 </p>
                 <img class="guide-shot" src="/admin/img/admin-analytics.png"
                      alt="Model request analytics" loading="lazy">
+                <p class="guide-note">
+                  <strong>Not every row has a provider.</strong> Requests MCC answered
+                  itself show <code>answered locally &middot; &lt;rule&gt;</code> in the
+                  provider column rather than crediting a provider that was never called.
+                  They are real rows with real token counts, and they filter like any
+                  other value &mdash; see
+                  <a href="#guide-optimizer">the Token Optimizer page</a>.
+                </p>
                 <p>Input tokens are reported in parts, because they bill differently:</p>
                 <table class="guide-table">
                   <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
@@ -1522,7 +1546,7 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   never written to either store &mdash; only masked labels.
                 </p>
 
-                <h3 id="guide-deploy">Desktop &amp; token optimizer</h3>
+                <h3 id="guide-deploy">Desktop &amp; RTK</h3>
                 <p>
                   The optional <code>mcc-desktop</code> tray app changes how the
                   server is owned, and its <strong>Server mode</strong> is set
@@ -1583,11 +1607,22 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   Windows browser at the URL it prints on startup.
                 </p>
                 <p>
-                  The <strong>Token optimizer</strong> card manages the RTK binary, which
-                  filters noisy terminal output before it reaches the model. Toggle it per
-                  agent (Claude Code, Codex, Pi); the state lives in <code>~/.fcc/rtk.json</code>
-                  and applies immediately. The same controls are available from the tray's
-                  Token optimizer submenu or the CLI:
+                  The <strong>Token optimizer</strong> card on the
+                  <strong>Providers</strong> tab manages the RTK binary, which filters
+                  noisy terminal output before it reaches the model. Toggle it per agent
+                  (Claude Code, Codex, Pi); the state lives in
+                  <code>~/.fcc/rtk.json</code> and applies immediately. The same controls
+                  are available from the tray's Token optimizer submenu or the CLI:
+                </p>
+                <p class="guide-note">
+                  <strong>Two different things share that name.</strong> This card is the
+                  RTK on/off switch, and it lives here. The
+                  <a href="#guide-optimizer">Token Optimizer</a> page in the sidebar is
+                  where you read what any of it saved &mdash; including RTK&rsquo;s own
+                  savings figure, which now appears there as a card in the Ledger, taken
+                  from the binary&rsquo;s own accounting rather than estimated. MCC pins a
+                  specific RTK version and installs that one the first time you enable an
+                  agent.
                 </p>
                 <pre><code>mcc-rtk status              # installed binary + enabled agents
 mcc-rtk enable claude,pi    # install the hook for these agents
@@ -1595,12 +1630,140 @@ mcc-rtk disable codex       # remove the hook for one agent
 mcc-rtk uninstall           # disable every agent and remove the binary
 mcc-rtk apply               # re-apply the stored state</code></pre>
 
+                <h3 id="guide-optimizer">The Token Optimizer page</h3>
+                <p>
+                  This page answers one question: <em>what did any of this actually
+                  save?</em> Measurement comes first, and each control sits beside the
+                  number it moves &mdash; so nothing here is a switch you flip and hope.
+                </p>
+
+                <h4>Requests MCC answers itself</h4>
+                <p>
+                  Some of what a coding agent sends is not work for a model at all. Claude
+                  Code asks a model to invent a name for your session, and it asks for the
+                  suggested next message it offers you. MCC recognises both and answers
+                  them locally: no provider call, no token spend, no latency. Two rules
+                  ship, both on by default, both toggled here &mdash; <em>Title generation
+                  skip</em> and <em>Suggestion mode skip</em>.
+                </p>
+                <p>
+                  These used to be invisible. Every locally answered request is now
+                  recorded with the rule that answered it and what it saved, and it credits
+                  <em>no</em> provider, because none was involved. So in
+                  <a href="#guide-analytics">Analytics</a> the provider column reads
+                  <code>answered locally &middot; title generation skip</code> instead of
+                  attributing free traffic to whichever provider you happen to have
+                  configured. The token counts on those rows are measured now too, rather
+                  than the fixed placeholder they used to report.
+                </p>
+                <p class="guide-note">
+                  <strong>Filtering for them.</strong> Pick the
+                  <em>answered locally &middot; &hellip;</em> entry from the provider
+                  filter&rsquo;s list and it works. The value behind that label is
+                  <code>local:title_generation_skip</code> &mdash; the underscored rule
+                  name &mdash; so if you are typing rather than picking, type that.
+                </p>
+
+                <h4>Candidates: finding rules that do not exist yet</h4>
+                <p>
+                  <em>Scan the log</em> reads your own request history, groups it into
+                  recurring prompt families, and shows which of them no rule covers. It is
+                  the honest way to decide whether another rule would be worth having.
+                </p>
+                <ul>
+                  <li>
+                    <strong>It runs only when you press it.</strong> Nothing is scheduled
+                    and nothing is cached; the log is not read until you ask.
+                  </li>
+                  <li>
+                    <strong>It is bounded.</strong> A scan reads 2,000 rows by default and
+                    you may raise that to 50,000. Above that ceiling the request is
+                    refused with a 422, rather than quietly scanning a sample and
+                    presenting it as if it were the whole log.
+                  </li>
+                </ul>
+
+                <h4>Tool-result trimming &mdash; off, and measured</h4>
+                <p>
+                  Trimming shortens large <code>Read</code>, <code>Grep</code> and
+                  <code>Glob</code> results before they reach the model. It is the only
+                  feature in MCC that changes what the model is allowed to see, it is off
+                  by default, and it is <strong>not</strong> a recommended optimization.
+                  The measurements are the reason.
+                </p>
+                <table class="guide-table">
+                  <thead>
+                    <tr>
+                      <th>Never trim the newest</th>
+                      <th>Fresh input tokens</th>
+                      <th>Cache hit rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>trimming off</td>
+                      <td>470,648</td>
+                      <td>91.8%</td>
+                    </tr>
+                    <tr>
+                      <td>2 &mdash; the shipped default</td>
+                      <td>521,860</td>
+                      <td>69.1%</td>
+                    </tr>
+                    <tr>
+                      <td>0</td>
+                      <td>72,897</td>
+                      <td>91.9%</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="guide-note guide-note-warn">
+                  <p>
+                    <strong>At the shipped default, trimming costs you tokens.</strong>
+                    Protecting the two newest results changes the prompt prefix on every
+                    turn, which throws prefix caching away: 10.9% <em>more</em> fresh input
+                    tokens than leaving trimming off entirely. Break-even is a baseline
+                    cache hit rate of about 90.9% &mdash; below it trimming wins, above it
+                    trimming loses, and a healthy session sits above it.
+                  </p>
+                  <p>
+                    Switching it on part-way through a conversation costs one near-total
+                    cache miss on that turn (a 3.8% hit). The full measurement table
+                    &mdash; including why <em>never trim the newest = 0</em> is not the
+                    default despite looking best above &mdash; is in
+                    <code>.env.example</code> and in the docstring of
+                    <code>core/anthropic/tool_result_trimming.py</code>.
+                  </p>
+                </div>
+                <p>
+                  If you want it anyway, there is a master switch and then three states per
+                  rule:
+                </p>
+                <ul>
+                  <li><strong>Off</strong> &mdash; results are left untouched.</li>
+                  <li>
+                    <strong>Observe</strong> &mdash; measures what <em>would</em> be removed
+                    and records it; the wire is unchanged and the model sees exactly what
+                    it saw before. Run a rule here against your own traffic first, and read
+                    the result before committing to it.
+                  </li>
+                  <li>
+                    <strong>On</strong> &mdash; performs the elision and marks it inline.
+                  </li>
+                </ul>
+                <p class="guide-note">
+                  These controls used to live on <strong>Limits</strong>. They are on this
+                  page now, next to the figures that tell you whether they helped.
+                </p>
+
                 <h3 id="guide-limits">Set the limits</h3>
                 <p>
                   Everything on the <strong>Limits</strong> tab is a trade-off
                   between how long a failing model may hold a live request and
                   how much history survives on disk. Each field states what the
-                  value costs and the range it accepts.
+                  value costs and the range it accepts. The token-optimizer
+                  controls used to be here; they now live on the
+                  <a href="#guide-optimizer">Token Optimizer</a> page.
                 </p>
                 <h4>When to stop waiting</h4>
                 <p>
@@ -1728,11 +1891,65 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                     startup log prints which one is in use.</li>
                   <li><strong>Web search returns nothing useful</strong> &mdash; open the
                     attempt detail; it shows exactly what was sent and returned.</li>
+                  <li><strong>&ldquo;Request exceeds this model's context window.&rdquo;</strong>
+                    The session outgrew the model you routed it to. The message names how
+                    many tokens were needed and how many the model holds. A
+                    <a href="#guide-models">fallback chain</a> carries these through to a
+                    roomier model automatically; if you have set
+                    <code>FALLBACK_SKIP_KINDS=context_length</code>, it will not.</li>
                 </ul>
                 <p class="guide-note">
-                  The longer written guide, with more screenshots, is at
-                  <code>docs/USAGE.md</code> in the repository.
+                  Every document that ships with this install &mdash; the README, the full
+                  written guide, the architecture notes &mdash; is on the
+                  <strong>Docs</strong> tab, rendered from the copy bundled with the
+                  version you are running. Each one links out to the latest on GitHub.
                 </p>
+              </article>
+            </div>
+          </section>
+
+          <!-- The project's documentation, bundled into the wheel and rendered
+               by the server. It is here rather than behind a link so it works
+               offline and always matches the version that is running. -->
+          <section id="view-docs" class="admin-view" data-view="docs" hidden>
+            <div class="guide">
+              <nav class="guide-toc docs-toc" aria-label="Documentation contents">
+                <p class="eyebrow guide-toc-eyebrow">Documents</p>
+                <div id="docsList" class="docs-list"></div>
+                <p class="eyebrow guide-toc-eyebrow docs-toc-split" id="docsHeadingsLabel" hidden>
+                  On this page
+                </p>
+                <div id="docsHeadings" class="docs-headings"></div>
+              </nav>
+
+              <article class="guide-body docs-body">
+                <div class="docs-head">
+                  <div class="docs-head-text">
+                    <h3 id="docsTitle">Documentation</h3>
+                    <p id="docsSummary" class="docs-summary"></p>
+                  </div>
+                  <a
+                    id="docsGithub"
+                    class="docs-github"
+                    href="https://github.com/FiredMosquito831/my-claude-code"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <svg
+                      viewBox="0 0 16 16"
+                      width="14"
+                      height="14"
+                      aria-hidden="true"
+                      focusable="false"
+                      fill="currentColor"
+                    >
+                      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+                    </svg>
+                    View on GitHub
+                  </a>
+                </div>
+                <p id="docsStatus" class="docs-status">Loading documentation&hellip;</p>
+                <div id="docsContent" class="docs-content"></div>
               </article>
             </div>
           </section>
