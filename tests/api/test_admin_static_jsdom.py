@@ -77,6 +77,7 @@ VIEWS_WITH_CONTENT = (
     "web_search",
     "limits",
     "guide",
+    "docs",
 )
 
 
@@ -220,3 +221,90 @@ def test_a_fresh_install_does_not_break_the_other_views(fresh_install) -> None:
         assert view["exists"], view_id
     for view_id in VIEWS_WITH_CONTENT:
         assert fresh_install["views"][view_id]["text"] > 0, view_id
+
+
+# --------------------------------------------------------------------- docs
+# The Docs page. The markdown is rendered on the server; what these check is
+# that the page places that HTML and wires the navigation beside it. Nothing
+# here parses markdown, and jsdom cannot tell whether any of it is legible.
+
+
+def test_registering_the_docs_view_did_not_break_the_other_views(rendered) -> None:
+    """The settings render loop empties `byId(view.containerId)` for every
+    entry. A static view whose containerId is not null-guarded makes that
+    lookup return null and the whole render throws -- killing every tab, not
+    just the new one. These are the counts unmodified main produces.
+    """
+
+    expected = {
+        "get_started": 1,
+        "providers": 4,
+        "claude": 3,
+        "requests": 0,
+        "optimizer": 6,
+        "web_search": 1,
+        "limits": 1,
+        "guide": 0,
+        "docs": 0,
+    }
+    actual = {name: rendered["views"][name]["sections"] for name in expected}
+    assert actual == expected
+
+
+def test_the_docs_view_is_registered_in_the_nav(rendered) -> None:
+    assert "Docs" in [label.strip() for label in rendered["navLabels"]]
+    assert rendered["views"]["docs"]["exists"] is True
+
+
+def test_the_docs_page_lists_every_bundled_document(rendered) -> None:
+    assert rendered["docs"]["docLinks"] == ["README", "Usage"]
+
+
+def test_the_first_document_opens_without_being_asked_for(rendered) -> None:
+    docs = rendered["docs"]
+    assert docs["title"] == "README"
+    assert docs["currentDoc"] == "README"
+    # The loading line must get out of the way once something loaded.
+    assert docs["statusHidden"] is True
+
+
+def test_a_long_document_gets_a_table_of_contents(rendered) -> None:
+    """The README is over a thousand lines; a page that long without one is
+    a scroll bar and nothing else."""
+
+    assert rendered["docs"]["headingLinks"] == [
+        "docs-heading-top:Install",
+        "docs-heading-sub:Windows",
+    ]
+
+
+def test_every_heading_the_contents_links_to_exists_in_the_document(rendered) -> None:
+    anchors = set(rendered["docs"]["anchorIds"])
+    assert {"install", "windows"} <= anchors
+
+
+def test_the_document_carries_a_link_to_the_latest_on_github(rendered) -> None:
+    href = rendered["docs"]["githubHref"]
+    assert href.startswith("https://github.com/FiredMosquito831/my-claude-code/blob/")
+    assert href.endswith("README.md")
+
+
+def test_every_table_sits_in_its_own_scroll_box(rendered) -> None:
+    """A wide table is the one thing in a document that can push the page
+    body sideways. jsdom has no layout engine, so this proves the box exists
+    around every table -- not that anything actually scrolls.
+    """
+
+    docs = rendered["docs"]
+    assert docs["tables"] > 0, "fixture rendered no table to check"
+    assert docs["scrollBoxes"] == docs["tables"]
+    assert docs["unwrappedTables"] == 0
+
+
+def test_a_cross_reference_to_another_document_is_intercepted(rendered) -> None:
+    assert rendered["docs"]["crossLinks"] == 1
+
+
+def test_a_fresh_install_still_renders_the_docs_page(fresh_install) -> None:
+    assert fresh_install["docs"]["present"] is True
+    assert fresh_install["docs"]["docLinks"] == ["README", "Usage"]
