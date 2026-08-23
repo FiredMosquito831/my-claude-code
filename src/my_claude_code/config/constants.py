@@ -85,6 +85,11 @@ STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT = 0.75
 # True holds reasoning back like scaffolding, so a model that thinks and
 # never answers leaves the route uncommitted and the chain can take over.
 FALLBACK_ON_REASONING_ONLY_DEFAULT = True
+# How long a model held at the reasoning boundary may think before the route
+# gives up on it. Measured on 21 days of traffic: every one of the 499 budget
+# exhaustions ran the *full* 600s, while 98% of slow reasoning successes had
+# started answering by 300s -- so this separates the two almost exactly.
+FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT = 300.0
 STREAM_COMMIT_HOLDBACK_MAX_BYTES_DEFAULT = 65_536
 # Used only when a rate-limited provider sends no Retry-After to obey.
 RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT = 60.0

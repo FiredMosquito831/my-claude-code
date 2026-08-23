@@ -24,6 +24,7 @@ from .constants import (
     FALLBACK_EJECT_SECONDS_DEFAULT,
     FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
     FALLBACK_ON_REASONING_ONLY_DEFAULT,
+    FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
     FALLBACK_SKIP_KINDS_DEFAULT,
     FALLBACK_STALL_TIMEOUT_DEFAULT,
     FALLBACK_TOTAL_TIMEOUT_DEFAULT,
@@ -444,6 +445,14 @@ class Settings(BaseSettings):
     # window in which a failure can still fall back invisibly, at the cost of
     # exactly that much time-to-first-token. 0 commits immediately, which
     # disables invisible recovery entirely.
+    fallback_reasoning_answer_timeout: float = Field(
+        default=FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
+        validation_alias="FALLBACK_REASONING_ANSWER_TIMEOUT",
+        description=(
+            "Seconds a model may think before the route stops waiting for it "
+            "to start answering."
+        ),
+    )
     fallback_on_reasoning_only: bool = Field(
         default=FALLBACK_ON_REASONING_ONLY_DEFAULT,
         validation_alias="FALLBACK_ON_REASONING_ONLY",

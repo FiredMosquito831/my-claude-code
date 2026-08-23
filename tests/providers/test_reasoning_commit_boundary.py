@@ -17,6 +17,7 @@ import pytest
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.stream_contracts import REASONING_HEARTBEAT
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.openai_chat import (
@@ -56,6 +57,11 @@ class _ReasoningProvider(OpenAIChatProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
     ) -> dict:
         return {"model": request.model, "messages": [{"role": "user", "content": "x"}]}
+
+
+async def _stream(chunks):
+    for chunk in chunks:
+        yield chunk
 
 
 def _thought(text: str) -> Any:
@@ -144,7 +150,7 @@ async def test_reasoning_alone_is_held_back_so_the_route_can_still_move() -> Non
     Nothing the client has seen is nothing it would lose, so the executor's
     attempt stays uncommitted and the next model on the chain may still answer.
     If this ever flips, the fallback chain is silently unusable for every
-    reasoning model again -- which is what 479 of 499 budget exhaustions were.
+    reasoning model again -- which 44 of 499 budget exhaustions already were.
     """
     assert await _deltas_seen_before_the_answer(fallback_on_reasoning_only=True) == 0
 
@@ -161,3 +167,41 @@ def test_holding_reasoning_back_is_the_shipped_default(
     monkeypatch.delenv("FALLBACK_ON_REASONING_ONLY", raising=False)
     assert Settings().fallback_on_reasoning_only is True
     assert ProviderConfig(api_key="k", base_url="u").fallback_on_reasoning_only is True
+
+
+@pytest.mark.asyncio
+async def test_the_provider_signals_that_it_is_holding_reasoning() -> None:
+    """The hop that would otherwise do nothing at all.
+
+    Routing cannot tell a model thinking silently from a model that is simply
+    silent unless the provider says so, and the two get very different
+    deadlines. If this heartbeat stops being emitted, a thinking model is
+    judged by the first-token share -- on an eleven-model chain, 54 seconds.
+    """
+    provider = _ReasoningProvider(fallback_on_reasoning_only=True)
+    create = AsyncMock(return_value=_stream([_thought("hmm"), _answer("x"), _finish()]))
+    with patch.object(provider._client.chat.completions, "create", create):
+        events = [
+            event
+            async for event in provider.stream_response(
+                make_messages_request(), input_tokens=7
+            )
+        ]
+
+    assert REASONING_HEARTBEAT in events
+
+
+@pytest.mark.asyncio
+async def test_no_heartbeat_when_reasoning_is_allowed_to_commit() -> None:
+    """With the setting off nothing is held, so there is nothing to signal."""
+    provider = _ReasoningProvider(fallback_on_reasoning_only=False)
+    create = AsyncMock(return_value=_stream([_thought("hmm"), _answer("x"), _finish()]))
+    with patch.object(provider._client.chat.completions, "create", create):
+        events = [
+            event
+            async for event in provider.stream_response(
+                make_messages_request(), input_tokens=7
+            )
+        ]
+
+    assert REASONING_HEARTBEAT not in events

@@ -23,6 +23,10 @@ from my_claude_code.application.routing import (
 from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
+from my_claude_code.core.anthropic.stream_contracts import (
+    REASONING_HEARTBEAT,
+    parse_sse_text,
+)
 from my_claude_code.core.async_iterators import AsyncCloseable
 from my_claude_code.core.failures import (
     ExecutionFailure,
@@ -1639,3 +1643,173 @@ async def test_a_cooldown_skip_does_not_bench_the_model_it_skipped() -> None:
     assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
 
     assert not health.is_ejected("primary/limited")
+
+
+class ThinkingProvider(FakeProvider):
+    """Holds reasoning back: alive and working, with nothing to show for it.
+
+    Emits the heartbeat the provider layer sends while its holdback buffer is
+    withholding thought frames, then -- if it is allowed to get that far --
+    the answer it was building up to.
+    """
+
+    def __init__(self, *, think_seconds: float, answers: bool = True):
+        super().__init__()
+        self._think_seconds = think_seconds
+        self._answers = answers
+
+    async def stream_response(
+        self,
+        request: MessagesRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        self.stream_calls.append({"request": request, "request_id": request_id})
+        deadline = asyncio.get_running_loop().time() + self._think_seconds
+        while asyncio.get_running_loop().time() < deadline:
+            yield REASONING_HEARTBEAT
+            await asyncio.sleep(0.01)
+        if not self._answers:
+            await asyncio.sleep(3600.0)
+        yield "event: message_stop\ndata: {}\n\n"
+
+
+def _thinking_executor(
+    providers: Mapping[str, ProviderPort],
+    *,
+    reasoning_answer_timeout: float,
+    total_timeout: float = 0.0,
+) -> ProviderExecutor:
+    return ProviderExecutor(
+        lambda provider_id: providers[provider_id],
+        token_counter=lambda _messages, _system, _tools: 17,
+        policy=RouteExecutionPolicy(
+            first_token_timeout=0.05,
+            total_timeout=total_timeout,
+            reasoning_answer_timeout=reasoning_answer_timeout,
+        ),
+        health=RouteHealthRegistry(eject_after_failures=0),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_thinking_model_outlives_the_first_token_deadline() -> None:
+    """The regression this deadline exists to prevent.
+
+    Held reasoning makes an attempt look silent, so without a deadline of its
+    own it inherits the first-token share -- 600s over an eleven-model chain
+    is 54s. Measured against real traffic that would have diverted 1,387
+    successful reasoning requests. A model that is visibly thinking must not
+    be judged by the clock for a model that is doing nothing.
+    """
+    primary = ThinkingProvider(think_seconds=0.3)
+    secondary = FakeProvider()
+    executor = _thinking_executor(
+        {"primary": primary, "secondary": secondary}, reasoning_answer_timeout=5.0
+    )
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("primary", "thinker"),
+            _routed_request("secondary", "other"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_thinking_survives",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert secondary.stream_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_only_ever_thinks_hands_over_to_the_fallback() -> None:
+    """The failure this whole boundary exists for, now bounded rather than endless."""
+    primary = ThinkingProvider(think_seconds=3600.0, answers=False)
+    secondary = FakeProvider()
+    executor = _thinking_executor(
+        {"primary": primary, "secondary": secondary}, reasoning_answer_timeout=0.2
+    )
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("primary", "loops"),
+            _routed_request("secondary", "answers"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_thinking_forever",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert secondary.stream_calls != []
+
+
+@pytest.mark.asyncio
+async def test_the_heartbeat_never_reaches_the_client() -> None:
+    """It is a routing signal, not output. An empty SSE frame is still a frame."""
+    primary = ThinkingProvider(think_seconds=0.1)
+    executor = _thinking_executor({"primary": primary}, reasoning_answer_timeout=5.0)
+
+    stream = executor.stream(
+        _plan(_routed_request("primary", "thinker")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_heartbeat_private",
+    )
+
+    chunks = [chunk async for chunk in stream]
+    assert REASONING_HEARTBEAT not in chunks
+    assert chunks == ["event: message_stop\ndata: {}\n\n"]
+
+
+@pytest.mark.asyncio
+async def test_a_silent_model_is_still_judged_by_the_first_token_deadline() -> None:
+    """The 393-hang fix must survive this one.
+
+    A stream that produces nothing at all sends no heartbeat, so it keeps the
+    tight share. Widening that to the thinking allowance would quietly undo
+    the fix that took hangs from 150 a day to roughly one.
+    """
+    primary = StallingProvider()
+    secondary = FakeProvider()
+    executor = _thinking_executor(
+        {"primary": primary, "secondary": secondary}, reasoning_answer_timeout=3600.0
+    )
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("primary", "silent"),
+            _routed_request("secondary", "answers"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_silent_still_bounded",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert secondary.stream_calls != []
+
+
+def test_the_thinking_allowance_has_a_shipped_default() -> None:
+    """A default is a separate contract from the parameter (§173)."""
+    assert RouteExecutionPolicy().reasoning_answer_timeout == 300.0
+
+
+def test_the_heartbeat_is_empty_and_is_not_a_frame() -> None:
+    """A protocol invariant, pinned rather than mutated.
+
+    Mutating the sentinel into a real SSE frame cannot fail any behavioural
+    test, because routing compares chunks against this same constant -- it is
+    unkillable by construction (§175). What actually matters is the property
+    the constant carries: any consumer that forwards it writes nothing, and it
+    can never be mistaken for provider output. Assert that directly.
+    """
+    assert REASONING_HEARTBEAT == ""
+    assert parse_sse_text(REASONING_HEARTBEAT) == []

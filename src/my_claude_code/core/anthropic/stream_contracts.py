@@ -222,6 +222,15 @@ _SCAFFOLDING_EVENT_TYPES = frozenset(
 )
 
 
+# The one fragment a provider may hand routing that is not output. A stream
+# holding reasoning back has nothing to show and has committed nothing, which
+# from outside is indistinguishable from a stream that has produced nothing at
+# all -- and the two deserve very different deadlines. Empty so that any
+# consumer forwarding it writes nothing, and not valid SSE so it can never be
+# confused with a frame.
+REASONING_HEARTBEAT = ""
+
+
 # The delta types inside a ``content_block_delta`` that carry reasoning rather
 # than any part of the answer. ``signature_delta`` is the cryptographic tail of
 # a thinking block and is meaningless without it, so it travels with it.
@@ -267,9 +276,9 @@ def sse_is_scaffolding(text: str, *, reasoning_commits: bool = True) -> bool:
     ``reasoning_commits=False`` moves reasoning deltas to the scaffolding side.
     A model that thinks aloud for the whole request budget and never writes an
     answer has shown the reader no answer to lose, so committing the route on
-    it spends a configured chain on nothing: measured on this traffic, 479 of
-    499 budget exhaustions were one primary doing exactly that, all at
-    ``route_attempt = 0``. Holding reasoning keeps the attempt uncommitted, so
+    it spends a configured chain on nothing: measured on this traffic, 44 of
+    499 budget exhaustions were a stream that had only reasoned, and 490 of the
+    499 never left ``route_attempt = 0``. Holding reasoning keeps the attempt uncommitted, so
     its share of the budget expires and the next model answers instead. The
     cost is that reasoning no longer streams live -- it arrives when the answer
     does, or when the buffer's byte cap forces a commit.

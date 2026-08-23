@@ -238,6 +238,24 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "FALLBACK_REASONING_ANSWER_TIMEOUT",
+        "Thinking time before the chain moves on",
+        "models",
+        "number",
+        settings_attr="fallback_reasoning_answer_timeout",
+        default="300",
+        restart_required=True,
+        description=(
+            "Seconds a model may think before the route stops waiting for it "
+            "to start an answer and tries the next model. Only applies while "
+            "the setting below is on, because only then is the attempt still "
+            "abandonable. Measured on real traffic: every request that ran out "
+            "of budget while thinking used the full 600s, and 98% of slow "
+            "reasoning requests that did answer had started by 300s. Set 0 to "
+            "let a thinking model run to the total request budget."
+        ),
+    ),
+    ConfigFieldSpec(
         "FALLBACK_ON_REASONING_ONLY",
         "Fall back when a model only thinks",
         "models",

@@ -8,7 +8,10 @@ from enum import StrEnum
 import httpx
 import openai
 
-from my_claude_code.core.anthropic.stream_contracts import sse_is_scaffolding
+from my_claude_code.core.anthropic.stream_contracts import (
+    REASONING_HEARTBEAT,
+    sse_is_scaffolding,
+)
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.trace import trace_event
 
@@ -77,6 +80,11 @@ class RecoveryHoldbackBuffer:
         self._bytes = 0
         self._started_at: float | None = None
         self.committed = False
+        # Whether the most recent push held a frame back *only* because
+        # reasoning is not allowed to commit. Routing reads it to tell a model
+        # that is thinking silently from one that is simply silent -- the two
+        # look identical from outside and deserve very different deadlines.
+        self.last_push_held_reasoning = False
 
     def restart_window(self) -> None:
         """Re-anchor the holdback window to the next event, keeping the buffer.
@@ -96,7 +104,16 @@ class RecoveryHoldbackBuffer:
         if not self.committed:
             self._started_at = None
 
+    def _is_held_reasoning(self, event: str) -> bool:
+        """True when only the reasoning rule is keeping this frame back."""
+        return (
+            not self._reasoning_commits
+            and sse_is_scaffolding(event, reasoning_commits=False)
+            and not sse_is_scaffolding(event)
+        )
+
     def push(self, event: str) -> list[str]:
+        self.last_push_held_reasoning = False
         if self.committed:
             return [event]
         if self._holdback_seconds <= 0:
@@ -118,6 +135,7 @@ class RecoveryHoldbackBuffer:
         # Content still gets the window rather than committing on its first
         # byte, because the window is also what makes an immediate cutoff
         # invisibly retryable -- held bytes have not reached the client yet.
+        self.last_push_held_reasoning = self._is_held_reasoning(event)
         if self._started_at is None and not sse_is_scaffolding(
             event, reasoning_commits=self._reasoning_commits
         ):
@@ -204,7 +222,19 @@ class RecoveryController:
         return self._midstream_recovery_count
 
     def push(self, event: str) -> list[str]:
-        return self._holdback.push(event)
+        """Events to forward, plus an empty heartbeat while reasoning is held.
+
+        The empty string is not SSE and never reaches a client: routing
+        consumes it, treats it as "this attempt is alive and thinking", and
+        keeps the attempt uncommitted. Without it a held reasoning stream is
+        indistinguishable from a stream that has produced nothing at all, and
+        gets the first-token deadline -- which on an eleven-model chain is the
+        budget divided by eleven, far too little for a model that thinks.
+        """
+        released = self._holdback.push(event)
+        if released or not self._holdback.last_push_held_reasoning:
+            return released
+        return [REASONING_HEARTBEAT]
 
     def upstream_opened(self) -> None:
         """Start the holdback window now that upstream bytes can actually flow."""

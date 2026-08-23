@@ -5,7 +5,10 @@ import time
 import httpx
 import openai
 
-from my_claude_code.core.anthropic.stream_contracts import sse_is_scaffolding
+from my_claude_code.core.anthropic.stream_contracts import (
+    REASONING_HEARTBEAT,
+    sse_is_scaffolding,
+)
 from my_claude_code.providers.stream_recovery import (
     EARLY_TRANSPARENT_MAX_RETRIES,
     EARLY_TRANSPARENT_TOTAL_ATTEMPTS,
@@ -476,7 +479,7 @@ def test_reasoning_commits_the_route_by_default() -> None:
 
 
 def test_reasoning_alone_never_commits_when_fallback_is_preferred() -> None:
-    """The measured shape of 479 of 499 budget exhaustions.
+    """The measured shape of 44 of 499 budget exhaustions.
 
     A primary that thinks for the whole request budget and never writes an
     answer used to commit on its first thought, which spent an eight-model
@@ -547,5 +550,7 @@ def test_an_early_retry_keeps_holding_reasoning_back() -> None:
     # correct one does. Only a push from outside the window separates them.
     controller.push(THINKING)
     time.sleep(0.8)
-    assert controller.push(THINKING) == []
+    # A heartbeat, not an event: nothing to forward, and the route is still
+    # abandonable. A buffer that had reverted would return the thoughts here.
+    assert controller.push(THINKING) == [REASONING_HEARTBEAT]
     assert not controller.committed

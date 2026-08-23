@@ -11,6 +11,7 @@ from loguru import logger
 
 from my_claude_code.config.constants import (
     FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
+    FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
     FALLBACK_STALL_TIMEOUT_DEFAULT,
     FALLBACK_TOTAL_TIMEOUT_DEFAULT,
 )
@@ -22,7 +23,10 @@ from my_claude_code.core.anthropic import (
     anthropic_request_snapshot,
     get_token_count,
 )
-from my_claude_code.core.anthropic.stream_contracts import sse_carries_content
+from my_claude_code.core.anthropic.stream_contracts import (
+    REASONING_HEARTBEAT,
+    sse_carries_content,
+)
 from my_claude_code.core.credential_attribution import record_credential
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import (
@@ -107,6 +111,16 @@ class RouteExecutionPolicy:
     # request budget: 106 requests held one for the full 600s after producing
     # real output, on 21 days of measured traffic.
     stall_timeout: float = FALLBACK_STALL_TIMEOUT_DEFAULT
+    # How long an attempt may think without starting an answer, once the
+    # provider has told us it is holding reasoning back. Deliberately not the
+    # attempt's share of the budget: that share is sized for a model which has
+    # shown nothing at all, and dividing 600s by an eleven-model chain leaves
+    # 54s, which measured against real traffic would divert 1,387 successful
+    # reasoning requests to rescue 44 reasoning-only failures. Every one of the
+    # 499 budget exhaustions ran the *full* budget, so any allowance under it
+    # rescues all of them, and 98% of the slow successes had begun answering
+    # inside 300s -- a flat allowance separates the two where the share cannot.
+    reasoning_answer_timeout: float = FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT
     # Failure kinds that end the route rather than moving to the next model.
     # A malformed request is the caller's, not the model's: the same body
     # fails identically everywhere, so walking a three-model chain buys three
@@ -150,9 +164,16 @@ async def _next_chunk(chunks: AsyncIterator[str], timeout: float | None) -> str:
 
 
 def _timeout_failure(
-    model_ref: str, *, seconds: float, first_token: bool, stalled: bool = False
+    model_ref: str,
+    *,
+    seconds: float,
+    first_token: bool,
+    stalled: bool = False,
+    reasoning_only: bool = False,
 ) -> ExecutionFailure:
-    if first_token:
+    if reasoning_only:
+        reason = f"produced only reasoning for {seconds:g}s without answering"
+    elif first_token:
         reason = f"produced no output within {seconds:g}s"
     elif stalled:
         # Distinct from the budget message on purpose: "exceeded the 600s
@@ -469,6 +490,7 @@ class ProviderExecutor:
                     )
                     chunks = provider_stream.__aiter__()
                     seen_chunk = False
+                    reasoning_since: float | None = None
                     last_progress = time.monotonic()
                     while True:
                         try:
@@ -479,6 +501,7 @@ class ProviderExecutor:
                                     deadline,
                                     attempt_deadline,
                                     last_progress,
+                                    reasoning_since,
                                 ),
                             )
                         except StopAsyncIteration:
@@ -490,7 +513,17 @@ class ProviderExecutor:
                                 request_id=request_id,
                                 attempt_budget=attempt_budget,
                                 last_progress=last_progress,
+                                reasoning_since=reasoning_since,
                             ) from exc
+                        if chunk == REASONING_HEARTBEAT:
+                            # The provider is holding reasoning back. Nothing
+                            # to forward and nothing committed, but the attempt
+                            # is demonstrably working rather than silent, so it
+                            # earns the answer allowance instead of the
+                            # first-token share.
+                            if reasoning_since is None:
+                                reasoning_since = time.monotonic()
+                            continue
                         seen_chunk = True
                         # Only a chunk that moves the answer forward counts as
                         # progress. A keepalive resetting this clock is exactly
@@ -633,6 +666,7 @@ class ProviderExecutor:
         deadline: float | None,
         attempt_deadline: float | None = None,
         last_progress: float | None = None,
+        reasoning_since: float | None = None,
     ) -> float | None:
         """Seconds to wait for the next chunk, or ``None`` to wait indefinitely.
 
@@ -652,10 +686,25 @@ class ProviderExecutor:
         limits: list[float] = []
         now = time.monotonic()
         if not seen_chunk:
-            if self._policy.first_token_timeout > 0:
-                limits.append(self._policy.first_token_timeout)
-            if attempt_deadline is not None:
-                limits.append(max(0.0, attempt_deadline - now))
+            if (
+                reasoning_since is not None
+                and self._policy.reasoning_answer_timeout > 0
+            ):
+                # Measured from the first held thought, not re-armed per
+                # thought: a model looping forever produces reasoning
+                # indefinitely, so a stall-style clock would never fire on the
+                # exact failure this bounds.
+                limits.append(
+                    max(
+                        0.0,
+                        reasoning_since + self._policy.reasoning_answer_timeout - now,
+                    )
+                )
+            else:
+                if self._policy.first_token_timeout > 0:
+                    limits.append(self._policy.first_token_timeout)
+                if attempt_deadline is not None:
+                    limits.append(max(0.0, attempt_deadline - now))
         elif self._policy.stall_timeout > 0 and last_progress is not None:
             limits.append(max(0.0, last_progress + self._policy.stall_timeout - now))
         if deadline is not None:
@@ -670,8 +719,10 @@ class ProviderExecutor:
         request_id: str,
         attempt_budget: float | None = None,
         last_progress: float | None = None,
+        reasoning_since: float | None = None,
     ) -> ExecutionFailure:
         first_token = not seen_chunk
+        reasoning_only = first_token and reasoning_since is not None
         # A producing stream can be ended by either the stall limit or the
         # whole-request budget. Which one it was is the difference between
         # "this model went quiet" and "this request ran too long", so decide
@@ -683,7 +734,9 @@ class ProviderExecutor:
             and time.monotonic() - last_progress
             >= self._policy.stall_timeout - _STALL_DECISION_TOLERANCE
         )
-        if first_token:
+        if reasoning_only:
+            seconds = self._policy.reasoning_answer_timeout
+        elif first_token:
             seconds = self._policy.first_token_timeout
         elif stalled:
             seconds = self._policy.stall_timeout
@@ -692,14 +745,18 @@ class ProviderExecutor:
         # Report the limit that actually ended it. "produced no output within
         # 120s" on a request abandoned at 40s, because it was one of three
         # models sharing a budget, sends the reader to the wrong setting.
-        if first_token and attempt_budget is not None:
+        if first_token and not reasoning_only and attempt_budget is not None:
             seconds = attempt_budget if seconds <= 0 else min(seconds, attempt_budget)
         logger.warning(
             "MODEL DEADLINE: '{}' {} after {:g}s",
             model_ref,
-            "produced no first token"
-            if first_token
-            else ("stalled" if stalled else "exceeded the request budget"),
+            "produced only reasoning"
+            if reasoning_only
+            else (
+                "produced no first token"
+                if first_token
+                else ("stalled" if stalled else "exceeded the request budget")
+            ),
             seconds,
         )
         trace_event(
@@ -712,7 +769,11 @@ class ProviderExecutor:
             timeout_seconds=seconds,
         )
         return _timeout_failure(
-            model_ref, seconds=seconds, first_token=first_token, stalled=stalled
+            model_ref,
+            seconds=seconds,
+            first_token=first_token,
+            stalled=stalled,
+            reasoning_only=reasoning_only,
         )
 
     def _prepare_from(
@@ -911,6 +972,7 @@ def route_execution_policy(settings: Settings) -> RouteExecutionPolicy:
         first_token_timeout=settings.fallback_first_token_timeout,
         total_timeout=settings.fallback_total_timeout,
         stall_timeout=settings.fallback_stall_timeout,
+        reasoning_answer_timeout=settings.fallback_reasoning_answer_timeout,
         skip_kinds=parse_failure_kinds(settings.fallback_skip_kinds),
     )
 

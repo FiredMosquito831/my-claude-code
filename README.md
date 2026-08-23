@@ -508,6 +508,7 @@ Requests that name a provider and model directly (`open_router/…`) are never r
 | --- | --- | --- |
 | `FALLBACK_FIRST_TOKEN_TIMEOUT` | `120` | The first-token deadline: seconds a model may stay silent before the next model takes over. Nothing has streamed yet, so the handover is invisible. `0` waits indefinitely. |
 | `FALLBACK_TOTAL_TIMEOUT` | `600` | Whole-request budget across every attempt, retry and recovery — the backstop for a stream that committed and then stalled. `0` disables it. |
+| `FALLBACK_STALL_TIMEOUT` | `120` | Seconds a stream that *has* started producing may then go quiet. Measured from the last chunk that moved the answer forward, so keepalives cannot hold a dead stream open and a model producing steadily is never cut. `0` allows an unlimited pause. |
 | `FALLBACK_EJECT_AFTER_FAILURES` / `FALLBACK_EJECT_SECONDS` | `3` / `30` | Skip a model that just failed repeatedly, so a request stops re-paying its timeout on the way to a healthy fallback. |
 
 Ejection can never empty a chain: if every model on a route is benched, they are tried in order anyway — skipping a bad model is an optimisation, refusing to try anything is an outage.
@@ -517,6 +518,15 @@ Ejection can never empty a chain: if every model on a route is benched, they are
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `FALLBACK_SKIP_KINDS` | `invalid_request` | Comma-separated failure kinds that abort the chain instead of falling through. Set `FALLBACK_SKIP_KINDS=invalid_request,context_length` to restore the pre-5.43.0 behaviour of giving up on any `400`. |
+
+**Thinking is not answering.** A reasoning model that streams its thoughts and never writes an answer used to commit the route on its very first thought: from that moment no other model could take over, the stall guard never fired because thoughts kept arriving, and the request ran until the whole budget ended it. Measured across 21 days of real traffic, 44 of 499 budget exhaustions were a stream that had only reasoned, and 490 of the 499 never left the first model on the chain.
+
+Since 5.50.0 reasoning is held back like an envelope frame, so the attempt stays abandonable and the next model can still answer. Two settings control it, both in **Admin UI → Models**:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `FALLBACK_ON_REASONING_ONLY` | `true` | Hold reasoning back so a model that only thinks does not commit the route. The cost is that thinking no longer streams live — it arrives with the answer, or once 64 KB have accumulated. Set `false` to watch a model think in real time and accept that it commits the route. |
+| `FALLBACK_REASONING_ANSWER_TIMEOUT` | `300` | Seconds a model may think before the chain moves on. A flat allowance on purpose: the attempt's share of `FALLBACK_TOTAL_TIMEOUT` is sized for a model that has shown *nothing*, and 600s split across an eleven-model chain leaves 54s, far too little to think in. `0` lets a thinking model run to the whole request budget. |
 
 Every attempt is recorded. **Analytics** shows the model that actually answered rather than the one the route started from, and the request detail draws the whole chain — see [Route tracing](#route-tracing).
 
