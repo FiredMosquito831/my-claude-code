@@ -23,6 +23,7 @@ from .constants import (
     FALLBACK_EJECT_AFTER_FAILURES_DEFAULT,
     FALLBACK_EJECT_SECONDS_DEFAULT,
     FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
+    FALLBACK_ON_REASONING_ONLY_DEFAULT,
     FALLBACK_SKIP_KINDS_DEFAULT,
     FALLBACK_STALL_TIMEOUT_DEFAULT,
     FALLBACK_TOTAL_TIMEOUT_DEFAULT,
@@ -443,6 +444,14 @@ class Settings(BaseSettings):
     # window in which a failure can still fall back invisibly, at the cost of
     # exactly that much time-to-first-token. 0 commits immediately, which
     # disables invisible recovery entirely.
+    fallback_on_reasoning_only: bool = Field(
+        default=FALLBACK_ON_REASONING_ONLY_DEFAULT,
+        validation_alias="FALLBACK_ON_REASONING_ONLY",
+        description=(
+            "Treat a stream that has emitted only reasoning as uncommitted, so "
+            "a model that thinks without ever answering falls back."
+        ),
+    )
     stream_commit_holdback_seconds: float = Field(
         default=STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
         validation_alias="STREAM_COMMIT_HOLDBACK_SECONDS",

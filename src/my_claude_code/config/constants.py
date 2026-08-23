@@ -81,6 +81,10 @@ STREAM_MIDSTREAM_RECOVERY_ATTEMPTS_DEFAULT = 5
 # Output is held this long before it commits. While held, a failure can still
 # fall back invisibly, so this is the width of the fallback window itself.
 STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT = 0.75
+# Whether a stream that has emitted only reasoning may still fall back.
+# True holds reasoning back like scaffolding, so a model that thinks and
+# never answers leaves the route uncommitted and the chain can take over.
+FALLBACK_ON_REASONING_ONLY_DEFAULT = True
 STREAM_COMMIT_HOLDBACK_MAX_BYTES_DEFAULT = 65_536
 # Used only when a rate-limited provider sends no Retry-After to obey.
 RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT = 60.0

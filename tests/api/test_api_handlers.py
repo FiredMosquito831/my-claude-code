@@ -45,6 +45,9 @@ class FakeProvider:
             'event: message_stop\ndata: {"type":"message_stop"}\n\n',
         ]
 
+    def throttle_remaining(self) -> float:
+        return 0.0
+
     @property
     def credential_label(self) -> str | None:
         return None

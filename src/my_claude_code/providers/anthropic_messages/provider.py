@@ -151,6 +151,7 @@ class AnthropicMessagesProvider(BaseProvider):
             provider_name=tag,
             request_id=request_id,
             holdback_seconds=self._config.commit_holdback_seconds,
+            reasoning_commits=not self._config.fallback_on_reasoning_only,
             early_retry_attempts=self._config.early_retry_attempts,
             midstream_recovery_attempts=0,
         )

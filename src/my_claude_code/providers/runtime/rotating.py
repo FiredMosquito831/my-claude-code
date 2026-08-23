@@ -63,6 +63,19 @@ class RotatingProvider(BaseProvider):
             return self._key_labels[index]
         return None
 
+    def throttle_remaining(self) -> float:
+        """The shortest cooldown across credentials; 0 while any key can serve.
+
+        ``BaseProvider`` answers 0 unconditionally, which for a rotating
+        provider would have claimed every key was free even with all of them
+        rate-limited. Rotation already prefers an unthrottled sub-provider, so
+        the value routing needs is the best case, not the first one.
+        """
+        return min(
+            (provider.throttle_remaining() for provider in self._providers),
+            default=0.0,
+        )
+
     def preflight_stream(
         self,
         request: MessagesRequest,

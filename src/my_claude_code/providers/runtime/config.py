@@ -123,6 +123,7 @@ def build_provider_config(
         early_retry_attempts=settings.stream_early_retry_attempts,
         midstream_recovery_attempts=settings.stream_midstream_recovery_attempts,
         commit_holdback_seconds=settings.stream_commit_holdback_seconds,
+        fallback_on_reasoning_only=settings.fallback_on_reasoning_only,
         rate_limit_cooldown_seconds=settings.rate_limit_cooldown_seconds,
         circuit_open_threshold=settings.credential_circuit_threshold,
     )
@@ -158,6 +159,7 @@ def _build_dynamic_provider_config(
         early_retry_attempts=settings.stream_early_retry_attempts,
         midstream_recovery_attempts=settings.stream_midstream_recovery_attempts,
         commit_holdback_seconds=settings.stream_commit_holdback_seconds,
+        fallback_on_reasoning_only=settings.fallback_on_reasoning_only,
         rate_limit_cooldown_seconds=settings.rate_limit_cooldown_seconds,
         circuit_open_threshold=settings.credential_circuit_threshold,
         credential_rotation=rotation,

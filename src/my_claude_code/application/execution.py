@@ -169,6 +169,18 @@ def _timeout_failure(
     )
 
 
+def _cooldown_failure(model_ref: str, seconds: float) -> ExecutionFailure:
+    """The verdict recorded for a model the chain stepped over while limited."""
+    return ExecutionFailure(
+        kind=FailureKind.RATE_LIMIT,
+        status_code=429,
+        message=(
+            f"Provider for '{model_ref}' is in rate-limit cooldown for {seconds:.0f}s."
+        ),
+        retryable=True,
+    )
+
+
 class _AttemptLedger:
     """Collects one verdict per model on the route, in chain order.
 
@@ -277,6 +289,18 @@ class _AttemptLedger:
                     error_kind="route_ended",
                     error_message=reason,
                 )
+
+    def in_cooldown(self, index: int, seconds: float) -> None:
+        """Record a model stepped over because its provider is rate-limited."""
+        self._set(
+            index,
+            outcome="skipped",
+            error_kind="cooldown",
+            error_message=(
+                f"provider in rate-limit cooldown for {seconds:.0f}s;"
+                " a later model was tried instead"
+            ),
+        )
 
     def out_of_time(self, index: int) -> None:
         self._set(
@@ -715,6 +739,10 @@ class ProviderExecutor:
 
         ``start`` indexes ``order``, not ``attempts``: a model benched by recent
         failures is not in ``order`` at all and is never reached.
+
+        A candidate whose provider is serving a rate-limit cooldown is stepped
+        over while anything remains behind it, because trying it buys a sleep
+        rather than an answer.
         """
         for position in range(start, len(order)):
             index = order[position]
@@ -740,26 +768,79 @@ class ProviderExecutor:
                     for remaining in range(position, len(order)):
                         ledger.out_of_time(order[remaining])
                 return None
+            try:
+                provider = self._provider_resolver(routed.resolved.provider_id)
+            except Exception as exc:
+                if on_attempt is not None:
+                    on_attempt(routed, index)
+                if ledger is not None:
+                    ledger.start(index)
+                if self._prepare_failed(
+                    routed, index, exc, failures, request_id=request_id, ledger=ledger
+                ):
+                    return None
+                continue
+
+            # A provider serving a 429 cooldown will not refuse the request --
+            # it will sleep inside its own limiter until the cooldown expires
+            # or this attempt's deadline does, and only then hand the chain a
+            # timeout. That wait is the whole reason a chain exists, so spend
+            # it on the next model instead. Never on the last candidate: a
+            # skipped chain with nothing behind it is an outage, and waiting
+            # is still better than refusing outright.
+            # Asked only when the answer can change something: with nothing
+            # behind this candidate the chain has to try it either way.
+            cooldown = (
+                provider.throttle_remaining() if position + 1 < len(order) else 0.0
+            )
+            if cooldown > 0:
+                logger.warning(
+                    "MODEL COOLDOWN: '{}' is rate-limited for {:.0f}s;"
+                    " trying the next model instead of waiting",
+                    model_ref,
+                    cooldown,
+                )
+                failures.append(_cooldown_failure(model_ref, cooldown))
+                if ledger is not None:
+                    ledger.in_cooldown(index, cooldown)
+                continue
+
             if on_attempt is not None:
                 on_attempt(routed, index)
             if ledger is not None:
                 ledger.start(index)
             try:
-                provider = self._provider_resolver(routed.resolved.provider_id)
                 provider.preflight_stream(routed.request, reasoning=routed.reasoning)
             except Exception as exc:
-                failures.append(exc)
-                if ledger is not None:
-                    ledger.failed(index, exc)
-                self._health.record_failure(model_ref)
-                self._trace_fallback(routed, exc, request_id=request_id, attempt=index)
-                if self._ends_the_route(exc):
-                    if ledger is not None:
-                        ledger.unreachable_after(index, exc)
+                if self._prepare_failed(
+                    routed, index, exc, failures, request_id=request_id, ledger=ledger
+                ):
                     return None
                 continue
             return position, provider
         return None
+
+    def _prepare_failed(
+        self,
+        routed: RoutedMessagesRequest,
+        index: int,
+        exc: Exception,
+        failures: list[BaseException],
+        *,
+        request_id: str,
+        ledger: _AttemptLedger | None,
+    ) -> bool:
+        """Record one pre-stream failure; True when it ends the route."""
+        failures.append(exc)
+        if ledger is not None:
+            ledger.failed(index, exc)
+        self._health.record_failure(routed.resolved.provider_model_ref)
+        self._trace_fallback(routed, exc, request_id=request_id, attempt=index)
+        if self._ends_the_route(exc):
+            if ledger is not None:
+                ledger.unreachable_after(index, exc)
+            return True
+        return False
 
     def _trace_route(
         self,

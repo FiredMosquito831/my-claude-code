@@ -9,6 +9,7 @@ from loguru import logger
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.constants import (
     CREDENTIAL_CIRCUIT_THRESHOLD_DEFAULT,
+    FALLBACK_ON_REASONING_ONLY_DEFAULT,
     HTTP_CONNECT_TIMEOUT_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
@@ -58,6 +59,7 @@ class ProviderConfig:
     early_retry_attempts: int = STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT
     midstream_recovery_attempts: int = STREAM_MIDSTREAM_RECOVERY_ATTEMPTS_DEFAULT
     commit_holdback_seconds: float = STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT
+    fallback_on_reasoning_only: bool = FALLBACK_ON_REASONING_ONLY_DEFAULT
     rate_limit_cooldown_seconds: float = RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT
     circuit_open_threshold: int = CREDENTIAL_CIRCUIT_THRESHOLD_DEFAULT
 

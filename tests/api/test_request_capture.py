@@ -354,6 +354,9 @@ class _FakeProvider:
     def __init__(self, events: list[str]) -> None:
         self.events = events
 
+    def throttle_remaining(self) -> float:
+        return 0.0
+
     @property
     def credential_label(self) -> str | None:
         return None

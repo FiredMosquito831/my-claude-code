@@ -37,6 +37,10 @@ class FakeProvider:
         self.preflight_calls: list[tuple[MessagesRequest, ReasoningPolicy]] = []
         self.stream_calls: list[dict[str, object]] = []
         self.stream_close_calls = 0
+        self.cooldown_seconds = 0.0
+
+    def throttle_remaining(self) -> float:
+        return self.cooldown_seconds
 
     @property
     def credential_label(self) -> str | None:
@@ -1530,3 +1534,108 @@ async def test_the_default_policy_is_what_lets_a_context_overflow_fall_back() ->
 
     assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
     assert healthy.stream_calls, "the default policy must let the chain continue"
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_provider_is_stepped_over_rather_than_waited_on() -> None:
+    """A cooldown is a sleep, and a chain exists so the sleep is not taken."""
+    primary = FakeProvider()
+    primary.cooldown_seconds = 42.0
+    secondary = FakeProvider()
+    executor = _executor({"primary": primary, "secondary": secondary})
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("primary", "limited"),
+            _routed_request("secondary", "free"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_cooldown_skip",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    # Not merely un-streamed: the limited provider was never even preflighted,
+    # which is the round trip the old path spent inside its own limiter.
+    assert primary.preflight_calls == []
+    assert primary.stream_calls == []
+    assert secondary.stream_calls != []
+
+
+@pytest.mark.asyncio
+async def test_the_last_model_is_tried_even_while_it_is_rate_limited() -> None:
+    """Skipping a bad model is an optimisation; refusing to try one is an outage."""
+    only = FakeProvider()
+    only.cooldown_seconds = 900.0
+    executor = _executor({"only": only})
+
+    stream = executor.stream(
+        _plan(_routed_request("only", "limited")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_cooldown_last",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert only.stream_calls != []
+
+
+@pytest.mark.asyncio
+async def test_a_cooldown_skip_is_recorded_as_its_own_verdict() -> None:
+    """The ledger must say "skipped, limited", not "failed" or "never reached"."""
+    primary = FakeProvider()
+    primary.cooldown_seconds = 42.0
+    secondary = FakeProvider()
+    records: list[RouteAttemptRecord] = []
+    executor = _executor({"primary": primary, "secondary": secondary})
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("primary", "limited"),
+            _routed_request("secondary", "free"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_cooldown_ledger",
+        on_attempt_result=records.append,
+    )
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+
+    assert [(r.outcome, r.error_kind) for r in records] == [
+        ("skipped", "cooldown"),
+        ("succeeded", None),
+    ]
+    assert "42s" in (records[0].error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_a_cooldown_skip_does_not_bench_the_model_it_skipped() -> None:
+    """The model did not fail; the chain declined to wait for it.
+
+    Counting it as a failure would eject a perfectly healthy model after a few
+    busy minutes, which is the opposite of what a cooldown means.
+    """
+    primary = FakeProvider()
+    primary.cooldown_seconds = 42.0
+    secondary = FakeProvider()
+    health = RouteHealthRegistry(eject_after_failures=1, eject_seconds=60.0)
+    executor = _deadline_executor(
+        {"primary": primary, "secondary": secondary}, health=health
+    )
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("primary", "limited"),
+            _routed_request("secondary", "free"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_cooldown_health",
+    )
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+
+    assert not health.is_ejected("primary/limited")

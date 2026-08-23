@@ -615,3 +615,35 @@ def test_key_health_reports_the_throttle_window() -> None:
     health = rotating.key_health()
     assert health[0]["throttle_remaining"] == 12.0
     assert health[1]["throttle_remaining"] == 0.0
+
+
+def test_rotating_provider_reports_the_shortest_credential_cooldown() -> None:
+    """Routing asks one provider "can you serve now"; any free key means yes.
+
+    ``BaseProvider`` answers 0 unconditionally, so an un-overridden rotating
+    provider claimed to be free with every one of its keys rate-limited --
+    which is exactly the wait the model chain now steps over.
+    """
+    rotating = _rotating(
+        [_ThrottledProvider(throttled_for=30.0), _ThrottledProvider(throttled_for=5.0)],
+        "round_robin",
+    )
+    assert rotating.throttle_remaining() == 5.0
+
+
+def test_rotating_provider_is_free_while_one_credential_can_serve() -> None:
+    rotating = _rotating(
+        [_ThrottledProvider(throttled_for=30.0), _FakeProvider()], "round_robin"
+    )
+    assert rotating.throttle_remaining() == 0.0
+
+
+def test_a_fully_rate_limited_rotating_provider_reports_a_cooldown() -> None:
+    rotating = _rotating(
+        [
+            _ThrottledProvider(throttled_for=30.0),
+            _ThrottledProvider(throttled_for=30.0),
+        ],
+        "round_robin",
+    )
+    assert rotating.throttle_remaining() == 30.0

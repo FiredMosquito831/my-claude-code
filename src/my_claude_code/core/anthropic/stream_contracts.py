@@ -222,7 +222,23 @@ _SCAFFOLDING_EVENT_TYPES = frozenset(
 )
 
 
-def sse_is_scaffolding(text: str) -> bool:
+# The delta types inside a ``content_block_delta`` that carry reasoning rather
+# than any part of the answer. ``signature_delta`` is the cryptographic tail of
+# a thinking block and is meaningless without it, so it travels with it.
+_REASONING_DELTA_TYPES = frozenset({"thinking_delta", "signature_delta"})
+
+
+def _event_is_scaffolding(event: SSEEvent, reasoning_commits: bool) -> bool:
+    kind = event.data.get("type") or event.event
+    if kind in _SCAFFOLDING_EVENT_TYPES:
+        return True
+    if reasoning_commits or kind != "content_block_delta":
+        return False
+    delta = event.data.get("delta")
+    return isinstance(delta, dict) and delta.get("type") in _REASONING_DELTA_TYPES
+
+
+def sse_is_scaffolding(text: str, *, reasoning_commits: bool = True) -> bool:
     """Whether an SSE fragment is envelope rather than answer.
 
     This decides where the model-fallback commit boundary starts. The provider
@@ -247,14 +263,21 @@ def sse_is_scaffolding(text: str) -> bool:
     like content: it starts the window, so unfamiliar output is delayed by the
     holdback rather than held indefinitely. A third "unknown" class would read
     as more precise while changing nothing any caller does.
+
+    ``reasoning_commits=False`` moves reasoning deltas to the scaffolding side.
+    A model that thinks aloud for the whole request budget and never writes an
+    answer has shown the reader no answer to lose, so committing the route on
+    it spends a configured chain on nothing: measured on this traffic, 479 of
+    499 budget exhaustions were one primary doing exactly that, all at
+    ``route_attempt = 0``. Holding reasoning keeps the attempt uncommitted, so
+    its share of the budget expires and the next model answers instead. The
+    cost is that reasoning no longer streams live -- it arrives when the answer
+    does, or when the buffer's byte cap forces a commit.
     """
     events = parse_sse_text(text)
     if not events:
         return False
-    return all(
-        (event.data.get("type") or event.event) in _SCAFFOLDING_EVENT_TYPES
-        for event in events
-    )
+    return all(_event_is_scaffolding(event, reasoning_commits) for event in events)
 
 
 def sse_carries_content(text: str) -> bool:

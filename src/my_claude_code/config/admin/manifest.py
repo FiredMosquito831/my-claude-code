@@ -233,8 +233,27 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "A malformed request fails identically everywhere, so retrying it "
             "costs a round trip per model to reach the same error. Leave empty "
             "to fall back on every failure. Known kinds: invalid_request, "
-            "authentication, permission, rate_limit, overloaded, timeout, "
-            "upstream, unavailable."
+            "context_length, authentication, permission, rate_limit, "
+            "overloaded, timeout, upstream, unavailable."
+        ),
+    ),
+    ConfigFieldSpec(
+        "FALLBACK_ON_REASONING_ONLY",
+        "Fall back when a model only thinks",
+        "models",
+        "boolean",
+        settings_attr="fallback_on_reasoning_only",
+        default="true",
+        restart_required=True,
+        description=(
+            "A model that streams its reasoning and never writes an answer "
+            "normally commits the route on the first thought, so the fallback "
+            "chain can no longer be used and the request runs until the total "
+            "budget ends it. With this on, reasoning is held back like an "
+            "envelope frame: the attempt stays uncommitted, its share of the "
+            "budget expires, and the next model answers instead. The cost is "
+            "that reasoning no longer streams live -- it appears when the "
+            "answer does. Turn this off to watch a model think in real time."
         ),
     ),
     ConfigFieldSpec(

@@ -1,5 +1,7 @@
 """Provider-owned stream retry and holdback policy."""
 
+import time
+
 import httpx
 import openai
 
@@ -461,3 +463,89 @@ def test_the_byte_cap_still_bounds_what_is_held() -> None:
     assert buffer.push(MESSAGE_START) == []
     assert buffer.push(PING) == [MESSAGE_START, PING]
     assert buffer.committed
+
+
+def test_reasoning_commits_the_route_by_default() -> None:
+    """The shipped classifier treats a thought as answer content."""
+    assert not sse_is_scaffolding(THINKING)
+    clock = iter([0.0, 0.1, 5.0])
+    buffer = RecoveryHoldbackBuffer(now=lambda: next(clock))
+    assert buffer.push(THINKING) == []
+    assert buffer.push(THINKING) == [THINKING, THINKING]
+    assert buffer.committed
+
+
+def test_reasoning_alone_never_commits_when_fallback_is_preferred() -> None:
+    """The measured shape of 479 of 499 budget exhaustions.
+
+    A primary that thinks for the whole request budget and never writes an
+    answer used to commit on its first thought, which spent an eight-model
+    chain on nothing. Held back, the attempt stays uncommitted and the route
+    can still move.
+    """
+    assert sse_is_scaffolding(THINKING, reasoning_commits=False)
+    clock = iter([0.0, 300.0, 600.0, 1200.0])
+    buffer = RecoveryHoldbackBuffer(reasoning_commits=False, now=lambda: next(clock))
+
+    assert buffer.push(MESSAGE_START) == []
+    assert buffer.push(THINKING) == []
+    assert buffer.push(THINKING) == []
+    assert not buffer.committed
+    assert buffer.has_buffered
+
+
+def test_a_signature_delta_travels_with_the_thinking_block_it_signs() -> None:
+    """It is the cryptographic tail of a thought, not a word of the answer."""
+    signature = _sse(
+        "content_block_delta",
+        '{"type":"content_block_delta","index":0,'
+        '"delta":{"type":"signature_delta","signature":"abc"}}',
+    )
+    assert sse_is_scaffolding(signature, reasoning_commits=False)
+    assert not sse_is_scaffolding(signature)
+
+
+def test_an_answer_still_commits_when_reasoning_does_not() -> None:
+    """Holding thoughts back must not hold the answer back too."""
+    clock = iter([0.0, 0.1, 5.0])
+    buffer = RecoveryHoldbackBuffer(reasoning_commits=False, now=lambda: next(clock))
+
+    assert buffer.push(THINKING) == []
+    buffer.push(TEXT)
+    assert buffer.push(TEXT) == [THINKING, TEXT, TEXT]
+    assert buffer.committed
+
+
+def test_tool_arguments_are_an_answer_even_when_reasoning_is_not() -> None:
+    """A tool call is the model acting, not deliberating."""
+    assert not sse_is_scaffolding(TOOL_ARGS, reasoning_commits=False)
+
+
+def test_an_early_retry_keeps_holding_reasoning_back() -> None:
+    """The retry path rebuilds the buffer; it must not revert to the default.
+
+    Constructing the replacement inline is what made this losable: the setting
+    would apply to the first attempt and silently not to the second.
+    """
+    controller = RecoveryController(
+        provider_name="p",
+        request_id="r",
+        reasoning_commits=False,
+    )
+    controller.push(THINKING)
+    decision = controller.advance_failure(
+        httpx.ReadError("reset"),
+        stream_opened=True,
+        generated_output=False,
+        complete_tool_salvageable=False,
+    )
+    assert decision.action is RecoveryFailureAction.EARLY_RETRY
+
+    # The wait is the assertion. Pushing twice back to back proves nothing:
+    # a buffer that had reverted to committing on reasoning would still be
+    # inside its 0.75s window and would return [] for the same reason the
+    # correct one does. Only a push from outside the window separates them.
+    controller.push(THINKING)
+    time.sleep(0.8)
+    assert controller.push(THINKING) == []
+    assert not controller.committed

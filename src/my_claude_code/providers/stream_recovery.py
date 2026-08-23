@@ -66,9 +66,11 @@ class RecoveryHoldbackBuffer:
         *,
         holdback_seconds: float = EARLY_HOLDBACK_SECONDS,
         max_bytes: int = RECOVERY_BUFFER_MAX_BYTES,
+        reasoning_commits: bool = True,
         now: Callable[[], float] | None = None,
     ) -> None:
         self._holdback_seconds = holdback_seconds
+        self._reasoning_commits = reasoning_commits
         self._max_bytes = max_bytes
         self._now = now or time.monotonic
         self._events: list[str] = []
@@ -116,7 +118,9 @@ class RecoveryHoldbackBuffer:
         # Content still gets the window rather than committing on its first
         # byte, because the window is also what makes an immediate cutoff
         # invisibly retryable -- held bytes have not reached the client yet.
-        if self._started_at is None and not sse_is_scaffolding(event):
+        if self._started_at is None and not sse_is_scaffolding(
+            event, reasoning_commits=self._reasoning_commits
+        ):
             self._started_at = self._now()
         if self._bytes >= self._max_bytes:
             return self.flush()
@@ -158,16 +162,30 @@ class RecoveryController:
         holdback_seconds: float = EARLY_HOLDBACK_SECONDS,
         early_retry_attempts: int = EARLY_TRANSPARENT_TOTAL_ATTEMPTS,
         midstream_recovery_attempts: int = MIDSTREAM_RECOVERY_ATTEMPTS,
+        reasoning_commits: bool = True,
     ) -> None:
         self._provider_name = provider_name
         self._request_id = request_id
         self._holdback_seconds = holdback_seconds
+        self._reasoning_commits = reasoning_commits
         # Attempts are counted as retries *after* the first try.
         self._max_early_retries = max(0, early_retry_attempts - 1)
         self._max_midstream_recoveries = max(0, midstream_recovery_attempts)
-        self._holdback = RecoveryHoldbackBuffer(holdback_seconds=holdback_seconds)
+        self._holdback = self._new_holdback()
         self._early_retry_count = 0
         self._midstream_recovery_count = 0
+
+    def _new_holdback(self) -> RecoveryHoldbackBuffer:
+        """One place building the buffer, so a retry cannot lose a setting.
+
+        The early-retry path replaces the buffer mid-stream. Constructing it
+        inline there meant every field added afterwards had to be remembered
+        twice, and the retry would silently revert to the default.
+        """
+        return RecoveryHoldbackBuffer(
+            holdback_seconds=self._holdback_seconds,
+            reasoning_commits=self._reasoning_commits,
+        )
 
     @property
     def committed(self) -> bool:
@@ -224,9 +242,7 @@ class RecoveryController:
         ):
             self._early_retry_count += 1
             self._holdback.discard()
-            self._holdback = RecoveryHoldbackBuffer(
-                holdback_seconds=self._holdback_seconds
-            )
+            self._holdback = self._new_holdback()
             trace_event(
                 stage="provider",
                 event="provider.recovery.early_retry",
