@@ -122,3 +122,28 @@ def test_a_zero_desktop_health_failure_threshold_still_reports_on_first_failure(
         _with("desktop_health_failure_threshold", "0").desktop_health_failure_threshold
         == 1
     )
+
+
+# --- RATE_LIMIT_COOLDOWN_SECONDS --------------------------------------------
+#
+# This limit's floor is a real value, not just a clamp destination: the range
+# table documents 0 as "does not pause". These pin that contract by name so a
+# future refactor cannot quietly turn the setting into either a crash or a
+# refused boot.
+
+
+def test_zero_cooldown_is_a_real_published_value() -> None:
+    resolved = _with("rate_limit_cooldown_seconds", "0")
+    assert resolved.rate_limit_cooldown_seconds == 0.0
+
+
+def test_negative_cooldown_clamps_to_no_pause() -> None:
+    resolved = _with("rate_limit_cooldown_seconds", "-5")
+    assert resolved.rate_limit_cooldown_seconds == 0.0
+
+
+def test_blank_cooldown_falls_back_to_the_shipped_default() -> None:
+    """The shipped default is 60 seconds."""
+    assert Settings.model_fields["rate_limit_cooldown_seconds"].default == 60.0
+    resolved = _with("rate_limit_cooldown_seconds", "")
+    assert resolved.rate_limit_cooldown_seconds == 60.0

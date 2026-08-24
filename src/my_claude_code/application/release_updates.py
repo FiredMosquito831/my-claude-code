@@ -419,12 +419,14 @@ def pending_upgrade_result() -> dict[str, Any] | None:
     """Outcome written by a deferred (Windows) upgrade, if one has finished.
 
     Read on status so a deferred install that failed after this process exited
-    is still reported instead of vanishing.
+    is still reported instead of vanishing. Read as ``utf-8-sig``: helpers
+    written by older builds under Windows PowerShell 5.1 prepend a UTF-8 BOM,
+    which ``json.loads`` refuses.
     """
 
     path = _stage_dir() / _PENDING_RESULT_FILENAME
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8-sig")
     except OSError:
         return None
     try:
@@ -508,6 +510,11 @@ def _deferred_helper_script(
     Written as PowerShell rather than Python because the only interpreter we
     can rely on is the one inside the environment being replaced -- using it
     would hold the very directory uv needs to delete.
+
+    Receipts go through ``[System.IO.File]::WriteAllText`` with a BOM-less
+    ``UTF8Encoding($false)``: Windows PowerShell 5.1's ``Set-Content
+    -Encoding utf8`` prepends a UTF-8 BOM and the Python reader parses JSON,
+    which refuses a leading U+FEFF.
     """
 
     quoted_args = ", ".join(_powershell_literal(arg) for arg in command[1:])
@@ -536,7 +543,7 @@ while ((Get-Date) -lt $deadline) {{
 }}
 if (Test-ParentAlive) {{
     $result = @{{ ok = $false; message = 'Timed out waiting for the server to stop.' }}
-    $result | ConvertTo-Json | Set-Content -Path {_powershell_literal(str(result_path))} -Encoding utf8
+    [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
     exit 1
 }}
 # Give Windows a moment to release the handles the exiting process held.
@@ -569,7 +576,7 @@ $result = @{{
     message = if ($ok) {{ 'Deferred install completed.' }} else {{ 'Deferred install failed after ' + $attempts + ' attempt(s).' }}
     output = $output
 }}
-$result | ConvertTo-Json | Set-Content -Path {_powershell_literal(str(result_path))} -Encoding utf8
+[System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
 if ($ok) {{
     Remove-Item -Path {_powershell_literal(str(stage_dir / "wheel"))} -Recurse -Force -ErrorAction SilentlyContinue
     # The launcher lives in uv's bin directory, outside the tool environment

@@ -476,3 +476,99 @@ def test_a_context_overflow_still_serializes_on_both_wire_protocols() -> None:
     assert anthropic_error_type_for_failure(failure) == "invalid_request_error"
     assert anthropic_status_for_error_type("invalid_request_error") == 400
     assert openai_error_type_for_failure(failure) == "invalid_request_error"
+
+
+# ---------------------------------------------------------------- zero waits
+#
+# "Retry-After: 0" says nothing to wait for. It used to flow straight into
+# extend_reactive_block, which refuses durations <= 0, so a single 429
+# carrying it exploded out of failure classification instead of producing
+# one. Same for RATE_LIMIT_COOLDOWN_SECONDS=0 with no header present.
+
+
+def _openai_rate_limit_error(headers: dict[str, str]) -> openai.RateLimitError:
+    request = httpx.Request("POST", "https://provider.test/v1/chat/completions")
+    response = httpx.Response(429, headers=headers, request=request)
+    return openai.RateLimitError(
+        "Too many requests",
+        response=response,
+        body={"error": {"message": "Too many requests"}},
+    )
+
+
+def _api_status_error_429(headers: dict[str, str]) -> openai.APIStatusError:
+    request = httpx.Request("POST", "https://provider.test/v1/chat/completions")
+    response = httpx.Response(429, headers=headers, request=request)
+    return openai.APIStatusError(
+        "stream embedded error",
+        response=response,
+        body={"error": {"message": "too many requests", "code": 429}},
+    )
+
+
+def _http_status_error_429(headers: dict[str, str]) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://provider.test/v1/messages")
+    response = httpx.Response(
+        429,
+        headers=headers,
+        request=request,
+        json={"error": {"message": "Too many requests"}},
+    )
+    return httpx.HTTPStatusError(
+        "Too many requests", request=request, response=response
+    )
+
+
+@pytest.mark.parametrize(
+    ("builder",),
+    (
+        pytest.param(_openai_rate_limit_error, id="openai_rate_limit_error"),
+        pytest.param(_api_status_error_429, id="api_status_error_429"),
+        pytest.param(_http_status_error_429, id="http_status_error"),
+    ),
+)
+@pytest.mark.parametrize(
+    ("header_name", "header_value"),
+    (("retry-after", "0"), ("retry-after-ms", "0")),
+)
+def test_a_zero_retry_after_installs_no_reactive_block(
+    builder: Callable[[dict[str, str]], Exception],
+    header_name: str,
+    header_value: str,
+) -> None:
+    """A zero-second upstream wait must classify cleanly and mark nothing."""
+    marks: list[float] = []
+
+    failure = classify_provider_failure(
+        builder({header_name: header_value}),
+        provider_name="ZERO",
+        read_timeout_s=30.0,
+        request_id=None,
+        mark_rate_limited=marks.append,
+    )
+
+    assert failure.kind is FailureKind.RATE_LIMIT
+    assert failure.status_code == 429
+    assert marks == [], "a zero-second wait must install no reactive block"
+
+
+def test_a_zero_configured_cooldown_installs_no_reactive_block() -> None:
+    """RATE_LIMIT_COOLDOWN_SECONDS=0 is published as 'does not pause'.
+
+    With no header to obey, the configured default went straight into
+    extend_reactive_block and raised -- punishing exactly the operators who
+    chose never to pause.
+    """
+    marks: list[float] = []
+
+    failure = classify_provider_failure(
+        _openai_rate_limit_error({}),
+        provider_name="ZERO",
+        read_timeout_s=30.0,
+        request_id=None,
+        mark_rate_limited=marks.append,
+        cooldown_seconds=0.0,
+    )
+
+    assert failure.kind is FailureKind.RATE_LIMIT
+    assert marks == []

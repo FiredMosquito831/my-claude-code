@@ -282,6 +282,20 @@ def context_length_failure(exc: BaseException) -> ExecutionFailure:
     return _failure(FailureKind.CONTEXT_LENGTH, 400, message, False)
 
 
+def _mark_rate_limited_when_positive(
+    mark_rate_limited: MarkRateLimited, seconds: float
+) -> None:
+    """Install the reactive block only for a real wait.
+
+    ``extend_reactive_block`` refuses durations <= 0, and upstreams do send
+    ``Retry-After: 0`` -- meaning "nothing to wait for", not "misconfigured".
+    Skip the mark instead of crashing out of classification.
+    """
+
+    if seconds > 0:
+        mark_rate_limited(seconds)
+
+
 def _classify_provider_failure(
     exc: Exception,
     *,
@@ -291,13 +305,19 @@ def _classify_provider_failure(
 ) -> ExecutionFailure:
     if isinstance(exc, ExecutionFailure):
         if exc.kind == FailureKind.RATE_LIMIT:
-            mark_rate_limited(rate_limit_cooldown_seconds(exc, cooldown_seconds))
+            _mark_rate_limited_when_positive(
+                mark_rate_limited,
+                rate_limit_cooldown_seconds(exc, cooldown_seconds),
+            )
         return exc
 
     if isinstance(exc, openai.AuthenticationError):
         return _failure(FailureKind.AUTHENTICATION, 401, _AUTHENTICATION_MESSAGE, False)
     if isinstance(exc, openai.RateLimitError):
-        mark_rate_limited(rate_limit_cooldown_seconds(exc, cooldown_seconds))
+        _mark_rate_limited_when_positive(
+            mark_rate_limited,
+            rate_limit_cooldown_seconds(exc, cooldown_seconds),
+        )
         return _failure(FailureKind.RATE_LIMIT, 429, _RATE_LIMIT_MESSAGE, True)
     if isinstance(exc, openai.BadRequestError):
         if is_context_length_error(exc):
@@ -324,7 +344,10 @@ def _classify_provider_failure(
     if isinstance(exc, openai.APIError):
         status = retryable_transient_status(exc)
         if status == 429:
-            mark_rate_limited(rate_limit_cooldown_seconds(exc, cooldown_seconds))
+            _mark_rate_limited_when_positive(
+                mark_rate_limited,
+                rate_limit_cooldown_seconds(exc, cooldown_seconds),
+            )
             return _failure(FailureKind.RATE_LIMIT, 429, _RATE_LIMIT_MESSAGE, True)
         if is_transient_overload_error(exc):
             return overloaded_provider_failure()
@@ -345,7 +368,10 @@ def _classify_provider_failure(
                 FailureKind.AUTHENTICATION, 401, _AUTHENTICATION_MESSAGE, False
             )
         if status == 429:
-            mark_rate_limited(rate_limit_cooldown_seconds(exc, cooldown_seconds))
+            _mark_rate_limited_when_positive(
+                mark_rate_limited,
+                rate_limit_cooldown_seconds(exc, cooldown_seconds),
+            )
             return _failure(FailureKind.RATE_LIMIT, 429, _RATE_LIMIT_MESSAGE, True)
         if status == 400:
             if is_context_length_error(exc):

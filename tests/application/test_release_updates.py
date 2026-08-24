@@ -542,7 +542,7 @@ def test_deferred_helper_script_waits_then_installs(tmp_path) -> None:
     assert script.index("Get-Process -Id $parent") < script.index("tool")
     assert "'tool', 'install', '--force', 'pkg'" in script
     assert str(tmp_path / "result.json") in script
-    result_write = script.index("ConvertTo-Json | Set-Content")
+    result_write = script.index("[System.IO.File]::WriteAllText")
     launch = script.index("Start-Process -FilePath")
     assert result_write < launch
     assert str(tmp_path / "bin" / "fcc-server.exe") in script
@@ -627,6 +627,39 @@ def test_pending_upgrade_result_tolerates_missing_or_corrupt_file(
         "not json", encoding="utf-8"
     )
     assert release_updates.pending_upgrade_result() is None
+
+
+def test_pending_upgrade_result_parses_a_utf8_bom_receipt(
+    monkeypatch, tmp_path
+) -> None:
+    """Windows PowerShell 5.1 writes UTF-8 with a BOM; json.loads refuses it.
+
+    Receipts written by an older helper sit on disk with that leading U+FEFF.
+    The reader must still surface their outcome instead of permanently
+    returning None and hiding what happened to the upgrade.
+    """
+    monkeypatch.setattr(release_updates, "_stage_dir", lambda: tmp_path)
+    (tmp_path / release_updates._PENDING_RESULT_FILENAME).write_bytes(
+        b'\xef\xbb\xbf{"ok": true}'
+    )
+    assert release_updates.pending_upgrade_result() == {"ok": True}
+
+
+def test_deferred_helper_writes_the_receipt_without_a_bom(tmp_path) -> None:
+    """Defense in depth: stop emitting the BOM the reader has to tolerate.
+
+    ``Set-Content -Encoding utf8`` under PowerShell 5.1 prepends U+FEFF;
+    ``[System.IO.File]::WriteAllText`` with ``UTF8Encoding($false)`` does not.
+    Both write sites -- timeout and final result -- must use it, and the
+    outcome must still be recorded before any relaunch attempt.
+    """
+    script = _deferred_script(tmp_path)
+    assert script.count("[System.IO.File]::WriteAllText") == 2
+    assert script.count("UTF8Encoding($false)") == 2
+    assert "Set-Content" not in script
+    first_write = script.index("[System.IO.File]::WriteAllText")
+    launch = script.index("Start-Process -FilePath")
+    assert first_write < launch
 
 
 def test_deferred_helper_survives_native_stderr(tmp_path) -> None:
