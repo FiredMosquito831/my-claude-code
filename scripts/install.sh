@@ -363,12 +363,49 @@ validate_args() {
     fi
 }
 
+extract_wheel_digest() {
+    # Scope the search to the asset object whose "name" is the wheel we will
+    # download: no other object's digest may satisfy it. Every other "name"
+    # line (the top-level release name, sibling assets) and the asset's own
+    # "browser_download_url" line end the matched scope, so an asset published
+    # without a digest yields nothing instead of borrowing a sibling's, and
+    # release-body prose can never be mistaken for the asset's digest.
+    printf '%s\n' "$1" |
+        awk -v wheel_name="$FCC_WHEEL_NAME" '
+            /"name":[[:space:]]*"/ {
+                name = $0
+                sub(/^.*"name":[[:space:]]*"/, "", name)
+                sub(/".*$/, "", name)
+                in_asset = (name == wheel_name) ? 1 : 0
+            }
+            in_asset && /"browser_download_url"/ { in_asset = 0 }
+            in_asset && /"digest":[[:space:]]*"sha256:/ {
+                line = $0
+                sub(/^.*"digest":[[:space:]]*"sha256:/, "", line)
+                sub(/".*$/, "", line)
+                print line
+                exit
+            }
+        '
+}
+
 resolve_release() {
+    digest_known=1
     if [ -n "$requested_version" ]; then
         FCC_VERSION=$requested_version
-        # No release feed is read for an explicit version, so no digest is
-        # available; the download is left unverified but clearly reported.
         FCC_WHEEL_NAME="my_claude_code-${FCC_VERSION}-py3-none-any.whl"
+        # A pinned install stays verified whenever the tag-scoped feed publishes
+        # a digest for the wheel. Only an unreachable feed downgrades to an
+        # explicitly reported unverified download; a readable feed that omits
+        # the asset's own digest is refused below rather than trusted.
+        tag_feed_url="https://api.github.com/repos/${FCC_REPO}/releases/tags/v${FCC_VERSION}"
+        print_command curl -fsSL "$tag_feed_url"
+        if release_json=$(curl -fsSL -H "Accept: application/vnd.github+json" "$tag_feed_url" 2>/dev/null); then
+            :
+        else
+            printf 'warning: could not reach the release feed to verify v%s -- proceeding unverified.\n' "$FCC_VERSION" >&2
+            digest_known=0
+        fi
     else
         # Read even during a dry run: it is a GET that changes nothing, and it
         # is the only way to report the version that would actually install.
@@ -380,24 +417,19 @@ resolve_release() {
             sed -e 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//' -e 's/".*//' -e 's/^v//')
         [ -n "$FCC_VERSION" ] ||
             fail "Could not read the latest release version from the release feed."
+        FCC_WHEEL_NAME="my_claude_code-${FCC_VERSION}-py3-none-any.whl"
+    fi
+
+    if [ "$digest_known" -eq 1 ]; then
         # GitHub publishes a sha256 digest per asset, so the download is still
         # verified even though no checksum is pinned in this script. The release
-        # body can itself mention a sha256 (the release notes often repeat the
-        # digest), and the body precedes the assets in the payload, so a naive
-        # first '"digest"' match can land on prose instead of the asset. Grab the
-        # digest only from the asset whose name matches the wheel we will download.
-        FCC_WHEEL_NAME="my_claude_code-${FCC_VERSION}-py3-none-any.whl"
-        FCC_WHEEL_SHA256=$(printf '%s\n' "$release_json" |
-            awk '
-                /"name":[[:space:]]*"'"$FCC_WHEEL_NAME"'"/ { in_asset = 1 }
-                in_asset && /"digest":[[:space:]]*"sha256:/ {
-                    line = $0
-                    sub(/^.*"digest":[[:space:]]*"sha256:/, "", line)
-                    sub(/".*$/, "", line)
-                    print line
-                    exit
-                }
-            ')
+        # body follows the assets in the payload and often repeats the wheel
+        # digest as prose, so the digest is taken only from the asset object
+        # whose name matches the wheel; an asset without one refuses loudly
+        # rather than borrowing a sibling's.
+        FCC_WHEEL_SHA256=$(extract_wheel_digest "$release_json")
+        [ -n "$FCC_WHEEL_SHA256" ] ||
+            fail "No digest published for this asset (${FCC_WHEEL_NAME} in release v${FCC_VERSION}); refusing to install."
     fi
     FCC_WHEEL_URL="https://github.com/${FCC_REPO}/releases/download/v${FCC_VERSION}/${FCC_WHEEL_NAME}"
 }
@@ -423,6 +455,15 @@ download_verified_release_wheel() {
     fi
     [ -s "$release_wheel_path" ] ||
         fail "The downloaded FCC release wheel was empty."
+
+    if [ -z "$FCC_WHEEL_SHA256" ]; then
+        # Reachable only when a --version install could not read the tag feed;
+        # resolve_release refuses a missing digest in every other case. The
+        # fail-open was announced there and is repeated here so the user sees
+        # it immediately before the install happens.
+        printf 'warning: installing FCC v%s WITHOUT checksum verification.\n' "$FCC_VERSION" >&2
+        return 0
+    fi
 
     if command -v sha256sum >/dev/null 2>&1; then
         actual_sha256=$(sha256sum "$release_wheel_path")

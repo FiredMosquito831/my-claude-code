@@ -64,6 +64,31 @@ RELEASE_FEED_JSON = f"""{{
 }}
 """
 
+PINNED_FEED_URL = (
+    "https://api.github.com/repos/FiredMosquito831/my-claude-code/releases/tags/"
+    f"v{FCC_VERSION}"
+)
+
+# Same shape as RELEASE_FEED_JSON, but the wheel asset carries no digest while
+# a sibling asset after it does one: a correctly scoped extractor must refuse
+# the install instead of borrowing the sibling's digest.
+RELEASE_FEED_NO_TARGET_DIGEST_JSON = f"""{{
+  "tag_name": "v{FCC_VERSION}",
+  "name": "v{FCC_VERSION}",
+  "assets": [
+    {{
+      "name": "{FCC_WHEEL_NAME}",
+      "browser_download_url": "{FCC_WHEEL_URL}"
+    }},
+    {{
+      "name": "sibling-asset.zip",
+      "digest": "sha256:{"b" * 64}",
+      "browser_download_url": "https://example.invalid/sibling-asset.zip"
+    }}
+  ]
+}}
+"""
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -232,6 +257,11 @@ case "$url:$FAIL_STEP" in
         exit 41
         ;;
 esac
+case "$url:$FAIL_STEP" in
+    *api.github.com*:fcc-feed)
+        exit 43
+        ;;
+esac
 case "$url" in
     *api.github.com*)
         cat "$FAKE_FIXTURES/release-feed.json"
@@ -337,10 +367,10 @@ def test_install_sh_digest_comes_from_the_asset_not_the_release_body(
 ) -> None:
     """A release body that mentions a sha256 must not pollute the wheel digest.
 
-    GitHub places the release ``body`` before the ``assets`` in the payload, and
+    GitHub places the release ``body`` after the ``assets`` in the payload, and
     release notes often repeat the wheel digest as prose (the v5.0.0 notes do).
-    The installer must verify against the asset's own ``digest`` field, not the
-    first ``"digest"`` in the feed.
+    The installer must verify against the asset's own ``digest`` field, never a
+    digest borrowed from any other object in the feed.
     """
     poisoned = RELEASE_FEED_JSON.replace(
         '"name": "v{FCC_VERSION}",',
@@ -357,6 +387,68 @@ def test_install_sh_digest_comes_from_the_asset_not_the_release_body(
     # (which compares against the real FCC_WHEEL_SHA256) would have refused.
     assert result.returncode == 0, result.stderr
     assert "is installed and verified." in result.stdout
+
+
+def test_install_sh_pinned_version_installs_verified_from_tag_feed(
+    posix_harness: PosixHarness,
+) -> None:
+    """An explicit --version stays verified via the tag-scoped release feed."""
+    result = posix_harness.run("--version", FCC_VERSION)
+
+    assert result.returncode == 0, result.stderr
+    assert "Verified FCC v" in result.stdout
+    assert "is installed and verified." in result.stdout
+    calls = posix_harness.calls()
+    assert f"download:{PINNED_FEED_URL}" in calls
+    assert f"download:{FCC_WHEEL_URL}" in calls
+    assert any(call.startswith("sha256sum:") for call in calls)
+    # A pin resolves against its own tag's feed, never /releases/latest.
+    assert f"download:{FCC_LATEST_RELEASE_URL}" not in calls
+
+
+def test_install_sh_pinned_version_proceeds_unverified_when_feed_unreachable(
+    posix_harness: PosixHarness,
+) -> None:
+    result = posix_harness.run("--version", FCC_VERSION, fail_step="fcc-feed")
+
+    assert result.returncode == 0, result.stderr
+    assert "proceeding unverified" in result.stderr
+    assert "is installed and verified." in result.stdout
+    calls = posix_harness.calls()
+    assert f"download:{PINNED_FEED_URL}" in calls
+    assert f"download:{FCC_WHEEL_URL}" in calls
+    # Unverified by design: no expected digest existed, so nothing was hashed.
+    assert not any(call.startswith("sha256sum:") for call in calls)
+
+
+def test_install_sh_pinned_version_refuses_target_asset_without_digest(
+    posix_harness: PosixHarness,
+) -> None:
+    (posix_harness.fixtures / "release-feed.json").write_text(
+        RELEASE_FEED_NO_TARGET_DIGEST_JSON, encoding="utf-8"
+    )
+
+    result = posix_harness.run("--version", FCC_VERSION)
+
+    assert result.returncode != 0
+    assert "No digest published for this asset" in result.stderr
+    assert "is installed and verified." not in result.stdout
+    assert not any("uv:tool install" in call for call in posix_harness.calls())
+
+
+def test_install_sh_refuses_latest_release_asset_without_digest(
+    posix_harness: PosixHarness,
+) -> None:
+    """The shared no-digest guard also covers the default latest-release path."""
+    (posix_harness.fixtures / "release-feed.json").write_text(
+        RELEASE_FEED_NO_TARGET_DIGEST_JSON, encoding="utf-8"
+    )
+
+    result = posix_harness.run()
+
+    assert result.returncode != 0
+    assert "No digest published for this asset" in result.stderr
+    assert not any("uv:tool install" in call for call in posix_harness.calls())
 
 
 def test_install_sh_replaces_obsolete_uv(posix_harness: PosixHarness) -> None:
