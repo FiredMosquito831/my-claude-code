@@ -7,6 +7,7 @@ restart, stop -- while the tray adapter owns the visible menu.
 """
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -28,16 +29,27 @@ from my_claude_code.cli.port_diagnostics import (
     probe_port_available,
 )
 from my_claude_code.config.claude_discovery import native_origin
-from my_claude_code.config.desktop import load_desktop_state, set_window_open
+from my_claude_code.config.desktop import (
+    DesktopState,
+    apply_start_at_login,
+    load_desktop_state,
+    remove_start_at_login,
+    set_window_open,
+)
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 from my_claude_code.core.interprocess_lock import InterprocessFileLock
 
+logger = logging.getLogger(__name__)
+
 _SERVER_MODULE = "my_claude_code.cli.entrypoints"
 
 LOCK_FILENAME = "desktop.lock"
 ACTIVATION_FILENAME = "desktop.activate"
+
+#: How often the close watcher samples ``window.is_open`` (seconds).
+WINDOW_CLOSE_POLL_SECONDS = 1.0
 
 #: Three distinguishable states of the configured host:port.
 type ServerPresence = Literal["healthy", "foreign", "free"]
@@ -482,10 +494,17 @@ class DesktopController:
 
         Only the child is stopped; a server the user started outside the tray
         is left running, because the tray is a controller, not an owner.
+
+        The window is closed without recording ``window_open=False``,
+        matching :meth:`handle_window_closed`: an app-ending close leaves the
+        state alone, because the user's last intent was an app *with* a
+        window and the next launch should restore it.
         """
 
         self.stop_health_monitor()
-        self.close_window()
+        window = self._window
+        if window is not None:
+            window.close()
         self._stop_child()
         self._lock.release()
 
@@ -493,6 +512,36 @@ class DesktopController:
         """Stop the child server and release the lock; the tray loop ends itself."""
 
         self.stop()
+
+
+def _poll_window_transition(
+    was_open: bool, controller: DesktopController, tray: Any
+) -> bool:
+    """Fold one ``is_open`` observation into close handling; return the state.
+
+    Only a True->False edge is acted on: a close the app survives records
+    "no window", while a close that ends it stops the tray so its ``run()``
+    returns and the launch's finally-block unwinds everything else.
+    """
+
+    window = controller.window
+    is_open = window is not None and bool(window.is_open)
+    if was_open and not is_open and not controller.handle_window_closed():
+        tray.stop()
+    return is_open
+
+
+def _watch_window_close(
+    controller: DesktopController,
+    tray: Any,
+    stop: threading.Event,
+    interval: float,
+) -> None:
+    """Watch the window provider's ``is_open`` edge until asked to stop."""
+
+    was_open = False
+    while not stop.wait(interval):
+        was_open = _poll_window_transition(was_open, controller, tray)
 
 
 class DesktopError(Exception):
@@ -521,13 +570,38 @@ def headless_refusal_reason() -> str | None:
             "reaches the WSL port directly."
         )
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
-        return None
+        return (
+            "mcc-desktop's tray lives in the Windows and macOS status areas; "
+            "no Linux tray backend is packaged. Run mcc-server instead -- it "
+            f"is headless -- and open {admin_url} in this machine's browser."
+        )
     return (
         "mcc-desktop needs a desktop session, and neither DISPLAY nor "
         "WAYLAND_DISPLAY is set. Run mcc-server instead -- it is headless -- "
         f"and open {admin_url} from a browser on any machine that can reach "
         "this one."
     )
+
+
+def _reconcile_start_at_login(state: DesktopState) -> None:
+    """Make the OS registration match what the admin API persisted.
+
+    The admin API only writes the JSON file -- it may be running headless,
+    with no tray or desktop session -- so this launch-time step reconciles
+    the flag with the OS ("The next ``mcc-desktop``/tray launch reconciles
+    the file with the OS"). Both directions are idempotent. A disabled tray
+    never registers: an invisible tray must not relaunch at login.
+    """
+
+    try:
+        if state.tray_enabled and state.start_at_login:
+            apply_start_at_login()
+        else:
+            remove_start_at_login()
+    except Exception:
+        logger.warning(
+            "Could not reconcile the start-at-login registration.", exc_info=True
+        )
 
 
 def launch_desktop(
@@ -553,6 +627,7 @@ def launch_desktop(
         return
 
     signal.clear()
+    _reconcile_start_at_login(load_desktop_state())
     controller = DesktopController(
         lock=instance_lock, window=window_factory(state.window)
     )
@@ -565,6 +640,12 @@ def launch_desktop(
         name="mcc-desktop-activation",
         daemon=True,
     )
+    close_watcher = threading.Thread(
+        target=_watch_window_close,
+        args=(controller, tray, stop_watching, WINDOW_CLOSE_POLL_SECONDS),
+        name="mcc-desktop-window-close",
+        daemon=True,
+    )
     try:
         controller.ensure_server()
         if state.window_open:
@@ -574,6 +655,7 @@ def launch_desktop(
             on_recovered=lambda: notify(SERVER_RECOVERED_NOTIFICATION),
         )
         watcher.start()
+        close_watcher.start()
         tray.run()
     finally:
         stop_watching.set()
