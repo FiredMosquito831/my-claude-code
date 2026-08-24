@@ -1,0 +1,57 @@
+# Arm the wheel end-to-end guard that nothing else can run.
+#
+# tests/api/test_docs_bundle_wheel.py builds a real wheel only behind
+# MCC_WHEEL_TESTS=1: a nested uv build inside `uv run pytest` hung CI until
+# the fixture was gated, so ordinary CI must never set the flag -- and never
+# did, which left the end-to-end half of that file decorative. This workflow
+# is the flag's only setter: weekly off-peak plus manual dispatch, never on
+# push/pull_request, so it cannot gate merges. Red here means the shipped
+# wheel's Docs bundle is broken even though every source-checkout run was
+# green.
+
+name: Wheel E2E
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Wednesdays 02:41 UTC -- deliberately off the :00/:30 fleet sync minutes.
+    - cron: "41 2 * * 3"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docs-bundle-wheel:
+    name: Build wheel, verify the bundled docs
+    runs-on: windows-latest
+    # The fixture caps each `uv build --wheel` at 900s; leave room for
+    # checkout, sync and a cold tool cache on top.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 1
+
+      - name: Install uv
+        # Same SHA pins as tests.yml; kept in lockstep by contract tests.
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.11.15"
+          enable-cache: true
+          cache-python: true
+
+      - name: Sync environment
+        run: uv sync
+
+      - name: Run the gated wheel tests
+        env:
+          MCC_WHEEL_TESTS: "1"
+        # --no-sync matters: the outer uv must not take the project lock back
+        # while the fixture's inner `uv build --wheel` wants it -- that
+        # contention is the documented hang. `uv sync` above already prepared
+        # the environment.
+        run: uv run --no-sync pytest -v --tb=short tests/api/test_docs_bundle_wheel.py

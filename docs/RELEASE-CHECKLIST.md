@@ -108,3 +108,22 @@ Captured views to refresh:
 - ] Wheel contains `my_claude_code/` and `free_claude_code/`
 - [ ] Dashboard screenshots refreshed from local `mcc-server`
 - [ ] README quickstart uses `mcc-server`; `fcc-server` still documented as alias
+
+## 6. Wheel end-to-end guard (`wheel-e2e.yml`)
+
+`tests/api/test_docs_bundle_wheel.py` only builds a real wheel behind
+`MCC_WHEEL_TESTS=1`, and ordinary CI must never set that flag (a nested
+`uv build` inside `uv run pytest` hung CI until the fixture was gated).
+`.github/workflows/wheel-e2e.yml` is therefore the flag's only setter:
+
+- **What it runs**: `MCC_WHEEL_TESTS=1 pytest tests/api/test_docs_bundle_wheel.py`
+  on `windows-latest` -- a real `uv build --wheel`, then the bundle
+  assertions inside it (every curated document present, non-empty,
+  uniquely named, and no developer-only documents shipped).
+- **When**: Wednesdays 02:41 UTC and manual *Run workflow* dispatches.
+  Never on `push`/`pull_request`, so it cannot gate merges.
+- **What a red run means**: the *shipped wheel* is missing, renaming, or
+  truncating a curated document -- every installed user gets an empty
+  Docs page while source checkouts render fine. Fix the
+  `[tool.hatch.build.targets.wheel.force-include]` table (see section 3),
+  then re-dispatch the workflow before releasing.
