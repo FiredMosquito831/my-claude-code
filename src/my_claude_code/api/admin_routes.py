@@ -87,10 +87,6 @@ from my_claude_code.config.websearch_catalog import (
     WEBSEARCH_CATALOG,
     WebSearchDescriptor,
 )
-from my_claude_code.core.messaging_auth import (
-    discord_auth_open,
-    telegram_auth_open,
-)
 from my_claude_code.core.optimization_discovery import (
     DEFAULT_SCAN_ROW_LIMIT,
     MAX_SCAN_ROW_LIMIT,
@@ -325,32 +321,10 @@ async def admin_document(slug: str, request: Request):
     }
 
 
-def _messaging_auth_open(config: dict[str, Any]) -> list[str]:
-    """Platform ids selected by config that would run without an allowlist."""
-    values = {field["key"]: field["value"] for field in config["fields"]}
-    platform = str(values.get("MESSAGING_PLATFORM", "")).strip()
-    open_platforms: list[str] = []
-    if (
-        platform == "telegram"
-        and str(values.get("TELEGRAM_BOT_TOKEN", "")).strip()
-        and telegram_auth_open(str(values.get("ALLOWED_TELEGRAM_USER_ID", "")))
-    ):
-        open_platforms.append("telegram")
-    if (
-        platform == "discord"
-        and str(values.get("DISCORD_BOT_TOKEN", "")).strip()
-        and discord_auth_open(str(values.get("ALLOWED_DISCORD_CHANNELS", "")))
-    ):
-        open_platforms.append("discord")
-    return open_platforms
-
-
 @router.get("/admin/api/config")
 async def get_admin_config(request: Request):
     require_loopback_admin(request)
-    config = load_config_response()
-    config["messaging_auth_open"] = _messaging_auth_open(config)
-    return config
+    return load_config_response()
 
 
 @router.post("/admin/api/config/validate")

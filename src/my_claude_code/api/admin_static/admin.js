@@ -327,6 +327,7 @@ async function loadDashboardState() {
   );
   renderNav();
   renderSections(config.sections, config.fields);
+  renderMessagingAuthNotice(config.messaging_auth_open);
   renderWebSearchProviders();
   await loadCustomProviders();
   byId("configPath").textContent = config.paths.managed;
@@ -1122,6 +1123,33 @@ function renderModelRouting(fields) {
   return wrap;
 }
 
+// Wave-2 cross-lane contract: the config GET payload carries a top-level
+// `messaging_auth_open` array naming every platform any unauthenticated
+// client can message right now ([] once every platform is locked behind an
+// allowlist). An open install is a security posture the reader should not
+// have to reverse-engineer from env vars, so it says so on the Messaging
+// page itself. Hidden entirely while the array is empty.
+function renderMessagingAuthNotice(openPlatforms) {
+  const view = byId("view-messaging");
+  const sections = byId("messagingSections");
+  if (!view || !sections) return;
+  byId("messagingAuthNotice")?.remove();
+  const platforms = Array.isArray(openPlatforms)
+    ? openPlatforms.filter(
+        (platform) => typeof platform === "string" && platform.trim() !== "",
+      )
+    : [];
+  if (platforms.length === 0) return;
+  const notice = document.createElement("p");
+  notice.id = "messagingAuthNotice";
+  notice.className = "analytics-warning";
+  notice.textContent =
+    "Messaging auth is OPEN: anyone can message these platforms: " +
+    `${platforms.join(", ")}. Set TELEGRAM_ALLOWED_USER_ID / ` +
+    "DISCORD_ALLOWED_CHANNEL_IDS.";
+  view.insertBefore(notice, sections);
+}
+
 function renderSections(sections, fields) {
   state.modelComboboxes.clear();
   VIEW_GROUPS.forEach((view) => {
@@ -1161,7 +1189,15 @@ function renderSections(sections, fields) {
 
       const heading = document.createElement("div");
       heading.className = "section-heading";
-      heading.innerHTML = `<div><h3>${section.label}</h3><p>${section.description}</p></div>`;
+      // label/description come from the manifest and can carry custom-provider
+      // display names, so they render as text nodes -- never as markup.
+      const headingText = document.createElement("div");
+      const headingLabel = document.createElement("h3");
+      headingLabel.textContent = section.label;
+      const headingDescription = document.createElement("p");
+      headingDescription.textContent = section.description;
+      headingText.append(headingLabel, headingDescription);
+      heading.appendChild(headingText);
       if (section.id === "models") {
         const refreshButton = document.createElement("button");
         refreshButton.type = "button";
@@ -4607,7 +4643,11 @@ function customProviderCard(provider) {
 
   const title = document.createElement("div");
   title.className = "provider-title";
-  title.innerHTML = `<strong>${provider.display_name || provider.provider_id}</strong>`;
+  // display_name is free-text the user typed, so it renders as a text node --
+  // same contract as renderProviderCard().
+  const name = document.createElement("strong");
+  name.textContent = provider.display_name || provider.provider_id;
+  title.appendChild(name);
   const pill = document.createElement("span");
   pill.className = `status-pill ${statusClass(provider.status)}`;
   pill.textContent =

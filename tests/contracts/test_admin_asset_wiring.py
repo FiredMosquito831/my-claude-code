@@ -63,6 +63,9 @@ KNOWN_DYNAMIC_ONLY_IDS: set[str] = {
     # It lives inside the section the settings renderer builds, so it cannot
     # be declared in index.html: that container is emptied on every render.
     "optPerToolNote",
+    # messagingAuthNotice: built dynamically by renderMessagingAuthNotice
+    # (admin.js ~1144); it is never declared in index.html.
+    "messagingAuthNotice",
 }
 
 
