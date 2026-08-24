@@ -4,6 +4,11 @@ from dataclasses import dataclass
 
 from loguru import logger
 
+from my_claude_code.core.messaging_auth import (
+    discord_auth_open,
+    telegram_auth_open,
+)
+
 from ..limiter import MessagingRateLimiter
 from ..voice import Transcriber
 from .ports import MessagingPlatformComponents, MessagingStartupNotice
@@ -42,6 +47,13 @@ def create_messaging_components(
             logger.info("No Telegram bot token configured, skipping platform setup")
             return None
 
+        if telegram_auth_open(opts.allowed_telegram_user_id):
+            logger.warning(
+                "SECURITY: Telegram operator allowlist is disabled - any Telegram "
+                "user who finds this bot can message it and act as the operator. "
+                "Lock it to your account by setting ALLOWED_TELEGRAM_USER_ID."
+            )
+
         from .telegram import TelegramRuntime
 
         limiter = MessagingRateLimiter(
@@ -79,6 +91,13 @@ def create_messaging_components(
         if not bot_token:
             logger.info("No Discord bot token configured, skipping platform setup")
             return None
+
+        if discord_auth_open(opts.allowed_discord_channels):
+            logger.warning(
+                "SECURITY: Discord channel allowlist is disabled - any channel "
+                "that can see this bot can message it and act as the operator. "
+                "Lock it to your channels by setting ALLOWED_DISCORD_CHANNELS."
+            )
 
         from .discord import DiscordRuntime
 
