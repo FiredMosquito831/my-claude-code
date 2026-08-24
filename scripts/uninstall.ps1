@@ -8,17 +8,31 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PackageName = "free-claude-code"
+# PackageName must equal [project].name in pyproject.toml -- uv installs and
+# uninstalls by that name, and anything else silently no-ops. Both names are
+# pinned by tests/contracts/test_uninstaller_parity.py.
+$PackageName = "my-claude-code"
+# Installs older than 5.14 were published under the free-claude-code name;
+# kept as best-effort cleanup. Absence of either tool is acceptable.
+$LegacyPackageName = "free-claude-code"
 $FccHomeDirname = ".fcc"
+# Must mirror every entry in [project.scripts] + [project.gui-scripts] (the
+# same list as Get-LauncherCommands in scripts/install.ps1); pinned by
+# tests/contracts/test_uninstaller_parity.py.
 $FccCommands = @(
-    "fcc-server",
-    "fcc-claude",
-    "fcc-claude-old",
-    "fcc-codex",
-    "fcc-pi",
-    "fcc-init",
-    "free-claude-code"
+    "fcc-server", "fcc-claude", "fcc-claude-old", "fcc-codex", "fcc-pi",
+    "fcc-init", "fcc-chatgpt-oauth-login", "fcc-compact-log",
+    "free-claude-code",
+    "fcc-anthropic-oauth-login", "fcc-rtk", "fcc-help", "fcc-desktop",
+    "mcc-server", "mcc-claude", "mcc-claude-old", "mcc-codex", "mcc-pi",
+    "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
+    "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-desktop",
+    "my-claude-code"
 )
+# GUI scripts (mcc-desktop / fcc-desktop) run as pythonw.exe out of the uv
+# tool environment rather than under a shim named after the command, so the
+# process guard must also look at interpreter image names.
+$GuardProcessImages = @("pythonw")
 $script:UvPath = ""
 $script:UvToolBin = ""
 
@@ -26,7 +40,8 @@ function Show-Usage {
     @"
 Usage: uninstall.ps1 [options]
 
-Removes the Free Claude Code uv tool and deletes ~/.fcc/ after removal is verified.
+Removes the My Claude Code uv tool (plus any legacy Free Claude Code tool)
+and deletes ~/.fcc/ after removal is verified.
 Does not remove uv, Claude Code, Codex, Pi, the uv-managed Python runtime, or shared PATH entries.
 
 Options:
@@ -93,10 +108,13 @@ function Invoke-NativeResult {
 }
 
 function Test-MissingUvToolError {
-    param([string] $Output)
+    param(
+        [string] $ToolName,
+        [string] $Output
+    )
 
     $normalized = $Output.ToLowerInvariant()
-    return $normalized.Contains($PackageName) -and $normalized.Contains("is not installed")
+    return $normalized.Contains($ToolName) -and $normalized.Contains("is not installed")
 }
 
 function Add-PathEntry {
@@ -120,16 +138,18 @@ function Add-KnownUvPaths {
     Add-PathEntry (Join-Path $env:USERPROFILE ".cargo\bin")
 }
 
-function Assert-NoFccProcessesRunning {
+function Assert-NoMccProcessesRunning {
+    # Shim-name checks cannot see gui-script processes (pythonw.exe out of the
+    # tool environment), hence the extra interpreter-image list.
     $running = @()
-    foreach ($commandName in $FccCommands) {
+    foreach ($commandName in ($FccCommands + $GuardProcessImages)) {
         $processes = @(Get-Process -Name $commandName -ErrorAction SilentlyContinue)
         if ($processes.Count -gt 0) {
             $running += $commandName
         }
     }
     if ($running.Count -gt 0) {
-        throw "Free Claude Code is still running ($($running -join ', ')). Stop those processes, then rerun uninstall."
+        throw "My Claude Code is still running ($($running -join ', ')). Stop those processes, then rerun uninstall."
     }
 }
 
@@ -143,7 +163,7 @@ function Initialize-UvContext {
 
     $uvCommand = Get-ApplicationCommand "uv"
     if (-not $uvCommand) {
-        throw "uv is required to remove the Free Claude Code tool. Install uv, then rerun this uninstaller; ~/.fcc was not deleted."
+        throw "uv is required to remove the My Claude Code tool. Install uv, then rerun this uninstaller; ~/.fcc was not deleted."
     }
     $script:UvPath = $uvCommand.Source
 
@@ -162,8 +182,10 @@ function Initialize-UvContext {
     }
 }
 
-function Uninstall-FreeClaudeCode {
-    Write-Host "+ uv tool uninstall $PackageName"
+function Uninstall-MccTool {
+    param([string] $ToolName)
+
+    Write-Host "+ uv tool uninstall $ToolName"
     if ($DryRun) {
         return
     }
@@ -171,7 +193,7 @@ function Uninstall-FreeClaudeCode {
     $result = Invoke-NativeResult -FilePath $script:UvPath -Arguments @(
         "tool",
         "uninstall",
-        $PackageName
+        $ToolName
     )
     if ($result.ExitCode -eq 0) {
         if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
@@ -179,19 +201,19 @@ function Uninstall-FreeClaudeCode {
         }
         return
     }
-    if (Test-MissingUvToolError -Output $result.Output) {
-        Write-Host "Free Claude Code uv tool is already absent; verifying its entry points."
+    if (Test-MissingUvToolError -ToolName $ToolName -Output $result.Output) {
+        Write-Host "$ToolName uv tool is already absent; verifying its entry points."
         return
     }
     if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
         [Console]::Error.WriteLine($result.Output)
     }
-    throw "uv tool uninstall $PackageName failed with exit code $($result.ExitCode); ~/.fcc was not deleted."
+    throw "uv tool uninstall $ToolName failed with exit code $($result.ExitCode); ~/.fcc was not deleted."
 }
 
 function Confirm-FccCommandsRemoved {
     if ($DryRun) {
-        Write-Host "+ verify all Free Claude Code entry points are absent from the uv tool bin directory"
+        Write-Host "+ verify all My Claude Code entry points are absent from the uv tool bin directory"
         return
     }
 
@@ -206,7 +228,7 @@ function Confirm-FccCommandsRemoved {
         }
     }
     if ($remaining.Count -gt 0) {
-        throw "Free Claude Code entry points remain after uv uninstall: $($remaining -join ', '); ~/.fcc was not deleted."
+        throw "My Claude Code entry points remain after uv uninstall: $($remaining -join ', '); ~/.fcc was not deleted."
     }
 }
 
@@ -244,19 +266,20 @@ if ($RemainingArgs.Count -gt 0) {
     throw "Unknown option: $($RemainingArgs -join ' ')"
 }
 if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
-    throw "USERPROFILE is not set; cannot locate Free Claude Code data."
+    throw "USERPROFILE is not set; cannot locate My Claude Code data."
 }
 
-Write-Step "Checking for running Free Claude Code processes"
-Assert-NoFccProcessesRunning
+Write-Step "Checking for running My Claude Code processes"
+Assert-NoMccProcessesRunning
 
-Write-Step "Locating the uv-managed Free Claude Code installation"
+Write-Step "Locating the uv-managed My Claude Code installation"
 Initialize-UvContext
 
-Write-Step "Removing the Free Claude Code uv tool"
-Uninstall-FreeClaudeCode
+Write-Step "Removing the My Claude Code uv tool (and any legacy Free Claude Code tool)"
+Uninstall-MccTool -ToolName $PackageName
+Uninstall-MccTool -ToolName $LegacyPackageName
 
-Write-Step "Verifying Free Claude Code entry points were removed"
+Write-Step "Verifying My Claude Code entry points were removed"
 Confirm-FccCommandsRemoved
 
 Write-Step "Purging FCC config and data from ~/.fcc"
@@ -267,6 +290,6 @@ if ($DryRun) {
     Write-Host "Dry run complete. No changes were made."
 }
 else {
-    Write-Host "Free Claude Code has been removed and verified."
+    Write-Host "My Claude Code has been removed and verified."
     Write-Host "uv, Claude Code, Codex, Pi, the uv-managed Python runtime, and shared PATH entries were left installed."
 }

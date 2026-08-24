@@ -1,24 +1,41 @@
+"""End-to-end uninstaller behaviour on both platforms.
+
+The uninstaller removes the ``my-claude-code`` uv tool (plus the legacy
+``free-claude-code`` tool left by pre-5.14 installs), verifies that every
+published entry point is gone before touching user data, and preserves
+``~/.fcc`` whenever removal cannot be confirmed. The shim fixtures here are
+derived from ``pyproject.toml`` so the scenarios always cover exactly the
+entry points a real wheel publishes; the cross-file parity contract lives in
+tests/contracts/test_uninstaller_parity.py.
+"""
+
 import os
 import shutil
 import subprocess
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-FCC_COMMANDS = (
-    "fcc-server",
-    "fcc-claude",
-    "fcc-claude-old",
-    "fcc-codex",
-    "fcc-pi",
-    "fcc-init",
-    "free-claude-code",
-)
+PRIMARY_PACKAGE = "my-claude-code"
+LEGACY_PACKAGE = "free-claude-code"
 
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _published_commands() -> tuple[str, ...]:
+    pyproject = _repo_root() / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    project = data["project"]
+    return tuple(
+        sorted(set(project.get("scripts", {})) | set(project.get("gui-scripts", {})))
+    )
+
+
+PUBLISHED_COMMANDS = _published_commands()
 
 
 def _write_executable(path: Path, text: str) -> None:
@@ -64,7 +81,7 @@ class PosixUninstallHarness:
         return self.log.read_text(encoding="utf-8").splitlines()
 
     def remove_entry_points(self) -> None:
-        for name in FCC_COMMANDS:
+        for name in PUBLISHED_COMMANDS:
             (self.tool_bin / name).unlink(missing_ok=True)
 
 
@@ -81,7 +98,7 @@ def posix_uninstall_harness(tmp_path: Path) -> PosixUninstallHarness:
     for path in (bin_dir, tool_bin, fcc_home):
         path.mkdir(parents=True)
     (fcc_home / "config.json").write_text("{}", encoding="utf-8")
-    for name in FCC_COMMANDS:
+    for name in PUBLISHED_COMMANDS:
         _write_executable(tool_bin / name, "#!/bin/sh\nexit 0\n")
 
     _write_executable(bin_dir / "claude", "#!/bin/sh\nexit 0\n")
@@ -89,7 +106,7 @@ def posix_uninstall_harness(tmp_path: Path) -> PosixUninstallHarness:
     _write_executable(bin_dir / "pi", "#!/bin/sh\nexit 0\n")
     _write_executable(
         bin_dir / "uv",
-        """#!/bin/sh
+        r"""#!/bin/sh
 echo "uv:$*" >> "$CALL_LOG"
 if [ "${1:-}" = "tool" ] && [ "${2:-}" = "dir" ] && [ "${3:-}" = "--bin" ]; then
     if [ "$FAIL_STEP" = "tool-dir" ]; then
@@ -105,13 +122,21 @@ if [ "${1:-}" = "tool" ] && [ "${2:-}" = "uninstall" ]; then
         exit 42
     fi
     if [ "$FAIL_STEP" = "missing" ] || [ "$FAIL_STEP" = "stale-entrypoint" ]; then
-        echo 'Tool `free-claude-code` is not installed' >&2
+        printf 'Tool `%s` is not installed\n' "${3:-}" >&2
         exit 2
     fi
-    for name in fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init free-claude-code; do
-        /bin/rm -f "$FAKE_TOOL_BIN/$name"
+    if [ "$FAIL_STEP" = "missing-primary" ] && [ "${3:-}" = "my-claude-code" ]; then
+        printf 'Tool `%s` is not installed\n' "${3:-}" >&2
+        exit 2
+    fi
+    if [ "$FAIL_STEP" = "missing-legacy" ] && [ "${3:-}" = "free-claude-code" ]; then
+        printf 'Tool `%s` is not installed\n' "${3:-}" >&2
+        exit 2
+    fi
+    for shim in "$FAKE_TOOL_BIN"/*; do
+        /bin/rm -f "$shim"
     done
-    echo "Uninstalled free-claude-code"
+    echo "Uninstalled ${3:-}"
     exit 0
 fi
 exit 43
@@ -119,7 +144,7 @@ exit 43
     )
     _write_executable(
         bin_dir / "rm",
-        """#!/bin/sh
+        r"""#!/bin/sh
 echo "rm:$*" >> "$CALL_LOG"
 if [ "$FAIL_STEP" = "purge" ]; then
     echo "simulated purge failure" >&2
@@ -143,16 +168,17 @@ exec /bin/rm "$@"
     return PosixUninstallHarness(home, bin_dir, tool_bin, fcc_home, log, env)
 
 
-def test_uninstall_sh_removes_and_verifies_only_fcc(
+def test_uninstall_sh_removes_and_verifies_only_mcc(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
     result = posix_uninstall_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Free Claude Code has been removed and verified." in result.stdout
+    assert "My Claude Code has been removed and verified." in result.stdout
     assert not posix_uninstall_harness.fcc_home.exists()
     assert all(
-        not (posix_uninstall_harness.tool_bin / name).exists() for name in FCC_COMMANDS
+        not (posix_uninstall_harness.tool_bin / name).exists()
+        for name in PUBLISHED_COMMANDS
     )
     assert (posix_uninstall_harness.bin_dir / "uv").exists()
     assert (posix_uninstall_harness.bin_dir / "claude").exists()
@@ -160,12 +186,13 @@ def test_uninstall_sh_removes_and_verifies_only_fcc(
     assert (posix_uninstall_harness.bin_dir / "pi").exists()
     assert posix_uninstall_harness.calls() == [
         "uv:tool dir --bin",
-        "uv:tool uninstall free-claude-code",
+        f"uv:tool uninstall {PRIMARY_PACKAGE}",
+        f"uv:tool uninstall {LEGACY_PACKAGE}",
         f"rm:-rf {posix_uninstall_harness.fcc_home}",
     ]
 
 
-def test_uninstall_sh_is_idempotent_when_tool_is_already_absent(
+def test_uninstall_sh_is_idempotent_when_both_tools_are_absent(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
     posix_uninstall_harness.remove_entry_points()
@@ -175,6 +202,40 @@ def test_uninstall_sh_is_idempotent_when_tool_is_already_absent(
     assert result.returncode == 0, result.stderr
     assert not posix_uninstall_harness.fcc_home.exists()
     assert "already absent" in result.stdout
+    assert posix_uninstall_harness.calls() == [
+        "uv:tool dir --bin",
+        f"uv:tool uninstall {PRIMARY_PACKAGE}",
+        f"uv:tool uninstall {LEGACY_PACKAGE}",
+        f"rm:-rf {posix_uninstall_harness.fcc_home}",
+    ]
+
+
+def test_uninstall_sh_cleans_up_legacy_tool_when_primary_is_absent(
+    posix_uninstall_harness: PosixUninstallHarness,
+) -> None:
+    result = posix_uninstall_harness.run(fail_step="missing-primary")
+
+    assert result.returncode == 0, result.stderr
+    assert f"{PRIMARY_PACKAGE} uv tool is already absent" in result.stdout
+    assert not posix_uninstall_harness.fcc_home.exists()
+    assert all(
+        not (posix_uninstall_harness.tool_bin / name).exists()
+        for name in PUBLISHED_COMMANDS
+    )
+
+
+def test_uninstall_sh_tolerates_legacy_tool_absence(
+    posix_uninstall_harness: PosixUninstallHarness,
+) -> None:
+    result = posix_uninstall_harness.run(fail_step="missing-legacy")
+
+    assert result.returncode == 0, result.stderr
+    assert f"{LEGACY_PACKAGE} uv tool is already absent" in result.stdout
+    assert not posix_uninstall_harness.fcc_home.exists()
+    assert all(
+        not (posix_uninstall_harness.tool_bin / name).exists()
+        for name in PUBLISHED_COMMANDS
+    )
 
 
 @pytest.mark.parametrize("failure", ["tool-dir", "uninstall", "stale-entrypoint"])
@@ -186,7 +247,7 @@ def test_uninstall_sh_preserves_config_when_tool_removal_is_unconfirmed(
 
     assert result.returncode != 0
     assert posix_uninstall_harness.fcc_home.exists()
-    assert "Free Claude Code has been removed and verified." not in result.stdout
+    assert "My Claude Code has been removed and verified." not in result.stdout
     assert not any(call.startswith("rm:") for call in posix_uninstall_harness.calls())
 
 
@@ -209,9 +270,11 @@ def test_uninstall_sh_reports_purge_failure_after_verified_tool_removal(
     assert result.returncode != 0
     assert posix_uninstall_harness.fcc_home.exists()
     assert all(
-        not (posix_uninstall_harness.tool_bin / name).exists() for name in FCC_COMMANDS
+        not (posix_uninstall_harness.tool_bin / name).exists()
+        for name in PUBLISHED_COMMANDS
     )
-    assert "Free Claude Code has been removed and verified." not in result.stdout
+    assert f"uv:tool uninstall {PRIMARY_PACKAGE}" in posix_uninstall_harness.calls()
+    assert "My Claude Code has been removed and verified." not in result.stdout
 
 
 def test_uninstall_sh_dry_run_is_non_mutating(
@@ -222,7 +285,8 @@ def test_uninstall_sh_dry_run_is_non_mutating(
     assert result.returncode == 0, result.stderr
     assert posix_uninstall_harness.fcc_home.exists()
     assert all(
-        (posix_uninstall_harness.tool_bin / name).exists() for name in FCC_COMMANDS
+        (posix_uninstall_harness.tool_bin / name).exists()
+        for name in PUBLISHED_COMMANDS
     )
     assert posix_uninstall_harness.calls() == []
     assert "Dry run complete. No changes were made." in result.stdout
@@ -255,6 +319,7 @@ class PowerShellUninstallHarness:
         fail_step: str = "",
         include_uv: bool = True,
         dry_run: bool = False,
+        fake_running_process: str = "",
     ) -> subprocess.CompletedProcess[str]:
         uv = self.bin_dir / "uv.cmd"
         if not include_uv and uv.exists():
@@ -274,6 +339,7 @@ class PowerShellUninstallHarness:
             env=self.env
             | {
                 "FAIL_STEP": fail_step,
+                "FAKE_RUNNING_PROCESS": fake_running_process,
                 "UNINSTALL_DRY_RUN": "1" if dry_run else "0",
             },
         )
@@ -284,7 +350,7 @@ class PowerShellUninstallHarness:
         return self.log.read_text(encoding="utf-8").splitlines()
 
     def remove_entry_points(self) -> None:
-        for name in FCC_COMMANDS:
+        for name in PUBLISHED_COMMANDS:
             (self.tool_bin / f"{name}.cmd").unlink(missing_ok=True)
 
 
@@ -308,16 +374,15 @@ def powershell_uninstall_harness(
     for path in (bin_dir, tool_bin, fcc_home):
         path.mkdir(parents=True)
     (fcc_home / "config.json").write_text("{}", encoding="utf-8")
-    for name in FCC_COMMANDS:
+    for name in PUBLISHED_COMMANDS:
         (tool_bin / f"{name}.cmd").write_text(
             "@echo off\nexit /b 0\n", encoding="utf-8"
         )
     for name in ("claude", "codex", "pi"):
         (bin_dir / f"{name}.cmd").write_text("@echo off\nexit /b 0\n", encoding="utf-8")
 
-    uv_commands = " ".join(FCC_COMMANDS)
     (bin_dir / "uv.cmd").write_text(
-        rf"""@echo off
+        r"""@echo off
 echo uv:%*>>"%CALL_LOG%"
 if "%1"=="tool" if "%2"=="dir" if "%3"=="--bin" goto tool_bin
 if "%1"=="tool" if "%2"=="uninstall" goto uninstall
@@ -328,11 +393,16 @@ echo %FAKE_TOOL_BIN%
 exit /b 0
 :uninstall
 if "%FAIL_STEP%"=="uninstall" echo permission denied while removing tool 1>&2 & exit /b 52
-if "%FAIL_STEP%"=="missing" echo Tool `free-claude-code` is not installed 1>&2 & exit /b 2
-if "%FAIL_STEP%"=="stale-entrypoint" echo Tool `free-claude-code` is not installed 1>&2 & exit /b 2
-for %%C in ({uv_commands}) do del /q "%FAKE_TOOL_BIN%\%%C.cmd" 2>nul
-echo Uninstalled free-claude-code
+if "%FAIL_STEP%"=="missing" goto not_installed
+if "%FAIL_STEP%"=="stale-entrypoint" goto not_installed
+if "%FAIL_STEP%"=="missing-primary" if "%~3"=="my-claude-code" goto not_installed
+if "%FAIL_STEP%"=="missing-legacy" if "%~3"=="free-claude-code" goto not_installed
+for %%F in ("%FAKE_TOOL_BIN%\*.cmd") do del /q "%%F" 2>nul
+echo Uninstalled %~3
 exit /b 0
+:not_installed
+echo Tool `%~3` is not installed 1>&2
+exit /b 2
 """,
         encoding="utf-8",
     )
@@ -353,6 +423,25 @@ function Remove-Item {
         throw "simulated purge failure"
     }
     Microsoft.PowerShell.Management\Remove-Item @PSBoundParameters
+}
+function Get-Process {
+    # Hermetic stand-in for the process guard: the real cmdlet sees whatever
+    # happens to run on this machine (mcc-claude, mcc-desktop, pythonw are
+    # routinely live here), which made the suite non-hermetic once the guard
+    # covered the full published command list.
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [string[]] $Name
+    )
+    if ($env:FAIL_STEP -ne "running-processes") {
+        return
+    }
+    foreach ($processName in @($Name)) {
+        if ($processName -eq $env:FAKE_RUNNING_PROCESS) {
+            [pscustomobject] @{ Id = 4242; ProcessName = $processName }
+        }
+    }
 }
 $installer = [scriptblock]::Create([IO.File]::ReadAllText($env:FCC_UNINSTALLER))
 if ($env:UNINSTALL_DRY_RUN -eq "1") {
@@ -387,17 +476,17 @@ else {
     )
 
 
-def test_uninstall_ps1_removes_and_verifies_only_fcc(
+def test_uninstall_ps1_removes_and_verifies_only_mcc(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
     result = powershell_uninstall_harness.run()
 
     assert result.returncode == 0, result.stderr
-    assert "Free Claude Code has been removed and verified." in result.stdout
+    assert "My Claude Code has been removed and verified." in result.stdout
     assert not powershell_uninstall_harness.fcc_home.exists()
     assert all(
         not (powershell_uninstall_harness.tool_bin / f"{name}.cmd").exists()
-        for name in FCC_COMMANDS
+        for name in PUBLISHED_COMMANDS
     )
     assert (powershell_uninstall_harness.bin_dir / "uv.cmd").exists()
     assert (powershell_uninstall_harness.bin_dir / "claude.cmd").exists()
@@ -405,12 +494,13 @@ def test_uninstall_ps1_removes_and_verifies_only_fcc(
     assert (powershell_uninstall_harness.bin_dir / "pi.cmd").exists()
     assert powershell_uninstall_harness.calls() == [
         "uv:tool dir --bin",
-        "uv:tool uninstall free-claude-code",
+        f"uv:tool uninstall {PRIMARY_PACKAGE}",
+        f"uv:tool uninstall {LEGACY_PACKAGE}",
         f"remove:{powershell_uninstall_harness.fcc_home}",
     ]
 
 
-def test_uninstall_ps1_is_idempotent_when_tool_is_already_absent(
+def test_uninstall_ps1_is_idempotent_when_both_tools_are_absent(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
     powershell_uninstall_harness.remove_entry_points()
@@ -420,6 +510,40 @@ def test_uninstall_ps1_is_idempotent_when_tool_is_already_absent(
     assert result.returncode == 0, result.stderr
     assert not powershell_uninstall_harness.fcc_home.exists()
     assert "already absent" in result.stdout
+    assert powershell_uninstall_harness.calls() == [
+        "uv:tool dir --bin",
+        f"uv:tool uninstall {PRIMARY_PACKAGE}",
+        f"uv:tool uninstall {LEGACY_PACKAGE}",
+        f"remove:{powershell_uninstall_harness.fcc_home}",
+    ]
+
+
+def test_uninstall_ps1_cleans_up_legacy_tool_when_primary_is_absent(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    result = powershell_uninstall_harness.run(fail_step="missing-primary")
+
+    assert result.returncode == 0, result.stderr
+    assert f"{PRIMARY_PACKAGE} uv tool is already absent" in result.stdout
+    assert not powershell_uninstall_harness.fcc_home.exists()
+    assert all(
+        not (powershell_uninstall_harness.tool_bin / f"{name}.cmd").exists()
+        for name in PUBLISHED_COMMANDS
+    )
+
+
+def test_uninstall_ps1_tolerates_legacy_tool_absence(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    result = powershell_uninstall_harness.run(fail_step="missing-legacy")
+
+    assert result.returncode == 0, result.stderr
+    assert f"{LEGACY_PACKAGE} uv tool is already absent" in result.stdout
+    assert not powershell_uninstall_harness.fcc_home.exists()
+    assert all(
+        not (powershell_uninstall_harness.tool_bin / f"{name}.cmd").exists()
+        for name in PUBLISHED_COMMANDS
+    )
 
 
 @pytest.mark.parametrize("failure", ["tool-dir", "uninstall", "stale-entrypoint"])
@@ -431,7 +555,7 @@ def test_uninstall_ps1_preserves_config_when_tool_removal_is_unconfirmed(
 
     assert result.returncode != 0
     assert powershell_uninstall_harness.fcc_home.exists()
-    assert "Free Claude Code has been removed and verified." not in result.stdout
+    assert "My Claude Code has been removed and verified." not in result.stdout
     assert not any(
         call.startswith("remove:") for call in powershell_uninstall_harness.calls()
     )
@@ -457,9 +581,12 @@ def test_uninstall_ps1_reports_purge_failure_after_verified_tool_removal(
     assert powershell_uninstall_harness.fcc_home.exists()
     assert all(
         not (powershell_uninstall_harness.tool_bin / f"{name}.cmd").exists()
-        for name in FCC_COMMANDS
+        for name in PUBLISHED_COMMANDS
     )
-    assert "Free Claude Code has been removed and verified." not in result.stdout
+    assert (
+        f"uv:tool uninstall {PRIMARY_PACKAGE}" in powershell_uninstall_harness.calls()
+    )
+    assert "My Claude Code has been removed and verified." not in result.stdout
 
 
 def test_uninstall_ps1_dry_run_is_non_mutating(
@@ -471,10 +598,51 @@ def test_uninstall_ps1_dry_run_is_non_mutating(
     assert powershell_uninstall_harness.fcc_home.exists()
     assert all(
         (powershell_uninstall_harness.tool_bin / f"{name}.cmd").exists()
-        for name in FCC_COMMANDS
+        for name in PUBLISHED_COMMANDS
     )
     assert powershell_uninstall_harness.calls() == []
     assert "Dry run complete. No changes were made." in result.stdout
+
+
+def test_uninstall_ps1_refuses_to_run_while_a_launcher_is_alive(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    """A live launcher holds the tool directory open on Windows.
+
+    Deleting shims underneath it half-removes the install, and purging
+    ~/.fcc afterwards would destroy config the user still needs.
+    """
+
+    result = powershell_uninstall_harness.run(
+        fail_step="running-processes",
+        fake_running_process="mcc-desktop",
+    )
+
+    assert result.returncode != 0
+    assert "still running (mcc-desktop)" in result.stderr
+    assert powershell_uninstall_harness.fcc_home.exists()
+    assert not any(
+        call.startswith("remove:") for call in powershell_uninstall_harness.calls()
+    )
+
+
+def test_uninstall_ps1_blocks_on_the_gui_host_image_name(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    """pythonw.exe is invisible under its launcher names, yet holds the tool.
+
+    Only the GuardProcessImages list can see it, so dropping that list must
+    fail here instead of surfacing mid-uninstall on a user's machine.
+    """
+
+    result = powershell_uninstall_harness.run(
+        fail_step="running-processes",
+        fake_running_process="pythonw",
+    )
+
+    assert result.returncode != 0
+    assert "still running (pythonw)" in result.stderr
+    assert powershell_uninstall_harness.fcc_home.exists()
 
 
 def test_uninstallers_guard_running_commands_and_preserve_shared_owners() -> None:
@@ -485,9 +653,10 @@ def test_uninstallers_guard_running_commands_and_preserve_shared_owners() -> Non
 
     assert "pgrep" in shell
     assert "Get-Process" in powershell
+    # GUI launchers run as pythonw.exe out of the tool environment, invisible
+    # to shim-name checks; only the Windows guard needs the interpreter image.
+    assert "pythonw" in powershell
     for text in (shell, powershell):
-        for command in FCC_COMMANDS:
-            assert command in text
         assert "npm uninstall" not in text
         assert "uv self uninstall" not in text
         assert "uv python uninstall" not in text
