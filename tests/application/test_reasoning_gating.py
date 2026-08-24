@@ -15,6 +15,7 @@ from my_claude_code.application.reasoning_gating import (
     EFFORT_BUDGET_RATIOS,
     MINIMUM_BUDGET_TOKENS,
     adapt_reasoning_policy,
+    native_wire_effort,
 )
 from my_claude_code.application.routing import ModelRouter
 from my_claude_code.config.reasoning import ReasoningPreference
@@ -24,6 +25,9 @@ from my_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningEffort,
     ReasoningPolicy,
+)
+from my_claude_code.providers.anthropic_messages.request import (
+    build_anthropic_messages_body,
 )
 from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
 
@@ -567,3 +571,76 @@ def test_the_ratio_table_covers_every_effort_and_stays_below_one() -> None:
     assert all(0.0 < ratio < 1.0 for ratio in EFFORT_BUDGET_RATIOS.values())
     assert EFFORT_BUDGET_RATIOS[ReasoningEffort.HIGH] == 0.80
     assert EFFORT_BUDGET_RATIOS[ReasoningEffort.MAX] == 0.95
+
+
+# ---------------------------------------------------------------------------
+# native_wire_effort -- the encoder-facing channel decision.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("policy", ALL_POLICIES)
+def test_native_wire_effort_is_none_without_a_capability(
+    policy: ReasoningPolicy,
+) -> None:
+    assert native_wire_effort(policy, UNKNOWN) is None
+
+
+def test_native_wire_effort_returns_a_member_effort_unchanged() -> None:
+    policy = ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
+
+    assert (
+        native_wire_effort(policy, EFFORT_ONLY_LOW_MEDIUM_HIGH) is ReasoningEffort.HIGH
+    )
+
+
+def test_native_wire_effort_rejects_an_effort_outside_the_vocabulary() -> None:
+    policy = ReasoningPolicy.on(effort=ReasoningEffort.MAX)
+
+    assert native_wire_effort(policy, EFFORT_ONLY_LOW_MEDIUM_HIGH) is None
+
+
+def test_native_wire_effort_rejects_an_unnamed_effort() -> None:
+    assert native_wire_effort(ReasoningPolicy.on(), EFFORT_ONLY_LOW_MEDIUM_HIGH) is None
+
+
+def test_native_wire_effort_rejects_an_unknown_vocabulary() -> None:
+    capability = ModelReasoningCapability(can_reason=True, supports_effort_control=True)
+
+    assert (
+        native_wire_effort(ReasoningPolicy.on(effort=ReasoningEffort.HIGH), capability)
+        is None
+    )
+
+
+@pytest.mark.parametrize("capability", (TOGGLE_ONLY, BUDGET_ONLY, CANNOT_REASON))
+def test_native_wire_effort_requires_the_effort_flag(
+    capability: ModelReasoningCapability,
+) -> None:
+    assert (
+        native_wire_effort(ReasoningPolicy.on(effort=ReasoningEffort.HIGH), capability)
+        is None
+    )
+
+
+def test_the_native_channel_reaches_the_anthropic_wire() -> None:
+    """The full chain: gated policy plus capability lands as documented wire."""
+
+    adapted = adapt_reasoning_policy(
+        ReasoningPolicy.on(effort=ReasoningEffort.XHIGH),
+        EFFORT_ONLY_LOW_MEDIUM_HIGH,
+        model_ref="provider/a-model",
+    )
+    assert adapted.effort is ReasoningEffort.HIGH
+
+    body = build_anthropic_messages_body(
+        MessagesRequest(
+            model="claude-x",
+            max_tokens=4096,
+            messages=[Message(role="user", content="hello")],
+        ),
+        reasoning=adapted,
+        capability=EFFORT_ONLY_LOW_MEDIUM_HIGH,
+    )
+
+    assert body["output_config"] == {"effort": "high"}
+    assert body["thinking"] == {"type": "adaptive"}
