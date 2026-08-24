@@ -42,6 +42,25 @@ _SECRET_TEXT_REPLACEMENTS = (
         ),
         "<redacted>",
     ),
+    # Platform-native credential shapes: Telegram bot tokens, Slack tokens.
+    (
+        re.compile(r"(?i)(?<![a-z0-9])\d{8,10}:[A-Za-z0-9_-]{30,}(?![a-z0-9])"),
+        "<redacted>",
+    ),
+    (
+        # Bot URLs own their whole credential segment; the id stays
+        # length-relaxed so split/truncated ids still die behind /bot.
+        re.compile(
+            r"(?i)(?P<prefix>(?:api\.)?telegram\.org/bot)"
+            r"[A-Za-z0-9_-]+:[A-Za-z0-9_-]+"
+        ),
+        r"\g<prefix><redacted>",
+    ),
+    (
+        # Slack legacy tokens; 16-char floor keeps prose like xoxb-short out.
+        re.compile(r"(?i)(?<![a-z0-9])xox[baprs]-[A-Za-z0-9-]{16,}(?![a-z0-9])"),
+        "<redacted>",
+    ),
 )
 
 
