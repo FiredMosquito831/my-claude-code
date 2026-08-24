@@ -669,6 +669,13 @@ class TestWindowCloseWatcher:
 
 
 class TestFatalErrorSurfacing:
+    # The surfaced channels are win32-only (MessageBoxW via ctypes.windll;
+    # pystray tray import) -- Linux CI has neither.
+    pytestmark = pytest.mark.skipif(
+        sys.platform != "win32",
+        reason="fatal-error surfacing targets win32 MessageBoxW/tray",
+    )
+
     """GUI-subsystem failures must reach the user without a console."""
 
     @staticmethod
