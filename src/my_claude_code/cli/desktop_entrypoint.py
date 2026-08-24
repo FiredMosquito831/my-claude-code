@@ -1,10 +1,12 @@
 """Lightweight entrypoint for the optional MCC desktop shell."""
 
+import ctypes
 import sys
 from collections.abc import Sequence
+from contextlib import suppress
 from pathlib import Path
 
-from my_claude_code.cli.desktop import headless_refusal_reason
+from my_claude_code.cli.desktop import DesktopError, headless_refusal_reason
 from my_claude_code.cli.desktop_assets import export_app_icon
 from my_claude_code.config.desktop import (
     SERVER_MODES,
@@ -15,6 +17,24 @@ from my_claude_code.config.desktop import (
     set_start_at_login,
     set_window_preference,
 )
+
+_MB_ICONERROR = 0x10
+_ERROR_BOX_TITLE = "My Claude Code"
+
+
+def _report_fatal_error(message: str) -> None:
+    """Surface a startup failure the GUI-subsystem executable cannot print.
+
+    ``mcc-desktop.exe`` has no console attached on Windows, so stderr goes
+    nowhere there: Windows gets a message box instead, every other platform
+    keeps the terminal fallback.
+    """
+
+    print(message, file=sys.stderr)
+    if sys.platform != "win32":
+        return
+    with suppress(Exception):
+        ctypes.windll.user32.MessageBoxW(None, message, _ERROR_BOX_TITLE, _MB_ICONERROR)
 
 
 def _print_state() -> None:
@@ -105,6 +125,10 @@ def launch(argv: Sequence[str] | None = None) -> None:
         print(refusal, file=sys.stderr)
         raise SystemExit(1)
 
-    from my_claude_code.cli.desktop_tray import launch as launch_tray
+    try:
+        from my_claude_code.cli.desktop_tray import launch as launch_tray
 
-    launch_tray()
+        launch_tray()
+    except DesktopError as exc:
+        _report_fatal_error(str(exc))
+        raise SystemExit(1) from exc

@@ -1,5 +1,7 @@
 """Tests for the desktop controller: server ownership, window, health, signals."""
 
+import sys
+import threading
 from pathlib import Path
 from typing import Any, cast
 
@@ -380,11 +382,16 @@ class TestHeadlessRefusal:
         assert reason is not None
         assert "mcc-server" in reason
 
-    def test_linux_with_a_display_is_allowed(self, monkeypatch):
+    def test_linux_with_a_display_still_names_mcc_server(self, monkeypatch):
+        """No Linux tray backend is packaged, so even a display session refuses."""
+
         monkeypatch.setattr(desktop_module, "native_origin", lambda: "linux")
         monkeypatch.setenv("DISPLAY", ":0")
 
-        assert headless_refusal_reason() is None
+        reason = headless_refusal_reason()
+
+        assert reason is not None
+        assert "mcc-server" in reason
 
     def test_entrypoint_exits_non_zero_when_refused(self, monkeypatch, capsys):
         from my_claude_code.cli import desktop_entrypoint
@@ -483,3 +490,241 @@ class TestWindowPreferenceFlag:
         desktop_state_path().write_text('{"window": "hologram"}', encoding="utf-8")
 
         assert load_desktop_state().window == "auto"
+
+
+class _RecordingTray:
+    """Stands in for the tray adapter; records stops, can end a watch loop."""
+
+    def __init__(self, stop_event=None) -> None:
+        self.stopped = []
+        self._stop_event = stop_event
+
+    def stop(self) -> None:
+        self.stopped.append(True)
+        if self._stop_event is not None:
+            self._stop_event.set()
+
+
+class _FlippingWindow(_FakeWindow):
+    """Answers ``is_open`` truthfully N times, then reports closed."""
+
+    def __init__(self, reads_before_close: int) -> None:
+        super().__init__()
+        self._reads_remaining = reads_before_close
+
+    @property
+    def is_open(self) -> bool:
+        if self._reads_remaining <= 0:
+            return False
+        self._reads_remaining -= 1
+        return True
+
+
+class TestLaunchReconciliation:
+    """A launch applies/removes the OS registration to match desktop.json."""
+
+    @pytest.fixture
+    def launched(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        monkeypatch.setattr(desktop_module, "config_dir_path", lambda: tmp_path)
+        # A healthy server keeps ensure_server a no-op without any sockets.
+        monkeypatch.setattr(desktop_module, "preflight_proxy", lambda url: None)
+        applied = []
+        removed = []
+        monkeypatch.setattr(
+            desktop_module,
+            "apply_start_at_login",
+            lambda: applied.append(True),
+        )
+        monkeypatch.setattr(
+            desktop_module,
+            "remove_start_at_login",
+            lambda: removed.append(True),
+        )
+        holder: dict[str, Any] = {}
+
+        class _InstantTray:
+            def __init__(self, controller):
+                self.controller = controller
+
+            def run(self):
+                pass
+
+            def stop(self):
+                holder["stopped"] = True
+
+        def _tray_factory(controller):
+            tray = _InstantTray(controller)
+            holder["tray"] = tray
+            return tray
+
+        def _run(state):
+            save_desktop_state(state)
+            window = _FakeWindow()
+            launch_desktop(_tray_factory, window_factory=lambda preference: window)
+            return window
+
+        holder["run"] = _run
+        return applied, removed, holder
+
+    def test_a_persisted_flag_is_applied_to_the_os(self, launched):
+        applied, removed, holder = launched
+
+        holder["run"](DesktopState(start_at_login=True))
+
+        assert applied == [True]
+        assert removed == []
+
+    def test_a_disabled_tray_never_registers_start_at_login(self, launched):
+        applied, removed, holder = launched
+
+        holder["run"](DesktopState(start_at_login=True, tray_enabled=False))
+
+        assert applied == []
+        assert removed == [True]
+
+    def test_an_off_flag_removes_any_stale_registration(self, launched):
+        applied, removed, holder = launched
+
+        holder["run"](DesktopState())
+
+        assert applied == []
+        assert removed == [True]
+
+
+class TestWindowCloseWatcher:
+    """Only a True->False is_open edge routes through handle_window_closed."""
+
+    def _controller(self, monkeypatch, tmp_path, *, minimize_to_tray):
+        _set_home(monkeypatch, tmp_path)
+        save_desktop_state(DesktopState(minimize_to_tray=minimize_to_tray))
+        controller = DesktopController.__new__(DesktopController)
+        object.__setattr__(controller, "_window", _FakeWindow())
+        return controller
+
+    def test_a_survived_close_records_no_window_and_keeps_the_tray(
+        self, monkeypatch, tmp_path
+    ):
+        controller = self._controller(monkeypatch, tmp_path, minimize_to_tray=True)
+        controller.show_window()
+        controller.window.close()
+        tray = _RecordingTray()
+
+        assert desktop_module._poll_window_transition(True, controller, tray) is False
+
+        assert tray.stopped == []
+        assert load_desktop_state().window_open is False
+
+    def test_an_app_ending_close_stops_the_tray_and_preserves_the_state(
+        self, monkeypatch, tmp_path
+    ):
+        controller = self._controller(monkeypatch, tmp_path, minimize_to_tray=False)
+        controller.show_window()
+        controller.window.close()
+        tray = _RecordingTray()
+
+        assert desktop_module._poll_window_transition(True, controller, tray) is False
+
+        assert tray.stopped == [True]
+        assert load_desktop_state().window_open is True
+
+    def test_edges_require_a_previous_open(self, monkeypatch, tmp_path):
+        controller = self._controller(monkeypatch, tmp_path, minimize_to_tray=False)
+        tray = _RecordingTray()
+
+        assert desktop_module._poll_window_transition(False, controller, tray) is False
+
+        assert tray.stopped == []
+        assert load_desktop_state().window_open is True
+
+    def test_a_steady_open_is_not_a_close(self, monkeypatch, tmp_path):
+        controller = self._controller(monkeypatch, tmp_path, minimize_to_tray=False)
+        controller.show_window()
+        tray = _RecordingTray()
+
+        assert desktop_module._poll_window_transition(True, controller, tray) is True
+
+        assert tray.stopped == []
+
+    def test_the_daemon_loop_detects_the_edge_and_ends_itself(
+        self, monkeypatch, tmp_path
+    ):
+        _set_home(monkeypatch, tmp_path)
+        save_desktop_state(DesktopState(minimize_to_tray=False))
+        controller = DesktopController.__new__(DesktopController)
+        object.__setattr__(controller, "_window", _FlippingWindow(reads_before_close=4))
+        stop = threading.Event()
+        tray = _RecordingTray(stop)
+
+        watcher = threading.Thread(
+            target=desktop_module._watch_window_close,
+            args=(controller, tray, stop, 0.0),
+            daemon=True,
+        )
+        watcher.start()
+        watcher.join(timeout=5)
+
+        assert not watcher.is_alive()
+        assert tray.stopped == [True]
+
+
+class TestFatalErrorSurfacing:
+    """GUI-subsystem failures must reach the user without a console."""
+
+    @staticmethod
+    def _entrypoint():
+        from my_claude_code.cli import desktop_entrypoint
+
+        return desktop_entrypoint
+
+    def test_windows_surfaces_via_message_box_and_stderr(self, monkeypatch, capsys):
+        entrypoint = self._entrypoint()
+        boxes = []
+
+        class _FakeUser32:
+            @staticmethod
+            def MessageBoxW(_hwnd, message, title, _flags):
+                boxes.append((message, title))
+                return 0
+
+        class _FakeWindll:
+            user32 = _FakeUser32()
+
+        monkeypatch.setattr(entrypoint.ctypes, "windll", _FakeWindll())
+        monkeypatch.setattr(sys, "platform", "win32")
+
+        entrypoint._report_fatal_error("Port 8082 is held.")
+
+        assert boxes == [("Port 8082 is held.", "My Claude Code")]
+        assert "Port 8082 is held." in capsys.readouterr().err
+
+    def test_other_platforms_fall_back_to_stderr_only(self, monkeypatch, capsys):
+        entrypoint = self._entrypoint()
+        monkeypatch.setattr(sys, "platform", "linux")
+
+        entrypoint._report_fatal_error("no display here")
+
+        err = capsys.readouterr().err
+        assert "no display here" in err
+
+    def test_launch_reports_desktop_errors_and_exits_non_zero(
+        self, monkeypatch, tmp_path
+    ):
+        entrypoint = self._entrypoint()
+        import my_claude_code.cli.desktop_tray as tray_module
+
+        _set_home(monkeypatch, tmp_path)
+        monkeypatch.setattr(entrypoint, "headless_refusal_reason", lambda: None)
+
+        def _boom():
+            raise DesktopError("port held by another program")
+
+        monkeypatch.setattr(tray_module, "launch", _boom)
+        reported = []
+        monkeypatch.setattr(entrypoint, "_report_fatal_error", reported.append)
+
+        with pytest.raises(SystemExit) as excinfo:
+            entrypoint.launch([])
+
+        assert excinfo.value.code == 1
+        assert reported == ["port held by another program"]

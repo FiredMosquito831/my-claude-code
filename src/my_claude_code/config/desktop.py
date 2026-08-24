@@ -189,6 +189,13 @@ def set_window_preference(value: str) -> DesktopState:
 
 
 def set_tray_enabled(enabled: bool) -> DesktopState:
+    """Persist the tray flag.
+
+    The flag gates start-at-login: with the tray disabled, launch-time
+    reconciliation removes instead of applies the OS registration -- an
+    invisible tray must not relaunch at login.
+    """
+
     return _update_state(tray_enabled=enabled)
 
 
@@ -399,6 +406,12 @@ def default_autostart_target() -> AutostartTarget:
 def set_start_at_login(
     enabled: bool, target: AutostartTarget | None = None
 ) -> DesktopState:
+    """Apply/remove now and persist; the tray launch reconciles afterwards.
+
+    Registration is honoured only while the tray itself is enabled: a
+    disabled tray strips the OS entry at the next launch.
+    """
+
     target = target or default_autostart_target()
     if enabled:
         apply_start_at_login(target)
@@ -597,6 +610,10 @@ def _remove_linux_start_at_login(target: AutostartTarget) -> None:
 
 
 def apply_tray_registration(enabled: bool) -> None:
-    """Persist the tray flag; a running tray remains until Quit."""
+    """Persist the tray flag; a running tray remains until Quit.
+
+    The flag also gates start-at-login: with the tray disabled, the next
+    launch's reconciliation removes any OS registration.
+    """
 
     _update_state(tray_enabled=enabled)
