@@ -13,7 +13,8 @@ CANONICAL_OPENAI_CHAT_BODY_KEYS = frozenset(
         "max_completion_tokens",
         "temperature",
         "top_p",
-        "metadata",
+        # NOT canonical: no encoder writes "metadata" -- callers pass it
+        # through extra_body verbatim (groq/sambanova fixtures pin this).
         "stop",
         "stop_sequences",
         "stream_options",

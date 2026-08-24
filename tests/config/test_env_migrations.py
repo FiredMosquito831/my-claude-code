@@ -137,3 +137,56 @@ def test_reasoning_migration_accepts_every_legacy_boolean_spelling(
 
     assert changed is True
     assert migrated == f"REASONING_POLICY={expected}\n"
+
+
+def test_migrate_env_key_in_file_stages_and_swaps_atomically(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from my_claude_code.config import env_migrations
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("HF_TOKEN=secret-token\n", encoding="utf-8")
+    real_replace = env_migrations.os.replace
+    calls: list[tuple[Path, Path]] = []
+
+    def spy(src: Path, dst: Path) -> None:
+        calls.append((src, dst))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(env_migrations.os, "replace", spy)
+
+    assert migrate_env_key_in_file(env_file, HUGGINGFACE_TOKEN_MIGRATION) is True
+
+    assert len(calls) == 1
+    src, dst = calls[0]
+    assert dst.name == ".env"
+    assert src.name == ".env.fcc-tmp"
+    assert src.parent == tmp_path
+    assert not src.exists()
+    assert env_file.read_text(encoding="utf-8") == "HUGGINGFACE_API_KEY=secret-token\n"
+
+
+def test_migrate_env_key_in_file_skips_unterminated_multiline_quotes(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    original = 'ENABLE_MODEL_THINKING=true\nNOTE="never closed\n'
+    env_file.write_text(original, encoding="utf-8")
+
+    assert migrate_env_key_in_file(env_file, REASONING_MIGRATIONS[0]) is False
+    assert env_file.read_text(encoding="utf-8") == original
+
+
+def test_migrate_env_key_in_file_allows_well_closed_multiline_quotes(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        'ENABLE_MODEL_THINKING=true\nNOTE="spans\ntwo lines"\n',
+        encoding="utf-8",
+    )
+
+    assert migrate_env_key_in_file(env_file, REASONING_MIGRATIONS[0]) is True
+    migrated = env_file.read_text(encoding="utf-8")
+    assert migrated.startswith("REASONING_POLICY=")
+    assert 'NOTE="spans\ntwo lines"' in migrated

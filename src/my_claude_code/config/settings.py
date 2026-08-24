@@ -397,9 +397,6 @@ class Settings(BaseSettings):
         default=FALLBACK_TOTAL_TIMEOUT_DEFAULT,
         validation_alias="FALLBACK_TOTAL_TIMEOUT",
     )
-    # Consecutive failures before a provider/model is skipped by routing, and
-    # how long it stays skipped. Without this every request re-pays a dead
-    # model's timeout on its way to a healthy fallback. 0 disables ejection.
     fallback_stall_timeout: float = Field(
         default=FALLBACK_STALL_TIMEOUT_DEFAULT,
         validation_alias="FALLBACK_STALL_TIMEOUT",
@@ -413,6 +410,9 @@ class Settings(BaseSettings):
         validation_alias="FALLBACK_SKIP_KINDS",
     )
 
+    # Consecutive failures before a provider/model is skipped by routing, and
+    # how long it stays skipped. Without this every request re-pays a dead
+    # model's timeout on its way to a healthy fallback. 0 disables ejection.
     fallback_eject_after_failures: int = Field(
         default=FALLBACK_EJECT_AFTER_FAILURES_DEFAULT,
         validation_alias="FALLBACK_EJECT_AFTER_FAILURES",

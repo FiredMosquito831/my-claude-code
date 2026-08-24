@@ -1,9 +1,12 @@
 """One-time dotenv key migrations for FCC-owned config files."""
 
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+from loguru import logger
 
 from .env_files import explicit_env_path, repo_env_path
 from .paths import managed_env_path
@@ -103,8 +106,57 @@ def migrate_env_key_in_file(path: Path, migration: EnvKeyMigration) -> bool:
     migrated, changed = migrate_env_key_in_text(original, migration)
     if not changed:
         return False
-    path.write_text(migrated, encoding="utf-8")
+    if _has_unterminated_quote(original):
+        # A rename inside an unterminated multiline value would be decided by
+        # line-based matching that cannot see where the value ends, so the key
+        # it writes can land inside the quoted text and surface as a phantom
+        # entry when dotenv parses the file. Skip and say so instead.
+        logger.warning(
+            "ENV MIGRATION: {} has an unterminated quoted value; rename {} manually",
+            path,
+            migration.old_key,
+        )
+        return False
+    _write_text_atomically(path, migrated)
     return True
+
+
+def _write_text_atomically(path: Path, text: str) -> None:
+    """Stage as a sibling ``<name>.fcc-tmp`` and swap in one rename.
+
+    These files hold credentials; a torn write must never leave a truncated
+    dotenv behind, and ``os.replace`` is atomic on every supported filesystem.
+    """
+    staging = path.with_name(f"{path.name}.fcc-tmp")
+    staging.write_text(text, encoding="utf-8")
+    os.replace(staging, path)
+
+
+def _has_unterminated_quote(text: str) -> bool:
+    """Whether any quoted value is still open at end of file.
+
+    Only a quote that opens a value (first character after ``=``) may span
+    lines, so apostrophes inside bare values never trip this. An opener left
+    unclosed means line-based key matching cannot tell where values end --
+    exactly when a blind rename risks writing a phantom key.
+    """
+    open_quote: str | None = None
+    for line in text.splitlines():
+        if open_quote is None:
+            if line.lstrip().startswith("#"):
+                continue
+            match = _DOTENV_ASSIGNMENT_RE.match(line)
+            if match is None:
+                continue
+            stripped = line[match.end() :].lstrip()
+            if not stripped or stripped[0] not in "\"'":
+                continue
+            if stripped[1:].rfind(stripped[0]) != -1:
+                continue  # opened and closed on the same line
+            open_quote = stripped[0]
+        elif line.rfind(open_quote) != -1:
+            open_quote = None
+    return open_quote is not None
 
 
 def migrate_env_key_in_text(

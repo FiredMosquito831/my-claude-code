@@ -137,6 +137,13 @@ class RouteExecutionPolicy:
 _STALL_DECISION_TOLERANCE = 0.05
 
 
+# Stepping a model over costs the chain a slot, so a wait worth having is
+# one that outlives the hop it saves: sub-second remainders logged as
+# "cooldown for 0s" three requests running were never worth routing
+# around in the first place.
+_COOLDOWN_STEP_OVER_FLOOR_SECONDS = 5.0
+
+
 class _DeadlineExceeded(Exception):
     """Internal marker: our own wait elapsed, not an upstream timeout."""
 
@@ -220,6 +227,7 @@ class _AttemptLedger:
         self._observer = observer
         self._records: dict[int, RouteAttemptRecord] = {}
         self._started: dict[int, float] = {}
+        self._current: int | None = None
         for index, ref in enumerate(model_refs):
             self._records[index] = RouteAttemptRecord(
                 attempt=index,
@@ -246,6 +254,7 @@ class _AttemptLedger:
                 )
 
     def start(self, index: int) -> None:
+        self._current = index
         self._started[index] = time.monotonic()
 
     def _elapsed_ms(self, index: int) -> float | None:
@@ -289,6 +298,24 @@ class _AttemptLedger:
             outcome="failed",
             error_kind=failure_kind_name(exc),
             error_message=safe_exception_message(exc),
+            duration_ms=self._elapsed_ms(index),
+        )
+
+    def interrupted(self) -> None:
+        """Record the attempt in flight when the client went away.
+
+        Cancellation used to drop the whole ledger on the floor: publish
+        ran only on success, failure and route-end, so a disconnect left
+        every verdict the chain had reached invisible in the request log.
+        """
+        index = self._current
+        if index is None:
+            return
+        self._set(
+            index,
+            outcome="failed",
+            error_kind="interrupted",
+            error_message="client cancelled before the stream finished",
             duration_ms=self._elapsed_ms(index),
         )
 
@@ -542,6 +569,7 @@ class ProviderExecutor:
                         # attempt still ended in a failure and the log should
                         # say so rather than leaving it as "never reached".
                         ledger.failed(index, exc)
+                        ledger.unreachable_after(index, exc)
                         ledger.publish()
                         raise
                     uncommitted_failure = exc
@@ -591,6 +619,28 @@ class ProviderExecutor:
                     raise uncommitted_failure
                 position, provider = following
 
+        async def guarded_provider_body() -> AsyncIterator[str]:
+            # A client hanging up cancels this generator mid-flight.
+            # Without this wrapper the ledger died unpublished, and the
+            # request log lost every verdict the chain had reached. Closing
+            # the inner body here keeps aclose() reaching the provider
+            # synchronously, as it did when this generator was the body.
+            inner = provider_body()
+            try:
+                async for chunk in inner:
+                    yield chunk
+            except asyncio.CancelledError, GeneratorExit:
+                ledger.interrupted()
+                ledger.publish()
+                raise
+            finally:
+                await close_stream_input(
+                    inner,
+                    owner="provider_executor",
+                    source="api",
+                    preserved_error=sys.exception(),
+                )
+
         stream_trace: dict[str, object] = {
             "request_id": request_id,
             "provider_id": plan.primary.resolved.provider_id,
@@ -600,7 +650,7 @@ class ProviderExecutor:
             stream_trace["generation_id"] = self._generation_id
 
         return traced_async_stream(
-            provider_body(),
+            guarded_provider_body(),
             stage="egress",
             source="api",
             complete_event=(
@@ -854,7 +904,7 @@ class ProviderExecutor:
             cooldown = (
                 provider.throttle_remaining() if position + 1 < len(order) else 0.0
             )
-            if cooldown > 0:
+            if cooldown >= _COOLDOWN_STEP_OVER_FLOOR_SECONDS:
                 logger.warning(
                     "MODEL COOLDOWN: '{}' is rate-limited for {:.0f}s;"
                     " trying the next model instead of waiting",
@@ -1013,5 +1063,11 @@ def route_health_registry(settings: Settings) -> RouteHealthRegistry:
 
 
 def reset_route_health_registries() -> None:
-    """Forget every bench. For tests, and for a deliberate config reload."""
+    """Forget every bench.
+
+    Called by the test suite between tests; no production path invokes it.
+    Changing either ejection setting already starts a fresh registry -- the
+    cache is keyed by both values -- and within one setting benches are
+    meant to outlive a config reload; that persistence is the point.
+    """
     _REGISTRIES.clear()

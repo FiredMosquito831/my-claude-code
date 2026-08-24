@@ -13,10 +13,7 @@ from my_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from my_claude_code.providers.model_listing import RequiredPathValues
 
 from .base_url import openai_v1_base_url
-from .extra_body import (
-    validate_extra_body_does_not_override_canonical_fields,
-    validate_extra_body_does_not_override_reasoning_fields,
-)
+from .extra_body import validate_extra_body_does_not_override_canonical_fields
 from .reasoning import (
     LLAMACPP_REASONING,
     NO_REASONING,
@@ -186,15 +183,30 @@ def _policy(
 
 OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
     "mistral_codestral": OpenAIChatProfile(
-        _policy("CODESTRAL", ReasoningReplayMode.THINK_TAGS),
+        _policy(
+            "CODESTRAL",
+            ReasoningReplayMode.THINK_TAGS,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+        ),
         NO_REASONING,
     ),
     "opencode": OpenAIChatProfile(
-        _policy("OPENCODE", ReasoningReplayMode.THINK_TAGS),
+        _policy(
+            "OPENCODE",
+            ReasoningReplayMode.THINK_TAGS,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+        ),
         NO_REASONING,
     ),
     "opencode_go": OpenAIChatProfile(
-        _policy("OPENCODE_GO", ReasoningReplayMode.THINK_TAGS),
+        _policy(
+            "OPENCODE_GO",
+            ReasoningReplayMode.THINK_TAGS,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+        ),
         NO_REASONING,
     ),
     "vercel": OpenAIChatProfile(
@@ -202,7 +214,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "VERCEL",
             ReasoningReplayMode.THINK_TAGS,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         ReasoningObject(_ALL_EFFORTS),
     ),
@@ -211,7 +223,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "HUGGINGFACE",
             ReasoningReplayMode.DISABLED,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         NO_REASONING,
     ),
@@ -246,6 +258,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "WAFER",
             ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         NamedEffortReasoning(
@@ -283,6 +297,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "MINIMAX",
             ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
             max_tokens_field="max_completion_tokens",
         ),
@@ -293,7 +309,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "CEREBRAS",
             ReasoningReplayMode.THINK_TAGS,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             max_tokens_field="max_completion_tokens",
         ),
         NamedEffortReasoning(
@@ -308,7 +324,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "GROQ",
             ReasoningReplayMode.REASONING_CONTENT,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             max_tokens_field="max_completion_tokens",
             strip_message_names=True,
             unsupported_body_keys=frozenset({"logprobs", "logit_bias", "top_logprobs"}),
@@ -325,7 +341,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "SAMBANOVA",
             ReasoningReplayMode.REASONING_CONTENT,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         NamedEffortReasoning(
             _LOW_MEDIUM_HIGH,
@@ -353,11 +369,21 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
     ),
     "novita": OpenAIChatProfile(
-        _policy("NOVITA", ReasoningReplayMode.THINK_TAGS),
+        _policy(
+            "NOVITA",
+            ReasoningReplayMode.THINK_TAGS,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+        ),
         NO_REASONING,
     ),
     "cline": OpenAIChatProfile(
-        _policy("CLINE", ReasoningReplayMode.DISABLED),
+        _policy(
+            "CLINE",
+            ReasoningReplayMode.DISABLED,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+        ),
         NO_REASONING,
         postprocessors=(apply_reasoning_details_replay,),
         model_listing=OpenAIModelListing(
@@ -385,6 +411,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "QWENCLOUD",
             ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         NO_REASONING,
@@ -393,6 +421,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "QWENCLOUD_CODING",
             ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         NO_REASONING,
     ),
@@ -400,6 +430,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "XAI",
             ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         NO_REASONING,
@@ -413,6 +445,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "TOGETHER",
             ReasoningReplayMode.REASONING,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         NO_REASONING,
@@ -428,7 +462,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "DEEPINFRA",
             ReasoningReplayMode.REASONING_CONTENT,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         NamedEffortReasoning(
@@ -452,7 +486,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "SILICONFLOW",
             ReasoningReplayMode.REASONING_CONTENT,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         NO_REASONING,
@@ -465,6 +499,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "NEBIUS",
             ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         NamedEffortReasoning(
@@ -482,6 +518,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "CHUTES",
             ReasoningReplayMode.DISABLED,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         NO_REASONING,
@@ -501,7 +539,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "FEATHERLESS",
             ReasoningReplayMode.REASONING_CONTENT,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         ChatTemplateReasoning(field="enable_thinking"),
@@ -526,7 +564,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "AGNES",
             ReasoningReplayMode.THINK_TAGS,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         ChatTemplateReasoning(field="enable_thinking"),
@@ -536,7 +574,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "WANDB",
             ReasoningReplayMode.DISABLED,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
             max_tokens_field="max_completion_tokens",
         ),
@@ -566,7 +604,12 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         structured_reasoning_details=True,
     ),
     "bedrock": OpenAIChatProfile(
-        _policy("BEDROCK", ReasoningReplayMode.THINK_TAGS),
+        _policy(
+            "BEDROCK",
+            ReasoningReplayMode.THINK_TAGS,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+        ),
         NO_REASONING,
         normalize_base_url=True,
     ),
@@ -574,6 +617,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "NARAROUTE",
             ReasoningReplayMode.DISABLED,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         NamedEffortReasoning(_LOW_MEDIUM_HIGH, enabled_value="medium"),
@@ -582,6 +627,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "TOKENROUTER",
             ReasoningReplayMode.DISABLED,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         NO_REASONING,
     ),
@@ -598,7 +645,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "ALIBABA",
             ReasoningReplayMode.REASONING_CONTENT,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         NO_REASONING,
     ),
@@ -607,7 +654,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "ALIBABA_CN",
             ReasoningReplayMode.REASONING_CONTENT,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         NO_REASONING,
     ),
@@ -616,7 +663,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "ALIBABA_CODING",
             ReasoningReplayMode.REASONING_CONTENT,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         NO_REASONING,
     ),
@@ -625,7 +672,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "ALIBABA_CODING_CN",
             ReasoningReplayMode.REASONING_CONTENT,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         NO_REASONING,
     ),
@@ -645,7 +692,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             "AZURE_OPENAI",
             ReasoningReplayMode.THINK_TAGS,
             include_extra_body=True,
-            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             max_tokens_field="max_completion_tokens",
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
@@ -655,6 +702,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "OLLAMA_CLOUD",
             ReasoningReplayMode.REASONING,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         NamedEffortReasoning(
@@ -668,6 +717,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "LLAMACPP",
             ReasoningReplayMode.THINK_TAGS,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         LLAMACPP_REASONING,
@@ -677,6 +728,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         _policy(
             "OLLAMA",
             ReasoningReplayMode.REASONING,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
         ),
         NamedEffortReasoning(
@@ -692,6 +745,11 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
 # Fallback profile for dynamic custom providers: plain OpenAI-compatible Chat
 # Completions with no provider-specific quirks.
 GENERIC_OPENAI_PROFILE = OpenAIChatProfile(
-    _policy("CUSTOM", ReasoningReplayMode.THINK_TAGS),
+    _policy(
+        "CUSTOM",
+        ReasoningReplayMode.THINK_TAGS,
+        include_extra_body=True,
+        extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+    ),
     NO_REASONING,
 )

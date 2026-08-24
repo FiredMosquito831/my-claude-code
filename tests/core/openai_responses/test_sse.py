@@ -968,3 +968,38 @@ def _overlapping_text_stream() -> list[str]:
         ),
         format_sse_event("message_stop", {"type": "message_stop"}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_message_start_seeds_input_tokens_when_final_delta_reports_zero() -> None:
+    """Translated upstreams report real inputs up front and zero at the end."""
+    events = [
+        format_sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {"usage": {"input_tokens": 12, "output_tokens": 1}},
+            },
+        ),
+        *_anthropic_text_stream("usage")[1:-2],
+        format_sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"input_tokens": 0, "output_tokens": 9},
+            },
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+
+    response = await _completed_response_from_sse(
+        _aiter(events),
+        {"model": "nvidia_nim/test-model", "stream": True},
+    )
+
+    assert response["usage"] == {
+        "input_tokens": 12,
+        "output_tokens": 9,
+        "total_tokens": 21,
+    }

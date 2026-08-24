@@ -873,9 +873,10 @@ def render_txt(
 
 
 def _txt_row(values: list[str], widths: list[int]) -> str:
-    cells = [
-        value.ljust(width)[:width] for value, width in zip(values, widths, strict=True)
-    ]
+    # Pad only, never clip: the widths cap at 40 for header sizing, but a
+    # wider value keeps its column overflow rather than losing characters --
+    # silently dropping content broke the fidelity this renderer promises.
+    cells = [value.ljust(width) for value, width in zip(values, widths, strict=True)]
     return " | ".join(cells) + "\n"
 
 

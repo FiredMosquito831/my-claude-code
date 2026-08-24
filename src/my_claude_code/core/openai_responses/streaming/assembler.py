@@ -57,6 +57,8 @@ class ResponsesStreamAssembler:
             chunks.extend(self._handle_content_block_delta(event.data))
         elif event.event == "content_block_stop":
             chunks.extend(self._handle_content_block_stop(event.data))
+        elif event.event == "message_start":
+            self._ledger.record_message_start(event.data)
         elif event.event == "message_delta":
             self._ledger.record_usage_delta(event.data)
         elif event.event == "message_stop":

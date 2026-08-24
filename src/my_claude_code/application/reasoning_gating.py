@@ -8,10 +8,6 @@ ownership of the wire shape, so a value this module cannot express through the
 encoder that will receive it simply degrades to the nearest thing that encoder
 already knew how to send.
 
-:func:`native_wire_effort` is the one deliberate exception, and it is a narrow
-one: it hands an encoder the *name* of an effort that a known native effort
-channel may carry, still without choosing any wire shape.
-
 The overriding rule is that an *unknown* capability changes nothing. Most
 providers publish no reasoning metadata at all, and clamping on silence would
 regress every one of them.
@@ -95,34 +91,6 @@ def adapt_reasoning_policy(
             working, capability, max_tokens, output_limit, model_ref
         )
     return working
-
-
-def native_wire_effort(
-    policy: ReasoningPolicy,
-    capability: ModelReasoningCapability | None,
-) -> ReasoningEffort | None:
-    """Return the effort a *known* native effort channel may carry, else None.
-
-    Non-``None`` exactly when the model is known to speak an effort vocabulary,
-    the policy names an effort, and that effort sits inside the published
-    vocabulary. Every less-certain shape returns ``None`` so the calling
-    encoder falls back to what it sent before metadata existed.
-
-    Callers settle ``OFF``/``ADAPTIVE`` controls before asking. Routing
-    normally clamps ``policy.effort`` into ``supported_efforts`` first
-    (:func:`adapt_reasoning_policy`), so the membership check here restates
-    that contract defensively for directly-built requests; it never clamps by
-    itself, because a silent rewrite belongs to the gating layer alone.
-    """
-
-    if capability is None or not capability.supports_effort_control:
-        return None
-    if policy.effort is None:
-        return None
-    supported = capability.supported_efforts
-    if not supported or policy.effort not in supported:
-        return None
-    return policy.effort
 
 
 def _suppress(policy: ReasoningPolicy, model_ref: str) -> ReasoningPolicy:

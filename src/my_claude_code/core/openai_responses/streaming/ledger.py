@@ -47,14 +47,35 @@ class ResponsesOutputLedger:
     def output(self) -> list[dict[str, Any]]:
         return [item for item in self._output_slots if item is not None]
 
+    def record_message_start(self, data: Mapping[str, Any]) -> None:
+        """Seed token counts reported up front by ``message_start``.
+
+        Translated upstreams report their real input count here and a zero in
+        the final ``message_delta``, so without this branch the response's only
+        input figure was that zero.
+        """
+        message = data.get("message")
+        if not isinstance(message, dict):
+            return
+        self._absorb_usage(message.get("usage"))
+
     def record_usage_delta(self, data: Mapping[str, Any]) -> None:
-        usage = data.get("usage")
+        self._absorb_usage(data.get("usage"))
+
+    def _absorb_usage(self, usage: object) -> None:
         if not isinstance(usage, dict):
             return
-        if isinstance(usage.get("input_tokens"), int):
-            self._input_tokens = usage["input_tokens"]
-        if isinstance(usage.get("output_tokens"), int):
-            self._output_tokens = usage["output_tokens"]
+        input_tokens = usage.get("input_tokens")
+        # A zero in a later report must not erase a positive count seeded by
+        # ``message_start``; it means the provider did not recount, not that
+        # nobody sent anything.
+        if isinstance(input_tokens, int) and (
+            self._input_tokens is None or input_tokens > 0
+        ):
+            self._input_tokens = input_tokens
+        output_tokens = usage.get("output_tokens")
+        if isinstance(output_tokens, int):
+            self._output_tokens = output_tokens
 
     def add_reasoning_text(self, text: str) -> None:
         self._reasoning_tokens_estimate += estimate_text_tokens(text)

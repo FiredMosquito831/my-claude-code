@@ -7,10 +7,7 @@ from typing import Any
 
 import httpx
 
-from my_claude_code.application.model_metadata import (
-    ModelReasoningCapability,
-    ProviderModelInfo,
-)
+from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.core.trace import trace_event
@@ -27,10 +24,6 @@ from my_claude_code.providers.stream_recovery import (
 from .auth import AnthropicMessagesAuth, BearerTokenAuth
 from .request import build_anthropic_messages_body
 from .streaming import iter_anthropic_sse_frames
-
-# models.dev files every Anthropic-Messages-shaped upstream under one bucket;
-# the lookup itself applies registry aliases such as anthropic_oauth.
-_MODELS_DEV_PROVIDER_ID = "anthropic"
 
 
 class AnthropicMessagesProvider(BaseProvider):
@@ -79,37 +72,13 @@ class AnthropicMessagesProvider(BaseProvider):
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         return model_infos_from_ids(await self.list_model_ids())
 
-    def _request_capability(
-        self, request: MessagesRequest
-    ) -> ModelReasoningCapability | None:
-        """Resolve models.dev's reasoning capability for this upstream model.
-
-        The Anthropic-first upstreams this family serves key their rows under
-        the ``anthropic`` bucket; anything else misses the bucket and resolves
-        to ``None``, which keeps the request builder on its historical
-        byte-identical path. Imported here rather than at module top because
-        ``providers.runtime``'s package facade constructs provider families --
-        the same lazy-import pattern runtime/factory.py uses to break cycle.
-        """
-        from my_claude_code.providers.runtime.models_dev import (
-            model_reasoning_capability_from_models_dev,
-        )
-
-        return model_reasoning_capability_from_models_dev(
-            _MODELS_DEV_PROVIDER_ID, request.model
-        )
-
     def preflight_stream(
         self,
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
     ) -> None:
-        build_anthropic_messages_body(
-            request,
-            reasoning=reasoning,
-            capability=self._request_capability(request),
-        )
+        build_anthropic_messages_body(request, reasoning=reasoning)
 
     async def _send_stream_request(self, body: dict[str, Any]) -> httpx.Response:
         headers = {"Content-Type": "application/json"}
@@ -158,11 +127,7 @@ class AnthropicMessagesProvider(BaseProvider):
     ) -> AsyncIterator[str]:
         tag = self._provider_name
         req_tag = f" request_id={request_id}" if request_id else ""
-        body = build_anthropic_messages_body(
-            request,
-            reasoning=reasoning,
-            capability=self._request_capability(request),
-        )
+        body = build_anthropic_messages_body(request, reasoning=reasoning)
         if self._body_transform is not None:
             body = self._body_transform(body)
         trace_event(

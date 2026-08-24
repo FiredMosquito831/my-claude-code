@@ -20,6 +20,12 @@ from my_claude_code.application.routing import (
     RoutedMessagesPlan,
     RoutedMessagesRequest,
 )
+from my_claude_code.config.constants import (
+    FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
+    FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
+    FALLBACK_STALL_TIMEOUT_DEFAULT,
+    FALLBACK_TOTAL_TIMEOUT_DEFAULT,
+)
 from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
@@ -1813,3 +1819,148 @@ def test_the_heartbeat_is_empty_and_is_not_a_frame() -> None:
     """
     assert REASONING_HEARTBEAT == ""
     assert parse_sse_text(REASONING_HEARTBEAT) == []
+
+
+def test_route_execution_policy_defaults_match_fallback_constants() -> None:
+    """The dataclass defaults and the env-default constants move together."""
+    policy = RouteExecutionPolicy()
+
+    assert policy.first_token_timeout == FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT
+    assert policy.total_timeout == FALLBACK_TOTAL_TIMEOUT_DEFAULT
+    assert policy.stall_timeout == FALLBACK_STALL_TIMEOUT_DEFAULT
+    assert policy.reasoning_answer_timeout == FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT
+
+
+@pytest.mark.asyncio
+async def test_client_cancellation_publishes_an_interrupted_attempt_verdict() -> None:
+    """A disconnect must not erase every verdict the chain had reached."""
+    provider = FakeProvider()
+    attempts, observer = _attempt_log()
+    executor = ProviderExecutor(
+        lambda _provider_id: provider,
+        token_counter=lambda _m, _s, _t: 1,
+    )
+    stream = executor.stream(
+        _plan(_routed_request(provider_id="solo")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_cancelled",
+        on_attempt_result=observer,
+    )
+
+    assert await anext(stream) == "event: message_stop\ndata: {}\n\n"
+    assert isinstance(stream, AsyncCloseable)
+    await stream.aclose()
+
+    assert len(attempts) == 1
+    verdict = attempts[0]
+    assert verdict.outcome == "failed"
+    assert verdict.error_kind == "interrupted"
+    assert "cancelled" in (verdict.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_a_post_commit_route_end_marks_downstream_models_unreachable() -> None:
+    """Behind a committed failure nothing was skipped for time or health."""
+    primary = ScriptedProvider(
+        chunks=("event: a\n\n",),
+        error=ExecutionFailure(
+            kind=FailureKind.INVALID_REQUEST,
+            status_code=400,
+            message="bad body",
+            retryable=False,
+        ),
+    )
+    secondary = FakeProvider()
+    attempts, observer = _attempt_log()
+    executor = _executor({"primary": primary, "secondary": secondary})
+
+    stream = executor.stream(
+        _plan(
+            _routed_request(provider_id="primary"),
+            _routed_request(provider_id="secondary"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_post_commit_end",
+        on_attempt_result=observer,
+    )
+    chunks = stream.__aiter__()
+    received: list[str] = []
+    with pytest.raises(ExecutionFailure):
+        while True:
+            received.append(await anext(chunks))
+
+    assert received == ["event: a\n\n"]
+    assert attempts[0].outcome == "failed"
+    assert attempts[1].outcome == "skipped"
+    assert attempts[1].error_kind == "route_ended"
+
+
+@pytest.mark.asyncio
+async def test_sub_second_cooldowns_do_not_cost_the_chain_a_slot() -> None:
+    """Below the step-over floor the wait is cheaper paid than routed around."""
+    primary = FakeProvider()
+    primary.cooldown_seconds = 4.9
+    secondary = FakeProvider()
+    executor = _executor({"primary": primary, "secondary": secondary})
+
+    stream = executor.stream(
+        _plan(
+            _routed_request(provider_id="primary"),
+            _routed_request(provider_id="secondary"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_small_cooldown",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert primary.preflight_calls, "a sub-floor cooldown must still be tried"
+
+
+@pytest.mark.asyncio
+async def test_full_cooldowns_still_step_over_to_the_next_model() -> None:
+    primary = FakeProvider()
+    primary.cooldown_seconds = 5.0
+    secondary = FakeProvider()
+    attempts, observer = _attempt_log()
+    executor = _executor({"primary": primary, "secondary": secondary})
+
+    stream = executor.stream(
+        _plan(
+            _routed_request(provider_id="primary"),
+            _routed_request(provider_id="secondary"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_cooldown_skip",
+        on_attempt_result=observer,
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert primary.preflight_calls == []
+    assert attempts[0].error_kind == "cooldown"
+    assert attempts[1].outcome == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_the_last_candidate_is_never_stepped_over_for_cooldown() -> None:
+    provider = FakeProvider()
+    provider.cooldown_seconds = 30.0
+    executor = _executor({"solo": provider})
+
+    stream = executor.stream(
+        _plan(_routed_request(provider_id="solo")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_last_candidate",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert provider.preflight_calls

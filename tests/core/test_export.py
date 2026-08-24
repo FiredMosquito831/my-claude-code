@@ -170,3 +170,15 @@ def test_websearch_aggregate(tmp_path) -> None:
     assert rows[0]["results"] == 3  # 0+1+2
     assert rows[0]["cost_usd"] == pytest.approx(0.03)
     store.close()
+
+
+def test_render_txt_keeps_cells_longer_than_the_width_cap() -> None:
+    long_value = "x" * 60
+    rows = iter([{"model": long_value}])
+
+    chunks = list(
+        export_engine.render_txt(rows, ["model"], ["Model"], "Title", "Summary")
+    )
+
+    row_line = chunks[-2].decode("utf-8")
+    assert long_value in row_line
