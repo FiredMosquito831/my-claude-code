@@ -25,7 +25,6 @@ from .rotation import (
     KeyPool,
     default_rotation_policy,
     mask_key_label,
-    parse_websearch_keys,
 )
 
 __all__ = [
@@ -47,7 +46,6 @@ __all__ = [
     "build_providers",
     "default_rotation_policy",
     "mask_key_label",
-    "parse_websearch_keys",
     "resolve_provider_id",
     "search",
     "search_with_logging",

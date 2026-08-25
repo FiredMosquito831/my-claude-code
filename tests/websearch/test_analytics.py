@@ -8,6 +8,7 @@ import pytest
 
 from my_claude_code.websearch.analytics import (
     WebSearchLogStore,
+    _ensure_auto_vacuum,
     default_websearch_db_path,
     get_shared_store,
     record_search,
@@ -1073,6 +1074,161 @@ class TestSchemaMigration:
         } <= columns
         assert route_table == ("search_route_log",)
         store.close()
+
+
+class TestStorageReclamation:
+    @staticmethod
+    def _auto_vacuum_mode(path) -> int:
+        connection = sqlite3.connect(path)
+        try:
+            return int(connection.execute("PRAGMA auto_vacuum").fetchone()[0])
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _size_after_checkpoint(path) -> int:
+        connection = sqlite3.connect(path)
+        try:
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            connection.close()
+        return path.stat().st_size
+
+    @staticmethod
+    def _page_count(path) -> int:
+        connection = sqlite3.connect(path)
+        try:
+            return int(connection.execute("PRAGMA page_count").fetchone()[0])
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _freelist_count(path) -> int:
+        connection = sqlite3.connect(path)
+        try:
+            return int(connection.execute("PRAGMA freelist_count").fetchone()[0])
+        finally:
+            connection.close()
+
+    def test_legacy_database_converts_to_incremental_auto_vacuum(
+        self, tmp_path
+    ) -> None:
+        """An existing auto_vacuum=0 database converts in place, keeping rows."""
+        db_path = tmp_path / "legacy-websearch.db"
+        seed = WebSearchLogStore(db_path)
+        seed.record(_outcome(query="historical"))
+        seed.close()
+
+        connection = sqlite3.connect(db_path)
+        try:
+            connection.isolation_level = None
+            connection.execute("PRAGMA auto_vacuum=NONE")
+            connection.execute("VACUUM")
+        finally:
+            connection.close()
+        assert self._auto_vacuum_mode(db_path) == 0
+
+        store = WebSearchLogStore(db_path)
+        try:
+            store.record(_outcome(query="post-migration"))
+            store.flush()
+            assert self._auto_vacuum_mode(db_path) == 2
+            queries = [row["query"] for row in store.requests(limit=10)["items"]]
+            assert "historical" in queries
+            assert "post-migration" in queries
+            connection = sqlite3.connect(db_path)
+            try:
+                names = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+            finally:
+                connection.close()
+            # ANALYZE ran after the rebuild, repopulating planner statistics.
+            assert "sqlite_stat1" in names
+        finally:
+            store.close()
+
+    def test_prune_reclaims_file_space_on_seeded_copy(self, tmp_path) -> None:
+        """Row-cap pruning must return bytes, not just grow the freelist."""
+        db_path = tmp_path / "websearch.db"
+        body = "x" * 20_000
+        # Baseline: the steady-state footprint of exactly max_rows fat rows,
+        # built independently so the main store's final size has a reference.
+        baseline_path = tmp_path / "baseline.db"
+        baseline = WebSearchLogStore(baseline_path, max_rows=5, prune_every=1)
+        try:
+            for _index in range(5):
+                baseline.record(_outcome(query=body[:256], input_payload={"raw": body}))
+            baseline.flush()
+            baseline_pages = self._page_count(baseline_path)
+        finally:
+            baseline.close()
+        store = WebSearchLogStore(db_path, max_rows=5, prune_every=1)
+        sizes: list[int] = []
+        try:
+            for _cycle in range(4):
+                for _index in range(30):
+                    store.record(
+                        _outcome(query=body[:256], input_payload={"raw": body})
+                    )
+                store.flush()
+                assert self._auto_vacuum_mode(db_path) == 2
+                sizes.append(self._size_after_checkpoint(db_path))
+                # incremental_vacuum drains whatever the prune just freed;
+                # SQLite retains only a tiny engine-managed residual.
+                assert self._freelist_count(db_path) <= 8
+        finally:
+            store.close()
+        # Later cycles must not keep ratcheting the file upward...
+        assert sizes[-1] <= sizes[0] * 2
+        # ...and pruning plus incremental_vacuum must pull the file back down
+        # toward the steady-state footprint instead of pinning the bulk-phase
+        # high-water mark (undrained, it stays ~6x the 5-row baseline).
+        assert self._page_count(db_path) <= baseline_pages * 3
+
+
+class TestEnsureAutoVacuum:
+    """Pin ``_ensure_auto_vacuum``'s statement contract on a real connection."""
+
+    def test_already_incremental_skips_the_rebuild(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
+            statements: list[str] = []
+            connection.set_trace_callback(statements.append)
+
+            _ensure_auto_vacuum(connection)
+
+            assert statements == ["PRAGMA auto_vacuum"]
+        finally:
+            connection.close()
+
+    def test_legacy_database_converts_and_restores_isolation(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        try:
+            assert int(connection.execute("PRAGMA auto_vacuum").fetchone()[0]) == 0
+            previous_isolation = connection.isolation_level
+            traced: list[str] = []
+            connection.set_trace_callback(traced.append)
+
+            _ensure_auto_vacuum(connection)
+
+            # ``--``-prefixed entries are engine-internal statements (SQLite
+            # reads back sqlite_stat1 while implementing ANALYZE), not
+            # statements issued by the helper.
+            statements = [sql for sql in traced if not sql.startswith("--")]
+            assert statements == [
+                "PRAGMA auto_vacuum",
+                "PRAGMA auto_vacuum=INCREMENTAL",
+                "VACUUM",
+                "ANALYZE",
+            ]
+            assert connection.isolation_level == previous_isolation
+        finally:
+            connection.close()
 
 
 class TestWriterBehavior:

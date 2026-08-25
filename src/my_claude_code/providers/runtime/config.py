@@ -125,7 +125,7 @@ def build_provider_config(
         commit_holdback_seconds=settings.stream_commit_holdback_seconds,
         fallback_on_reasoning_only=settings.fallback_on_reasoning_only,
         rate_limit_cooldown_seconds=settings.rate_limit_cooldown_seconds,
-        circuit_open_threshold=settings.credential_circuit_threshold,
+        circuit_threshold=settings.credential_circuit_threshold,
     )
 
 
@@ -161,6 +161,6 @@ def _build_dynamic_provider_config(
         commit_holdback_seconds=settings.stream_commit_holdback_seconds,
         fallback_on_reasoning_only=settings.fallback_on_reasoning_only,
         rate_limit_cooldown_seconds=settings.rate_limit_cooldown_seconds,
-        circuit_open_threshold=settings.credential_circuit_threshold,
+        circuit_threshold=settings.credential_circuit_threshold,
         credential_rotation=rotation,
     )

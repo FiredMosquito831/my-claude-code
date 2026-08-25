@@ -2,6 +2,7 @@
 
 import pytest
 
+from my_claude_code.config.credentials import parse_credential_keys
 from my_claude_code.core.rate_limit import MAX_RATE_LIMIT_COOLDOWN_SECONDS
 from my_claude_code.websearch.rotation import (
     CIRCUIT_OPEN_SECONDS,
@@ -11,18 +12,17 @@ from my_claude_code.websearch.rotation import (
     KeyPool,
     default_rotation_policy,
     mask_key_label,
-    parse_websearch_keys,
 )
 from tests.websearch.support import FakeClock
 
 
 class TestParseAndMask:
-    def test_parse_websearch_keys_splits_and_strips(self) -> None:
-        assert parse_websearch_keys("k1,k2, k3 ,, ") == ("k1", "k2", "k3")
+    def test_parse_credential_keys_splits_and_strips(self) -> None:
+        assert parse_credential_keys("k1,k2, k3 ,, ") == ("k1", "k2", "k3")
 
     @pytest.mark.parametrize("raw", [None, "", "   ", ",,"])
-    def test_parse_websearch_keys_empty(self, raw) -> None:
-        assert parse_websearch_keys(raw) == ()
+    def test_parse_credential_keys_empty(self, raw) -> None:
+        assert parse_credential_keys(raw) == ()
 
     def test_mask_key_label_first4_last4(self) -> None:
         assert mask_key_label("sk-abcd1234wxyz") == "sk-a…wxyz"

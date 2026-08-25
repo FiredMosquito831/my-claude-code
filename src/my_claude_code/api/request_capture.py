@@ -39,6 +39,7 @@ from my_claude_code.core.request_log import (
     RequestRecord,
     RouteAttempt,
     RouteAttemptOutcome,
+    install_recovery_trace,
     store_from_settings,
 )
 
@@ -97,6 +98,12 @@ class RequestCapture:
         # The rotating provider writes the credential it picks into this slot
         # from deep in the call stack; it is read back at finalize time.
         self._credential = install_attribution()
+        # Stream-recovery counters arrive the same way: a provider's runner
+        # increments this collector from inside its holdback and retry
+        # machinery, however many context copies the streaming response runs
+        # through. Only a logged request installs one, so providers exercised
+        # directly stay unrecorded.
+        self._recovery = install_recovery_trace() if self.enabled else None
         input_chars = len(input_text) if input_text else None
         self._record = RequestRecord(
             id=request_id,
@@ -136,8 +143,16 @@ class RequestCapture:
                 error_kind=attempt.error_kind,
                 error_message=attempt.error_message,
                 duration_ms=attempt.duration_ms,
+                params=self._recovery_events_for(attempt.attempt),
             )
         )
+
+    def _recovery_events_for(self, attempt_index: int) -> dict[str, Any] | None:
+        """Snapshot the recovery counters recorded while this attempt ran."""
+        if self._recovery is None:
+            return None
+        events = self._recovery.events.get(attempt_index)
+        return dict(events) if events else None
 
     def set_plan(self, plan: RoutedMessagesPlan) -> None:
         """Record the whole routing decision before any attempt is made.
@@ -166,6 +181,11 @@ class RequestCapture:
         """
         if not self.enabled:
             return
+        # Attempt boundary for recovery attribution: everything a provider
+        # records from here until the next boundary belongs to this chain
+        # index -- including every counter on a single-model route.
+        if self._recovery is not None:
+            self._recovery.current_attempt = attempt
         if attempt == 0:
             self._primary_model_ref = routed.resolved.provider_model_ref
         self._record.route_attempt = attempt

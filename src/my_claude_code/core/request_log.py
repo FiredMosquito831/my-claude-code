@@ -12,6 +12,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Generator, Iterator
 from compression import zstd
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -294,6 +295,11 @@ CREATE TABLE IF NOT EXISTS request_attempts (
     error_kind TEXT,
     error_message TEXT,
     duration_ms REAL,
+    -- What the provider did to keep this attempt alive, as a small JSON
+    -- object: {"early_retries": n, "midstream_recoveries": n, "salvages": n}.
+    -- Written only when something was counted; NULL on every row written
+    -- before recovery was recorded, which is "not measured", not zero.
+    params TEXT,
     PRIMARY KEY (request_id, attempt)
 );
 """
@@ -527,6 +533,69 @@ class RouteAttempt:
     error_kind: str | None = None
     error_message: str | None = None
     duration_ms: float | None = None
+    # What this attempt's provider did to survive: transparent early retries,
+    # midstream recoveries, salvaged continuations. Absent (None) on every
+    # attempt where nothing was counted -- including everything written
+    # before recovery observability existed.
+    params: dict[str, Any] | None = None
+
+
+# ---------------------------------------------------- recovery observability --
+#
+# The recovery decisions live deep inside a provider's stream runner, while the
+# request log is finalized at the API boundary. Rather than widening every
+# provider signature with out-parameters, the capture installs one mutable
+# collector for the life of the request and the runner increments it as its
+# RecoveryController takes each action -- the same shape credential
+# attribution uses, and for the same reason: mutating one shared object stays
+# visible through any number of context copies, including the child tasks a
+# streaming response runs in.
+#
+# Counters are bucketed by route-chain index. The capture advances
+# ``current_attempt`` at every attempt boundary (``set_routing`` fires before
+# the attempt's provider stream starts), so an event recorded between two
+# boundaries belongs to the attempt in flight -- including the common case
+# where every counter lands on attempt 0 of a single-model route.
+
+RECOVERY_EARLY_RETRIES = "early_retries"
+RECOVERY_MIDSTREAM_RECOVERIES = "midstream_recoveries"
+RECOVERY_SALVAGES = "salvages"
+
+
+@dataclass(slots=True)
+class RecoveryTrace:
+    """Mutable per-request collector of provider stream-recovery counters."""
+
+    current_attempt: int = 0
+    # Chain index -> {"early_retries": n, "midstream_recoveries": n, ...}
+    events: dict[int, dict[str, int]] = field(default_factory=dict)
+
+    def record(self, kind: str) -> None:
+        bucket = self.events.setdefault(self.current_attempt, {})
+        bucket[kind] = bucket.get(kind, 0) + 1
+
+
+_RECOVERY_TRACE: ContextVar[RecoveryTrace | None] = ContextVar(
+    "fcc_recovery_trace", default=None
+)
+
+
+def install_recovery_trace() -> RecoveryTrace:
+    """Start recording stream recovery for the current request."""
+    slot = RecoveryTrace()
+    _RECOVERY_TRACE.set(slot)
+    return slot
+
+
+def record_recovery_event(kind: str) -> None:
+    """Record one recovery action for the tracked request, if any.
+
+    A no-op outside a tracked request, so providers exercised directly (unit
+    tests, token counting) need no special handling.
+    """
+    slot = _RECOVERY_TRACE.get()
+    if slot is not None:
+        slot.record(kind)
 
 
 @dataclass(slots=True)
@@ -828,6 +897,7 @@ class RequestLogStore:
                 conn.executescript(_BODIES_SCHEMA)
                 self._ensure_added_columns(conn)
                 self._ensure_input_sha_column(conn)
+                self._ensure_attempt_params_column(conn)
                 self._relax_bodies_sha_constraint(conn)
                 self._ensure_bodies_index(conn)
         finally:
@@ -971,6 +1041,31 @@ class RequestLogStore:
         if "sha" in columns and "input_sha" not in columns:
             with contextlib.suppress(sqlite3.OperationalError):
                 conn.execute("ALTER TABLE request_bodies ADD COLUMN input_sha TEXT")
+
+    @staticmethod
+    def _ensure_attempt_params_column(conn: sqlite3.Connection) -> None:
+        """Add per-attempt recovery counters to a database created before them.
+
+        ``params`` carries the transparent stream recovery that happened while
+        each model held the request. Rows written earlier keep it NULL, which
+        reads downstream as "recorded before recovery was counted", not zero.
+        """
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(request_attempts)")
+        }
+        if "params" in columns:
+            return
+        try:
+            conn.execute("ALTER TABLE request_attempts ADD COLUMN params TEXT")
+        except sqlite3.OperationalError:
+            # Another process may have won the migration race; only a
+            # genuinely missing column is an error.
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(request_attempts)")
+            }
+            if "params" not in columns:
+                raise
 
     @staticmethod
     def _relax_bodies_sha_constraint(conn: sqlite3.Connection) -> None:
@@ -1404,6 +1499,7 @@ class RequestLogStore:
                 attempt.error_kind,
                 attempt.error_message,
                 attempt.duration_ms,
+                json.dumps(attempt.params) if attempt.params else None,
             )
             for record in batch
             for attempt in record.attempts
@@ -1413,7 +1509,7 @@ class RequestLogStore:
         conn.executemany(
             "INSERT OR REPLACE INTO request_attempts (request_id, attempt,"
             " provider, model_ref, outcome, error_kind, error_message,"
-            " duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " duration_ms, params) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
 
@@ -1424,7 +1520,7 @@ class RequestLogStore:
         """Return one request's attempts in the order the chain tried them."""
         rows = conn.execute(
             "SELECT attempt, provider, model_ref, outcome, error_kind,"
-            " error_message, duration_ms FROM request_attempts"
+            " error_message, duration_ms, params FROM request_attempts"
             " WHERE request_id = ? ORDER BY attempt",
             (request_id,),
         ).fetchall()
@@ -1437,6 +1533,7 @@ class RequestLogStore:
                 "error_kind": row["error_kind"],
                 "error_message": row["error_message"],
                 "duration_ms": row["duration_ms"],
+                "params": _loads_or_none(row["params"]),
             }
             for row in rows
         ]
@@ -2173,6 +2270,23 @@ class RequestLogStore:
                     args,
                 ).fetchall()
             ]
+            try:
+                recovery = conn.execute(
+                    "SELECT"
+                    " COALESCE(SUM(json_extract(a.params, '$.early_retries')), 0),"
+                    " COALESCE(SUM(json_extract(a.params,"
+                    " '$.midstream_recoveries')), 0),"
+                    " COALESCE(SUM(json_extract(a.params, '$.salvages')), 0)"
+                    " FROM request_attempts AS a"
+                    " WHERE a.request_id IN (SELECT id FROM requests"
+                    f"{where})",
+                    args,
+                ).fetchone()
+            except sqlite3.Error as exc:
+                # One unreadable params value must not take the analytics
+                # page down; report nothing measured instead.
+                logger.warning("Request log recovery aggregate skipped: {}", exc)
+                recovery = (0, 0, 0)
             series = self._series(conn, where, args, since=since, until=until)
 
         total = totals["total"] or 0
@@ -2199,6 +2313,14 @@ class RequestLogStore:
             "fallback_routes": fallback_routes,
             "diverted": totals["diverted"] or 0,
             "diverted_routes": diverted_routes,
+            # Stream recovery summed over every attempt in the window. A zero
+            # is a real measured zero; rows written before recovery was
+            # recorded carry nothing to sum and do not drag it down.
+            "recovery": {
+                "early_retries": int(recovery[0]),
+                "midstream_recoveries": int(recovery[1]),
+                "salvages": int(recovery[2]),
+            },
             # Requests that carried an image or a document, whether or not the
             # route had to divert: a vision-capable primary needs no diversion
             # and still received a picture.

@@ -310,7 +310,7 @@ def create_provider(provider_id: str, settings: Settings) -> BaseProvider:
     state = CredentialRotationState(
         len(providers),
         config.credential_rotation,
-        circuit_open_threshold=config.circuit_open_threshold,
+        circuit_threshold=config.circuit_threshold,
     )
     labels = tuple(mask_key_label(key) for key in keys)
     return RotatingProvider(config, providers, state, key_labels=labels)

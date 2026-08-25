@@ -29,6 +29,12 @@ from my_claude_code.core.anthropic.streaming import (
 )
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.request_log import (
+    RECOVERY_EARLY_RETRIES,
+    RECOVERY_MIDSTREAM_RECOVERIES,
+    RECOVERY_SALVAGES,
+    record_recovery_event,
+)
 from my_claude_code.core.trace import provider_chat_body_snapshot, trace_event
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
@@ -597,6 +603,7 @@ class _OpenAIChatStreamRunner:
                         complete_tool_salvageable=complete_tool_salvageable,
                     )
                     if decision.action == RecoveryFailureAction.EARLY_RETRY:
+                        record_recovery_event(RECOVERY_EARLY_RETRIES)
                         ledger = self._new_ledger()
                         think_parser = ThinkTagParser()
                         heuristic_parser = HeuristicToolParser()
@@ -626,6 +633,7 @@ class _OpenAIChatStreamRunner:
                             )
                             recovery_events = None
                         if recovery_events is not None:
+                            record_recovery_event(RECOVERY_MIDSTREAM_RECOVERIES)
                             for event in recovery.flush_uncommitted(decision):
                                 yield event
                             for event in recovery_events:
@@ -881,6 +889,7 @@ class _OpenAIChatStreamRunner:
                 provider=self._provider._provider_name,
                 request_id=self._request_id,
             )
+            record_recovery_event(RECOVERY_SALVAGES)
             return events
 
         partial_text = ledger.accumulated_text
@@ -917,6 +926,7 @@ class _OpenAIChatStreamRunner:
             provider=self._provider._provider_name,
             request_id=self._request_id,
         )
+        record_recovery_event(RECOVERY_SALVAGES)
         return events
 
     async def _repair_tool_args(

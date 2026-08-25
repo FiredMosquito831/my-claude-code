@@ -2042,3 +2042,172 @@ def test_attempts_are_deleted_with_the_request_they_belong_to(store, tmp_path):
         assert orphans == 0
     finally:
         small.close()
+
+
+# ------------------------------------------------- recovery observability --
+
+
+_LEGACY_ATTEMPTS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS request_attempts (
+    request_id TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    provider TEXT,
+    model_ref TEXT,
+    outcome TEXT NOT NULL,
+    error_kind TEXT,
+    error_message TEXT,
+    duration_ms REAL,
+    PRIMARY KEY (request_id, attempt)
+);
+"""
+
+
+def _recovered_attempts() -> tuple[RouteAttempt, ...]:
+    return (
+        RouteAttempt(
+            attempt=0,
+            provider="nous_portal",
+            model_ref="nous_portal/m1",
+            outcome=RouteAttemptOutcome.FAILED,
+            error_kind="timeout",
+            params={"early_retries": 2, "midstream_recoveries": 1},
+        ),
+        RouteAttempt(
+            attempt=1,
+            provider="groq",
+            model_ref="groq/m2",
+            outcome=RouteAttemptOutcome.SUCCEEDED,
+            duration_ms=900.0,
+            params={"salvages": 1},
+        ),
+    )
+
+
+def test_attempt_params_round_trip(store: RequestLogStore) -> None:
+    """Recovery counters survive the writer and come back parsed."""
+    store.enqueue(_record("req_rec", attempts=_recovered_attempts()))
+    store.enqueue(_record("req_bare"))
+    store.close()
+
+    stored = store.get_request("req_rec")
+    assert stored is not None
+    first, second = stored["route_attempts"]
+    assert first["params"] == {"early_retries": 2, "midstream_recoveries": 1}
+    assert second["params"] == {"salvages": 1}
+
+    bare = store.get_request("req_bare")
+    assert bare is not None
+    assert bare["route_attempts"] == []
+
+
+def test_migrates_a_database_created_before_attempt_params(tmp_path) -> None:
+    """Existing attempt rows must gain the params column without losing data."""
+    db_path = tmp_path / "requests.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(_OLD_SCHEMA)
+        conn.executescript(_LEGACY_ATTEMPTS_SCHEMA)
+        conn.execute(
+            "INSERT INTO requests (id, ts_epoch, ts_iso, endpoint, protocol,"
+            " status) VALUES ('legacy', ?, 'x', '/v1/messages', 'anthropic',"
+            " 'success')",
+            (time.time(),),
+        )
+        conn.execute(
+            "INSERT INTO request_attempts (request_id, attempt, provider,"
+            " model_ref, outcome) VALUES ('legacy', 0, 'nvidia_nim',"
+            " 'nvidia_nim/old', 'failed')"
+        )
+        conn.commit()
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(request_attempts)")
+        }
+        assert "params" not in columns
+    finally:
+        conn.close()
+
+    store = RequestLogStore(db_path, max_rows=100)
+    try:
+        store.enqueue(_record("fresh", attempts=_recovered_attempts()))
+        store.close()
+
+        check = sqlite3.connect(db_path)
+        try:
+            columns = {
+                str(row[1])
+                for row in check.execute("PRAGMA table_info(request_attempts)")
+            }
+        finally:
+            check.close()
+        assert "params" in columns
+
+        legacy = store.get_request("legacy")
+        assert legacy is not None
+        (attempt,) = legacy["route_attempts"]
+        assert attempt["outcome"] == "failed"
+        # Written before recovery was counted: NULL, not zero.
+        assert attempt["params"] is None
+
+        fresh = store.get_request("fresh")
+        assert fresh is not None
+        assert fresh["route_attempts"][0]["params"] == {
+            "early_retries": 2,
+            "midstream_recoveries": 1,
+        }
+    finally:
+        store.close()
+
+
+def test_stats_sums_recovery_over_the_window(store: RequestLogStore) -> None:
+    """The analytics payload carries the counters summed over every attempt."""
+    store.enqueue(_record("r1", attempts=_recovered_attempts()))
+    store.enqueue(
+        _record(
+            "r2",
+            provider="opencode",
+            resolved_model="oc/m",
+            attempts=(
+                RouteAttempt(
+                    attempt=0,
+                    provider="opencode",
+                    model_ref="oc/m",
+                    outcome=RouteAttemptOutcome.SUCCEEDED,
+                    params={"early_retries": 1, "salvages": 4},
+                ),
+            ),
+        )
+    )
+    store.close()
+
+    assert store.stats()["recovery"] == {
+        "early_retries": 3,
+        "midstream_recoveries": 1,
+        "salvages": 5,
+    }
+    # The window filters carry through to the attempts being summed.
+    narrowed = store.stats(provider="opencode")
+    assert narrowed["recovery"] == {
+        "early_retries": 1,
+        "midstream_recoveries": 0,
+        "salvages": 4,
+    }
+
+
+def test_an_unreadable_params_value_cannot_take_stats_down(store) -> None:
+    """One malformed blob reports nothing measured instead of raising."""
+    store.enqueue(_record("r1", attempts=_recovered_attempts()))
+    store.close()
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "UPDATE request_attempts SET params = 'not json'"
+            " WHERE request_id = 'r1' AND attempt = 0"
+        )
+
+    assert store.stats()["recovery"] == {
+        "early_retries": 0,
+        "midstream_recoveries": 0,
+        "salvages": 0,
+    }
+    row = store.get_request("r1")
+    assert row is not None
+    assert row["route_attempts"][0]["params"] is None

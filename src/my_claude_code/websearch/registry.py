@@ -16,6 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from loguru import logger
 
+from my_claude_code.config.credentials import parse_credential_keys
 from my_claude_code.config.env_files import env_file_override
 from my_claude_code.config.settings import Settings
 from my_claude_code.config.websearch_catalog import (
@@ -31,7 +32,6 @@ from .options import read_websearch_options
 from .rotation import (
     ROTATION_POLICIES,
     default_rotation_policy,
-    parse_websearch_keys,
 )
 
 DEFAULT_HTTP_TIMEOUT = 20.0
@@ -474,7 +474,7 @@ def _descriptor_keys(
     if descriptor.settings_attr is None:
         return ()
     raw = getattr(settings, descriptor.settings_attr)
-    return parse_websearch_keys(raw if isinstance(raw, str) else None)
+    return parse_credential_keys(raw if isinstance(raw, str) else None)
 
 
 def _descriptor_base_url(

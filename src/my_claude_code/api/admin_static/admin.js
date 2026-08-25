@@ -7116,6 +7116,20 @@ function renderRequestStatsCards(stats) {
     ["Success rate", `${successRate}%`],
     ["Error rate", `${((stats.error_rate || 0) * 100).toFixed(1)}%`],
     ["Served by fallback", formatFallbackShare(stats)],
+    // Transparent stream recovery: retries and continuations a provider took
+    // without the client ever seeing a seam. A zero is a real measured zero;
+    // rows written before these were counted contribute nothing rather than
+    // dragging the sums down.
+    [
+      "Early retries",
+      formatAnalyticsNumber(stats.recovery?.early_retries ?? 0),
+      "Provider stream recovery, invisible to the client",
+    ],
+    [
+      "Midstream recoveries",
+      formatAnalyticsNumber(stats.recovery?.midstream_recoveries ?? 0),
+    ],
+    ["Salvages", formatAnalyticsNumber(stats.recovery?.salvages ?? 0)],
     // Counted separately from the diversion: a vision-capable primary takes an
     // image without any diversion at all, so "how many had a picture in them"
     // and "how many had to be rerouted" are different questions.

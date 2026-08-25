@@ -104,6 +104,15 @@ def test_the_settings_views_still_render_their_sections(rendered) -> None:
     assert views["optimizer"]["sections"] >= 1
 
 
+def test_stream_recovery_tiles_render_from_the_stats_payload(rendered) -> None:
+    """The three transparent-recovery counters surface as request tiles."""
+    cards = {row[1]: row[0] for row in rendered["requestCards"]}
+
+    assert cards.get("Early retries") == "41"
+    assert cards.get("Midstream recoveries") == "7"
+    assert cards.get("Salvages") == "3"
+
+
 def test_the_optimizer_view_is_registered(rendered) -> None:
     assert "Token Optimizer" in rendered["navLabels"]
     assert rendered["optimizer"]["present"] is True

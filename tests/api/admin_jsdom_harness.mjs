@@ -198,6 +198,7 @@ const ROUTES = {
     top_errors: [],
     fallback_routes: [],
     diverted_routes: [],
+    recovery: { early_retries: 41, midstream_recoveries: 7, salvages: 3 },
     coverage: {},
   },
   /* The Docs page. The html here is what the *server* produced -- the point
@@ -408,6 +409,15 @@ const docs = docsView
     }
   : { present: false };
 
+const requestsView = doc.querySelector('.admin-view[data-view="requests"]');
+const requestCards = requestsView
+  ? Array.from(
+      requestsView.querySelectorAll("#reqStatsCards .requests-card"),
+    ).map((card) =>
+      Array.from(card.children).map((el) => el.textContent.trim()),
+    )
+  : [];
+
 const optimizer = doc.querySelector('.admin-view[data-view="optimizer"]');
 // `> table >` matters: the per-rule <details> holds a nested table, and an
 // unscoped selector reports its rows as extra rule rows.
@@ -451,6 +461,7 @@ console.log(
       consoleErrors,
       navLabels: navLinks.map((link) => link.textContent),
       views,
+      requestCards,
       docs,
       optimizer: {
         present: Boolean(optimizer),

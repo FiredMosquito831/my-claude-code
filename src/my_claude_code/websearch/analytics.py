@@ -4,7 +4,8 @@ Recording is non-blocking: :meth:`WebSearchLogStore.record` enqueues onto a
 bounded queue drained by a single background writer thread (WAL,
 ``synchronous=NORMAL``, batched inserts). Reads (``stats``/``requests``) use
 short-lived connections so they never block the writer. Retention prunes both
-attempt and logical-route tables to ``max_rows`` newest records.
+attempt and logical-route tables to ``max_rows`` newest records; incremental
+auto-vacuum returns those pruned pages to the filesystem.
 
 Import direction: this module may import ``config``/``core`` and the sibling
 ``registry`` (for the outcome contracts); nothing in
@@ -556,6 +557,7 @@ class WebSearchLogStore:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+            _ensure_auto_vacuum(connection)
             _initialize_schema(connection)
             while True:
                 batch = self._collect_batch()
@@ -651,6 +653,17 @@ class WebSearchLogStore:
             connection.execute(_PRUNE_SQL, (self._max_rows,))
             connection.execute(_PRUNE_ROUTES_SQL, (self._max_rows,))
             connection.execute(_PRUNE_ORPHAN_ROUTES_SQL)
+            connection.commit()
+            # Requires incremental auto-vacuum (see ``_ensure_auto_vacuum``).
+            # The pragma yields one row per reclaimed page; an unconsumed
+            # cursor leaves the statement suspended after the first step
+            # and every prune would reclaim exactly one page while the
+            # rest of the freed pages stay on the freelist.
+            for _ in connection.execute("PRAGMA incremental_vacuum"):
+                pass
+            # The pragma's page moves participate in a transaction under
+            # Python's implicit-transaction mode; commit them so readers see
+            # the reclaimed pages immediately.
             connection.commit()
         except Exception:
             connection.rollback()
@@ -1304,6 +1317,34 @@ def _encode_provider_path(providers: tuple[str, ...]) -> str:
 
 def _decode_provider_path(encoded: str) -> list[str]:
     return [provider for provider in encoded.split("|") if provider]
+
+
+def _ensure_auto_vacuum(connection: sqlite3.Connection) -> None:
+    """Enable incremental auto-vacuum so pruned pages leave the file.
+
+    Without it ``_prune`` only moves pages onto the internal freelist: the
+    database file grows forever under row-based retention. A fresh database
+    adopts the pragma directly; an existing one (live installs started with
+    ``auto_vacuum=0``) needs a one-time full ``VACUUM`` rebuild followed by
+    ``ANALYZE`` so the planner keeps statistics for the rewritten pages. This
+    runs on the writer thread at startup, never on a request path.
+    """
+    try:
+        mode = connection.execute("PRAGMA auto_vacuum").fetchone()[0]
+        if int(mode) == 2:
+            return
+        previous = connection.isolation_level
+        connection.isolation_level = None
+        try:
+            # Autocommit: the pragma is a no-op inside a transaction and
+            # VACUUM refuses to run inside one.
+            connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
+            connection.execute("VACUUM")
+            connection.execute("ANALYZE")
+        finally:
+            connection.isolation_level = previous
+    except sqlite3.Error as exc:
+        logger.warning("Websearch analytics auto_vacuum setup failed: {}", exc)
 
 
 def _initialize_schema(connection: sqlite3.Connection) -> None:

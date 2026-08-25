@@ -131,7 +131,6 @@ from my_claude_code.providers.chatgpt_oauth.oauth_login import (
 from my_claude_code.providers.runtime.rotating import RotatingProvider
 from my_claude_code.websearch.errors import WebSearchError
 from my_claude_code.websearch.registry import search_with_logging
-from my_claude_code.websearch.rotation import mask_key_label, parse_websearch_keys
 
 from .dependencies import get_services, get_settings
 from .ports import ApiServices
@@ -965,13 +964,13 @@ async def list_websearch_credential_keys(env_key: str, request: Request):
     descriptor = _websearch_descriptor_for_env(env_key)
     state = load_value_state()
     entry = state.get(env_key, {"value": "", "source": "default"})
-    keys = parse_websearch_keys(entry["value"])
+    keys = parse_credential_keys(entry["value"])
     return {
         "provider_id": descriptor.provider_id,
         "env_key": env_key,
         "locked": is_locked_source(entry["source"]),
         "keys": [
-            {"index": index, "key_label": mask_key_label(key)}
+            {"index": index, "key_label": mask_credential_label(key)}
             for index, key in enumerate(keys)
         ],
         "health": cached_key_pool_snapshot(descriptor.provider_id),
@@ -1067,14 +1066,14 @@ def _editable_websearch_keys(env_key: str) -> list[str]:
             status_code=409,
             detail=f"{env_key} comes from a locked source ({entry['source']})",
         )
-    return list(parse_websearch_keys(entry["value"]))
+    return list(parse_credential_keys(entry["value"]))
 
 
 def _masked_keys(env_key: str) -> list[dict[str, Any]]:
     entry = load_value_state().get(env_key, {"value": "", "source": "default"})
     return [
-        {"index": index, "key_label": mask_key_label(key)}
-        for index, key in enumerate(parse_websearch_keys(entry["value"]))
+        {"index": index, "key_label": mask_credential_label(key)}
+        for index, key in enumerate(parse_credential_keys(entry["value"]))
     ]
 
 

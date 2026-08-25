@@ -15,6 +15,7 @@ from my_claude_code.api.request_capture import (
     extract_request_params,
 )
 from my_claude_code.api.response_streams import ManagedStreamingResponse
+from my_claude_code.application.execution import RouteAttemptRecord
 from my_claude_code.application.routing import ModelRouter
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import request_image_inputs
@@ -22,9 +23,11 @@ from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.async_iterators import AsyncCloseable
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.request_log import (
+    _RECOVERY_TRACE,
     RequestLogStore,
     RequestRecord,
     get_request_log_store,
+    record_recovery_event,
 )
 
 
@@ -858,3 +861,69 @@ def test_ordinary_row_leaves_the_optimization_columns_null(
     assert row is not None
     assert row["optimization"] is None
     assert row["optimization_tokens_saved"] is None
+
+
+def test_recovery_counters_land_on_their_own_attempt_row(
+    store: RequestLogStore,
+) -> None:
+    """Events recorded between attempt boundaries attach to that attempt."""
+    plan = _vision_router().resolve_messages_plan(
+        MessagesRequest(
+            model="claude-sonnet-4-6",
+            max_tokens=8,
+            messages=[Message(role="user", content="hi")],
+        )
+    )
+    capture = _make_capture(store, request_id="req_rec")
+    capture.set_plan(plan)
+    capture.set_routing(plan.attempts[0], 0)
+    record_recovery_event("early_retries")
+    record_recovery_event("early_retries")
+    record_recovery_event("salvages")
+    capture.set_routing(plan.attempts[1], 1)
+    record_recovery_event("midstream_recoveries")
+
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/blind",
+            outcome="failed",
+            error_kind="timeout",
+        )
+    )
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=1,
+            provider_id="groq",
+            model_ref="groq/backup",
+            outcome="succeeded",
+        )
+    )
+    capture.finish_success("ok")
+    store.close()
+    _RECOVERY_TRACE.set(None)
+
+    row = store.get_request("req_rec")
+    assert row is not None
+    first, second = row["route_attempts"]
+    assert first["params"] == {"early_retries": 2, "salvages": 1}
+    assert second["params"] == {"midstream_recoveries": 1}
+    # The aggregates read the same numbers the rows do.
+    assert store.stats()["recovery"] == {
+        "early_retries": 2,
+        "midstream_recoveries": 1,
+        "salvages": 1,
+    }
+
+
+def test_a_disabled_capture_installs_no_recovery_trace() -> None:
+    """Providers run unrecorded when logging is off."""
+    _RECOVERY_TRACE.set(None)
+    capture = _make_capture(None, request_id="req_off")
+    assert capture.enabled is False
+
+    record_recovery_event("early_retries")
+    capture.finish_success("ok")
+
+    assert _RECOVERY_TRACE.get() is None

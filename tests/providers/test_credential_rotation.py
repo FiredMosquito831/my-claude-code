@@ -647,3 +647,41 @@ def test_a_fully_rate_limited_rotating_provider_reports_a_cooldown() -> None:
         "round_robin",
     )
     assert rotating.throttle_remaining() == 30.0
+
+
+class _ManualClock:
+    """Callable clock a test can advance deterministically."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.mark.asyncio
+async def test_half_open_admits_exactly_one_probe() -> None:
+    """A recovered breaker admits ONE probe until that probe settles.
+
+    While the probe is outstanding the credential must not be handed out
+    again; only its success restores full service.
+    """
+    clock = _ManualClock()
+    state = CredentialRotationState(2, "failover", clock=clock)
+    for _ in range(3):
+        await state.report_failure(0, Exception("boom"))
+    assert state.get_metrics()[0]["state"] == "CIRCUIT_OPEN"
+
+    # The longest cooldown tier elapses; key 0 wakes into HALF_OPEN...
+    clock.now += 61.0
+    # ...and key 1 benches only now, so it stays benched throughout.
+    await state.report_failure(1, _RetryableError())
+
+    assert await state.acquire() == 0
+    # The outstanding probe reserves the credential: no second admission.
+    assert await state.acquire() == -1
+
+    await state.report_success(0)
+    states = [entry["state"] for entry in state.get_metrics()]
+    assert states == ["HEALTHY", "COOLDOWN"]
+    assert await state.acquire() == 0

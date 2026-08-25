@@ -61,7 +61,7 @@ class ProviderConfig:
     commit_holdback_seconds: float = STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT
     fallback_on_reasoning_only: bool = FALLBACK_ON_REASONING_ONLY_DEFAULT
     rate_limit_cooldown_seconds: float = RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT
-    circuit_open_threshold: int = CREDENTIAL_CIRCUIT_THRESHOLD_DEFAULT
+    circuit_threshold: int = CREDENTIAL_CIRCUIT_THRESHOLD_DEFAULT
 
 
 class BaseProvider(ABC):

@@ -1,55 +1,57 @@
-"""API key parsing and in-memory rotation health (KeyPool).
+"""In-memory rotation health (KeyPool) over the shared credential engine.
+
+KeyPool is a thin synchronous adapter over the consolidated engine in
+``my_claude_code.core.credential_rotation`` (:data:`WEBSEARCH_TUNING`). Key
+material, masking, and the admin snapshot shape live here; every transition
+rule -- ladders, thresholds, expiry, selection policies -- lives once in the
+shared engine.
 
 KeyPool health semantics (in-memory only):
 
 - ``HEALTHY`` -> ``COOLDOWN`` on consecutive failures with tiered backoff
   (10s / 30s / 60s / 120s).
-- ``CIRCUIT_OPEN`` when the 4th consecutive failure lands (60s); further
+- ``CIRCUIT_OPEN`` when the 4th consecutive failure lands (fixed 60s window);
   failures beyond the threshold fall back to the 120s cooldown tier.
 - 401/403 (and quota) failures -> ``LOCKED_OUT`` for 5 minutes, doubling on
-  each repeated lockout (capped); a later success resets the escalation.
-- 429 -> dedicated rate-limit cooldown (60s), tracked separately from the
-  consecutive-failure ladder.
+  each repeated lockout (capped at one hour); a later success resets it.
+- 429 -> dedicated rate-limit cooldown (60s default), honoring the
+  provider's own Retry-After, tracked separately from the ladder.
 
 Expired states lazily return to ``HEALTHY`` on the next acquire.
 """
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
-from enum import StrEnum
 from typing import Any
 
 from my_claude_code.config.credentials import mask_key_label
-from my_claude_code.core.rate_limit import MAX_RATE_LIMIT_COOLDOWN_SECONDS
+from my_claude_code.core.credential_rotation import (
+    WEBSEARCH_TUNING,
+    PoolHealthState,
+    PoolSlot,
+    RotationEngine,
+)
 
 __all__ = [
+    "ROTATION_POLICIES",
     "KeyHealth",
     "KeyHealthState",
     "KeyPool",
     "default_rotation_policy",
     "mask_key_label",
-    "parse_websearch_keys",
 ]
 
 ROTATION_POLICIES: tuple[str, ...] = ("single", "round_robin", "least_used", "failover")
 DEFAULT_SINGLE_KEY_POLICY = "single"
 DEFAULT_MULTI_KEY_POLICY = "failover"
 
-COOLDOWN_TIER_SECONDS: tuple[float, ...] = (10.0, 30.0, 60.0, 120.0)
-CIRCUIT_OPEN_FAILURES = 4
-CIRCUIT_OPEN_SECONDS = 60.0
-RATE_LIMIT_COOLDOWN_SECONDS = 60.0
-LOCKOUT_BASE_SECONDS = 300.0
-LOCKOUT_MAX_SECONDS = 3600.0
-
-
-def parse_websearch_keys(raw: str | None) -> tuple[str, ...]:
-    """Split a comma-separated credential env value into stripped keys."""
-
-    if not raw:
-        return ()
-    return tuple(part for part in (piece.strip() for piece in raw.split(",")) if part)
+# Historical constant names, now derived from the shared tuning preset.
+COOLDOWN_TIER_SECONDS: tuple[float, ...] = WEBSEARCH_TUNING.cooldown_tiers
+CIRCUIT_OPEN_FAILURES = WEBSEARCH_TUNING.circuit_threshold
+CIRCUIT_OPEN_SECONDS = WEBSEARCH_TUNING.circuit_fixed_seconds
+RATE_LIMIT_COOLDOWN_SECONDS = WEBSEARCH_TUNING.rate_limit_seconds
+LOCKOUT_BASE_SECONDS = WEBSEARCH_TUNING.lockout_tiers[0]
+LOCKOUT_MAX_SECONDS = max(WEBSEARCH_TUNING.lockout_tiers)
 
 
 def default_rotation_policy(key_count: int) -> str:
@@ -58,28 +60,86 @@ def default_rotation_policy(key_count: int) -> str:
     return DEFAULT_MULTI_KEY_POLICY if key_count > 1 else DEFAULT_SINGLE_KEY_POLICY
 
 
-class KeyHealthState(StrEnum):
-    HEALTHY = "healthy"
-    COOLDOWN = "cooldown"
-    CIRCUIT_OPEN = "circuit_open"
-    LOCKED_OUT = "locked_out"
+#: Canonical pool states; the websearch surface uses lowercase values.
+KeyHealthState = PoolHealthState
 
 
-@dataclass(slots=True)
 class KeyHealth:
-    """Mutable per-key runtime health tracked by :class:`KeyPool`."""
+    """Live read-only view over one pooled key's runtime health.
 
-    key: str
-    requests: int = 0
-    successes: int = 0
-    failures: int = 0
-    consecutive_failures: int = 0
-    rate_limits: int = 0
-    lockouts: int = 0
-    state: KeyHealthState = KeyHealthState.HEALTHY
-    state_until: float = 0.0  # monotonic deadline; 0 when healthy
-    last_error: str | None = None
-    last_used_at: float | None = None
+    The historical pool handed out its own mutable record from
+    ``health_at``, so a reference held across further transitions keeps
+    reading current values rather than a point-in-time copy; this facade
+    preserves that contract over the shared engine's slot.
+    """
+
+    def __init__(self, *, key: str, slot: PoolSlot) -> None:
+        self._key = key
+        self._slot = slot
+
+    @property
+    def key(self) -> str:
+        return self._key
+
+    @property
+    def requests(self) -> int:
+        return self._slot.requests
+
+    @property
+    def successes(self) -> int:
+        return self._slot.successes
+
+    @property
+    def failures(self) -> int:
+        return self._slot.failures
+
+    @property
+    def consecutive_failures(self) -> int:
+        return self._slot.consecutive_failures
+
+    @property
+    def rate_limits(self) -> int:
+        return self._slot.rate_limits
+
+    @property
+    def lockouts(self) -> int:
+        return self._slot.lockouts
+
+    @property
+    def state(self) -> KeyHealthState:
+        return self._slot.state
+
+    @property
+    def state_until(self) -> float:
+        # Monotonic deadline; 0 while healthy.
+        if self._slot.state is KeyHealthState.HEALTHY:
+            return 0.0
+        return self._slot.deadline
+
+    @property
+    def last_error(self) -> str | None:
+        return self._slot.last_error
+
+    @property
+    def last_used_at(self) -> float | None:
+        return self._slot.last_used_at
+
+    def __repr__(self) -> str:
+        names = (
+            "key",
+            "requests",
+            "successes",
+            "failures",
+            "consecutive_failures",
+            "rate_limits",
+            "lockouts",
+            "state",
+            "state_until",
+            "last_error",
+            "last_used_at",
+        )
+        fields = ", ".join(f"{name}={getattr(self, name)!r}" for name in names)
+        return f"KeyHealth({fields})"
 
 
 class KeyPool:
@@ -98,55 +158,42 @@ class KeyPool:
             )
         if not keys:
             raise ValueError("KeyPool requires at least one key slot")
-        self._policy = policy
+        self._keys = tuple(keys)
         self._clock = clock
-        self._health = [KeyHealth(key=key) for key in keys]
-        self._round_robin_cursor = 0
+        self._engine = RotationEngine(
+            len(self._keys), policy=policy, tuning=WEBSEARCH_TUNING, clock=clock
+        )
 
     @property
     def policy(self) -> str:
-        return self._policy
+        return self._engine.policy
 
     @property
     def key_count(self) -> int:
-        return len(self._health)
+        return len(self._keys)
 
     def key_at(self, index: int) -> str:
-        return self._health[index].key
+        return self._keys[index]
 
     def health_at(self, index: int) -> KeyHealth:
-        return self._health[index]
+        return self._view(index, self._engine.slot(index))
+
+    def _view(self, index: int, slot: PoolSlot) -> KeyHealth:
+        return KeyHealth(key=self._keys[index], slot=slot)
 
     def acquire(
         self, *, exclude: frozenset[int] = frozenset()
     ) -> tuple[int, str] | None:
         """Return the next usable ``(index, key)`` per policy, or None when exhausted."""
 
-        now = self._clock()
-        candidates = [
-            index
-            for index in range(len(self._health))
-            if index not in exclude and self._is_usable(index, now)
-        ]
-        if self._policy == "single":
-            # The single policy may only ever serve from key slot 0.
-            candidates = [index for index in candidates if index == 0]
-        if not candidates:
+        index = self._engine.choose(exclude)
+        if index is None:
             return None
-        index = self._select(candidates)
-        health = self._health[index]
-        health.requests += 1
-        health.last_used_at = now
-        return index, health.key
+        self._engine.mark_acquired(index)
+        return index, self._keys[index]
 
     def report_success(self, index: int) -> None:
-        health = self._health[index]
-        health.successes += 1
-        health.consecutive_failures = 0
-        health.lockouts = 0
-        health.state = KeyHealthState.HEALTHY
-        health.state_until = 0.0
-        health.last_error = None
+        self._engine.succeed(index)
 
     def report_failure(
         self, index: int, *, kind: str, message: str | None = None
@@ -156,24 +203,8 @@ class KeyPool:
         if kind == "rate_limit":
             self.report_rate_limit(index, message=message)
             return
-        health = self._health[index]
-        health.failures += 1
-        health.last_error = message
-        now = self._clock()
-        if kind in ("auth", "quota"):
-            health.lockouts += 1
-            health.consecutive_failures = 0
-            health.state = KeyHealthState.LOCKED_OUT
-            backoff = LOCKOUT_BASE_SECONDS * (2 ** (health.lockouts - 1))
-            health.state_until = now + min(backoff, LOCKOUT_MAX_SECONDS)
-            return
-        health.consecutive_failures += 1
-        if health.consecutive_failures == CIRCUIT_OPEN_FAILURES:
-            health.state = KeyHealthState.CIRCUIT_OPEN
-            health.state_until = now + CIRCUIT_OPEN_SECONDS
-            return
-        health.state = KeyHealthState.COOLDOWN
-        health.state_until = now + self._cooldown_seconds(health.consecutive_failures)
+        failure_class = "auth" if kind in ("auth", "quota") else "transient"
+        self._engine.fail(index, failure_class, message=message)
 
     def report_rate_limit(
         self,
@@ -190,79 +221,33 @@ class KeyPool:
         nothing.
         """
 
-        health = self._health[index]
-        health.failures += 1
-        health.rate_limits += 1
-        health.last_error = message
-        health.state = KeyHealthState.COOLDOWN
-        cooldown = (
-            retry_after_seconds
-            if retry_after_seconds is not None and retry_after_seconds >= 0
-            else RATE_LIMIT_COOLDOWN_SECONDS
-        )
-        health.state_until = self._clock() + min(
-            cooldown, MAX_RATE_LIMIT_COOLDOWN_SECONDS
+        self._engine.note_rate_limit(
+            index, message=message, retry_after=retry_after_seconds
         )
 
     def snapshot(self) -> dict[str, Any]:
         """Health snapshot for admin UI / diagnostics (keys masked)."""
 
+        self._engine.refresh()
         now = self._clock()
         keys: list[dict[str, Any]] = []
-        for index, health in enumerate(self._health):
-            self._refresh_state(health, now)
+        for index, slot in enumerate(self._engine.slots()):
+            healthy = slot.state is KeyHealthState.HEALTHY
             keys.append(
                 {
                     "index": index,
-                    "key_label": mask_key_label(health.key),
-                    "state": health.state.value,
+                    "key_label": mask_key_label(self._keys[index]),
+                    "state": slot.state.value,
                     "state_remaining_seconds": (
-                        round(max(0.0, health.state_until - now), 3)
-                        if health.state is not KeyHealthState.HEALTHY
-                        else 0.0
+                        round(max(0.0, slot.deadline - now), 3) if not healthy else 0.0
                     ),
-                    "requests": health.requests,
-                    "successes": health.successes,
-                    "failures": health.failures,
-                    "consecutive_failures": health.consecutive_failures,
-                    "rate_limits": health.rate_limits,
-                    "lockouts": health.lockouts,
-                    "last_error": health.last_error,
+                    "requests": slot.requests,
+                    "successes": slot.successes,
+                    "failures": slot.failures,
+                    "consecutive_failures": slot.consecutive_failures,
+                    "rate_limits": slot.rate_limits,
+                    "lockouts": slot.lockouts,
+                    "last_error": slot.last_error,
                 }
             )
-        return {"policy": self._policy, "keys": keys}
-
-    def _select(self, candidates: list[int]) -> int:
-        if self._policy == "single":
-            return 0
-        if self._policy == "failover":
-            return min(candidates)
-        if self._policy == "round_robin":
-            ordered = sorted(candidates)
-            index = next(
-                (i for i in ordered if i >= self._round_robin_cursor), ordered[0]
-            )
-            self._round_robin_cursor = index + 1
-            return index
-        # least_used: fewest served requests, lowest index wins ties.
-        return min(candidates, key=lambda i: (self._health[i].requests, i))
-
-    def _is_usable(self, index: int, now: float) -> bool:
-        health = self._health[index]
-        self._refresh_state(health, now)
-        return health.state is KeyHealthState.HEALTHY
-
-    @staticmethod
-    def _refresh_state(health: KeyHealth, now: float) -> None:
-        if (
-            health.state is not KeyHealthState.HEALTHY
-            and health.state_until
-            and now >= health.state_until
-        ):
-            health.state = KeyHealthState.HEALTHY
-            health.state_until = 0.0
-
-    @staticmethod
-    def _cooldown_seconds(consecutive_failures: int) -> float:
-        tier = min(consecutive_failures, len(COOLDOWN_TIER_SECONDS)) - 1
-        return COOLDOWN_TIER_SECONDS[max(tier, 0)]
+        return {"policy": self._engine.policy, "keys": keys}

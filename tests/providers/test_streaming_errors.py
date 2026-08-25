@@ -18,6 +18,7 @@ from my_claude_code.core.anthropic.streaming import (
 )
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.request_log import install_recovery_trace
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from my_claude_code.providers.openai_chat.provider import (
@@ -1516,3 +1517,60 @@ async def test_openai_compat_stream_ends_with_contract_when_tool_name_never_arri
         error = await _collect_stream_error(provider, request)
 
     assert "Provider stream ended without finish_reason." in error.message
+
+
+@pytest.mark.asyncio
+async def test_early_retry_records_one_recovery_event():
+    """A pre-commit invisible retry lands in the recovery collector."""
+    provider = _make_provider()
+    request = _make_request()
+    first_stream = AsyncStreamMock(
+        [_make_chunk(content="hidden")],
+        error=httpx.ReadError("early cutoff"),
+    )
+    second_stream = AsyncStreamMock(
+        [
+            _make_chunk(content="visible"),
+            _make_chunk(finish_reason="stop"),
+        ]
+    )
+
+    trace = install_recovery_trace()
+    with patch.object(
+        provider._client.chat.completions,
+        "create",
+        new_callable=AsyncMock,
+        side_effect=[first_stream, second_stream],
+    ):
+        await _collect_stream(provider, request)
+
+    assert trace.events == {0: {"early_retries": 1}}
+
+
+@pytest.mark.asyncio
+async def test_midstream_recovery_and_salvage_record_counters():
+    """A committed stream that truncates counts the recovery and the salvage."""
+    provider = _make_provider()
+    request = _make_request()
+    # One huge delta blows the holdback byte cap, so the stream commits before
+    # it dies: an early retry is off the table and the cut is truly midstream.
+    stream_mock = AsyncStreamMock([_make_chunk(content="x" * 70_000)])
+
+    trace = install_recovery_trace()
+    with (
+        patch.object(
+            provider._client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            return_value=stream_mock,
+        ),
+        patch.object(
+            _OpenAIChatStreamRunner,
+            "_collect_recovery_text",
+            new_callable=AsyncMock,
+            return_value=("world", ""),
+        ),
+    ):
+        await _collect_stream(provider, request)
+
+    assert trace.events == {0: {"midstream_recoveries": 1, "salvages": 1}}
