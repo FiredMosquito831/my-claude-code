@@ -723,7 +723,9 @@ async def test_a_model_benched_by_earlier_failures_is_skipped_entirely() -> None
     """The point of ejection: the fallback answers without re-paying the timeout."""
     primary = FakeProvider()
     secondary = FakeProvider()
-    health = RouteHealthRegistry(eject_after_failures=1, eject_seconds=300.0)
+    health = RouteHealthRegistry(
+        mode="consecutive", eject_after_failures=1, eject_seconds=300.0
+    )
     health.record_failure("primary/big")
     executor = _deadline_executor(
         {"primary": primary, "secondary": secondary}, health=health
@@ -856,7 +858,9 @@ async def test_a_model_benched_by_recent_failures_is_recorded_as_benched() -> No
     so nothing else in the log distinguishes it from a chain that was never
     configured -- which is exactly the confusion this row exists to prevent.
     """
-    health = RouteHealthRegistry(eject_after_failures=1, eject_seconds=300.0)
+    health = RouteHealthRegistry(
+        mode="consecutive", eject_after_failures=1, eject_seconds=300.0
+    )
     health.record_failure("sick/provider-model")
     attempts, observer = _attempt_log()
 
@@ -1005,11 +1009,22 @@ async def test_a_stream_that_dies_after_preflight_is_recorded_as_failed() -> Non
     assert all(a.duration_ms is None for a in attempts if a.outcome == "skipped")
 
 
-def _ejection_settings(*, after_failures: int) -> Settings:
+def _ejection_settings(
+    *,
+    after_failures: int = 3,
+    behavior: str = "consecutive",
+    eject_window: int = 10,
+    eject_failure_rate: float = 0.5,
+    eject_min_samples: int = 8,
+) -> Settings:
     """Real Settings, because that is what the factory keys itself on."""
     settings = Settings()
+    settings.fallback_behavior = behavior
     settings.fallback_eject_after_failures = after_failures
     settings.fallback_eject_seconds = 300.0
+    settings.fallback_eject_window = eject_window
+    settings.fallback_eject_failure_rate = eject_failure_rate
+    settings.fallback_eject_min_samples = eject_min_samples
     return settings
 
 
@@ -1964,3 +1979,63 @@ async def test_the_last_candidate_is_never_stepped_over_for_cooldown() -> None:
 
     assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
     assert provider.preflight_calls
+
+
+# --------------------------------------------------------------- retry-once --
+
+
+def _retry_settings() -> Settings:
+    """Settings that enable retry_once on a synthetic 2-model chain."""
+    settings = Settings()
+    settings.fallback_retry_first = "retry_once"
+    settings.fallback_behavior = "rate_based"
+    return settings
+
+
+# --------------------------------------------------------------- retry-once --
+
+
+class _static_resolver:
+    """Test resolver that returns a stand-in provider; enough to construct a
+    ProviderExecutor without exercising the stream path.
+    """
+
+    def __call__(self, provider_id: str) -> ProviderPort:
+        return FakeProvider()
+
+
+def test_error_is_retryable_classifies_failures() -> None:
+    """Transient failure kinds are retryable; auth and invalid-request are not.
+
+    The chain retries a failed primary once only when the failure is one the
+    same model could plausibly recover from on a second attempt. Timeouts,
+    5xx, 429 and upstream errors qualify; auth and malformed-request do not,
+    because a second try will produce the same answer.
+    """
+    from my_claude_code.core.failures import ExecutionFailure, FailureKind
+
+    executor = ProviderExecutor(
+        _static_resolver(),
+        token_counter=lambda _m, _s, _t: 1,
+        retry_first="retry_once",
+    )
+
+    for kind, retryable in [
+        (FailureKind.TIMEOUT, True),
+        (FailureKind.UPSTREAM, True),
+        (FailureKind.RATE_LIMIT, True),
+        (FailureKind.OVERLOADED, True),
+        (FailureKind.UNAVAILABLE, True),
+        (FailureKind.AUTHENTICATION, False),
+        (FailureKind.INVALID_REQUEST, False),
+        (FailureKind.PERMISSION, False),
+        (FailureKind.CONTEXT_LENGTH, False),
+    ]:
+        failure = ExecutionFailure(
+            kind=kind, status_code=500, message="x", retryable=False
+        )
+        assert executor._error_is_retryable(failure) is retryable, kind
+
+    # An unclassified exception is treated as transient: it might be a raw
+    # httpx.TimeoutError raised before the failure policy mapped it.
+    assert executor._error_is_retryable(TimeoutError("slow")) is True

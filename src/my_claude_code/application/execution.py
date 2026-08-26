@@ -5,7 +5,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 from loguru import logger
 
@@ -378,6 +378,19 @@ class ProviderExecutor:
         log_raw_payloads: bool = False,
         policy: RouteExecutionPolicy | None = None,
         health: RouteHealthRegistry | None = None,
+        retry_first: str = "skip",
+        provider_lookup: Callable[[str], float | None] | None = None,
+        # Which failure kinds are eligible for a retry_once on the primary.
+        # Auth/invalid-request never retry (won't change on retry).
+        retry_once_kinds: frozenset[FailureKind] = frozenset(
+            {
+                FailureKind.RATE_LIMIT,
+                FailureKind.OVERLOADED,
+                FailureKind.TIMEOUT,
+                FailureKind.UPSTREAM,
+                FailureKind.UNAVAILABLE,
+            }
+        ),
     ) -> None:
         self._provider_resolver = provider_resolver
         self._token_counter = token_counter
@@ -385,6 +398,10 @@ class ProviderExecutor:
         self._log_raw_payloads = log_raw_payloads
         self._policy = policy or RouteExecutionPolicy()
         self._health = health or RouteHealthRegistry()
+        self._retry_first = retry_first
+        self._retry_once_kinds = retry_once_kinds
+        self._provider_lookup = provider_lookup
+        self._retried_positions: set[int] = set()
 
     def stream(
         self,
@@ -417,7 +434,9 @@ class ProviderExecutor:
         attempts = plan.attempts
         buffer_until_complete = not plan.primary.request.stream
         failures: list[BaseException] = []
-        order = self._health.usable_indexes(plan.model_refs())
+        order = self._health.usable_indexes(
+            plan.model_refs(), provider_lookup=self._provider_lookup
+        )
         if len(order) < len(attempts):
             logger.info(
                 "MODEL CHAIN: skipping {} recently-failing model(s) on this route",
@@ -601,6 +620,39 @@ class ProviderExecutor:
                     ledger.unreachable_after(index, uncommitted_failure)
                     ledger.publish()
                     raise uncommitted_failure
+                # Retry the primary once for transient errors (timeout,
+                # 5xx, 429) before falling back. Only position 0 (the
+                # primary) is eligible; already-failed fallbacks are not
+                # retried. Auth/invalid-request never retry because they
+                # cannot change on a second attempt.
+                if (
+                    self._retry_first == "retry_once"
+                    and position == 0
+                    and index not in self._retried_positions
+                    and self._error_is_retryable(uncommitted_failure)
+                ):
+                    self._retried_positions.add(index)
+                    logger.info(
+                        "MODEL RETRY: '{}' failed once with {}; retrying once before falling back",
+                        model_ref,
+                        type(uncommitted_failure).__name__,
+                    )
+                    # Re-prepare the same position (same model). The next
+                    # loop iteration streams it again with a fresh
+                    # attempt row in the ledger.
+                    following = self._prepare_from(
+                        attempts,
+                        order,
+                        position,
+                        failures,
+                        request_id=request_id,
+                        on_attempt=on_attempt,
+                        deadline=deadline,
+                        ledger=ledger,
+                    )
+                    if following is not None:
+                        position, provider = following
+                        continue
                 self._trace_fallback(
                     routed, uncommitted_failure, request_id=request_id, attempt=index
                 )
@@ -826,6 +878,22 @@ class ProviderExecutor:
             reasoning_only=reasoning_only,
         )
 
+    def _error_is_retryable(self, exc: BaseException) -> bool:
+        """Whether a one-shot retry of the same model could plausibly help.
+
+        Only transient upstream / server-side kinds are eligible. Auth and
+        invalid-request will fail identically on a second attempt, so a
+        retry would only add latency to the same answer. Timeout covers
+        the holding-pattern case where a model was slow once but may
+        respond immediately on retry.
+        """
+        kind = failure_kind(exc)
+        if kind is None:
+            # Unclassified errors (raw httpx.TimeoutError, etc.) are
+            # treated as transient.
+            return True
+        return kind in self._retry_once_kinds
+
     def _prepare_from(
         self,
         attempts: tuple[RoutedMessagesRequest, ...],
@@ -1037,7 +1105,15 @@ def route_execution_policy(settings: Settings) -> RouteExecutionPolicy:
 #
 # Confirmed against a live server before this change: four consecutive failures
 # of the same model produced zero "MODEL CHAIN: skipping" lines.
-_REGISTRIES: dict[tuple[int, float], RouteHealthRegistry] = {}
+_RouteEjectKey = tuple[
+    Literal["consecutive", "rate_based"],
+    int,
+    int,
+    float,
+    int,
+    float,
+]
+_REGISTRIES: dict[_RouteEjectKey, RouteHealthRegistry] = {}
 
 
 def route_health_registry(settings: Settings) -> RouteHealthRegistry:
@@ -1046,19 +1122,32 @@ def route_health_registry(settings: Settings) -> RouteHealthRegistry:
     What a route learns about a model has to outlive a single request: three
     consecutive failures cannot be observed by three independent registries.
 
-    Keyed by the settings that define ejection rather than held as one global,
-    so changing either value starts a clean registry instead of inheriting
-    benches made under a different policy. Nothing else about a request can
-    reach it, which keeps this a cache rather than shared mutable state.
+    Keyed by all the settings that define ejection rather than held as one
+    global, so changing any of them starts a clean registry instead of
+    inheriting benches made under a different policy. Nothing else about a
+    request can reach it, which keeps this a cache rather than shared
+    mutable state.
     """
-    key = (settings.fallback_eject_after_failures, settings.fallback_eject_seconds)
-    registry = _REGISTRIES.get(key)
+    key = (
+        settings.fallback_behavior,
+        settings.fallback_eject_after_failures,
+        settings.fallback_eject_window,
+        settings.fallback_eject_failure_rate,
+        settings.fallback_eject_min_samples,
+        settings.fallback_eject_seconds,
+    )
+    typed_key = cast(_RouteEjectKey, key)
+    registry = _REGISTRIES.get(typed_key)
     if registry is None:
         registry = RouteHealthRegistry(
-            eject_after_failures=key[0],
-            eject_seconds=key[1],
+            mode=cast(Literal["consecutive", "rate_based"], key[0]),
+            eject_after_failures=key[1],
+            eject_window=key[2],
+            eject_failure_rate=key[3],
+            eject_min_samples=key[4],
+            eject_seconds=key[5],
         )
-        _REGISTRIES[key] = registry
+        _REGISTRIES[typed_key] = registry
     return registry
 
 

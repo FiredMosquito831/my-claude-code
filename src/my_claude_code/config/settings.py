@@ -20,11 +20,16 @@ from .constants import (
     DESKTOP_WINDOW_HEIGHT_DEFAULT,
     DESKTOP_WINDOW_WIDTH_DEFAULT,
     FAILURE_KIND_NAMES,
+    FALLBACK_BEHAVIOR_DEFAULT,
     FALLBACK_EJECT_AFTER_FAILURES_DEFAULT,
+    FALLBACK_EJECT_FAILURE_RATE_DEFAULT,
+    FALLBACK_EJECT_MIN_SAMPLES_DEFAULT,
     FALLBACK_EJECT_SECONDS_DEFAULT,
+    FALLBACK_EJECT_WINDOW_DEFAULT,
     FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
     FALLBACK_ON_REASONING_ONLY_DEFAULT,
     FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
+    FALLBACK_RETRY_FIRST_DEFAULT,
     FALLBACK_SKIP_KINDS_DEFAULT,
     FALLBACK_STALL_TIMEOUT_DEFAULT,
     FALLBACK_TOTAL_TIMEOUT_DEFAULT,
@@ -420,6 +425,43 @@ class Settings(BaseSettings):
     fallback_eject_seconds: float = Field(
         default=FALLBACK_EJECT_SECONDS_DEFAULT,
         validation_alias="FALLBACK_EJECT_SECONDS",
+    )
+
+    # Eject mode. ``rate_based`` (default) benches a model when the failure
+    # rate over the last ``fallback_eject_window`` requests crosses
+    # ``fallback_eject_failure_rate`` (with at least
+    # ``fallback_eject_min_samples`` observed so the rate is meaningful),
+    # for ``fallback_eject_seconds``. ``legacy`` preserves the historical
+    # consecutive-count behavior keyed on ``FALLBACK_EJECT_AFTER_FAILURES``
+    # and ``FALLBACK_EJECT_SECONDS``.
+    fallback_behavior: str = Field(
+        default=FALLBACK_BEHAVIOR_DEFAULT,
+        validation_alias="FALLBACK_BEHAVIOR",
+    )
+    # Window size (in requests) for the rate-based eject math.
+    fallback_eject_window: int = Field(
+        default=FALLBACK_EJECT_WINDOW_DEFAULT,
+        validation_alias="FALLBACK_EJECT_WINDOW",
+    )
+    # Failure-rate threshold (0.0-1.0) for rate-based eject.
+    fallback_eject_failure_rate: float = Field(
+        default=FALLBACK_EJECT_FAILURE_RATE_DEFAULT,
+        validation_alias="FALLBACK_EJECT_FAILURE_RATE",
+    )
+    # Minimum number of requests observed before the rate is evaluated.
+    # Prevents a single failure on a low-traffic model from tripping it.
+    fallback_eject_min_samples: int = Field(
+        default=FALLBACK_EJECT_MIN_SAMPLES_DEFAULT,
+        validation_alias="FALLBACK_EJECT_MIN_SAMPLES",
+    )
+    # Whether the chain retries a failed primary once before falling back.
+    # ``skip`` (default) moves on immediately; ``retry_once`` gives the
+    # primary one more chance for transient errors (timeouts, 5xx, 429)
+    # before falling through. Applies only to position 0 (the primary);
+    # already-failed fallbacks are not retried.
+    fallback_retry_first: str = Field(
+        default=FALLBACK_RETRY_FIRST_DEFAULT,
+        validation_alias="FALLBACK_RETRY_FIRST",
     )
 
     # How many times one model is retried on a 429 or 5xx before the chain

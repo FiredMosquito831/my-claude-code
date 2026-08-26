@@ -3,14 +3,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from my_claude_code.config.settings import Settings
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from tests.api.support import create_test_app
 
-app = create_test_app()
-
-# Mock provider
+# Mock provider. Real production path: routing resolves to the "opencode"
+# provider for the test models (claude-3-haiku-*, claude-3-sonnet, etc.)
+# because the Settings defaults route haiku/sonnet through the root
+# `model` setting, which defaults to opencode/deepseek-v4-flash-free.
+# Inject the mock under the "opencode" key so the chain's
+# lease.resolve_provider returns it instead of a real OpenCode instance.
 mock_provider = MagicMock(spec=NvidiaNimProvider)
 
 # Track stream_response calls for test_model_mapping
@@ -56,15 +60,39 @@ def _terminal_json_error(response, *, status_code: int):
 mock_provider.stream_response = _mock_stream_response
 
 
+# Module-level app for the (rare) tests that touch `app.state` directly
+# outside the client fixture. The fixture's own test_app is separate
+# so client tests and direct-app tests don't share mutable state.
+app = create_test_app(Settings(), providers={"opencode": mock_provider})
+
+
 @pytest.fixture(scope="module")
 def client():
-    """HTTP client with provider resolution stubbed; patch only for this file."""
+    """HTTP client with the mock provider injected via the runtime factory.
+
+    Replaces the previous `patch(...resolve_provider, ...)` which was a
+    no-op: that symbol isn't on the production path. The chain gets its
+    resolver from the RequestRuntimeLease via the ProviderRuntimeManager,
+    which the `providers=` dict here wires to `mock_provider` under the
+    key the router actually resolves to ("opencode" for the default
+    Settings).
+    """
+    settings = Settings()
+    # Route the root model fallback to the mock so the test's
+    # model names (claude-3-haiku-*, claude-3-sonnet) resolve to the
+    # injected mock provider via the root `model` setting.
+    settings.model = "opencode/test-model"
+    test_app = create_test_app(settings, providers={"opencode": mock_provider})
+    # The handler's `Depends(resolve_provider)` path is a second resolver
+    # layer; create_test_app injects the mock into the runtime factory
+    # only, so the handler still needs this patch to get the mock back
+    # instead of a real (or MagicMock-backed) provider.
     with (
         patch(
             "my_claude_code.api.routes.resolve_provider",
             return_value=mock_provider,
         ),
-        TestClient(app) as test_client,
+        TestClient(test_app) as test_client,
     ):
         yield test_client
 

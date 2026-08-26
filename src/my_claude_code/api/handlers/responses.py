@@ -52,13 +52,30 @@ class ResponsesHandler:
         self._settings = settings
         self._model_router = model_router or ModelRouter(settings)
         self._responses_adapter = responses_adapter or OpenAIResponsesAdapter()
+
         self._provider_executor = provider_executor or ProviderExecutor(
             provider_resolver,
             policy=route_execution_policy(settings),
             health=route_health_registry(settings),
             generation_id=generation_id,
             log_raw_payloads=settings.log_raw_api_payloads,
+            retry_first=settings.fallback_retry_first,
+            provider_lookup=self._throttle_lookup,
         )
+
+    def _throttle_lookup(self, provider_id: str) -> float | None:
+        """Return provider throttle seconds for a provider_id, or None.
+
+        See ``MessagesHandler._throttle_lookup`` for the full contract.
+        """
+        try:
+            provider = self._provider_executor._provider_resolver(provider_id)
+        except Exception:
+            return None
+        try:
+            return provider.throttle_remaining()
+        except Exception:
+            return None
 
     async def create(
         self,

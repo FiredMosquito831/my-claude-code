@@ -71,6 +71,16 @@ FAILURE_KIND_NAMES: frozenset[str] = frozenset(
 
 FALLBACK_EJECT_AFTER_FAILURES_DEFAULT = 3
 FALLBACK_EJECT_SECONDS_DEFAULT = 30.0
+# Rate-based ejection policy: skip a model when at least this fraction of the
+# last `FALLBACK_EJECT_WINDOW` requests have failed (with at least
+# `FALLBACK_EJECT_MIN_SAMPLES` requests seen so the rate is meaningful).
+# Consecutive-count mode (FALLBACK_BEHAVIOR=legacy) ignores these and uses
+# `FALLBACK_EJECT_AFTER_FAILURES` + `FALLBACK_EJECT_SECONDS` instead.
+FALLBACK_BEHAVIOR_DEFAULT = "rate_based"
+FALLBACK_RETRY_FIRST_DEFAULT = "skip"
+FALLBACK_EJECT_WINDOW_DEFAULT = 10
+FALLBACK_EJECT_FAILURE_RATE_DEFAULT = 0.5
+FALLBACK_EJECT_MIN_SAMPLES_DEFAULT = 8
 
 # Resilience knobs that used to be module constants. Each one decides how long a
 # failing model is allowed to hold a request, which is a deployment question,

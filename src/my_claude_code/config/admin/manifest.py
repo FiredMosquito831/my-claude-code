@@ -726,6 +726,67 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description="Seconds a benched model stays out of routing.",
     ),
     ConfigFieldSpec(
+        "FALLBACK_BEHAVIOR",
+        "Eject mode",
+        "limits",
+        "select",
+        settings_attr="fallback_behavior",
+        default="rate_based",
+        options=("rate_based", "legacy"),
+        description=(
+            "How a failing model is benched. rate_based (default) skips a model when its failure rate over the last FALLBACK_EJECT_WINDOW requests crosses FALLBACK_EJECT_FAILURE_RATE, for FALLBACK_EJECT_SECONDS. legacy preserves the historical consecutive-count behavior (FALLBACK_EJECT_AFTER_FAILURES + FALLBACK_EJECT_SECONDS)."
+        ),
+    ),
+    ConfigFieldSpec(
+        "FALLBACK_RETRY_FIRST",
+        "Retry primary once",
+        "limits",
+        "select",
+        settings_attr="fallback_retry_first",
+        default="skip",
+        options=("skip", "retry_once"),
+        description=(
+            "What happens when the primary model fails. skip (default) moves straight to the next fallback. retry_once gives the primary one more chance for transient errors (timeout, 5xx, 429) before falling through. Auth and invalid-request errors are never retried regardless."
+        ),
+    ),
+    ConfigFieldSpec(
+        "FALLBACK_EJECT_WINDOW",
+        "Rate window (requests)",
+        "limits",
+        "number",
+        settings_attr="fallback_eject_window",
+        default="10",
+        description=(
+            "Window size in requests for the rate-based eject math. A model is benched when at least FALLBACK_EJECT_FAILURE_RATE of its last N requests failed. Ignored in legacy mode."
+        ),
+        minimum=1,
+    ),
+    ConfigFieldSpec(
+        "FALLBACK_EJECT_FAILURE_RATE",
+        "Failure rate threshold",
+        "limits",
+        "number",
+        settings_attr="fallback_eject_failure_rate",
+        default="0.5",
+        description=(
+            "Fraction of failures in the window (0.0-1.0) that benches a model. Ignored in legacy mode."
+        ),
+        minimum=0.0,
+        maximum=1.0,
+    ),
+    ConfigFieldSpec(
+        "FALLBACK_EJECT_MIN_SAMPLES",
+        "Min samples before evaluation",
+        "limits",
+        "number",
+        settings_attr="fallback_eject_min_samples",
+        default="8",
+        description=(
+            "Minimum requests observed before the failure rate is evaluated. Prevents a single failure on a low-traffic model from tripping it. Ignored in legacy mode."
+        ),
+        minimum=1,
+    ),
+    ConfigFieldSpec(
         "PROVIDER_RETRY_ATTEMPTS",
         "Retries before the chain",
         "limits",
