@@ -58,6 +58,12 @@ class _ModelHealth:
 class RouteHealthRegistry:
     """Consecutive-failure or rate-based ejection for provider/model refs."""
 
+    # When False, the registry is a no-op: every failure passes through
+    # immediately and the chain advances to the next model. The provider's
+    # own Retry-After / rate-limit skip is also bypassed (no throttling at all
+    # when off). The per-failure error still gets recorded in the request log
+    # so the analytics view can show the real upstream message.
+    bench_enabled: bool = True
     mode: Literal["consecutive", "rate_based"] = FALLBACK_BEHAVIOR_DEFAULT
     # consecutive mode
     eject_after_failures: int = FALLBACK_EJECT_AFTER_FAILURES_DEFAULT
@@ -72,6 +78,8 @@ class RouteHealthRegistry:
 
     @property
     def enabled(self) -> bool:
+        if not self.bench_enabled:
+            return False
         if self.eject_seconds <= 0:
             return False
         if self.mode == "consecutive":
@@ -101,14 +109,32 @@ class RouteHealthRegistry:
             if len(health.outcomes) > self.eject_window:
                 health.outcomes.popleft()
 
-    def record_failure(self, model_ref: str) -> None:
+    def record_failure(
+        self,
+        model_ref: str,
+        *,
+        failure_kind: str | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        # When bench_enabled is False (the default), this is a no-op --
+        # the chain advances to the next model on every failure with no
+        # throttling. When True, the bench duration depends on the kind:
+        #   5xx / transient / unknown -> 1s (model is probably fine)
+        #   rate_limit -> the provider signal (retry_after_seconds) if
+        #     present, else eject_seconds
+        #   auth / permission / quota -> eject_seconds (the credential is
+        #     likely wrong; bench long enough for the user to fix)
+        #   sustained rate-based -> eject_seconds (only after the
+        #     rate-based signal fires)
         if not self.enabled:
             return
         health = self._models.setdefault(model_ref, _ModelHealth())
         if self.mode == "consecutive":
             self._record_consecutive(health)
         else:
-            self._record_rate_based(health, model_ref)
+            self._record_rate_based(
+                health, model_ref, failure_kind, retry_after_seconds
+            )
 
     def _record_consecutive(self, health: _ModelHealth) -> None:
         health.consecutive_failures += 1
@@ -117,13 +143,20 @@ class RouteHealthRegistry:
         health.ejected_until = self.now() + self.eject_seconds
         ref = self._model_ref_for(health)
         logger.warning(
-            "MODEL EJECTED (consecutive): '%s' failed %d times in a row; skipping it for %gs",
+            "MODEL EJECTED (consecutive): '%s' failed %d times in a row; "
+            "skipping it for %gs",
             ref,
             health.consecutive_failures,
             self.eject_seconds,
         )
 
-    def _record_rate_based(self, health: _ModelHealth, model_ref: str) -> None:
+    def _record_rate_based(
+        self,
+        health: _ModelHealth,
+        model_ref: str,
+        failure_kind: str | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         health.outcomes.append(False)
         if len(health.outcomes) > self.eject_window:
             health.outcomes.popleft()
@@ -133,15 +166,31 @@ class RouteHealthRegistry:
         rate = failures / len(health.outcomes)
         if rate < self.eject_failure_rate:
             return
-        health.ejected_until = self.now() + self.eject_seconds
+        # 5xx / transient get a short bench (the model is probably
+        # fine). Rate-limit honors the provider signal. Auth and
+        # quota use eject_seconds (longer, because the failure is
+        # more permanent).
+        duration = self.eject_seconds
+        if failure_kind == "rate_limit" and retry_after_seconds:
+            duration = max(retry_after_seconds, 1.0)
+        elif failure_kind in (
+            "rate_limit",
+            "upstream",
+            "timeout",
+            "overloaded",
+            "unavailable",
+        ):
+            duration = min(self.eject_seconds, 1.0)  # transient / 5xx-ish
+        health.ejected_until = self.now() + duration
         logger.warning(
-            "MODEL EJECTED (rate-based): '%s' at %d/%d failures (%.0f%%) in its last %d requests; skipping it for %gs",
+            "MODEL EJECTED (rate-based): '%s' at %d/%d failures (%.0f%%) in its last %d requests; skipping it for %gs (kind=%s)",
             model_ref,
             failures,
             len(health.outcomes),
             rate * 100,
             self.eject_window,
-            self.eject_seconds,
+            duration,
+            failure_kind or "unknown",
         )
 
     def _model_ref_for(self, health: _ModelHealth) -> str:
@@ -199,7 +248,6 @@ class RouteHealthRegistry:
                     and isinstance(cooldown, (int, float))
                     and cooldown > 0
                 ):
-                    continue
                     continue
             usable.append(index)
         if usable:

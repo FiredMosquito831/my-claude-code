@@ -1135,6 +1135,7 @@ def route_health_registry(settings: Settings) -> RouteHealthRegistry:
         settings.fallback_eject_failure_rate,
         settings.fallback_eject_min_samples,
         settings.fallback_eject_seconds,
+        settings.fallback_bench_enabled,
     )
     typed_key = cast(_RouteEjectKey, key)
     registry = _REGISTRIES.get(typed_key)
@@ -1146,6 +1147,7 @@ def route_health_registry(settings: Settings) -> RouteHealthRegistry:
             eject_failure_rate=key[3],
             eject_min_samples=key[4],
             eject_seconds=key[5],
+            bench_enabled=settings.fallback_bench_enabled,
         )
         _REGISTRIES[typed_key] = registry
     return registry

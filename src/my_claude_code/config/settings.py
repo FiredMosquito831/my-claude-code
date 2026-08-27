@@ -418,6 +418,15 @@ class Settings(BaseSettings):
     # Consecutive failures before a provider/model is skipped by routing, and
     # how long it stays skipped. Without this every request re-pays a dead
     # model's timeout on its way to a healthy fallback. 0 disables ejection.
+    # When False (default), the chain does direct retry / direct fallback with
+    # no per-failure benching and no rate-limit skip. When True, the rate-based
+    # eject + provider rate-limit skip + kind-aware bench durations are active.
+    # This is a per-route opt-in: a route that wants the old behavior gets it;
+    # a route that wants the new behavior opts in. Default off on new installs.
+    fallback_bench_enabled: bool = Field(
+        default=False,
+        validation_alias="FALLBACK_BENCH_ENABLED",
+    )
     fallback_eject_after_failures: int = Field(
         default=FALLBACK_EJECT_AFTER_FAILURES_DEFAULT,
         validation_alias="FALLBACK_EJECT_AFTER_FAILURES",

@@ -1016,6 +1016,7 @@ def _ejection_settings(
     eject_window: int = 10,
     eject_failure_rate: float = 0.5,
     eject_min_samples: int = 8,
+    bench_enabled: bool = True,
 ) -> Settings:
     """Real Settings, because that is what the factory keys itself on."""
     settings = Settings()
@@ -1025,6 +1026,7 @@ def _ejection_settings(
     settings.fallback_eject_window = eject_window
     settings.fallback_eject_failure_rate = eject_failure_rate
     settings.fallback_eject_min_samples = eject_min_samples
+    settings.fallback_bench_enabled = bench_enabled
     return settings
 
 
@@ -1038,7 +1040,7 @@ async def test_a_model_is_benched_across_requests_not_within_one() -> None:
     server before the fix: four consecutive failures of the same model produced
     zero "MODEL CHAIN: skipping" lines.
     """
-    settings = _ejection_settings(after_failures=2)
+    settings = _ejection_settings(after_failures=2, bench_enabled=True)
 
     # Two separate "requests", each resolving its registry the way a handler
     # does. Sharing is the whole contract being tested.
@@ -1053,13 +1055,15 @@ async def test_a_model_is_benched_across_requests_not_within_one() -> None:
 
 def test_changing_the_ejection_policy_starts_a_clean_registry() -> None:
     """A bench made under one policy must not be inherited by another.
+    # Force bench_enabled on so record_failure actually benches (the default
+    # is off, which would make these tests no-ops).
 
     Two models on the route, because ejecting every candidate is deliberately
     bypassed -- skipping a bad model is an optimisation, refusing to try
     anything is an outage -- so a single-model route can never show a bench.
     """
-    strict = _ejection_settings(after_failures=1)
-    lenient = _ejection_settings(after_failures=9)
+    strict = _ejection_settings(after_failures=1, bench_enabled=True)
+    lenient = _ejection_settings(after_failures=9, bench_enabled=True)
     route = ("sick/model", "healthy/model")
 
     route_health_registry(strict).record_failure("sick/model")
