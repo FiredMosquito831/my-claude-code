@@ -49,7 +49,11 @@ class NimSettings(BaseModel):
     repetition_penalty: Annotated[float, Field(ge=0.0)] | None = None
     seed: int | None = None
     stop: str | None = None
-    parallel_tool_calls: bool = True
+    # Unset by default like the sampling fields above: NIM pins its own
+    # per-model default for parallel tool calls, and sending an
+    # unrequested True overrode it on every request. Set it to force the
+    # behaviour either way.
+    parallel_tool_calls: bool | None = None
     ignore_eos: bool | None = None
     min_tokens: Annotated[int, Field(ge=0)] | None = None
     chat_template: str | None = None

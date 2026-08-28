@@ -171,10 +171,25 @@ class TestBuildRequestBody:
         body = build_request_body(req, NimSettings(), reasoning=REASONING_ON)
         assert "include_stop_str_in_output" not in body.get("extra_body", {})
 
-    def test_parallel_tool_calls_included(self, req):
+    def test_parallel_tool_calls_absent_unless_set(self, req):
+        """Unset means "let NIM decide", like every other request parameter.
+
+        Until 5.65.0 this one field was written unconditionally, so every NIM
+        request carried a parallel_tool_calls the client never asked for and
+        overrode whatever default NIM pins for that model.
+        """
+        body = build_request_body(req, NimSettings(), reasoning=REASONING_ON)
+        assert "parallel_tool_calls" not in body
+
+    def test_parallel_tool_calls_included_when_explicitly_disabled(self, req):
         nim = NimSettings(parallel_tool_calls=False)
         body = build_request_body(req, nim, reasoning=REASONING_ON)
         assert body["parallel_tool_calls"] is False
+
+    def test_parallel_tool_calls_included_when_explicitly_enabled(self, req):
+        nim = NimSettings(parallel_tool_calls=True)
+        body = build_request_body(req, nim, reasoning=REASONING_ON)
+        assert body["parallel_tool_calls"] is True
 
     def test_tool_schema_boolean_subschemas_are_removed_without_mutating_request(
         self, req

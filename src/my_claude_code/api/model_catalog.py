@@ -11,8 +11,22 @@ from my_claude_code.core.gateway_model_ids import (
     gateway_model_id,
     no_thinking_gateway_model_id,
 )
+from my_claude_code.core.model_visibility import ModelVisibility
 
 DISCOVERED_MODEL_CREATED_AT = "1970-01-01T00:00:00Z"
+
+
+def settings_model_visibility(settings: Settings) -> ModelVisibility:
+    """Build the shared hide-only model filter from configuration.
+
+    The two env values are raw text; every presentation boundary that lists
+    models goes through this so the pickers and `/v1/models` cannot drift
+    apart on what "visible" means.
+    """
+
+    return ModelVisibility.from_raw(
+        settings.model_visibility_allow, settings.model_visibility_deny
+    )
 
 
 class ModelResponse(BaseModel):
@@ -83,8 +97,11 @@ def build_models_list_response(
     """Return configured, cached, and compatibility model ids."""
     models: list[ModelResponse] = []
     seen: set[str] = set()
+    visibility = settings_model_visibility(settings)
 
     for ref in configured_chat_model_refs(settings):
+        if not visibility.is_visible(ref.model_ref):
+            continue
         supports_thinking = runtime.cached_model_supports_thinking(
             ref.provider_id, ref.model_id
         )
@@ -96,6 +113,8 @@ def build_models_list_response(
         )
 
     for model_info in runtime.cached_prefixed_model_infos():
+        if not visibility.is_visible(model_info.model_id):
+            continue
         _append_provider_model_variants(
             models,
             seen,
@@ -103,6 +122,10 @@ def build_models_list_response(
             supports_thinking=model_info.supports_thinking,
         )
 
+    # The Claude aliases are protocol names, not provider refs: Claude Code
+    # asks for `claude-opus-4-...` and MCC maps it onto whatever MODEL_OPUS
+    # points at. Filtering them would not hide a model, it would break the
+    # client, so the visibility lists never see them.
     for model in SUPPORTED_CLAUDE_MODELS:
         _append_unique_model(models, seen, model)
 

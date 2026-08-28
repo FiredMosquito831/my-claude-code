@@ -81,7 +81,11 @@ def apply_nim_request_options(
     if nim.seed is not None:
         body["seed"] = nim.seed
 
-    body["parallel_tool_calls"] = nim.parallel_tool_calls
+    # ``is not None``, not truthiness: an explicit False must still be
+    # sent, while unset stays out of the body so NIM applies its own
+    # per-model default.
+    if nim.parallel_tool_calls is not None:
+        body["parallel_tool_calls"] = nim.parallel_tool_calls
 
     extra_body: dict[str, Any] = {}
     request_extra = request_data.extra_body

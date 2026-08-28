@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from my_claude_code.api.docs_content import available_documents
 from my_claude_code.api.docs_render import render_document
+from my_claude_code.api.model_catalog import settings_model_visibility
 from my_claude_code.api.optimization_handlers import OPTIMIZATION_RULE_SPECS
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.release_updates import (
@@ -1104,11 +1105,19 @@ def _model_options(
     *,
     refresh_result: ProviderModelRefreshResult | None = None,
 ) -> dict[str, list[str]]:
-    configured = {
-        ref.model_ref
-        for ref in configured_chat_model_refs(services.requests.current_settings())
-    }
-    infos = services.requests.cached_prefixed_model_infos()
+    settings = services.requests.current_settings()
+    # Configured refs are never filtered here, unlike in `/v1/models`. A picker
+    # has to be able to render the value that is actually saved; dropping a
+    # hidden-but-configured ref would leave the select showing nothing while
+    # the route it names keeps serving traffic. Hiding is for the hundreds of
+    # models nobody chose.
+    configured = {ref.model_ref for ref in configured_chat_model_refs(settings)}
+    visibility = settings_model_visibility(settings)
+    infos = tuple(
+        info
+        for info in services.requests.cached_prefixed_model_infos()
+        if visibility.is_visible(info.model_id)
+    )
     discovered = {info.model_id for info in infos}
     failed_provider_ids = (
         refresh_result.failed_provider_ids if refresh_result is not None else ()

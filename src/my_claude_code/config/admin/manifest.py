@@ -222,6 +222,37 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="model_vision_fallbacks",
     ),
     ConfigFieldSpec(
+        "MODEL_VISIBILITY_ALLOW",
+        "Only show these models",
+        "models",
+        "text",
+        settings_attr="model_visibility_allow",
+        default="",
+        description=(
+            "Comma-separated glob patterns matched against the full "
+            "provider/model reference, case-insensitively -- for example "
+            "nvidia_nim/*, *:free, *inkling*, or one exact ref. Leave empty "
+            "to show every model a provider publishes. This only hides "
+            "models from this page's pickers and from /v1/models: a hidden "
+            "model named in a route or a fallback chain above still routes "
+            "normally."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_VISIBILITY_DENY",
+        "Never show these models",
+        "models",
+        "text",
+        settings_attr="model_visibility_deny",
+        default="",
+        description=(
+            "Comma-separated glob patterns, same form as above. Applied after "
+            "the allow list and wins over it, so a broad allow can be trimmed "
+            "without listing every survivor. Hides only; it never blocks a "
+            "route."
+        ),
+    ),
+    ConfigFieldSpec(
         "FALLBACK_SKIP_KINDS",
         "Do not fall back on",
         "models",

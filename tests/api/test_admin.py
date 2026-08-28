@@ -625,6 +625,46 @@ def test_admin_models_include_configured_and_cached_canonical_slugs():
     }
 
 
+def test_admin_models_apply_the_visibility_filter_to_discovered_models():
+    settings = Settings()
+    settings.model = "nvidia_nim/configured-model"
+    settings.open_router_api_key = "open-router-key"
+    settings.model_visibility_deny = "open_router/meta/*"
+    app = create_test_app(settings)
+    provider_manager_for_app(app).cache_model_infos(
+        "open_router",
+        {
+            ProviderModelInfo("anthropic/kept"),
+            ProviderModelInfo("meta/llama-3.3", supports_vision=False),
+        },
+    )
+
+    body = _local_client(app).get("/admin/api/models").json()
+
+    assert body["models"] == [
+        "nvidia_nim/configured-model",
+        "open_router/anthropic/kept",
+    ]
+    # A hidden model has nothing to say about vision either.
+    assert body["blind_models"] == []
+
+
+def test_admin_models_keep_a_configured_model_that_the_filter_hides():
+    """A picker must be able to render the value that is actually saved.
+
+    Dropping a hidden-but-configured ref would leave the select empty while
+    the route it names carried on serving traffic.
+    """
+    settings = Settings()
+    settings.model = "nvidia_nim/configured-model"
+    settings.model_visibility_allow = "open_router/*"
+    app = create_test_app(settings)
+
+    body = _local_client(app).get("/admin/api/models").json()
+
+    assert body["models"] == ["nvidia_nim/configured-model"]
+
+
 def test_admin_model_refresh_returns_the_updated_canonical_catalog():
     settings = Settings()
     settings.model = "deepseek/deepseek-chat"

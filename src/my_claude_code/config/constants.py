@@ -88,6 +88,13 @@ FALLBACK_STALL_TIMEOUT_DEFAULT = 120.0
 
 FALLBACK_SKIP_KINDS_DEFAULT = "invalid_request"
 
+# Comma-separated globs deciding which provider/model refs are *listed*.
+# Both empty by default, which lists everything the providers publish: a
+# gateway's full catalogue is the honest default, and shrinking it is a
+# preference, not a safety measure. Matching lives in core.model_visibility.
+MODEL_VISIBILITY_ALLOW_DEFAULT = ""
+MODEL_VISIBILITY_DENY_DEFAULT = ""
+
 # Mirrors core.failures.FailureKind. `config` is a leaf package by declared
 # policy -- it imports nothing, not even core -- so the names are repeated
 # here rather than imported. A list that mirrors another file drifts, so

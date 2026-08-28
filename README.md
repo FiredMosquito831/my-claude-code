@@ -479,6 +479,19 @@ Web search provider keys share the same rotation engine — see [Web Search → 
 
 For example, route Opus to `nvidia_nim/moonshotai/kimi-k2.6`, Sonnet to `open_router/openrouter/free`, Haiku to `lmstudio/qwen3.5-coder`, and keep `MODEL` on `zai/glm-5.2`.
 
+### Model Visibility
+
+A gateway can publish hundreds of models — `nous_portal` alone lists 343 — and every one of them lands in `/v1/models` (what `mcc-claude --discover-models` writes into Claude Code, and what the Codex catalog is built from) and in the Admin model pickers. Two glob lists decide which of them are worth showing.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `MODEL_VISIBILITY_ALLOW` | *(empty)* | Comma-separated globs. Empty lists everything; a non-empty list makes visibility opt-in. |
+| `MODEL_VISIBILITY_DENY` | *(empty)* | Same form, applied **after** the allow list and winning over it. |
+
+Patterns are matched case-insensitively against the full `provider/model` reference, so `nvidia_nim/thinkingmachines/inkling` picks one model, `commandcode/*` one provider, `*:free` every free variant, and `*inkling*` anything containing the word. An explicit pick is simply a pattern with no wildcards, which is why ticking models and writing globs are one mechanism rather than two that can disagree.
+
+**These lists hide; they never block.** A model named by `MODEL`, a tier override or a `MODEL_*_FALLBACKS` chain keeps routing normally while hidden. A visibility filter that silently broke a working chain would be worse than a chain entry that is invisible but alive, because the breakage would surface as an outage nowhere near the setting that caused it. The Admin pickers therefore also keep showing a model you have actually configured, even when the filter hides it — a picker has to be able to render the value that is saved.
+
 ### Fallback Chains
 
 Every tier can carry an ordered list of stand-ins. If the model a request routes to cannot serve it, MCC tries the next entry in that tier's chain, then the next, until one answers.

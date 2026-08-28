@@ -454,3 +454,26 @@ def test_the_vision_chain_is_recorded_as_one_diversion(settings):
     assert plan.diversion is RouteDiversion.VISION
     assert plan.diverted_from == "nvidia_nim/fallback-model"
     assert plan.has_fallbacks
+
+
+def test_visibility_patterns_never_change_a_resolved_route(settings):
+    """Hide-only: the visibility lists are a presentation filter, not a block.
+
+    A model can be hidden from `/v1/models` and from the Admin pickers and
+    still be named by MODEL or by a fallback chain. It must keep routing. The
+    alternative -- refusing to route a hidden model -- would let one glob
+    silently break a working chain, and the breakage would surface as an
+    outage far away from the setting that caused it.
+    """
+    settings.model = "nvidia_nim/thinkingmachines/inkling"
+    settings.model_fallbacks = (
+        "nous_portal/tencent/hy3:free,commandcode/minimax/minimax-m3-free"
+    )
+    settings.model_visibility_allow = "nothing-matches-this/*"
+    settings.model_visibility_deny = "*"
+
+    assert _refs(ModelRouter(settings), _request()) == (
+        "nvidia_nim/thinkingmachines/inkling",
+        "nous_portal/tencent/hy3:free",
+        "commandcode/minimax/minimax-m3-free",
+    )

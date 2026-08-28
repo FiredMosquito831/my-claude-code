@@ -37,6 +37,8 @@ from .constants import (
     MAX_OUTPUT_TOKENS_CEILING,
     MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
     MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
+    MODEL_VISIBILITY_ALLOW_DEFAULT,
+    MODEL_VISIBILITY_DENY_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
     REASONING_ANSWER_FLOOR_MAX,
@@ -384,6 +386,21 @@ class Settings(BaseSettings):
     # one unreachable vision model must not lose every image on the machine.
     model_vision_fallbacks: str | None = Field(
         default=None, validation_alias="MODEL_VISION_FALLBACKS"
+    )
+
+    # ==================== Model visibility ====================
+    # Comma-separated globs matched case-insensitively against the full
+    # `provider/model` ref. Empty allow means "list everything"; deny is
+    # applied after allow and wins. These hide models from `/v1/models` and
+    # from the Admin pickers only -- routing never consults them, so a hidden
+    # model named in MODEL or a fallback chain still serves requests.
+    model_visibility_allow: str = Field(
+        default=MODEL_VISIBILITY_ALLOW_DEFAULT,
+        validation_alias="MODEL_VISIBILITY_ALLOW",
+    )
+    model_visibility_deny: str = Field(
+        default=MODEL_VISIBILITY_DENY_DEFAULT,
+        validation_alias="MODEL_VISIBILITY_DENY",
     )
 
     # ==================== Output tokens ====================

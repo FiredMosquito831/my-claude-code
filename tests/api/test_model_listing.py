@@ -148,3 +148,90 @@ def test_models_list_works_with_empty_discovery_catalog():
         "claude-3-freecc-no-thinking/open_router/anthropic/claude-opus",
     ]
     assert "claude-sonnet-4-20250514" in ids
+
+
+def _visibility_settings(*, allow: str = "", deny: str = "") -> Settings:
+    return Settings.model_construct(
+        model="nvidia_nim/thinkingmachines/inkling",
+        model_fable=None,
+        model_opus=None,
+        model_sonnet=None,
+        model_haiku=None,
+        anthropic_auth_token="",
+        nvidia_nim_api_key="nim-key",
+        nous_api_key="nous-key",
+        model_visibility_allow=allow,
+        model_visibility_deny=deny,
+    )
+
+
+def _listed_refs(app) -> set[str]:
+    """The provider refs behind the listed ids, ignoring the Claude aliases."""
+    return {
+        item["display_name"].removesuffix(" (no thinking)")
+        for item in TestClient(app).get("/v1/models").json()["data"]
+        if "/" in item["id"]
+    }
+
+
+def _app_with_two_providers(settings: Settings):
+    app = create_test_app(settings)
+    _cache_models(app, "nvidia_nim", "thinkingmachines/inkling", "openai/gpt-oss")
+    _cache_models(app, "nous_portal", "tencent/hy3:free", "tencent/hy3")
+    return app
+
+
+def test_models_list_lists_everything_when_no_visibility_pattern_is_set():
+    app = _app_with_two_providers(_visibility_settings())
+
+    assert _listed_refs(app) == {
+        "nvidia_nim/thinkingmachines/inkling",
+        "nvidia_nim/openai/gpt-oss",
+        "nous_portal/tencent/hy3:free",
+        "nous_portal/tencent/hy3",
+    }
+
+
+def test_models_list_hides_everything_a_non_empty_allow_does_not_match():
+    app = _app_with_two_providers(_visibility_settings(allow="nvidia_nim/*"))
+
+    assert _listed_refs(app) == {
+        "nvidia_nim/thinkingmachines/inkling",
+        "nvidia_nim/openai/gpt-oss",
+    }
+
+
+def test_models_list_applies_deny_after_allow():
+    app = _app_with_two_providers(_visibility_settings(allow="*", deny="*:free"))
+
+    assert _listed_refs(app) == {
+        "nvidia_nim/thinkingmachines/inkling",
+        "nvidia_nim/openai/gpt-oss",
+        "nous_portal/tencent/hy3",
+    }
+
+
+def test_models_list_keeps_the_claude_aliases_whatever_the_filter_says():
+    """The aliases are protocol names, not provider refs.
+
+    Hiding them would not shrink a catalogue, it would stop Claude Code from
+    being able to name a model at all.
+    """
+    app = _app_with_two_providers(_visibility_settings(allow="nothing-matches-this/*"))
+
+    ids = [item["id"] for item in TestClient(app).get("/v1/models").json()["data"]]
+    assert _listed_refs(app) == set()
+    assert "claude-sonnet-4-20250514" in ids
+    assert "claude-fable-5" in ids
+
+
+def test_models_list_hides_a_configured_model_that_is_denied():
+    """Hidden means hidden even for a model this proxy is configured to use.
+
+    Routing is unaffected -- see
+    tests/application/test_routing_chains.py::test_visibility_patterns_never
+    _change_a_resolved_route -- so the entry is invisible but alive.
+    """
+    app = _app_with_two_providers(_visibility_settings(deny="*/thinkingmachines/*"))
+
+    assert "nvidia_nim/thinkingmachines/inkling" not in _listed_refs(app)
