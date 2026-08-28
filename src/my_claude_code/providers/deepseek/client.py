@@ -35,6 +35,7 @@ class DeepSeekProvider(OpenAIChatProvider):
             config,
             profile=_PROFILE,
             rate_limiter=rate_limiter,
+            provider_id="deepseek",
         )
 
     def _build_request_body(
@@ -46,6 +47,7 @@ class DeepSeekProvider(OpenAIChatProvider):
         return build_deepseek_request_body(
             request,
             reasoning=reasoning,
+            provider_id=self._provider_id,
         )
 
     def _get_retry_request_body(self, error: Exception, body: dict) -> dict | None:

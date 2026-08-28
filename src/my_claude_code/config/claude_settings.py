@@ -1,11 +1,11 @@
 """Read and patch Claude Code's settings.json to point at the FCC proxy."""
 
 import json
-import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from my_claude_code.config.atomic_json import write_json_document_atomically
 from my_claude_code.config.paths import (
     claude_managed_settings_paths,
 )
@@ -238,16 +238,6 @@ def _backup_if_needed(path: Path) -> None:
         shutil.copyfile(path, backup_path)
 
 
-def _write_document_atomically(path: Path, data: dict[str, object]) -> None:
-    """Write a JSON document to path atomically, creating parent directories as needed."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(path.name + ".fcc-tmp")
-    content = json.dumps(data, indent=2) + "\n"
-    tmp_path.write_text(content, encoding="utf-8")
-    os.replace(tmp_path, path)
-
-
 def apply_proxy_env(
     *, path: Path, base_url: str, auth_token: str
 ) -> ClaudeSettingsStatus:
@@ -273,7 +263,7 @@ def apply_proxy_env(
         env[CLAUDE_AUTH_TOKEN_ENV] = auth_token
         data["env"] = env
 
-        _write_document_atomically(path, data)
+        write_json_document_atomically(path, data)
     except OSError as exc:
         raise ClaudeSettingsError(
             f"cannot write Claude settings file {path}: {exc}"
@@ -322,7 +312,7 @@ def clear_proxy_env(
         else:
             data.pop("env", None)
 
-        _write_document_atomically(path, data)
+        write_json_document_atomically(path, data)
     except OSError as exc:
         raise ClaudeSettingsError(
             f"cannot write Claude settings file {path}: {exc}"

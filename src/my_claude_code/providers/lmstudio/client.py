@@ -69,6 +69,7 @@ class LMStudioProvider(OpenAIChatProvider):
             config,
             profile=_PROFILE,
             rate_limiter=rate_limiter,
+            provider_id="lmstudio",
         )
         self._loaded_context_cache: tuple[float, int | None] = (0.0, None)
 

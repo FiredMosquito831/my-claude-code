@@ -58,8 +58,14 @@ class OpenRouterGatewayProvider(OpenAIChatProvider):
         *,
         profile: OpenAIChatProfile,
         rate_limiter: ProviderRateLimiter,
+        provider_id: str = "",
     ):
-        super().__init__(config, profile=profile, rate_limiter=rate_limiter)
+        super().__init__(
+            config,
+            profile=profile,
+            rate_limiter=rate_limiter,
+            provider_id=provider_id,
+        )
 
     async def list_model_ids(self) -> frozenset[str]:
         """Only advertise gateway models that can run Claude Code tools."""

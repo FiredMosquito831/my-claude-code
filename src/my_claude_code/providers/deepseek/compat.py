@@ -46,7 +46,10 @@ _OMITTED_ATTACHMENT_BLOCK = {"type": "text", "text": _OMITTED_ATTACHMENT_TEXT}
 
 
 def build_deepseek_request_body(
-    request_data: MessagesRequest, *, reasoning: ReasoningPolicy
+    request_data: MessagesRequest,
+    *,
+    reasoning: ReasoningPolicy,
+    provider_id: str = "",
 ) -> dict:
     """Build a DeepSeek Chat Completions body from an Anthropic request."""
     logger.debug(
@@ -103,6 +106,7 @@ def build_deepseek_request_body(
         reasoning=effective_reasoning,
         policy=DEEPSEEK_REQUEST_POLICY,
         postprocessors=(_apply_deepseek_chat_extras,),
+        provider_id=provider_id,
     )
     if "max_tokens" not in body or body.get("max_tokens") is None:
         body["max_tokens"] = ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS

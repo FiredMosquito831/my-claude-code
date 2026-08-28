@@ -34,6 +34,7 @@ class GoogleOpenAIProvider(OpenAIChatProvider):
         rate_limiter: ProviderRateLimiter,
         api_key_provider: OpenAIAsyncCredentialProvider | None = None,
         default_headers: Mapping[str, str] | None = None,
+        provider_id: str = "",
     ) -> None:
         super().__init__(
             config,
@@ -41,6 +42,7 @@ class GoogleOpenAIProvider(OpenAIChatProvider):
             rate_limiter=rate_limiter,
             api_key_provider=api_key_provider,
             default_headers=default_headers,
+            provider_id=provider_id,
         )
         self._tool_call_extra_content_by_id: dict[str, dict[str, Any]] = {}
 
@@ -74,4 +76,5 @@ class GoogleOpenAIProvider(OpenAIChatProvider):
                 ),
                 *self._profile.request_postprocessors,
             ),
+            provider_id=self._provider_id,
         )

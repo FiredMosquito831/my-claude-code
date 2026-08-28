@@ -89,6 +89,7 @@ class CloudflareProvider(OpenAIChatProvider):
             replace(config, base_url=base_url),
             profile=_PROFILE,
             rate_limiter=rate_limiter,
+            provider_id="cloudflare",
         )
 
     async def cleanup(self) -> None:

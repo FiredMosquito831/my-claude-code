@@ -39,6 +39,7 @@ class MistralProvider(OpenAIChatProvider):
             config,
             profile=_PROFILE,
             rate_limiter=rate_limiter,
+            provider_id="mistral",
         )
 
     def _build_request_body(
@@ -51,6 +52,7 @@ class MistralProvider(OpenAIChatProvider):
             request,
             reasoning=reasoning,
             policy=_REQUEST_POLICY,
+            provider_id=self._provider_id,
         )
         apply_mistral_reasoning_request_shape(body, reasoning=reasoning)
         return body

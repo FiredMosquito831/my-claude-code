@@ -71,6 +71,7 @@ class VertexProvider(GoogleOpenAIProvider):
             rate_limiter=rate_limiter,
             api_key_provider=self._access_token_provider,
             default_headers={"x-goog-user-project": self._project_id},
+            provider_id="vertex",
         )
 
     async def cleanup(self) -> None:

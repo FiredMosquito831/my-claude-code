@@ -8,6 +8,12 @@ from typing import Any, Literal
 from loguru import logger
 
 from my_claude_code.application.errors import InvalidRequestError
+from my_claude_code.config.model_overrides import (
+    ModelParameterOverrides,
+    apply_model_parameter_overrides,
+    current_model_overrides,
+    model_ref_for,
+)
 from my_claude_code.core.anthropic import (
     OpenAIToolNameCodec,
     ReasoningReplayMode,
@@ -46,8 +52,19 @@ def build_openai_chat_request_body(
     reasoning: ReasoningPolicy,
     policy: OpenAIChatRequestPolicy,
     postprocessors: Iterable[OpenAIChatPostprocessor] = (),
+    provider_id: str = "",
+    overrides: ModelParameterOverrides | None = None,
 ) -> dict[str, Any]:
-    """Build an OpenAI-compatible chat request body from an Anthropic request."""
+    """Build an OpenAI-compatible chat request body from an Anthropic request.
+
+    ``provider_id`` is the catalogue id (``nvidia_nim``), not the policy's
+    ``provider_name`` log label (``NIM``); it is what the user's override file
+    keys on. Passing nothing disables overrides for that caller rather than
+    guessing, because a wrong id would apply somebody else's settings.
+
+    ``overrides`` defaults to the process-wide table read from
+    ``~/.fcc/model_overrides.json``; tests pass their own.
+    """
     logger.debug(
         "{}_REQUEST: conversion start model={} msgs={}",
         policy.provider_name,
@@ -80,6 +97,18 @@ def build_openai_chat_request_body(
 
     for postprocess in postprocessors:
         postprocess(body, request_data, reasoning)
+
+    # Last, deliberately: the user's own setting has to win over every
+    # provider-specific postprocessor above, and a "force unset" can only
+    # remove a key once everything that might set it has run.
+    if provider_id:
+        table = overrides if overrides is not None else current_model_overrides()
+        apply_model_parameter_overrides(
+            body,
+            provider_id=provider_id,
+            model_ref=model_ref_for(provider_id, str(body.get("model") or "")),
+            overrides=table,
+        )
 
     _encode_openai_tool_names(body, OpenAIToolNameCodec.from_request(request_data))
 

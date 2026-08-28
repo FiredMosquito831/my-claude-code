@@ -34,6 +34,7 @@ def create_openai_chat_provider(
         config,
         profile=resolved,
         rate_limiter=rate_limiter,
+        provider_id=provider_id,
     )
 
 

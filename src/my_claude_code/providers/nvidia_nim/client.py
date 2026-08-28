@@ -54,6 +54,7 @@ class NvidiaNimProvider(OpenAIChatProvider):
             config,
             profile=_PROFILE,
             rate_limiter=rate_limiter,
+            provider_id="nvidia_nim",
         )
         self._nim_settings = nim_settings
 
@@ -68,6 +69,7 @@ class NvidiaNimProvider(OpenAIChatProvider):
             request,
             self._nim_settings,
             reasoning=reasoning,
+            provider_id=self._provider_id,
         )
 
     def _prepare_create_body(self, body: dict[str, Any]) -> dict[str, Any]:

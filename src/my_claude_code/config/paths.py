@@ -18,6 +18,7 @@ ANTHROPIC_OAUTH_MANAGED_STORE_FILENAME = "anthropic_oauth.json"
 CLAUDE_CONFIG_DIRNAME = ".claude"
 CLAUDE_SETTINGS_FILENAME = "settings.json"
 ONBOARDING_STATE_FILENAME = "onboarding.json"
+MODEL_OVERRIDES_FILENAME = "model_overrides.json"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
 WSL_WINDOWS_USERS_DIR = "/mnt/c/Users"
 MACOS_MANAGED_SETTINGS_PATH = (
@@ -42,6 +43,12 @@ def managed_env_path() -> Path:
     """Return the default user-managed env file path."""
 
     return config_dir_path() / FCC_ENV_FILENAME
+
+
+def model_overrides_path() -> Path:
+    """Return the per-provider/per-model request parameter override file."""
+
+    return config_dir_path() / MODEL_OVERRIDES_FILENAME
 
 
 def legacy_env_paths() -> tuple[Path, ...]:

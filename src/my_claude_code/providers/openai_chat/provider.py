@@ -90,9 +90,15 @@ class OpenAIChatProvider(BaseProvider):
         rate_limiter: ProviderRateLimiter,
         default_headers: Mapping[str, str] | None = None,
         api_key_provider: OpenAIAsyncCredentialProvider | None = None,
+        provider_id: str = "",
     ):
         super().__init__(config)
         self._profile = profile
+        # The catalogue id (``nvidia_nim``), which is what the user's override
+        # file keys on. ``_provider_name`` is the profile's log label (``NIM``)
+        # and is deliberately not reused for it: several profiles share a label
+        # and none of them are catalogue ids.
+        self._provider_id = provider_id
         self._provider_name = profile.provider_name
         if config.api_key is None and api_key_provider is None:
             raise ValueError(
@@ -238,6 +244,7 @@ class OpenAIChatProvider(BaseProvider):
             reasoning=reasoning,
             policy=self._profile.request_policy,
             postprocessors=self._profile.request_postprocessors,
+            provider_id=self._provider_id,
         )
 
     def preflight_stream(

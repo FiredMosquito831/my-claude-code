@@ -51,6 +51,7 @@ class GeminiProvider(OpenAIChatProvider):
             config,
             profile=_PROFILE,
             rate_limiter=rate_limiter,
+            provider_id="gemini",
         )
         self._tool_call_extra_content_by_id: dict[str, dict[str, Any]] = {}
 
@@ -86,4 +87,5 @@ class GeminiProvider(OpenAIChatProvider):
                 ),
                 _PROFILE.apply_reasoning,
             ),
+            provider_id=self._provider_id,
         )

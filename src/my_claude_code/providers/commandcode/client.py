@@ -28,6 +28,9 @@ _PROFILE = OpenAIChatProfile(
 )
 
 
+COMMANDCODE_PROVIDER_ID = "commandcode"
+
+
 class CommandCodeProvider(BaseProvider):
     """Route one Command Code catalog through its documented protocol family."""
 
@@ -43,6 +46,7 @@ class CommandCodeProvider(BaseProvider):
             config,
             profile=_PROFILE,
             rate_limiter=rate_limiter,
+            provider_id=COMMANDCODE_PROVIDER_ID,
         )
         self._anthropic = AnthropicMessagesProvider(
             config,

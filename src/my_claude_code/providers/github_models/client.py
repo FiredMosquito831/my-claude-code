@@ -51,6 +51,7 @@ class GitHubModelsProvider(OpenAIChatProvider):
             profile=_PROFILE,
             rate_limiter=rate_limiter,
             default_headers=_github_models_default_headers(),
+            provider_id="github_models",
         )
 
     async def cleanup(self) -> None:

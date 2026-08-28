@@ -19,4 +19,9 @@ class KiloProvider(OpenRouterGatewayProvider):
     """Kilo AI Gateway provider using the OpenAI-compatible Chat Completions API."""
 
     def __init__(self, config: ProviderConfig, *, rate_limiter: ProviderRateLimiter):
-        super().__init__(config, profile=_PROFILE, rate_limiter=rate_limiter)
+        super().__init__(
+            config,
+            profile=_PROFILE,
+            rate_limiter=rate_limiter,
+            provider_id="kilo",
+        )
