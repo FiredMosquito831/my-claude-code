@@ -2,12 +2,17 @@
 
 import asyncio
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
-from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.application.model_metadata import (
+    ModelReasoningCapability,
+    ProviderModelInfo,
+)
 from my_claude_code.providers.runtime import models_dev
 from my_claude_code.providers.runtime.models_dev import (
     enrich_model_infos,
@@ -45,6 +50,11 @@ def _write_cache(path: Path, *, age_hours: float = 0.0) -> None:
         json.dumps({"fetched_at": fetched.isoformat(), "index": _INDEX}),
         encoding="utf-8",
     )
+    # Freshness reads the last time the payload was *revalidated*, which a 304
+    # advances by touching the file. Age the mtime with the payload, or the
+    # cache looks brand new however old its ``fetched_at`` claims to be.
+    aged = fetched.timestamp()
+    os.utime(path, (aged, aged))
 
 
 def test_cache_roundtrip_and_freshness(tmp_path: Path) -> None:
@@ -122,7 +132,7 @@ async def test_enrich_uses_cache_without_network(
     path = tmp_path / "models-dev.json"
     _write_cache(path)
 
-    async def _boom():
+    async def _boom(etag=None):
         raise AssertionError("network must not be touched")
 
     monkeypatch.setattr(models_dev, "fetch_models_dev_index", _boom)
@@ -141,9 +151,9 @@ async def test_enrich_without_cache_schedules_refresh_and_passes_through(
     path = tmp_path / "models-dev.json"
     fetched: list[str] = []
 
-    async def _fake_fetch():
+    async def _fake_fetch(etag=None):
         fetched.append("hit")
-        return _INDEX
+        return models_dev.ModelsDevFetch(index=_INDEX)
 
     monkeypatch.setattr(models_dev, "fetch_models_dev_index", _fake_fetch)
 
@@ -166,7 +176,7 @@ async def test_refresh_is_silent_when_offline(
 ) -> None:
     path = tmp_path / "models-dev.json"
 
-    async def _offline():
+    async def _offline(etag=None):
         return None
 
     monkeypatch.setattr(models_dev, "fetch_models_dev_index", _offline)
@@ -193,7 +203,7 @@ async def test_fetch_returns_none_on_httpx_failure(
         async def __aexit__(self, *args: object) -> None:
             return None
 
-        async def get(self, url: str) -> object:
+        async def get(self, url: str, headers: object = None) -> object:
             raise httpx.ConnectError("offline")
 
     monkeypatch.setattr(models_dev.httpx, "AsyncClient", _FailingClient)
@@ -384,7 +394,10 @@ def test_layering_provider_reported_wins_when_known(tmp_path: Path) -> None:
 
     # models.dev says False, provider says True: provider wins for can_reason.
     resolved = resolve_model_reasoning_capability(
-        "open_router", "acme/no-reasoning", True, path
+        "open_router",
+        "acme/no-reasoning",
+        ModelReasoningCapability(can_reason=True),
+        path,
     )
 
     assert resolved is not None
@@ -788,13 +801,24 @@ def test_thinking_and_numeric_tags_are_not_stripped(tmp_path: Path) -> None:
     assert numeric is None
 
 
-def test_rejected_llamacpp_pairing_stays_unknown(tmp_path: Path) -> None:
+def test_rejected_llamacpp_alias_is_still_not_installed(tmp_path: Path) -> None:
+    """The alias stays rejected; only the approximate tier may answer.
+
+    Before cross-provider matching existed, "no alias" and "no answer" were the
+    same thing. They no longer are: llamacpp has no models.dev bucket, so a
+    same-named row elsewhere now supplies an explicitly approximate answer.
+    What must not happen is llamacpp being *aliased* onto models.dev's "llama"
+    bucket, which would make another product's catalogue authoritative for a
+    local server.
+    """
     path = tmp_path / "models-dev.json"
     _write_matching_cache(path)
 
-    # A "llama" provider is present in the fixture; llamacpp must NOT match it.
+    assert "llamacpp" not in PROVIDER_ID_ALIASES
+    # A name that exists nowhere stays unknown even through the new tier.
     assert (
-        model_reasoning_capability_from_models_dev("llamacpp", "llama-4", path) is None
+        model_reasoning_capability_from_models_dev("llamacpp", "not-a-model", path)
+        is None
     )
 
 
@@ -998,3 +1022,438 @@ def test_the_provider_alias_map_is_used_for_scoping_too():
         (ProviderModelInfo(model_id="a-model"),), index, "open_router"
     )
     assert info.supports_vision is True
+
+
+# --------------------------------------------------------------------------
+# Gateway-first, field-by-field merge
+# --------------------------------------------------------------------------
+
+_MERGE_INDEX = {
+    "openrouter": {
+        "models": {
+            "vendor/merged": {
+                "reasoning": True,
+                "reasoning_options": [
+                    {"type": "effort", "values": ["low", "high"]},
+                ],
+            }
+        }
+    }
+}
+
+
+def test_merge_keeps_both_sources_fields(tmp_path: Path) -> None:
+    """The bug this PR fixes: rebuilding by source dropped ``mandatory``.
+
+    The gateway is the only source that publishes ``reasoning.mandatory``, and
+    models.dev is the only one publishing an effort vocabulary here. A merge
+    that picks a winning source keeps one and silently loses the other, which
+    is exactly why the v5.60.0 mandatory-model handling never ran.
+    """
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_MERGE_INDEX, path)
+
+    resolved = resolve_model_reasoning_capability(
+        "open_router",
+        "vendor/merged",
+        ModelReasoningCapability(can_reason=True, mandatory=True),
+        path,
+    )
+
+    assert resolved is not None
+    assert resolved.mandatory is True
+    assert resolved.supported_efforts == frozenset(
+        {ReasoningEffort.LOW, ReasoningEffort.HIGH}
+    )
+    assert resolved.supports_effort_control is True
+
+
+def test_merge_prefers_the_gateway_field_by_field(tmp_path: Path) -> None:
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_MERGE_INDEX, path)
+
+    resolved = resolve_model_reasoning_capability(
+        "open_router",
+        "vendor/merged",
+        ModelReasoningCapability(
+            can_reason=True, supported_efforts=frozenset({ReasoningEffort.MAX})
+        ),
+        path,
+    )
+
+    assert resolved is not None
+    # The gateway's vocabulary wins; models.dev still supplies effort control.
+    assert resolved.supported_efforts == frozenset({ReasoningEffort.MAX})
+    assert resolved.supports_effort_control is True
+
+
+def test_merge_keeps_a_known_false_rather_than_deferring(tmp_path: Path) -> None:
+    """``False`` is an answer; only ``None`` defers to the other source."""
+    merged = models_dev.merge_reasoning_capabilities(
+        ModelReasoningCapability(supports_toggle_control=False),
+        ModelReasoningCapability(supports_toggle_control=True),
+    )
+
+    assert merged is not None
+    assert merged.supports_toggle_control is False
+
+
+def test_merge_of_two_unknowns_is_unknown() -> None:
+    assert models_dev.merge_reasoning_capabilities(None, None) is None
+
+
+# --------------------------------------------------------------------------
+# reasoning_options: [] -- known, but with no caller control
+# --------------------------------------------------------------------------
+
+_CONTROL_INDEX = {
+    "nvidia": {
+        "models": {
+            # models.dev's own schema forbids omitting reasoning_options when
+            # reasoning is true, so [] is a deliberate value meaning "reasoning
+            # is on and you cannot steer it". 1,223 of 5,230 reasoning models
+            # (23%) carry it.
+            "thinkingmachines/inkling": {"reasoning": True, "reasoning_options": []},
+            "minimaxai/minimax-m3": {
+                "reasoning": True,
+                "reasoning_options": [{"type": "toggle"}],
+            },
+        }
+    }
+}
+
+
+def test_empty_reasoning_options_is_known_no_control_not_unknown(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_CONTROL_INDEX, path)
+
+    capability = model_reasoning_capability_from_models_dev(
+        "nvidia_nim", "thinkingmachines/inkling", path
+    )
+
+    assert capability is not None
+    assert capability.can_reason is True
+    assert capability.supports_effort_control is False
+    assert capability.supports_toggle_control is False
+    assert capability.supports_budget_control is False
+
+
+def test_absent_models_dev_row_is_unknown_everywhere(tmp_path: Path) -> None:
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_CONTROL_INDEX, path)
+
+    # "nvidia" HAS a bucket, so the approximate tier is never consulted and an
+    # unlisted model stays entirely unknown.
+    assert (
+        model_reasoning_capability_from_models_dev("nvidia_nim", "not-listed", path)
+        is None
+    )
+
+
+def test_toggle_only_model_still_parses_as_it_did(tmp_path: Path) -> None:
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_CONTROL_INDEX, path)
+
+    capability = model_reasoning_capability_from_models_dev(
+        "nvidia_nim", "minimaxai/minimax-m3", path
+    )
+
+    assert capability is not None
+    assert capability.supports_toggle_control is True
+    assert capability.supports_effort_control is False
+    assert capability.supported_efforts is None
+
+
+# --------------------------------------------------------------------------
+# limit.output / limit.context == 0 is a miss, never a ceiling
+# --------------------------------------------------------------------------
+
+_ZERO_INDEX = {
+    "openrouter": {
+        "models": {
+            "vendor/zeroed": {
+                "limit": {"context": 0, "output": 0},
+                "cost": {"input": 0.1, "output": 0.2},
+            }
+        }
+    }
+}
+
+
+def test_zero_output_limit_reads_as_unknown(tmp_path: Path) -> None:
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_ZERO_INDEX, path)
+
+    assert model_output_limit_from_models_dev("open_router", "vendor/zeroed", path) is (
+        None
+    )
+
+
+def test_zero_context_limit_never_enriches_a_model() -> None:
+    """195 models publish output 0 and 132 publish context 0 on the live feed."""
+    enriched = enrich_model_infos(
+        (ProviderModelInfo(model_id="vendor/zeroed"),), _ZERO_INDEX
+    )
+
+    assert enriched[0].context_length is None
+    # The rest of the row is still perfectly usable.
+    assert enriched[0].input_price == 0.1
+
+
+# --------------------------------------------------------------------------
+# Cross-provider fallback for a provider models.dev does not describe
+# --------------------------------------------------------------------------
+
+_CROSS_INDEX = {
+    "alpha": {
+        "models": {
+            "tencent/hy3": {
+                "reasoning": True,
+                "reasoning_options": [{"type": "effort", "values": ["low", "high"]}],
+                "limit": {"output": 64000},
+            }
+        }
+    },
+    "beta": {
+        "models": {
+            "tencent/hy3": {
+                "reasoning": True,
+                "reasoning_options": [{"type": "effort", "values": ["low", "high"]}],
+                "limit": {"output": 64000},
+            }
+        }
+    },
+    "gamma": {
+        "models": {
+            "tencent/hy3": {
+                "reasoning": True,
+                "reasoning_options": [{"type": "toggle"}],
+                "limit": {"output": 262144},
+            }
+        }
+    },
+}
+
+
+def test_cross_provider_uses_the_modal_value_not_the_min_or_max(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_CROSS_INDEX, path)
+
+    limit = model_output_limit_from_models_dev("nous_portal", "tencent/hy3:free", path)
+
+    # min would be 64000 too, so pin the mode explicitly instead: two rows say
+    # 64000 and one says 262144, and the answer is the value two agreed on.
+    match = models_dev.cross_provider_match("nous_portal", "tencent/hy3:free", path)
+    assert match is not None
+    assert match.match_count == 3
+    assert match.output_agreement == pytest.approx(2 / 3)
+    assert limit == 64000
+
+
+def test_cross_provider_votes_each_capability_field(tmp_path: Path) -> None:
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_CROSS_INDEX, path)
+
+    capability = model_reasoning_capability_from_models_dev(
+        "nous_portal", "tencent/hy3:free", path
+    )
+
+    assert capability is not None
+    assert capability.can_reason is True
+    # Two effort rows against one toggle row: the modal vocabulary wins rather
+    # than the intersection (which collapses) or the union (which invents).
+    assert capability.supported_efforts == frozenset(
+        {ReasoningEffort.LOW, ReasoningEffort.HIGH}
+    )
+    assert capability.supports_effort_control is True
+
+
+def test_cross_provider_resolution_is_logged_as_approximate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An approximate answer must announce itself, with its evidence.
+
+    The module logger is stubbed rather than a loguru sink added: global sink
+    and level state is shared across the whole suite, so a sink-based
+    assertion passes or fails depending on what ran before it.
+    """
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_CROSS_INDEX, path)
+    records: list[str] = []
+
+    class _RecordingLogger:
+        def info(self, template: str, *args: object) -> None:
+            records.append(template.format(*args))
+
+        def debug(self, template: str, *args: object) -> None:
+            return None
+
+    monkeypatch.setattr(models_dev, "logger", _RecordingLogger())
+
+    models_dev.cross_provider_match("nous_portal", "tencent/hy3:free", path)
+
+    assert len(records) == 1
+    line = records[0]
+    assert "APPROXIMATE" in line
+    assert "no bucket for nous_portal" in line
+    assert "matches=3" in line
+    assert "67% agreement" in line
+    assert "64000" in line
+
+
+def test_cross_provider_never_outranks_the_gateway(tmp_path: Path) -> None:
+    """The hy3 case: the gateway says 128,000, name-matching says 64,000.
+
+    Letting the approximate tier win would halve the model's real capacity,
+    which is precisely what WORKING-NOTES 54 forbids.
+    """
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_CROSS_INDEX, path)
+
+    gateway = ModelReasoningCapability(
+        can_reason=True,
+        supports_effort_control=True,
+        supported_efforts=frozenset({ReasoningEffort.HIGH}),
+        mandatory=False,
+    )
+    resolved = resolve_model_reasoning_capability(
+        "nous_portal", "tencent/hy3:free", gateway, path
+    )
+
+    assert resolved is not None
+    assert resolved.supported_efforts == frozenset({ReasoningEffort.HIGH})
+    assert resolved.mandatory is False
+    # models.dev still fills what the gateway left unstated.
+    assert resolved.supports_toggle_control is False
+
+
+def test_a_provider_with_its_own_bucket_never_reads_outside_it(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_CROSS_INDEX, path)
+
+    # "alpha" is a bucket in this fixture, so a model it does not list stays
+    # unknown rather than borrowing a namesake from "gamma".
+    assert model_output_limit_from_models_dev("alpha", "not-listed", path) is None
+
+
+# --------------------------------------------------------------------------
+# Conditional GET
+# --------------------------------------------------------------------------
+
+
+class _ConditionalClient:
+    """Minimal httpx.AsyncClient stand-in that honours If-None-Match."""
+
+    requests: ClassVar[list[dict[str, str]]] = []
+    current_etag: ClassVar[str] = 'W/"v1"'
+    body: ClassVar[dict[str, object]] = {"alpha": {"models": {}}}
+
+    def __init__(self, **kwargs: object) -> None:
+        pass
+
+    async def __aenter__(self) -> _ConditionalClient:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def get(self, url: str, headers: dict[str, str] | None = None) -> object:
+        type(self).requests.append(dict(headers or {}))
+        if (headers or {}).get("If-None-Match") == type(self).current_etag:
+            return _Response(304, {}, {})
+        return _Response(200, {"etag": type(self).current_etag}, type(self).body)
+
+
+class _Response:
+    def __init__(
+        self, status_code: int, headers: dict[str, str], payload: dict[str, object]
+    ) -> None:
+        self.status_code = status_code
+        self.headers = headers
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return self._payload
+
+
+@pytest.mark.asyncio
+async def test_refresh_sends_if_none_match_and_304_keeps_the_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "models-dev.json"
+    _ConditionalClient.requests = []
+    _ConditionalClient.current_etag = 'W/"v1"'
+    _ConditionalClient.body = {"alpha": {"models": {"a/b": {"reasoning": True}}}}
+    monkeypatch.setattr(models_dev.httpx, "AsyncClient", _ConditionalClient)
+
+    assert await refresh_models_dev_cache(path) is True
+    first_bytes = path.read_bytes()
+    stored = read_models_dev_cache(path)
+    assert stored is not None
+    assert stored.etag == 'W/"v1"'
+
+    # Age the cache so the second refresh is a genuine revalidation.
+    aged = (datetime.now(UTC) - timedelta(hours=48)).timestamp()
+    os.utime(path, (aged, aged))
+    aged_cache = read_models_dev_cache(path)
+    assert aged_cache is not None and aged_cache.fresh is False
+
+    assert await refresh_models_dev_cache(path) is True
+
+    assert _ConditionalClient.requests[0] == {}
+    assert _ConditionalClient.requests[1] == {"If-None-Match": 'W/"v1"'}
+    # The 4.4MB body is not rewritten; only the revalidation stamp moves.
+    assert path.read_bytes() == first_bytes
+    revalidated = read_models_dev_cache(path)
+    assert revalidated is not None and revalidated.fresh is True
+
+
+@pytest.mark.asyncio
+async def test_changed_etag_rewrites_the_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "models-dev.json"
+    _ConditionalClient.requests = []
+    _ConditionalClient.current_etag = 'W/"v1"'
+    _ConditionalClient.body = {"alpha": {"models": {"a/b": {"reasoning": True}}}}
+    monkeypatch.setattr(models_dev.httpx, "AsyncClient", _ConditionalClient)
+
+    assert await refresh_models_dev_cache(path) is True
+
+    _ConditionalClient.current_etag = 'W/"v2"'
+    _ConditionalClient.body = {"alpha": {"models": {"a/c": {"reasoning": False}}}}
+
+    assert await refresh_models_dev_cache(path) is True
+
+    stored = read_models_dev_cache(path)
+    assert stored is not None
+    assert stored.etag == 'W/"v2"'
+    assert stored.index == {"alpha": {"models": {"a/c": {"reasoning": False}}}}
+
+
+@pytest.mark.asyncio
+async def test_a_stale_cache_survives_a_failed_revalidation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Silent failure must not cost the user the catalogue they already have."""
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(_CROSS_INDEX, path, 'W/"v1"')
+
+    async def _offline(etag: str | None = None) -> None:
+        return None
+
+    monkeypatch.setattr(models_dev, "fetch_models_dev_index", _offline)
+
+    assert await refresh_models_dev_cache(path) is False
+    stored = read_models_dev_cache(path)
+    assert stored is not None
+    assert stored.index == _CROSS_INDEX

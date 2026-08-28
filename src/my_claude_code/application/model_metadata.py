@@ -23,6 +23,22 @@ class ModelReasoningCapability:
     effort enum and a raw token budget) and call sites care about each style
     independently (e.g. "can I send an effort string" vs "can I send a
     numeric budget").
+
+    Three states must stay distinguishable, and every parser and merge here is
+    written to preserve them:
+
+    1. *unknown* -- no source had an opinion; every field is ``None``. The
+       lookups return ``None`` in place of the whole object when not even the
+       model was found.
+    2. *known, no caller control* -- the model reasons but exposes no knob.
+       models.dev spells this ``reasoning: true`` with ``reasoning_options:
+       []`` (23% of its reasoning models), which parses to ``can_reason=True``
+       with all three ``supports_*_control`` explicitly ``False``.
+    3. *known, controllable* -- the usual effort/toggle/budget shapes.
+
+    ``supported_efforts`` carries the same distinction one level down:
+    ``None`` when no effort option was published at all, and an empty
+    ``frozenset`` when one was published with no usable values.
     """
 
     can_reason: bool | None = None
@@ -43,11 +59,38 @@ class ModelReasoningCapability:
     # publishes no such flag today, so this stays None until a source
     # carries it; the gating branch exists so the rewrite is ready.
     mandatory: bool | None = None
+    # Whether the model runs with thinking on unless the caller says otherwise.
+    # Published by OpenRouter-dialect gateways as ``reasoning.default_enabled``
+    # and by nothing else today. ``None`` -- unknown -- must never change
+    # behavior; it is not the same as a known ``False``.
+    default_enabled: bool | None = None
+
+
+type ModelDefaultParameterValue = str | int | float | bool
+"""A scalar a provider may pin as a per-model default request parameter."""
+
+type ModelDefaultParameters = tuple[tuple[str, ModelDefaultParameterValue], ...]
+"""Provider-declared per-model default parameters, sorted by name.
+
+A tuple of pairs rather than a mapping because :class:`ProviderModelInfo` is
+hashable and lives in ``frozenset``s. Only scalar values are carried: every
+pinned value observed upstream (``temperature``, ``top_p``, ``top_k``) is a
+scalar, and a non-scalar default (an array such as ``stop``) is dropped rather
+than encoded, because a partially-representable structure would be worse than
+an absent one.
+"""
 
 
 @dataclass(frozen=True, slots=True)
 class ProviderModelInfo:
-    """Provider model metadata used to shape the application model catalog."""
+    """Provider model metadata used to shape the application model catalog.
+
+    Every optional field is ``None`` when the provider did not report it. That
+    is deliberately distinct from a reported value that states the model lacks
+    the capability (``supports_vision=False``) or has no such declaration
+    (``default_parameters=()``). Consumers must only act on what a source
+    actually stated.
+    """
 
     model_id: str
     supports_thinking: bool | None = None
@@ -58,6 +101,23 @@ class ProviderModelInfo:
     context_length: int | None = None
     input_price: float | None = None
     output_price: float | None = None
+    # The provider's own declared ceiling on generated tokens for this model
+    # (OpenRouter dialect: ``top_provider.max_completion_tokens``). Distinct
+    # from ``context_length``, which covers prompt plus completion. ``None``
+    # means unreported; a non-positive upstream value is read as unreported
+    # too, never as "this model can emit zero tokens".
+    max_output_tokens: int | None = None
+    # The complete ``supported_parameters`` list a gateway publishes, not just
+    # the reasoning flag distilled from it. ``None`` means the provider did not
+    # publish the list; an empty frozenset means it published an empty one.
+    supported_parameters: frozenset[str] | None = None
+    # Values the provider pins for this model and rejects being overridden
+    # (observed live as ``400 top_p is immutable ... must be 0.95``).
+    default_parameters: ModelDefaultParameters | None = None
+    # Reasoning capability as the *provider* reports it, which outranks the
+    # models.dev fallback field by field. ``None`` means the provider published
+    # no reasoning block at all.
+    reasoning_capability: ModelReasoningCapability | None = None
 
 
 @dataclass(frozen=True, slots=True)

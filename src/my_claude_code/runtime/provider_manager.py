@@ -163,12 +163,23 @@ class ProviderRuntimeManager:
         return resolve_model_reasoning_capability(
             provider_id,
             model_id,
-            self._model_cache.cached_model_supports_thinking(provider_id, model_id),
+            self._model_cache.cached_model_reasoning_capability(provider_id, model_id),
         )
 
     def model_output_limit(self, provider_id: str, model_id: str) -> int | None:
-        """Return the model's published output-token limit, if models.dev has one."""
-        return model_output_limit_from_models_dev(provider_id, model_id)
+        """Return the model's published output-token limit, if anything has one.
+
+        The routing target's own ``/models`` payload is the authority and is
+        consulted first; models.dev -- whose answer may itself come from the
+        approximate cross-provider tier -- only fills the gap. The ordering is
+        load-bearing: for ``nous_portal/tencent/hy3:free`` the gateway reports
+        128,000 while the cross-provider modal value is 64,000, and letting the
+        name match win would halve the model's real capacity for no reason
+        (WORKING-NOTES 54).
+        """
+        return self._model_cache.cached_model_max_output_tokens(
+            provider_id, model_id
+        ) or model_output_limit_from_models_dev(provider_id, model_id)
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._model_cache.cached_prefixed_model_infos()

@@ -5,14 +5,22 @@ Fetches https://models.dev/api.json (10s timeout) and caches it at
 The cache is used when it is fresh (<24h); a stale cache is still used while a
 background refresh is scheduled. Everything is fully silent when offline:
 discovery never fails because models.dev is unreachable.
+
+Refreshes are conditional. models.dev serves a strong ``ETag`` (and no
+``Last-Modified``), so the stored ETag is replayed as ``If-None-Match`` and an
+unchanged index answers ``304`` instead of re-downloading ~4.4 MB. A ``304``
+leaves the payload on disk untouched and only stamps the file's mtime, which is
+what freshness is measured from.
 """
 
 import asyncio
 import json
+import os
 import threading
 import uuid
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from collections import Counter
+from collections.abc import Callable, Hashable, Iterable, Mapping
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,7 +33,7 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
 )
 from my_claude_code.config.paths import config_dir_path
-from my_claude_code.core.reasoning import ReasoningEffort
+from my_claude_code.core.reasoning import EFFORT_BY_VALUE, ReasoningEffort
 
 MODELS_DEV_URL = "https://models.dev/api.json"
 MODELS_DEV_CACHE_TTL_SECONDS = 24 * 60 * 60
@@ -46,6 +54,16 @@ class ModelsDevCache:
     index: Mapping[str, Any]
     fetched_at: datetime
     fresh: bool
+    # The ``ETag`` models.dev served with this payload, replayed as
+    # ``If-None-Match`` on the next refresh. ``None`` for a cache written
+    # before ETags were stored, or by a response that carried none.
+    etag: str | None = None
+    # When the payload was last *confirmed current* upstream: the file's mtime,
+    # which a ``304`` advances without rewriting 4.4 MB. Freshness is measured
+    # from this, not from ``fetched_at``, or a validated-but-unchanged index
+    # would look stale forever and schedule a refresh on every lookup.
+    # ``fetched_at`` stays as the provenance of the bytes on disk.
+    validated_at: datetime | None = None
 
 
 def read_models_dev_cache(path: Path | None = None) -> ModelsDevCache | None:
@@ -67,12 +85,23 @@ def read_models_dev_cache(path: Path | None = None) -> ModelsDevCache | None:
         return None
     if fetched_at.tzinfo is None:
         fetched_at = fetched_at.replace(tzinfo=UTC)
-    age = (datetime.now(UTC) - fetched_at).total_seconds()
+    raw_etag = payload.get("etag")
+    validated_at = _cache_file_mtime(cache_path) or fetched_at
+    age = (datetime.now(UTC) - validated_at).total_seconds()
     return ModelsDevCache(
         index=index,
         fetched_at=fetched_at,
         fresh=age < MODELS_DEV_CACHE_TTL_SECONDS,
+        etag=raw_etag if isinstance(raw_etag, str) and raw_etag else None,
+        validated_at=validated_at,
     )
+
+
+def _cache_file_mtime(cache_path: Path) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(cache_path.stat().st_mtime, UTC)
+    except OSError, OverflowError, ValueError:
+        return None
 
 
 def models_dev_provider_model_ids(
@@ -99,13 +128,17 @@ def models_dev_provider_model_ids(
     )
 
 
-def write_models_dev_cache(index: Mapping[str, Any], path: Path | None = None) -> Path:
+def write_models_dev_cache(
+    index: Mapping[str, Any], path: Path | None = None, etag: str | None = None
+) -> Path:
     """Atomically persist the models.dev index with a fetch timestamp."""
     cache_path = path if path is not None else models_dev_cache_path()
-    payload = {
+    payload: dict[str, Any] = {
         "fetched_at": datetime.now(UTC).isoformat(),
         "index": index,
     }
+    if etag:
+        payload["etag"] = etag
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = cache_path.with_name(f".{cache_path.name}.{uuid.uuid4().hex}.tmp")
     temp_path.write_text(
@@ -115,30 +148,77 @@ def write_models_dev_cache(index: Mapping[str, Any], path: Path | None = None) -
     return cache_path
 
 
-async def fetch_models_dev_index() -> Mapping[str, Any] | None:
-    """Fetch the models.dev index; return None silently on any failure."""
+@dataclass(frozen=True, slots=True)
+class ModelsDevFetch:
+    """Outcome of one conditional GET against models.dev."""
+
+    index: Mapping[str, Any] | None = None
+    etag: str | None = None
+    # True when the server answered 304: the cached payload is still current
+    # and no body was transferred.
+    not_modified: bool = False
+
+
+async def fetch_models_dev_index(etag: str | None = None) -> ModelsDevFetch | None:
+    """Conditionally fetch the models.dev index; None silently on any failure.
+
+    ``etag`` is the value stored beside the cached payload. models.dev sends
+    ``Cache-Control: max-age=0, must-revalidate`` and no ``Last-Modified``, so
+    ``If-None-Match`` is the only conditional request it honours.
+    """
+    headers = {"If-None-Match": etag} if etag else {}
     try:
         async with httpx.AsyncClient(
             timeout=MODELS_DEV_FETCH_TIMEOUT_SECONDS
         ) as client:
-            response = await client.get(MODELS_DEV_URL)
+            response = await client.get(MODELS_DEV_URL, headers=headers)
+            if response.status_code == 304:
+                return ModelsDevFetch(not_modified=True, etag=etag)
             response.raise_for_status()
             payload = response.json()
+            response_etag = response.headers.get("etag")
     except Exception as exc:
         logger.debug("models.dev fetch failed silently: {}", exc)
         return None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    return ModelsDevFetch(
+        index=payload,
+        etag=response_etag if isinstance(response_etag, str) else None,
+    )
 
 
 async def refresh_models_dev_cache(path: Path | None = None) -> bool:
     """Fetch and persist the models.dev index; never raises."""
-    index = await fetch_models_dev_index()
-    if index is None:
+    cache_path = path if path is not None else models_dev_cache_path()
+    cached = read_models_dev_cache(cache_path)
+    fetched = await fetch_models_dev_index(cached.etag if cached else None)
+    if fetched is None:
+        return False
+    if fetched.not_modified:
+        return _touch_models_dev_cache(cache_path)
+    if fetched.index is None:
         return False
     try:
-        write_models_dev_cache(index, path)
+        write_models_dev_cache(fetched.index, cache_path, fetched.etag)
     except OSError as exc:
         logger.debug("models.dev cache write failed silently: {}", exc)
+        return False
+    return True
+
+
+def _touch_models_dev_cache(cache_path: Path) -> bool:
+    """Record that an unchanged payload was revalidated, without rewriting it.
+
+    Bumping the mtime is the whole point of the conditional GET: the 4.4 MB
+    body stays on disk exactly as it was, and freshness (which reads the mtime)
+    restarts. The parsed-index memos key on the same mtime, so they rebuild
+    once per revalidation rather than on every lookup.
+    """
+    try:
+        os.utime(cache_path, None)
+    except OSError as exc:
+        logger.debug("models.dev cache touch failed silently: {}", exc)
         return False
     return True
 
@@ -225,8 +305,17 @@ def _parse_models_dev_metadata(
     output_price = (
         _float_or_none(cost.get("output")) if isinstance(cost, Mapping) else None
     )
+    # models.dev's schema permits ``limit.context: 0`` and ``limit.output: 0``
+    # despite its own error text claiming they must be positive. Measured on
+    # the live 2026-08 feed: 132 models publish ``limit.context == 0`` and 195
+    # publish ``limit.output == 0`` -- overwhelmingly image/video entries plus
+    # real holes on ``vercel`` (91) and ``poe`` (44). Zero means "not
+    # applicable / unknown" and must read as absent everywhere, never as a
+    # ceiling of zero.
     context_length = (
-        _int_or_none(limit.get("context")) if isinstance(limit, Mapping) else None
+        _positive_int_or_none(limit.get("context"))
+        if isinstance(limit, Mapping)
+        else None
     )
     return _ModelsDevModelMetadata(
         context_length=context_length,
@@ -268,6 +357,12 @@ def _int_or_none(value: Any) -> int | None:
     if isinstance(value, float):
         return int(value)
     return None
+
+
+def _positive_int_or_none(value: Any) -> int | None:
+    """Read a limit, treating a non-positive published value as unreported."""
+    parsed = _int_or_none(value)
+    return parsed if parsed is not None and parsed > 0 else None
 
 
 def _provider_bucket_metadata(
@@ -398,9 +493,8 @@ def enrich_model_infos(
             enriched.append(info)
             continue
         enriched.append(
-            ProviderModelInfo(
-                model_id=info.model_id,
-                supports_thinking=info.supports_thinking,
+            replace(
+                info,
                 supports_vision=(
                     info.supports_vision
                     if info.supports_vision is not None
@@ -507,13 +601,12 @@ PROVIDER_ID_ALIASES: dict[str, str] = {
 #                                     about a deployment we cannot inspect.
 #                                     Wrong in that direction is worse than
 #                                     unknown, which behaves exactly as today.
-# These six have no models.dev entry at all and correctly stay unknown:
-# agnes, commandcode, featherless, nous_portal, qwencloud_coding, sambanova.
-#
-# Cross-provider matching is also deliberately not built: the same model id
-# under different providers disagrees (deepseek/deepseek-v4-flash has 81
-# entries with 16 distinct effort vocabularies and contradictory can_reason
-# values), so lookups never leave their provider bucket.
+# These six have no models.dev bucket at all: agnes, commandcode,
+# featherless, nous_portal, qwencloud_coding, sambanova. For them -- and only
+# for them -- the approximate cross-provider tier below supplies an answer;
+# see ``_cross_provider_match``. A provider that HAS a bucket is still never
+# allowed to read outside it, because a wrong same-name row would then
+# override its own provider's authoritative one.
 
 # Pricing/routing/capability tags some providers accept in a model ref but
 # models.dev does not list (e.g. "deepseek/deepseek-r1:free"). Every tag here
@@ -594,11 +687,6 @@ def _lookup_in_bucket[T](bucket: Mapping[str, T], model_id: str) -> T | None:
     return _single_tagged_variant(bucket, model_id)
 
 
-_EFFORT_BY_VALUE: dict[str, ReasoningEffort] = {
-    member.value: member for member in ReasoningEffort
-}
-
-
 def _parse_reasoning_capability(
     metadata: Mapping[str, Any],
 ) -> ModelReasoningCapability:
@@ -634,9 +722,9 @@ def _parse_reasoning_capability(
             values = option.get("values")
             supported_efforts = (
                 frozenset(
-                    _EFFORT_BY_VALUE[value]
+                    EFFORT_BY_VALUE[value]
                     for value in values
-                    if isinstance(value, str) and value in _EFFORT_BY_VALUE
+                    if isinstance(value, str) and value in EFFORT_BY_VALUE
                 )
                 if isinstance(values, list)
                 else frozenset()
@@ -725,8 +813,236 @@ def model_reasoning_capability_from_models_dev(
         if alias is not None:
             bucket = reasoning_index.get(alias)
     if bucket is None:
-        return None
+        if _has_models_dev_bucket(_cached_raw_index(path), provider_id):
+            return None
+        match = cross_provider_match(provider_id, model_id, path)
+        return match.capability if match is not None else None
     return _lookup_in_bucket(bucket, model_id)
+
+
+@dataclass(frozen=True, slots=True)
+class _CrossProviderRow:
+    """One models.dev row, stripped to what the approximate tier votes on."""
+
+    capability: ModelReasoningCapability
+    output_limit: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class CrossProviderMatch:
+    """An approximate answer assembled from same-named rows in other buckets.
+
+    Only ever consulted for a provider models.dev does not describe at all, and
+    only after the provider's own ``/models`` payload and an exact models.dev
+    row have had their say. Every field is the *mode* across the matching rows:
+    not the minimum, which would under-use a model against WORKING-NOTES 54,
+    and not the maximum, which produces hard 400s.
+    """
+
+    capability: ModelReasoningCapability
+    output_limit: int | None
+    match_count: int
+    # Share of the rows reporting an output limit that agreed on the modal
+    # value. ``None`` when none of them reported one.
+    output_agreement: float | None
+
+
+def _build_cross_provider_index(
+    index: Mapping[str, Any],
+) -> dict[str, tuple[_CrossProviderRow, ...]]:
+    """Collect every models.dev row per normalized model id, across providers.
+
+    Deliberately keeps all of them rather than one: the answer is a vote, so
+    the losing rows are the denominator of the agreement ratio that gets
+    logged.
+    """
+    built: dict[str, list[_CrossProviderRow]] = {}
+    for bucket in index.values():
+        if not isinstance(bucket, Mapping):
+            continue
+        models = bucket.get("models")
+        if not isinstance(models, Mapping):
+            continue
+        for model_id, metadata in models.items():
+            if not isinstance(model_id, str) or not isinstance(metadata, Mapping):
+                continue
+            limit = metadata.get("limit")
+            row = _CrossProviderRow(
+                capability=_parse_reasoning_capability(metadata),
+                output_limit=(
+                    _positive_int_or_none(limit.get("output"))
+                    if isinstance(limit, Mapping)
+                    else None
+                ),
+            )
+            for candidate in _normalize_candidates(model_id):
+                built.setdefault(candidate, []).append(row)
+    return {candidate: tuple(rows) for candidate, rows in built.items()}
+
+
+def _modal[T: Hashable](
+    values: Iterable[T | None], tie_break: Callable[[T], Any]
+) -> tuple[T, float] | None:
+    """Return the most common non-None value and how many reporters agreed.
+
+    Ties are broken by ``tie_break`` descending, which every caller points at
+    the more capable option (True over False, the larger limit, the larger
+    effort vocabulary). That direction is the one WORKING-NOTES 54 asks for:
+    when the evidence is split, do not be the source that shrinks a model
+    below its declared capability.
+    """
+    reported = [value for value in values if value is not None]
+    if not reported:
+        return None
+    counts = Counter(reported)
+    winner = max(counts, key=lambda value: (counts[value], tie_break(value)))
+    return winner, counts[winner] / len(reported)
+
+
+def _cross_provider_capability(
+    rows: tuple[_CrossProviderRow, ...],
+) -> ModelReasoningCapability:
+    """Vote each capability field independently across the matching rows."""
+    capabilities = [row.capability for row in rows]
+
+    def vote_bool(reader: Callable[[ModelReasoningCapability], bool | None]):
+        result = _modal((reader(item) for item in capabilities), lambda value: value)
+        return result[0] if result else None
+
+    efforts = _modal(
+        (item.supported_efforts for item in capabilities),
+        lambda value: (len(value), sorted(effort.value for effort in value)),
+    )
+    return ModelReasoningCapability(
+        can_reason=vote_bool(lambda item: item.can_reason),
+        supports_effort_control=vote_bool(lambda item: item.supports_effort_control),
+        supports_toggle_control=vote_bool(lambda item: item.supports_toggle_control),
+        supports_budget_control=vote_bool(lambda item: item.supports_budget_control),
+        supported_efforts=efforts[0] if efforts else None,
+        mandatory=vote_bool(lambda item: item.mandatory),
+        default_enabled=vote_bool(lambda item: item.default_enabled),
+    )
+
+
+_cross_provider_index_lock = threading.Lock()
+_cross_provider_index_cache: dict[
+    Path, tuple[float, dict[str, tuple[_CrossProviderRow, ...]]]
+] = {}
+
+
+def _cached_cross_provider_index(
+    path: Path | None,
+) -> dict[str, tuple[_CrossProviderRow, ...]]:
+    cache_path = path if path is not None else models_dev_cache_path()
+    try:
+        mtime = cache_path.stat().st_mtime
+    except OSError:
+        return {}
+    with _cross_provider_index_lock:
+        cached = _cross_provider_index_cache.get(cache_path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+    cache = read_models_dev_cache(cache_path)
+    built = _build_cross_provider_index(cache.index) if cache is not None else {}
+    with _cross_provider_index_lock:
+        _cross_provider_index_cache[cache_path] = (mtime, built)
+    return built
+
+
+_cross_provider_match_lock = threading.Lock()
+_cross_provider_match_cache: dict[
+    Path, tuple[float, dict[tuple[str, str], CrossProviderMatch | None]]
+] = {}
+
+
+def cross_provider_match(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> CrossProviderMatch | None:
+    """Resolve a model by name across every models.dev bucket.
+
+    Memoized per on-disk cache generation, which is also what keeps the
+    "this answer is approximate" log line to one per model per refresh instead
+    of one per request.
+    """
+    cache_path = path if path is not None else models_dev_cache_path()
+    try:
+        mtime = cache_path.stat().st_mtime
+    except OSError:
+        return None
+    key = (provider_id, model_id)
+    with _cross_provider_match_lock:
+        cached = _cross_provider_match_cache.get(cache_path)
+        if cached is not None and cached[0] == mtime and key in cached[1]:
+            return cached[1][key]
+
+    rows = _lookup_in_bucket(_cached_cross_provider_index(cache_path), model_id)
+    match: CrossProviderMatch | None = None
+    if rows:
+        output = _modal((row.output_limit for row in rows), lambda value: value)
+        match = CrossProviderMatch(
+            capability=_cross_provider_capability(rows),
+            output_limit=output[0] if output else None,
+            match_count=len(rows),
+            output_agreement=output[1] if output else None,
+        )
+        logger.info(
+            "models.dev has no bucket for {}; APPROXIMATE cross-provider match "
+            "for {}: matches={}, output limit {} ({} agreement), efforts {}",
+            provider_id,
+            model_id,
+            match.match_count,
+            match.output_limit,
+            (
+                "unreported"
+                if match.output_agreement is None
+                else f"{match.output_agreement:.0%}"
+            ),
+            (
+                "unknown"
+                if match.capability.supported_efforts is None
+                else sorted(
+                    effort.value for effort in match.capability.supported_efforts
+                )
+            ),
+        )
+
+    with _cross_provider_match_lock:
+        cached = _cross_provider_match_cache.get(cache_path)
+        if cached is None or cached[0] != mtime:
+            cached = (mtime, {})
+            _cross_provider_match_cache[cache_path] = cached
+        cached[1][key] = match
+    return match
+
+
+_raw_index_ids_lock = threading.Lock()
+_raw_index_ids_cache: dict[Path, tuple[float, frozenset[str]]] = {}
+
+
+def _cached_raw_index(path: Path | None) -> frozenset[str]:
+    """The models.dev provider ids present on disk, memoized per generation."""
+    cache_path = path if path is not None else models_dev_cache_path()
+    try:
+        mtime = cache_path.stat().st_mtime
+    except OSError:
+        return frozenset()
+    with _raw_index_ids_lock:
+        cached = _raw_index_ids_cache.get(cache_path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+    cache = read_models_dev_cache(cache_path)
+    built = frozenset(cache.index) if cache is not None else frozenset()
+    with _raw_index_ids_lock:
+        _raw_index_ids_cache[cache_path] = (mtime, built)
+    return built
+
+
+def _has_models_dev_bucket(index: frozenset[str], provider_id: str) -> bool:
+    """Whether models.dev describes this provider under its id or its alias."""
+    if provider_id in index:
+        return True
+    alias = PROVIDER_ID_ALIASES.get(provider_id)
+    return alias is not None and alias in index
 
 
 def _build_output_limit_index(
@@ -752,8 +1068,8 @@ def _build_output_limit_index(
             limit = metadata.get("limit")
             if not isinstance(limit, Mapping):
                 continue
-            output = _int_or_none(limit.get("output"))
-            if output is None or output <= 0:
+            output = _positive_int_or_none(limit.get("output"))
+            if output is None:
                 continue
             for candidate in _normalize_candidates(model_id):
                 per_model.setdefault(candidate, output)
@@ -798,36 +1114,74 @@ def model_output_limit_from_models_dev(
         if alias is not None:
             bucket = limit_index.get(alias)
     if bucket is None:
-        return None
+        if _has_models_dev_bucket(_cached_raw_index(path), provider_id):
+            return None
+        match = cross_provider_match(provider_id, model_id, path)
+        return match.output_limit if match is not None else None
     return _lookup_in_bucket(bucket, model_id)
+
+
+def merge_reasoning_capabilities(
+    primary: ModelReasoningCapability | None,
+    secondary: ModelReasoningCapability | None,
+) -> ModelReasoningCapability | None:
+    """Merge two capability records field by field; ``primary`` wins each field.
+
+    Per field, not per source. Choosing a source wholesale is what the previous
+    implementation did and it silently dropped every field the winning source
+    had no opinion about -- ``mandatory`` among them, which is why the
+    mandatory-model handling shipped dead.
+
+    A ``False`` in ``primary`` is a real answer and is kept; only ``None``
+    (nothing stated) defers to ``secondary``.
+    """
+    if primary is None:
+        return secondary
+    if secondary is None:
+        return primary
+    return ModelReasoningCapability(
+        can_reason=_first_stated(primary.can_reason, secondary.can_reason),
+        supports_effort_control=_first_stated(
+            primary.supports_effort_control, secondary.supports_effort_control
+        ),
+        supports_toggle_control=_first_stated(
+            primary.supports_toggle_control, secondary.supports_toggle_control
+        ),
+        supports_budget_control=_first_stated(
+            primary.supports_budget_control, secondary.supports_budget_control
+        ),
+        supported_efforts=_first_stated(
+            primary.supported_efforts, secondary.supported_efforts
+        ),
+        mandatory=_first_stated(primary.mandatory, secondary.mandatory),
+        default_enabled=_first_stated(
+            primary.default_enabled, secondary.default_enabled
+        ),
+    )
+
+
+def _first_stated[T](primary: T | None, secondary: T | None) -> T | None:
+    return primary if primary is not None else secondary
 
 
 def resolve_model_reasoning_capability(
     provider_id: str,
     model_id: str,
-    provider_supports_thinking: bool | None,
+    provider_capability: ModelReasoningCapability | None,
     path: Path | None = None,
 ) -> ModelReasoningCapability | None:
-    """Layer provider-reported capability over the models.dev fallback.
+    """Layer the provider's own reported capability over the models.dev one.
 
-    ``provider_supports_thinking`` (typically
-    ``ProviderModelInfo.supports_thinking``) wins for ``can_reason`` whenever
-    it is not ``None``; control-style detail (effort/toggle/budget support,
-    and the effort vocabulary) always comes from models.dev, since providers
-    in this project only ever report the single thinking-supported boolean.
+    Gateway first, field by field: whatever the provider's ``/models`` payload
+    stated about this model wins, and models.dev fills only the fields it left
+    unstated. models.dev's own answer may itself come from the approximate
+    cross-provider tier, which therefore can never outrank the gateway -- the
+    ordering that matters, since for ``tencent/hy3:free`` the cross-provider
+    modal output limit is 64,000 while the gateway reports 128,000.
+
     Returns ``None`` only when neither layer has any data at all.
     """
-    models_dev_capability = model_reasoning_capability_from_models_dev(
-        provider_id, model_id, path
-    )
-    if provider_supports_thinking is None:
-        return models_dev_capability
-    if models_dev_capability is None:
-        return ModelReasoningCapability(can_reason=provider_supports_thinking)
-    return ModelReasoningCapability(
-        can_reason=provider_supports_thinking,
-        supports_effort_control=models_dev_capability.supports_effort_control,
-        supports_toggle_control=models_dev_capability.supports_toggle_control,
-        supports_budget_control=models_dev_capability.supports_budget_control,
-        supported_efforts=models_dev_capability.supported_efforts,
+    return merge_reasoning_capabilities(
+        provider_capability,
+        model_reasoning_capability_from_models_dev(provider_id, model_id, path),
     )

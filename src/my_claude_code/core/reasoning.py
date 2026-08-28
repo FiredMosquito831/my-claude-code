@@ -38,6 +38,17 @@ class ReasoningEffort(StrEnum):
         return _EFFORT_BUDGET_TOKENS[self]
 
 
+EFFORT_BY_VALUE: dict[str, ReasoningEffort] = {
+    member.value: member for member in ReasoningEffort
+}
+"""Wire value -> member, for sources that publish effort names as strings.
+
+Owned here so every parser that reads an upstream effort vocabulary drops
+exactly the same non-member strings; a second copy elsewhere would let two
+sources disagree about what "default" or "none" means.
+"""
+
+
 _EFFORT_BUDGET_TOKENS = {
     ReasoningEffort.MINIMAL: 1_024,
     ReasoningEffort.LOW: 1_024,

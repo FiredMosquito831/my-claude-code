@@ -1,8 +1,12 @@
 """Provider model-list metadata cache."""
 
 from collections.abc import Iterable
+from dataclasses import replace
 
-from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.application.model_metadata import (
+    ModelReasoningCapability,
+    ProviderModelInfo,
+)
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.providers.model_listing import model_infos_from_ids
 
@@ -83,6 +87,45 @@ class ProviderModelCache:
             return None
         return info.supports_vision
 
+    def cached_model_max_output_tokens(
+        self, provider_id: str, model_id: str
+    ) -> int | None:
+        """Return the provider's own declared output ceiling for this model.
+
+        ``None`` when the provider does not publish one, which is unknown, not
+        unlimited and not zero.
+        """
+        info = self._model_infos_by_provider.get(provider_id, {}).get(model_id)
+        if info is None:
+            return None
+        return info.max_output_tokens
+
+    def cached_model_reasoning_capability(
+        self, provider_id: str, model_id: str
+    ) -> ModelReasoningCapability | None:
+        """Return everything the provider itself said about this model's reasoning.
+
+        The whole capability, not the single thinking boolean: a gateway that
+        publishes a ``reasoning`` block states its effort vocabulary, whether
+        thinking is mandatory and whether a token budget is accepted, and all
+        of it must reach the merge or models.dev silently decides questions the
+        routing target already answered.
+
+        ``None`` when the model is not cached, or when the provider said
+        nothing at all about its reasoning.
+        """
+        info = self._model_infos_by_provider.get(provider_id, {}).get(model_id)
+        if info is None:
+            return None
+        capability = info.reasoning_capability
+        if capability is None:
+            if info.supports_thinking is None:
+                return None
+            return ModelReasoningCapability(can_reason=info.supports_thinking)
+        if capability.can_reason is None and info.supports_thinking is not None:
+            return replace(capability, can_reason=info.supports_thinking)
+        return capability
+
     def cached_prefixed_model_refs(self) -> tuple[str, ...]:
         """Return cached provider models in user-selectable ``provider/model`` form."""
         return tuple(info.model_id for info in self.cached_prefixed_model_infos())
@@ -104,14 +147,7 @@ class ProviderModelCache:
         for provider_id in ordered_ids:
             provider_infos = self._model_infos_by_provider.get(provider_id, {})
             infos.extend(
-                ProviderModelInfo(
-                    model_id=f"{provider_id}/{info.model_id}",
-                    supports_thinking=info.supports_thinking,
-                    supports_vision=info.supports_vision,
-                    context_length=info.context_length,
-                    input_price=info.input_price,
-                    output_price=info.output_price,
-                )
+                replace(info, model_id=f"{provider_id}/{info.model_id}")
                 for info in sorted(
                     provider_infos.values(), key=lambda item: item.model_id
                 )

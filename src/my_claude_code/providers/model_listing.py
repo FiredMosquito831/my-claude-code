@@ -4,8 +4,14 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from my_claude_code.application.model_metadata import (
+    ModelDefaultParameters,
+    ModelDefaultParameterValue,
+    ModelReasoningCapability,
+)
+from my_claude_code.application.model_metadata import (
     ProviderModelInfo as _ProviderModelInfo,
 )
+from my_claude_code.core.reasoning import EFFORT_BY_VALUE, ReasoningEffort
 
 type ModelListScalar = str | bool
 type RequiredPathValues = tuple[
@@ -193,9 +199,11 @@ def extract_tool_capable_model_infos(
         if supported_parameter_names.isdisjoint({"tools", "tool_choice"}):
             continue
         model_infos.add(
-            _ProviderModelInfo(
+            _openrouter_dialect_model_info(
+                item,
                 model_id=model_id,
-                supports_thinking="reasoning" in supported_parameter_names,
+                supported_parameter_names=supported_parameter_names,
+                read_vision=False,
             )
         )
 
@@ -341,14 +349,136 @@ def extract_openrouter_tool_model_infos(
         if supported_parameter_names.isdisjoint({"tools", "tool_choice"}):
             continue
         model_infos.add(
-            _ProviderModelInfo(
+            _openrouter_dialect_model_info(
+                item,
                 model_id=model_id,
-                supports_thinking="reasoning" in supported_parameter_names,
-                supports_vision=_openrouter_accepts_images(item),
+                supported_parameter_names=supported_parameter_names,
+                read_vision=True,
             )
         )
 
     return frozenset(model_infos)
+
+
+# The OpenRouter dialect publishes "none" inside ``reasoning.supported_efforts``
+# alongside real effort levels. It is not an effort level -- it is the gateway
+# saying reasoning can be switched off -- so it is deliberately never mapped
+# onto a ``ReasoningEffort`` member: there is none, and inventing one would
+# make "think as little as possible" and "do not think at all" the same
+# request. It is read as a toggle signal instead; see ``_openrouter_reasoning``.
+_REASONING_OFF_EFFORT = "none"
+
+
+def _openrouter_dialect_model_info(
+    item: Any,
+    *,
+    model_id: str,
+    supported_parameter_names: set[str],
+    read_vision: bool,
+) -> _ProviderModelInfo:
+    """Build one model record from an OpenRouter-dialect ``/models`` entry.
+
+    Every field a gateway does not publish stays ``None``. A thin payload that
+    carries only ``context_length`` therefore yields ``None`` -- unknown -- for
+    the rest, never ``False``.
+    """
+    top_provider = _field(item, "top_provider")
+    return _ProviderModelInfo(
+        model_id=model_id,
+        supports_thinking="reasoning" in supported_parameter_names,
+        supports_vision=_openrouter_accepts_images(item) if read_vision else None,
+        # ``top_provider.context_length`` is the routed deployment's own window
+        # and is the more specific of the two; the top-level value is the
+        # model's nominal one. Prefer the specific, fall back to the nominal.
+        context_length=(
+            _positive_int_or_none(_field(top_provider, "context_length"))
+            or _positive_int_or_none(_field(item, "context_length"))
+        ),
+        max_output_tokens=_positive_int_or_none(
+            _field(top_provider, "max_completion_tokens")
+        ),
+        supported_parameters=frozenset(supported_parameter_names),
+        default_parameters=_default_parameters(_field(item, "default_parameters")),
+        reasoning_capability=_openrouter_reasoning(
+            _field(item, "reasoning"),
+            supports_thinking="reasoning" in supported_parameter_names,
+        ),
+    )
+
+
+def _positive_int_or_none(value: Any) -> int | None:
+    """Read a positive integer; anything else -- including 0 -- is unreported.
+
+    A limit of zero is never a real limit. Upstream feeds publish it for models
+    the field does not apply to, so it must read as absent rather than as a
+    ceiling that would forbid all output.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value > 0 else None
+
+
+def _default_parameters(value: Any) -> ModelDefaultParameters | None:
+    """Read a gateway's declared per-model default parameters.
+
+    ``None`` when the block is absent or not an object; an empty tuple when the
+    gateway published an empty object, which is its statement that it pins
+    nothing.
+    """
+    if not isinstance(value, Mapping):
+        return None
+    pinned: list[tuple[str, ModelDefaultParameterValue]] = []
+    for name, pinned_value in value.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if isinstance(pinned_value, bool | int | float | str):
+            pinned.append((name, pinned_value))
+    return tuple(sorted(pinned, key=lambda entry: entry[0]))
+
+
+def _openrouter_reasoning(
+    reasoning: Any, *, supports_thinking: bool
+) -> ModelReasoningCapability | None:
+    """Map a gateway ``reasoning`` block onto the neutral capability record.
+
+    ``None`` when the gateway publishes no block at all -- unknown. A block
+    that omits ``supported_efforts`` yields a capability whose
+    ``supported_efforts`` is ``None`` (known model, unknown vocabulary), which
+    stays distinct from a published-but-empty vocabulary.
+    """
+    if not isinstance(reasoning, Mapping):
+        return None
+    mandatory = _bool_or_none(reasoning.get("mandatory"))
+    raw_efforts = reasoning.get("supported_efforts")
+    supported_efforts: frozenset[ReasoningEffort] | None = None
+    supports_effort: bool | None = None
+    can_switch_off: bool | None = None
+    if _is_sequence(raw_efforts):
+        published = {value for value in raw_efforts if isinstance(value, str)}
+        supported_efforts = frozenset(
+            EFFORT_BY_VALUE[value] for value in published if value in EFFORT_BY_VALUE
+        )
+        supports_effort = bool(supported_efforts)
+        if _REASONING_OFF_EFFORT in published:
+            can_switch_off = True
+    # ``mandatory`` is the gateway's own statement about whether thinking can be
+    # turned off, so it settles the toggle question in both directions; a
+    # published "none" effort can only ever confirm it.
+    if mandatory is not None and not can_switch_off:
+        can_switch_off = not mandatory
+    return ModelReasoningCapability(
+        can_reason=supports_thinking,
+        supports_effort_control=supports_effort,
+        supports_toggle_control=can_switch_off,
+        supports_budget_control=_bool_or_none(reasoning.get("supports_max_tokens")),
+        supported_efforts=supported_efforts,
+        mandatory=mandatory,
+        default_enabled=_bool_or_none(reasoning.get("default_enabled")),
+    )
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
 
 
 def _openrouter_accepts_images(item: Any) -> bool | None:
