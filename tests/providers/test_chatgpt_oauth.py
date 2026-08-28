@@ -11,6 +11,11 @@ from my_claude_code.application.errors import (
 )
 from my_claude_code.config.provider_catalog import CHATGPT_OAUTH_DEFAULT_BASE
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningEffort,
+    ReasoningPolicy,
+)
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.chatgpt_oauth import ChatGPTOAuthProvider
 from my_claude_code.providers.chatgpt_oauth.conversion import (
@@ -72,7 +77,7 @@ def test_build_request_body_converts_messages():
         messages=[Message(role="user", content="hi")],
     )
 
-    body = build_chatgpt_oauth_request_body(request)
+    body = build_chatgpt_oauth_request_body(request, reasoning=DEFAULT_REASONING_POLICY)
 
     assert body["model"] == "gpt-5"
     assert body["store"] is False
@@ -121,7 +126,7 @@ def test_build_request_body_converts_tool_calls_to_function_items():
         }
     )
 
-    body = build_chatgpt_oauth_request_body(request)
+    body = build_chatgpt_oauth_request_body(request, reasoning=DEFAULT_REASONING_POLICY)
 
     items = body["input"]
     types = [item["type"] for item in items]
@@ -156,27 +161,80 @@ def test_build_request_body_converts_tool_calls_to_function_items():
     assert types[0] == "message"
 
 
-def test_build_request_body_adds_reasoning_for_gpt5():
-    request = MessagesRequest(
-        model="gpt-5",
+def _reasoning_request(model: str = "gpt-5.5") -> MessagesRequest:
+    return MessagesRequest(
+        model=model,
         messages=[Message(role="user", content="hi")],
     )
 
-    body = build_chatgpt_oauth_request_body(request)
+
+def test_build_request_body_keeps_medium_for_the_provider_default_policy():
+    """An unspecified policy must keep the effort this provider always sent."""
+    body = build_chatgpt_oauth_request_body(
+        _reasoning_request(), reasoning=DEFAULT_REASONING_POLICY
+    )
 
     assert body["reasoning"] == {"effort": "medium", "summary": "auto"}
-    assert "reasoning.encrypted_content" in body["include"]
+    assert body["include"] == ["reasoning.encrypted_content"]
 
 
-def test_build_request_body_skips_reasoning_for_non_reasoning_model():
-    request = MessagesRequest(
-        model="unknown-model",
-        messages=[Message(role="user", content="hi")],
+def test_build_request_body_omits_reasoning_and_include_when_off():
+    body = build_chatgpt_oauth_request_body(
+        _reasoning_request(), reasoning=ReasoningPolicy.off()
     )
 
-    body = build_chatgpt_oauth_request_body(request)
+    assert "reasoning" not in body
+    assert "include" not in body
+
+
+@pytest.mark.parametrize(
+    ("effort", "expected"),
+    [
+        (ReasoningEffort.MINIMAL, "minimal"),
+        (ReasoningEffort.LOW, "low"),
+        (ReasoningEffort.MEDIUM, "medium"),
+        (ReasoningEffort.HIGH, "high"),
+        # The Responses endpoint documents no effort above "high", so FCC's two
+        # extra levels map down rather than being sent verbatim.
+        (ReasoningEffort.XHIGH, "high"),
+        (ReasoningEffort.MAX, "high"),
+    ],
+)
+def test_build_request_body_encodes_each_named_effort(effort, expected):
+    body = build_chatgpt_oauth_request_body(
+        _reasoning_request(), reasoning=ReasoningPolicy.on(effort=effort)
+    )
+
+    assert body["reasoning"] == {"effort": expected, "summary": "auto"}
+    assert body["include"] == ["reasoning.encrypted_content"]
+
+
+def test_build_request_body_keeps_encrypted_content_whenever_reasoning_is_sent():
+    for policy in (
+        DEFAULT_REASONING_POLICY,
+        ReasoningPolicy.on(),
+        ReasoningPolicy.on(effort=ReasoningEffort.LOW),
+        ReasoningPolicy.adaptive(),
+    ):
+        body = build_chatgpt_oauth_request_body(_reasoning_request(), reasoning=policy)
+
+        assert "reasoning" in body
+        assert body["include"] == ["reasoning.encrypted_content"]
+
+
+def test_build_request_body_no_longer_reasons_on_a_model_id_starting_with_o():
+    """Regression: capability was decided by ``model.startswith("o")``.
+
+    Any id beginning with the letter "o" reasoned unconditionally, so an
+    explicit "off" from the client was ignored. The policy decides now.
+    """
+    body = build_chatgpt_oauth_request_body(
+        _reasoning_request(model="omni-nonreasoning"),
+        reasoning=ReasoningPolicy.off(),
+    )
 
     assert "reasoning" not in body
+    assert "include" not in body
 
 
 def test_build_request_body_extracts_system_as_instructions():
@@ -186,7 +244,7 @@ def test_build_request_body_extracts_system_as_instructions():
         messages=[Message(role="user", content="hi")],
     )
 
-    body = build_chatgpt_oauth_request_body(request)
+    body = build_chatgpt_oauth_request_body(request, reasoning=DEFAULT_REASONING_POLICY)
 
     assert body["instructions"] == "You are a helpful assistant."
 
@@ -201,7 +259,7 @@ def test_build_request_body_rejects_extra_body():
     )
 
     with pytest.raises(InvalidRequestError):
-        build_chatgpt_oauth_request_body(request)
+        build_chatgpt_oauth_request_body(request, reasoning=DEFAULT_REASONING_POLICY)
 
 
 def test_chatgpt_tool_call_to_anthropic():
@@ -896,3 +954,38 @@ async def test_list_model_ids_falls_back_when_models_dev_is_unavailable(
     models = await chatgpt_oauth_provider.list_model_ids()
 
     assert {"gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna"} <= models
+
+
+def _record_body_builder(monkeypatch, calls: list):
+    """Replace the provider's body builder with a recorder of its kwargs."""
+    from my_claude_code.providers.chatgpt_oauth import provider as provider_module
+
+    def _record(request, *, reasoning, **kwargs):
+        calls.append(reasoning)
+        return {"model": request.model, "input": [], "tools": []}
+
+    monkeypatch.setattr(provider_module, "build_chatgpt_oauth_request_body", _record)
+
+
+def test_preflight_stream_passes_the_policy_to_the_body_builder(
+    chatgpt_oauth_provider, monkeypatch
+):
+    calls: list = []
+    _record_body_builder(monkeypatch, calls)
+    policy = ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
+
+    chatgpt_oauth_provider.preflight_stream(_reasoning_request(), reasoning=policy)
+
+    assert calls == [policy]
+
+
+def test_stream_response_passes_the_policy_to_the_body_builder(
+    chatgpt_oauth_provider, monkeypatch
+):
+    calls: list = []
+    _record_body_builder(monkeypatch, calls)
+    policy = ReasoningPolicy.off()
+
+    chatgpt_oauth_provider.stream_response(_reasoning_request(), reasoning=policy)
+
+    assert calls == [policy]

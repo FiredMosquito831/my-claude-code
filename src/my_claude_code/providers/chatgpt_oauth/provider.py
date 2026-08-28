@@ -180,7 +180,7 @@ class ChatGPTOAuthProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
     ) -> None:
         """Validate the upstream request before streaming."""
-        build_chatgpt_oauth_request_body(request)
+        build_chatgpt_oauth_request_body(request, reasoning=reasoning)
 
     async def _send_stream_request(
         self,
@@ -230,7 +230,7 @@ class ChatGPTOAuthProvider(BaseProvider):
             logger.error("{}_ERROR:{} {}", tag, req_tag, exc)
             raise ApplicationUnavailableError(str(exc)) from exc
 
-        body = build_chatgpt_oauth_request_body(request)
+        body = build_chatgpt_oauth_request_body(request, reasoning=reasoning)
         url = f"{self._base_url}/codex/responses"
         headers = _build_headers(credentials, self._session_id)
 

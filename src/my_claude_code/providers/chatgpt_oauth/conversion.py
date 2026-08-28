@@ -10,9 +10,29 @@ from my_claude_code.core.anthropic.conversion import (
     ReasoningReplayMode,
 )
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.reasoning import (
+    ReasoningControl,
+    ReasoningEffort,
+    ReasoningPolicy,
+)
 
 CHATGPT_DEFAULT_REASONING_EFFORT = "medium"
 CHATGPT_DEFAULT_REASONING_SUMMARY = "auto"
+
+# The ChatGPT/Codex Responses endpoint documents four named efforts. FCC's own
+# vocabulary has two more, so ``xhigh`` and ``max`` are mapped down to the
+# strongest value this endpoint is documented to accept rather than being sent
+# verbatim and risking a 400. This mirrors ``_LOW_MEDIUM_HIGH`` in
+# ``providers/openai_chat/profiles.py``, which solves the same problem for
+# chat-completions providers with a narrower vocabulary.
+_RESPONSES_EFFORTS: dict[ReasoningEffort, str] = {
+    ReasoningEffort.MINIMAL: "minimal",
+    ReasoningEffort.LOW: "low",
+    ReasoningEffort.MEDIUM: "medium",
+    ReasoningEffort.HIGH: "high",
+    ReasoningEffort.XHIGH: "high",
+    ReasoningEffort.MAX: "high",
+}
 
 
 def _strip_openai_system_message(
@@ -168,10 +188,30 @@ def _convert_tool_choice(tool_choice: Any) -> Any:
     return tool_choice
 
 
-def _supports_reasoning(model: str) -> bool:
-    """Return True for models known to expose reasoning through the backend."""
-    name = model.lower()
-    return name.startswith("gpt-5") or name.startswith("codex") or name.startswith("o")
+def _reasoning_block(policy: ReasoningPolicy) -> dict[str, Any] | None:
+    """Return the Responses API ``reasoning`` block for one policy, or None.
+
+    Capability is deliberately *not* decided here. ``adapt_reasoning_policy``
+    has already constrained this policy to what the resolved model accepts, so
+    the provider's only job is to encode the intent it was handed; branching on
+    the model id is what this function used to do and is exactly what the
+    project forbids.
+
+    An explicit OFF omits the block entirely rather than sending an
+    ``effort`` of "none": omission is accepted by every model this backend
+    serves, whereas the sentinel value is not documented for all of them.
+    A policy that names no effort keeps the endpoint's long-standing
+    ``medium`` so nobody's default silently changes.
+    """
+    if policy.control is ReasoningControl.OFF:
+        return None
+    effort = (
+        _RESPONSES_EFFORTS.get(policy.effort) if policy.effort is not None else None
+    )
+    return {
+        "effort": effort or CHATGPT_DEFAULT_REASONING_EFFORT,
+        "summary": CHATGPT_DEFAULT_REASONING_SUMMARY,
+    }
 
 
 def _extract_system_instructions(request: MessagesRequest) -> str | None:
@@ -196,6 +236,7 @@ def _extract_system_instructions(request: MessagesRequest) -> str | None:
 def build_chatgpt_oauth_request_body(
     request: MessagesRequest,
     *,
+    reasoning: ReasoningPolicy,
     default_max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Build a ChatGPT Responses API request body from an Anthropic request."""
@@ -239,11 +280,12 @@ def build_chatgpt_oauth_request_body(
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
 
-    if _supports_reasoning(request.model):
-        body["reasoning"] = {
-            "effort": CHATGPT_DEFAULT_REASONING_EFFORT,
-            "summary": CHATGPT_DEFAULT_REASONING_SUMMARY,
-        }
+    reasoning_block = _reasoning_block(reasoning)
+    if reasoning_block is not None:
+        body["reasoning"] = reasoning_block
+        # Required for stateless multi-turn reasoning: without it the backend
+        # cannot carry encrypted reasoning across turns of a ``store: false``
+        # conversation.
         body["include"] = ["reasoning.encrypted_content"]
 
     return body
