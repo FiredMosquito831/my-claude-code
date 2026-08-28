@@ -21,6 +21,7 @@ from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.reasoning import (
+    ReasoningAdaptationKind,
     ReasoningControl,
     ReasoningEffort,
     ReasoningPolicy,
@@ -110,16 +111,14 @@ def gated_body(
     max_tokens: int | None = 4096,
     output_limit: int | None = 8192,
 ) -> dict[str, Any]:
-    return encode(
-        profile_id,
-        adapt_reasoning_policy(
-            policy,
-            capability,
-            max_tokens=max_tokens,
-            output_limit=output_limit,
-            model_ref="provider/a-model",
-        ),
+    adapted, _adaptation = adapt_reasoning_policy(
+        policy,
+        capability,
+        max_tokens=max_tokens,
+        output_limit=output_limit,
+        model_ref="provider/a-model",
     )
+    return encode(profile_id, adapted)
 
 
 def field_paths(value: Any, prefix: str = "") -> set[str]:
@@ -143,7 +142,7 @@ def test_unknown_capability_leaves_every_request_byte_identical(
 ) -> None:
     """No models.dev row for a model means the request must not change at all."""
 
-    assert adapt_reasoning_policy(policy, None) is policy
+    assert adapt_reasoning_policy(policy, None)[0] is policy
     assert gated_body(profile_id, policy, UNKNOWN) == encode(profile_id, policy)
 
 
@@ -218,7 +217,7 @@ def test_policy_off_is_unchanged_in_every_capability_shape(
     capability: ModelReasoningCapability | None, profile_id: str
 ) -> None:
     off = ReasoningPolicy.off()
-    assert adapt_reasoning_policy(off, capability) is off
+    assert adapt_reasoning_policy(off, capability)[0] is off
     assert gated_body(profile_id, off, capability) == encode(profile_id, off)
 
 
@@ -249,7 +248,7 @@ def test_model_known_not_to_reason_emits_no_reasoning_fields(
 
 
 def test_model_known_not_to_reason_drops_an_explicit_budget() -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(budget_tokens=9000), CANNOT_REASON
     )
     assert adapted == ReasoningPolicy.provider_default()
@@ -262,7 +261,7 @@ def test_model_known_not_to_reason_drops_an_explicit_budget() -> None:
 
 def test_supported_effort_is_sent_unchanged() -> None:
     policy = ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM)
-    adapted = adapt_reasoning_policy(policy, EFFORT_ONLY_LOW_MEDIUM_HIGH)
+    adapted, _adaptation = adapt_reasoning_policy(policy, EFFORT_ONLY_LOW_MEDIUM_HIGH)
     assert adapted is policy
     assert (
         gated_body("groq", policy, EFFORT_ONLY_LOW_MEDIUM_HIGH)["reasoning_effort"]
@@ -274,7 +273,7 @@ def test_supported_effort_is_sent_unchanged() -> None:
 def test_effort_above_the_models_vocabulary_clamps_down_to_high(
     requested: ReasoningEffort,
 ) -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(effort=requested), EFFORT_ONLY_LOW_MEDIUM_HIGH
     )
     assert adapted.effort is ReasoningEffort.HIGH
@@ -290,7 +289,7 @@ def test_effort_above_the_models_vocabulary_clamps_down_to_high(
 def test_effort_below_the_models_vocabulary_clamps_up_to_its_lowest(
     requested: ReasoningEffort,
 ) -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(effort=requested), EFFORT_ONLY_HIGH_MAX
     )
     assert adapted.effort is ReasoningEffort.HIGH
@@ -305,7 +304,7 @@ def test_an_unknown_effort_vocabulary_is_left_alone() -> None:
         can_reason=True, supports_effort_control=True, supported_efforts=None
     )
     policy = ReasoningPolicy.on(effort=ReasoningEffort.MAX)
-    assert adapt_reasoning_policy(policy, capability) is policy
+    assert adapt_reasoning_policy(policy, capability)[0] is policy
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +313,7 @@ def test_an_unknown_effort_vocabulary_is_left_alone() -> None:
 
 
 def test_toggle_only_model_turns_thinking_on_and_loses_the_level() -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(effort=ReasoningEffort.HIGH), TOGGLE_ONLY
     )
     assert adapted == ReasoningPolicy.on()
@@ -347,7 +346,7 @@ def test_toggle_only_model_sends_the_encoders_own_enabled_value() -> None:
 
 
 def test_budget_only_model_synthesises_the_high_ratio_budget() -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
         BUDGET_ONLY,
         max_tokens=4096,
@@ -366,7 +365,7 @@ def test_budget_only_model_synthesises_the_high_ratio_budget() -> None:
 
 
 def test_budget_only_model_uses_the_smaller_of_max_tokens_and_output_limit() -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM),
         BUDGET_ONLY,
         max_tokens=100_000,
@@ -378,7 +377,7 @@ def test_budget_only_model_uses_the_smaller_of_max_tokens_and_output_limit() -> 
 
 
 def test_a_synthesised_budget_below_the_floor_is_raised_to_1024() -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(effort=ReasoningEffort.MINIMAL),
         BUDGET_ONLY,
         max_tokens=2000,
@@ -389,7 +388,7 @@ def test_a_synthesised_budget_below_the_floor_is_raised_to_1024() -> None:
 
 
 def test_a_synthesised_budget_never_exceeds_the_models_output_limit() -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(effort=ReasoningEffort.MAX),
         BUDGET_ONLY,
         max_tokens=512,
@@ -405,18 +404,18 @@ def test_a_synthesised_budget_never_exceeds_the_models_output_limit() -> None:
 
 def test_explicit_budget_within_range_is_sent_unchanged() -> None:
     policy = ReasoningPolicy.on(budget_tokens=4096)
-    assert adapt_reasoning_policy(policy, BUDGET_ONLY, output_limit=8192) is policy
+    assert adapt_reasoning_policy(policy, BUDGET_ONLY, output_limit=8192)[0] is policy
 
 
 def test_explicit_budget_above_the_output_limit_is_capped() -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(budget_tokens=999_999), BUDGET_ONLY, output_limit=8192
     )
     assert adapted.budget_tokens == 8192
 
 
 def test_explicit_budget_below_the_floor_is_raised() -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(budget_tokens=100), BUDGET_ONLY, output_limit=8192
     )
     assert adapted.budget_tokens == 1024
@@ -425,7 +424,7 @@ def test_explicit_budget_below_the_floor_is_raised() -> None:
 
 def test_explicit_budget_is_untouched_when_the_output_limit_is_unknown() -> None:
     policy = ReasoningPolicy.on(budget_tokens=999_999)
-    assert adapt_reasoning_policy(policy, BUDGET_ONLY, output_limit=None) is policy
+    assert adapt_reasoning_policy(policy, BUDGET_ONLY, output_limit=None)[0] is policy
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +433,7 @@ def test_explicit_budget_is_untouched_when_the_output_limit_is_unknown() -> None
 
 
 def test_explicit_budget_on_an_effort_only_model_becomes_the_nearest_effort() -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(budget_tokens=2048), EFFORT_ONLY_LOW_MEDIUM_HIGH
     )
     assert adapted.budget_tokens is None
@@ -446,7 +445,7 @@ def test_explicit_budget_on_an_effort_only_model_becomes_the_nearest_effort() ->
 
 
 def test_a_tiny_explicit_budget_becomes_the_models_lowest_effort() -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(budget_tokens=16), EFFORT_ONLY_HIGH_MAX
     )
     # minimal is the cheapest effort FCC knows; the model's floor is high.
@@ -456,7 +455,7 @@ def test_a_tiny_explicit_budget_becomes_the_models_lowest_effort() -> None:
 def test_explicit_budget_is_left_alone_when_budget_support_is_unknown() -> None:
     capability = ModelReasoningCapability(can_reason=True)
     policy = ReasoningPolicy.on(budget_tokens=4096)
-    assert adapt_reasoning_policy(policy, capability) is policy
+    assert adapt_reasoning_policy(policy, capability)[0] is policy
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +554,61 @@ def test_a_suppression_warns(warnings_sink: list[str]) -> None:
     )
     assert len(warnings_sink) == 1
     assert "REASONING SUPPRESSED" in warnings_sink[0]
+
+
+# ---------------------------------------------------------------------------
+# R10 -- models that cannot disable thinking (mandatory=True).
+# ---------------------------------------------------------------------------
+
+
+def test_mandatory_model_rewrites_an_off_request_to_its_lowest_effort() -> None:
+    capability = ModelReasoningCapability(
+        can_reason=True,
+        supports_effort_control=True,
+        supported_efforts=frozenset({ReasoningEffort.HIGH, ReasoningEffort.MAX}),
+        mandatory=True,
+    )
+    adapted, adaptation = adapt_reasoning_policy(ReasoningPolicy.off(), capability)
+
+    assert adapted == ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
+    assert adaptation.kind is ReasoningAdaptationKind.SUBSTITUTED
+    assert adaptation.message is not None
+    assert "cannot run with thinking" in adaptation.message
+
+
+def test_mandatory_model_without_a_vocabulary_gets_adaptive() -> None:
+    """No effort vocabulary known: adaptive lets the model pick its own floor."""
+
+    capability = ModelReasoningCapability(can_reason=True, mandatory=True)
+    adapted, adaptation = adapt_reasoning_policy(ReasoningPolicy.off(), capability)
+
+    assert adapted.control is ReasoningControl.ADAPTIVE
+    assert adaptation.kind is ReasoningAdaptationKind.SUBSTITUTED
+
+
+def test_an_unknown_mandatory_flag_leaves_off_alone() -> None:
+    """``mandatory=None`` must never rewrite an OFF request.
+
+    Every capability in ALL_CAPABILITIES carries the default ``None``, so the
+    existing OFF matrix above already proves the common shape; this asserts
+    it explicitly for the effort-control capability.
+    """
+
+    off = ReasoningPolicy.off()
+    assert adapt_reasoning_policy(off, EFFORT_ONLY_LOW_MEDIUM_HIGH)[0] is off
+
+
+def test_a_mandatory_off_rewrite_warns(warnings_sink: list[str]) -> None:
+    capability = ModelReasoningCapability(
+        can_reason=True,
+        supports_effort_control=True,
+        supported_efforts=frozenset({ReasoningEffort.HIGH}),
+        mandatory=True,
+    )
+    adapt_reasoning_policy(ReasoningPolicy.off(), capability)
+
+    assert len(warnings_sink) == 1
+    assert "REASONING OFF SUBSTITUTED" in warnings_sink[0]
 
 
 # ---------------------------------------------------------------------------

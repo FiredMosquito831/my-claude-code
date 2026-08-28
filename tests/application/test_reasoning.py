@@ -132,8 +132,8 @@ def test_reasoning_budget_requires_explicit_on_control() -> None:
 @pytest.mark.parametrize(
     ("effort", "expected"),
     (
-        (ReasoningEffort.MINIMAL, 512),
-        (ReasoningEffort.LOW, 512),
+        (ReasoningEffort.MINIMAL, 1_024),
+        (ReasoningEffort.LOW, 1_024),
         (ReasoningEffort.MEDIUM, 1_024),
         (ReasoningEffort.HIGH, 2_048),
         (ReasoningEffort.XHIGH, 4_096),

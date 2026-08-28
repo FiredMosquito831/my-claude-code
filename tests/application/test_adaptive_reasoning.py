@@ -35,7 +35,6 @@ from my_claude_code.providers.anthropic_messages.request import (
     build_anthropic_messages_body,
 )
 from my_claude_code.providers.google_openai.reasoning import (
-    GeminiReasoningEncoder,
     VertexReasoningEncoder,
 )
 from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
@@ -120,17 +119,13 @@ def _openai_body(profile_id: str, policy: ReasoningPolicy) -> dict[str, Any]:
 
 
 def _google_body(label: str, policy: ReasoningPolicy) -> dict[str, Any]:
-    encoder = (
-        GeminiReasoningEncoder() if label == "gemini" else VertexReasoningEncoder()
-    )
     body: dict[str, Any] = {"model": "a-model", "messages": []}
-    encoder.encode(body, policy)
+    VertexReasoningEncoder().encode(body, policy)
     return body
 
 
 NON_ANTHROPIC_ENCODERS = (
     *((profile_id, _openai_body) for profile_id in REPRESENTATIVE_PROFILES),
-    ("gemini", _google_body),
     ("vertex", _google_body),
 )
 
@@ -245,7 +240,7 @@ def test_every_pre_adaptive_preference_is_byte_identical(
     }
     for profile_id in REPRESENTATIVE_PROFILES:
         produced[profile_id] = _trim(_openai_body(profile_id, policy))
-    for label in ("gemini", "vertex"):
+    for label in ("vertex",):
         produced[label] = _trim(_google_body(label, policy))
 
     for label, body in produced.items():
@@ -268,7 +263,7 @@ def test_anthropic_still_defaults_to_adaptive_without_an_adaptive_tier() -> None
 
 
 def test_a_model_known_not_to_reason_suppresses_an_adaptive_tier() -> None:
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.adaptive(), CANNOT_REASON, model_ref="provider/no-thinking"
     )
 
@@ -282,7 +277,7 @@ def test_a_model_known_not_to_reason_suppresses_an_adaptive_tier() -> None:
 def test_unknown_capability_leaves_an_adaptive_policy_untouched() -> None:
     policy = ReasoningPolicy.adaptive()
 
-    assert adapt_reasoning_policy(policy, None) is policy
+    assert adapt_reasoning_policy(policy, None)[0] is policy
 
 
 @pytest.mark.parametrize("capability", [EFFORT_ONLY, TOGGLE_ONLY, BUDGET_ONLY])
@@ -296,7 +291,7 @@ def test_adaptive_is_never_translated_into_a_fabricated_control(
     asked for.
     """
 
-    adapted = adapt_reasoning_policy(
+    adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.adaptive(),
         capability,
         max_tokens=4096,

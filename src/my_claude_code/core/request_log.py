@@ -107,6 +107,10 @@ _LIST_METADATA_COLUMNS = (
     "route_diversion",
     "key_index",
     "key_label",
+    # Why the applied reasoning policy differs from what was asked for: the
+    # warning gating would otherwise emit only to the server log. NULL whenever
+    # gating changed nothing, so a list row never carries an empty warning.
+    "reasoning_adaptation",
     # Shape of the assistant turn. These are counts, not bodies, so list views
     # can show what a turn contained without loading the transcript.
     "thinking_chars",
@@ -410,6 +414,10 @@ _ADDED_COLUMNS = (
         "ALTER TABLE requests ADD COLUMN requested_reasoning TEXT",
     ),
     (
+        "reasoning_adaptation",
+        "ALTER TABLE requests ADD COLUMN reasoning_adaptation TEXT",
+    ),
+    (
         "optimization",
         "ALTER TABLE requests ADD COLUMN optimization TEXT",
     ),
@@ -637,6 +645,12 @@ class RequestRecord:
     # originally requested. ``requested_reasoning`` stays None on a row whose
     # writer did not know it; that is distinct from "requested == applied".
     requested_reasoning: str | None = None
+    # The warning gating would otherwise emit only to the server log: why the
+    # applied policy differs from what was asked for. NULL whenever gating
+    # changed nothing and on every row written before this column existed --
+    # "no warning was raised" and "nobody was recording" are the same shape
+    # here only because no warning could have fired unrecorded.
+    reasoning_adaptation: str | None = None
     params: dict[str, Any] | None = None
     tokens_in: int | None = None
     tokens_out: int | None = None
@@ -1639,7 +1653,7 @@ class RequestLogStore:
                         id, ts_epoch, ts_iso, endpoint, protocol, requested_model,
                         provider, resolved_model, stream, input_text, output_text,
                         input_sha256, output_sha256, input_chars, output_chars,
-                        reasoning, requested_reasoning, params,
+                        reasoning, requested_reasoning, reasoning_adaptation, params,
                         tokens_in, tokens_out,
                         cache_read_tokens, cache_write_tokens, ttft_ms,
                         duration_ms, status, error_kind, error_message, headers,
@@ -1648,7 +1662,7 @@ class RequestLogStore:
                         route_primary_model, route_chain, route_diverted_from,
                         route_diversion, input_image_count,
                         optimization, optimization_tokens_saved
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     rows,
                 )
@@ -1697,6 +1711,7 @@ class RequestLogStore:
             record.output_chars,
             record.reasoning,
             record.requested_reasoning,
+            record.reasoning_adaptation,
             json.dumps(record.params) if record.params is not None else None,
             record.tokens_in,
             record.tokens_out,

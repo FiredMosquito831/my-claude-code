@@ -472,6 +472,56 @@ def test_missing_index_returns_unknown_not_raise(tmp_path: Path) -> None:
     assert result is None
 
 
+def test_reasoning_mandatory_flag_is_parsed_and_silence_stays_unknown(
+    tmp_path: Path,
+) -> None:
+    """``reasoning_mandatory`` sets the capability flag; absence means unknown.
+
+    The index here is local to this test on purpose: no other test's fixture
+    grows a key, and the parse contract (True / False / absent -> None) is
+    asserted in one place. A wrong True would rewrite every OFF request for
+    the model, so the absent case is asserted explicitly, not assumed.
+    """
+
+    path = tmp_path / "models-dev.json"
+    write_models_dev_cache(
+        {
+            "openrouter": {
+                "models": {
+                    "acme/mandatory": {
+                        "reasoning": True,
+                        "reasoning_options": [{"type": "toggle"}],
+                        "reasoning_mandatory": True,
+                    },
+                    "acme/explicitly-optional": {
+                        "reasoning": True,
+                        "reasoning_mandatory": False,
+                    },
+                    "acme/no-flag": {"reasoning": True},
+                }
+            }
+        },
+        path,
+    )
+
+    mandatory = model_reasoning_capability_from_models_dev(
+        "open_router", "acme/mandatory", path
+    )
+    optional = model_reasoning_capability_from_models_dev(
+        "open_router", "acme/explicitly-optional", path
+    )
+    unknown = model_reasoning_capability_from_models_dev(
+        "open_router", "acme/no-flag", path
+    )
+
+    assert mandatory is not None
+    assert mandatory.mandatory is True
+    assert optional is not None
+    assert optional.mandatory is False
+    assert unknown is not None
+    assert unknown.mandatory is None
+
+
 def test_reasoning_index_is_memoized_until_mtime_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

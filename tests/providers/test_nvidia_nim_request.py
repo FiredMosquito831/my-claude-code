@@ -104,8 +104,8 @@ class TestBuildRequestBody:
     @pytest.mark.parametrize(
         ("effort", "expected_budget"),
         (
-            (ReasoningEffort.MINIMAL, 512),
-            (ReasoningEffort.LOW, 512),
+            (ReasoningEffort.MINIMAL, 1_024),
+            (ReasoningEffort.LOW, 1_024),
             (ReasoningEffort.MEDIUM, 1_024),
             (ReasoningEffort.HIGH, 2_048),
             (ReasoningEffort.XHIGH, 4_096),

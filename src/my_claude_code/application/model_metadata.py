@@ -35,6 +35,14 @@ class ModelReasoningCapability:
     # "default" value some entries carry). ``None`` means unknown; an empty
     # frozenset means the effort option is known to have no usable values.
     supported_efforts: frozenset[ReasoningEffort] | None = None
+    # True only when the model cannot run with thinking disabled: an OFF
+    # request must be rewritten to the floor (lowest supported effort, or
+    # adaptive when no vocabulary is known) instead, because the provider
+    # rejects disabled thinking outright. ``None`` -- unknown -- must never
+    # change behavior, exactly like every other field here. models.dev
+    # publishes no such flag today, so this stays None until a source
+    # carries it; the gating branch exists so the rewrite is ready.
+    mandatory: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

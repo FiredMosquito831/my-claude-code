@@ -21,7 +21,11 @@ from my_claude_code.core.anthropic import (
     request_carries_image,
 )
 from my_claude_code.core.gateway_model_ids import decode_gateway_model_id
-from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    ReasoningAdaptation,
+    ReasoningAdaptationKind,
+    ReasoningPolicy,
+)
 
 from .model_metadata import ModelReasoningCapability
 from .reasoning import resolve_reasoning_policy
@@ -61,6 +65,7 @@ class RoutedMessagesRequest:
     resolved: ResolvedModel
     reasoning: ReasoningPolicy
     requested_reasoning: ReasoningPolicy
+    reasoning_adaptation: ReasoningAdaptation
 
 
 @dataclass(frozen=True, slots=True)
@@ -449,11 +454,13 @@ class ModelRouter:
         routed = request.model_copy(deep=True)
         routed.model = resolved.provider_model
         policy = resolve_reasoning_policy(routed, resolved.reasoning_preference)
+        reasoning, reasoning_adaptation = self._gate_reasoning(policy, routed, resolved)
         return RoutedMessagesRequest(
             request=routed,
             resolved=resolved,
-            reasoning=self._gate_reasoning(policy, routed, resolved),
+            reasoning=reasoning,
             requested_reasoning=policy,
+            reasoning_adaptation=reasoning_adaptation,
         )
 
     def _gate_reasoning(
@@ -461,11 +468,11 @@ class ModelRouter:
         policy: ReasoningPolicy,
         request: MessagesRequest,
         resolved: ResolvedModel,
-    ) -> ReasoningPolicy:
+    ) -> tuple[ReasoningPolicy, ReasoningAdaptation]:
         """Narrow one resolved policy to what the resolved model accepts."""
 
         if self._reasoning_capability_lookup is None:
-            return policy
+            return policy, ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
         capability = self._reasoning_capability_lookup(
             resolved.provider_id, resolved.provider_model
         )

@@ -48,7 +48,11 @@ from my_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
     text_content,
 )
-from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    ReasoningAdaptation,
+    ReasoningAdaptationKind,
+    ReasoningPolicy,
+)
 from my_claude_code.core.version import package_version
 from my_claude_code.core.websearch.models import (
     WebSearchResponse,
@@ -115,6 +119,9 @@ class FixedProviderModelRouter(ModelRouter):
             resolved=resolved,
             reasoning=ReasoningPolicy.off(),
             requested_reasoning=ReasoningPolicy.off(),
+            reasoning_adaptation=ReasoningAdaptation(
+                ReasoningAdaptationKind.UNCHANGED, None
+            ),
         )
 
 

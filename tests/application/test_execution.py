@@ -39,7 +39,11 @@ from my_claude_code.core.failures import (
     FailureKind,
     parse_failure_kinds,
 )
-from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    ReasoningAdaptation,
+    ReasoningAdaptationKind,
+    ReasoningPolicy,
+)
 
 
 class FakeProvider:
@@ -130,6 +134,9 @@ def _routed_request(
         ),
         reasoning=ReasoningPolicy.on(),
         requested_reasoning=ReasoningPolicy.on(),
+        reasoning_adaptation=ReasoningAdaptation(
+            ReasoningAdaptationKind.UNCHANGED, None
+        ),
     )
 
 

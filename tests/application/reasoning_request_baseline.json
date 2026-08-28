@@ -12,7 +12,7 @@
   "anthropic_messages|bare|low": {
     "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 512,
+      "budget_tokens": 1024,
       "type": "enabled"
     }
   },
@@ -66,7 +66,7 @@
       "effort": "high"
     },
     "thinking": {
-      "budget_tokens": 512,
+      "budget_tokens": 1024,
       "type": "enabled"
     }
   },
@@ -123,7 +123,7 @@
   "anthropic_messages|client_thinking_adaptive|low": {
     "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 512,
+      "budget_tokens": 1024,
       "type": "enabled"
     }
   },
@@ -168,7 +168,7 @@
   "anthropic_messages|client_thinking_budget|low": {
     "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 512,
+      "budget_tokens": 1024,
       "type": "enabled"
     }
   },
@@ -209,7 +209,7 @@
   "anthropic_messages|client_thinking_disabled|low": {
     "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 512,
+      "budget_tokens": 1024,
       "type": "enabled"
     }
   },
@@ -608,126 +608,6 @@
   "fireworks|client_thinking_disabled|xhigh": {
     "reasoning_effort": "high"
   },
-  "gemini|bare|client": {},
-  "gemini|bare|high": {
-    "reasoning_effort": "high"
-  },
-  "gemini|bare|low": {
-    "reasoning_effort": "low"
-  },
-  "gemini|bare|max": {
-    "reasoning_effort": "high"
-  },
-  "gemini|bare|medium": {
-    "reasoning_effort": "medium"
-  },
-  "gemini|bare|off": {
-    "reasoning_effort": "none"
-  },
-  "gemini|bare|xhigh": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_effort_high|client": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_effort_high|high": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_effort_high|low": {
-    "reasoning_effort": "low"
-  },
-  "gemini|client_effort_high|max": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_effort_high|medium": {
-    "reasoning_effort": "medium"
-  },
-  "gemini|client_effort_high|off": {
-    "reasoning_effort": "none"
-  },
-  "gemini|client_effort_high|xhigh": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_thinking_adaptive|client": {
-    "extra_body": {
-      "extra_body": {
-        "google": {
-          "thinking_config": {
-            "include_thoughts": true
-          }
-        }
-      }
-    }
-  },
-  "gemini|client_thinking_adaptive|high": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_thinking_adaptive|low": {
-    "reasoning_effort": "low"
-  },
-  "gemini|client_thinking_adaptive|max": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_thinking_adaptive|medium": {
-    "reasoning_effort": "medium"
-  },
-  "gemini|client_thinking_adaptive|off": {
-    "reasoning_effort": "none"
-  },
-  "gemini|client_thinking_adaptive|xhigh": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_thinking_budget|client": {
-    "extra_body": {
-      "extra_body": {
-        "google": {
-          "thinking_config": {
-            "include_thoughts": true,
-            "thinking_budget": 4096
-          }
-        }
-      }
-    }
-  },
-  "gemini|client_thinking_budget|high": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_thinking_budget|low": {
-    "reasoning_effort": "low"
-  },
-  "gemini|client_thinking_budget|max": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_thinking_budget|medium": {
-    "reasoning_effort": "medium"
-  },
-  "gemini|client_thinking_budget|off": {
-    "reasoning_effort": "none"
-  },
-  "gemini|client_thinking_budget|xhigh": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_thinking_disabled|client": {
-    "reasoning_effort": "none"
-  },
-  "gemini|client_thinking_disabled|high": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_thinking_disabled|low": {
-    "reasoning_effort": "low"
-  },
-  "gemini|client_thinking_disabled|max": {
-    "reasoning_effort": "high"
-  },
-  "gemini|client_thinking_disabled|medium": {
-    "reasoning_effort": "medium"
-  },
-  "gemini|client_thinking_disabled|off": {
-    "reasoning_effort": "none"
-  },
-  "gemini|client_thinking_disabled|xhigh": {
-    "reasoning_effort": "high"
-  },
   "groq|bare|client": {},
   "groq|bare|high": {
     "reasoning_effort": "high"
@@ -839,7 +719,7 @@
   },
   "llamacpp|bare|low": {
     "extra_body": {
-      "thinking_budget_tokens": 512
+      "thinking_budget_tokens": 1024
     }
   },
   "llamacpp|bare|max": {
@@ -874,7 +754,7 @@
   },
   "llamacpp|client_effort_high|low": {
     "extra_body": {
-      "thinking_budget_tokens": 512
+      "thinking_budget_tokens": 1024
     }
   },
   "llamacpp|client_effort_high|max": {
@@ -905,7 +785,7 @@
   },
   "llamacpp|client_thinking_adaptive|low": {
     "extra_body": {
-      "thinking_budget_tokens": 512
+      "thinking_budget_tokens": 1024
     }
   },
   "llamacpp|client_thinking_adaptive|max": {
@@ -940,7 +820,7 @@
   },
   "llamacpp|client_thinking_budget|low": {
     "extra_body": {
-      "thinking_budget_tokens": 512
+      "thinking_budget_tokens": 1024
     }
   },
   "llamacpp|client_thinking_budget|max": {
@@ -975,7 +855,7 @@
   },
   "llamacpp|client_thinking_disabled|low": {
     "extra_body": {
-      "thinking_budget_tokens": 512
+      "thinking_budget_tokens": 1024
     }
   },
   "llamacpp|client_thinking_disabled|max": {
@@ -1431,7 +1311,7 @@
         "google": {
           "thinking_config": {
             "include_thoughts": true,
-            "thinking_budget": 512
+            "thinking_budget": 1024
           }
         }
       }
@@ -1515,7 +1395,7 @@
         "google": {
           "thinking_config": {
             "include_thoughts": true,
-            "thinking_budget": 512
+            "thinking_budget": 1024
           }
         }
       }
@@ -1598,7 +1478,7 @@
         "google": {
           "thinking_config": {
             "include_thoughts": true,
-            "thinking_budget": 512
+            "thinking_budget": 1024
           }
         }
       }
@@ -1682,7 +1562,7 @@
         "google": {
           "thinking_config": {
             "include_thoughts": true,
-            "thinking_budget": 512
+            "thinking_budget": 1024
           }
         }
       }
@@ -1766,7 +1646,7 @@
         "google": {
           "thinking_config": {
             "include_thoughts": true,
-            "thinking_budget": 512
+            "thinking_budget": 1024
           }
         }
       }

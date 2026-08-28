@@ -248,6 +248,7 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
         "thinking_chars",
         "reasoning",
         "requested_reasoning",
+        "reasoning_adaptation",
     ),
 }
 
@@ -298,6 +299,7 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "tool_calls",
     "reasoning",
     "requested_reasoning",
+    "reasoning_adaptation",
     "params",
     "headers",
     "input_sha256",
@@ -341,6 +343,7 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "tool_calls": "Tool calls",
     "reasoning": "Reasoning policy (applied)",
     "requested_reasoning": "Reasoning policy (requested)",
+    "reasoning_adaptation": "Reasoning adaptation",
     "params": "Params",
     "headers": "Headers",
     "input_sha256": "Input SHA-256",

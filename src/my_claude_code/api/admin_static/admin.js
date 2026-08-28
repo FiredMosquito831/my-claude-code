@@ -7741,6 +7741,7 @@ async function openRequestDetail(requestId) {
     ["Image input", formatImageSummary(row)],
     ["Reasoning policy", row.reasoning],
     ["Requested reasoning", formatRequestedReasoning(row)],
+    ["Reasoning adaptation", formatReasoningAdaptation(row)],
     ["Params", row.params ? JSON.stringify(row.params) : ""],
     ["Input SHA-256", row.input_sha256],
     ["Output SHA-256", row.output_sha256],
@@ -7771,6 +7772,16 @@ function formatRequestedReasoning(row) {
   if (requested == null || requested === "") return "";
   if (requested === row.reasoning) return "";
   return requested;
+}
+
+// Surface why the applied policy differs from what was asked for. The field
+// is NULL on every ungated request and on rows written before it existed --
+// we only show the row when gating actually raised a warning, so the request
+// log never carries an empty "no warning" line.
+function formatReasoningAdaptation(row) {
+  const message = row.reasoning_adaptation;
+  if (message == null || message === "") return "";
+  return message;
 }
 
 function formatChars(count) {

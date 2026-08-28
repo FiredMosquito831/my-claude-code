@@ -39,8 +39,8 @@ class ReasoningEffort(StrEnum):
 
 
 _EFFORT_BUDGET_TOKENS = {
-    ReasoningEffort.MINIMAL: 512,
-    ReasoningEffort.LOW: 512,
+    ReasoningEffort.MINIMAL: 1_024,
+    ReasoningEffort.LOW: 1_024,
     ReasoningEffort.MEDIUM: 1_024,
     ReasoningEffort.HIGH: 2_048,
     ReasoningEffort.XHIGH: 4_096,
@@ -136,6 +136,33 @@ class ReasoningPolicy:
         if self.effort is None:
             return None
         return self.effort.budget_tokens
+
+
+class ReasoningAdaptationKind(StrEnum):
+    """What per-model capability gating did to a requested reasoning policy.
+
+    ``message`` on :class:`ReasoningAdaptation` carries the operator-facing
+    warning; this enum is the programmatic signal a UI can style on.
+    """
+
+    UNCHANGED = "unchanged"
+    SUBSTITUTED = "substituted"
+    CLAMPED = "clamped"
+    DROPPED = "dropped"
+    SUPPRESSED = "suppressed"
+
+
+@dataclass(frozen=True, slots=True)
+class ReasoningAdaptation:
+    """What per-model gating changed about one reasoning request.
+
+    Returned alongside the adapted policy so the request log and admin UI can
+    surface the warning that gating currently only emits to the server log.
+    ``message`` is ``None`` exactly when ``kind`` is ``UNCHANGED``.
+    """
+
+    kind: ReasoningAdaptationKind
+    message: str | None
 
 
 DEFAULT_REASONING_POLICY = ReasoningPolicy.provider_default()

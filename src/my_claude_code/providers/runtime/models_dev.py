@@ -606,11 +606,20 @@ def _parse_reasoning_capability(
     raw_can_reason = metadata.get("reasoning")
     can_reason = raw_can_reason if isinstance(raw_can_reason, bool) else None
 
+    # models.dev publishes no "reasoning cannot be disabled" flag today. Read
+    # a conventional key so the field lights up the day one appears, and stay
+    # None (unknown) otherwise -- a wrong mandatory=True would rewrite every
+    # OFF request, so only an explicit True from the source may set it.
+    # Parsed before the options check: a bare ``reasoning: true`` with no
+    # options list hits the early return below and must still carry it.
+    raw_mandatory = metadata.get("reasoning_mandatory")
+    mandatory = raw_mandatory if isinstance(raw_mandatory, bool) else None
+
     options = metadata.get("reasoning_options")
     if not isinstance(options, list):
         # No (or malformed) options list: control styles are unknown, not
         # known-false. ``can_reason`` may still be known from the flag above.
-        return ModelReasoningCapability(can_reason=can_reason)
+        return ModelReasoningCapability(can_reason=can_reason, mandatory=mandatory)
 
     supports_effort = False
     supports_toggle = False
@@ -643,6 +652,7 @@ def _parse_reasoning_capability(
         supports_toggle_control=supports_toggle,
         supports_budget_control=supports_budget,
         supported_efforts=supported_efforts,
+        mandatory=mandatory,
     )
 
 

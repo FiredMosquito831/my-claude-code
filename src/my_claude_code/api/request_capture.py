@@ -203,6 +203,10 @@ class RequestCapture:
             routed.requested_reasoning,
             client_thinking_type=_client_thinking_type(routed.request),
         )
+        # Why the applied policy differs from what was asked for: the warning
+        # gating would otherwise emit only to the server log, now surfaced in
+        # the request log and admin UI. NULL whenever gating changed nothing.
+        self._record.reasoning_adaptation = routed.reasoning_adaptation.message
 
     def set_optimization(self, rule: str, tokens_saved: int) -> None:
         """Record that a local rule answered this request, and drop the route.

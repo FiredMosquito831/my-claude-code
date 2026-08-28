@@ -1046,6 +1046,7 @@ class ProviderExecutor:
                 else None
             ),
             "reasoning_budget_tokens": routed.reasoning.budget_tokens,
+            "reasoning_adaptation": routed.reasoning_adaptation.message,
         }
         if attempt_count > 1:
             route_trace["attempt"] = attempt
