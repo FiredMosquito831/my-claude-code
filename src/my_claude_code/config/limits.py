@@ -51,6 +51,11 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "max_output_tokens_context_margin": LimitRange(
         0, 65_536, "0 reserves nothing for the prompt"
     ),
+    # 0 lets thinking take the whole output allowance, which is the
+    # unreconciled behaviour this setting exists to remove.
+    "reasoning_answer_floor_max": LimitRange(
+        0, 1_048_576, "0 leaves no tokens reserved for the answer"
+    ),
     # --- when to stop waiting ---------------------------------------------
     "fallback_first_token_timeout": LimitRange(
         0.0, HOUR, "0 waits indefinitely for the first token"

@@ -540,13 +540,14 @@ Every attempt is recorded. **Analytics** shows the model that actually answered 
 
 This replaces a flat 81,920 that every model got regardless. On real routes that number was simultaneously too high (`minimaxai/minimax-m3` and `thinkingmachines/inkling` both stop at 16,384) and too low (`tencent/hy3:free` does 128,000, `meituan/longcat-2.0:free` 131,072).
 
-Three settings cover what the model itself cannot answer, all editable in **Admin UI → Limits**:
+Four settings cover what the model itself cannot answer, all editable in **Admin UI → Limits**:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT` | `32768` | Used **only** when no source publishes a limit for the routed model. A fallback for a missing client value, never a cap on a present one — a number nobody published has no business shrinking an explicit request. |
 | `MAX_OUTPUT_TOKENS_CEILING` | *(unset)* | Absolute cap on every request, whatever the model can do. Deliberately empty, and best left that way: a ceiling below a model's published limit throws away capacity for nothing. Set one only as a runaway guard. |
 | `MAX_OUTPUT_TOKENS_CONTEXT_MARGIN` | `1024` | Tokens reserved for the prompt when a model's output limit is as large as its whole context window — about 15% of the catalog reports exactly that, and on those, asking for the full output leaves no room for the messages. |
+| `REASONING_ANSWER_FLOOR_MAX` | `16384` | Most tokens ever held back from the output allowance for the visible answer while extended thinking is on. Thinking and the answer share one `max_tokens`. The reserve applied is `min(this, output // 2)`, so a 16,384-output model keeps a working thinking budget instead of zero. |
 
 **Context is respected.** Where the provider publishes a context window, the budget is bounded by what the prompt left of it, minus the margin. If the prompt already fills the window the request is sent unchanged, so the provider reports the real error rather than MCC guessing at it.
 

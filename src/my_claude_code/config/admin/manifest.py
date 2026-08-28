@@ -687,6 +687,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "tokenizer's. 0 reserves nothing."
         ),
     ),
+    ConfigFieldSpec(
+        "REASONING_ANSWER_FLOOR_MAX",
+        "Answer reserve when thinking",
+        "limits",
+        "number",
+        settings_attr="reasoning_answer_floor_max",
+        default="16384",
+        advanced=True,
+        description=(
+            "Most tokens ever held back from a request's output allowance for "
+            "the visible answer while extended thinking is on. Thinking and "
+            "the answer share one max_tokens, so without a reserve a large "
+            "thinking budget can consume the whole allowance. Applied as the "
+            "smaller of this and half the model's output allowance, so a "
+            "16,384-token model still gets a working budget."
+        ),
+    ),
     # ---- Limits: when to stop waiting ------------------------------------
     ConfigFieldSpec(
         "FALLBACK_FIRST_TOKEN_TIMEOUT",

@@ -129,6 +129,35 @@ def test_native_request_strips_reasoning_content_and_normalizes_inline_system() 
 
 
 def test_reasoning_budget_keeps_max_tokens_strictly_larger() -> None:
+    """The budget yields, not max_tokens.
+
+    Raising ``max_tokens`` past what the client asked for was the old
+    behaviour, and nothing checked the raised value against the model's real
+    output limit.
+    """
+
+    request = MessagesRequest(
+        model="claude-sonnet-5",
+        max_tokens=8192,
+        messages=[Message(role="user", content="hello")],
+    )
+
+    body = build_anthropic_messages_body(
+        request,
+        reasoning=ReasoningPolicy.on(budget_tokens=9000),
+    )
+
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 8191}
+    assert body["max_tokens"] == 8192
+
+
+def test_a_max_tokens_below_the_thinking_minimum_is_the_one_case_that_grows() -> None:
+    """No legal budget exists under 1,024, so the allowance has to move.
+
+    Documented as the single exception: everywhere else the budget is what
+    yields.
+    """
+
     request = MessagesRequest(
         model="claude-sonnet-5",
         max_tokens=512,
@@ -140,8 +169,8 @@ def test_reasoning_budget_keeps_max_tokens_strictly_larger() -> None:
         reasoning=ReasoningPolicy.on(budget_tokens=512),
     )
 
-    assert body["thinking"] == {"type": "enabled", "budget_tokens": 512}
-    assert body["max_tokens"] == 513
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert body["max_tokens"] == 1025
 
 
 def test_extra_body_cannot_override_canonical_fields() -> None:

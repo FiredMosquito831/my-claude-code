@@ -32,6 +32,18 @@ MAX_OUTPUT_TOKENS_CEILING: int | None = None
 #    (the smallest in the catalogue is 4,096) and large enough to cover both.
 MAX_OUTPUT_TOKENS_CONTEXT_MARGIN = 1024
 
+# Upper bound on the slice of the output allowance held back for the visible
+# answer when thinking is enabled. Thinking tokens and answer tokens come out of
+# the same ``max_tokens``; nothing reconciled them before, so a budget could
+# consume the entire allowance and leave the model no room to reply.
+#
+# The floor actually applied is ``min(REASONING_ANSWER_FLOOR_MAX,
+# effective_output // 2)`` -- proportional on purpose. A flat 16,384 on a
+# 16,384-output model (nvidia_nim/minimaxai/minimax-m3) would leave a thinking
+# budget of zero and silently disable reasoning; the halving gives a large
+# reserve on a large model and an even split on a small one.
+REASONING_ANSWER_FLOOR_MAX = 16384
+
 # Non-secret marker stored in Settings when FCC owns renewable ChatGPT credentials.
 CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-oauth"
 

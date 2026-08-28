@@ -24,7 +24,10 @@ from dataclasses import dataclass
 
 from loguru import logger
 
-from my_claude_code.config.constants import MAX_OUTPUT_TOKENS_CONTEXT_MARGIN
+from my_claude_code.config.constants import (
+    MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
+    REASONING_ANSWER_FLOOR_MAX,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +46,10 @@ class OutputTokenLimits:
     unknown_default: int | None = None
     ceiling: int | None = None
     context_margin: int = MAX_OUTPUT_TOKENS_CONTEXT_MARGIN
+    # Thinking tokens come out of this same allowance, so the answer
+    # reserve travels with it rather than in a parallel record: the two
+    # numbers only mean anything together (WORKING-NOTES 54).
+    answer_floor_max: int = REASONING_ANSWER_FLOOR_MAX
 
 
 # "Nothing is known and nothing is configured." Shared because it is frozen

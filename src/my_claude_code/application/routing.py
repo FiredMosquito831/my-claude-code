@@ -25,6 +25,7 @@ from my_claude_code.core.reasoning import (
     ReasoningAdaptation,
     ReasoningAdaptationKind,
     ReasoningPolicy,
+    combine_reasoning_adaptations,
 )
 
 from .model_metadata import ModelReasoningCapability
@@ -34,6 +35,7 @@ from .output_tokens import (
     resolve_max_output_tokens,
 )
 from .reasoning import resolve_reasoning_policy
+from .reasoning_budget import reconcile_reasoning_budget
 from .reasoning_gating import adapt_reasoning_policy
 
 _ROUTE_SETTINGS = (
@@ -167,6 +169,38 @@ def apply_output_token_budget(
         return routed
     return replace(
         routed, request=routed.request.model_copy(update={"max_tokens": resolved})
+    )
+
+
+def apply_reasoning_budget(routed: RoutedMessagesRequest) -> RoutedMessagesRequest:
+    """Fit this request's thinking budget inside the answer it has to leave.
+
+    Runs *after* :func:`apply_output_token_budget`, on purpose and in that
+    order: the reasoning budget has to be reconciled against the very number
+    that becomes ``max_tokens``, and that number is not final until the output
+    budget has been resolved against the prompt's token count. Reconciling at
+    gating time instead would use the client's raw ask, which the output budget
+    may then lower.
+    """
+
+    limits = routed.output_limits
+    effective_output = routed.request.max_tokens
+    if effective_output is None:
+        effective_output = limits.limit
+    reasoning, adaptation = reconcile_reasoning_budget(
+        routed.reasoning,
+        effective_output=effective_output,
+        floor_max=limits.answer_floor_max,
+        model_ref=routed.resolved.provider_model_ref,
+    )
+    if reasoning == routed.reasoning:
+        return routed
+    return replace(
+        routed,
+        reasoning=reasoning,
+        reasoning_adaptation=combine_reasoning_adaptations(
+            routed.reasoning_adaptation, adaptation
+        ),
     )
 
 
@@ -519,6 +553,7 @@ class ModelRouter:
             unknown_default=self._settings.max_output_tokens_unknown_default,
             ceiling=self._settings.max_output_tokens_ceiling,
             context_margin=self._settings.max_output_tokens_context_margin,
+            answer_floor_max=self._settings.reasoning_answer_floor_max,
         )
 
     def _model_output_limit(self, resolved: ResolvedModel) -> int | None:
@@ -552,6 +587,7 @@ class ModelRouter:
             capability,
             max_tokens=request.max_tokens,
             output_limit=output_limit,
+            answer_floor_max=self._settings.reasoning_answer_floor_max,
             model_ref=resolved.provider_model_ref,
         )
 

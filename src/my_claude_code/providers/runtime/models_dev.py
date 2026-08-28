@@ -34,6 +34,9 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.core.reasoning import EFFORT_BY_VALUE, ReasoningEffort
+from my_claude_code.providers.reasoning_vocabulary import (
+    provider_reasoning_vocabulary,
+)
 
 MODELS_DEV_URL = "https://models.dev/api.json"
 MODELS_DEV_CACHE_TTL_SECONDS = 24 * 60 * 60
@@ -1179,9 +1182,17 @@ def resolve_model_reasoning_capability(
     ordering that matters, since for ``tencent/hy3:free`` the cross-provider
     modal output limit is 64,000 while the gateway reports 128,000.
 
-    Returns ``None`` only when neither layer has any data at all.
+    A third and lowest layer follows: what the provider's API documents for
+    every model behind it (see ``providers.reasoning_vocabulary``). It fills
+    only fields the two per-model layers left unstated, so a gateway that
+    publishes a richer vocabulary for one model always wins.
+
+    Returns ``None`` only when no layer has any data at all.
     """
     return merge_reasoning_capabilities(
-        provider_capability,
-        model_reasoning_capability_from_models_dev(provider_id, model_id, path),
+        merge_reasoning_capabilities(
+            provider_capability,
+            model_reasoning_capability_from_models_dev(provider_id, model_id, path),
+        ),
+        provider_reasoning_vocabulary(provider_id),
     )

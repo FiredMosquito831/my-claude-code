@@ -17,9 +17,9 @@
     }
   },
   "anthropic_messages|bare|max": {
-    "max_tokens": 8193,
+    "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 8192,
+      "budget_tokens": 4095,
       "type": "enabled"
     }
   },
@@ -34,9 +34,9 @@
     "max_tokens": 4096
   },
   "anthropic_messages|bare|xhigh": {
-    "max_tokens": 4097,
+    "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 4096,
+      "budget_tokens": 4095,
       "type": "enabled"
     }
   },
@@ -71,12 +71,12 @@
     }
   },
   "anthropic_messages|client_effort_high|max": {
-    "max_tokens": 8193,
+    "max_tokens": 4096,
     "output_config": {
       "effort": "high"
     },
     "thinking": {
-      "budget_tokens": 8192,
+      "budget_tokens": 4095,
       "type": "enabled"
     }
   },
@@ -97,12 +97,12 @@
     }
   },
   "anthropic_messages|client_effort_high|xhigh": {
-    "max_tokens": 4097,
+    "max_tokens": 4096,
     "output_config": {
       "effort": "high"
     },
     "thinking": {
-      "budget_tokens": 4096,
+      "budget_tokens": 4095,
       "type": "enabled"
     }
   },
@@ -128,9 +128,9 @@
     }
   },
   "anthropic_messages|client_thinking_adaptive|max": {
-    "max_tokens": 8193,
+    "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 8192,
+      "budget_tokens": 4095,
       "type": "enabled"
     }
   },
@@ -145,16 +145,16 @@
     "max_tokens": 4096
   },
   "anthropic_messages|client_thinking_adaptive|xhigh": {
-    "max_tokens": 4097,
+    "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 4096,
+      "budget_tokens": 4095,
       "type": "enabled"
     }
   },
   "anthropic_messages|client_thinking_budget|client": {
-    "max_tokens": 4097,
+    "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 4096,
+      "budget_tokens": 4095,
       "type": "enabled"
     }
   },
@@ -173,9 +173,9 @@
     }
   },
   "anthropic_messages|client_thinking_budget|max": {
-    "max_tokens": 8193,
+    "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 8192,
+      "budget_tokens": 4095,
       "type": "enabled"
     }
   },
@@ -190,9 +190,9 @@
     "max_tokens": 4096
   },
   "anthropic_messages|client_thinking_budget|xhigh": {
-    "max_tokens": 4097,
+    "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 4096,
+      "budget_tokens": 4095,
       "type": "enabled"
     }
   },
@@ -214,9 +214,9 @@
     }
   },
   "anthropic_messages|client_thinking_disabled|max": {
-    "max_tokens": 8193,
+    "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 8192,
+      "budget_tokens": 4095,
       "type": "enabled"
     }
   },
@@ -231,9 +231,9 @@
     "max_tokens": 4096
   },
   "anthropic_messages|client_thinking_disabled|xhigh": {
-    "max_tokens": 4097,
+    "max_tokens": 4096,
     "thinking": {
-      "budget_tokens": 4096,
+      "budget_tokens": 4095,
       "type": "enabled"
     }
   },

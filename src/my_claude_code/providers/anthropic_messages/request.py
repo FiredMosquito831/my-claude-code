@@ -6,7 +6,11 @@ from typing import Any
 from my_claude_code.application.errors import InvalidRequestError
 from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
-from my_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    MINIMUM_BUDGET_TOKENS,
+    ReasoningControl,
+    ReasoningPolicy,
+)
 
 _INTERNAL_FIELDS = frozenset(
     {
@@ -83,16 +87,46 @@ def _apply_reasoning(
 
     budget = policy.numeric_budget_tokens
     if budget is not None:
-        max_tokens = body.get("max_tokens")
-        if isinstance(max_tokens, int) and max_tokens <= budget:
-            body["max_tokens"] = budget + 1
-        body["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        body["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": _budget_within_max_tokens(body, budget),
+        }
         return
 
     requested = request.thinking
     if requested is not None and requested.type in {"adaptive", "enabled"}:
         return
     body["thinking"] = {"type": "adaptive"}
+
+
+def _budget_within_max_tokens(body: dict[str, Any], budget: int) -> int:
+    """Enforce Anthropic's ``budget_tokens < max_tokens`` on the wire body.
+
+    Asserted here rather than only at gating time because the two numbers are
+    still moving after gating: user configuration, per-model overrides and the
+    per-model output budget are all applied later, and a violation at *this*
+    point is what the provider answers with a 400. The commit boundary is where
+    the protocol adapter owns the invariant.
+
+    The thinking budget is what yields. Raising ``max_tokens`` to ``budget + 1``
+    was the previous behaviour and it did so without consulting the model's own
+    published limit at all, which is how a request ends up asking a
+    16,384-token model for more output than it can emit. The single exception
+    is a ``max_tokens`` too small to admit Anthropic's documented 1,024-token
+    minimum: no legal budget exists below it, so the allowance is raised to the
+    smallest value that admits one rather than sending a budget the API
+    rejects.
+    """
+
+    max_tokens = body.get("max_tokens")
+    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool):
+        return budget
+    if max_tokens > budget:
+        return budget
+    if max_tokens > MINIMUM_BUDGET_TOKENS:
+        return max_tokens - 1
+    body["max_tokens"] = MINIMUM_BUDGET_TOKENS + 1
+    return MINIMUM_BUDGET_TOKENS
 
 
 def _merge_extra_body(body: dict[str, Any], extra_body: Any) -> None:

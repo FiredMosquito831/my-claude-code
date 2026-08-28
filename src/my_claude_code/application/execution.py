@@ -48,6 +48,7 @@ from .routing import (
     RoutedMessagesPlan,
     RoutedMessagesRequest,
     apply_output_token_budget,
+    apply_reasoning_budget,
 )
 
 TokenCounter = Callable[
@@ -521,8 +522,12 @@ class ProviderExecutor:
         # a budget sized for the 262,144-token model above it. Rebound here
         # rather than in routing because the context-headroom half of the
         # decision needs the prompt's token count.
+        # Output budget first, then the thinking budget: the reasoning
+        # reconciliation has to see the max_tokens that will actually be
+        # sent, or the two numbers disagree and the provider 400s.
         attempts = tuple(
-            apply_output_token_budget(attempt, input_tokens) for attempt in attempts
+            apply_reasoning_budget(apply_output_token_budget(attempt, input_tokens))
+            for attempt in attempts
         )
 
         # Per-request, not per-executor. ProviderExecutor is constructed once

@@ -52,17 +52,27 @@ class ModelReasoningCapability:
     # frozenset means the effort option is known to have no usable values.
     supported_efforts: frozenset[ReasoningEffort] | None = None
     # True only when the model cannot run with thinking disabled: an OFF
-    # request must be rewritten to the floor (lowest supported effort, or
-    # adaptive when no vocabulary is known) instead, because the provider
-    # rejects disabled thinking outright. ``None`` -- unknown -- must never
-    # change behavior, exactly like every other field here. models.dev
-    # publishes no such flag today, so this stays None until a source
-    # carries it; the gating branch exists so the rewrite is ready.
+    # request is rewritten to the floor (lowest supported effort, or adaptive
+    # when no vocabulary is known) instead, because the provider rejects
+    # disabled thinking outright. ``None`` -- unknown -- must never change
+    # behavior, exactly like every other field here. models.dev publishes no
+    # such key on any of its 7,483 rows; OpenRouter-dialect gateways publish it
+    # as ``reasoning.mandatory`` and that is the only source that populates it.
     mandatory: bool | None = None
     # Whether the model runs with thinking on unless the caller says otherwise.
     # Published by OpenRouter-dialect gateways as ``reasoning.default_enabled``
     # and by nothing else today. ``None`` -- unknown -- must never change
     # behavior; it is not the same as a known ``False``.
+    #
+    # Deliberately not consumed by gating. Every decision that could plausibly
+    # read it is already answered better by a field that states the thing
+    # directly: whether the model reasons is ``can_reason``, whether it can be
+    # turned off is ``mandatory``, and whether a knob exists is the three
+    # ``supports_*_control`` flags. The one remaining use -- emitting a
+    # reasoning block because a model happens to default to thinking on --
+    # would send reasoning nobody asked for, which is the opposite of what a
+    # policy expressing no opinion means. Kept because it is real published
+    # metadata surfaced in the admin model view, not because gating needs it.
     default_enabled: bool | None = None
 
 

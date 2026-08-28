@@ -18,12 +18,20 @@ from dataclasses import replace
 from loguru import logger
 
 from my_claude_code.application.model_metadata import ModelReasoningCapability
+from my_claude_code.application.reasoning_budget import (
+    bound_budget,
+    budget_for_effort,
+    effort_for_budget,
+)
+from my_claude_code.config.constants import REASONING_ANSWER_FLOOR_MAX
 from my_claude_code.core.reasoning import (
+    MINIMUM_BUDGET_TOKENS,
     ReasoningAdaptation,
     ReasoningAdaptationKind,
     ReasoningControl,
     ReasoningEffort,
     ReasoningPolicy,
+    combine_reasoning_adaptations,
 )
 
 # Declaration order is the documented ordering:
@@ -33,40 +41,6 @@ _EFFORT_RANK: dict[ReasoningEffort, int] = {
     effort: rank for rank, effort in enumerate(_EFFORT_ORDER)
 }
 
-# Anthropic's documented minimum extended-thinking budget.
-MINIMUM_BUDGET_TOKENS = 1024
-
-# Severity order for merging several sub-adaptations into one descriptor. A
-# request that is both substituted and clamped is reported at the worse of
-# the two, so the admin UI never under-represents what gating did.
-_ADAPTATION_SEVERITY: dict[ReasoningAdaptationKind, int] = {
-    ReasoningAdaptationKind.UNCHANGED: 0,
-    ReasoningAdaptationKind.SUBSTITUTED: 1,
-    ReasoningAdaptationKind.CLAMPED: 2,
-    ReasoningAdaptationKind.DROPPED: 3,
-    ReasoningAdaptationKind.SUPPRESSED: 4,
-}
-
-# Share of the effective output budget to spend on thinking, per named effort.
-#
-# These are the published industry ratios, not FCC inventions: OpenRouter
-# documents ``budget_tokens = max(min(max_tokens * ratio, 128000), 1024)`` for
-# translating a reasoning effort onto Anthropic-style budgets
-# (https://openrouter.ai/docs/use-cases/reasoning-tokens), and Vercel's AI
-# Gateway publishes the same ratios. ``max``/``xhigh`` stop at 0.95 rather than
-# 1.00 because Anthropic requires the thinking budget to be strictly smaller
-# than ``max_tokens``.
-#
-# This is the ONLY place these numbers exist. Do not inline them elsewhere.
-EFFORT_BUDGET_RATIOS: dict[ReasoningEffort, float] = {
-    ReasoningEffort.MINIMAL: 0.10,
-    ReasoningEffort.LOW: 0.20,
-    ReasoningEffort.MEDIUM: 0.50,
-    ReasoningEffort.HIGH: 0.80,
-    ReasoningEffort.XHIGH: 0.95,
-    ReasoningEffort.MAX: 0.95,
-}
-
 
 def adapt_reasoning_policy(
     policy: ReasoningPolicy,
@@ -74,6 +48,7 @@ def adapt_reasoning_policy(
     *,
     max_tokens: int | None = None,
     output_limit: int | None = None,
+    answer_floor_max: int = REASONING_ANSWER_FLOOR_MAX,
     model_ref: str = "",
 ) -> tuple[ReasoningPolicy, ReasoningAdaptation]:
     """Return the policy this model can actually be told, and what changed.
@@ -104,41 +79,73 @@ def adapt_reasoning_policy(
         # request here would send reasoning nobody wanted.
         return policy, ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
 
+    if _publishes_no_control(capability):
+        # models.dev spells this ``reasoning: true`` with ``reasoning_options:
+        # []`` -- "reasoning is on, but the caller has no control" -- and 1,223
+        # of its 5,230 reasoning models (23%) carry it. Without this branch
+        # every guard below is skipped (effort control False, budget control
+        # False, toggle control False) and the raw effort falls straight
+        # through to the wire, into a field the model does not have.
+        return _drop_controls(policy, model_ref)
+
     working = policy
     adaptations: list[ReasoningAdaptation] = []
     if working.budget_tokens is not None:
         working, adaptation = _adapt_budget(
-            working, capability, output_limit, model_ref
+            working, capability, max_tokens, output_limit, answer_floor_max, model_ref
         )
-        if adaptation.kind is not ReasoningAdaptationKind.UNCHANGED:
-            adaptations.append(adaptation)
+        adaptations.append(adaptation)
     if working.budget_tokens is None:
         working, adaptation = _adapt_effort(
-            working, capability, max_tokens, output_limit, model_ref
+            working, capability, max_tokens, output_limit, answer_floor_max, model_ref
         )
-        if adaptation.kind is not ReasoningAdaptationKind.UNCHANGED:
-            adaptations.append(adaptation)
-    return working, _merge_adaptations(policy, working, adaptations)
+        adaptations.append(adaptation)
+    return working, combine_reasoning_adaptations(*adaptations)
 
 
-def _merge_adaptations(
-    requested: ReasoningPolicy,
-    applied: ReasoningPolicy,
-    adaptations: list[ReasoningAdaptation],
-) -> ReasoningAdaptation:
-    """Collapse zero or more sub-adaptations into the single descriptor.
+def _publishes_no_control(capability: ModelReasoningCapability) -> bool:
+    """Return whether the model reasons but exposes no reasoning knob at all.
 
-    The R7 path can substitute a budget for an effort *and* then clamp that
-    effort, so the caller accumulates every sub-step and this collapses them:
-    one message per step, joined, and a ``kind`` severe enough to cover all of
-    them. With no steps the policy passed through untouched.
+    All three ``supports_*_control`` flags explicitly ``False`` is a *stated*
+    fact, not silence, and must never be confused with the unknown case where
+    they are ``None`` -- unknown has to keep passing through untouched. The
+    parser preserves that three-state distinction precisely so this branch can
+    read it.
     """
 
-    if not adaptations:
-        return ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
-    messages = [adaptation.message for adaptation in adaptations if adaptation.message]
-    kind = max(adaptations, key=lambda a: _ADAPTATION_SEVERITY[a.kind]).kind
-    return ReasoningAdaptation(kind, " ".join(messages))
+    return capability.can_reason is not False and (
+        capability.supports_effort_control is False
+        and capability.supports_toggle_control is False
+        and capability.supports_budget_control is False
+    )
+
+
+def _drop_controls(
+    policy: ReasoningPolicy, model_ref: str
+) -> tuple[ReasoningPolicy, ReasoningAdaptation]:
+    """Keep thinking on for a model that accepts no reasoning control.
+
+    ``DROPPED`` rather than a new kind: it already means "the level was
+    discarded, thinking stays on", which is exactly this, and is what the
+    toggle-only case reports. A synonym would split one meaning across two
+    values and force every consumer to learn both.
+    """
+
+    enabled = ReasoningPolicy.on()
+    if policy == enabled:
+        return enabled, ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
+    if policy.effort is not None:
+        asked = f"effort '{policy.effort.value}'"
+    elif policy.budget_tokens is not None:
+        asked = f"a {policy.budget_tokens}-token thinking budget"
+    else:
+        asked = "the requested reasoning controls"
+    message = (
+        f"REASONING LEVEL DROPPED: '{model_ref}' reasons but publishes no"
+        f" reasoning control; enabling thinking and discarding {asked}"
+    )
+    logger.warning(message)
+    return enabled, ReasoningAdaptation(ReasoningAdaptationKind.DROPPED, message)
 
 
 def _mandatory_off_rewrite(
@@ -193,7 +200,9 @@ def _suppress(
 def _adapt_budget(
     policy: ReasoningPolicy,
     capability: ModelReasoningCapability,
+    max_tokens: int | None,
     output_limit: int | None,
+    answer_floor_max: int,
     model_ref: str,
 ) -> tuple[ReasoningPolicy, ReasoningAdaptation]:
     """Handle an explicit numeric budget against a known capability."""
@@ -202,28 +211,14 @@ def _adapt_budget(
     if budget is None:
         return policy, ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
 
-    if capability.supports_budget_control:
-        clamped = _clamp_budget(budget, output_limit)
-        if clamped == budget:
-            return policy, ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
-        message = (
-            f"REASONING BUDGET CLAMPED: '{model_ref}' accepts"
-            f" {MINIMUM_BUDGET_TOKENS}..{output_limit if output_limit is not None else 'unbounded'}"
-            f" thinking tokens; sending {clamped} instead of the requested {budget}"
-        )
-        logger.warning(message)
-        return replace(policy, budget_tokens=clamped), ReasoningAdaptation(
-            ReasoningAdaptationKind.CLAMPED, message
-        )
-
     if (
         capability.supports_budget_control is False
         and capability.supports_effort_control
     ):
         # R7: no vendor publishes a budget -> effort mapping, so the inverse of
         # FCC's own effort -> budget table is used: the strongest effort whose
-        # FCC budget still fits inside what the client asked for.
-        derived = _effort_for_budget(budget)
+        # budget still fits inside what the client asked for.
+        derived = effort_for_budget(budget, _effective_output(max_tokens, output_limit))
         message = (
             f"REASONING BUDGET SUBSTITUTED: '{model_ref}' has no thinking-token"
             f" budget; sending effort '{derived.value}' instead of the requested"
@@ -236,8 +231,26 @@ def _adapt_budget(
             budget_tokens=None,
         ), ReasoningAdaptation(ReasoningAdaptationKind.SUBSTITUTED, message)
 
-    # Budget support unknown: behave exactly as before.
-    return policy, ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
+    # Clamp whenever the model's output limit is known, not only when *budget
+    # control* is known. ``supports_budget_control`` is ``None`` for most
+    # models, so a client budget was passing through entirely unclamped on
+    # every one of them even where ``limit.output`` was published: knowing what
+    # the model can emit is already enough to know the budget cannot exceed it.
+    if not capability.supports_budget_control and output_limit is None:
+        return policy, ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
+
+    clamped = _clamp_budget(budget, output_limit, answer_floor_max)
+    if clamped == budget:
+        return policy, ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
+    message = (
+        f"REASONING BUDGET CLAMPED: '{model_ref}' accepts"
+        f" {MINIMUM_BUDGET_TOKENS}..{output_limit if output_limit is not None else 'unbounded'}"
+        f" thinking tokens; sending {clamped} instead of the requested {budget}"
+    )
+    logger.warning(message)
+    return replace(policy, budget_tokens=clamped), ReasoningAdaptation(
+        ReasoningAdaptationKind.CLAMPED, message
+    )
 
 
 def _adapt_effort(
@@ -245,6 +258,7 @@ def _adapt_effort(
     capability: ModelReasoningCapability,
     max_tokens: int | None,
     output_limit: int | None,
+    answer_floor_max: int,
     model_ref: str,
 ) -> tuple[ReasoningPolicy, ReasoningAdaptation]:
     """Handle a named effort (or a bare "on") against a known capability."""
@@ -270,7 +284,7 @@ def _adapt_effort(
         return policy, ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
 
     if capability.supports_budget_control:
-        budget = _budget_for_effort(effort, max_tokens, output_limit)
+        budget = _budget_for_effort(effort, max_tokens, output_limit, answer_floor_max)
         message = (
             f"REASONING EFFORT SUBSTITUTED: '{model_ref}' has no effort control;"
             f" sending a {budget}-token thinking budget for effort '{effort.value}'"
@@ -317,35 +331,34 @@ def _clamp_effort(
     return min(supported, key=lambda effort: _EFFORT_RANK[effort])
 
 
-def _effort_for_budget(budget: int) -> ReasoningEffort:
-    """Return the strongest effort whose FCC budget fits inside ``budget``."""
-
-    affordable = [effort for effort in _EFFORT_ORDER if effort.budget_tokens <= budget]
-    if affordable:
-        return max(affordable, key=lambda effort: _EFFORT_RANK[effort])
-    return _EFFORT_ORDER[0]
-
-
 def _budget_for_effort(
-    effort: ReasoningEffort, max_tokens: int | None, output_limit: int | None
+    effort: ReasoningEffort,
+    max_tokens: int | None,
+    output_limit: int | None,
+    answer_floor_max: int,
 ) -> int:
-    """Synthesise a thinking budget for one effort (see EFFORT_BUDGET_RATIOS)."""
+    """Synthesise a thinking budget for one effort, sized to this model."""
 
-    effective_max = _effective_max_tokens(max_tokens, output_limit)
-    return _clamp_budget(
-        int(effective_max * EFFORT_BUDGET_RATIOS[effort]), output_limit
-    )
+    effective_output = _effective_output(max_tokens, output_limit)
+    if effective_output is None:
+        return effort.budget_tokens
+    return budget_for_effort(effort, effective_output, answer_floor_max)
 
 
-def _effective_max_tokens(max_tokens: int | None, output_limit: int | None) -> int:
+def _effective_output(max_tokens: int | None, output_limit: int | None) -> int | None:
+    """Return the output allowance this request has to share, if known.
+
+    ``None`` when nothing publishes one and the client named none either, which
+    is what leaves the flat last-resort table in charge.
+    """
+
     candidates = [value for value in (max_tokens, output_limit) if value is not None]
     if not candidates:
-        return MINIMUM_BUDGET_TOKENS
+        return None
     return min(candidates)
 
 
-def _clamp_budget(budget: int, output_limit: int | None) -> int:
-    clamped = max(budget, MINIMUM_BUDGET_TOKENS)
-    if output_limit is not None:
-        clamped = min(clamped, output_limit)
-    return clamped
+def _clamp_budget(budget: int, output_limit: int | None, answer_floor_max: int) -> int:
+    if output_limit is None:
+        return max(budget, MINIMUM_BUDGET_TOKENS)
+    return bound_budget(budget, output_limit, answer_floor_max)

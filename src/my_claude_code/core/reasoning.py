@@ -49,6 +49,15 @@ sources disagree about what "default" or "none" means.
 """
 
 
+MINIMUM_BUDGET_TOKENS = 1_024
+"""Smallest thinking budget any FCC-supported dialect accepts.
+
+Anthropic's documented extended-thinking minimum, and the same floor Cohere
+and the OpenAI-dialect ``thinking`` encoders already use. Owned here so the
+gating layer and the wire encoders cannot drift apart about it.
+"""
+
+
 _EFFORT_BUDGET_TOKENS = {
     ReasoningEffort.MINIMAL: 1_024,
     ReasoningEffort.LOW: 1_024,
@@ -57,6 +66,17 @@ _EFFORT_BUDGET_TOKENS = {
     ReasoningEffort.XHIGH: 4_096,
     ReasoningEffort.MAX: 8_192,
 }
+"""LAST-RESORT flat effort -> budget map, for a model with no known limit.
+
+This table is model-independent and therefore cannot be the primary answer:
+"high effort" must not mean 2,048 tokens on a 230,400-output model and 2,048
+on a 16,384-output one. The capability-aware derivation in
+``application.reasoning_budget`` is the single source of truth whenever
+anything at all publishes the model's output allowance, and it writes its
+result onto :attr:`ReasoningPolicy.effort_budget_tokens`. These numbers are
+reached only when nothing does -- no provider ``/models`` limit, no models.dev
+row, and no configured unknown-default.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,14 +91,26 @@ class ReasoningPolicy:
     control: ReasoningControl = ReasoningControl.DEFAULT
     effort: ReasoningEffort | None = None
     budget_tokens: int | None = None
+    effort_budget_tokens: int | None = None
+    """Capability-derived token cost of :attr:`effort`, when one is known.
+
+    Deliberately *not* ``budget_tokens``: that field means "the caller named
+    this exact number of thinking tokens", and every encoder that can express
+    both a budget and an effort checks it first. Writing a derived value there
+    would flip every effort-capable provider onto its budget channel. This
+    field only replaces the flat ``_EFFORT_BUDGET_TOKENS`` fallback inside
+    :attr:`numeric_budget_tokens`, so encoders that have no budget field are
+    unaffected and encoders that only have one get a model-sized number
+    instead of a model-independent one.
+    """
 
     def __post_init__(self) -> None:
-        if self.budget_tokens is not None and (
-            not isinstance(self.budget_tokens, int)
-            or isinstance(self.budget_tokens, bool)
-            or self.budget_tokens <= 0
-        ):
-            raise ValueError("Reasoning budget must be a positive integer.")
+        for name in ("budget_tokens", "effort_budget_tokens"):
+            value = getattr(self, name)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value <= 0
+            ):
+                raise ValueError("Reasoning budget must be a positive integer.")
         if self.budget_tokens is not None and self.control is not ReasoningControl.ON:
             raise ValueError("A reasoning budget requires reasoning control to be on.")
 
@@ -138,12 +170,23 @@ class ReasoningPolicy:
 
     @property
     def numeric_budget_tokens(self) -> int | None:
-        """Express this intent as an exact or FCC-mapped numeric budget."""
+        """Express this intent as an exact or FCC-mapped numeric budget.
+
+        Resolution order, worst source last:
+
+        1. the caller's own ``budget_tokens``;
+        2. ``effort_budget_tokens`` -- this effort priced against the routed
+           model's real output allowance (``application.reasoning_budget``);
+        3. the flat ``_EFFORT_BUDGET_TOKENS`` table, reached only when nothing
+           publishes an output allowance for this model.
+        """
 
         if self.control is ReasoningControl.OFF:
             return None
         if self.budget_tokens is not None:
             return self.budget_tokens
+        if self.effort_budget_tokens is not None:
+            return self.effort_budget_tokens
         if self.effort is None:
             return None
         return self.effort.budget_tokens
@@ -174,6 +217,41 @@ class ReasoningAdaptation:
 
     kind: ReasoningAdaptationKind
     message: str | None
+
+
+# Severity order for merging several sub-adaptations into one descriptor. A
+# request that is both substituted and clamped is reported at the worse of the
+# two, so the admin UI never under-represents what happened to it.
+_ADAPTATION_SEVERITY: dict[ReasoningAdaptationKind, int] = {
+    ReasoningAdaptationKind.UNCHANGED: 0,
+    ReasoningAdaptationKind.SUBSTITUTED: 1,
+    ReasoningAdaptationKind.CLAMPED: 2,
+    ReasoningAdaptationKind.DROPPED: 3,
+    ReasoningAdaptationKind.SUPPRESSED: 4,
+}
+
+
+def combine_reasoning_adaptations(
+    *adaptations: ReasoningAdaptation,
+) -> ReasoningAdaptation:
+    """Collapse several adaptations of one request into a single descriptor.
+
+    One request can be adapted twice in two different places -- capability
+    gating at routing time, then budget reconciliation once ``max_tokens`` is
+    final -- and the request log has room for one verdict. Every message is
+    kept, joined in the order they happened, under the most severe ``kind``.
+    """
+
+    stated = [
+        adaptation
+        for adaptation in adaptations
+        if adaptation.kind is not ReasoningAdaptationKind.UNCHANGED
+    ]
+    if not stated:
+        return ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
+    messages = [adaptation.message for adaptation in stated if adaptation.message]
+    kind = max(stated, key=lambda a: _ADAPTATION_SEVERITY[a.kind]).kind
+    return ReasoningAdaptation(kind, " ".join(messages) or None)
 
 
 DEFAULT_REASONING_POLICY = ReasoningPolicy.provider_default()

@@ -39,6 +39,7 @@ from .constants import (
     MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
+    REASONING_ANSWER_FLOOR_MAX,
     REQUEST_LOG_COMPRESSION_LEVEL_DEFAULT,
     REQUEST_LOG_IMAGE_MAX_PIXELS_DEFAULT,
     REQUEST_LOG_QUEUE_MAX_SIZE_DEFAULT,
@@ -410,6 +411,13 @@ class Settings(BaseSettings):
     max_output_tokens_context_margin: int = Field(
         default=MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
         validation_alias="MAX_OUTPUT_TOKENS_CONTEXT_MARGIN",
+    )
+    # Most tokens ever held back from the output allowance for the visible
+    # answer when thinking is on. Applied as
+    # min(this, effective_output // 2), so it never starves a small model.
+    reasoning_answer_floor_max: int = Field(
+        default=REASONING_ANSWER_FLOOR_MAX,
+        validation_alias="REASONING_ANSWER_FLOOR_MAX",
     )
 
     # ==================== Fallback timing ====================

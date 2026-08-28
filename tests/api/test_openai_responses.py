@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -604,9 +605,13 @@ def test_create_response_quarantines_malformed_prior_function_call() -> None:
         ({"effort": "none"}, ReasoningPolicy.off()),
         (
             {"effort": "low"},
+            # effort_budget_tokens is the "low" ratio (0.20) of the 32,768-token
+            # unknown-model fallback: nothing publishes a limit for this test
+            # model, so that fallback is the allowance the budget is sized from.
             ReasoningPolicy(
                 control=ReasoningControl.DEFAULT,
                 effort=ReasoningEffort.LOW,
+                effort_budget_tokens=6553,
             ),
         ),
     ],
@@ -636,7 +641,13 @@ def test_create_response_preserves_and_resolves_reasoning_effort(
     assert routed.thinking is None
     assert routed.output_config == reasoning
     assert provider.stream_kwargs[0]["reasoning"] == expected_policy
-    assert provider.preflight_stream.call_args.kwargs["reasoning"] == expected_policy
+    # Preflight deliberately runs before the prompt is counted, and therefore
+    # before the thinking budget is reconciled against the resolved max_tokens.
+    # It sees the same intent with the numeric translation not yet filled in,
+    # which is immaterial to a capability probe.
+    assert provider.preflight_stream.call_args.kwargs["reasoning"] == replace(
+        expected_policy, effort_budget_tokens=None
+    )
 
 
 def test_create_response_maps_redacted_thinking_to_encrypted_reasoning() -> None:

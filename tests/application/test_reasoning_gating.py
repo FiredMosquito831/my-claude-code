@@ -11,16 +11,14 @@ from typing import Any
 import pytest
 
 from my_claude_code.application.model_metadata import ModelReasoningCapability
-from my_claude_code.application.reasoning_gating import (
-    EFFORT_BUDGET_RATIOS,
-    MINIMUM_BUDGET_TOKENS,
-    adapt_reasoning_policy,
-)
+from my_claude_code.application.reasoning_budget import EFFORT_BUDGET_RATIOS
+from my_claude_code.application.reasoning_gating import adapt_reasoning_policy
 from my_claude_code.application.routing import ModelRouter
 from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.reasoning import (
+    MINIMUM_BUDGET_TOKENS,
     ReasoningAdaptationKind,
     ReasoningControl,
     ReasoningEffort,
@@ -74,6 +72,17 @@ BUDGET_ONLY = ModelReasoningCapability(
     supports_budget_control=True,
     supported_efforts=None,
 )
+# models.dev's ``reasoning: true`` with ``reasoning_options: []`` -- the model
+# reasons, the caller gets no knob. 1,223 of its 5,230 reasoning models carry
+# it. Every ``False`` here is a stated fact, which is what separates it from
+# UNKNOWN.
+NO_CONTROL = ModelReasoningCapability(
+    can_reason=True,
+    supports_effort_control=False,
+    supports_toggle_control=False,
+    supports_budget_control=False,
+    supported_efforts=None,
+)
 ALL_CAPABILITIES = (
     UNKNOWN,
     CANNOT_REASON,
@@ -81,6 +90,7 @@ ALL_CAPABILITIES = (
     EFFORT_ONLY_HIGH_MAX,
     TOGGLE_ONLY,
     BUDGET_ONLY,
+    NO_CONTROL,
 )
 
 ALL_POLICIES = (
@@ -203,7 +213,9 @@ def test_the_router_feeds_request_max_tokens_into_a_synthesised_budget() -> None
         output_limit_lookup=lambda _p, _m: 65_536,
     ).resolve_messages_request(_router_request())
     # effective_max is the request's own 4096, not the model's 65536 limit.
-    assert routed.reasoning.budget_tokens == int(4096 * 0.95)
+    # On an allowance that small the answer floor -- half of it -- binds before
+    # the 0.95 ratio does, so thinking and answer split it evenly.
+    assert routed.reasoning.budget_tokens == 4096 // 2
 
 
 # ---------------------------------------------------------------------------
@@ -349,19 +361,21 @@ def test_budget_only_model_synthesises_the_high_ratio_budget() -> None:
     adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
         BUDGET_ONLY,
-        max_tokens=4096,
-        output_limit=8192,
+        max_tokens=100_000,
+        output_limit=200_000,
     )
-    # effective_max = min(4096, 8192) = 4096; 4096 * 0.80 = 3276.8 -> 3276
-    assert adapted.budget_tokens == 3276
+    # effective_max = min(100_000, 200_000) = 100_000; 100_000 * 0.80 = 80_000,
+    # which still leaves 20_000 for the answer -- more than the 16,384 floor --
+    # so the published ratio is what binds here, not the reconciliation.
+    assert adapted.budget_tokens == 80_000
     body = gated_body(
         "llamacpp",
         ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
         BUDGET_ONLY,
-        max_tokens=4096,
-        output_limit=8192,
+        max_tokens=100_000,
+        output_limit=200_000,
     )
-    assert body["extra_body"]["thinking_budget_tokens"] == 3276
+    assert body["extra_body"]["thinking_budget_tokens"] == 80_000
 
 
 def test_budget_only_model_uses_the_smaller_of_max_tokens_and_output_limit() -> None:
@@ -394,7 +408,9 @@ def test_a_synthesised_budget_never_exceeds_the_models_output_limit() -> None:
         max_tokens=512,
         output_limit=512,
     )
-    assert adapted.budget_tokens == 512
+    # Strictly less, never equal: a budget equal to max_tokens is a body
+    # Anthropic rejects, and 512 was what this used to produce.
+    assert adapted.budget_tokens == 511
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +427,9 @@ def test_explicit_budget_above_the_output_limit_is_capped() -> None:
     adapted, _adaptation = adapt_reasoning_policy(
         ReasoningPolicy.on(budget_tokens=999_999), BUDGET_ONLY, output_limit=8192
     )
-    assert adapted.budget_tokens == 8192
+    # Capped at the allowance, not at the limit: the answer keeps half of an
+    # 8,192-token output (the proportional floor), so 4,096 is left to think in.
+    assert adapted.budget_tokens == 4096
 
 
 def test_explicit_budget_below_the_floor_is_raised() -> None:
@@ -621,3 +639,221 @@ def test_the_ratio_table_covers_every_effort_and_stays_below_one() -> None:
     assert all(0.0 < ratio < 1.0 for ratio in EFFORT_BUDGET_RATIOS.values())
     assert EFFORT_BUDGET_RATIOS[ReasoningEffort.HIGH] == 0.80
     assert EFFORT_BUDGET_RATIOS[ReasoningEffort.MAX] == 0.95
+
+
+# ---------------------------------------------------------------------------
+# R8 -- ``reasoning_options: []``: the model reasons and takes no control.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("effort", tuple(ReasoningEffort))
+def test_a_model_with_no_control_gets_thinking_on_and_no_level(
+    effort: ReasoningEffort,
+) -> None:
+    """Every effort collapses to a bare "on"; none of them reaches the wire.
+
+    Before this branch existed, all three guards below were skipped -- effort
+    control False, budget control False, toggle control False -- and the raw
+    effort fell through the final ``UNCHANGED`` return into a field the model
+    does not have.
+    """
+
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(effort=effort), NO_CONTROL, model_ref="provider/a-model"
+    )
+
+    assert adapted == ReasoningPolicy.on()
+    assert adapted.effort is None
+    assert adapted.budget_tokens is None
+    assert adapted.numeric_budget_tokens is None
+    assert adaptation.kind is ReasoningAdaptationKind.DROPPED
+    assert adaptation.message is not None
+    assert effort.value in adaptation.message
+
+
+def test_a_client_budget_on_a_no_control_model_is_dropped_too() -> None:
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(budget_tokens=4096),
+        NO_CONTROL,
+        output_limit=230_400,
+        model_ref="provider/a-model",
+    )
+
+    assert adapted == ReasoningPolicy.on()
+    assert adaptation.kind is ReasoningAdaptationKind.DROPPED
+
+
+def test_a_bare_on_against_a_no_control_model_is_not_an_adaptation() -> None:
+    on = ReasoningPolicy.on()
+    adapted, adaptation = adapt_reasoning_policy(on, NO_CONTROL)
+
+    assert adapted == on
+    assert adaptation.kind is ReasoningAdaptationKind.UNCHANGED
+
+
+@pytest.mark.parametrize("effort", tuple(ReasoningEffort))
+def test_no_control_and_unknown_do_not_collapse_into_each_other(
+    effort: ReasoningEffort,
+) -> None:
+    """The three-state distinction the parser preserves has to survive gating.
+
+    ``None`` on all three flags means nobody said anything and must change
+    nothing; ``False`` on all three is a statement and must drop the level.
+    """
+
+    policy = ReasoningPolicy.on(effort=effort)
+    unknown_flags = ModelReasoningCapability(can_reason=True)
+
+    assert adapt_reasoning_policy(policy, unknown_flags)[0] == policy
+    assert adapt_reasoning_policy(policy, NO_CONTROL)[0] == ReasoningPolicy.on()
+
+
+@pytest.mark.parametrize("profile_id", REPRESENTATIVE_PROFILES)
+def test_a_no_control_model_never_receives_an_effort_level(profile_id: str) -> None:
+    body = gated_body(
+        profile_id, ReasoningPolicy.on(effort=ReasoningEffort.MINIMAL), NO_CONTROL
+    )
+    assert body == encode(profile_id, ReasoningPolicy.on())
+
+
+# ---------------------------------------------------------------------------
+# R9 -- ``mandatory``: a model that cannot run with thinking disabled.
+# ---------------------------------------------------------------------------
+
+
+MANDATORY_WITH_VOCABULARY = ModelReasoningCapability(
+    can_reason=True,
+    supports_effort_control=True,
+    supports_toggle_control=False,
+    supports_budget_control=False,
+    supported_efforts=frozenset(
+        {ReasoningEffort.MEDIUM, ReasoningEffort.HIGH, ReasoningEffort.MAX}
+    ),
+    mandatory=True,
+)
+MANDATORY_WITHOUT_VOCABULARY = ModelReasoningCapability(
+    can_reason=True,
+    supports_effort_control=False,
+    supports_toggle_control=True,
+    supports_budget_control=False,
+    supported_efforts=None,
+    mandatory=True,
+)
+
+
+def test_off_against_a_mandatory_model_becomes_its_lowest_effort() -> None:
+    """Live shape: z-ai/glm-5.3-flash publishes ``reasoning.mandatory: true``.
+
+    OFF would be refused by the model, so the floor is the nearest honest
+    thing -- never left OFF, and never dropped to "no opinion" either.
+    """
+
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.off(),
+        MANDATORY_WITH_VOCABULARY,
+        model_ref="nous_portal/z-ai/glm-5.3-flash",
+    )
+
+    assert adapted == ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM)
+    assert adapted.control is not ReasoningControl.OFF
+    assert adaptation.kind is ReasoningAdaptationKind.SUBSTITUTED
+    assert adaptation.message is not None
+    assert "cannot run with thinking disabled" in adaptation.message
+
+
+def test_off_against_a_mandatory_model_without_a_vocabulary_goes_adaptive() -> None:
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.off(), MANDATORY_WITHOUT_VOCABULARY, model_ref="p/m"
+    )
+
+    assert adapted == ReasoningPolicy.adaptive()
+    assert adapted.control is ReasoningControl.ADAPTIVE
+    assert adaptation.kind is ReasoningAdaptationKind.SUBSTITUTED
+
+
+@pytest.mark.parametrize("profile_id", REPRESENTATIVE_PROFILES)
+def test_a_mandatory_model_never_sees_a_disabled_wire_field(profile_id: str) -> None:
+    """The point of the rewrite: no encoder may emit its "off" shape."""
+
+    gated = gated_body(profile_id, ReasoningPolicy.off(), MANDATORY_WITH_VOCABULARY)
+    off_body = encode(profile_id, ReasoningPolicy.off())
+    floor_body = encode(profile_id, ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM))
+
+    assert gated == floor_body
+    # ``minimax`` (a constant body) and ``xai`` (no reasoning field at all)
+    # have no disabled shape to have emitted; every other encoder here does.
+    if off_body != floor_body:
+        assert gated != off_body
+
+
+def test_mandatory_is_ignored_when_it_is_unknown() -> None:
+    """``None`` is not ``False``; an unstated flag must not rewrite anything."""
+
+    off = ReasoningPolicy.off()
+    unstated = ModelReasoningCapability(
+        can_reason=True,
+        supports_effort_control=True,
+        supported_efforts=frozenset({ReasoningEffort.HIGH}),
+    )
+    assert adapt_reasoning_policy(off, unstated)[0] is off
+
+
+# ---------------------------------------------------------------------------
+# R10 -- a client budget is clamped wherever the output limit is known.
+# ---------------------------------------------------------------------------
+
+
+def test_a_client_budget_is_clamped_when_budget_control_is_unknown() -> None:
+    """``supports_budget_control`` is ``None`` for most models.
+
+    Knowing what the model can emit is already enough to know the budget cannot
+    exceed it, so the clamp must not wait for the control flag.
+    """
+
+    unknown_control = ModelReasoningCapability(can_reason=True)
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(budget_tokens=999_999),
+        unknown_control,
+        output_limit=16_384,
+        model_ref="nvidia_nim/minimaxai/minimax-m3",
+    )
+
+    assert adapted.budget_tokens == 8192
+    assert adaptation.kind is ReasoningAdaptationKind.CLAMPED
+
+
+def test_a_client_budget_stays_untouched_when_the_output_limit_is_unknown() -> None:
+    """Unknown on both counts still has to change nothing at all."""
+
+    policy = ReasoningPolicy.on(budget_tokens=999_999)
+    unknown_control = ModelReasoningCapability(can_reason=True)
+    assert (
+        adapt_reasoning_policy(policy, unknown_control, output_limit=None)[0] is policy
+    )
+
+
+# ---------------------------------------------------------------------------
+# R11 -- an effort is priced against the model, not against a flat table.
+# ---------------------------------------------------------------------------
+
+
+def test_the_same_effort_costs_different_tokens_on_different_models() -> None:
+    """Live numbers: glm-5.2:free 230,400 vs minimax-m3 16,384."""
+
+    def budget(output_limit: int) -> int | None:
+        adapted, _ = adapt_reasoning_policy(
+            ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+            BUDGET_ONLY,
+            max_tokens=None,
+            output_limit=output_limit,
+        )
+        return adapted.budget_tokens
+
+    large = budget(230_400)
+    small = budget(16_384)
+
+    assert large is not None and small is not None
+    assert large != small
+    assert large > small
+    # The flat table would have answered 2,048 for both.
+    assert 2048 not in {large, small}
