@@ -12,6 +12,9 @@ from my_claude_code.config.admin.persistence import (
 from my_claude_code.config.settings import Settings
 
 LIMIT_KEYS = (
+    "MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT",
+    "MAX_OUTPUT_TOKENS_CEILING",
+    "MAX_OUTPUT_TOKENS_CONTEXT_MARGIN",
     "FALLBACK_FIRST_TOKEN_TIMEOUT",
     "FALLBACK_TOTAL_TIMEOUT",
     "FALLBACK_STALL_TIMEOUT",
@@ -103,6 +106,13 @@ def test_each_limit_default_matches_the_setting_default(key: str) -> None:
     attr = field.settings_attr
     assert attr is not None
     actual = getattr(Settings(), attr)
+    if actual is None:
+        # An optional limit that ships unset shows an empty box, not the word
+        # "None". MAX_OUTPUT_TOKENS_CEILING is the only one: a ceiling that
+        # binds below a model's own published limit is exactly what the
+        # per-model output budget exists to avoid, so it is opt-in.
+        assert field.default == ""
+        return
     if isinstance(actual, bool):
         assert field.default == ("true" if actual else "false")
     elif isinstance(actual, int | float):

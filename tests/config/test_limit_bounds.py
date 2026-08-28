@@ -60,7 +60,13 @@ def test_a_value_above_the_range_is_clamped_not_fatal(attr: str) -> None:
 @pytest.mark.parametrize("attr", LIMIT_ATTRS)
 def test_the_default_sits_inside_its_own_range(attr: str) -> None:
     """A default outside its range would be clamped on every single boot."""
-    assert LIMIT_RANGES[attr].contains(Settings.model_fields[attr].default)
+    default = Settings.model_fields[attr].default
+    if default is None:
+        # An optional limit that ships unset -- MAX_OUTPUT_TOKENS_CEILING is
+        # the only one, and deliberately so. There is nothing to keep in range
+        # until an operator names a value, which the clamp tests above cover.
+        return
+    assert LIMIT_RANGES[attr].contains(default)
 
 
 def test_the_compression_level_cannot_exceed_what_zstd_accepts() -> None:

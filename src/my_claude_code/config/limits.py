@@ -39,6 +39,18 @@ HOUR = 3600.0
 DAY = 86400.0
 
 LIMIT_RANGES: dict[str, LimitRange] = {
+    # --- how many tokens one answer may be ---------------------------------
+    # The upper bound is the largest output limit anything in the models.dev
+    # catalogue publishes, rounded up to a power of two. It is a sanity bound
+    # on a hand-typed number, not an opinion about model capacity: a real
+    # per-model limit is read from the model, never from this table.
+    "max_output_tokens_unknown_default": LimitRange(1, 1_048_576),
+    "max_output_tokens_ceiling": LimitRange(1, 1_048_576),
+    # 0 turns the reservation off, which is only sane if you trust FCC's token
+    # count to match the upstream's exactly.
+    "max_output_tokens_context_margin": LimitRange(
+        0, 65_536, "0 reserves nothing for the prompt"
+    ),
     # --- when to stop waiting ---------------------------------------------
     "fallback_first_token_timeout": LimitRange(
         0.0, HOUR, "0 waits indefinitely for the first token"

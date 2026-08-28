@@ -1,7 +1,7 @@
 """Model routing for Claude-compatible requests."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from loguru import logger
@@ -28,6 +28,11 @@ from my_claude_code.core.reasoning import (
 )
 
 from .model_metadata import ModelReasoningCapability
+from .output_tokens import (
+    UNKNOWN_OUTPUT_TOKEN_LIMITS,
+    OutputTokenLimits,
+    resolve_max_output_tokens,
+)
 from .reasoning import resolve_reasoning_policy
 from .reasoning_gating import adapt_reasoning_policy
 
@@ -59,6 +64,13 @@ class RoutedMessagesRequest:
     and the tier configuration asked for. The two are equal whenever the model
     could accept the request unchanged, and differ exactly when the model's
     published capability forced a clamp, a substitution, or a suppression.
+
+    ``output_limits`` carries everything known about how many tokens this model
+    can emit, resolved here because the lookups live in this layer and
+    ``core/anthropic/conversion.py`` -- where the body is built -- cannot reach
+    settings or the model catalogue. It is only the *inputs* to the decision:
+    the budget itself needs the prompt's token count, which is not known until
+    execution, so :func:`apply_output_token_budget` finishes the job there.
     """
 
     request: MessagesRequest
@@ -66,6 +78,7 @@ class RoutedMessagesRequest:
     reasoning: ReasoningPolicy
     requested_reasoning: ReasoningPolicy
     reasoning_adaptation: ReasoningAdaptation
+    output_limits: OutputTokenLimits = UNKNOWN_OUTPUT_TOKEN_LIMITS
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +142,32 @@ VisionCapabilityLookup = Callable[[str, str], bool | None]
 # means every model is unknown -- which by design changes nothing at all.
 ReasoningCapabilityLookup = Callable[[str, str], ModelReasoningCapability | None]
 OutputLimitLookup = Callable[[str, str], int | None]
+ContextLengthLookup = Callable[[str, str], int | None]
+
+
+def apply_output_token_budget(
+    routed: RoutedMessagesRequest, input_tokens: int
+) -> RoutedMessagesRequest:
+    """Bind one routed request's ``max_tokens`` to what its model can emit.
+
+    Called once the prompt has been counted, because the context-headroom half
+    of the decision needs that count. The resolved value is written onto the
+    routed request itself, which is how it reaches
+    ``build_base_request_body`` -- and every other provider dialect -- without
+    ``core`` having to look anything up.
+    """
+
+    resolved = resolve_max_output_tokens(
+        routed.request.max_tokens,
+        limits=routed.output_limits,
+        input_tokens=input_tokens,
+        model_ref=routed.resolved.provider_model_ref,
+    )
+    if resolved == routed.request.max_tokens:
+        return routed
+    return replace(
+        routed, request=routed.request.model_copy(update={"max_tokens": resolved})
+    )
 
 
 class ModelRouter:
@@ -141,11 +180,13 @@ class ModelRouter:
         vision_lookup: VisionCapabilityLookup | None = None,
         reasoning_capability_lookup: ReasoningCapabilityLookup | None = None,
         output_limit_lookup: OutputLimitLookup | None = None,
+        context_length_lookup: ContextLengthLookup | None = None,
     ):
         self._settings = settings
         self._vision_lookup = vision_lookup
         self._reasoning_capability_lookup = reasoning_capability_lookup
         self._output_limit_lookup = output_limit_lookup
+        self._context_length_lookup = context_length_lookup
 
     def resolve(self, claude_model_name: str) -> ResolvedModel:
         (
@@ -461,6 +502,35 @@ class ModelRouter:
             reasoning=reasoning,
             requested_reasoning=policy,
             reasoning_adaptation=reasoning_adaptation,
+            output_limits=self._output_limits(resolved),
+        )
+
+    def _output_limits(self, resolved: ResolvedModel) -> OutputTokenLimits:
+        """Collect what is known about this model's output capacity.
+
+        An absent lookup means every model is unknown, which leaves the
+        operator's fallback in charge -- the same "changes nothing at all"
+        default the vision and reasoning lookups already have.
+        """
+
+        return OutputTokenLimits(
+            limit=self._model_output_limit(resolved),
+            context_length=self._model_context_length(resolved),
+            unknown_default=self._settings.max_output_tokens_unknown_default,
+            ceiling=self._settings.max_output_tokens_ceiling,
+            context_margin=self._settings.max_output_tokens_context_margin,
+        )
+
+    def _model_output_limit(self, resolved: ResolvedModel) -> int | None:
+        if self._output_limit_lookup is None:
+            return None
+        return self._output_limit_lookup(resolved.provider_id, resolved.provider_model)
+
+    def _model_context_length(self, resolved: ResolvedModel) -> int | None:
+        if self._context_length_lookup is None:
+            return None
+        return self._context_length_lookup(
+            resolved.provider_id, resolved.provider_model
         )
 
     def _gate_reasoning(
@@ -476,11 +546,7 @@ class ModelRouter:
         capability = self._reasoning_capability_lookup(
             resolved.provider_id, resolved.provider_model
         )
-        output_limit = (
-            self._output_limit_lookup(resolved.provider_id, resolved.provider_model)
-            if self._output_limit_lookup is not None
-            else None
-        )
+        output_limit = self._model_output_limit(resolved)
         return adapt_reasoning_policy(
             policy,
             capability,

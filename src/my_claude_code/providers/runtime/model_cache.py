@@ -100,6 +100,20 @@ class ProviderModelCache:
             return None
         return info.max_output_tokens
 
+    def cached_model_context_length(
+        self, provider_id: str, model_id: str
+    ) -> int | None:
+        """Return the provider's own declared context window for this model.
+
+        Prompt plus completion, unlike
+        :meth:`cached_model_max_output_tokens`. ``None`` when the provider does
+        not publish one.
+        """
+        info = self._model_infos_by_provider.get(provider_id, {}).get(model_id)
+        if info is None:
+            return None
+        return info.context_length
+
     def cached_model_reasoning_capability(
         self, provider_id: str, model_id: str
     ) -> ModelReasoningCapability | None:

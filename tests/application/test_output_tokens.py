@@ -1,0 +1,385 @@
+"""Per-model output-token budgets (WORKING-NOTES 54).
+
+    requested <= model maximum  ->  send what was requested
+    requested >  model maximum  ->  send the MODEL'S MAXIMUM
+    unknown                     ->  fall back, and say so
+
+The numbers used here are real: they are the published output limits of models
+this proxy actually routes to, so a regression shows up as a model the user
+recognises rather than an abstract one.
+"""
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from my_claude_code.application.output_tokens import (
+    OutputTokenLimits,
+    resolve_max_output_tokens,
+)
+from my_claude_code.application.routing import (
+    ModelRouter,
+    apply_output_token_budget,
+)
+from my_claude_code.config.constants import (
+    ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    MAX_OUTPUT_TOKENS_CEILING,
+    MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
+    MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
+)
+from my_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
+from my_claude_code.config.reasoning import ReasoningPreference
+from my_claude_code.config.settings import Settings
+from my_claude_code.core.anthropic.models import Message, MessagesRequest
+from my_claude_code.providers.base import ProviderConfig
+from tests.providers.request_factory import make_messages_request
+from tests.providers.support import passthrough_rate_limiter, profiled_provider
+
+# Measured on the user's live routes, 2026-08.
+MINIMAX_M3 = 16_384  # nvidia_nim/minimaxai/minimax-m3
+HY3_FREE = 128_000  # nous_portal/tencent/hy3:free
+LONGCAT = 131_072  # meituan/longcat-2.0:free
+GLM_52_FREE = 230_400  # z-ai/glm-5.2:free
+BIG_MODEL = 262_144
+
+
+def resolve(
+    requested: int | None,
+    *,
+    limit: int | None = None,
+    context_length: int | None = None,
+    unknown_default: int | None = MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
+    ceiling: int | None = MAX_OUTPUT_TOKENS_CEILING,
+    context_margin: int = MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
+    input_tokens: int = 0,
+) -> int | None:
+    """Resolve one budget against the shipped configuration defaults."""
+
+    return resolve_max_output_tokens(
+        requested,
+        limits=OutputTokenLimits(
+            limit=limit,
+            context_length=context_length,
+            unknown_default=unknown_default,
+            ceiling=ceiling,
+            context_margin=context_margin,
+        ),
+        input_tokens=input_tokens,
+        model_ref="nvidia_nim/minimaxai/minimax-m3",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# The rule
+# --------------------------------------------------------------------------- #
+
+
+def test_client_value_below_the_limit_passes_through_untouched():
+    assert resolve(4_096, limit=MINIMAX_M3) == 4_096
+
+
+def test_client_value_above_the_limit_is_clamped_to_the_limit(caplog):
+    with caplog.at_level("WARNING"):
+        assert resolve(ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS, limit=MINIMAX_M3) == (
+            MINIMAX_M3
+        )
+
+    assert "MAX TOKENS CLAMPED" in caplog.text
+    assert "minimax-m3" in caplog.text
+    assert "81920" in caplog.text
+    assert "16384" in caplog.text
+
+
+def test_client_value_exactly_at_the_limit_is_not_clamped():
+    assert resolve(MINIMAX_M3, limit=MINIMAX_M3) == MINIMAX_M3
+
+
+@pytest.mark.parametrize("limit", [MINIMAX_M3, HY3_FREE, LONGCAT, GLM_52_FREE])
+def test_no_client_value_sends_the_models_full_capability(limit):
+    """Not 81920. The whole point: under-using a model is as wrong as over-asking."""
+
+    assert resolve(None, limit=limit) == limit
+    assert resolve(None, limit=limit) != ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+
+
+# --------------------------------------------------------------------------- #
+# Unknown: a fallback, never a cap
+# --------------------------------------------------------------------------- #
+
+
+def test_unknown_model_without_a_client_value_uses_the_configured_fallback():
+    assert resolve(None) == MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT
+
+
+def test_unknown_model_never_clamps_an_explicit_client_value_below_itself():
+    """A number nobody published has no standing to shrink an explicit ask."""
+
+    requested = MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT * 4
+    assert resolve(requested) == requested
+
+
+def test_unknown_fallback_can_be_switched_off_entirely():
+    """No fallback and no limit leaves max_tokens unset for the profile default."""
+
+    assert resolve(None, unknown_default=None) is None
+
+
+# --------------------------------------------------------------------------- #
+# The ceiling: off by default, and it must not undercut a real capability
+# --------------------------------------------------------------------------- #
+
+
+def test_ceiling_is_unset_by_default_so_a_262k_model_gets_262k():
+    assert MAX_OUTPUT_TOKENS_CEILING is None
+    assert resolve(None, limit=BIG_MODEL) == BIG_MODEL
+
+
+def test_ceiling_binds_when_the_operator_sets_one(caplog):
+    with caplog.at_level("WARNING"):
+        assert resolve(None, limit=BIG_MODEL, ceiling=32_000) == 32_000
+
+    assert "MAX TOKENS CEILING" in caplog.text
+
+
+def test_ceiling_above_the_models_limit_changes_nothing():
+    assert resolve(None, limit=MINIMAX_M3, ceiling=BIG_MODEL) == MINIMAX_M3
+
+
+# --------------------------------------------------------------------------- #
+# Zero is a value, not an absence
+# --------------------------------------------------------------------------- #
+
+
+def test_client_zero_is_not_treated_as_unset():
+    assert resolve(0, limit=LONGCAT) == 0
+
+
+def test_client_zero_on_an_unknown_model_is_not_replaced_by_the_fallback():
+    assert resolve(0) == 0
+
+
+# --------------------------------------------------------------------------- #
+# Context headroom
+# --------------------------------------------------------------------------- #
+
+
+def test_output_equal_to_context_is_bounded_by_what_the_prompt_left(caplog):
+    """15% of the models.dev catalogue reports limit.output == limit.context."""
+
+    with caplog.at_level("WARNING"):
+        resolved = resolve(
+            None,
+            limit=LONGCAT,
+            context_length=LONGCAT,
+            input_tokens=100_000,
+        )
+
+    assert resolved == LONGCAT - 100_000 - MAX_OUTPUT_TOKENS_CONTEXT_MARGIN
+    assert "MAX TOKENS BOUNDED BY CONTEXT" in caplog.text
+
+
+def test_negative_headroom_leaves_the_request_unmodified():
+    """Let the provider report the real error rather than send max_tokens<=0."""
+
+    assert (
+        resolve(
+            None,
+            limit=LONGCAT,
+            context_length=LONGCAT,
+            input_tokens=LONGCAT,
+        )
+        == LONGCAT
+    )
+
+
+def test_headroom_exactly_zero_leaves_the_request_unmodified():
+    assert (
+        resolve(
+            8_192,
+            limit=LONGCAT,
+            context_length=LONGCAT,
+            input_tokens=LONGCAT - MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
+        )
+        == 8_192
+    )
+
+
+def test_a_small_output_limit_inside_a_large_context_is_never_touched():
+    assert (
+        resolve(
+            None,
+            limit=MINIMAX_M3,
+            context_length=LONGCAT,
+            input_tokens=90_000,
+        )
+        == MINIMAX_M3
+    )
+
+
+def test_context_margin_of_zero_reserves_nothing():
+    assert (
+        resolve(
+            None,
+            limit=HY3_FREE,
+            context_length=HY3_FREE,
+            input_tokens=8_000,
+            context_margin=0,
+        )
+        == HY3_FREE - 8_000
+    )
+
+
+# --------------------------------------------------------------------------- #
+# End to end through the router
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def settings():
+    settings = Settings()
+    settings.model = "nvidia_nim/minimaxai/minimax-m3"
+    settings.model_fable = None
+    settings.model_opus = None
+    settings.model_sonnet = None
+    settings.model_haiku = None
+    settings.reasoning_policy = ReasoningPreference.OFF
+    settings.reasoning_fable = ReasoningPreference.INHERIT
+    settings.reasoning_opus = ReasoningPreference.INHERIT
+    settings.reasoning_sonnet = ReasoningPreference.INHERIT
+    settings.reasoning_haiku = ReasoningPreference.INHERIT
+    return settings
+
+
+def route(settings, request, *, output_limit=None, context_length=None):
+    router = ModelRouter(
+        settings,
+        output_limit_lookup=lambda _p, _m: output_limit,
+        context_length_lookup=lambda _p, _m: context_length,
+    )
+    return apply_output_token_budget(router.resolve_messages_request(request), 0)
+
+
+def test_router_defaults_are_unset_so_nothing_changes_without_lookups(settings):
+    """An absent catalogue must leave the shipped fallback in charge, not 81920."""
+
+    request = MessagesRequest(
+        model="claude-sonnet-4",
+        messages=[Message(role="user", content="hi")],
+    )
+    routed = route(settings, request)
+
+    assert routed.request.max_tokens == MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT
+
+
+def test_router_sends_the_full_published_limit_when_the_client_omits_one(settings):
+    request = MessagesRequest(
+        model="claude-sonnet-4",
+        messages=[Message(role="user", content="hi")],
+    )
+    routed = route(settings, request, output_limit=GLM_52_FREE)
+
+    assert routed.request.max_tokens == GLM_52_FREE
+
+
+def test_router_clamps_the_client_value_and_leaves_the_caller_request_alone(settings):
+    request = MessagesRequest(
+        model="claude-sonnet-4",
+        max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        messages=[Message(role="user", content="hi")],
+    )
+    routed = route(settings, request, output_limit=MINIMAX_M3)
+
+    assert routed.request.max_tokens == MINIMAX_M3
+    assert request.max_tokens == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def test_router_applies_the_operator_ceiling_from_settings(settings):
+    settings.max_output_tokens_ceiling = 8_000
+    request = MessagesRequest(
+        model="claude-sonnet-4",
+        messages=[Message(role="user", content="hi")],
+    )
+    routed = route(settings, request, output_limit=BIG_MODEL)
+
+    assert routed.request.max_tokens == 8_000
+
+
+def test_router_bounds_by_context_using_the_prompts_token_count(settings):
+    router = ModelRouter(
+        settings,
+        output_limit_lookup=lambda _p, _m: HY3_FREE,
+        context_length_lookup=lambda _p, _m: HY3_FREE,
+    )
+    request = MessagesRequest(
+        model="claude-sonnet-4",
+        messages=[Message(role="user", content="hi")],
+    )
+    routed = apply_output_token_budget(
+        router.resolve_messages_request(request), 120_000
+    )
+
+    assert routed.request.max_tokens == (
+        HY3_FREE - 120_000 - MAX_OUTPUT_TOKENS_CONTEXT_MARGIN
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Cooperation with the reactive cap learned from a provider 400
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def groq_provider():
+    return profiled_provider(
+        "groq",
+        ProviderConfig(
+            api_key="test_groq_key",
+            base_url=GROQ_DEFAULT_BASE,
+            rate_limit=10,
+            rate_window=60,
+        ),
+        rate_limiter=passthrough_rate_limiter(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_learned_cap_beats_the_catalogue_limit(groq_provider):
+    """Ground truth from the provider outranks a published claim about it."""
+
+    body = groq_provider._build_request_body(
+        make_messages_request(
+            "llama-3.3-70b-versatile",
+            # What the catalogue said this model can emit, already applied by
+            # routing before the provider ever saw the request.
+            max_tokens=LONGCAT,
+            thinking={"enabled": False},
+        )
+    )
+    assert body["max_completion_tokens"] == LONGCAT
+    groq_provider._model_output_caps[body["model"]] = 40_960
+
+    create = AsyncMock(return_value=object())
+    with patch.object(groq_provider._client.chat.completions, "create", create):
+        _stream, used_body = await groq_provider._create_stream(body)
+
+    assert used_body["max_completion_tokens"] == 40_960
+
+
+@pytest.mark.asyncio
+async def test_a_learned_cap_never_raises_a_smaller_catalogue_limit(groq_provider):
+    """An "at most N" does not contradict a catalogue value below N."""
+
+    body = groq_provider._build_request_body(
+        make_messages_request(
+            "llama-3.3-70b-versatile",
+            max_tokens=MINIMAX_M3,
+            thinking={"enabled": False},
+        )
+    )
+    groq_provider._model_output_caps[body["model"]] = 40_960
+
+    create = AsyncMock(return_value=object())
+    with patch.object(groq_provider._client.chat.completions, "create", create):
+        _stream, used_body = await groq_provider._create_stream(body)
+
+    assert used_body["max_completion_tokens"] == MINIMAX_M3

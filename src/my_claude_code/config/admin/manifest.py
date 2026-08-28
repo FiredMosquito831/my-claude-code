@@ -641,6 +641,52 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         advanced=True,
         restart_required=True,
     ),
+    # ---- Limits: how long one answer may be ------------------------------
+    ConfigFieldSpec(
+        "MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT",
+        "Output tokens when unknown",
+        "limits",
+        "number",
+        settings_attr="max_output_tokens_unknown_default",
+        default="32768",
+        description=(
+            "Output-token budget used only when no source publishes a limit "
+            "for the routed model. Whenever one does -- the provider's own "
+            "/models payload or the models.dev catalogue -- that number is "
+            "used instead, so a capable model is never held to this one. It "
+            "also never reduces a max_tokens the client asked for."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MAX_OUTPUT_TOKENS_CEILING",
+        "Output token ceiling",
+        "limits",
+        "number",
+        settings_attr="max_output_tokens_ceiling",
+        default="",
+        advanced=True,
+        description=(
+            "Absolute cap on output tokens for every request, whatever the "
+            "model can do. Empty by default and best left empty: a ceiling "
+            "below a model's published limit throws away capacity you are "
+            "paying for. Set one only as a runaway guard."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MAX_OUTPUT_TOKENS_CONTEXT_MARGIN",
+        "Prompt reserve",
+        "limits",
+        "number",
+        settings_attr="max_output_tokens_context_margin",
+        default="1024",
+        advanced=True,
+        description=(
+            "Tokens held back from the context window when a model's output "
+            "limit is large enough to swallow its own context. Absorbs the "
+            "difference between FCC's token count and the upstream "
+            "tokenizer's. 0 reserves nothing."
+        ),
+    ),
     # ---- Limits: when to stop waiting ------------------------------------
     ConfigFieldSpec(
         "FALLBACK_FIRST_TOKEN_TIMEOUT",

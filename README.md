@@ -530,6 +530,28 @@ Since 5.50.0 reasoning is held back like an envelope frame, so the attempt stays
 
 Every attempt is recorded. **Analytics** shows the model that actually answered rather than the one the route started from, and the request detail draws the whole chain — see [Route tracing](#route-tracing).
 
+### Output Token Budget
+
+**Each model is asked for what it can actually produce.** MCC reads the routed model's published output limit — the provider's own `/models` payload first, the [models.dev](https://models.dev) catalog second — and sizes `max_tokens` from it:
+
+- The client asked for **less** than the limit → it gets exactly what it asked for.
+- The client asked for **more** → the request is lowered to the model's maximum and a `MAX TOKENS CLAMPED` warning names the model, the ask and the limit. Sending the original value instead just buys a 400 from the provider.
+- The client asked for **nothing** → the model's **full** limit is sent. A model that can write 230,400 tokens is used as one.
+
+This replaces a flat 81,920 that every model got regardless. On real routes that number was simultaneously too high (`minimaxai/minimax-m3` and `thinkingmachines/inkling` both stop at 16,384) and too low (`tencent/hy3:free` does 128,000, `meituan/longcat-2.0:free` 131,072).
+
+Three settings cover what the model itself cannot answer, all editable in **Admin UI → Limits**:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT` | `32768` | Used **only** when no source publishes a limit for the routed model. A fallback for a missing client value, never a cap on a present one — a number nobody published has no business shrinking an explicit request. |
+| `MAX_OUTPUT_TOKENS_CEILING` | *(unset)* | Absolute cap on every request, whatever the model can do. Deliberately empty, and best left that way: a ceiling below a model's published limit throws away capacity for nothing. Set one only as a runaway guard. |
+| `MAX_OUTPUT_TOKENS_CONTEXT_MARGIN` | `1024` | Tokens reserved for the prompt when a model's output limit is as large as its whole context window — about 15% of the catalog reports exactly that, and on those, asking for the full output leaves no room for the messages. |
+
+**Context is respected.** Where the provider publishes a context window, the budget is bounded by what the prompt left of it, minus the margin. If the prompt already fills the window the request is sent unchanged, so the provider reports the real error rather than MCC guessing at it.
+
+**A provider's own rejection still wins.** Some upstreams cap output below what they publish and say so in a 400 (`max_completion_tokens must be less than or equal to 40960`). MCC parses that, retries once, and remembers the cap for that model — and a learned cap always beats a catalogue value, because it came from the deployment actually serving the request.
+
 ### Vision Adapter
 
 Set `MODEL_VISION` to a model that accepts images and MCC will route image-carrying requests to it whenever the model the tier picked is **known** not to read images — so a fast text-only default can stay in place without breaking screenshots and diagrams.

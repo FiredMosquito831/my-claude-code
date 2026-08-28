@@ -353,7 +353,16 @@ class OpenAIChatProvider(BaseProvider):
         return None
 
     def _apply_learned_output_cap(self, body: dict) -> dict:
-        """Clamp output tokens to a previously learned cap for this model."""
+        """Clamp output tokens to a previously learned cap for this model.
+
+        This runs after the routed budget has already been sized from the
+        model's published limit, and it only ever lowers -- which is what makes
+        it the deciding word. A cap learned from the provider's own 400 is
+        ground truth about this deployment; a catalogue limit is a published
+        claim, and where a gateway resells a model on a smaller deployment the
+        claim is the one that is wrong. It never raises the budget: the 400
+        says "at most N", which does not contradict a catalogue value below N.
+        """
         model = body.get("model")
         if not isinstance(model, str):
             return body

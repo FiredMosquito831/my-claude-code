@@ -34,6 +34,9 @@ from .constants import (
     FALLBACK_STALL_TIMEOUT_DEFAULT,
     FALLBACK_TOTAL_TIMEOUT_DEFAULT,
     HTTP_CONNECT_TIMEOUT_DEFAULT,
+    MAX_OUTPUT_TOKENS_CEILING,
+    MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
+    MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
     REQUEST_LOG_COMPRESSION_LEVEL_DEFAULT,
@@ -380,6 +383,33 @@ class Settings(BaseSettings):
     # one unreachable vision model must not lose every image on the machine.
     model_vision_fallbacks: str | None = Field(
         default=None, validation_alias="MODEL_VISION_FALLBACKS"
+    )
+
+    # ==================== Output tokens ====================
+    # What one request may ask the routed model to generate. The model's own
+    # published limit governs whenever a source has one; these three only cover
+    # the cases where it does not, or where the operator wants a hard stop.
+    #
+    # Used only when nothing published an output limit for the routed model.
+    # A fallback for a missing client value, never a cap on a present one:
+    # capping an explicit request against a number nobody published would be an
+    # invented limit.
+    max_output_tokens_unknown_default: int = Field(
+        default=MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
+        validation_alias="MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT",
+    )
+    # Absolute runaway guard. Unset by default: a ceiling that binds below a
+    # model's declared capability under-uses the model, which is exactly what
+    # this whole path exists to stop.
+    max_output_tokens_ceiling: int | None = Field(
+        default=MAX_OUTPUT_TOKENS_CEILING,
+        validation_alias="MAX_OUTPUT_TOKENS_CEILING",
+    )
+    # Tokens reserved for the prompt when the model's output limit is large
+    # enough to swallow its own context window.
+    max_output_tokens_context_margin: int = Field(
+        default=MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
+        validation_alias="MAX_OUTPUT_TOKENS_CONTEXT_MARGIN",
     )
 
     # ==================== Fallback timing ====================
@@ -1206,6 +1236,10 @@ class Settings(BaseSettings):
         """
         for attr, limit in LIMIT_RANGES.items():
             value = getattr(self, attr)
+            if value is None:
+                # An optional limit that is simply not set, e.g. the output
+                # ceiling. Nothing to keep inside a range.
+                continue
             clamped = limit.clamp(value)
             if clamped == value:
                 continue

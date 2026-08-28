@@ -759,8 +759,18 @@ def build_base_request_body(
 
     body: dict[str, Any] = {"model": request_data.model, "messages": messages}
 
+    # ``is None``, not falsy: a client that sends ``max_tokens: 0`` said
+    # something, and swapping it for a default answers a different question.
+    #
+    # By the time a routed request arrives here its ``max_tokens`` has already
+    # been bound to the model's own published output limit by
+    # ``application.routing.apply_output_token_budget``. ``default_max_tokens``
+    # is the last-resort per-profile constant for the paths that never went
+    # through routing, and nothing more.
     max_tokens = request_data.max_tokens
-    set_if_not_none(body, "max_tokens", max_tokens or default_max_tokens)
+    if max_tokens is None:
+        max_tokens = default_max_tokens
+    set_if_not_none(body, "max_tokens", max_tokens)
     set_if_not_none(body, "temperature", request_data.temperature)
     set_if_not_none(body, "top_p", request_data.top_p)
 

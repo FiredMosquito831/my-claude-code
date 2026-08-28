@@ -44,7 +44,11 @@ from my_claude_code.core.trace import (
 
 from .ports import ProviderPort, ProviderResolver
 from .route_health import RouteHealthRegistry
-from .routing import RoutedMessagesPlan, RoutedMessagesRequest
+from .routing import (
+    RoutedMessagesPlan,
+    RoutedMessagesRequest,
+    apply_output_token_budget,
+)
 
 TokenCounter = Callable[
     [list[Message], str | list[SystemContent] | None, list[Tool] | None],
@@ -503,10 +507,22 @@ class ProviderExecutor:
         if self._log_raw_payloads:
             logger.debug(f"{raw_log_label} [{{}}]: {{}}", request_id, raw_log_payload)
 
+        # Counted once and used twice: the input usage the client is told
+        # about, and how much of the model's context window its answer still
+        # has to fit in. Deliberately after preflight -- a request that cannot
+        # be converted at all should not pay for tokenization first.
         input_tokens = self._token_counter(
             plan.primary.request.messages,
             plan.primary.request.system,
             plan.primary.request.tools,
+        )
+        # Every attempt is bound to its own model's real output capacity, not
+        # just the primary: a fallback on a 16,384-token model must not inherit
+        # a budget sized for the 262,144-token model above it. Rebound here
+        # rather than in routing because the context-headroom half of the
+        # decision needs the prompt's token count.
+        attempts = tuple(
+            apply_output_token_budget(attempt, input_tokens) for attempt in attempts
         )
 
         # Per-request, not per-executor. ProviderExecutor is constructed once

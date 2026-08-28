@@ -181,6 +181,18 @@ class ProviderRuntimeManager:
             provider_id, model_id
         ) or model_output_limit_from_models_dev(provider_id, model_id)
 
+    def model_context_length(self, provider_id: str, model_id: str) -> int | None:
+        """Return the routed deployment's own context window, if it publishes one.
+
+        Only the provider's ``/models`` payload answers this. models.dev's
+        ``limit.context`` describes the model as its *originating* vendor ships
+        it, which for a resold deployment is routinely wrong in the direction
+        that matters -- a gateway serving a 262k model on a 32k deployment
+        would have its real window overstated, and the output budget derived
+        from it would not fit.
+        """
+        return self._model_cache.cached_model_context_length(provider_id, model_id)
+
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._model_cache.cached_prefixed_model_infos()
 

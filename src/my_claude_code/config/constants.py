@@ -3,8 +3,34 @@
 # HTTP client connect timeout (seconds). Keep aligned with README.md and .env.example.
 HTTP_CONNECT_TIMEOUT_DEFAULT = 10.0
 
-# Anthropic Messages API default when the client omits max_tokens.
+# Anthropic Messages API default when the client omits max_tokens, and nothing
+# published a real per-model limit for the routed model. It is the last-resort
+# per-profile default only: whenever a capability source knows what the model
+# can actually emit, that number governs instead (WORKING-NOTES 54).
 ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS = 81920
+
+# Output-token budget for one request. Three separate decisions, three separate
+# names -- fusing them into one expression is how a fallback silently becomes a
+# cap.
+#
+# 1. What to send when *no* source knows the model's output limit. A fallback,
+#    never a limit: it supplies a value the client did not give, and it must
+#    never reduce a value the client did give, because a guess has no standing
+#    to override an explicit request.
+MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT = 32768
+# 2. An absolute runaway guard, off by default and deliberately so. A ceiling
+#    that binds below a model's own declared capability is the anti-pattern
+#    WORKING-NOTES 54 forbids -- it is what OpenCode does, and it silently caps
+#    a 262,144-output model at 32k. Set it only if you want one.
+MAX_OUTPUT_TOKENS_CEILING: int | None = None
+# 3. Tokens held back from the context window when bounding output by the
+#    remaining context. 1,117 of 7,440 models.dev entries report
+#    ``limit.output == limit.context``, so on those the full output leaves no
+#    room for the prompt. The margin absorbs the gap between FCC's own token
+#    count and the upstream tokenizer plus whatever chat template the provider
+#    wraps around the messages; 1,024 is small against any real context window
+#    (the smallest in the catalogue is 4,096) and large enough to cover both.
+MAX_OUTPUT_TOKENS_CONTEXT_MARGIN = 1024
 
 # Non-secret marker stored in Settings when FCC owns renewable ChatGPT credentials.
 CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-oauth"
