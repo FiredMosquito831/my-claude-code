@@ -1062,8 +1062,6 @@ async def test_a_model_is_benched_across_requests_not_within_one() -> None:
 
 def test_changing_the_ejection_policy_starts_a_clean_registry() -> None:
     """A bench made under one policy must not be inherited by another.
-    # Force bench_enabled on so record_failure actually benches (the default
-    # is off, which would make these tests no-ops).
 
     Two models on the route, because ejecting every candidate is deliberately
     bypassed -- skipping a bad model is an optimisation, refusing to try
@@ -2050,3 +2048,175 @@ def test_error_is_retryable_classifies_failures() -> None:
     # An unclassified exception is treated as transient: it might be a raw
     # httpx.TimeoutError raised before the failure policy mapped it.
     assert executor._error_is_retryable(TimeoutError("slow")) is True
+
+
+def test_benching_is_on_by_default() -> None:
+    """The 5.58.0-5.60.0 regression: ejection shipped off and looked on.
+
+    ``fallback_bench_enabled`` defaulted to False and was absent from
+    .env.example, so upgrading silently disabled route-model ejection for every
+    existing install. FALLBACK_EJECT_* stayed documented and stayed set in user
+    .env files while doing nothing, and a flapping model was re-tried at
+    position 0 on every request instead of being parked.
+    """
+    settings = Settings()
+
+    assert settings.fallback_bench_enabled is True
+
+    registry = route_health_registry(settings)
+    assert registry.bench_enabled is True
+    assert registry.enabled is True
+
+
+def test_the_eject_knobs_are_live_under_the_default_settings() -> None:
+    """A default install must actually bench, not just be configured to."""
+    settings = _ejection_settings(after_failures=2)
+    registry = route_health_registry(settings)
+
+    for _ in range(2):
+        registry.record_failure("sick/model")
+
+    assert registry.usable_indexes(("sick/model", "healthy/model")) == (1,)
+
+
+class _RecordingRegistry(RouteHealthRegistry):
+    """Registry that captures what the executor tells it about each failure."""
+
+    def __init__(self) -> None:
+        super().__init__(bench_enabled=False)
+        self.calls: list[tuple[str, str | None, float | None]] = []
+
+    def record_failure(
+        self,
+        model_ref: str,
+        *,
+        failure_kind: str | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        self.calls.append((model_ref, failure_kind, retry_after_seconds))
+        super().record_failure(
+            model_ref,
+            failure_kind=failure_kind,
+            retry_after_seconds=retry_after_seconds,
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_failure_kind_reaches_the_health_registry() -> None:
+    """Without the kind, every ejection used the full eject_seconds.
+
+    The kind-aware bench ladder in RouteHealthRegistry keys off this argument:
+    a 5xx/timeout parks the model for a second, auth/quota take the full
+    window. The executor never passed it, so the whole ladder was dead code.
+    """
+    failure = ExecutionFailure(
+        kind=FailureKind.UPSTREAM, status_code=502, message="boom", retryable=True
+    )
+    primary = ScriptedProvider(chunks=(), error=failure)
+    registry = _RecordingRegistry()
+    executor = ProviderExecutor(
+        lambda provider_id: {"primary": primary, "secondary": FakeProvider()}[
+            provider_id
+        ],
+        token_counter=lambda _m, _s, _t: 17,
+        health=registry,
+    )
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("primary", "big"),
+            _routed_request("secondary", "small"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_kind",
+    )
+    [chunk async for chunk in stream]
+
+    assert registry.calls == [("primary/big", "upstream", None)]
+
+
+@pytest.mark.asyncio
+async def test_an_unclassified_failure_reports_no_kind_rather_than_raising() -> None:
+    """A raw exception never reached provider classification and has no .kind."""
+    primary = ScriptedProvider(chunks=(), error=RuntimeError("upstream 503"))
+    registry = _RecordingRegistry()
+    executor = ProviderExecutor(
+        lambda provider_id: {"primary": primary, "secondary": FakeProvider()}[
+            provider_id
+        ],
+        token_counter=lambda _m, _s, _t: 17,
+        health=registry,
+    )
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("primary", "big"),
+            _routed_request("secondary", "small"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_unclassified",
+    )
+    [chunk async for chunk in stream]
+
+    assert registry.calls == [("primary/big", None, None)]
+
+
+@pytest.mark.asyncio
+async def test_retry_once_applies_to_every_request_not_once_per_process() -> None:
+    """``_retried_positions`` used to live on the executor.
+
+    ProviderExecutor is built once per handler and shared by every request in
+    the process, so the first request to retry position 0 consumed the budget
+    for the whole process lifetime and no later request retried its primary.
+    """
+    executor = ProviderExecutor(
+        lambda provider_id: {
+            "primary": ScriptedProvider(chunks=(), error=RuntimeError("upstream 503")),
+            "secondary": FakeProvider(),
+        }[provider_id],
+        token_counter=lambda _m, _s, _t: 17,
+        retry_first="retry_once",
+        health=RouteHealthRegistry(bench_enabled=False),
+    )
+
+    async def run(request_id: str) -> list[tuple[int, str]]:
+        seen: list[tuple[int, str]] = []
+        stream = executor.stream(
+            _plan(
+                _routed_request("primary", "big"),
+                _routed_request("secondary", "small"),
+            ),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id=request_id,
+            on_attempt=lambda routed, index: seen.append(
+                (index, routed.resolved.provider_model_ref)
+            ),
+        )
+        [chunk async for chunk in stream]
+        return seen
+
+    first = await run("req_retry_1")
+    second = await run("req_retry_2")
+
+    # The primary is attempted twice (original + one retry) in both requests.
+    assert [ref for _, ref in first].count("primary/big") == 2
+    assert [ref for _, ref in second].count("primary/big") == 2, (
+        "the second request did not retry its primary: retry state leaked "
+        "across requests"
+    )
+
+
+def test_the_executor_holds_no_cross_request_retry_state() -> None:
+    executor = ProviderExecutor(
+        _static_resolver(),
+        token_counter=lambda _m, _s, _t: 1,
+        retry_first="retry_once",
+    )
+
+    assert not hasattr(executor, "_retried_positions")

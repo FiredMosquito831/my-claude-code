@@ -49,6 +49,12 @@ def apply_nim_request_options(
     """Apply NIM schema repairs and configured request defaults."""
     sanitize_nim_tool_schemas(body)
 
+    # nim.max_tokens is unset by default, so the client's value passes through
+    # untouched and the model's own output limit governs. It only clamps when
+    # an operator has deliberately configured a cap. The reasoning budget is
+    # sized separately, against the model's real limit.output from models.dev
+    # (see application/reasoning_gating.py), rather than against any constant
+    # here.
     max_tokens = body.get("max_tokens") or request_data.max_tokens
     if max_tokens is None:
         max_tokens = nim.max_tokens
@@ -64,9 +70,13 @@ def apply_nim_request_options(
     if "stop" not in body and nim.stop:
         body["stop"] = nim.stop
 
-    if nim.presence_penalty != 0.0:
+    # ``is not None`` rather than a comparison against the default: an unset
+    # penalty must stay out of the body entirely so NIM applies its own,
+    # while a deliberate 0.0 must still be sent. Testing against the default
+    # made those two cases indistinguishable.
+    if nim.presence_penalty is not None:
         body["presence_penalty"] = nim.presence_penalty
-    if nim.frequency_penalty != 0.0:
+    if nim.frequency_penalty is not None:
         body["frequency_penalty"] = nim.frequency_penalty
     if nim.seed is not None:
         body["seed"] = nim.seed
@@ -104,12 +114,14 @@ def apply_nim_request_options(
 
     req_top_k = request_data.top_k
     top_k = req_top_k if req_top_k is not None else nim.top_k
+    # -1 stays an ignored sentinel here only to absorb a client that spells
+    # "unset" that way; nim.top_k is already None when unset.
     _set_extra(extra_body, "top_k", top_k, ignore_value=-1)
-    _set_extra(extra_body, "min_p", nim.min_p, ignore_value=0.0)
-    _set_extra(
-        extra_body, "repetition_penalty", nim.repetition_penalty, ignore_value=1.0
-    )
-    _set_extra(extra_body, "min_tokens", nim.min_tokens, ignore_value=0)
+    # No ignore_value on the rest: unset is None and is dropped by _set_extra,
+    # so a configured 0.0 / 1.0 / 0 is a real choice and must reach NIM.
+    _set_extra(extra_body, "min_p", nim.min_p)
+    _set_extra(extra_body, "repetition_penalty", nim.repetition_penalty)
+    _set_extra(extra_body, "min_tokens", nim.min_tokens)
     _set_extra(extra_body, "chat_template", nim.chat_template)
     _set_extra(extra_body, "request_id", nim.request_id)
     _set_extra(extra_body, "ignore_eos", nim.ignore_eos)

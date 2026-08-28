@@ -6,7 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from my_claude_code.config.constants import (
-    ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     HTTP_CONNECT_TIMEOUT_DEFAULT,
 )
 from my_claude_code.config.env_files import (
@@ -46,7 +45,11 @@ class TestSettings:
         assert settings.model == "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
         assert isinstance(settings.provider_rate_limit, int)
         assert isinstance(settings.provider_rate_window, int)
-        assert isinstance(settings.nim.temperature, float)
+        # Unset by default: an unrequested sampling value must not be invented
+        # and sent upstream, because some models pin these and reject any
+        # other value.
+        assert settings.nim.temperature is None
+        assert settings.nim.top_p is None
         assert isinstance(settings.enable_title_generation_skip, bool)
         assert settings.reasoning_policy is ReasoningPreference.CLIENT
         assert settings.http_read_timeout == 120.0
@@ -550,11 +553,21 @@ class TestSettings:
 class TestNimSettingsValidBounds:
     """Test that valid values within bounds are accepted."""
 
-    @pytest.mark.parametrize("top_k", [-1, 0, 1, 100])
+    @pytest.mark.parametrize("top_k", [0, 1, 100])
     def test_top_k_valid(self, top_k):
-        """top_k >= -1 should be accepted."""
+        """top_k >= 0 is kept as given."""
         s = NimSettings(top_k=top_k)
         assert s.top_k == top_k
+
+    def test_top_k_minus_one_normalises_to_unset(self):
+        """-1 was the historical "let NIM decide" sentinel.
+
+        It is still accepted for compatibility, but now normalises to None so
+        the request builder can leave top_k out of the body entirely rather
+        than sending a sentinel upstream.
+        """
+        assert NimSettings(top_k=-1).top_k is None
+        assert NimSettings().top_k is None
 
     @pytest.mark.parametrize("temp", [0.0, 0.5, 1.0, 2.0])
     def test_temperature_valid(self, temp):
@@ -635,8 +648,17 @@ class TestNimSettingsInvalidBounds:
 class TestNimSettingsValidators:
     """Test custom field validators in NimSettings."""
 
-    def test_default_max_tokens_matches_shared_constant(self):
-        assert NimSettings().max_tokens == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+    def test_max_tokens_is_unset_by_default(self):
+        """No invented output ceiling.
+
+        This used to default to ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS and clamp
+        the client's value with min(), which truncated any model whose real
+        limit.output is higher. Unset means the client's value passes through
+        and the model's own limit governs; a configured value is a deliberate
+        operator cap.
+        """
+        assert NimSettings().max_tokens is None
+        assert NimSettings(max_tokens=4_096).max_tokens == 4_096
 
     @pytest.mark.parametrize(
         "seed_val,expected",

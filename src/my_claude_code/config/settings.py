@@ -418,13 +418,20 @@ class Settings(BaseSettings):
     # Consecutive failures before a provider/model is skipped by routing, and
     # how long it stays skipped. Without this every request re-pays a dead
     # model's timeout on its way to a healthy fallback. 0 disables ejection.
-    # When False (default), the chain does direct retry / direct fallback with
-    # no per-failure benching and no rate-limit skip. When True, the rate-based
-    # eject + provider rate-limit skip + kind-aware bench durations are active.
-    # This is a per-route opt-in: a route that wants the old behavior gets it;
-    # a route that wants the new behavior opts in. Default off on new installs.
+    # When True (the default), benching is active: the configured eject mode
+    # (consecutive or rate-based), the provider rate-limit skip and the
+    # kind-aware bench durations all apply. Set False to opt a route out and
+    # get direct retry / direct fallback with no benching at all.
+    #
+    # This defaulted to False in 5.58.0-5.60.0, which silently disabled
+    # ejection for every existing install on upgrade -- FALLBACK_EJECT_* were
+    # still documented and still set in user .env files, but were inert. A
+    # flapping model was then re-tried at position 0 on every request instead
+    # of being parked, which showed up as bursts of upstream stream failures.
+    # Ejection is a resilience guard, so it defaults on; opting out stays
+    # possible and is now documented in .env.example.
     fallback_bench_enabled: bool = Field(
-        default=False,
+        default=True,
         validation_alias="FALLBACK_BENCH_ENABLED",
     )
     fallback_eject_after_failures: int = Field(

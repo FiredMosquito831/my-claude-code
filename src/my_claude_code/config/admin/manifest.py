@@ -731,15 +731,16 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "limits",
         "select",
         settings_attr="fallback_bench_enabled",
-        default="false",
+        default="true",
         options=("false", "true"),
         description=(
-            "Whether the chain skips a model that fails repeatedly. OFF "
-            "(default) falls back on every error immediately (old behavior, "
-            "no per-failure throttling). ON enables rate-based ejection and "
-            "honors the provider Retry-After, with per-failure cooldowns keyed "
-            "on error kind: 1s for transient, the provider signal for rate "
-            "limits, longer for auth/quota and sustained failures."
+            "Whether the chain skips a model that fails repeatedly. ON "
+            "(default) enables ejection and honors the provider Retry-After, "
+            "with per-failure cooldowns keyed on error kind: 1s for "
+            "transient, the provider signal for rate limits, longer for "
+            "auth/quota and sustained failures. OFF falls back on every error "
+            "immediately with no per-failure throttling, which also makes "
+            "every Eject setting below inert."
         ),
     ),
     ConfigFieldSpec(

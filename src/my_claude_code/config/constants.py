@@ -183,3 +183,12 @@ TOOL_RESULT_TRIM_PROTECT_RECENT_DEFAULT = 2
 # tests/contracts/test_import_boundaries.py pins the two equal in both
 # directions exactly as it does for FAILURE_KIND_NAMES.
 TRIM_MODE_NAMES: frozenset[str] = frozenset({"off", "observe", "on"})
+
+# Nous Portal rejects an API-key request that carries no `tags` array with a
+# `user=` entry: HTTP 400 "This request is not valid. Check the model name and
+# other parameters. Additional info: missing tags". OAuth callers are identified
+# by their bearer token instead, which is why the requirement is undocumented in
+# the OpenAPI spec. The value after `user=` is free-form; only the prefix is
+# mandatory. Enforcement began 2026-08-27, when every previously-working
+# `tencent/hy3:free` request started failing.
+NOUS_PORTAL_USER_TAG_DEFAULT = "user=my-claude-code"

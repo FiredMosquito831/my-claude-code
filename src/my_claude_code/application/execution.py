@@ -197,6 +197,26 @@ def _timeout_failure(
     )
 
 
+def _provider_retry_after(provider: ProviderPort) -> float | None:
+    """The provider's own remaining cooldown, when it reports a usable one.
+
+    Used to size a rate-limit bench from the provider's signal instead of a
+    fixed number, per "read signals, don't invent thresholds".
+
+    Deliberately total: this runs while a failure is already being recorded,
+    so anything raised here would replace a real upstream error with an
+    internal one. A provider that cannot answer just yields None, and the
+    registry falls back to its configured eject window.
+    """
+    try:
+        remaining = provider.throttle_remaining()
+    except Exception:
+        return None
+    if isinstance(remaining, bool) or not isinstance(remaining, int | float):
+        return None
+    return float(remaining) if remaining > 0 else None
+
+
 def _cooldown_failure(model_ref: str, seconds: float) -> ExecutionFailure:
     """The verdict recorded for a model the chain stepped over while limited."""
     return ExecutionFailure(
@@ -401,7 +421,6 @@ class ProviderExecutor:
         self._retry_first = retry_first
         self._retry_once_kinds = retry_once_kinds
         self._provider_lookup = provider_lookup
-        self._retried_positions: set[int] = set()
 
     def stream(
         self,
@@ -489,6 +508,13 @@ class ProviderExecutor:
             plan.primary.request.system,
             plan.primary.request.tools,
         )
+
+        # Per-request, not per-executor. ProviderExecutor is constructed once
+        # per handler and shared by every request in the process, so holding
+        # this on self meant the first request to retry position 0 consumed
+        # the retry-once budget for the whole process lifetime and no later
+        # request ever retried its primary again.
+        retried_positions: set[int] = set()
 
         async def provider_body() -> AsyncIterator[str]:
             position, provider = prepared
@@ -615,7 +641,27 @@ class ProviderExecutor:
                 # runs alongside a half-open connection to the previous one.
                 failures.append(uncommitted_failure)
                 ledger.failed(index, uncommitted_failure)
-                self._health.record_failure(model_ref)
+                # Pass the kind through so the bench duration matches the
+                # failure: a 5xx/timeout parks the model for a second, a
+                # rate-limit honours the provider's own remaining cooldown,
+                # and auth/quota take the full eject window. Without these
+                # arguments every ejection used eject_seconds and the whole
+                # kind-aware ladder in RouteHealthRegistry was dead code.
+                # failure_kind() rather than .kind: an attempt can fail with a
+                # raw exception (httpx TimeoutError, RuntimeError from a
+                # construction error) that never reached provider
+                # classification, and those have no .kind at all.
+                kind = failure_kind(uncommitted_failure)
+                retry_after_seconds = (
+                    _provider_retry_after(provider)
+                    if kind is FailureKind.RATE_LIMIT
+                    else None
+                )
+                self._health.record_failure(
+                    model_ref,
+                    failure_kind=kind.value if kind is not None else None,
+                    retry_after_seconds=retry_after_seconds,
+                )
                 if self._ends_the_route(uncommitted_failure):
                     ledger.unreachable_after(index, uncommitted_failure)
                     ledger.publish()
@@ -628,10 +674,10 @@ class ProviderExecutor:
                 if (
                     self._retry_first == "retry_once"
                     and position == 0
-                    and index not in self._retried_positions
+                    and index not in retried_positions
                     and self._error_is_retryable(uncommitted_failure)
                 ):
-                    self._retried_positions.add(index)
+                    retried_positions.add(index)
                     logger.info(
                         "MODEL RETRY: '{}' failed once with {}; retrying once before falling back",
                         model_ref,

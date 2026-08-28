@@ -420,7 +420,10 @@ async def test_stream_response_retries_without_chat_template(provider_config):
     assert mock_create.await_count == 2
 
     first_extra = mock_create.call_args_list[0].kwargs["extra_body"]
-    second_extra = mock_create.call_args_list[1].kwargs["extra_body"]
+    # .get(): stripping chat_template can now empty extra_body entirely, since
+    # NimSettings no longer injects unrequested sampling values that used to
+    # keep it non-empty. An absent extra_body satisfies these assertions.
+    second_extra = mock_create.call_args_list[1].kwargs.get("extra_body", {})
 
     assert first_extra["chat_template"] == "custom_template"
     assert first_extra["chat_template_kwargs"] == {

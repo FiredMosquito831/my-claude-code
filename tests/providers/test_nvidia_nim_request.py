@@ -376,7 +376,9 @@ class TestBuildRequestBody:
             reasoning=ReasoningPolicy.provider_default(),
         )
 
-        assert "chat_template_kwargs" not in body["extra_body"]
+        # .get(): with every NimSettings sampling field defaulting to unset,
+        # a request that needs no extra_body no longer carries an empty one.
+        assert "chat_template_kwargs" not in body.get("extra_body", {})
 
     def test_clone_body_without_chat_template(self):
         body = {
@@ -636,3 +638,154 @@ class TestBuildRequestBody:
         body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
 
         assert clone_body_without_reasoning_content(body) is None
+
+
+class TestSamplingDefaultsAreNotInjected:
+    """NIM pins some sampling parameters per model and 400s on any other value.
+
+    ``moonshotai/kimi-k3`` requires ``top_p`` to be exactly 0.95 and answers
+    ``400 Validation: top_p is immutable for this model and must be 0.95,
+    got 1`` to anything else. Claude Code speaks the Anthropic protocol and
+    sends no ``top_p`` at all, so MCC must not invent one.
+    """
+
+    @staticmethod
+    def _bare(**overrides):
+        """A request with every sampling field explicitly unset.
+
+        The shared factory supplies sample values (temperature=0.5, top_p=0.9),
+        which is exactly what these tests must not have.
+        """
+        base: dict[str, Any] = {
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 100,
+            "system": None,
+            "temperature": None,
+            "top_p": None,
+            "top_k": None,
+            "stop_sequences": None,
+            "tools": None,
+            "extra_body": None,
+            "thinking": None,
+        }
+        base.update(overrides)
+        return make_messages_request(**base)
+
+    def test_unset_sampling_fields_never_reach_the_body(self):
+        """The regression: NimSettings() used to inject top_p/temperature 1.0."""
+        body = build_request_body(
+            self._bare(),
+            NimSettings(),
+            reasoning=ReasoningPolicy.provider_default(),
+        )
+
+        for key in ("top_p", "temperature", "presence_penalty", "frequency_penalty"):
+            assert key not in body, f"{key} was injected without the client asking"
+        extra = body.get("extra_body", {})
+        for key in ("top_k", "min_p", "repetition_penalty", "min_tokens", "ignore_eos"):
+            assert key not in extra, f"extra_body.{key} was injected unrequested"
+
+    def test_a_client_supplied_value_still_passes_through(self):
+        body = build_request_body(
+            self._bare(top_p=0.95, temperature=0.3),
+            NimSettings(),
+            reasoning=ReasoningPolicy.provider_default(),
+        )
+
+        assert body["top_p"] == 0.95
+        assert body["temperature"] == 0.3
+
+    def test_a_configured_value_is_applied_when_the_client_sent_none(self):
+        body = build_request_body(
+            self._bare(),
+            NimSettings(top_p=0.95, temperature=0.3),
+            reasoning=ReasoningPolicy.provider_default(),
+        )
+
+        assert body["top_p"] == 0.95
+        assert body["temperature"] == 0.3
+
+    def test_the_client_wins_over_a_configured_value(self):
+        body = build_request_body(
+            self._bare(top_p=0.5),
+            NimSettings(top_p=0.95),
+            reasoning=ReasoningPolicy.provider_default(),
+        )
+
+        assert body["top_p"] == 0.5
+
+    def test_a_deliberate_zero_is_sent_rather_than_read_as_unset(self):
+        """0.0 used to equal the default and was silently dropped."""
+        body = build_request_body(
+            self._bare(),
+            NimSettings(presence_penalty=0.0, frequency_penalty=0.0, min_p=0.0),
+            reasoning=ReasoningPolicy.provider_default(),
+        )
+
+        assert body["presence_penalty"] == 0.0
+        assert body["frequency_penalty"] == 0.0
+        assert body["extra_body"]["min_p"] == 0.0
+
+    def test_a_deliberate_repetition_penalty_of_one_is_sent(self):
+        body = build_request_body(
+            self._bare(),
+            NimSettings(repetition_penalty=1.0),
+            reasoning=ReasoningPolicy.provider_default(),
+        )
+
+        assert body["extra_body"]["repetition_penalty"] == 1.0
+
+    def test_minus_one_top_k_is_still_accepted_as_unset(self):
+        """-1 was the historical sentinel; it must keep meaning "let NIM decide"."""
+        assert NimSettings(top_k=-1).top_k is None
+
+        body = build_request_body(
+            self._bare(),
+            NimSettings(top_k=-1),
+            reasoning=ReasoningPolicy.provider_default(),
+        )
+
+        assert "top_k" not in body.get("extra_body", {})
+
+    def test_bounds_are_still_enforced_on_a_set_value(self):
+        with pytest.raises(ValueError):
+            NimSettings(top_p=1.5)
+        with pytest.raises(ValueError):
+            NimSettings(temperature=-1.0)
+
+
+class TestMaxTokensIsNotCapped:
+    """A hardcoded output ceiling truncates any model whose real limit is higher.
+
+    max_tokens used to default to ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS (81920)
+    and be applied as ``min(client_value, 81920)``. The model's real output
+    limit comes from models.dev ``limit.output``, and the reasoning budget is
+    already sized against it; the request's max_tokens must not be clipped by
+    an unrelated constant.
+    """
+
+    @staticmethod
+    def _req(**overrides):
+        return TestSamplingDefaultsAreNotInjected._bare(**overrides)
+
+    def test_a_large_client_request_is_not_truncated(self):
+        body = build_request_body(
+            self._req(max_tokens=200_000),
+            NimSettings(),
+            reasoning=ReasoningPolicy.provider_default(),
+        )
+
+        assert body["max_tokens"] == 200_000
+
+    def test_an_operator_configured_cap_is_still_applied(self):
+        body = build_request_body(
+            self._req(max_tokens=200_000),
+            NimSettings(max_tokens=4_096),
+            reasoning=ReasoningPolicy.provider_default(),
+        )
+
+        assert body["max_tokens"] == 4_096
+
+    def test_max_tokens_is_unset_by_default(self):
+        assert NimSettings().max_tokens is None

@@ -1,38 +1,57 @@
-"""NVIDIA NIM settings (fixed values, no env config)."""
+"""NVIDIA NIM request settings.
+
+Every sampling knob here defaults to ``None``, meaning "not set". A field that
+is ``None`` is never written into the outbound request body, so NIM applies its
+own default for that model. This matters because NIM pins some parameters
+per-model and rejects any other value: ``moonshotai/kimi-k3`` requires
+``top_p`` to be exactly ``0.95`` and answers ``400 Validation: top_p is
+immutable for this model`` to anything else.
+
+Before 5.61.0 these were non-optional floats defaulting to ``1.0``/``0.0``,
+which had two consequences. Every NIM request carried a ``top_p`` and a
+``temperature`` the client never asked for -- Claude Code speaks the Anthropic
+protocol and sends neither -- and "unset" was indistinguishable from a
+deliberate ``presence_penalty=0.0``, because the request builder used
+"value equals the default" as its proxy for "user did not set it".
+"""
+
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
-from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+# Sampling fields that are absent from the request body unless explicitly set.
+_OPTIONAL_FLOAT_FIELDS = (
+    "temperature",
+    "top_p",
+    "min_p",
+    "presence_penalty",
+    "frequency_penalty",
+    "repetition_penalty",
+)
 
 
 class NimSettings(BaseModel):
-    """Fixed NVIDIA NIM settings (not configurable via env)."""
+    """NVIDIA NIM request settings; unset fields defer to the provider."""
 
-    temperature: float = Field(
-        1.0, ge=0.0, le=2.0, description="Sampling temperature, must be >=0 and <=2."
-    )
-    top_p: float = Field(
-        1.0, ge=0.0, le=1.0, description="Nucleus sampling probability. [0,1]"
-    )
-    top_k: int = -1
-    max_tokens: int = Field(
-        ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-        ge=1,
-        description="Maximum number of tokens in output.",
-    )
-    presence_penalty: float = Field(0.0, ge=-2.0, le=2.0)
-    frequency_penalty: float = Field(0.0, ge=-2.0, le=2.0)
-    min_p: float = Field(
-        0.0, ge=0.0, le=1.0, description="Minimum probability threshold [0,1]."
-    )
-    repetition_penalty: float = Field(
-        1.0, ge=0.0, description="Penalty for repeated tokens. Must be >=0."
-    )
+    temperature: Annotated[float, Field(ge=0.0, le=2.0)] | None = None
+    top_p: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
+    top_k: int | None = None
+    # Unset by default, so the client's max_tokens reaches NIM unchanged and
+    # the model's own output limit applies. This used to default to
+    # ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS (81920) and was applied as
+    # min(client_value, 81920), which silently truncated any model whose real
+    # limit is higher -- an invented ceiling of exactly the kind the project
+    # forbids. Set it to impose a deliberate cap.
+    max_tokens: Annotated[int, Field(ge=1)] | None = None
+    presence_penalty: Annotated[float, Field(ge=-2.0, le=2.0)] | None = None
+    frequency_penalty: Annotated[float, Field(ge=-2.0, le=2.0)] | None = None
+    min_p: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
+    repetition_penalty: Annotated[float, Field(ge=0.0)] | None = None
     seed: int | None = None
     stop: str | None = None
     parallel_tool_calls: bool = True
-    ignore_eos: bool = False
-    min_tokens: int = Field(0, ge=0, description="Minimum tokens in the response.")
+    ignore_eos: bool | None = None
+    min_tokens: Annotated[int, Field(ge=0)] | None = None
     chat_template: str | None = None
     request_id: str | None = None
 
@@ -41,60 +60,38 @@ class NimSettings(BaseModel):
     @field_validator("top_k", mode="before")
     @classmethod
     def validate_top_k(cls, v, info: ValidationInfo):
-        if v is None or v == "":
-            return -1
+        # -1 was the historical "unset" sentinel and is still accepted as one,
+        # so an existing caller passing -1 keeps meaning "let NIM decide".
+        if v is None or v == "" or v == -1:
+            return None
         int_v = int(v)
-        if int_v < -1:
+        if int_v < 0:
             raise ValueError(f"{info.field_name} must be -1 or >= 0")
         return int_v
 
-    @field_validator(
-        "temperature",
-        "top_p",
-        "min_p",
-        "presence_penalty",
-        "frequency_penalty",
-        "repetition_penalty",
-        mode="before",
-    )
+    @field_validator(*_OPTIONAL_FLOAT_FIELDS, mode="before")
     @classmethod
     def validate_float_fields(cls, v, info: ValidationInfo):
-        field_defaults = {
-            "temperature": 1.0,
-            "top_p": 1.0,
-            "min_p": 0.0,
-            "presence_penalty": 0.0,
-            "frequency_penalty": 0.0,
-            "repetition_penalty": 1.0,
-        }
         if v is None or v == "":
-            key = info.field_name or "temperature"
-            return field_defaults.get(key, 1.0)
+            return None
         try:
-            val = float(v)
+            return float(v)
         except (TypeError, ValueError) as err:
             raise ValueError(
                 f"{info.field_name} must be a float. Got {type(v).__name__}."
             ) from err
-        return val
 
     @field_validator("max_tokens", "min_tokens", mode="before")
     @classmethod
     def validate_int_fields(cls, v, info: ValidationInfo):
-        field_defaults = {
-            "max_tokens": ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-            "min_tokens": 0,
-        }
         if v is None or v == "":
-            key = info.field_name or "max_tokens"
-            return field_defaults.get(key, ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS)
+            return None
         try:
-            val = int(v)
+            return int(v)
         except (TypeError, ValueError) as err:
             raise ValueError(
                 f"{info.field_name} must be an int. Got {type(v).__name__}."
             ) from err
-        return val
 
     @field_validator("seed", mode="before")
     @classmethod

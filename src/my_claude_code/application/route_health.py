@@ -116,9 +116,9 @@ class RouteHealthRegistry:
         failure_kind: str | None = None,
         retry_after_seconds: float | None = None,
     ) -> None:
-        # When bench_enabled is False (the default), this is a no-op --
-        # the chain advances to the next model on every failure with no
-        # throttling. When True, the bench duration depends on the kind:
+        # When bench_enabled is False, this is a no-op -- the chain
+        # advances to the next model on every failure with no throttling.
+        # When True (the default), the bench duration depends on the kind:
         #   5xx / transient / unknown -> 1s (model is probably fine)
         #   rate_limit -> the provider signal (retry_after_seconds) if
         #     present, else eject_seconds
