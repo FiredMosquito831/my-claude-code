@@ -53,6 +53,25 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "Reason: the command delegates to the provider's OAuth login utility."
     ),
     (
+        "my_claude_code.api.model_admin",
+        "my_claude_code.providers.runtime.models_dev",
+    ): (
+        "Owner: admin Models page capability inspector. "
+        "Reason: the page's whole purpose is to name the tier each capability "
+        "value came from, and the tiers are the models.dev lookups themselves; "
+        "reading them through an abstraction would erase the distinction it "
+        "exists to show. Read-only, admin surface only."
+    ),
+    (
+        "my_claude_code.api.model_admin",
+        "my_claude_code.providers.reasoning_vocabulary",
+    ): (
+        "Owner: admin Models page capability inspector. "
+        "Reason: the lowest resolution tier is what a provider's API documents "
+        "for every model behind it, and the page reports it as a source in its "
+        "own right. Read-only, admin surface only."
+    ),
+    (
         "my_claude_code.api.admin_routes",
         "my_claude_code.providers.anthropic_oauth.credentials",
     ): (

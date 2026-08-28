@@ -446,6 +446,76 @@
             ></div>
           </section>
 
+          <!-- Models: what the catalogue shows, what MCC forces onto a
+               request, and where each capability number came from. Filled
+               from /admin/api/model-admin when the view is opened; it owns no
+               manifest settings section, so renderSections() skips it. -->
+          <section id="view-models" class="admin-view" data-view="models" hidden>
+            <p class="view-intro">
+              Every model MCC has discovered or been configured with. Choose what the
+              catalogue shows, force request parameters per provider or per model, and
+              read what MCC actually knows about a model before you override it.
+            </p>
+
+            <section class="settings-section" id="section-model-visibility">
+              <h3>Visibility</h3>
+              <p class="section-help" id="modelsHideOnlyNotice"></p>
+              <div class="models-visibility-grid">
+                <label class="models-pattern-field">
+                  <span class="models-pattern-label">Allow patterns</span>
+                  <textarea id="modelsAllowPatterns" rows="3" spellcheck="false"
+                    placeholder="empty = allow everything"></textarea>
+                </label>
+                <label class="models-pattern-field">
+                  <span class="models-pattern-label">Deny patterns</span>
+                  <textarea id="modelsDenyPatterns" rows="3" spellcheck="false"
+                    placeholder="e.g. *:free, nous_portal/*"></textarea>
+                </label>
+              </div>
+              <p class="section-help">
+                Comma-separated globs, matched case-insensitively against the full
+                <code>provider/model</code> ref. Deny wins over allow. Ticking a model
+                below writes an exact-match pattern into these same two lists.
+              </p>
+              <div class="models-actions">
+                <button type="button" class="secondary" id="modelsPreviewVisibility">
+                  Preview
+                </button>
+                <button type="button" id="modelsSaveVisibility">Save patterns</button>
+                <span id="modelsVisibilityStatus" class="models-status"></span>
+              </div>
+              <div id="modelsHiddenRoutes" class="models-route-warning" hidden></div>
+              <div id="modelsPreviewResult" class="models-preview" hidden></div>
+            </section>
+
+            <section class="settings-section" id="section-model-parameters">
+              <h3>Parameter overrides</h3>
+              <p class="section-help">
+                Forced onto the upstream request body after the provider has built it.
+                Each parameter has three states: <strong>inherit</strong> (say nothing),
+                <strong>force unset</strong> (remove the key even if the provider added
+                it), or a forced value. A model row beats its provider row per
+                parameter, so one parameter can be forced off while the rest inherit.
+              </p>
+              <p class="section-help" id="modelsOwnedElsewhere"></p>
+            </section>
+
+            <section class="settings-section" id="section-model-tree">
+              <div class="models-tree-head">
+                <h3>Providers and models</h3>
+                <div class="models-actions">
+                  <input type="search" id="modelsFilter" placeholder="Filter models"
+                    aria-label="Filter models" />
+                  <button type="button" class="secondary" id="modelsReload">
+                    Reload
+                  </button>
+                </div>
+              </div>
+              <p id="modelsTreeStatus" class="models-status"></p>
+              <div id="modelsTree" class="models-tree"></div>
+            </section>
+          </section>
+
           <section id="view-messaging" class="admin-view" data-view="messaging" hidden>
             <div
               id="messagingSections"

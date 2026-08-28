@@ -5489,3 +5489,273 @@ details.turn-pane > summary:focus-visible {
 .opt-note-body {
   margin: var(--space-2) 0 0;
 }
+
+/* ------------------------------------------------------------------ models
+   The Models page: visibility tree, three-state parameter editor, and the
+   read-only capability panel. Every colour here is a theme token, so the page
+   follows the accent picker like the rest of the dashboard. */
+
+.models-visibility-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.models-pattern-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.models-pattern-label {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.models-pattern-field textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+.models-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
+}
+
+.models-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.models-status.error {
+  color: var(--error);
+}
+
+.models-route-warning,
+.models-route-warning-inline {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  border-radius: var(--space-2);
+  font-size: 13px;
+}
+
+.models-route-warning ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+}
+
+.models-preview {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--space-2);
+  background: var(--panel-strong);
+  font-size: 13px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.models-preview ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.models-tree-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.models-tree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.models-provider {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--space-2);
+  background: var(--panel);
+}
+
+.models-provider > summary,
+.models-model > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-3);
+  list-style: none;
+}
+
+.models-provider-name {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.models-provider-overrides,
+.models-model-body {
+  padding: 0 var(--space-4) var(--space-4);
+  border-top: 1px solid var(--line);
+}
+
+.models-model {
+  margin: 0 var(--space-3) var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--space-2);
+  background: var(--card);
+}
+
+.models-ref {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+.models-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--neutral-border);
+  background: var(--neutral-bg);
+  color: var(--muted);
+}
+
+.models-chip-route {
+  border-color: var(--accent-border);
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.models-chip-hidden {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.models-chip-forced {
+  border-color: var(--reasoning-border);
+  background: var(--reasoning-bg);
+  color: var(--reasoning);
+}
+
+.models-subhead {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.models-override-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.models-override-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 130px minmax(120px, 1.4fr);
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.models-override-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.models-override-value:disabled {
+  opacity: 0.4;
+}
+
+.models-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.models-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  padding: var(--space-1) var(--space-2) var(--space-1) 0;
+  vertical-align: top;
+  width: 34%;
+}
+
+.models-table td {
+  padding: var(--space-1) var(--space-2) var(--space-1) 0;
+  vertical-align: top;
+}
+
+.models-cell-source {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.models-source {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--neutral-border);
+  background: var(--neutral-bg);
+  color: var(--muted);
+  align-self: flex-start;
+}
+
+/* Authoritative: the gateway published this for this exact model. */
+.models-source-provider {
+  border-color: var(--ok-border);
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.models-source-models_dev {
+  border-color: var(--reasoning-border);
+  background: var(--reasoning-bg);
+  color: var(--reasoning);
+}
+
+/* A vote across same-named rows in other providers' buckets. It is regularly
+   wrong -- one free model is credited with a 1,048,576-token output limit off
+   a single match -- so it never gets to look like a published number. */
+.models-source-approximate {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.models-approx-note {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  .models-override-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.models-effective,
+.models-capabilities {
+  margin-top: var(--space-3);
+}
+
+.models-override-mode {
+  font-size: 12px;
+}

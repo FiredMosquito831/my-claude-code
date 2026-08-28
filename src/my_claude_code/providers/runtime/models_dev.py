@@ -1048,6 +1048,20 @@ def _has_models_dev_bucket(index: frozenset[str], provider_id: str) -> bool:
     return alias is not None and alias in index
 
 
+def models_dev_describes_provider(provider_id: str, path: Path | None = None) -> bool:
+    """Whether models.dev has a bucket of its own for this provider.
+
+    The public form of the check every lookup here already makes internally.
+    It exists because "models.dev answered" and "the approximate cross-provider
+    tier answered" are the same return value from
+    :func:`model_output_limit_from_models_dev`, and a reader that has to tell
+    an authoritative row from a one-sample vote across foreign buckets cannot
+    do it from the value alone.
+    """
+
+    return _has_models_dev_bucket(_cached_raw_index(path), provider_id)
+
+
 def _build_output_limit_index(
     index: Mapping[str, Any],
 ) -> dict[str, dict[str, int]]:

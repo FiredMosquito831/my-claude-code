@@ -145,6 +145,17 @@ const VIEW_GROUPS = [
     containerId: "modelConfigSections",
   },
   {
+    // Static markup filled from /admin/api/model-admin when the view opens.
+    // It claims no manifest section, so `containerId` stays null and
+    // renderSections() skips it -- both of its loops guard on containerId,
+    // which is what stops a container-less view blanking every other tab.
+    id: "models",
+    label: "Models",
+    title: "Models",
+    sections: [],
+    containerId: null,
+  },
+  {
     id: "messaging",
     label: "Messaging",
     title: "Messaging",
@@ -418,6 +429,10 @@ function setActiveView(viewId, { scroll = false } = {}) {
 
   if (activeView.id === "optimizer") {
     loadOptimizerView().catch((error) => showMessage(error.message, "error"));
+  }
+
+  if (activeView.id === "models") {
+    loadModelsView().catch((error) => showMessage(error.message, "error"));
   }
 
   if (activeView.id === "docs") {
@@ -9603,3 +9618,601 @@ function initOptimizerView() {
 initOptimizerView();
 
 initThemeSwitch();
+
+/* ----------------------------------------------------------------- models
+   The Models page. Three sections over one payload from
+   /admin/api/model-admin: which models the catalogue shows, which request
+   parameters are forced, and -- read-only -- what MCC knows about a model and
+   which tier it learned it from.
+
+   Everything is built with createElement/textContent. A model ref is upstream
+   text and half of it is user-typed configuration, so none of it is ever
+   interpolated into innerHTML. */
+
+const modelsState = {
+  data: null,
+  loading: false,
+  filter: "",
+  // Which provider/model rows are unfolded, so a re-render after a save does
+  // not collapse the row the user is working in.
+  open: new Set(),
+};
+
+async function loadModelsView(force = false) {
+  if (modelsState.loading) return;
+  if (modelsState.data && !force) return;
+  modelsState.loading = true;
+  setModelsStatus("Loading models...");
+  try {
+    modelsState.data = await api("/admin/api/model-admin");
+    renderModelsPage();
+    setModelsStatus("");
+  } catch (error) {
+    setModelsStatus(error.message);
+  } finally {
+    modelsState.loading = false;
+  }
+}
+
+function setModelsStatus(text) {
+  const status = byId("modelsTreeStatus");
+  if (!status) return;
+  status.textContent = text || "";
+  status.hidden = !text;
+}
+
+function setModelsVisibilityStatus(text, kind = "") {
+  const status = byId("modelsVisibilityStatus");
+  if (!status) return;
+  status.textContent = text || "";
+  status.className = `models-status${kind ? ` ${kind}` : ""}`;
+}
+
+function renderModelsPage() {
+  const data = modelsState.data;
+  if (!data) return;
+  const notice = byId("modelsHideOnlyNotice");
+  if (notice) notice.textContent = data.visibility.hide_only_notice || "";
+  const allow = byId("modelsAllowPatterns");
+  const deny = byId("modelsDenyPatterns");
+  if (allow && document.activeElement !== allow) {
+    allow.value = data.visibility.allow_raw || "";
+  }
+  if (deny && document.activeElement !== deny) {
+    deny.value = data.visibility.deny_raw || "";
+  }
+  renderModelsOwnedElsewhere(data.overrides.owned_elsewhere || {});
+  renderModelsHiddenRoutes(data.visibility.hidden_route_refs || []);
+  renderModelsTree();
+}
+
+function renderModelsOwnedElsewhere(owned) {
+  const target = byId("modelsOwnedElsewhere");
+  if (!target) return;
+  target.textContent = "";
+  const lead = document.createElement("span");
+  lead.textContent = "Not editable here: ";
+  target.appendChild(lead);
+  Object.keys(owned).forEach((name, index) => {
+    if (index > 0) target.appendChild(document.createTextNode("; "));
+    const code = document.createElement("code");
+    code.textContent = name;
+    target.appendChild(code);
+    target.appendChild(document.createTextNode(` — ${owned[name]}`));
+  });
+}
+
+function renderModelsHiddenRoutes(routes) {
+  const target = byId("modelsHiddenRoutes");
+  if (!target) return;
+  target.textContent = "";
+  target.hidden = routes.length === 0;
+  if (!routes.length) return;
+  const heading = document.createElement("p");
+  heading.textContent =
+    "These configured routes are currently hidden. They still resolve and still serve requests -- hiding is display-only.";
+  target.appendChild(heading);
+  const list = document.createElement("ul");
+  routes.forEach((route) => {
+    const item = document.createElement("li");
+    const code = document.createElement("code");
+    code.textContent = route.model_ref;
+    item.appendChild(code);
+    item.appendChild(
+      document.createTextNode(` (${(route.sources || []).join(", ")})`),
+    );
+    list.appendChild(item);
+  });
+  target.appendChild(list);
+}
+
+function modelsMatchesFilter(text) {
+  if (!modelsState.filter) return true;
+  return text.toLowerCase().includes(modelsState.filter);
+}
+
+function renderModelsTree() {
+  const tree = byId("modelsTree");
+  const data = modelsState.data;
+  if (!tree || !data) return;
+  tree.textContent = "";
+  const editable = data.overrides.editable_parameters || [];
+  let shown = 0;
+  (data.providers || []).forEach((provider) => {
+    const models = (provider.models || []).filter((model) =>
+      modelsMatchesFilter(model.model_ref),
+    );
+    if (!models.length) return;
+    shown += models.length;
+    tree.appendChild(buildModelsProviderNode(provider, models, editable, data));
+  });
+  if (!shown) {
+    const empty = document.createElement("p");
+    empty.className = "models-status";
+    empty.textContent = modelsState.filter
+      ? "No model matches that filter."
+      : "No models discovered yet. Refresh provider models on the Providers page.";
+    tree.appendChild(empty);
+  }
+}
+
+function buildModelsProviderNode(provider, models, editable, data) {
+  const node = document.createElement("details");
+  node.className = "models-provider";
+  const key = `provider:${provider.provider_id}`;
+  node.open = modelsState.open.has(key) || Boolean(modelsState.filter);
+  node.addEventListener("toggle", () => {
+    if (node.open) modelsState.open.add(key);
+    else modelsState.open.delete(key);
+  });
+
+  const summary = document.createElement("summary");
+  const name = document.createElement("span");
+  name.className = "models-provider-name";
+  name.textContent = provider.provider_id;
+  summary.appendChild(name);
+  const count = document.createElement("span");
+  count.className = "models-chip";
+  count.textContent = `${models.length} shown / ${provider.hidden_count} hidden`;
+  summary.appendChild(count);
+  node.appendChild(summary);
+
+  const providerOverrides = document.createElement("div");
+  providerOverrides.className = "models-provider-overrides";
+  const label = document.createElement("p");
+  label.className = "models-subhead";
+  label.textContent = "Provider-wide parameter overrides";
+  providerOverrides.appendChild(label);
+  providerOverrides.appendChild(
+    buildOverrideEditor(
+      "provider",
+      provider.provider_id,
+      provider.override,
+      editable,
+    ),
+  );
+  node.appendChild(providerOverrides);
+
+  models.forEach((model) => {
+    node.appendChild(buildModelNode(model, editable, data));
+  });
+  return node;
+}
+
+function buildModelNode(model, editable, data) {
+  const node = document.createElement("details");
+  node.className = "models-model";
+  const key = `model:${model.model_ref}`;
+  node.open = modelsState.open.has(key);
+  node.addEventListener("toggle", () => {
+    if (node.open) modelsState.open.add(key);
+    else modelsState.open.delete(key);
+  });
+
+  const summary = document.createElement("summary");
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.checked = model.visible;
+  toggle.title = model.visible ? "Visible in catalogues" : "Hidden from catalogues";
+  toggle.setAttribute("aria-label", `Show ${model.model_ref}`);
+  // The checkbox lives inside a <summary>; without this its click would also
+  // fold the row open or shut.
+  toggle.addEventListener("click", (event) => event.stopPropagation());
+  toggle.addEventListener("change", () => {
+    toggleModelVisibility(model.model_ref, toggle.checked).catch((error) =>
+      showMessage(error.message, "error"),
+    );
+  });
+  summary.appendChild(toggle);
+
+  const ref = document.createElement("span");
+  ref.className = "models-ref";
+  ref.textContent = model.model_ref;
+  summary.appendChild(ref);
+
+  if (model.configured) {
+    summary.appendChild(buildModelsChip("route", "named by a MODEL* setting"));
+  }
+  if (!model.visible) {
+    summary.appendChild(buildModelsChip("hidden", "hidden"));
+  }
+  if (!model.has_metadata) {
+    summary.appendChild(buildModelsChip("unknown", "no discovered metadata"));
+  }
+  const forced = (model.effective || []).filter((row) => row.action !== "inherit");
+  if (forced.length) {
+    summary.appendChild(
+      buildModelsChip("forced", `${forced.length} override(s) active`),
+    );
+  }
+  node.appendChild(summary);
+
+  const body = document.createElement("div");
+  body.className = "models-model-body";
+  const overridesHead = document.createElement("p");
+  overridesHead.className = "models-subhead";
+  overridesHead.textContent = "Model parameter overrides";
+  body.appendChild(overridesHead);
+  body.appendChild(
+    buildOverrideEditor("model", model.model_ref, model.override, editable),
+  );
+  body.appendChild(buildEffectiveTable(model.effective || []));
+  body.appendChild(
+    buildCapabilityPanel(model.capabilities, data.source_labels || {}),
+  );
+  node.appendChild(body);
+  return node;
+}
+
+function buildModelsChip(kind, text) {
+  const chip = document.createElement("span");
+  chip.className = `models-chip models-chip-${kind}`;
+  chip.textContent = text;
+  return chip;
+}
+
+/* The three-state control. A single text box cannot say "force unset": empty
+   and "send null" would look identical, and the difference between them is
+   the entire point of the override file. So every parameter is a mode select
+   -- inherit / force unset / force value -- and the text box beside it is
+   only that third mode's argument, disabled in the other two. */
+function buildOverrideEditor(scope, key, row, editable) {
+  const form = document.createElement("div");
+  form.className = "models-override-editor";
+  const inputs = new Map();
+
+  editable.forEach((name) => {
+    const current = (row || {})[name];
+    const field = document.createElement("div");
+    field.className = "models-override-row";
+
+    const label = document.createElement("span");
+    label.className = "models-override-name";
+    label.textContent = name;
+    field.appendChild(label);
+
+    const mode = document.createElement("select");
+    mode.className = "models-override-mode";
+    mode.setAttribute("aria-label", `${name} override mode`);
+    [
+      ["inherit", "Inherit"],
+      ["unset", "Force unset"],
+      ["value", "Force value"],
+    ].forEach(([value, text]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      mode.appendChild(option);
+    });
+    mode.value = current ? current.state : "inherit";
+    field.appendChild(mode);
+
+    const box = document.createElement("input");
+    box.type = "text";
+    box.className = "models-override-value";
+    box.setAttribute("aria-label", `${name} value`);
+    box.value =
+      current && current.state === "value" ? formatOverrideValue(current.value) : "";
+    box.disabled = mode.value !== "value";
+    mode.addEventListener("change", () => {
+      box.disabled = mode.value !== "value";
+    });
+    field.appendChild(box);
+    inputs.set(name, { mode, box });
+    form.appendChild(field);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "models-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.textContent = "Save overrides";
+  const status = document.createElement("span");
+  status.className = "models-status";
+  save.addEventListener("click", () => {
+    const updates = {};
+    inputs.forEach((control, name) => {
+      if (control.mode.value === "inherit") {
+        updates[name] =
+          (modelsState.data &&
+            modelsState.data.overrides &&
+            modelsState.data.overrides.inherit_sentinel) ||
+          "inherit";
+      } else if (control.mode.value === "unset") {
+        updates[name] = null;
+      } else {
+        updates[name] = parseOverrideValue(name, control.box.value);
+      }
+    });
+    save.disabled = true;
+    status.textContent = "Saving...";
+    saveModelOverrides(scope, key, updates)
+      .then(() => {
+        status.textContent = "Saved";
+      })
+      .catch((error) => {
+        status.textContent = error.message;
+        showMessage(error.message, "error");
+      })
+      .finally(() => {
+        save.disabled = false;
+      });
+  });
+  actions.appendChild(save);
+  actions.appendChild(status);
+  form.appendChild(actions);
+  return form;
+}
+
+function formatOverrideValue(value) {
+  if (Array.isArray(value)) return value.join(", ");
+  if (value === null || value === undefined) return "";
+  return String(value);
+}
+
+/* `stop` is the one list-valued parameter; everything else is a scalar, and a
+   number sent as a string is rejected by most upstream APIs. */
+function parseOverrideValue(name, raw) {
+  const text = (raw || "").trim();
+  if (name === "stop") {
+    return text
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  }
+  if (text === "") return "";
+  if (/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(text)) return Number(text);
+  return text;
+}
+
+function buildEffectiveTable(rows) {
+  const wrap = document.createElement("div");
+  wrap.className = "models-effective";
+  const head = document.createElement("p");
+  head.className = "models-subhead";
+  head.textContent = "Effective request parameters";
+  wrap.appendChild(head);
+  const table = document.createElement("table");
+  table.className = "models-table";
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    const name = document.createElement("th");
+    name.scope = "row";
+    name.textContent = row.name;
+    tr.appendChild(name);
+    const value = document.createElement("td");
+    if (row.action === "inherit") value.textContent = "not sent";
+    else if (row.action === "unset") value.textContent = "removed from the body";
+    else value.textContent = formatOverrideValue(row.value);
+    tr.appendChild(value);
+    const from = document.createElement("td");
+    from.className = "models-cell-source";
+    from.textContent = row.from ? `${row.from} override` : "";
+    tr.appendChild(from);
+    table.appendChild(tr);
+  });
+  wrap.appendChild(table);
+  return wrap;
+}
+
+/* Read-only. The point of this panel is that a number here can come from the
+   provider's own /models, from models.dev, or from a vote across same-named
+   rows in *other* providers' buckets -- and the third is regularly wrong. So
+   the tier is rendered beside every field, and the approximate one says how
+   many rows voted and how far they agreed. */
+function buildCapabilityPanel(capabilities, labels) {
+  const wrap = document.createElement("div");
+  wrap.className = "models-capabilities";
+  const head = document.createElement("p");
+  head.className = "models-subhead";
+  head.textContent = "What MCC knows (read-only)";
+  wrap.appendChild(head);
+  const table = document.createElement("table");
+  table.className = "models-table";
+  if (!capabilities) {
+    wrap.appendChild(table);
+    return wrap;
+  }
+  const rows = [
+    ["output limit", capabilities.max_output_tokens],
+    ["context length", capabilities.context_length],
+    ["reads images", capabilities.supports_vision],
+    ["gateway default parameters", capabilities.default_parameters],
+    ["supported parameters", capabilities.supported_parameters],
+  ];
+  const reasoning = capabilities.reasoning || {};
+  Object.keys(reasoning).forEach((name) => {
+    rows.push([name.replace(/_/g, " "), reasoning[name]]);
+  });
+  rows.forEach((entry) => {
+    if (!entry[1]) return;
+    table.appendChild(buildCapabilityRow(entry[0], entry[1], labels));
+  });
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function buildCapabilityRow(label, field, labels) {
+  const tr = document.createElement("tr");
+  const name = document.createElement("th");
+  name.scope = "row";
+  name.textContent = label;
+  tr.appendChild(name);
+
+  const value = document.createElement("td");
+  value.textContent = formatCapabilityValue(field.value);
+  tr.appendChild(value);
+
+  const source = document.createElement("td");
+  source.className = "models-cell-source";
+  const badge = document.createElement("span");
+  badge.className = `models-source models-source-${field.source}`;
+  badge.textContent = field.source_label || labels[field.source] || field.source;
+  source.appendChild(badge);
+  if (field.approximate) {
+    const warn = document.createElement("span");
+    warn.className = "models-approx-note";
+    const agreement =
+      field.agreement === null || field.agreement === undefined
+        ? "agreement unreported"
+        : `${Math.round(field.agreement * 100)}% agreement`;
+    const matches =
+      field.match_count === null || field.match_count === undefined
+        ? "an unknown number of"
+        : String(field.match_count);
+    warn.textContent = `guessed from ${matches} same-named row(s), ${agreement}`;
+    source.appendChild(warn);
+  }
+  if (field.note) {
+    const note = document.createElement("span");
+    note.className = "models-approx-note";
+    note.textContent = field.note;
+    source.appendChild(note);
+  }
+  tr.appendChild(source);
+  return tr;
+}
+
+function formatCapabilityValue(value) {
+  if (value === null || value === undefined) return "not reported";
+  if (Array.isArray(value)) {
+    if (!value.length) return "none published";
+    return value
+      .map((entry) =>
+        Array.isArray(entry) ? `${entry[0]}=${entry[1]}` : String(entry),
+      )
+      .join(", ");
+  }
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number") return value.toLocaleString();
+  return String(value);
+}
+
+async function toggleModelVisibility(modelRef, visible) {
+  const result = await api("/admin/api/model-admin/visibility/toggle", {
+    method: "POST",
+    body: JSON.stringify({ model_ref: modelRef, visible }),
+  });
+  if (result.honored === false) {
+    // An exact pattern cannot beat a broader glob the user wrote. Saying so
+    // beats a checkbox that springs back with no explanation.
+    showMessage(
+      `${modelRef} is still ${result.visible ? "visible" : "hidden"}: a pattern in your allow/deny lists overrules this tick.`,
+      "error",
+    );
+  }
+  await loadModelsView(true);
+}
+
+async function saveModelOverrides(scope, key, updates) {
+  modelsState.data = await api("/admin/api/model-admin/overrides", {
+    method: "POST",
+    body: JSON.stringify({ scope, key, updates }),
+  });
+  renderModelsPage();
+}
+
+function renderModelsPreview(result) {
+  const target = byId("modelsPreviewResult");
+  if (!target) return;
+  target.textContent = "";
+  target.hidden = false;
+  const summary = document.createElement("p");
+  summary.textContent = `${result.visible_count} model(s) would stay visible; ${result.hidden_count} would be hidden.`;
+  target.appendChild(summary);
+  const hidden = result.hidden_model_refs || [];
+  if (hidden.length) {
+    const list = document.createElement("ul");
+    hidden.slice(0, 200).forEach((ref) => {
+      const item = document.createElement("li");
+      item.textContent = ref;
+      list.appendChild(item);
+    });
+    target.appendChild(list);
+    if (hidden.length > 200) {
+      const more = document.createElement("p");
+      more.textContent = `...and ${hidden.length - 200} more.`;
+      target.appendChild(more);
+    }
+  }
+  const routes = result.hidden_route_refs || [];
+  if (routes.length) {
+    const warn = document.createElement("p");
+    warn.className = "models-route-warning-inline";
+    warn.textContent = `${routes.length} configured route(s) would be hidden: ${routes
+      .map((route) => route.model_ref)
+      .join(", ")}. They would still serve requests.`;
+    target.appendChild(warn);
+  }
+}
+
+function initModelsView() {
+  const preview = byId("modelsPreviewVisibility");
+  const save = byId("modelsSaveVisibility");
+  const filter = byId("modelsFilter");
+  const reload = byId("modelsReload");
+  if (!preview || !save) return;
+
+  const patterns = () => ({
+    allow: (byId("modelsAllowPatterns") || {}).value || "",
+    deny: (byId("modelsDenyPatterns") || {}).value || "",
+  });
+
+  preview.addEventListener("click", () => {
+    setModelsVisibilityStatus("Previewing...");
+    api("/admin/api/model-admin/visibility/preview", {
+      method: "POST",
+      body: JSON.stringify(patterns()),
+    })
+      .then((result) => {
+        renderModelsPreview(result);
+        setModelsVisibilityStatus("");
+      })
+      .catch((error) => setModelsVisibilityStatus(error.message, "error"));
+  });
+
+  save.addEventListener("click", () => {
+    setModelsVisibilityStatus("Saving...");
+    api("/admin/api/model-admin/visibility", {
+      method: "POST",
+      body: JSON.stringify(patterns()),
+    })
+      .then(() => loadModelsView(true))
+      .then(() => setModelsVisibilityStatus("Saved"))
+      .catch((error) => setModelsVisibilityStatus(error.message, "error"));
+  });
+
+  if (filter) {
+    filter.addEventListener("input", () => {
+      modelsState.filter = filter.value.trim().toLowerCase();
+      renderModelsTree();
+    });
+  }
+  if (reload) {
+    reload.addEventListener("click", () => {
+      loadModelsView(true).catch((error) => showMessage(error.message, "error"));
+    });
+  }
+}
+
+initModelsView();

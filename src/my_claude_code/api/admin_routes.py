@@ -15,6 +15,15 @@ from pydantic import BaseModel, Field
 
 from my_claude_code.api.docs_content import available_documents
 from my_claude_code.api.docs_render import render_document
+from my_claude_code.api.model_admin import (
+    MODEL_SCOPE,
+    PROVIDER_SCOPE,
+    apply_visibility_toggle,
+    build_models_page_payload,
+    render_patterns,
+    visibility_payload,
+    with_override_row,
+)
 from my_claude_code.api.model_catalog import settings_model_visibility
 from my_claude_code.api.optimization_handlers import OPTIMIZATION_RULE_SPECS
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
@@ -54,6 +63,10 @@ from my_claude_code.config.desktop import (
     resolve_auto_window,
     save_desktop_state,
 )
+from my_claude_code.config.model_overrides import (
+    current_model_overrides,
+    save_model_overrides,
+)
 from my_claude_code.config.model_refs import configured_chat_model_refs
 from my_claude_code.config.onboarding import (
     OnboardingState,
@@ -88,6 +101,7 @@ from my_claude_code.config.websearch_catalog import (
     WEBSEARCH_CATALOG,
     WebSearchDescriptor,
 )
+from my_claude_code.core.model_visibility import ModelVisibility
 from my_claude_code.core.optimization_discovery import (
     DEFAULT_SCAN_ROW_LIMIT,
     MAX_SCAN_ROW_LIMIT,
@@ -185,6 +199,38 @@ class DesktopUpdatePayload(BaseModel):
     minimize_to_tray: bool | None = None
     server_mode: str | None = None
     window: str | None = None
+
+
+class ModelVisibilityPayload(BaseModel):
+    """The two visibility pattern lists, as the free-text editor submits them.
+
+    Both are raw comma-separated text rather than arrays: they are stored in
+    two env values of exactly that shape, and round-tripping through a list
+    would quietly normalise whitespace the user can see in the editor.
+    """
+
+    allow: str | None = None
+    deny: str | None = None
+
+
+class ModelVisibilityTogglePayload(BaseModel):
+    """One model ticked on or off in the provider tree."""
+
+    model_ref: str
+    visible: bool
+
+
+class ModelOverridePayload(BaseModel):
+    """One provider or model override row, as the parameter editor submits it.
+
+    ``updates`` carries three states per parameter: a value forces it, ``null``
+    forces it unset, and the string ``"inherit"`` removes the key so the row
+    inherits again. Only keys the user touched need be present.
+    """
+
+    scope: str
+    key: str
+    updates: dict[str, Any] = Field(default_factory=dict)
 
 
 class RtkUpdatePayload(BaseModel):
@@ -782,6 +828,148 @@ async def update_onboarding(
     )
     state = await _build_onboarding_state(settings)
     return _onboarding_state_response(state)
+
+
+def _models_page_payload(services: ApiServices) -> dict[str, Any]:
+    settings = services.requests.current_settings()
+    return build_models_page_payload(
+        services.requests.cached_prefixed_model_infos(),
+        configured_chat_model_refs(settings),
+        settings_model_visibility(settings),
+        current_model_overrides(),
+    )
+
+
+@router.get("/admin/api/model-admin")
+async def model_admin_page(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Everything the Models page renders: tree, overrides and capabilities.
+
+    One request rather than three: the three sections describe the same models
+    and a partial refresh would show a tree and a capability panel that
+    disagreed about which models exist.
+    """
+
+    require_loopback_admin(request)
+    return await asyncio.to_thread(_models_page_payload, services)
+
+
+@router.post("/admin/api/model-admin/visibility/preview")
+async def preview_model_visibility(
+    payload: ModelVisibilityPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Show what a pattern set would hide, without saving it.
+
+    Nothing is persisted here on purpose: the point of the preview is to answer
+    "how many models does `*:free` take away" *before* the answer becomes the
+    running configuration.
+    """
+
+    require_loopback_admin(request)
+    settings = services.requests.current_settings()
+    visibility = ModelVisibility.from_raw(payload.allow, payload.deny)
+    configured = configured_chat_model_refs(settings)
+    known = {info.model_id for info in services.requests.cached_prefixed_model_infos()}
+    known.update(ref.model_ref for ref in configured)
+    return visibility_payload(visibility, sorted(known, key=str.casefold), configured)
+
+
+@router.post("/admin/api/model-admin/visibility")
+async def save_model_visibility(
+    payload: ModelVisibilityPayload,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    services: ApiServices = Depends(get_services),
+):
+    """Persist the two pattern lists through the ordinary settings path."""
+
+    require_loopback_admin(request)
+    return await _apply_visibility(
+        services,
+        background_tasks,
+        ModelVisibility.from_raw(payload.allow, payload.deny),
+    )
+
+
+@router.post("/admin/api/model-admin/visibility/toggle")
+async def toggle_model_visibility(
+    payload: ModelVisibilityTogglePayload,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    services: ApiServices = Depends(get_services),
+):
+    """Tick one model on or off by writing an exact-match pattern."""
+
+    require_loopback_admin(request)
+    settings = services.requests.current_settings()
+    updated = apply_visibility_toggle(
+        settings_model_visibility(settings), payload.model_ref, visible=payload.visible
+    )
+    result = await _apply_visibility(services, background_tasks, updated)
+    # What the toggle actually achieved, which a user-written glob can still
+    # overrule in either direction.
+    result["model_ref"] = payload.model_ref
+    result["visible"] = updated.is_visible(payload.model_ref)
+    result["honored"] = result["visible"] == payload.visible
+    return result
+
+
+async def _apply_visibility(
+    services: ApiServices,
+    background_tasks: BackgroundTasks,
+    visibility: ModelVisibility,
+) -> dict[str, Any]:
+    """Write both pattern lists through ``apply_admin_config``.
+
+    Deliberately not a direct write to the env file: these are two ordinary
+    settings fields, and going around the manifest would skip validation, the
+    locked-source check and the restart bookkeeping every other field gets.
+    """
+
+    result = await services.admin.apply_admin_config(
+        {
+            "MODEL_VISIBILITY_ALLOW": render_patterns(visibility.allow),
+            "MODEL_VISIBILITY_DENY": render_patterns(visibility.deny),
+        }
+    )
+    restart = result.get("restart")
+    if isinstance(restart, dict) and restart.get("automatic"):
+        background_tasks.add_task(services.admin.request_restart)
+    result["visibility"] = {
+        "allow": list(visibility.allow),
+        "deny": list(visibility.deny),
+    }
+    return result
+
+
+@router.post("/admin/api/model-admin/overrides")
+async def save_model_override_row(
+    payload: ModelOverridePayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Rewrite one provider or model override row and save the file."""
+
+    require_loopback_admin(request)
+    if payload.scope not in (PROVIDER_SCOPE, MODEL_SCOPE):
+        raise HTTPException(
+            status_code=400,
+            detail=f"scope must be '{PROVIDER_SCOPE}' or '{MODEL_SCOPE}'",
+        )
+    if not payload.key.strip():
+        raise HTTPException(status_code=400, detail="key must not be empty")
+    updated = with_override_row(
+        current_model_overrides(),
+        scope=payload.scope,
+        key=payload.key,
+        updates=payload.updates,
+    )
+    await asyncio.to_thread(save_model_overrides, updated)
+    return await asyncio.to_thread(_models_page_payload, services)
 
 
 @router.get("/admin/api/models")
