@@ -304,6 +304,15 @@ CREATE TABLE IF NOT EXISTS request_attempts (
     -- Written only when something was counted; NULL on every row written
     -- before recovery was recorded, which is "not measured", not zero.
     params TEXT,
+    -- The outbound body actually handed to the provider SDK, as redacted JSON
+    -- with prompt text replaced by prompt structure. Recorded at the commit
+    -- boundary, so it is the body after every postprocessor, override and
+    -- retry rewrite -- not the client's original ask.
+    wire_body TEXT,
+    -- 1/0: did that outbound body end up carrying a reasoning instruction at
+    -- all? ``requests.reasoning_adaptation`` says what gating decided; this
+    -- says whether the encoder acted on it. NULL means "not measured".
+    reasoning_emitted INTEGER,
     PRIMARY KEY (request_id, attempt)
 );
 """
@@ -431,6 +440,34 @@ _ADDED_COLUMNS = (
 # Keeping them out of ``_SCHEMA`` matters: that script runs before the ALTER
 # TABLE migration, so indexing ``key_label`` there would fail outright on a
 # database created by an earlier version.
+# Same rule for the per-attempt side table: ``CREATE TABLE IF NOT EXISTS``
+# never revises an existing definition, so each column added after
+# ``request_attempts`` shipped needs its own guarded ALTER.
+_ATTEMPT_ADDED_COLUMNS = (
+    ("params", "ALTER TABLE request_attempts ADD COLUMN params TEXT"),
+    ("wire_body", "ALTER TABLE request_attempts ADD COLUMN wire_body TEXT"),
+    (
+        "reasoning_emitted",
+        "ALTER TABLE request_attempts ADD COLUMN reasoning_emitted INTEGER",
+    ),
+)
+
+# Written in this order by ``_store_attempts``; the placeholder count is
+# asserted against it so a column can never be added without its marker.
+_ATTEMPT_INSERT_COLUMNS = (
+    "request_id",
+    "attempt",
+    "provider",
+    "model_ref",
+    "outcome",
+    "error_kind",
+    "error_message",
+    "duration_ms",
+    "params",
+    "wire_body",
+    "reasoning_emitted",
+)
+
 _ADDED_INDEXES = ("CREATE INDEX IF NOT EXISTS idx_requests_key ON requests(key_label)",)
 
 
@@ -546,6 +583,13 @@ class RouteAttempt:
     # attempt where nothing was counted -- including everything written
     # before recovery observability existed.
     params: dict[str, Any] | None = None
+    # The redacted, text-free outbound body this attempt actually sent, as a
+    # JSON string. None on every attempt written before wire capture existed
+    # and on any attempt whose provider has no instrumented commit boundary.
+    wire_body: str | None = None
+    # Whether that body carried a reasoning instruction. None is "not
+    # measured" and is deliberately distinct from False.
+    reasoning_emitted: bool | None = None
 
 
 # ---------------------------------------------------- recovery observability --
@@ -911,7 +955,7 @@ class RequestLogStore:
                 conn.executescript(_BODIES_SCHEMA)
                 self._ensure_added_columns(conn)
                 self._ensure_input_sha_column(conn)
-                self._ensure_attempt_params_column(conn)
+                self._ensure_attempt_columns(conn)
                 self._relax_bodies_sha_constraint(conn)
                 self._ensure_bodies_index(conn)
         finally:
@@ -1057,29 +1101,37 @@ class RequestLogStore:
                 conn.execute("ALTER TABLE request_bodies ADD COLUMN input_sha TEXT")
 
     @staticmethod
-    def _ensure_attempt_params_column(conn: sqlite3.Connection) -> None:
-        """Add per-attempt recovery counters to a database created before them.
+    def _ensure_attempt_columns(conn: sqlite3.Connection) -> None:
+        """Add per-attempt columns to a table created before they existed.
 
-        ``params`` carries the transparent stream recovery that happened while
-        each model held the request. Rows written earlier keep it NULL, which
-        reads downstream as "recorded before recovery was counted", not zero.
+        ``CREATE TABLE IF NOT EXISTS`` is a no-op on an existing database, so
+        every column added after the table shipped needs its own guarded
+        ``ALTER TABLE``. Rows written earlier keep the column NULL, which reads
+        downstream as "not measured" -- distinct from zero and from false:
+
+        * ``params`` -- the transparent stream recovery that happened while
+          this model held the request, plus the resolved wire parameters.
+        * ``wire_body`` -- the redacted, text-free outbound body.
+        * ``reasoning_emitted`` -- whether that body carried reasoning.
         """
-        columns = {
-            str(row[1]) for row in conn.execute("PRAGMA table_info(request_attempts)")
-        }
-        if "params" in columns:
-            return
-        try:
-            conn.execute("ALTER TABLE request_attempts ADD COLUMN params TEXT")
-        except sqlite3.OperationalError:
-            # Another process may have won the migration race; only a
-            # genuinely missing column is an error.
+        for column, ddl in _ATTEMPT_ADDED_COLUMNS:
             columns = {
                 str(row[1])
                 for row in conn.execute("PRAGMA table_info(request_attempts)")
             }
-            if "params" not in columns:
-                raise
+            if column in columns:
+                continue
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                # Another process may have won the migration race; only a
+                # genuinely missing column is an error.
+                columns = {
+                    str(row[1])
+                    for row in conn.execute("PRAGMA table_info(request_attempts)")
+                }
+                if column not in columns:
+                    raise
 
     @staticmethod
     def _relax_bodies_sha_constraint(conn: sqlite3.Connection) -> None:
@@ -1514,16 +1566,29 @@ class RequestLogStore:
                 attempt.error_message,
                 attempt.duration_ms,
                 json.dumps(attempt.params) if attempt.params else None,
+                attempt.wire_body,
+                None
+                if attempt.reasoning_emitted is None
+                else int(attempt.reasoning_emitted),
             )
             for record in batch
             for attempt in record.attempts
         ]
         if not rows:
             return
+        # Placeholders are counted against the column list mechanically -- a
+        # 43-column INSERT with 42 markers once shipped and broke every write.
+        # The marker string is generated from the same tuple the row is built
+        # against, so the two cannot drift; this catches the row itself.
+        if len(rows[0]) != len(_ATTEMPT_INSERT_COLUMNS):
+            raise RuntimeError(
+                "request_attempts row width"
+                f" {len(rows[0])} != {len(_ATTEMPT_INSERT_COLUMNS)} columns"
+            )
         conn.executemany(
-            "INSERT OR REPLACE INTO request_attempts (request_id, attempt,"
-            " provider, model_ref, outcome, error_kind, error_message,"
-            " duration_ms, params) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO request_attempts"
+            f" ({', '.join(_ATTEMPT_INSERT_COLUMNS)}) VALUES"
+            f" ({', '.join('?' * len(_ATTEMPT_INSERT_COLUMNS))})",
             rows,
         )
 
@@ -1534,7 +1599,8 @@ class RequestLogStore:
         """Return one request's attempts in the order the chain tried them."""
         rows = conn.execute(
             "SELECT attempt, provider, model_ref, outcome, error_kind,"
-            " error_message, duration_ms, params FROM request_attempts"
+            " error_message, duration_ms, params, wire_body, reasoning_emitted"
+            " FROM request_attempts"
             " WHERE request_id = ? ORDER BY attempt",
             (request_id,),
         ).fetchall()
@@ -1548,6 +1614,12 @@ class RequestLogStore:
                 "error_message": row["error_message"],
                 "duration_ms": row["duration_ms"],
                 "params": _loads_or_none(row["params"]),
+                "wire_body": _loads_or_none(row["wire_body"]),
+                "reasoning_emitted": (
+                    None
+                    if row["reasoning_emitted"] is None
+                    else bool(row["reasoning_emitted"])
+                ),
             }
             for row in rows
         ]

@@ -42,6 +42,7 @@ from my_claude_code.core.request_log import (
     install_recovery_trace,
     store_from_settings,
 )
+from my_claude_code.core.wire_capture import WireRequest, install_wire_trace
 
 WireProtocol = Literal["anthropic", "openai_responses"]
 
@@ -104,6 +105,12 @@ class RequestCapture:
         # through. Only a logged request installs one, so providers exercised
         # directly stay unrecorded.
         self._recovery = install_recovery_trace() if self.enabled else None
+        # The outbound body arrives the same way, from the one statement in
+        # each provider that hands a body to its SDK. Reading ``max_tokens``
+        # and the tool count off the *inbound* request here -- which is what
+        # ``params`` below still does, deliberately, as the client's ask --
+        # reported the client's numbers as if they were the wire's.
+        self._wire = install_wire_trace() if self.enabled else None
         input_chars = len(input_text) if input_text else None
         self._record = RequestRecord(
             id=request_id,
@@ -134,6 +141,7 @@ class RequestCapture:
         """
         if not self.enabled:
             return
+        wire = None if self._wire is None else self._wire.requests.get(attempt.attempt)
         self._attempts.append(
             RouteAttempt(
                 attempt=attempt.attempt,
@@ -143,9 +151,25 @@ class RequestCapture:
                 error_kind=attempt.error_kind,
                 error_message=attempt.error_message,
                 duration_ms=attempt.duration_ms,
-                params=self._recovery_events_for(attempt.attempt),
+                params=self._attempt_params(attempt.attempt, wire),
+                wire_body=None if wire is None else wire.body_json,
+                reasoning_emitted=None if wire is None else wire.reasoning_emitted,
             )
         )
+
+    def _attempt_params(
+        self, attempt_index: int, wire: WireRequest | None
+    ) -> dict[str, Any] | None:
+        """Merge what the provider survived with what it actually sent.
+
+        Both are facts about one attempt, and ``params`` is the column that
+        already models them. The wire summary is nested under ``wire`` so the
+        flat recovery counters keep their existing shape.
+        """
+        params = self._recovery_events_for(attempt_index) or {}
+        if wire is not None and wire.params:
+            params["wire"] = wire.params
+        return params or None
 
     def _recovery_events_for(self, attempt_index: int) -> dict[str, Any] | None:
         """Snapshot the recovery counters recorded while this attempt ran."""
@@ -186,6 +210,8 @@ class RequestCapture:
         # index -- including every counter on a single-model route.
         if self._recovery is not None:
             self._recovery.current_attempt = attempt
+        if self._wire is not None:
+            self._wire.current_attempt = attempt
         if attempt == 0:
             self._primary_model_ref = routed.resolved.provider_model_ref
         self._record.route_attempt = attempt

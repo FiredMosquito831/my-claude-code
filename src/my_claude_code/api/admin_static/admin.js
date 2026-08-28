@@ -7757,6 +7757,7 @@ async function openRequestDetail(requestId) {
     ["Reasoning policy", row.reasoning],
     ["Requested reasoning", formatRequestedReasoning(row)],
     ["Reasoning adaptation", formatReasoningAdaptation(row)],
+    ["Reasoning sent", formatRequestReasoningEmitted(row)],
     ["Params", row.params ? JSON.stringify(row.params) : ""],
     ["Input SHA-256", row.input_sha256],
     ["Output SHA-256", row.output_sha256],
@@ -7772,6 +7773,7 @@ async function openRequestDetail(requestId) {
   renderRequestRouteTrace(row);
   renderRequestImages(row);
   renderRequestChain(row);
+  renderWireRequest(row);
   renderTurnTranscript(row);
   byId("reqDetailModal").hidden = false;
   byId("reqDetailClose").focus();
@@ -7797,6 +7799,21 @@ function formatReasoningAdaptation(row) {
   const message = row.reasoning_adaptation;
   if (message == null || message === "") return "";
   return message;
+}
+
+// Intent and action, side by side. "Reasoning adaptation" is what gating
+// decided; this is whether the body that left actually carried a reasoning
+// instruction. They diverged silently for ~23,000 requests on a provider whose
+// encoder discards the policy, and four investigations chased the wrong layer.
+// Read off the attempt that answered, since a fallback may differ from the
+// primary. Blank when nothing was measured, so no claim is made about old rows.
+function formatRequestReasoningEmitted(row) {
+  const attempts = row.route_attempts || [];
+  const answered =
+    attempts.find((attempt) => attempt.outcome === "succeeded") ||
+    attempts[attempts.length - 1];
+  if (!answered || answered.reasoning_emitted == null) return "";
+  return answered.reasoning_emitted ? "yes" : "no";
 }
 
 function formatChars(count) {
@@ -7935,6 +7952,114 @@ function renderRequestChain(row) {
     list.appendChild(item);
   });
   container.appendChild(list);
+}
+
+/**
+ * Show the body MCC actually sent, per attempt, minus the prompt text.
+ *
+ * The meta list above shows the *client's* parameters -- what Claude Code
+ * asked for. This panel shows what left the process after routing, the output
+ * budget, every provider postprocessor and any create-level retry rewrite.
+ * They differ constantly: a client asking for 64,000 tokens against a model
+ * capped at 16,384 is sent 16,384, and for months only the 64,000 was visible.
+ *
+ * Message and system text is deliberately absent -- it is captured once, in
+ * the Prompt pane below -- but its structure survives, so "40 tools, 12
+ * messages, 3 image blocks" is still readable here.
+ */
+function renderWireRequest(row) {
+  const container = byId("reqDetailWire");
+  if (!container) return;
+  container.innerHTML = "";
+  const attempts = (row.route_attempts || []).filter((a) => a.wire_body);
+  if (!attempts.length) {
+    container.hidden = true;
+    return;
+  }
+  container.hidden = false;
+
+  const heading = document.createElement("h4");
+  heading.className = "req-chain-title";
+  heading.textContent = "Request body sent (no prompt text)";
+  container.appendChild(heading);
+
+  attempts.forEach((attempt) => {
+    const pane = document.createElement("details");
+    pane.className = "req-wire-pane";
+    if (attempts.length === 1) pane.open = false;
+
+    const summary = document.createElement("summary");
+    summary.className = "req-wire-head";
+
+    const model = document.createElement("code");
+    model.className = "req-chain-model";
+    model.textContent = attempt.model_ref || "—";
+    summary.appendChild(model);
+
+    const facts = document.createElement("span");
+    facts.className = "req-wire-facts";
+    facts.textContent = formatWireFacts(attempt);
+    summary.appendChild(facts);
+
+    const reasoning = document.createElement("span");
+    reasoning.className = `req-wire-reasoning is-${wireReasoningState(attempt)}`;
+    reasoning.textContent = formatReasoningEmitted(attempt);
+    reasoning.title =
+      "Whether the outbound body actually carried a reasoning instruction, " +
+      "as opposed to what reasoning gating decided.";
+    summary.appendChild(reasoning);
+    pane.appendChild(summary);
+
+    const body = attempt.wire_body;
+    if (body && body._truncated) {
+      const note = document.createElement("p");
+      note.className = "req-wire-truncated";
+      note.textContent =
+        `Truncated at ${Number(body._limit).toLocaleString()} of ` +
+        `${Number(body._original_chars).toLocaleString()} characters.`;
+      pane.appendChild(note);
+    }
+
+    const pre = document.createElement("pre");
+    pre.className = "requests-detail-body req-wire-body";
+    pre.textContent = formatWireBody(body);
+    pane.appendChild(pre);
+    container.appendChild(pane);
+  });
+}
+
+/** One line of the numbers people open this panel to check. */
+function formatWireFacts(attempt) {
+  const wire = (attempt.params && attempt.params.wire) || {};
+  const parts = [];
+  if (wire.max_tokens != null) parts.push(`max_tokens ${Number(wire.max_tokens).toLocaleString()}`);
+  if (wire.tools != null) parts.push(wire.tools === 1 ? "1 tool" : `${wire.tools} tools`);
+  if (wire.temperature != null) parts.push(`temp ${wire.temperature}`);
+  return parts.join(" · ");
+}
+
+// Null is "not measured" -- an attempt written before wire capture existed, or
+// one whose provider has no instrumented commit boundary. It must not read as
+// "reasoning was off", which is the exact confusion this field exists to end.
+function wireReasoningState(attempt) {
+  if (attempt.reasoning_emitted == null) return "unknown";
+  return attempt.reasoning_emitted ? "on" : "off";
+}
+
+function formatReasoningEmitted(attempt) {
+  const state = wireReasoningState(attempt);
+  if (state === "unknown") return "reasoning not measured";
+  return state === "on" ? "reasoning sent" : "no reasoning sent";
+}
+
+function formatWireBody(body) {
+  if (body == null) return "";
+  if (body._truncated) return String(body._preview || "");
+  try {
+    return JSON.stringify(body, null, 2);
+  } catch (error) {
+    return String(body);
+  }
 }
 
 const CHAIN_OUTCOME_LABELS = {

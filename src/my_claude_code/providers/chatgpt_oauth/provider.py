@@ -23,6 +23,7 @@ from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.core.trace import trace_event
 from my_claude_code.core.version import package_version
+from my_claude_code.core.wire_capture import record_wire_request
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.model_listing import model_infos_from_ids
@@ -269,6 +270,10 @@ class ChatGPTOAuthProvider(BaseProvider):
                     active_credentials = credentials
                     active_headers = headers
                     refreshed_after_unauthorized = False
+                    # Commit boundary: the body is final once it is handed
+                    # to the sender. Headers are not recorded -- they carry the
+                    # bearer token.
+                    record_wire_request(body)
                     response = await self._rate_limiter.execute_with_retry(
                         self._send_stream_request,
                         provider_failure_override=self._provider_failure_override,

@@ -29,6 +29,7 @@ from my_claude_code.core.request_log import (
     get_request_log_store,
     record_recovery_event,
 )
+from my_claude_code.core.wire_capture import _WIRE_TRACE, record_wire_request
 
 
 @pytest.fixture
@@ -927,3 +928,103 @@ def test_a_disabled_capture_installs_no_recovery_trace() -> None:
     capture.finish_success("ok")
 
     assert _RECOVERY_TRACE.get() is None
+
+
+def test_the_capture_records_the_wire_body_not_the_clients_ask(
+    store: RequestLogStore,
+) -> None:
+    """The defect, end to end: 64,000 asked for, 16,384 sent, 16,384 recorded.
+
+    ``params`` on the request row is still the client's ask, deliberately --
+    that is a real fact about the request. What was missing was the other one.
+    """
+    plan = _vision_router().resolve_messages_plan(
+        MessagesRequest(
+            model="claude-sonnet-4-6",
+            max_tokens=64000,
+            messages=[Message(role="user", content="hi")],
+        )
+    )
+    capture = _make_capture(
+        store, request_id="req_wire", params={"max_tokens": 64000, "tools": 40}
+    )
+    capture.set_plan(plan)
+    capture.set_routing(plan.attempts[0], 0)
+    # What the provider hands its SDK, after the budget and every postprocessor.
+    record_wire_request(
+        {
+            "model": "thinkingmachines/inkling",
+            "max_tokens": 16384,
+            "reasoning_effort": "high",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"function": {"name": "Read"}}],
+        }
+    )
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/thinkingmachines/inkling",
+            outcome="succeeded",
+        )
+    )
+    capture.finish_success("ok")
+    store.close()
+    _WIRE_TRACE.set(None)
+
+    row = store.get_request("req_wire")
+    assert row is not None
+    assert row["params"] == {"max_tokens": 64000, "tools": 40}, "the client's ask"
+    (attempt,) = row["route_attempts"]
+    assert attempt["params"]["wire"]["max_tokens"] == 16384, "what was sent"
+    assert attempt["params"]["wire"]["tools"] == 1
+    assert attempt["reasoning_emitted"] is True
+    assert attempt["wire_body"]["max_tokens"] == 16384
+
+
+def test_wire_bodies_land_on_their_own_attempt_row(store: RequestLogStore) -> None:
+    """Each attempt's body attaches to that attempt, not to the whole request."""
+    plan = _vision_router().resolve_messages_plan(
+        MessagesRequest(
+            model="claude-sonnet-4-6",
+            max_tokens=8,
+            messages=[Message(role="user", content="hi")],
+        )
+    )
+    capture = _make_capture(store, request_id="req_two")
+    capture.set_plan(plan)
+    capture.set_routing(plan.attempts[0], 0)
+    record_wire_request({"model": "blind", "max_tokens": 4096})
+    capture.set_routing(plan.attempts[1], 1)
+    record_wire_request({"model": "backup", "max_tokens": 8192, "thinking": {}})
+
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0, provider_id="nvidia_nim", model_ref="x", outcome="failed"
+        )
+    )
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=1, provider_id="groq", model_ref="y", outcome="succeeded"
+        )
+    )
+    capture.finish_success("ok")
+    store.close()
+    _WIRE_TRACE.set(None)
+
+    row = store.get_request("req_two")
+    assert row is not None
+    first, second = row["route_attempts"]
+    assert first["params"]["wire"]["max_tokens"] == 4096
+    assert second["params"]["wire"]["max_tokens"] == 8192
+    # An empty ``thinking`` object is not an instruction.
+    assert second["reasoning_emitted"] is False
+
+
+def test_an_untracked_capture_installs_no_wire_trace(store: RequestLogStore) -> None:
+    """A disabled log must not start collecting bodies it will never write."""
+    _WIRE_TRACE.set(None)
+    capture = _make_capture(None, request_id="req_off")
+    assert capture.enabled is False
+    record_wire_request({"model": "m", "max_tokens": 1})
+    assert _WIRE_TRACE.get() is None

@@ -2211,3 +2211,125 @@ def test_an_unreadable_params_value_cannot_take_stats_down(store) -> None:
     row = store.get_request("r1")
     assert row is not None
     assert row["route_attempts"][0]["params"] is None
+
+
+# --------------------------------------------------------------------------- #
+# The outbound wire request, recorded per attempt
+# --------------------------------------------------------------------------- #
+
+
+def _wire_attempts() -> tuple[RouteAttempt, ...]:
+    """One attempt that was sent 16,384 tokens after asking for 64,000."""
+    return (
+        RouteAttempt(
+            attempt=0,
+            provider="nvidia_nim",
+            model_ref="nvidia_nim/thinkingmachines/inkling",
+            outcome=RouteAttemptOutcome.SUCCEEDED,
+            params={"early_retries": 1, "wire": {"max_tokens": 16384, "tools": 40}},
+            wire_body='{"max_tokens": 16384, "model": "inkling"}',
+            reasoning_emitted=True,
+        ),
+    )
+
+
+def test_wire_request_round_trips_through_the_writer(store: RequestLogStore) -> None:
+    """The wire body, its summary and the reasoning flag survive a round trip."""
+    store.enqueue(_record("req_wire", attempts=_wire_attempts()))
+    store.close()
+
+    stored = store.get_request("req_wire")
+    assert stored is not None
+    (attempt,) = stored["route_attempts"]
+    # The whole point: the recorded number is the wire's, not the client's.
+    assert attempt["params"]["wire"]["max_tokens"] == 16384
+    # Recovery counters keep their existing flat shape alongside it.
+    assert attempt["params"]["early_retries"] == 1
+    assert attempt["wire_body"] == {"max_tokens": 16384, "model": "inkling"}
+    assert attempt["reasoning_emitted"] is True
+
+
+def test_reasoning_emitted_false_is_stored_as_false_not_as_missing(
+    store: RequestLogStore,
+) -> None:
+    """``False`` and "not measured" must stay distinguishable in the column."""
+    store.enqueue(
+        _record(
+            "req_none",
+            attempts=(
+                RouteAttempt(
+                    attempt=0,
+                    provider="commandcode",
+                    model_ref="commandcode/m",
+                    outcome=RouteAttemptOutcome.SUCCEEDED,
+                    wire_body="{}",
+                    reasoning_emitted=False,
+                ),
+            ),
+        )
+    )
+    store.close()
+
+    stored = store.get_request("req_none")
+    assert stored is not None
+    (attempt,) = stored["route_attempts"]
+    assert attempt["reasoning_emitted"] is False
+
+
+def test_migrates_a_database_created_before_the_wire_columns(tmp_path) -> None:
+    """The live database predates these columns; the ALTERs must be guarded.
+
+    ``CREATE TABLE IF NOT EXISTS`` is a no-op on an existing table, so the
+    columns only appear if the explicit, ``PRAGMA table_info``-guarded ALTERs
+    run -- and running the store twice must not fail the second time.
+    """
+    db_path = tmp_path / "requests.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(_OLD_SCHEMA)
+        conn.executescript(_LEGACY_ATTEMPTS_SCHEMA)
+        conn.execute(
+            "INSERT INTO requests (id, ts_epoch, ts_iso, endpoint, protocol,"
+            " status) VALUES ('legacy', ?, 'x', '/v1/messages', 'anthropic',"
+            " 'success')",
+            (time.time(),),
+        )
+        conn.execute(
+            "INSERT INTO request_attempts (request_id, attempt, provider,"
+            " model_ref, outcome) VALUES ('legacy', 0, 'groq', 'groq/old',"
+            " 'succeeded')"
+        )
+        conn.commit()
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(request_attempts)")
+        }
+        assert "wire_body" not in columns
+        assert "reasoning_emitted" not in columns
+    finally:
+        conn.close()
+
+    store = RequestLogStore(db_path, max_rows=100)
+    try:
+        store.enqueue(_record("fresh", attempts=_wire_attempts()))
+        store.close()
+    finally:
+        store.close()
+
+    # Idempotent: a second open of the same file finds the columns and skips.
+    again = RequestLogStore(db_path, max_rows=100)
+    try:
+        legacy = again.get_request("legacy")
+        assert legacy is not None
+        (old_attempt,) = legacy["route_attempts"]
+        # Written before wire capture existed: NULL, which is "not measured"
+        # and must never read as "no reasoning was sent".
+        assert old_attempt["wire_body"] is None
+        assert old_attempt["reasoning_emitted"] is None
+
+        fresh = again.get_request("fresh")
+        assert fresh is not None
+        (new_attempt,) = fresh["route_attempts"]
+        assert new_attempt["params"]["wire"]["max_tokens"] == 16384
+        assert new_attempt["reasoning_emitted"] is True
+    finally:
+        again.close()

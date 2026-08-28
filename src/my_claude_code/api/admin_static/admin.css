@@ -5759,3 +5759,62 @@ details.turn-pane > summary:focus-visible {
 .models-override-mode {
   font-size: 12px;
 }
+
+/* The outbound request body, per attempt. Collapsed by default: it is a
+   debugging surface, not something to scroll past on every request. */
+.req-wire {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.req-wire-pane {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.req-wire-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.req-wire-facts {
+  color: var(--muted);
+}
+
+.req-wire-reasoning {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid var(--line-strong);
+  color: var(--muted);
+}
+
+.req-wire-reasoning.is-on {
+  color: var(--ok, var(--accent));
+  border-color: currentColor;
+}
+
+.req-wire-truncated {
+  margin: 0;
+  padding: 0 10px 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.req-wire-body {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  max-height: 340px;
+  overflow: auto;
+}

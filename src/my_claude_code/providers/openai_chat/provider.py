@@ -36,6 +36,7 @@ from my_claude_code.core.request_log import (
     record_recovery_event,
 )
 from my_claude_code.core.trace import provider_chat_body_snapshot, trace_event
+from my_claude_code.core.wire_capture import record_wire_request
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import (
@@ -317,6 +318,14 @@ class OpenAIChatProvider(BaseProvider):
         while True:
             try:
                 create_body = self._prepare_create_body(body)
+                # The commit boundary. Everything upstream of this line can
+                # still change the body -- base conversion, common policy,
+                # provider postprocessors, the override postprocessor, tool
+                # name encoding, the learned output cap and the create-level
+                # retry rewrites all run before it -- and nothing downstream
+                # can. ``stream`` is passed as a keyword, so it is recorded
+                # alongside rather than read back out of the dict.
+                record_wire_request(create_body, stream=True)
                 stream = await self._rate_limiter.execute_with_retry(
                     self._client.chat.completions.create,
                     provider_failure_override=self._provider_failure_override,
