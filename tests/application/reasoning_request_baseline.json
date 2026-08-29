@@ -1701,40 +1701,92 @@
     }
   },
   "xai|bare|client": {},
-  "xai|bare|high": {},
-  "xai|bare|low": {},
-  "xai|bare|max": {},
-  "xai|bare|medium": {},
+  "xai|bare|high": {
+    "reasoning_effort": "high"
+  },
+  "xai|bare|low": {
+    "reasoning_effort": "low"
+  },
+  "xai|bare|max": {
+    "reasoning_effort": "high"
+  },
+  "xai|bare|medium": {
+    "reasoning_effort": "medium"
+  },
   "xai|bare|off": {},
-  "xai|bare|xhigh": {},
-  "xai|client_effort_high|client": {},
-  "xai|client_effort_high|high": {},
-  "xai|client_effort_high|low": {},
-  "xai|client_effort_high|max": {},
-  "xai|client_effort_high|medium": {},
+  "xai|bare|xhigh": {
+    "reasoning_effort": "high"
+  },
+  "xai|client_effort_high|client": {
+    "reasoning_effort": "high"
+  },
+  "xai|client_effort_high|high": {
+    "reasoning_effort": "high"
+  },
+  "xai|client_effort_high|low": {
+    "reasoning_effort": "low"
+  },
+  "xai|client_effort_high|max": {
+    "reasoning_effort": "high"
+  },
+  "xai|client_effort_high|medium": {
+    "reasoning_effort": "medium"
+  },
   "xai|client_effort_high|off": {},
-  "xai|client_effort_high|xhigh": {},
+  "xai|client_effort_high|xhigh": {
+    "reasoning_effort": "high"
+  },
   "xai|client_thinking_adaptive|client": {},
-  "xai|client_thinking_adaptive|high": {},
-  "xai|client_thinking_adaptive|low": {},
-  "xai|client_thinking_adaptive|max": {},
-  "xai|client_thinking_adaptive|medium": {},
+  "xai|client_thinking_adaptive|high": {
+    "reasoning_effort": "high"
+  },
+  "xai|client_thinking_adaptive|low": {
+    "reasoning_effort": "low"
+  },
+  "xai|client_thinking_adaptive|max": {
+    "reasoning_effort": "high"
+  },
+  "xai|client_thinking_adaptive|medium": {
+    "reasoning_effort": "medium"
+  },
   "xai|client_thinking_adaptive|off": {},
-  "xai|client_thinking_adaptive|xhigh": {},
+  "xai|client_thinking_adaptive|xhigh": {
+    "reasoning_effort": "high"
+  },
   "xai|client_thinking_budget|client": {},
-  "xai|client_thinking_budget|high": {},
-  "xai|client_thinking_budget|low": {},
-  "xai|client_thinking_budget|max": {},
-  "xai|client_thinking_budget|medium": {},
+  "xai|client_thinking_budget|high": {
+    "reasoning_effort": "high"
+  },
+  "xai|client_thinking_budget|low": {
+    "reasoning_effort": "low"
+  },
+  "xai|client_thinking_budget|max": {
+    "reasoning_effort": "high"
+  },
+  "xai|client_thinking_budget|medium": {
+    "reasoning_effort": "medium"
+  },
   "xai|client_thinking_budget|off": {},
-  "xai|client_thinking_budget|xhigh": {},
+  "xai|client_thinking_budget|xhigh": {
+    "reasoning_effort": "high"
+  },
   "xai|client_thinking_disabled|client": {},
-  "xai|client_thinking_disabled|high": {},
-  "xai|client_thinking_disabled|low": {},
-  "xai|client_thinking_disabled|max": {},
-  "xai|client_thinking_disabled|medium": {},
+  "xai|client_thinking_disabled|high": {
+    "reasoning_effort": "high"
+  },
+  "xai|client_thinking_disabled|low": {
+    "reasoning_effort": "low"
+  },
+  "xai|client_thinking_disabled|max": {
+    "reasoning_effort": "high"
+  },
+  "xai|client_thinking_disabled|medium": {
+    "reasoning_effort": "medium"
+  },
   "xai|client_thinking_disabled|off": {},
-  "xai|client_thinking_disabled|xhigh": {},
+  "xai|client_thinking_disabled|xhigh": {
+    "reasoning_effort": "high"
+  },
   "zai|bare|client": {},
   "zai|bare|high": {
     "extra_body": {

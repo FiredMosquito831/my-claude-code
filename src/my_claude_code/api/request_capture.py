@@ -31,8 +31,10 @@ from my_claude_code.core.credential_attribution import install_attribution
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import failure_kind_name, find_execution_failure
 from my_claude_code.core.reasoning import (
+    ReasoningAdaptation,
     ReasoningAdaptationKind,
     ReasoningPolicy,
+    combine_reasoning_adaptations,
 )
 from my_claude_code.core.request_headers import capture_headers
 from my_claude_code.core.request_images import capture_images
@@ -119,6 +121,10 @@ class RequestCapture:
         # ``params`` below still does, deliberately, as the client's ask --
         # reported the client's numbers as if they were the wire's.
         self._wire = install_wire_trace(wire_body_max_chars) if self.enabled else None
+        # Routing's own verdict, kept so a provider-level adaptation recorded
+        # after the request left can be merged with it at commit time rather
+        # than overwriting it.
+        self._reasoning_adaptation: ReasoningAdaptation | None = None
         input_chars = len(input_text) if input_text else None
         self._record = RequestRecord(
             id=request_id,
@@ -245,6 +251,7 @@ class RequestCapture:
         # Why the applied policy differs from what was asked for: the warning
         # gating would otherwise emit only to the server log, now surfaced in
         # the request log and admin UI. NULL whenever gating changed nothing.
+        self._reasoning_adaptation = routed.reasoning_adaptation
         self._record.reasoning_adaptation = routed.reasoning_adaptation.message
         # The message is prose and PR-owned; the kind is the programmatic
         # signal the wire pane styles on, so a reworded warning can never
@@ -486,12 +493,36 @@ class RequestCapture:
             calls.append(call)
         return calls
 
+    def _merge_provider_reasoning_adaptations(self) -> None:
+        """Fold a create-level reasoning strip into the row's single verdict.
+
+        Routing decides before the request leaves and writes its verdict in
+        :meth:`set_routing`; a create-level retry decides after the host has
+        already refused it. The row has one verdict, so the two are combined
+        under the more severe kind, with both messages kept in the order they
+        happened. ``UNCHANGED`` stays NULL, exactly as ``set_routing`` stores
+        it.
+        """
+        if self._wire is None or not self._wire.reasoning_adaptations:
+            return
+        routed = self._reasoning_adaptation
+        parts = [] if routed is None else [routed]
+        parts.extend(self._wire.reasoning_adaptations)
+        combined = combine_reasoning_adaptations(*parts)
+        self._record.reasoning_adaptation = combined.message
+        self._record.reasoning_adaptation_kind = (
+            None
+            if combined.kind is ReasoningAdaptationKind.UNCHANGED
+            else str(combined.kind)
+        )
+
     def _finalize(self, status: Literal["success", "error", "cancelled"]) -> None:
         if self._finalized or self._store is None:
             self._finalized = True
             return
         self._finalized = True
         record = self._record
+        self._merge_provider_reasoning_adaptations()
         record.status = status
         record.duration_ms = (time.perf_counter() - self._start) * 1000
         record.ttft_ms = self._ttft_ms

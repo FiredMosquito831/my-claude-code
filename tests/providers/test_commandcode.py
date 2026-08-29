@@ -394,7 +394,7 @@ def test_reasoning_is_read_and_replayed_on_the_field_it_arrives_on() -> None:
     assert "<think>" not in json.dumps(assistant)
 
 
-def _profile_body(name: str) -> dict:
+def _profile_body(name: str, reasoning: ReasoningPolicy | None = None) -> dict:
     profile = OPENAI_CHAT_PROFILES[name]
     return build_openai_chat_request_body(
         MessagesRequest.model_validate(
@@ -404,7 +404,7 @@ def _profile_body(name: str) -> dict:
                 "messages": [{"role": "user", "content": "ping"}],
             }
         ),
-        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+        reasoning=reasoning or ReasoningPolicy.on(effort=ReasoningEffort.MAX),
         policy=profile.request_policy,
         postprocessors=profile.request_postprocessors,
         provider_id=name,
@@ -415,16 +415,16 @@ def _profile_body(name: str) -> dict:
 def test_untouched_providers_keep_their_own_reasoning_shape() -> None:
     """Regression guard: this change is scoped to Command Code alone.
 
-    Two kinds of neighbour are pinned -- providers that send no reasoning at
-    all, and providers that send a *different* dialect -- so a future edit to
-    the shared encoders cannot quietly spread Command Code's ``reasoning_effort``
-    across the fleet, nor erase somebody else's shape.
+    Command Code's own contribution was its *probed on-value*: a rung named
+    when the policy names none. That is what must not spread. Since 6.5.0
+    ``bedrock`` and ``cline`` do carry the standard field -- like every
+    OpenAI-compatible host -- but they must never gain an on-value, because
+    nobody probed one for them.
     """
     for name in ("bedrock", "cline"):
+        assert "reasoning_effort" not in _profile_body(name, ReasoningPolicy.on())
         body = _profile_body(name)
-        assert "reasoning_effort" not in body
         assert "reasoning" not in body
-        assert "reasoning_effort" not in body.get("extra_body", {})
         assert "reasoning" not in body.get("extra_body", {})
 
     # Ollama: its own named-effort vocabulary, which tops out at "max".

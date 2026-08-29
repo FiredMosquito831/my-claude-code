@@ -14,7 +14,7 @@ from my_claude_code.providers.model_listing import (
     model_infos_from_ids,
 )
 from my_claude_code.providers.openai_chat import (
-    NO_REASONING,
+    OPENAI_STANDARD_REASONING,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
@@ -28,15 +28,9 @@ _REQUEST_POLICY = OpenAIChatRequestPolicy(
     provider_name="GITHUB_MODELS",
     reasoning_replay=ReasoningReplayMode.THINK_TAGS,
 )
-# 2026-08-29 audit: correctly ``NO_REASONING``. The GitHub Models catalog is a
-# multi-vendor shim -- OpenAI, Meta, Mistral, Cohere, DeepSeek and Microsoft
-# models behind one endpoint -- so there is no single reasoning knob to send,
-# and models.dev's nearest bucket reports reasoning on 32 of 33 rows under
-# vendor-specific controls that do not share a vocabulary. Choosing between them
-# would mean branching on the model id, which this project forbids. There is no
-# GitHub Models credential on the audit machine, so nothing could be probed;
-# revisit with a token and the invalid-value probe used for OpenCode.
-_PROFILE = OpenAIChatProfile(_REQUEST_POLICY, NO_REASONING)
+# The OpenAI standard field. Which of the catalogue's vendors can take it is
+# the per-model capability gate's decision, not this file's.
+_PROFILE = OpenAIChatProfile(_REQUEST_POLICY, OPENAI_STANDARD_REASONING)
 _REQUIRED_MODEL_CAPABILITIES = frozenset({"streaming", "tool-calling"})
 
 

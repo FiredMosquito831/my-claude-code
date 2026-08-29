@@ -1,12 +1,12 @@
-"""Wire-shape tests for the 2026-08-29 ``NO_REASONING`` audit.
+"""Wire-shape tests for the default OpenAI dialect and the declared ones.
 
-Two providers were changed by that audit -- OpenCode Zen gained the
-``reasoning_effort`` enum its gateway actually validates, and DeepSeek's
-existing ``reasoning_effort`` stopped collapsing six requested efforts onto two
-wire values. Every other profile was examined and deliberately left alone, so
-the third test here pins their outbound bodies byte-for-byte: an audit that
-documents a decision is only worth as much as the guard that keeps a later edit
-to the shared encoders from quietly undoing it.
+Every OpenAI-compatible profile now declares ``reasoning_effort`` unless it was
+probed speaking something else. Two halves are pinned here: that the twenty
+profiles which used to send nothing now speak the standard field (and still
+send nothing for OFF, which is what ``off=False`` on the default guarantees),
+and that the hosts with a *measured* dialect -- OpenCode Zen's wider enum,
+DeepSeek's thinking object, ollama, zenmux, kimi, featherless -- were not
+flattened onto the default in the process.
 """
 
 import pytest
@@ -14,9 +14,19 @@ import pytest
 from my_claude_code.config.model_overrides import ModelParameterOverrides
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
-from my_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    ReasoningDialect,
+    ReasoningDialectOrigin,
+    ReasoningEffort,
+    ReasoningPolicy,
+)
 from my_claude_code.providers.deepseek.compat import build_deepseek_request_body
-from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
+from my_claude_code.providers.openai_chat.profiles import (
+    GENERIC_OPENAI_PROFILE,
+    OPENAI_CHAT_PROFILES,
+    OPENAI_STANDARD_REASONING,
+)
+from my_claude_code.providers.openai_chat.reasoning import NoReasoning
 from my_claude_code.providers.openai_chat.request_policy import (
     build_openai_chat_request_body,
 )
@@ -187,12 +197,14 @@ def test_deepseek_on_without_an_effort_enables_thinking_explicitly() -> None:
 
 
 # --------------------------------------------------------------------------
-# Everything else the audit examined and deliberately did not change.
+# The twenty profiles that used to send nothing at all.
 # --------------------------------------------------------------------------
 
-# Examined on 2026-08-29 and left as ``NO_REASONING``. Each profile carries the
-# evidence in a comment; this list is the executable half of that record.
-_AUDITED_UNCHANGED = (
+# Every profile that carried ``NO_REASONING`` before PR F. Kept as data so the
+# sweeps below are exhaustive and provable against the list the 5.70.0 audit
+# left behind, rather than re-derived from whatever the registry happens to
+# hold today.
+_PREVIOUSLY_NO_REASONING = (
     "mistral_codestral",
     "opencode_go",
     "huggingface",
@@ -215,39 +227,96 @@ _AUDITED_UNCHANGED = (
 )
 
 
-@pytest.mark.parametrize("provider_id", _AUDITED_UNCHANGED)
-@pytest.mark.parametrize(
-    "reasoning",
-    [
-        ReasoningPolicy.provider_default(),
-        ReasoningPolicy.on(effort=ReasoningEffort.MAX),
-        ReasoningPolicy.off(),
-    ],
-    ids=["default", "max", "off"],
-)
-def test_audited_but_unchanged_providers_send_no_reasoning_control(
-    provider_id: str, reasoning: ReasoningPolicy
+@pytest.mark.parametrize("provider_id", _PREVIOUSLY_NO_REASONING)
+def test_every_previously_silent_profile_now_speaks_the_standard(
+    provider_id: str,
 ) -> None:
-    """Regression guard: the audit's verdicts stay verdicts.
-
-    A body that is byte-identical across all three intents is the wire-level
-    statement that this provider is asked for nothing. If a later edit to the
-    shared encoders leaks a control into one of these, that is a provider the
-    audit found no evidence for and the request would 400 on part of its
-    roster.
-    """
-    body = _profile_body(provider_id, reasoning)
+    """The standard field, and only it -- no second dialect leaks in."""
+    body = _profile_body(provider_id, ReasoningPolicy.on(effort=ReasoningEffort.MAX))
     extra_body = body.get("extra_body", {})
 
-    for field in ("reasoning_effort", "reasoning", "thinking", "reasoning_split"):
+    assert body["reasoning_effort"] == "high", provider_id
+    for field in ("reasoning", "thinking", "reasoning_split"):
         assert field not in body, provider_id
         assert field not in extra_body, provider_id
     assert "chat_template_kwargs" not in extra_body, provider_id
-    assert body == _profile_body(provider_id, ReasoningPolicy.provider_default())
 
 
-def test_neighbouring_dialects_are_untouched_by_the_audit() -> None:
-    """The other half of the guard: nobody else's shape was erased either."""
+@pytest.mark.parametrize("provider_id", _PREVIOUSLY_NO_REASONING)
+def test_a_previously_silent_profile_still_sends_nothing_for_off(
+    provider_id: str,
+) -> None:
+    """OFF is byte-identical to the default body, exactly as before PR F.
+
+    The default dialect has no ``disabled_value``, so it has no OFF spelling,
+    so gating's "no OFF spelling -> nothing is sent" row applies. A user who
+    explicitly turns reasoning off is never handed a level nobody asked for,
+    and no host is sent a ``none`` it may not know.
+    """
+    assert _profile_body(provider_id, ReasoningPolicy.off()) == _profile_body(
+        provider_id, ReasoningPolicy.provider_default()
+    ), provider_id
+
+
+@pytest.mark.parametrize("provider_id", _PREVIOUSLY_NO_REASONING)
+def test_a_level_less_on_names_no_rung(provider_id: str) -> None:
+    """An enabled value is a default rung, and nobody asked for a rung."""
+    assert "reasoning_effort" not in _profile_body(provider_id, ReasoningPolicy.on())
+
+
+def test_the_default_dialect_is_the_openai_standard_ladder() -> None:
+    """The four rungs, the standard field, and no toggle, budget or OFF."""
+    assert OPENAI_STANDARD_REASONING.dialect == ReasoningDialect(
+        effort_values=frozenset(
+            {
+                ReasoningEffort.MINIMAL,
+                ReasoningEffort.LOW,
+                ReasoningEffort.MEDIUM,
+                ReasoningEffort.HIGH,
+            }
+        ),
+        toggle=False,
+        budget=False,
+        off=False,
+        adaptive=False,
+        effort_field="reasoning_effort",
+        toggle_field="",
+        budget_field="",
+        origin=ReasoningDialectOrigin.DEFAULT,
+    )
+
+
+def test_the_default_ladder_is_a_subset_of_the_openai_sdk_enum() -> None:
+    """Every word the default can emit is one the SDK's own type allows.
+
+    Fails loudly the day the SDK narrows the enum, which is the only way this
+    default could become wrong without anyone touching FCC.
+    """
+    from typing import get_args
+
+    from openai.types.shared.reasoning_effort import ReasoningEffort as SdkEffort
+
+    allowed = {value for value in get_args(get_args(SdkEffort)[0]) if value}
+    emitted = {
+        _profile_body("xai", ReasoningPolicy.on(effort=effort))["reasoning_effort"]
+        for effort in ReasoningEffort
+    }
+    assert emitted <= allowed
+
+
+def test_no_openai_chat_profile_is_silent_any_more() -> None:
+    """``NoReasoning`` is unreachable from the registry and the fallback."""
+    silent = [
+        name
+        for name, profile in OPENAI_CHAT_PROFILES.items()
+        if isinstance(profile.reasoning, NoReasoning)
+    ]
+    assert silent == []
+    assert not isinstance(GENERIC_OPENAI_PROFILE.reasoning, NoReasoning)
+
+
+def test_declared_dialects_survive_the_default() -> None:
+    """The other half of the guard: nobody else's shape was flattened."""
     max_on = ReasoningPolicy.on(effort=ReasoningEffort.MAX)
 
     # Ollama: its own named-effort vocabulary, topping out at "max".

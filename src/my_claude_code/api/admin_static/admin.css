@@ -5969,6 +5969,21 @@ details.turn-pane > summary:focus-visible {
   color: var(--muted);
 }
 
+/* Provenance, not a tier badge: the dialect panel is deliberately plain text,
+   so this reads as a quiet inline note beside the heading rather than a
+   status pill competing with it. */
+.models-dialect-origin {
+  margin-left: var(--space-2);
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+  background: var(--surface-2, transparent);
+}
+
 .models-override-editor {
   display: flex;
   flex-direction: column;

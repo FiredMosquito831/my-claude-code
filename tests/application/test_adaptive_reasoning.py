@@ -235,6 +235,15 @@ def test_every_pre_adaptive_preference_is_byte_identical(
     sent asking for 8,193 -- a number nothing had checked against the model's
     real limit. The budget yields instead now (4,095 of 4,096). No cell for any
     other provider moved.
+
+    Twenty-six ``xai`` cells were re-baselined in 6.5.0 for the same class of
+    reason. This matrix drives the encoders directly and **bypasses per-model
+    capability gating**, so it sees the raw encoder change: ``xai`` used to
+    carry ``NO_REASONING`` and now declares the OpenAI standard field, so every
+    non-``off`` preference gains a ``reasoning_effort``. Through the real
+    request path the gate still decides whether that field is sent at all --
+    which is what ``tests/application/test_reasoning_wire_table.py`` covers.
+    The other 315 cells, every other provider included, did not move.
     """
 
     overrides = CLIENT_REQUESTS[shape]

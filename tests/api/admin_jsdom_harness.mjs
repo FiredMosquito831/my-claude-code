@@ -959,6 +959,70 @@ const requestDetail = {
   }),
 };
 
+/* ------------------------------------------------- Models page dialect panel
+   Driven directly, because the panel's whole job is to say WHERE a dialect
+   came from -- and the three origins cannot all be reached from one fixture
+   catalogue. */
+function drivePanel(dialect) {
+  const node = window.eval(`buildDialectPanel(${JSON.stringify(dialect)})`);
+  if (!node) return null;
+  return {
+    subhead: (node.querySelector(".models-subhead").textContent || "").trim(),
+    origin: node.querySelector(".models-dialect-origin")
+      ? node.querySelector(".models-dialect-origin").textContent
+      : null,
+    notes: Array.from(node.querySelectorAll(".models-empty-note")).map((el) =>
+      (el.textContent || "").replace(/\s+/g, " ").trim(),
+    ),
+  };
+}
+
+const dialectPanels = {
+  default: drivePanel({
+    known: true,
+    effort_field: "reasoning_effort",
+    effort_values: ["high", "low", "medium", "minimal"],
+    toggle: false,
+    toggle_field: null,
+    budget: false,
+    budget_field: null,
+    off: false,
+    adaptive: false,
+    origin: "default",
+    origin_label: "default OpenAI dialect",
+    learned_rejections: [],
+  }),
+  declared: drivePanel({
+    known: true,
+    effort_field: null,
+    effort_values: null,
+    toggle: true,
+    toggle_field: "chat_template_kwargs.thinking",
+    budget: true,
+    budget_field: "reasoning_budget",
+    off: true,
+    adaptive: false,
+    origin: "declared",
+    origin_label: "declared by this provider",
+    learned_rejections: [],
+  }),
+  learned: drivePanel({
+    known: true,
+    effort_field: null,
+    effort_values: null,
+    toggle: false,
+    toggle_field: null,
+    budget: false,
+    budget_field: null,
+    off: false,
+    adaptive: false,
+    origin: "learned",
+    origin_label: "learned from the host's own rejection",
+    learned_rejections: [{ field: "reasoning_effort", since: "2026-08-29" }],
+  }),
+  unknown: drivePanel({ known: false }),
+};
+
 requestDetail.reasoningRow = window.eval(
   `formatRequestReasoningEmitted({route_attempts:[{outcome:"succeeded",reasoning_emitted:0}]})`,
 );
@@ -983,6 +1047,7 @@ console.log(
       },
       requestCards,
       requestDetail,
+      dialectPanels,
       docs,
       limits,
       optimizer: {

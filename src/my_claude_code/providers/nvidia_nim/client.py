@@ -22,6 +22,10 @@ from my_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatProfile,
     OpenAIChatProvider,
+    complaint_evidence_snippet,
+    is_bad_request,
+    sampling_parameter_evidence,
+    upstream_complaint,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
@@ -31,11 +35,8 @@ from .retry import (
     clone_body_without_chat_template,
     clone_body_without_reasoning_budget,
     clone_body_without_reasoning_content,
-    complaint_evidence_snippet,
     reasoning_budget_evidence,
     reasoning_content_evidence,
-    sampling_parameter_evidence,
-    upstream_complaint,
 )
 from .tool_schema import (
     body_without_nim_tool_argument_aliases,
@@ -52,6 +53,9 @@ _PROFILE = OpenAIChatProfile(
     # instead of the profile postprocessors. The operator's request log confirms
     # it reaches the model: 18,744 of 24,620 NIM requests (76.1%) came back with
     # thinking. An encoder here would be dead configuration that reads as live.
+    # PR F gave every profile-driven host the OpenAI standard dialect; this
+    # one is excluded because the profile encoder is not the wire, and its
+    # real dialect is declared alongside.
     NO_REASONING,
 )
 
@@ -142,9 +146,7 @@ class NvidiaNimProvider(OpenAIChatProvider):
            rather than guessed at.
         """
         status_code = getattr(error, "status_code", None)
-        bad_request_like = isinstance(error, openai.BadRequestError) or (
-            status_code == 400
-        )
+        bad_request_like = is_bad_request(error)
 
         complaint = upstream_complaint(error)
         evidence = complaint_evidence_snippet(complaint)

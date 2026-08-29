@@ -6,6 +6,7 @@ from typing import Any, Protocol
 from my_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningDialect,
+    ReasoningDialectOrigin,
     ReasoningEffort,
     ReasoningPolicy,
     nearest_effort,
@@ -110,6 +111,9 @@ class NamedEffortReasoning:
     field: str = "reasoning_effort"
     budget_field: str | None = None
     use_extra_body: bool = False
+    # Provenance for the Models page. Only the fleet default sets ``DEFAULT``;
+    # a profile that names its own vocabulary is a declaration by definition.
+    origin: ReasoningDialectOrigin = ReasoningDialectOrigin.DECLARED
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         target = _extra_body(body) if self.use_extra_body else body
@@ -140,6 +144,7 @@ class NamedEffortReasoning:
             effort_field=self.field,
             toggle_field=self.field if self.enabled_value is not None else "",
             budget_field=self.budget_field or "",
+            origin=self.origin,
         )
 
 

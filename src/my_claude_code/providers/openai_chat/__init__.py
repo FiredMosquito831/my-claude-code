@@ -4,11 +4,23 @@ from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .base_url import openai_v1_base_url
+from .complaint import (
+    complaint_evidence_snippet,
+    is_bad_request,
+    matched_token,
+    sampling_parameter_evidence,
+    upstream_complaint,
+)
 from .extra_body import (
     validate_extra_body_does_not_override_canonical_fields,
     validate_extra_body_does_not_override_reasoning_fields,
 )
-from .profiles import GENERIC_OPENAI_PROFILE, OPENAI_CHAT_PROFILES, OpenAIChatProfile
+from .profiles import (
+    GENERIC_OPENAI_PROFILE,
+    OPENAI_CHAT_PROFILES,
+    OPENAI_STANDARD_REASONING,
+    OpenAIChatProfile,
+)
 from .provider import OpenAIAsyncCredentialProvider, OpenAIChatProvider
 from .reasoning import (
     NO_REASONING,
@@ -42,6 +54,7 @@ __all__ = [
     "GENERIC_OPENAI_PROFILE",
     "NO_REASONING",
     "OPENAI_CHAT_PROFILES",
+    "OPENAI_STANDARD_REASONING",
     "ChatTemplateReasoning",
     "NamedEffortReasoning",
     "OpenAIAsyncCredentialProvider",
@@ -50,8 +63,13 @@ __all__ = [
     "OpenAIChatRequestPolicy",
     "ReasoningObject",
     "build_openai_chat_request_body",
+    "complaint_evidence_snippet",
     "create_openai_chat_provider",
+    "is_bad_request",
+    "matched_token",
     "openai_v1_base_url",
+    "sampling_parameter_evidence",
+    "upstream_complaint",
     "usage_int",
     "validate_extra_body_does_not_override_canonical_fields",
     "validate_extra_body_does_not_override_reasoning_fields",

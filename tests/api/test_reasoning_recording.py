@@ -341,3 +341,43 @@ def test_client_adaptive_is_recorded_without_changing_the_wire() -> None:
         profile.apply_reasoning(body_a, adaptive, policy)
         profile.apply_reasoning(body_b, enabled, enabled_policy)
         assert body_a == body_b, name
+
+
+def test_a_provider_adaptation_merges_with_the_routing_verdict(store) -> None:
+    """One row, one verdict: routing's and the provider's are combined.
+
+    Routing clamps before the request leaves; the provider strips after the
+    host has already refused it. Both messages are kept, under the more severe
+    of the two kinds, so the row never under-represents what happened.
+    """
+    from my_claude_code.core.reasoning import ReasoningAdaptationKind
+    from my_claude_code.core.wire_capture import record_reasoning_adaptation
+
+    routed = ModelRouter(
+        _settings(ReasoningPreference.MAX),
+        reasoning_capability_lookup=lambda _p, _m: EFFORT_UP_TO_HIGH,
+        output_limit_lookup=lambda _p, _m: 8192,
+    ).resolve_messages_request(_request())
+    capture = RequestCapture(
+        store,
+        request_id="req_merged",
+        endpoint="/v1/messages",
+        protocol="anthropic",
+        stream=False,
+        requested_model="claude-3-opus",
+        input_text="hello",
+        params={"max_tokens": 4096},
+    )
+    capture.set_routing(routed)
+    # Routing recorded a CLAMPED verdict above; the provider layer now reports
+    # that the host refused the field outright.
+    record_reasoning_adaptation(
+        ReasoningAdaptationKind.SUPPRESSED, "XAI rejected 'reasoning_effort' for m"
+    )
+    capture.finish_success("ok")
+    store.close()
+
+    row = store.get_request("req_merged")
+    assert row is not None
+    assert row["reasoning_adaptation_kind"] == "suppressed"
+    assert "XAI rejected 'reasoning_effort' for m" in row["reasoning_adaptation"]

@@ -1,59 +1,21 @@
 """NVIDIA NIM retry-body downgrade helpers.
 
-Two concerns live here:
-
-* the *evidence* side -- reading an upstream rejection and deciding which
-  request field, if any, it actually complains about; and
-* the *surgery* side -- cloning a request body with only that field removed.
-
-The evidence side exists because a downgrade retry is only a recovery when the
-provider objected to the thing being removed. NIM's reasoning instruction lives
-in ``extra_body.chat_template_kwargs`` (``thinking`` / ``enable_thinking``, plus
-``reasoning_budget``), so a rung that fires on the mere *shape* of a 400 turns
-every unrelated rejection -- a sampling-parameter complaint such as
-``Validation: top_p is immutable for this model and must be 0.95, got 1`` --
-into a silent downgrade to a non-thinking request. Match on what the provider
-said, the way ``providers/openai_chat/output_cap.py`` matches a named cap.
+The *surgery* side of a downgrade retry: cloning a request body with only the
+field NIM named removed. The *evidence* side -- reading an upstream rejection
+and deciding which field it actually complains about -- moved to
+``providers/openai_chat/complaint.py`` when the create-level reasoning safety
+net needed the same judgement fleet-wide; the patterns below are the ones only
+NIM speaks, because NIM's reasoning control lives in
+``extra_body.chat_template_kwargs`` (``thinking`` / ``enable_thinking``, plus
+``reasoning_budget``) rather than in the standard field.
 """
 
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
-# Keys whose values carry the provider's own words about what was wrong.
-_COMPLAINT_KEYS = frozenset(
-    {
-        "message",
-        "detail",
-        "details",
-        "msg",
-        "error",
-        "errors",
-        "reason",
-        "param",
-        "loc",
-        "title",
-        "type",
-        "code",
-    }
-)
-
-# Keys under which validation errors echo the *request* back. Anything found
-# there names a field we sent, not a field the provider objected to, so reading
-# it as evidence is what makes a rung fire indiscriminately.
-_ECHO_KEYS = frozenset(
-    {
-        "input",
-        "body",
-        "request",
-        "payload",
-        "data",
-        "ctx",
-        "value",
-        "received",
-    }
-)
+from my_claude_code.providers.openai_chat import matched_token
 
 _CHAT_TEMPLATE_PATTERN = re.compile(r"\bchat_template(_kwargs)?\b")
 _REASONING_CONTENT_PATTERN = re.compile(r"\breasoning_content\b")
@@ -61,90 +23,26 @@ _REASONING_BUDGET_PATTERN = re.compile(r"\breasoning_budget\b")
 _THINKING_BUDGET_PATTERN = re.compile(r"\bthinking_token_budget\b")
 _REASONING_CONFIG_PATTERN = re.compile(r"\breasoning_config\b")
 
-# Sampling knobs. A 400 naming one of these is a complaint about how the model
-# is sampled and has nothing to do with the chat template, so it must never
-# cost the request its reasoning instruction.
-_SAMPLING_PARAM_PATTERN = re.compile(
-    r"\b("
-    r"top_p|top_k|min_p|temperature|seed|"
-    r"frequency_penalty|presence_penalty|repetition_penalty|length_penalty"
-    r")\b"
-)
-
-# Enough of the provider's words to make a log line answerable, not so much
-# that a verbose validation error floods the log.
-_EVIDENCE_CHARS = 200
-
-
-def upstream_complaint(error: Exception) -> str:
-    """Return the provider's lowercased complaint, with the echoed request removed.
-
-    Prefers the structured error body: pydantic-style validation errors carry
-    the objection in ``msg``/``loc``/``type`` and the whole submitted request
-    under ``input``, and only the former is evidence. Falls back to ``str`` when
-    the body yields nothing readable.
-    """
-    parts: list[str] = []
-    _collect_complaint(getattr(error, "body", None), parts, keyed=False)
-    if parts:
-        return " ".join(parts).lower()
-    return str(error).lower()
-
-
-def _collect_complaint(value: Any, parts: list[str], *, keyed: bool) -> None:
-    if isinstance(value, str):
-        if keyed:
-            parts.append(value)
-        return
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            name = str(key).lower()
-            if name in _ECHO_KEYS:
-                continue
-            _collect_complaint(item, parts, keyed=name in _COMPLAINT_KEYS)
-        return
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
-        for item in value:
-            _collect_complaint(item, parts, keyed=keyed)
-
-
-def _matched(pattern: re.Pattern[str], complaint: str) -> str | None:
-    match = pattern.search(complaint)
-    return match.group(0) if match else None
-
 
 def chat_template_evidence(complaint: str) -> str | None:
     """Return the chat-template field the provider named, if it named one."""
-    return _matched(_CHAT_TEMPLATE_PATTERN, complaint)
+    return matched_token(_CHAT_TEMPLATE_PATTERN, complaint)
 
 
 def reasoning_content_evidence(complaint: str) -> str | None:
     """Return the replayed-reasoning field the provider named, if it named one."""
-    return _matched(_REASONING_CONTENT_PATTERN, complaint)
+    return matched_token(_REASONING_CONTENT_PATTERN, complaint)
 
 
 def reasoning_budget_evidence(complaint: str) -> str | None:
     """Return the thinking-budget control the provider named, if it named one."""
-    budget = _matched(_REASONING_BUDGET_PATTERN, complaint)
+    budget = matched_token(_REASONING_BUDGET_PATTERN, complaint)
     if budget is not None:
         return budget
-    thinking_budget = _matched(_THINKING_BUDGET_PATTERN, complaint)
+    thinking_budget = matched_token(_THINKING_BUDGET_PATTERN, complaint)
     if thinking_budget is not None and _REASONING_CONFIG_PATTERN.search(complaint):
         return thinking_budget
     return None
-
-
-def sampling_parameter_evidence(complaint: str) -> str | None:
-    """Return the sampling parameter the provider named, if it named one."""
-    return _matched(_SAMPLING_PARAM_PATTERN, complaint)
-
-
-def complaint_evidence_snippet(complaint: str) -> str:
-    """Return a bounded excerpt of the complaint, for logs."""
-    text = " ".join(complaint.split())
-    if len(text) <= _EVIDENCE_CHARS:
-        return text
-    return f"{text[:_EVIDENCE_CHARS]}..."
 
 
 def clone_body_without_reasoning_budget(body: dict[str, Any]) -> dict[str, Any] | None:

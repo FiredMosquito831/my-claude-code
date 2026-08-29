@@ -11305,8 +11305,14 @@ function buildDialectPanel(dialect) {
   wrap.className = "models-dialect";
   const head = document.createElement("p");
   head.className = "models-subhead";
-  head.textContent = "What this host parses (declared, not voted)";
+  head.textContent = "What this host parses (declared or learned, never voted)";
   wrap.appendChild(head);
+  if (dialect.known && dialect.origin_label) {
+    const origin = document.createElement("span");
+    origin.className = "models-dialect-origin";
+    origin.textContent = dialect.origin_label;
+    head.appendChild(origin);
+  }
   const body = document.createElement("p");
   body.className = "models-empty-note";
   if (!dialect.known) {
@@ -11339,6 +11345,21 @@ function buildDialectPanel(dialect) {
   if (dialect.adaptive) parts.push("has an adaptive channel");
   body.textContent = parts.join(" · ");
   wrap.appendChild(body);
+  const rejections = Array.isArray(dialect.learned_rejections)
+    ? dialect.learned_rejections
+    : [];
+  if (rejections.length) {
+    const learned = document.createElement("p");
+    learned.className = "models-empty-note";
+    learned.textContent = rejections
+      .map(
+        (entry) =>
+          `Not sent since ${entry.since}: ${entry.field} — this host answered ` +
+          "400 naming it.",
+      )
+      .join(" · ");
+    wrap.appendChild(learned);
+  }
   return wrap;
 }
 

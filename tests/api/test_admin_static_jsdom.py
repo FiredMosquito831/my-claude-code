@@ -646,3 +646,40 @@ def test_an_unmeasured_number_is_a_dash_not_a_zero(rendered) -> None:
     assert (
         rendered["requestDetail"]["reasoningRow"] == "not sent (model default applies)"
     )
+
+
+def test_the_dialect_panel_renders_the_origin_pill(rendered) -> None:
+    """Provenance is on the panel, in the operator's words, for all three.
+
+    "This host parses reasoning_effort" reads very differently depending on
+    whether someone probed it, whether it is the standard assumed of every
+    OpenAI-compatible host, or whether the host itself said no.
+    """
+    panels = rendered["dialectPanels"]
+
+    assert panels["default"]["origin"] == "default OpenAI dialect"
+    assert panels["declared"]["origin"] == "declared by this provider"
+    assert panels["learned"]["origin"] == "learned from the host's own rejection"
+    # An undeclared dialect has no provenance to show, and says so in prose.
+    assert panels["unknown"]["origin"] is None
+    assert "Not declared for this provider" in panels["unknown"]["notes"][0]
+    assert (
+        panels["default"]["subhead"]
+        == "What this host parses (declared or learned, never voted)default OpenAI dialect"
+    )
+
+
+def test_the_dialect_panel_lists_learned_rejections(rendered) -> None:
+    """A learned rejection is dated and attributed to the host's own 400."""
+    panels = rendered["dialectPanels"]
+
+    assert panels["default"]["notes"] == [
+        "effort via reasoning_effort: high, low, medium, minimal · no on/off "
+        "field · no thinking-budget field · cannot be switched off"
+    ]
+    learned = panels["learned"]["notes"]
+    assert len(learned) == 2
+    assert learned[1] == (
+        "Not sent since 2026-08-29: reasoning_effort — this host answered "
+        "400 naming it."
+    )

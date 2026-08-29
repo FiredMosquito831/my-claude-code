@@ -946,3 +946,37 @@ def test_narrowing_never_widens_a_dialect() -> None:
     assert dialect is not None
     assert dialect.effort_values is None
     assert dialect.toggle is True
+
+
+def test_a_learned_rejection_reaches_the_manager_through_the_provider() -> None:
+    """Both narrowings only remove, so they compose in either order.
+
+    The provider drops the effort channel it was measured being refused; the
+    manager then drops whatever the gateway's own ``supported_parameters`` do
+    not list. Neither can put a channel back.
+    """
+    from my_claude_code.core.reasoning import (
+        ReasoningDialect,
+        ReasoningDialectOrigin,
+        ReasoningEffort,
+        narrow_dialect_by_rejections,
+    )
+
+    declared = ReasoningDialect(
+        effort_values=frozenset({ReasoningEffort.LOW, ReasoningEffort.HIGH}),
+        toggle=True,
+        toggle_field="reasoning_effort",
+        effort_field="reasoning_effort",
+    )
+    learned = narrow_dialect_by_rejections(declared, {"reasoning_effort": "2026-08-29"})
+
+    assert learned.effort_values is None
+    assert learned.toggle is False
+    assert learned.origin is ReasoningDialectOrigin.LEARNED
+    assert learned.learned_rejections == (("reasoning_effort", "2026-08-29"),)
+    # Narrowing again with the same evidence is idempotent, so a second 400 on
+    # the same field cannot widen or re-order anything.
+    assert (
+        narrow_dialect_by_rejections(learned, {"reasoning_effort": "2026-08-29"})
+        == learned
+    )

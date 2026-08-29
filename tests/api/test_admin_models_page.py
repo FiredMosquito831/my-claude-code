@@ -606,3 +606,60 @@ def test_the_models_payload_still_builds_with_the_request_log_disabled():
     model = payload["providers"][0]["models"][0]
     assert model["reasoning_measured"] is None
     assert payload["measured_days"] == 7
+
+
+def test_the_models_page_names_the_dialects_origin() -> None:
+    """Three provenances, three operator-facing labels, one payload key.
+
+    The page used to say only "what this host parses". After PR F the same
+    sentence can be a probe someone wrote down, the OpenAI standard assumed of
+    every compatible host, or the host's own 400 -- and an operator deciding
+    whether to trust it needs to know which.
+    """
+    from my_claude_code.api.model_admin import dialect_payload
+    from my_claude_code.core.reasoning import (
+        ReasoningDialect,
+        ReasoningDialectOrigin,
+        ReasoningEffort,
+    )
+
+    default = dialect_payload(
+        ReasoningDialect(
+            effort_values=frozenset({ReasoningEffort.LOW}),
+            effort_field="reasoning_effort",
+            origin=ReasoningDialectOrigin.DEFAULT,
+        )
+    )
+    assert default["origin"] == "default"
+    assert default["origin_label"] == "default OpenAI dialect"
+    assert default["learned_rejections"] == []
+
+    declared = dialect_payload(ReasoningDialect(toggle=True, toggle_field="thinking"))
+    assert declared["origin"] == "declared"
+    assert declared["origin_label"] == "declared by this provider"
+
+    # An undeclared dialect stays exactly as it was: unknown never restricts,
+    # and it gains no provenance keys to misread.
+    unknown = dialect_payload(None)
+    assert unknown["known"] is False
+    assert "origin" not in unknown
+
+
+def test_a_learned_rejection_is_dated_on_the_page() -> None:
+    """The date is what makes a learned rejection answerable rather than eerie."""
+    from my_claude_code.api.model_admin import dialect_payload
+    from my_claude_code.core.reasoning import (
+        ReasoningDialect,
+        ReasoningDialectOrigin,
+    )
+
+    payload = dialect_payload(
+        ReasoningDialect(
+            origin=ReasoningDialectOrigin.LEARNED,
+            learned_rejections=(("reasoning_effort", "2026-08-29"),),
+        )
+    )
+    assert payload["origin_label"] == "learned from the host's own rejection"
+    assert payload["learned_rejections"] == [
+        {"field": "reasoning_effort", "since": "2026-08-29"}
+    ]

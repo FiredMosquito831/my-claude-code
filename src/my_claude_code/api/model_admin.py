@@ -45,7 +45,10 @@ from my_claude_code.core.model_visibility import (
     MODEL_PATTERN_SEPARATOR,
     ModelVisibility,
 )
-from my_claude_code.core.reasoning import ReasoningDialect
+from my_claude_code.core.reasoning import (
+    ReasoningDialect,
+    ReasoningDialectOrigin,
+)
 from my_claude_code.providers.runtime.models_dev import (
     cross_provider_match,
     model_output_limit_tiered,
@@ -71,6 +74,16 @@ SOURCE_LABELS: dict[str, str] = {
     SOURCE_APPROXIMATE: "approximate cross-provider",
     SOURCE_HOST_DIALECT: "host dialect",
     SOURCE_UNKNOWN: "unknown",
+}
+
+# Where a host dialect came from, in the operator's words. Provenance, not
+# confidence: "default" is the OpenAI standard field every compatible host is
+# assumed to read, "declared" is a probe someone wrote down, and "learned" is
+# the host's own 400 overruling both.
+DIALECT_ORIGIN_LABELS: dict[ReasoningDialectOrigin, str] = {
+    ReasoningDialectOrigin.DEFAULT: "default OpenAI dialect",
+    ReasoningDialectOrigin.DECLARED: "declared by this provider",
+    ReasoningDialectOrigin.LEARNED: "learned from the host's own rejection",
 }
 
 # What each rung of the ladder means, for the page's per-field tier column.
@@ -224,6 +237,12 @@ def dialect_payload(dialect: ReasoningDialect | None) -> dict[str, Any]:
         "budget_field": dialect.budget_field or None,
         "off": dialect.off,
         "adaptive": dialect.adaptive,
+        "origin": dialect.origin.value,
+        "origin_label": DIALECT_ORIGIN_LABELS[dialect.origin],
+        "learned_rejections": [
+            {"field": field, "since": since}
+            for field, since in dialect.learned_rejections
+        ],
     }
 
 

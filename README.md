@@ -618,6 +618,10 @@ A control is sent only when the model has that knob **and** the host has a field
 - a model known not to reason at all gets no reasoning controls;
 - and where MCC knows neither fact, the request is left **exactly** as before — most providers publish nothing, and narrowing on silence would regress them.
 
+**Every OpenAI-compatible host now declares the standard `reasoning_effort` field by default.** That field is defined by the Chat Completions API itself, so a host claiming compatibility either reads it or ignores it — and roughly twenty hosts that previously sent nothing at all now speak it. Which *models* are actually sent it is still the capability gate's decision above, so a mixed roster is protected per model rather than by silencing the whole host. A host that genuinely refuses the field says so with a 400 naming it: MCC strips the field, retries that one request without it, and never asks for it again on that model. A 400 that names a sampling parameter instead is *not* treated as a reasoning rejection — it is raised, because dropping thinking would not have fixed it.
+
+The Models page states which of the three you are looking at: **default OpenAI dialect**, **declared by this provider** (someone probed this gateway and wrote down what it parses), or **learned from the host's own rejection**, dated.
+
 Each request logs both the reasoning policy applied and the one originally requested, and every adaptation names the wire field it will be sent through (or says plainly that nothing is being sent), so what left the proxy is visible in the request detail view. Unsupported controls safely remain provider-defined.
 
 <div align="center">

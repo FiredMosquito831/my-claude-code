@@ -98,16 +98,24 @@ def test_base_url_is_overridable_for_other_regions(provider_id: str) -> None:
 
 
 @pytest.mark.parametrize("provider_id", ALIBABA_PROVIDER_IDS)
-def test_alibaba_reads_reasoning_but_never_requests_it(provider_id: str) -> None:
-    """Deliberately narrow: read ``reasoning_content``, never send ``enable_thinking``.
+def test_alibaba_reads_reasoning_and_asks_with_the_standard_field(
+    provider_id: str,
+) -> None:
+    """Reads ``reasoning_content``; asks with ``reasoning_effort``, not DashScope's own.
 
-    DashScope rejects ``enable_thinking`` on some models, and the Coding Plan
-    proxies third-party models we cannot test without a subscription. An unsent
-    control costs thinking on some models; a wrongly-sent one fails every request.
+    ``enable_thinking`` is DashScope's native control and is still not sent --
+    it is rejected outright by part of each roster, and no encoder emits it.
+    What changed in 6.5.0 is that these profiles no longer send *nothing*: they
+    speak the OpenAI standard field like every other compatible host, the
+    per-model capability gate decides which models are sent it, and a model
+    that refuses it is learned from its own 400.
     """
     profile = OPENAI_CHAT_PROFILES[provider_id]
 
-    assert isinstance(profile.reasoning, NoReasoning)
+    assert not isinstance(profile.reasoning, NoReasoning)
+    assert profile.reasoning.dialect.effort_field == "reasoning_effort"
+    # DashScope's own toggle is still nobody's wire field here.
+    assert profile.reasoning.dialect.toggle is False
     assert profile.reasoning_delta_field == "reasoning_content"
 
 
@@ -115,7 +123,7 @@ def test_alibaba_reads_reasoning_but_never_requests_it(provider_id: str) -> None
 def test_caller_extra_body_survives_as_the_thinking_escape_hatch(
     provider_id: str,
 ) -> None:
-    """Because FCC will not send ``enable_thinking``, the user must be able to."""
+    """FCC still never sends ``enable_thinking``, so the user must be able to."""
     policy = OPENAI_CHAT_PROFILES[provider_id].request_policy
 
     assert policy.include_extra_body is True

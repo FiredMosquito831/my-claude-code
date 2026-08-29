@@ -350,3 +350,35 @@ def test_keyword_arguments_passed_beside_the_body_are_recorded_with_it():
     trace = install_wire_trace()
     record_wire_request({"model": "m"}, stream=True)
     assert json.loads(trace.requests[0].body_json)["stream"] is True
+
+
+def test_is_reasoning_key_is_public() -> None:
+    """Import guard for the promotion: the private name is gone for good.
+
+    ``reasoning_was_emitted`` and the safety net's candidate set are driven by
+    the same predicate, so a silent rename would desynchronise them.
+    """
+    from my_claude_code.core import wire_capture
+
+    assert wire_capture.is_reasoning_key("reasoning_effort")
+    assert not wire_capture.is_reasoning_key("temperature")
+    assert not hasattr(wire_capture, "_is_reasoning_key")
+
+
+def test_a_provider_can_record_a_reasoning_adaptation() -> None:
+    """Recorded inside a trace; a no-op outside one, like the body recorder."""
+    from my_claude_code.core import wire_capture
+    from my_claude_code.core.reasoning import ReasoningAdaptationKind
+    from my_claude_code.core.wire_capture import (
+        install_wire_trace,
+        record_reasoning_adaptation,
+    )
+
+    trace = install_wire_trace()
+    record_reasoning_adaptation(ReasoningAdaptationKind.SUPPRESSED, "host refused it")
+    assert len(trace.reasoning_adaptations) == 1
+    assert trace.reasoning_adaptations[0].message == "host refused it"
+
+    wire_capture._WIRE_TRACE.set(None)
+    # No trace installed: recording must not raise.
+    record_reasoning_adaptation(ReasoningAdaptationKind.SUPPRESSED, "ignored")

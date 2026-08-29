@@ -103,15 +103,22 @@ def test_build_request_body_preserves_caller_extra_body(huggingface_provider):
         ReasoningPolicy.on(budget_tokens=4096),
     ),
 )
-def test_build_request_body_leaves_reasoning_control_to_selected_upstream(
+def test_build_request_body_sends_only_the_standard_reasoning_field(
     huggingface_provider, reasoning
 ):
+    """HF routes to many independent backends, so it speaks the one standard.
+
+    Before 6.5.0 this profile sent nothing at all, on the argument that one
+    encoder cannot be right for a roster publishing three different
+    vocabularies. That objection was always about *models*, and models have
+    their own answer now: the per-model capability gate. What is pinned here is
+    that no second dialect leaks in alongside the standard field.
+    """
     body = huggingface_provider._build_request_body(
         make_request(),
         reasoning=reasoning,
     )
 
-    assert "reasoning_effort" not in body
     assert "reasoning" not in body
     assert "thinking" not in body
     assert "extra_body" not in body

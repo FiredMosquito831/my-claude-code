@@ -596,7 +596,9 @@ Providers expose reasoning differently. MCC resolves your intent once at the bou
 
 Two independent facts decide what actually goes on the wire: what the **model** supports, and which reasoning fields the **host** in front of it parses. A control is sent only when both agree; otherwise the nearest thing both can express goes instead, and the request log names the field it went through. A model with only an on/off switch behind a gateway with only an effort field gets no reasoning instruction at all — its own default applies — because the gateway's default effort word is not the level you asked for. Where MCC knows neither fact the request is unchanged.
 
-The Models page shows the two side by side: what the model can do, with the resolution tier each field came from, and what the host parses, labelled as a declaration rather than a vote.
+Every OpenAI-compatible host declares the standard `reasoning_effort` field unless it was probed speaking something else; a host that refuses it answers with a 400, is retried once without it, and is not asked again for that model. Your own model-parameter override is applied **after** every postprocessor, so setting `reasoning_effort` explicitly — or to null — on a model always wins over the default dialect.
+
+The Models page shows the two side by side: what the model can do, with the resolution tier each field came from, and what the host parses, labelled **default OpenAI dialect**, **declared by this provider**, or **learned from the host's own rejection** — never a vote.
 
 ---
 

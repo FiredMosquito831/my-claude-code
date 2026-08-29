@@ -39,6 +39,9 @@ _REQUEST_POLICY = OpenAIChatRequestPolicy(
 # strips it again when a non-reasoning model rejects it -- a pairing the profile
 # encoder cannot express. models.dev reports reasoning on only 7 of 34 Mistral
 # rows, which is why that retry exists. An encoder here would never be consulted.
+# PR F gave every profile-driven host the OpenAI standard dialect; this
+# one is excluded because the profile encoder is not the wire, and its
+# real dialect is declared alongside.
 _PROFILE = OpenAIChatProfile(_REQUEST_POLICY, NO_REASONING)
 
 

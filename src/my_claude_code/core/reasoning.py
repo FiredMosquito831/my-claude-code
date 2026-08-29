@@ -1,6 +1,7 @@
 """Provider-neutral reasoning intent."""
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 
@@ -238,6 +239,25 @@ def effort_intersection(
     return first & second
 
 
+class ReasoningDialectOrigin(StrEnum):
+    """Where a :class:`ReasoningDialect` came from.
+
+    Provenance, not confidence. A declared dialect is a claim someone probed
+    and wrote down; the default is the OpenAI Chat Completions standard, which
+    an OpenAI-compatible host either reads or ignores; a learned dialect is the
+    host's own 400 overruling both.
+    """
+
+    DEFAULT = "default"
+    """The OpenAI Chat Completions standard field, assumed of every host."""
+
+    DECLARED = "declared"
+    """This profile states what its gateway was measured parsing."""
+
+    LEARNED = "learned"
+    """Narrowed by a rejection the host itself sent."""
+
+
 @dataclass(frozen=True, slots=True)
 class ReasoningDialect:
     """Which reasoning fields one HOST parses for one request.
@@ -278,6 +298,71 @@ class ReasoningDialect:
 
     budget_field: str = ""
     """Wire name of the budget field, for adaptation messages only."""
+
+    origin: ReasoningDialectOrigin = ReasoningDialectOrigin.DECLARED
+    """Where this dialect came from: the OpenAI standard, a profile's own
+    declaration, or a 400 the host itself answered."""
+
+    learned_rejections: tuple[tuple[str, str], ...] = ()
+    """``(field, ISO date)`` for each field this host refused, newest last."""
+
+
+def narrow_dialect_by_rejections(
+    dialect: ReasoningDialect, rejections: Mapping[str, str]
+) -> ReasoningDialect:
+    """Remove from a dialect every channel whose wire field was refused.
+
+    A learned rejection outranks a declaration: the profile is a claim about
+    the gateway, a 400 is the gateway itself, and where they disagree the
+    gateway is right. Narrowing only ever removes -- it can never invent a
+    channel -- so it composes with the manager's own gateway narrowing in
+    either order.
+
+    A dotted field name (``reasoning.effort``) is matched on its first segment
+    too, because that is the key a body actually carries and therefore the key
+    a strip removes.
+    """
+
+    if not rejections:
+        return dialect
+
+    def refers_to(field: str, declared: str) -> bool:
+        if not declared:
+            return False
+        return field in (declared, declared.split(".", 1)[0])
+
+    effort_values = dialect.effort_values
+    effort_field = dialect.effort_field
+    toggle = dialect.toggle
+    off = dialect.off
+    toggle_field = dialect.toggle_field
+    budget = dialect.budget
+    budget_field = dialect.budget_field
+
+    for field in rejections:
+        if refers_to(field, effort_field):
+            effort_values = None
+            effort_field = ""
+        if refers_to(field, toggle_field):
+            toggle = False
+            off = False
+            toggle_field = ""
+        if refers_to(field, budget_field):
+            budget = False
+            budget_field = ""
+
+    return replace(
+        dialect,
+        effort_values=effort_values,
+        effort_field=effort_field,
+        toggle=toggle,
+        off=off,
+        toggle_field=toggle_field,
+        budget=budget,
+        budget_field=budget_field,
+        origin=ReasoningDialectOrigin.LEARNED,
+        learned_rejections=tuple(sorted(rejections.items())),
+    )
 
 
 class ReasoningAdaptationKind(StrEnum):

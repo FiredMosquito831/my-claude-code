@@ -36,6 +36,9 @@ _PROFILE = OpenAIChatProfile(
     # ``_apply_deepseek_chat_extras`` in ``.compat``, which owns the wire shape
     # together with the tool-follow-up rules that have to disable thinking.
     # Putting an encoder here would be dead configuration that reads as live.
+    # PR F gave every profile-driven host the OpenAI standard dialect; this
+    # one is excluded because the profile encoder is not the wire, and its
+    # real dialect is declared alongside.
     NO_REASONING,
 )
 

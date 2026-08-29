@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
+from my_claude_code.core.reasoning import ReasoningAdaptation, ReasoningAdaptationKind
 
 # Default bound on the stored JSON per attempt. It bounds the *message and
 # tool structure* only: every other key is stored whole regardless, because a
@@ -251,7 +252,14 @@ def strip_request_content(body: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _is_reasoning_key(key: str) -> bool:
+def is_reasoning_key(key: str) -> bool:
+    """Whether a wire key is a reasoning instruction under some dialect.
+
+    The fleet's single definition, public because the create-level reasoning
+    safety net (``providers/openai_chat/reasoning_reject.py``) decides what a
+    400 is allowed to strip from the same list. A new encoder field is covered
+    everywhere the day it is added to ``_REASONING_KEYS`` above.
+    """
     lowered = key.lower()
     return any(lowered.startswith(name) for name in _REASONING_KEYS)
 
@@ -272,7 +280,7 @@ def _looks_enabled(value: Any) -> bool:
             return False
         # A nested container (``chat_template_kwargs``) counts only if
         # something inside it is itself an enabled reasoning instruction.
-        nested = [item for k, item in value.items() if _is_reasoning_key(str(k))]
+        nested = [item for k, item in value.items() if is_reasoning_key(str(k))]
         if nested:
             return any(_looks_enabled(item) for item in nested)
         return True
@@ -295,7 +303,7 @@ def reasoning_was_emitted(body: Mapping[str, Any]) -> bool:
     adaptation for a policy that was then thrown away.
     """
     for raw_key, value in body.items():
-        if _is_reasoning_key(str(raw_key)) and _looks_enabled(value):
+        if is_reasoning_key(str(raw_key)) and _looks_enabled(value):
             return True
     extra = body.get("extra_body")
     return isinstance(extra, Mapping) and reasoning_was_emitted(extra)
@@ -343,13 +351,13 @@ def wire_params_summary(body: Mapping[str, Any]) -> dict[str, Any]:
     reasoning: dict[str, Any] = {}
     for raw_key, value in body.items():
         key = str(raw_key)
-        if _is_reasoning_key(key) and value is not None:
+        if is_reasoning_key(key) and value is not None:
             reasoning[key] = redact_wire_value(value)
     extra = body.get("extra_body")
     if isinstance(extra, Mapping):
         for raw_key, value in extra.items():
             key = str(raw_key)
-            if _is_reasoning_key(key) and value is not None:
+            if is_reasoning_key(key) and value is not None:
                 reasoning[f"extra_body.{key}"] = redact_wire_value(value)
     if reasoning:
         summary["reasoning"] = reasoning
@@ -371,7 +379,7 @@ def _knob_sort_key(key: str) -> tuple[int, str]:
 
     if key == "model":
         return (0, "")
-    if _is_reasoning_key(key):
+    if is_reasoning_key(key):
         return (1, key)
     if key in _SAMPLING_FIELDS:
         return (2, f"{_SAMPLING_FIELDS.index(key):02d}")
@@ -478,6 +486,11 @@ class WireTrace:
     body_limit: int = DEFAULT_WIRE_BODY_MAX_CHARS
     current_attempt: int = 0
     requests: dict[int, WireRequest] = field(default_factory=dict)
+    # What the provider layer changed about this request's reasoning after it
+    # had already left routing -- a create-level strip forced by the host's own
+    # 400. Merged with routing's verdict at commit time, not here, because the
+    # request row holds one verdict and routing's is written first.
+    reasoning_adaptations: list[ReasoningAdaptation] = field(default_factory=list)
 
     def record(self, body: Mapping[str, Any]) -> None:
         # Last write wins: a create-level retry rewrites the body (dropping
@@ -515,3 +528,19 @@ def record_wire_request(body: Mapping[str, Any], **extra: Any) -> None:
     if slot is None:
         return
     slot.record({**body, **extra} if extra else body)
+
+
+def record_reasoning_adaptation(kind: ReasoningAdaptationKind, message: str) -> None:
+    """Record that the provider layer changed this request's reasoning.
+
+    ``reasoning_adaptation`` on the request row is written by routing, which
+    decides before the request leaves. A create-level retry decides after it
+    has already been refused, and the row has one verdict, so the two are
+    merged at commit under the more severe kind
+    (:func:`~my_claude_code.core.reasoning.combine_reasoning_adaptations`).
+    A no-op outside a tracked request, like :func:`record_wire_request`.
+    """
+    slot = _WIRE_TRACE.get()
+    if slot is None:
+        return
+    slot.reasoning_adaptations.append(ReasoningAdaptation(kind, message))

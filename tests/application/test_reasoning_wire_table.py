@@ -48,6 +48,37 @@ TOGGLE_ONLY = ModelReasoningCapability(
     supports_budget_control=False,
 )
 
+CANNOT_REASON = ModelReasoningCapability(
+    can_reason=False,
+    supports_effort_control=False,
+    supports_toggle_control=False,
+    supports_budget_control=False,
+)
+
+# Every profile that carried ``NO_REASONING`` before PR F and now declares the
+# OpenAI standard field.
+_PREVIOUSLY_SILENT = (
+    "mistral_codestral",
+    "opencode_go",
+    "huggingface",
+    "kimi_coding",
+    "novita",
+    "cline",
+    "qwencloud",
+    "qwencloud_coding",
+    "xai",
+    "together",
+    "siliconflow",
+    "chutes",
+    "bedrock",
+    "tokenrouter",
+    "alibaba",
+    "alibaba_cn",
+    "alibaba_coding",
+    "alibaba_coding_cn",
+    "azure_openai",
+)
+
 
 def effort_model(*efforts: ReasoningEffort, toggle: bool = False):
     return ModelReasoningCapability(
@@ -215,10 +246,58 @@ WIRE_TABLE: tuple[tuple[Any, ...], ...] = (
         ReasoningEffort.LOW,
         None,  # Mistral builds its own body; asserted separately below.
     ),
+    # Every host that used to send nothing at all, three rows each. The point
+    # of the set is that ONE encoder now serves a mixed roster correctly,
+    # because the per-model gate -- not a hand-written per-provider verdict --
+    # is what protects the models that cannot take the field. Each deleted
+    # "one encoder cannot be right for that set" comment is answered by the
+    # second row below.
+    *(
+        row
+        for provider_id in _PREVIOUSLY_SILENT
+        for row in (
+            # A model with an effort scale: the ask survives, clamped into the
+            # four rungs the standard ladder declares.
+            (
+                provider_id,
+                "reasoning-model",
+                effort_model(
+                    ReasoningEffort.LOW,
+                    ReasoningEffort.HIGH,
+                    ReasoningEffort.MAX,
+                ),
+                profile_dialect(provider_id),
+                ReasoningEffort.MAX,
+                {"reasoning_effort": "high"},
+            ),
+            # A model that cannot reason at all: nothing is sent, and the gate
+            # is what stopped it -- the encoder was never consulted.
+            (
+                provider_id,
+                "plain-model",
+                CANNOT_REASON,
+                profile_dialect(provider_id),
+                ReasoningEffort.MAX,
+                {},
+            ),
+            # A toggle-only model on an effort-only host: no on/off field
+            # exists on either side of the pair, so nothing is sent. The
+            # mixed-roster case the OpenCode probe found, generalised.
+            (
+                provider_id,
+                "toggle-only-model",
+                TOGGLE_ONLY,
+                profile_dialect(provider_id),
+                ReasoningEffort.MAX,
+                {},
+            ),
+        )
+    ),
 )
 
 
 _PROFILES = {
+    **{name: OPENAI_CHAT_PROFILES[name] for name in _PREVIOUSLY_SILENT},
     "commandcode": COMMANDCODE_PROFILE,
     "opencode": OPENAI_CHAT_PROFILES["opencode"],
     "groq": OPENAI_CHAT_PROFILES["groq"],
@@ -331,3 +410,22 @@ def test_deepseek_spells_the_whole_ladder() -> None:
     """Its own 400 named the enum, and it is FCC's ladder value for value."""
 
     assert DEEPSEEK_DIALECT.effort_values == frozenset(ReasoningEffort)
+
+
+def test_anthropic_reports_its_adaptive_channel_under_its_own_provider_id() -> None:
+    """The composed provider forwards the Messages adapter's dialect.
+
+    Before PR F ``AnthropicProvider`` inherited ``BaseProvider``'s ``None``,
+    so the fleet's only ``adaptive`` channel was invisible on the ``anthropic``
+    and ``anthropic_oauth`` ids -- to gating and to the Models page alike.
+    """
+    from my_claude_code.providers.anthropic.provider import AnthropicProvider
+    from my_claude_code.providers.base import ProviderConfig
+    from my_claude_code.providers.rate_limit import ProviderRateLimiter
+
+    provider = AnthropicProvider(
+        ProviderConfig(api_key="k", base_url="https://api.anthropic.com/v1"),
+        rate_limiter=ProviderRateLimiter(),
+    )
+    assert provider.reasoning_dialect("claude-sonnet-4-5") == ANTHROPIC_DIALECT
+    assert ANTHROPIC_DIALECT.adaptive

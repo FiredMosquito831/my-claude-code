@@ -5,9 +5,11 @@ from copy import deepcopy
 from my_claude_code.providers.nvidia_nim.retry import (
     chat_template_evidence,
     clone_body_without_reasoning_budget,
-    complaint_evidence_snippet,
     reasoning_budget_evidence,
     reasoning_content_evidence,
+)
+from my_claude_code.providers.openai_chat import (
+    complaint_evidence_snippet,
     sampling_parameter_evidence,
     upstream_complaint,
 )

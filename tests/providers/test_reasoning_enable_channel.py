@@ -26,26 +26,13 @@ from my_claude_code.providers.openai_chat.profiles import (
     GENERIC_OPENAI_PROFILE,
     OPENAI_CHAT_PROFILES,
 )
-from my_claude_code.providers.openai_chat.reasoning import NoReasoning
+from my_claude_code.providers.openai_chat.reasoning import SplitReasoningOutput
 
 _ALL_PROFILES = (
     *OPENAI_CHAT_PROFILES.items(),
     ("<generic>", GENERIC_OPENAI_PROFILE),
     ("commandcode", COMMANDCODE_PROFILE),
 )
-
-# Profiles that deliberately send nothing for a level-less "on", each for a
-# reason recorded next to its encoder and backed by a live probe.
-_NO_ENABLE_CHANNEL = {
-    # 2026-08-29 probe: naming any rung *reduces* reasoning (3,000 -> 903
-    # reasoning tokens on ``hy3-free``), and the gateway validates the enum but
-    # forwards the field to the model, which answers HTTP 400 to every rung on
-    # ``mimo-v2.5-free`` while a bare request returns 200 and reasons.
-    "opencode",
-    # A numeric thinking budget only; "on with no level" names no number, and
-    # llama.cpp has no boolean to fall back on.
-    "llamacpp",
-}
 
 
 def _encode(profile, policy: ReasoningPolicy) -> dict:
@@ -57,14 +44,66 @@ def _encode(profile, policy: ReasoningPolicy) -> dict:
 
 
 @pytest.mark.parametrize("name,profile", _ALL_PROFILES)
-def test_level_less_on_reaches_the_wire(name: str, profile) -> None:
-    """A control=ON policy with no effort must emit, or be a known abstainer."""
+def test_a_level_less_on_sends_a_rung_only_where_the_host_declares_one(
+    name: str, profile
+) -> None:
+    """ON with no level emits exactly when the dialect has a toggle channel.
+
+    The exemption set used to be hand-written, and both of its members fell
+    out of the general rule for reasons worth keeping:
+
+    * ``opencode`` -- the 2026-08-29 probe showed naming any rung *reduces*
+      reasoning (3,000 -> 903 reasoning tokens on ``hy3-free``), and the
+      gateway validates the enum but forwards the field to the model, which
+      answers HTTP 400 to every rung on ``mimo-v2.5-free`` while a bare request
+      returns 200 and reasons.
+    * ``llamacpp`` -- a numeric thinking budget only; "on with no level" names
+      no number, and llama.cpp has no boolean to fall back on.
+
+    Both are now derivable: neither declares ``toggle``, because an enabled
+    value is a *default rung* and neither host has one. So is every profile
+    converted to the default dialect. The rule replaces the list.
+    """
 
     body = _encode(profile, ReasoningPolicy.on())
-    if isinstance(profile.reasoning, NoReasoning) or name in _NO_ENABLE_CHANNEL:
-        assert body == {}, f"{name} unexpectedly gained an enable channel"
+    # ``reasoning_split`` is an output-routing request, not a compute control,
+    # and is emitted unconditionally by design -- the same carve-out the
+    # declaration sweep below makes, for the same reason.
+    body = {key: value for key, value in body.items() if key != "reasoning_split"}
+    if body.get("extra_body"):
+        extra = {
+            key: value
+            for key, value in body["extra_body"].items()
+            if key != "reasoning_split"
+        }
+        if extra:
+            body["extra_body"] = extra
+        else:
+            del body["extra_body"]
+    if profile.reasoning.dialect.toggle:
+        assert body, f"{name} declares a toggle but drops a level-less request"
+    else:
+        assert body == {}, f"{name} emits a rung nobody asked for"
+
+
+@pytest.mark.parametrize("name,profile", _ALL_PROFILES)
+def test_every_openai_chat_profile_declares_an_effort_or_a_reason(
+    name: str, profile
+) -> None:
+    """No profile is silent: every host declares some reasoning channel.
+
+    ``SplitReasoningOutput`` is the documented exemption -- it routes reasoning
+    *output* and controls no computation at all -- and is named here rather
+    than skipped by shape, so a future silent encoder cannot slip through by
+    resembling it.
+    """
+
+    if isinstance(profile.reasoning, SplitReasoningOutput):
         return
-    assert body, f"{name} silently drops a level-less reasoning request"
+    dialect = profile.reasoning.dialect
+    assert dialect.effort_values is not None or dialect.toggle or dialect.budget, (
+        f"{name} declares no reasoning channel at all"
+    )
 
 
 def test_commandcode_emits_its_probed_on_value() -> None:

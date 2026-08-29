@@ -13,7 +13,11 @@ import httpx
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic.models import MessagesRequest
-from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningDialect,
+    ReasoningPolicy,
+)
 from my_claude_code.providers.anthropic_messages import (
     AnthropicMessagesAuth,
     AnthropicMessagesProvider,
@@ -64,6 +68,15 @@ class AnthropicProvider(BaseProvider):
                 write=config.http_write_timeout,
             ),
         )
+
+    def reasoning_dialect(self, model_id: str) -> ReasoningDialect | None:
+        """Forward the Messages adapter's dialect: it is what builds the body.
+
+        Without this the composed adapter's dialect was invisible on the
+        ``anthropic`` provider id -- gating and the Models page both saw
+        ``None`` -- and the fleet's only ``adaptive`` channel went unreported.
+        """
+        return self._messages.reasoning_dialect(model_id)
 
     def throttle_remaining(self) -> float:
         return self._rate_limiter.remaining_wait()
