@@ -9745,14 +9745,21 @@ initOptimizerView();
 initThemeSwitch();
 
 /* ----------------------------------------------------------------- models
-   The Models page. Three sections over one payload from
-   /admin/api/model-admin: which models the catalogue shows, which request
-   parameters are forced, and -- read-only -- what MCC knows about a model and
-   which tier it learned it from.
+   The Models page. One payload from /admin/api/model-admin drives two
+   sections: which models the catalogue shows, and -- per provider or per
+   model -- which request parameters are forced, beside a read-only account of
+   what MCC knows about the model and where it learned it.
 
    Everything is built with createElement/textContent. A model ref is upstream
    text and half of it is user-typed configuration, so none of it is ever
-   interpolated into innerHTML. */
+   interpolated into innerHTML.
+
+   The tree is built lazily. A real install answers with ~1000 models across
+   ~10 providers; building every override editor and capability table up front
+   put 186,000 nodes and 9,279 <select> elements on the page before the user
+   had opened anything. Provider bodies are built on first open, model bodies
+   on first open, and a provider's model list is paged, so the node count
+   tracks what is actually on screen. */
 
 const modelsState = {
   data: null,
@@ -9761,7 +9768,13 @@ const modelsState = {
   // Which provider/model rows are unfolded, so a re-render after a save does
   // not collapse the row the user is working in.
   open: new Set(),
+  // provider_id -> how many of its (filtered) models have been paged in.
+  paged: new Map(),
 };
+
+// How many model rows a provider shows before the "Show more" button. Sized so
+// a page of rows is a scroll or two, not a wall.
+const MODELS_PAGE_SIZE = 40;
 
 async function loadModelsView(force = false) {
   if (modelsState.loading) return;
@@ -9798,6 +9811,13 @@ function renderModelsPage() {
   if (!data) return;
   const notice = byId("modelsHideOnlyNotice");
   if (notice) notice.textContent = data.visibility.hide_only_notice || "";
+  syncModelsPatternFields(data);
+  renderModelsOwnedElsewhere(data.overrides.owned_elsewhere || {});
+  renderModelsHiddenRoutes(data.visibility.hidden_route_refs || []);
+  renderModelsTree();
+}
+
+function syncModelsPatternFields(data) {
   const allow = byId("modelsAllowPatterns");
   const deny = byId("modelsDenyPatterns");
   if (allow && document.activeElement !== allow) {
@@ -9806,25 +9826,44 @@ function renderModelsPage() {
   if (deny && document.activeElement !== deny) {
     deny.value = data.visibility.deny_raw || "";
   }
-  renderModelsOwnedElsewhere(data.overrides.owned_elsewhere || {});
-  renderModelsHiddenRoutes(data.visibility.hidden_route_refs || []);
-  renderModelsTree();
 }
 
+/* Was one run-on sentence that repeated "the reasoning pipeline owns thinking
+   parameters" four times. The same facts read as a list, grouped by owner. */
 function renderModelsOwnedElsewhere(owned) {
   const target = byId("modelsOwnedElsewhere");
   if (!target) return;
   target.textContent = "";
-  const lead = document.createElement("span");
-  lead.textContent = "Not editable here: ";
-  target.appendChild(lead);
-  Object.keys(owned).forEach((name, index) => {
-    if (index > 0) target.appendChild(document.createTextNode("; "));
-    const code = document.createElement("code");
-    code.textContent = name;
-    target.appendChild(code);
-    target.appendChild(document.createTextNode(` — ${owned[name]}`));
+  const names = Object.keys(owned);
+  target.hidden = names.length === 0;
+  if (!names.length) return;
+  const byOwner = new Map();
+  names.forEach((name) => {
+    const reason = owned[name];
+    if (!byOwner.has(reason)) byOwner.set(reason, []);
+    byOwner.get(reason).push(name);
   });
+  const lead = document.createElement("p");
+  lead.className = "models-subhead";
+  lead.textContent = "Not editable here";
+  target.appendChild(lead);
+  const list = document.createElement("ul");
+  list.className = "models-owned-list";
+  byOwner.forEach((params, reason) => {
+    const item = document.createElement("li");
+    params.forEach((name, index) => {
+      if (index > 0) item.appendChild(document.createTextNode(" "));
+      const code = document.createElement("code");
+      code.textContent = name;
+      item.appendChild(code);
+    });
+    const why = document.createElement("span");
+    why.className = "models-owned-reason";
+    why.textContent = reason;
+    item.appendChild(why);
+    list.appendChild(item);
+  });
+  target.appendChild(list);
 }
 
 function renderModelsHiddenRoutes(routes) {
@@ -9856,40 +9895,63 @@ function modelsMatchesFilter(text) {
   return text.toLowerCase().includes(modelsState.filter);
 }
 
+function modelsFilteredFor(provider) {
+  return (provider.models || []).filter((model) =>
+    modelsMatchesFilter(model.model_ref),
+  );
+}
+
 function renderModelsTree() {
   const tree = byId("modelsTree");
   const data = modelsState.data;
   if (!tree || !data) return;
   tree.textContent = "";
-  const editable = data.overrides.editable_parameters || [];
+  const providers = data.providers || [];
+  const matching = [];
   let shown = 0;
-  (data.providers || []).forEach((provider) => {
-    const models = (provider.models || []).filter((model) =>
-      modelsMatchesFilter(model.model_ref),
-    );
+  providers.forEach((provider) => {
+    const models = modelsFilteredFor(provider);
     if (!models.length) return;
     shown += models.length;
-    tree.appendChild(buildModelsProviderNode(provider, models, editable, data));
+    matching.push([provider, models]);
   });
-  if (!shown) {
+
+  renderModelsTreeSummary(providers.length, matching.length, shown);
+
+  if (!matching.length) {
     const empty = document.createElement("p");
     empty.className = "models-status";
     empty.textContent = modelsState.filter
       ? "No model matches that filter."
       : "No models discovered yet. Refresh provider models on the Providers page.";
     tree.appendChild(empty);
+    return;
+  }
+  // A filter that lands inside exactly one provider is unambiguous, so open
+  // it. A filter that spans nine providers is not, and force-opening all of
+  // them was how a three-letter search produced twelve thousand pixels of
+  // page.
+  const auto = Boolean(modelsState.filter) && matching.length === 1;
+  matching.forEach(([provider, models]) => {
+    tree.appendChild(buildModelsProviderNode(provider, models, auto));
+  });
+}
+
+function renderModelsTreeSummary(providerCount, matchedProviders, shown) {
+  const target = byId("modelsTreeSummary");
+  if (!target) return;
+  if (modelsState.filter) {
+    target.textContent = `${shown} model(s) in ${matchedProviders} of ${providerCount} provider(s) match "${modelsState.filter}".`;
+  } else {
+    target.textContent = `${shown} model(s) across ${providerCount} provider(s). Open a provider to see its models.`;
   }
 }
 
-function buildModelsProviderNode(provider, models, editable, data) {
+function buildModelsProviderNode(provider, models, autoOpen) {
   const node = document.createElement("details");
   node.className = "models-provider";
   const key = `provider:${provider.provider_id}`;
-  node.open = modelsState.open.has(key) || Boolean(modelsState.filter);
-  node.addEventListener("toggle", () => {
-    if (node.open) modelsState.open.add(key);
-    else modelsState.open.delete(key);
-  });
+  node.open = modelsState.open.has(key) || autoOpen;
 
   const summary = document.createElement("summary");
   const name = document.createElement("span");
@@ -9898,95 +9960,216 @@ function buildModelsProviderNode(provider, models, editable, data) {
   summary.appendChild(name);
   const count = document.createElement("span");
   count.className = "models-chip";
-  count.textContent = `${models.length} shown / ${provider.hidden_count} hidden`;
+  count.textContent = modelsState.filter
+    ? `${models.length} of ${(provider.models || []).length} match`
+    : `${models.length} models`;
   summary.appendChild(count);
+  // "0 hidden" on every provider is chrome with no information in it.
+  if (provider.hidden_count) {
+    summary.appendChild(
+      buildModelsChip("hidden", `${provider.hidden_count} hidden`),
+    );
+  }
+  if (providerHasOverrides(provider)) {
+    summary.appendChild(buildModelsChip("forced", "provider override"));
+  }
   node.appendChild(summary);
 
-  const providerOverrides = document.createElement("div");
-  providerOverrides.className = "models-provider-overrides";
-  const label = document.createElement("p");
-  label.className = "models-subhead";
-  label.textContent = "Provider-wide parameter overrides";
-  providerOverrides.appendChild(label);
-  providerOverrides.appendChild(
-    buildOverrideEditor(
-      "provider",
-      provider.provider_id,
-      provider.override,
-      editable,
-    ),
-  );
-  node.appendChild(providerOverrides);
+  const body = document.createElement("div");
+  body.className = "models-provider-body";
+  node.appendChild(body);
 
-  models.forEach((model) => {
-    node.appendChild(buildModelNode(model, editable, data));
+  // Built on first open, not up front. Ten providers' worth of editors and a
+  // thousand model bodies is the difference between 190,000 nodes and a few
+  // hundred.
+  const fill = () => {
+    if (body.dataset.filled === "1") return;
+    body.dataset.filled = "1";
+    fillModelsProviderBody(body, provider, models);
+  };
+  node.addEventListener("toggle", () => {
+    if (node.open) {
+      modelsState.open.add(key);
+      fill();
+    } else {
+      modelsState.open.delete(key);
+    }
   });
+  if (node.open) fill();
   return node;
 }
 
-function buildModelNode(model, editable, data) {
+function providerHasOverrides(provider) {
+  return Object.keys(provider.override || {}).length > 0;
+}
+
+function fillModelsProviderBody(body, provider, models) {
+  const data = modelsState.data;
+  const editable = (data && data.overrides.editable_parameters) || [];
+
+  // The models are what the user clicked the provider for, so they come
+  // first; the provider-wide form is one line of disclosure above them
+  // instead of a screenful of selects to scroll past.
+  const settings = document.createElement("details");
+  settings.className = "models-provider-settings";
+  const settingsSummary = document.createElement("summary");
+  settingsSummary.textContent = `Parameter overrides for every ${provider.provider_id} model`;
+  settings.appendChild(settingsSummary);
+  settings.open = providerHasOverrides(provider);
+  const editor = document.createElement("div");
+  settings.appendChild(editor);
+  const buildEditor = () => {
+    if (editor.dataset.filled === "1") return;
+    editor.dataset.filled = "1";
+    editor.appendChild(
+      buildOverrideEditor(
+        "provider",
+        provider.provider_id,
+        provider.override,
+        editable,
+      ),
+    );
+  };
+  if (settings.open) buildEditor();
+  settings.addEventListener("toggle", () => {
+    if (settings.open) buildEditor();
+  });
+  body.appendChild(settings);
+
+  const list = document.createElement("div");
+  list.className = "models-model-list";
+  body.appendChild(list);
+
+  const more = document.createElement("button");
+  more.type = "button";
+  more.className = "secondary-button models-more";
+  body.appendChild(more);
+
+  const page = () => {
+    const already = list.childElementCount;
+    const next = models.slice(already, already + MODELS_PAGE_SIZE);
+    next.forEach((model) => list.appendChild(buildModelRow(model, editable)));
+    const remaining = models.length - list.childElementCount;
+    more.hidden = remaining <= 0;
+    more.textContent = `Show ${Math.min(remaining, MODELS_PAGE_SIZE)} more of ${remaining}`;
+    modelsState.paged.set(provider.provider_id, list.childElementCount);
+  };
+  more.addEventListener("click", page);
+  // Re-page up to wherever the user had got to before a filter change rebuilt
+  // the tree, so "Show more" is not something you have to press again.
+  const wanted = modelsState.paged.get(provider.provider_id) || 0;
+  page();
+  while (list.childElementCount < wanted && !more.hidden) page();
+}
+
+/* The visibility tick is a sibling of the <details>, not a child of its
+   <summary>. A control inside a summary is both an accessibility violation
+   (Chrome reported it 1,021 times on a real install) and a click-target
+   conflict that needed a stopPropagation to paper over. */
+function buildModelRow(model, editable) {
+  const row = document.createElement("div");
+  row.className = "models-model-row";
+
+  const tick = document.createElement("label");
+  tick.className = "models-visible-toggle";
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.checked = model.visible;
+  toggle.addEventListener("change", () => {
+    toggleModelVisibility(model.model_ref, toggle.checked).catch((error) => {
+      toggle.checked = !toggle.checked;
+      showMessage(error.message, "error");
+    });
+  });
+  tick.appendChild(toggle);
+  const tickText = document.createElement("span");
+  tickText.textContent = "Show";
+  tick.appendChild(tickText);
+  tick.title = `Show ${model.model_ref} in /v1/models and the admin pickers`;
+  row.appendChild(tick);
+
+  row.appendChild(buildModelNode(model, editable));
+  return row;
+}
+
+function buildModelNode(model, editable) {
   const node = document.createElement("details");
   node.className = "models-model";
   const key = `model:${model.model_ref}`;
   node.open = modelsState.open.has(key);
+
+  node.appendChild(buildModelSummary(model));
+
+  const body = document.createElement("div");
+  body.className = "models-model-body";
+  node.appendChild(body);
+
+  const fill = () => {
+    if (body.dataset.filled === "1") return;
+    body.dataset.filled = "1";
+    fillModelBody(body, model, editable);
+  };
   node.addEventListener("toggle", () => {
-    if (node.open) modelsState.open.add(key);
-    else modelsState.open.delete(key);
+    if (node.open) {
+      modelsState.open.add(key);
+      fill();
+    } else {
+      modelsState.open.delete(key);
+    }
   });
+  if (node.open) fill();
+  return node;
+}
 
+function buildModelSummary(model) {
   const summary = document.createElement("summary");
-  const toggle = document.createElement("input");
-  toggle.type = "checkbox";
-  toggle.checked = model.visible;
-  toggle.title = model.visible ? "Visible in catalogues" : "Hidden from catalogues";
-  toggle.setAttribute("aria-label", `Show ${model.model_ref}`);
-  // The checkbox lives inside a <summary>; without this its click would also
-  // fold the row open or shut.
-  toggle.addEventListener("click", (event) => event.stopPropagation());
-  toggle.addEventListener("change", () => {
-    toggleModelVisibility(model.model_ref, toggle.checked).catch((error) =>
-      showMessage(error.message, "error"),
-    );
-  });
-  summary.appendChild(toggle);
-
   const ref = document.createElement("span");
   ref.className = "models-ref";
   ref.textContent = model.model_ref;
   summary.appendChild(ref);
-
   if (model.configured) {
     summary.appendChild(buildModelsChip("route", "named by a MODEL* setting"));
   }
   if (!model.visible) {
-    summary.appendChild(buildModelsChip("hidden", "hidden"));
+    summary.appendChild(buildModelsChip("hidden", "hidden from catalogues"));
   }
   if (!model.has_metadata) {
     summary.appendChild(buildModelsChip("unknown", "no discovered metadata"));
   }
-  const forced = (model.effective || []).filter((row) => row.action !== "inherit");
+  const forced = (model.effective || []).filter(
+    (row) => row.action !== "inherit",
+  );
   if (forced.length) {
     summary.appendChild(
       buildModelsChip("forced", `${forced.length} override(s) active`),
     );
   }
-  node.appendChild(summary);
+  return summary;
+}
 
-  const body = document.createElement("div");
-  body.className = "models-model-body";
-  const overridesHead = document.createElement("p");
-  overridesHead.className = "models-subhead";
-  overridesHead.textContent = "Model parameter overrides";
-  body.appendChild(overridesHead);
+function fillModelBody(body, model, editable) {
+  body.textContent = "";
   body.appendChild(
     buildOverrideEditor("model", model.model_ref, model.override, editable),
   );
-  body.appendChild(buildEffectiveTable(model.effective || []));
-  body.appendChild(
-    buildCapabilityPanel(model.capabilities, data.source_labels || {}),
+  const readouts = document.createElement("div");
+  readouts.className = "models-readouts";
+  body.appendChild(readouts);
+  fillModelReadouts(readouts, model);
+}
+
+/* The two read-only panels, refreshed on their own. Rebuilding the whole body
+   after a save also rebuilt the Save button's status element, so the "Saved"
+   confirmation landed in a node that was no longer on the page and the user
+   saw nothing at all. The editor already shows what was saved; only these
+   two need repainting. */
+function fillModelReadouts(readouts, model) {
+  const data = modelsState.data;
+  readouts.textContent = "";
+  readouts.appendChild(buildEffectiveTable(model.effective || []));
+  readouts.appendChild(
+    buildCapabilityPanel(model.capabilities, (data && data.source_labels) || {}),
   );
-  node.appendChild(body);
-  return node;
 }
 
 function buildModelsChip(kind, text) {
@@ -10000,25 +10183,39 @@ function buildModelsChip(kind, text) {
    and "send null" would look identical, and the difference between them is
    the entire point of the override file. So every parameter is a mode select
    -- inherit / force unset / force value -- and the text box beside it is
-   only that third mode's argument, disabled in the other two. */
+   only that third mode's argument, disabled in the other two.
+
+   The grid carries column headers, because "temperature | Inherit | [ ]" with
+   nothing above it does not say which of the two controls is the answer. */
 function buildOverrideEditor(scope, key, row, editable) {
   const form = document.createElement("div");
   form.className = "models-override-editor";
   const inputs = new Map();
 
+  const header = document.createElement("div");
+  header.className = "models-override-row models-override-head";
+  ["Parameter", "What to send", "Value"].forEach((text) => {
+    const cell = document.createElement("span");
+    cell.textContent = text;
+    header.appendChild(cell);
+  });
+  form.appendChild(header);
+
   editable.forEach((name) => {
     const current = (row || {})[name];
     const field = document.createElement("div");
     field.className = "models-override-row";
+    const boxId = `ov-${scope}-${key}-${name}`.replace(/[^A-Za-z0-9_-]/g, "-");
 
-    const label = document.createElement("span");
+    const label = document.createElement("label");
     label.className = "models-override-name";
     label.textContent = name;
+    label.htmlFor = `${boxId}-mode`;
     field.appendChild(label);
 
     const mode = document.createElement("select");
     mode.className = "models-override-mode";
-    mode.setAttribute("aria-label", `${name} override mode`);
+    mode.id = `${boxId}-mode`;
     [
       ["inherit", "Inherit"],
       ["unset", "Force unset"],
@@ -10035,12 +10232,17 @@ function buildOverrideEditor(scope, key, row, editable) {
     const box = document.createElement("input");
     box.type = "text";
     box.className = "models-override-value";
+    box.id = `${boxId}-value`;
     box.setAttribute("aria-label", `${name} value`);
+    box.placeholder = name === "stop" ? "comma-separated" : "";
     box.value =
-      current && current.state === "value" ? formatOverrideValue(current.value) : "";
+      current && current.state === "value"
+        ? formatOverrideValue(current.value)
+        : "";
     box.disabled = mode.value !== "value";
     mode.addEventListener("change", () => {
       box.disabled = mode.value !== "value";
+      if (!box.disabled) box.focus();
     });
     field.appendChild(box);
     inputs.set(name, { mode, box });
@@ -10056,6 +10258,9 @@ function buildOverrideEditor(scope, key, row, editable) {
   status.className = "models-status";
   save.addEventListener("click", () => {
     const updates = {};
+    // "Force value" with an empty box used to save the empty string, which is
+    // then forced onto the upstream body as `temperature: ""`. Refuse it.
+    const blank = [];
     inputs.forEach((control, name) => {
       if (control.mode.value === "inherit") {
         updates[name] =
@@ -10065,18 +10270,34 @@ function buildOverrideEditor(scope, key, row, editable) {
           "inherit";
       } else if (control.mode.value === "unset") {
         updates[name] = null;
+      } else if (!control.box.value.trim()) {
+        blank.push(name);
       } else {
         updates[name] = parseOverrideValue(name, control.box.value);
       }
     });
+    if (blank.length) {
+      const many = blank.length > 1;
+      const message = `Give ${blank.join(", ")} a value, or set ${many ? "them" : "it"} back to Inherit or Force unset.`;
+      status.textContent = message;
+      status.className = "models-status error";
+      showMessage(message, "error");
+      return;
+    }
     save.disabled = true;
+    status.className = "models-status";
     status.textContent = "Saving...";
     saveModelOverrides(scope, key, updates)
       .then(() => {
+        // The tree is not rebuilt on save, so this element is still on the
+        // page and the confirmation is actually visible. It used to be
+        // written into a node renderModelsPage() had already discarded.
         status.textContent = "Saved";
+        status.className = "models-status ok";
       })
       .catch((error) => {
         status.textContent = error.message;
+        status.className = "models-status error";
         showMessage(error.message, "error");
       })
       .finally(() => {
@@ -10110,29 +10331,40 @@ function parseOverrideValue(name, raw) {
   return text;
 }
 
+/* Only the parameters that are actually forced. Nine rows of "not sent" under
+   a heading called "Effective request parameters" was the same information as
+   nine "Inherit" selects directly above it, restated. */
 function buildEffectiveTable(rows) {
   const wrap = document.createElement("div");
   wrap.className = "models-effective";
   const head = document.createElement("p");
   head.className = "models-subhead";
-  head.textContent = "Effective request parameters";
+  head.textContent = "What this forces onto the request";
   wrap.appendChild(head);
+  const forced = rows.filter((row) => row.action !== "inherit");
+  if (!forced.length) {
+    const note = document.createElement("p");
+    note.className = "models-empty-note";
+    note.textContent =
+      "Nothing. Every editable parameter is left to the provider.";
+    wrap.appendChild(note);
+    return wrap;
+  }
   const table = document.createElement("table");
   table.className = "models-table";
-  rows.forEach((row) => {
+  forced.forEach((row) => {
     const tr = document.createElement("tr");
     const name = document.createElement("th");
     name.scope = "row";
     name.textContent = row.name;
     tr.appendChild(name);
     const value = document.createElement("td");
-    if (row.action === "inherit") value.textContent = "not sent";
-    else if (row.action === "unset") value.textContent = "removed from the body";
+    if (row.action === "unset") value.textContent = "removed from the body";
     else value.textContent = formatOverrideValue(row.value);
     tr.appendChild(value);
     const from = document.createElement("td");
     from.className = "models-cell-source";
-    from.textContent = row.from ? `${row.from} override` : "";
+    from.textContent = row.from ? `from the ${row.from} row` : "";
     tr.appendChild(from);
     table.appendChild(tr);
   });
@@ -10151,29 +10383,36 @@ function buildCapabilityPanel(capabilities, labels) {
   wrap.className = "models-capabilities";
   const head = document.createElement("p");
   head.className = "models-subhead";
-  head.textContent = "What MCC knows (read-only)";
+  head.textContent = "What MCC knows about this model (read-only)";
   wrap.appendChild(head);
   const table = document.createElement("table");
   table.className = "models-table";
-  if (!capabilities) {
-    wrap.appendChild(table);
-    return wrap;
+  const rows = [];
+  if (capabilities) {
+    rows.push(["output limit", capabilities.max_output_tokens]);
+    rows.push(["context length", capabilities.context_length]);
+    rows.push(["reads images", capabilities.supports_vision]);
+    rows.push(["gateway default parameters", capabilities.default_parameters]);
+    rows.push(["supported parameters", capabilities.supported_parameters]);
+    const reasoning = capabilities.reasoning || {};
+    Object.keys(reasoning).forEach((name) => {
+      rows.push([name.replace(/_/g, " "), reasoning[name]]);
+    });
   }
-  const rows = [
-    ["output limit", capabilities.max_output_tokens],
-    ["context length", capabilities.context_length],
-    ["reads images", capabilities.supports_vision],
-    ["gateway default parameters", capabilities.default_parameters],
-    ["supported parameters", capabilities.supported_parameters],
-  ];
-  const reasoning = capabilities.reasoning || {};
-  Object.keys(reasoning).forEach((name) => {
-    rows.push([name.replace(/_/g, " "), reasoning[name]]);
-  });
+  let written = 0;
   rows.forEach((entry) => {
     if (!entry[1]) return;
+    written += 1;
     table.appendChild(buildCapabilityRow(entry[0], entry[1], labels));
   });
+  if (!written) {
+    const note = document.createElement("p");
+    note.className = "models-empty-note";
+    note.textContent =
+      "Nothing discovered for this model, so MCC falls back to its defaults.";
+    wrap.appendChild(note);
+    return wrap;
+  }
   wrap.appendChild(table);
   return wrap;
 }
@@ -10193,7 +10432,11 @@ function buildCapabilityRow(label, field, labels) {
   source.className = "models-cell-source";
   const badge = document.createElement("span");
   badge.className = `models-source models-source-${field.source}`;
-  badge.textContent = field.source_label || labels[field.source] || field.source;
+  const sourceText =
+    field.source_label || labels[field.source] || field.source || "unknown";
+  // A guessed number and a published one used to wear the same shape of
+  // badge. The guessed one now says so on the badge itself.
+  badge.textContent = field.approximate ? `${sourceText} — guessed` : sourceText;
   source.appendChild(badge);
   // The exact rung of the resolution ladder, not just the coarse badge: a
   // "provider /models" answer that matched the id exactly reads very
@@ -10201,12 +10444,13 @@ function buildCapabilityRow(label, field, labels) {
   if (field.tier) {
     const tier = document.createElement("span");
     tier.className = "models-approx-note";
-    tier.textContent = `tier ${field.tier}: ${field.tier_label || ""}`.trim();
+    tier.textContent =
+      `matched at tier ${field.tier} of 9 — ${field.tier_label || ""}`.trim();
     source.appendChild(tier);
   }
   if (field.approximate) {
     const warn = document.createElement("span");
-    warn.className = "models-approx-note";
+    warn.className = "models-approx-note models-approx-warn";
     // Agreement is over the rows that actually published the field, which is
     // never the same as the number of rows that merely share the name.
     const agreement =
@@ -10221,8 +10465,7 @@ function buildCapabilityRow(label, field, labels) {
       field.reporters === null || field.reporters === undefined
         ? ""
         : ` across ${field.reporters} that published one`;
-    warn.textContent =
-      `guessed from ${matches} same-named row(s), ${agreement}${reporters}`;
+    warn.textContent = `guessed from ${matches} same-named row(s) in other providers, ${agreement}${reporters}`;
     source.appendChild(warn);
   }
   if (field.note) {
@@ -10250,11 +10493,86 @@ function formatCapabilityValue(value) {
   return String(value);
 }
 
+/* Both writes patch modelsState.data and refresh only the rows that changed.
+   Rebuilding the whole tree on every save discarded unsaved edits in every
+   other open editor, and destroyed the button's own status element before the
+   "Saved" confirmation could land in it -- a save that worked looked like a
+   save that did nothing. */
+function applyModelsData(next) {
+  modelsState.data = next;
+  const notice = byId("modelsHideOnlyNotice");
+  if (notice) notice.textContent = next.visibility.hide_only_notice || "";
+  syncModelsPatternFields(next);
+  renderModelsOwnedElsewhere(next.overrides.owned_elsewhere || {});
+  renderModelsHiddenRoutes(next.visibility.hidden_route_refs || []);
+}
+
+function findModelInData(modelRef) {
+  const data = modelsState.data;
+  if (!data) return null;
+  for (const provider of data.providers || []) {
+    for (const model of provider.models || []) {
+      if (model.model_ref === modelRef) return model;
+    }
+  }
+  return null;
+}
+
+/* Repaint one model row from the current payload without touching the tree
+   around it: the summary chips, the tick, and the body if it is open. */
+function refreshModelRow(modelRef) {
+  const model = findModelInData(modelRef);
+  if (!model) return;
+  const editable =
+    (modelsState.data && modelsState.data.overrides.editable_parameters) || [];
+  document.querySelectorAll("details.models-model").forEach((node) => {
+    const ref = node.querySelector(".models-ref");
+    if (!ref || ref.textContent !== modelRef) return;
+    const summary = node.querySelector("summary");
+    if (summary) node.replaceChild(buildModelSummary(model), summary);
+    const row = node.parentElement;
+    const tick =
+      row && row.querySelector(".models-visible-toggle input[type=checkbox]");
+    if (tick) tick.checked = model.visible;
+    const body = node.querySelector(".models-model-body");
+    if (!body || body.dataset.filled !== "1") return;
+    const readouts = body.querySelector(".models-readouts");
+    if (readouts) fillModelReadouts(readouts, model);
+    else fillModelBody(body, model, editable);
+  });
+}
+
+function refreshProviderRow(providerId) {
+  const data = modelsState.data;
+  if (!data) return;
+  const provider = (data.providers || []).find(
+    (entry) => entry.provider_id === providerId,
+  );
+  if (!provider) return;
+  document.querySelectorAll("details.models-provider").forEach((node) => {
+    const name = node.querySelector(".models-provider-name");
+    if (!name || name.textContent !== providerId) return;
+    const summary = node.querySelector("summary");
+    if (!summary) return;
+    summary
+      .querySelectorAll(".models-chip-forced")
+      .forEach((chip) => chip.remove());
+    if (providerHasOverrides(provider)) {
+      summary.appendChild(buildModelsChip("forced", "provider override"));
+    }
+  });
+  // A provider override changes what every model under it sends, so the open
+  // model bodies below it have to be repainted too.
+  (provider.models || []).forEach((model) => refreshModelRow(model.model_ref));
+}
+
 async function toggleModelVisibility(modelRef, visible) {
   const result = await api("/admin/api/model-admin/visibility/toggle", {
     method: "POST",
     body: JSON.stringify({ model_ref: modelRef, visible }),
   });
+  applyModelsData(await api("/admin/api/model-admin"));
+  refreshModelRow(modelRef);
   if (result.honored === false) {
     // An exact pattern cannot beat a broader glob the user wrote. Saying so
     // beats a checkbox that springs back with no explanation.
@@ -10262,16 +10580,23 @@ async function toggleModelVisibility(modelRef, visible) {
       `${modelRef} is still ${result.visible ? "visible" : "hidden"}: a pattern in your allow/deny lists overrules this tick.`,
       "error",
     );
+  } else {
+    showMessage(
+      `${modelRef} is now ${visible ? "shown in" : "hidden from"} /v1/models and the admin pickers. Routing is unaffected either way.`,
+      "ok",
+    );
   }
-  await loadModelsView(true);
 }
 
 async function saveModelOverrides(scope, key, updates) {
-  modelsState.data = await api("/admin/api/model-admin/overrides", {
-    method: "POST",
-    body: JSON.stringify({ scope, key, updates }),
-  });
-  renderModelsPage();
+  applyModelsData(
+    await api("/admin/api/model-admin/overrides", {
+      method: "POST",
+      body: JSON.stringify({ scope, key, updates }),
+    }),
+  );
+  if (scope === "provider") refreshProviderRow(key);
+  else refreshModelRow(key);
 }
 
 function renderModelsPreview(result) {
@@ -10345,9 +10670,19 @@ function initModelsView() {
   });
 
   if (filter) {
+    // A thousand model refs re-filter on every keystroke; debounce so typing
+    // does not queue a whole tree rebuild per character.
+    let pending = null;
     filter.addEventListener("input", () => {
-      modelsState.filter = filter.value.trim().toLowerCase();
-      renderModelsTree();
+      if (pending) window.clearTimeout(pending);
+      pending = window.setTimeout(() => {
+        pending = null;
+        const next = filter.value.trim().toLowerCase();
+        if (next === modelsState.filter) return;
+        modelsState.filter = next;
+        modelsState.paged.clear();
+        renderModelsTree();
+      }, 150);
     });
   }
   if (reload) {

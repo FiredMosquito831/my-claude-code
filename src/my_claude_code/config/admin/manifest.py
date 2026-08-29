@@ -223,7 +223,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ),
     ConfigFieldSpec(
         "MODEL_VISIBILITY_ALLOW",
-        "Only show these models",
+        "Only list these models",
         "models",
         "text",
         settings_attr="model_visibility_allow",
@@ -232,15 +232,17 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "Comma-separated glob patterns matched against the full "
             "provider/model reference, case-insensitively -- for example "
             "nvidia_nim/*, *:free, *inkling*, or one exact ref. Leave empty "
-            "to show every model a provider publishes. This only hides "
-            "models from this page's pickers and from /v1/models: a hidden "
-            "model named in a route or a fallback chain above still routes "
-            "normally."
+            "to list every model a provider publishes. This changes only "
+            "what is listed: which models appear in /v1/models and in this "
+            "page's pickers. It is not an access control and it does not "
+            "disable anything. A model left off this list still routes and "
+            "still serves requests when a route or a fallback chain above "
+            "names it."
         ),
     ),
     ConfigFieldSpec(
         "MODEL_VISIBILITY_DENY",
-        "Never show these models",
+        "Hide these models from the listings",
         "models",
         "text",
         settings_attr="model_visibility_deny",
@@ -248,8 +250,12 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Comma-separated glob patterns, same form as above. Applied after "
             "the allow list and wins over it, so a broad allow can be trimmed "
-            "without listing every survivor. Hides only; it never blocks a "
-            "route."
+            "without listing every survivor. This hides models from "
+            "/v1/models and from this page's pickers -- nothing more. It does "
+            "not block, disable or unroute a model: one named in MODEL, "
+            "MODEL_OPUS or a MODEL_*_FALLBACKS chain is still tried and still "
+            "answers, it is simply not listed. To stop using a model, take it "
+            "out of the route that names it."
         ),
     ),
     ConfigFieldSpec(

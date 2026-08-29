@@ -190,3 +190,209 @@ def test_the_models_page_never_interpolates_a_model_ref_into_markup() -> None:
         "the Models page must build its DOM with createElement/textContent: a "
         "model ref is upstream text and half of it is user-typed configuration."
     )
+
+
+def _models_section() -> str:
+    script = _script()
+    return script[
+        script.index(
+            "/* ----------------------------------------------------------------- models"
+        ) :
+    ]
+
+
+def test_the_tree_is_built_lazily_rather_than_all_at_once() -> None:
+    """The defect a browser found: 186,290 nodes before the user opened one row.
+
+    Driving the shipped page against a real install (1,021 models over 10
+    providers) put 9,279 ``<select>`` elements and 186k nodes into the tree
+    while every provider was still collapsed, because the render walked every
+    provider's every model and built a full override editor and two tables for
+    each. Provider bodies, model bodies and the provider's own override editor
+    are now filled on first open, and the model list is paged.
+    """
+
+    section = _models_section()
+
+    # Every deferred body is guarded by the same filled-once marker, so a
+    # second toggle does not duplicate the contents.
+    assert section.count('body.dataset.filled = "1";') >= 2, (
+        "provider and model bodies must both be filled on first open"
+    )
+    assert 'editor.dataset.filled = "1";' in section, (
+        "a provider's own override editor must also be built on first open"
+    )
+    assert "if (node.open) fill();" in section, (
+        "a row restored open by modelsState.open must still get a body"
+    )
+    assert "const MODELS_PAGE_SIZE" in section, (
+        "a provider with hundreds of models must page its rows, not render "
+        "them all: nous_portal alone publishes 317"
+    )
+    assert "models.slice(already, already + MODELS_PAGE_SIZE)" in section
+
+
+def test_a_filter_does_not_force_every_matching_provider_open() -> None:
+    """Typing three letters used to unfold nine providers at once."""
+
+    section = _models_section()
+
+    assert "matching.length === 1" in section, (
+        "a filter may auto-open a provider only when it is the single match; "
+        "opening all of them is how a short search produced twelve thousand "
+        "pixels of page"
+    )
+    assert "window.setTimeout" in section and "modelsState.filter = next;" in section, (
+        "filtering a thousand refs on every keystroke must be debounced"
+    )
+
+
+def test_the_visibility_tick_is_not_inside_a_summary_element() -> None:
+    """Chrome reported "interactive element inside a summary" 1,021 times.
+
+    The checkbox is now a sibling of the ``<details>``, which also removes the
+    ``stopPropagation`` that stopped ticking a box from folding the row.
+    """
+
+    section = _models_section()
+
+    assert "models-model-row" in section
+    assert "row.appendChild(buildModelNode(model, editable));" in section
+    assert "event.stopPropagation()" not in section, (
+        "a checkbox that needs stopPropagation to avoid folding its own row is "
+        "a checkbox in the wrong place"
+    )
+    # The summary carries the ref and its chips, and no form control.
+    summary_builder = section[
+        section.index("function buildModelSummary(") : section.index(
+            "function fillModelBody("
+        )
+    ]
+    assert 'createElement("input")' not in summary_builder
+    assert 'createElement("select")' not in summary_builder
+
+
+def test_saving_an_override_does_not_destroy_its_own_status_element() -> None:
+    """Verified in a browser: a save that worked showed no confirmation at all.
+
+    ``renderModelsPage()`` rebuilt the whole tree, so the "Saved" text landed
+    in a node that had already been replaced -- and every other open editor's
+    unsaved edits went with it. A save now patches the payload and repaints
+    only the affected rows' read-only panels.
+    """
+
+    section = _models_section()
+
+    save_body = section[
+        section.index("async function saveModelOverrides(") : section.index(
+            "function renderModelsPreview("
+        )
+    ]
+    assert "renderModelsPage()" not in save_body, (
+        "saving must not rebuild the tree: it discards unsaved edits in every "
+        "other open editor and destroys the button's own status element"
+    )
+    assert "refreshProviderRow(key)" in save_body
+    assert "refreshModelRow(key)" in save_body
+    # The refresh repaints the read-only panels, never the editor around them.
+    assert "function fillModelReadouts(" in section
+    assert "if (readouts) fillModelReadouts(readouts, model);" in section
+
+
+def test_force_value_refuses_an_empty_box() -> None:
+    """Force value with a blank box forced an empty string upstream."""
+
+    section = _models_section()
+
+    assert "blank.push(name);" in section
+    assert "if (blank.length) {" in section
+    assert "back to Inherit or Force unset" in section
+
+
+def test_the_override_grid_names_its_columns() -> None:
+    """A parameter, a select and a box with no headers do not say which is which."""
+
+    section = _models_section()
+    styles = ADMIN_CSS.read_text(encoding="utf-8")
+
+    assert '["Parameter", "What to send", "Value"]' in section
+    assert ".models-override-head" in styles
+
+
+def test_the_page_has_no_heading_without_controls_under_it() -> None:
+    """The middle of the three sections was a heading and three paragraphs.
+
+    The override explanation now lives beside the editors it explains, inside
+    the tree section, so every heading on the page owns something the user can
+    operate.
+    """
+
+    markup = _markup()
+    view = markup[
+        markup.index('id="view-models"') : markup.index('id="view-messaging"')
+    ]
+
+    assert 'id="section-model-parameters"' not in view, (
+        "the prose-only Parameter overrides section must not come back: it "
+        "put a third competing heading between the two that had controls"
+    )
+    assert 'id="section-model-visibility"' in view
+    assert 'id="section-model-tree"' in view
+    assert 'class="models-help"' in view, (
+        "the override explanation belongs beside the editors, as disclosure"
+    )
+    assert 'id="modelsOwnedElsewhere"' in view
+    assert 'id="modelsTreeSummary"' in view, (
+        "a collapsed tree must say how much it is hiding"
+    )
+
+
+def test_the_owned_elsewhere_list_is_grouped_by_owner() -> None:
+    """It rendered as one run-on line repeating the same clause four times."""
+
+    section = _models_section()
+
+    assert "const byOwner = new Map();" in section
+    assert "models-owned-list" in section
+
+
+def test_the_visibility_labels_do_not_promise_to_block_a_model() -> None:
+    """The field said it would never show a model; it is hide-only.
+
+    A denied model is still routed when a chain names it -- documented and
+    intended -- so the label must not read like an off switch. The semantics
+    are unchanged; only the words are.
+    """
+
+    manifest = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "my_claude_code"
+        / "config"
+        / "admin"
+        / "manifest.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"Never show these models"' not in manifest, (
+        "the deny field must not be labelled as never showing a model: it "
+        "hides a model from the listings and does not stop it being routed"
+    )
+    assert '"Hide these models from the listings"' in manifest
+    assert '"Only list these models"' in manifest
+    assert "it is simply not listed" in manifest, (
+        "the deny help must say out loud that a hidden model still answers"
+    )
+
+
+def test_the_page_says_hiding_is_display_only_where_the_user_ticks() -> None:
+    """The toast after a tick has to repeat what the field label promises."""
+
+    section = _models_section()
+
+    assert "Routing is unaffected either way." in section
+    markup = _markup()
+    view = markup[
+        markup.index('id="view-models"') : markup.index('id="view-messaging"')
+    ]
+    assert "Hiding wins over showing" in view
+    assert "exact-match pattern into the hide list" in view

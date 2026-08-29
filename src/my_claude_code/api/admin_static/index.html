@@ -458,24 +458,24 @@
             </p>
 
             <section class="settings-section" id="section-model-visibility">
-              <h3>Visibility</h3>
+              <h3>What the catalogue shows</h3>
               <p class="section-help" id="modelsHideOnlyNotice"></p>
               <div class="models-visibility-grid">
                 <label class="models-pattern-field">
-                  <span class="models-pattern-label">Allow patterns</span>
+                  <span class="models-pattern-label">Show only these</span>
                   <textarea id="modelsAllowPatterns" rows="3" spellcheck="false"
-                    placeholder="empty = allow everything"></textarea>
+                    placeholder="empty = show everything"></textarea>
                 </label>
                 <label class="models-pattern-field">
-                  <span class="models-pattern-label">Deny patterns</span>
+                  <span class="models-pattern-label">Hide these</span>
                   <textarea id="modelsDenyPatterns" rows="3" spellcheck="false"
                     placeholder="e.g. *:free, nous_portal/*"></textarea>
                 </label>
               </div>
               <p class="section-help">
                 Comma-separated globs, matched case-insensitively against the full
-                <code>provider/model</code> ref. Deny wins over allow. Ticking a model
-                below writes an exact-match pattern into these same two lists.
+                <code>provider/model</code> ref. Hiding wins over showing. Unticking a
+                model below writes an exact-match pattern into the hide list.
               </p>
               <div class="models-actions">
                 <button type="button" class="secondary" id="modelsPreviewVisibility">
@@ -486,18 +486,6 @@
               </div>
               <div id="modelsHiddenRoutes" class="models-route-warning" hidden></div>
               <div id="modelsPreviewResult" class="models-preview" hidden></div>
-            </section>
-
-            <section class="settings-section" id="section-model-parameters">
-              <h3>Parameter overrides</h3>
-              <p class="section-help">
-                Forced onto the upstream request body after the provider has built it.
-                Each parameter has three states: <strong>inherit</strong> (say nothing),
-                <strong>force unset</strong> (remove the key even if the provider added
-                it), or a forced value. A model row beats its provider row per
-                parameter, so one parameter can be forced off while the rest inherit.
-              </p>
-              <p class="section-help" id="modelsOwnedElsewhere"></p>
             </section>
 
             <section class="settings-section" id="section-model-tree">
@@ -511,6 +499,20 @@
                   </button>
                 </div>
               </div>
+              <p id="modelsTreeSummary" class="section-help"></p>
+              <details class="models-help">
+                <summary>How parameter overrides work</summary>
+                <p class="section-help">
+                  Overrides are forced onto the upstream request body after the provider
+                  has built it. Each parameter has three states:
+                  <strong>Inherit</strong> (say nothing and let the provider decide),
+                  <strong>Force unset</strong> (remove the key even if the provider added
+                  it), or <strong>Force value</strong> (send exactly what you type). A
+                  model row beats its provider row per parameter, so one parameter can be
+                  forced off while the rest inherit.
+                </p>
+                <div id="modelsOwnedElsewhere" class="models-owned" hidden></div>
+              </details>
               <p id="modelsTreeStatus" class="models-status"></p>
               <div id="modelsTree" class="models-tree"></div>
             </section>

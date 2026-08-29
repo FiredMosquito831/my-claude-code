@@ -5606,17 +5606,124 @@ details.turn-pane > summary:focus-visible {
   color: var(--text-strong);
 }
 
-.models-provider-overrides,
 .models-model-body {
   padding: 0 var(--space-4) var(--space-4);
   border-top: 1px solid var(--line);
 }
 
-.models-model {
+/* The visibility tick sits beside the disclosure, not inside its <summary>:
+   a control in a summary is an a11y violation and steals the fold click. */
+.models-model-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
   margin: 0 var(--space-3) var(--space-2);
+}
+
+.models-model-row > .models-model {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.models-visible-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-3) 0 0 var(--space-3);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.models-model {
   border: 1px solid var(--line);
   border-radius: var(--space-2);
   background: var(--card);
+}
+
+.models-provider-body {
+  border-top: 1px solid var(--line);
+  padding-bottom: var(--space-3);
+}
+
+/* One line of disclosure rather than a screenful of selects between the
+   provider you clicked and the models you clicked it for. */
+.models-provider-settings > summary,
+.models-help > summary {
+  cursor: pointer;
+  padding: var(--space-3) var(--space-4);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.models-provider-settings > summary:hover,
+.models-help > summary:hover {
+  color: var(--text);
+}
+
+.models-provider-settings > div {
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+.models-help {
+  margin: var(--space-2) 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--space-2);
+  background: var(--panel);
+}
+
+.models-help > summary {
+  padding: var(--space-2) var(--space-3);
+}
+
+.models-help p,
+.models-owned {
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.models-owned-list {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.models-owned-list li {
+  margin-bottom: 4px;
+}
+
+.models-owned-reason {
+  display: block;
+  color: var(--muted);
+}
+
+.models-more {
+  margin: 0 var(--space-3);
+  font-size: 12px;
+}
+
+.models-model-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.models-readouts {
+  display: block;
+}
+
+/* A guessed number reads as a caution, not as a footnote. */
+.models-approx-warn {
+  color: var(--warn);
+}
+
+.models-empty-note {
+  margin: 0 0 var(--space-2);
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .models-ref {
@@ -5667,9 +5774,28 @@ details.turn-pane > summary:focus-visible {
 
 .models-override-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) 130px minmax(120px, 1.4fr);
+  grid-template-columns: minmax(140px, 200px) 130px minmax(120px, 220px);
   gap: var(--space-2);
   align-items: center;
+}
+
+/* "temperature | Inherit | [ ]" with nothing above it does not say which of
+   the two controls is the answer. */
+.models-override-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.models-override-name {
+  cursor: pointer;
+}
+
+.models-status.ok {
+  color: var(--ok, var(--accent));
 }
 
 .models-override-name {
