@@ -330,11 +330,20 @@ def test_reasoning_off_sends_no_reasoning_field() -> None:
     assert "thinking" not in body
 
 
-def test_reasoning_on_without_an_effort_keeps_the_gateway_default() -> None:
-    """Bare requests already reason the most; naming a rung would reduce it."""
+def test_reasoning_on_without_an_effort_names_the_strongest_rung() -> None:
+    """Bare requests reason LESS here, so a level-less "on" must name a rung.
+
+    This test asserted the opposite until 5.71.0, on the 5.69.0 belief that a
+    bare request already reasons the most. A live A/B on 2026-08-29 refuted it
+    -- identical prompt at ``max_tokens: 3000``, both HTTP 200:
+    ``deepseek/deepseek-v4-flash`` returned 132 reasoning tokens bare against
+    1,046 under ``reasoning_effort: "max"``, and ``xiaomi/mimo-v2.5`` 7 against
+    17. Without an on-value this encoder emitted nothing at all for the policy
+    per-model gating produces most often here (control ON, effort discarded).
+    """
     body = _chat_body("z-ai/glm-5.3-flash", ReasoningPolicy.on())
 
-    assert "reasoning_effort" not in body
+    assert body["reasoning_effort"] == "max"
 
 
 def test_caller_extra_body_reaches_the_gateway_but_cannot_forge_reasoning() -> None:

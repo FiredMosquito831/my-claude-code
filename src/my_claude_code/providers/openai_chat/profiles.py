@@ -228,6 +228,25 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             include_extra_body=True,
             extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
+        # No ``enabled_value``, and that is a *finding*, not an omission --
+        # OpenCode is the exact inverse of Command Code. A live A/B on
+        # 2026-08-29 (identical prompt, ``max_tokens: 3000``, ``hy3-free``):
+        #
+        #     bare (no reasoning_effort)  HTTP 200  reasoning_tokens=3000
+        #     reasoning_effort: "max"     HTTP 200  reasoning_tokens=903
+        #     reasoning_effort: "minimal" HTTP 200  reasoning_tokens=836
+        #     reasoning_effort: "none"    HTTP 200  reasoning_tokens=0
+        #
+        # so naming any rung here really does reduce reasoning, and inventing
+        # an on-value for a policy that named no level would cost thinking.
+        # Worse, the enum is validated by the *gateway* but forwarded to the
+        # *model*: ``mimo-v2.5-free`` answers HTTP 400 "Upstream request
+        # failed: [400] Invalid request parameters" to every rung, valid ones
+        # included, while a bare request returns 200 and reasons. So the field
+        # is safe only where per-model capability says the model has effort
+        # control -- which is exactly the gate that already stands in front of
+        # it, and the reason this profile must not gain a value it would send
+        # unconditionally.
         NamedEffortReasoning(_ALL_EFFORTS, disabled_value="none"),
     ),
     # 2026-08-29 audit: SUSPECTED but unproven, deliberately unchanged. Same

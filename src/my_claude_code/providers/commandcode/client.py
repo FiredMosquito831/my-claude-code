@@ -57,11 +57,25 @@ _PROFILE = OpenAIChatProfile(
     # returns 200, while an invalid ``reasoning_effort`` returns 400.
     #
     # No disabled value: the enum has no "none"/"off" rung and the gateway
-    # 400s on both, so reasoning OFF sends no reasoning field at all. No
-    # enabled value either: with nothing sent, the gateway's own default is
-    # already its most verbose reasoning setting, so inventing a rung for
-    # "on, but no effort named" would reduce reasoning rather than request it.
-    NamedEffortReasoning(_EFFORTS),
+    # 400s on both, so reasoning OFF sends no reasoning field at all.
+    #
+    # ``enabled_value="max"`` since 5.71.0. It was deliberately omitted in
+    # 5.69.0 on the belief that "with nothing sent, the gateway's own default
+    # is already its most verbose reasoning setting", so naming a rung would
+    # reduce reasoning. A live A/B on 2026-08-29 refutes that outright --
+    # identical prompt, ``max_tokens: 3000``, ``deepseek/deepseek-v4-flash``:
+    #
+    #     bare (no reasoning_effort)  HTTP 200  reasoning_tokens=132
+    #     reasoning_effort: "max"     HTTP 200  reasoning_tokens=1046
+    #
+    # -- eight times the thinking, not less. Without an enabled value this
+    # encoder had *nothing to emit* for the one policy per-model gating
+    # produces most often here: ``ReasoningPolicy.on()``, control ON with the
+    # effort discarded, which is what both ``_drop_controls`` and the
+    # toggle-only branch return. Gating logged "enabling thinking" while the
+    # body left carrying no reasoning instruction at all, on every Command Code
+    # model whose models.dev row publishes no effort control.
+    NamedEffortReasoning(_EFFORTS, enabled_value="max"),
     # Delta field, not the ``reasoning_content`` default: the gateway emits
     # ``reasoning`` (plus ``reasoning_details``). Reading the wrong field is
     # why reasoning that did arrive was dropped before reaching the client.
