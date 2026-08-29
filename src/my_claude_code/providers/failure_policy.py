@@ -247,10 +247,26 @@ def rate_limit_cooldown_seconds(
     second or hammers one that needs an hour. Providers publish the real reset
     on every 429, so use it when present.
     """
+    seconds = retry_after_from_error(exc)
+    if seconds is None:
+        return default_seconds
+    return seconds
+
+
+def retry_after_from_error(exc: BaseException) -> float | None:
+    """The wait the upstream itself published, or ``None`` when it published none.
+
+    Deliberately separate from :func:`rate_limit_cooldown_seconds`: that one
+    always answers with a number, so a caller cannot tell "the server told us
+    7s" from "we fell back to the configured default". Everything that benches
+    a credential or a route needs that distinction -- the provider's number is
+    authoritative, ours is only a stand-in -- so this returns the header value
+    alone, capped at the one-hour sanity bound a single header may request.
+    """
     response = getattr(exc, "response", None)
     seconds = retry_after_seconds(getattr(response, "headers", None))
     if seconds is None:
-        return default_seconds
+        return None
     return min(seconds, MAX_RATE_LIMIT_COOLDOWN_SECONDS)
 
 
@@ -309,6 +325,13 @@ def _classify_provider_failure(
                 mark_rate_limited,
                 rate_limit_cooldown_seconds(exc, cooldown_seconds),
             )
+            published = retry_after_from_error(exc)
+            if exc.retry_after_seconds is None and published is not None:
+                # ExecutionFailure is frozen by design, so carry the header
+                # forward on a new one rather than mutating this one.
+                return _failure(
+                    exc.kind, exc.status_code, exc.message, exc.retryable, published
+                )
         return exc
 
     if isinstance(exc, openai.AuthenticationError):
@@ -318,7 +341,13 @@ def _classify_provider_failure(
             mark_rate_limited,
             rate_limit_cooldown_seconds(exc, cooldown_seconds),
         )
-        return _failure(FailureKind.RATE_LIMIT, 429, _RATE_LIMIT_MESSAGE, True)
+        return _failure(
+            FailureKind.RATE_LIMIT,
+            429,
+            _RATE_LIMIT_MESSAGE,
+            True,
+            retry_after_from_error(exc),
+        )
     if isinstance(exc, openai.BadRequestError):
         if is_context_length_error(exc):
             return context_length_failure(exc)
@@ -348,7 +377,13 @@ def _classify_provider_failure(
                 mark_rate_limited,
                 rate_limit_cooldown_seconds(exc, cooldown_seconds),
             )
-            return _failure(FailureKind.RATE_LIMIT, 429, _RATE_LIMIT_MESSAGE, True)
+            return _failure(
+                FailureKind.RATE_LIMIT,
+                429,
+                _RATE_LIMIT_MESSAGE,
+                True,
+                retry_after_from_error(exc),
+            )
         if is_transient_overload_error(exc):
             return overloaded_provider_failure()
         effective_status = status or getattr(exc, "status_code", None)
@@ -372,7 +407,13 @@ def _classify_provider_failure(
                 mark_rate_limited,
                 rate_limit_cooldown_seconds(exc, cooldown_seconds),
             )
-            return _failure(FailureKind.RATE_LIMIT, 429, _RATE_LIMIT_MESSAGE, True)
+            return _failure(
+                FailureKind.RATE_LIMIT,
+                429,
+                _RATE_LIMIT_MESSAGE,
+                True,
+                retry_after_from_error(exc),
+            )
         if status == 400:
             if is_context_length_error(exc):
                 return context_length_failure(exc)
@@ -406,12 +447,14 @@ def _failure(
     status_code: int,
     message: str,
     retryable: bool,
+    retry_after_seconds: float | None = None,
 ) -> ExecutionFailure:
     return ExecutionFailure(
         kind=kind,
         status_code=status_code,
         message=message,
         retryable=retryable,
+        retry_after_seconds=retry_after_seconds,
     )
 
 

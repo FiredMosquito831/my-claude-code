@@ -11,6 +11,7 @@ from my_claude_code.config.credentials import parse_credential_keys
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
+from my_claude_code.core.credential_rotation import PoolHealthState
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
@@ -25,6 +26,7 @@ from my_claude_code.providers.runtime.config import (
     credential_rotation_policy,
 )
 from my_claude_code.providers.runtime.rotating import RotatingProvider
+from tests.providers.support import rotation_state
 
 
 class _RetryableError(Exception):
@@ -33,6 +35,37 @@ class _RetryableError(Exception):
 
 class _InvalidRequestError(Exception):
     status_code = 400
+
+
+def _rate_limited(*, retry_after: float | None) -> ExecutionFailure:
+    """A provider-classified 429, with or without the upstream's own window."""
+    return ExecutionFailure(
+        kind=FailureKind.RATE_LIMIT,
+        status_code=429,
+        message="Rate limited.",
+        retryable=True,
+        retry_after_seconds=retry_after,
+    )
+
+
+def _timeout() -> ExecutionFailure:
+    """What a model that never produced a first token looks like here."""
+    return ExecutionFailure(
+        kind=FailureKind.TIMEOUT,
+        status_code=504,
+        message="Provider produced no first token.",
+        retryable=True,
+    )
+
+
+def _classified_unavailable() -> ExecutionFailure:
+    """How providers classify a dead socket: transport, not the credential."""
+    return ExecutionFailure(
+        kind=FailureKind.UNAVAILABLE,
+        status_code=500,
+        message="Connection failed.",
+        retryable=True,
+    )
 
 
 def _settings(**overrides) -> Settings:
@@ -82,7 +115,7 @@ def test_build_provider_config_parses_multiple_keys():
 
 @pytest.mark.asyncio
 async def test_round_robin_state_advances():
-    state = CredentialRotationState(3, "round_robin")
+    state = rotation_state(3, "round_robin")
     assert await state.acquire() == 0
     assert await state.acquire() == 1
     assert await state.acquire() == 2
@@ -91,7 +124,7 @@ async def test_round_robin_state_advances():
 
 @pytest.mark.asyncio
 async def test_on_error_state_sticks_then_fails_over():
-    state = CredentialRotationState(2, "on_error")
+    state = rotation_state(2, "on_error")
     assert await state.acquire() == 0
     assert await state.acquire() == 0
     rotate = await state.report_failure(0, _RetryableError())
@@ -101,7 +134,7 @@ async def test_on_error_state_sticks_then_fails_over():
 
 @pytest.mark.asyncio
 async def test_backed_off_keys_are_skipped_in_round_robin():
-    state = CredentialRotationState(3, "round_robin")
+    state = rotation_state(3, "round_robin")
     await state.report_failure(1, _RetryableError())
     assert await state.acquire() == 0
     assert await state.acquire() == 2
@@ -110,7 +143,7 @@ async def test_backed_off_keys_are_skipped_in_round_robin():
 
 @pytest.mark.asyncio
 async def test_least_used_picks_least_requested_healthy_key():
-    state = CredentialRotationState(3, "least_used")
+    state = rotation_state(3, "least_used")
     assert await state.acquire() == 0
     assert await state.acquire() == 1
     assert await state.acquire() == 2
@@ -123,7 +156,7 @@ async def test_least_used_picks_least_requested_healthy_key():
 
 @pytest.mark.asyncio
 async def test_failover_sticks_to_first_healthy_key():
-    state = CredentialRotationState(3, "failover")
+    state = rotation_state(3, "failover")
     assert await state.acquire() == 0
     assert await state.acquire() == 0
     await state.report_failure(0, _RetryableError())
@@ -132,32 +165,33 @@ async def test_failover_sticks_to_first_healthy_key():
 
 
 @pytest.mark.asyncio
-async def test_cooldown_tiers_escalate_on_repeated_failures():
-    state = CredentialRotationState(1, "failover")
-    await state.report_failure(0, _RetryableError())
-    metrics = state.get_metrics()[0]
-    assert metrics["state"] == "COOLDOWN"
-    assert metrics["tier"] == 1
-    first = metrics["cooldown_remaining"]
-    assert 9.0 < first <= 10.0
+async def test_a_429_benches_for_the_configured_window_without_a_ladder():
+    """No tier, no escalation: every 429 without a header waits the same."""
+    state = rotation_state(1, "failover", rate_limit_seconds=45.0)
 
-    await state.report_failure(0, _RetryableError())
-    metrics = state.get_metrics()[0]
-    assert metrics["tier"] == 2
-    assert 29.0 < metrics["cooldown_remaining"] <= 30.0
+    for _ in range(4):
+        await state.report_failure(0, _RetryableError())
+        metrics = state.get_metrics()[0]
+        assert metrics["state"] == "COOLDOWN"
+        assert 44.0 < metrics["cooldown_remaining"] <= 45.0
 
 
 @pytest.mark.asyncio
-async def test_circuit_opens_after_three_consecutive_failures():
-    state = CredentialRotationState(1, "failover")
-    for _ in range(3):
-        await state.report_failure(0, Exception("boom"))
-    assert state.get_metrics()[0]["state"] == "CIRCUIT_OPEN"
+async def test_a_run_of_generic_failures_never_benches_a_key():
+    """The breaker is gone: nothing but auth and 429 moves a key's health."""
+    state = rotation_state(1, "failover")
+    before = _health(state)
+
+    for _ in range(10):
+        assert await state.report_failure(0, Exception("boom")) is False
+
+    assert state.get_metrics()[0]["state"] == "HEALTHY"
+    assert _health(state) == before
 
 
 @pytest.mark.asyncio
 async def test_auth_failures_escalate_lockout_tiers():
-    state = CredentialRotationState(2, "failover")
+    state = rotation_state(2, "failover")
 
     class _AuthError(Exception):
         status_code = 401
@@ -178,28 +212,42 @@ async def test_auth_failures_escalate_lockout_tiers():
 
 @pytest.mark.asyncio
 async def test_acquire_returns_minus_one_when_all_keys_benched():
-    state = CredentialRotationState(2, "round_robin")
+    state = rotation_state(2, "round_robin")
     await state.report_failure(0, _RetryableError())
     await state.report_failure(1, _RetryableError())
     assert await state.acquire() == -1
     wait = await state.shortest_cooldown_remaining()
-    assert 0 < wait <= 10.0
+    assert 0 < wait <= 60.0
 
 
 @pytest.mark.asyncio
 async def test_report_success_restores_health():
-    state = CredentialRotationState(1, "failover")
+    state = rotation_state(1, "failover")
     await state.report_failure(0, _RetryableError())
     await state.report_success(0)
     metrics = state.get_metrics()[0]
     assert metrics["state"] == "HEALTHY"
-    assert metrics["tier"] == 0
     assert await state.acquire() == 0
 
 
-def test_error_justifies_rotation():
-    assert error_justifies_rotation(_RetryableError()) is True
-    assert error_justifies_rotation(_InvalidRequestError()) is False
+@pytest.mark.parametrize(
+    ("factory", "expected"),
+    [
+        (_RetryableError, True),
+        (_InvalidRequestError, False),
+        (lambda: openai.APITimeoutError(httpx.Request("POST", "http://x")), False),
+        (lambda: httpx.ConnectError("refused"), True),
+        (
+            lambda: openai.APIConnectionError(
+                request=httpx.Request("POST", "http://x")
+            ),
+            True,
+        ),
+    ],
+    ids=["429", "400", "sdk_timeout", "transport", "sdk_transport"],
+)
+def test_error_justifies_rotation(factory, expected: bool):
+    assert error_justifies_rotation(factory()) is expected
 
 
 class _FakeProvider(BaseProvider):
@@ -265,7 +313,7 @@ def _rotating(providers: list[_FakeProvider], policy: str) -> RotatingProvider:
         api_keys=tuple(f"k{i + 1}" for i in range(len(providers))),
         credential_rotation=policy,
     )
-    state = CredentialRotationState(len(providers), policy)
+    state = rotation_state(len(providers), policy)
     return RotatingProvider(config, providers, state)
 
 
@@ -320,7 +368,7 @@ async def test_rotating_provider_does_not_retry_after_output_started():
 @pytest.mark.asyncio
 async def test_single_policy_still_counts_usage():
     """Regression: the ``single`` fast path used to skip usage bookkeeping."""
-    state = CredentialRotationState(3, "single")
+    state = rotation_state(3, "single")
     for _ in range(4):
         assert await state.acquire() == 0
     metrics = state.get_metrics()
@@ -331,7 +379,7 @@ async def test_single_policy_still_counts_usage():
 @pytest.mark.asyncio
 async def test_single_key_pool_counts_usage():
     """Regression: a one-key pool reported zero requests under any policy."""
-    state = CredentialRotationState(1, "round_robin")
+    state = rotation_state(1, "round_robin")
     for _ in range(3):
         assert await state.acquire() == 0
     assert state.get_metrics()[0]["request_count"] == 3
@@ -348,7 +396,7 @@ async def test_unrelated_failures_do_not_escalate_the_auth_lockout():
     class _AuthError(Exception):
         status_code = 401
 
-    state = CredentialRotationState(2, "failover")
+    state = rotation_state(2, "failover")
     await state.report_failure(0, _RetryableError())
     await state.report_failure(0, _RetryableError())
     await state.report_failure(0, _AuthError())
@@ -364,7 +412,7 @@ async def test_success_clears_the_auth_escalation():
     class _AuthError(Exception):
         status_code = 401
 
-    state = CredentialRotationState(1, "single")
+    state = rotation_state(1, "single")
     await state.report_failure(0, _AuthError())
     await state.report_success(0)
     await state.report_failure(0, _AuthError())
@@ -373,29 +421,74 @@ async def test_success_clears_the_auth_escalation():
 
 
 @pytest.mark.asyncio
-async def test_rate_limits_do_not_open_the_circuit():
-    """429 escalates the cooldown ladder but never trips the breaker."""
-    state = CredentialRotationState(2, "round_robin")
-    for _ in range(5):
-        await state.report_failure(0, _RetryableError())
+async def test_rate_limit_benches_for_the_window_the_provider_published():
+    """The provider's own Retry-After wins over anything configured here."""
+    state = rotation_state(2, "round_robin", rate_limit_seconds=600.0)
+
+    assert await state.report_failure(0, _rate_limited(retry_after=7.0)) is True
+
     metrics = state.get_metrics()[0]
     assert metrics["state"] == "COOLDOWN"
-    assert metrics["consecutive_failures"] == 0
+    assert 6.0 < metrics["cooldown_remaining"] <= 7.0
+    assert metrics["rate_limits"] == 1
 
 
 @pytest.mark.asyncio
-async def test_abandoned_probe_is_released():
-    """Regression: an abandoned half-open probe benched a key permanently.
+async def test_rate_limit_without_a_header_uses_the_configured_cooldown():
+    """No signal from the provider is the only time our own number applies."""
+    state = rotation_state(2, "round_robin", rate_limit_seconds=45.0)
 
-    ``acquire`` reserves a half-open credential by setting ``is_probing``; if
-    the client disconnects, neither success nor failure is reported, so the
-    reservation used to stick and the credential was never selectable again.
+    assert await state.report_failure(0, _rate_limited(retry_after=None)) is True
+
+    metrics = state.get_metrics()[0]
+    assert metrics["state"] == "COOLDOWN"
+    # 45, not the engine's own 60.0 default: the setting reaches the pool.
+    assert 44.0 < metrics["cooldown_remaining"] <= 45.0
+
+
+@pytest.mark.asyncio
+async def test_lockout_tiers_come_from_settings():
+    """The one surviving ladder is the operator's, not a hardcoded one."""
+    state = rotation_state(1, "single", lockout_tiers=(1.0, 2.0))
+
+    class _AuthError(Exception):
+        status_code = 401
+
+    await state.report_failure(0, _AuthError())
+    assert 0.0 < state.get_metrics()[0]["lockout_remaining"] <= 1.0
+
+    await state.report_failure(0, _AuthError())
+    assert 1.0 < state.get_metrics()[0]["lockout_remaining"] <= 2.0
+
+    # Clamped at the last entry rather than running off the end.
+    await state.report_failure(0, _AuthError())
+    assert 1.0 < state.get_metrics()[0]["lockout_remaining"] <= 2.0
+
+
+@pytest.mark.asyncio
+async def test_no_half_open_state_exists() -> None:
+    """The probe machinery is gone, and with it the way it stranded a key.
+
+    A half-open slot was reserved on acquire and released only by an explicit
+    success or failure, so a request that reported neither -- a disconnect, a
+    cancellation, or any of the failure classes that no longer charge health
+    -- left the credential permanently unselectable. A bench now expires
+    straight back to HEALTHY.
     """
-    state = CredentialRotationState(2, "round_robin")
+    assert not hasattr(PoolHealthState, "HALF_OPEN")
+    assert "HALF_OPEN" not in {member.name for member in PoolHealthState}
+
+    clock = _ManualClock()
+    state = rotation_state(2, "round_robin", rate_limit_seconds=30.0, clock=clock)
     await state.report_failure(0, _RetryableError())
-    assert await state.reset_key(0) is True
-    state.release_probe(0)
-    assert state.get_metrics()[0]["is_probing"] is False
+    assert state.get_metrics()[0]["state"] == "COOLDOWN"
+
+    clock.now += 31.0
+    assert state.selectable_indexes() == (0, 1)
+    assert state.get_metrics()[0]["state"] == "HEALTHY"
+    # Selectable twice running: nothing reserves the recovered credential.
+    assert await state.acquire() == 0
+    assert await state.acquire() == 1
 
 
 @pytest.mark.asyncio
@@ -409,7 +502,6 @@ async def test_client_disconnect_does_not_bench_the_credential():
     await maybe_await_aclose(stream)  # client went away mid-stream
 
     metrics = provider.key_health()[0]
-    assert metrics["is_probing"] is False
     assert metrics["state"] == "HEALTHY"
 
 
@@ -438,7 +530,7 @@ async def test_key_health_reports_index_and_masked_label():
         api_keys=("alpha-secret-0001", "beta-secret-0002"),
         credential_rotation="round_robin",
     )
-    state = CredentialRotationState(2, "round_robin")
+    state = rotation_state(2, "round_robin")
     rotating = RotatingProvider(
         config,
         providers,
@@ -465,7 +557,7 @@ async def test_rotating_provider_records_the_credential_it_used():
         api_keys=("k1", "k2"),
         credential_rotation="failover",
     )
-    state = CredentialRotationState(2, "failover")
+    state = rotation_state(2, "failover")
     provider = RotatingProvider(
         config, [first, second], state, key_labels=("…key1", "…key2")
     )
@@ -546,7 +638,7 @@ async def test_rotating_provider_fails_over_a_rejected_credential():
 @pytest.mark.asyncio
 async def test_acquire_avoids_unavailable_credentials() -> None:
     """A throttled credential must be skipped while another can serve."""
-    state = CredentialRotationState(3, "round_robin")
+    state = rotation_state(3, "round_robin")
     picks = {await state.acquire(frozenset({0})) for _ in range(6)}
     assert picks == {1, 2}
 
@@ -554,14 +646,14 @@ async def test_acquire_avoids_unavailable_credentials() -> None:
 @pytest.mark.asyncio
 async def test_acquire_falls_back_when_every_credential_is_unavailable() -> None:
     """Total throttling must queue on a limiter, not hard-fail the request."""
-    state = CredentialRotationState(2, "round_robin")
+    state = rotation_state(2, "round_robin")
     index = await state.acquire(frozenset({0, 1}))
     assert index in (0, 1)
 
 
 @pytest.mark.asyncio
 async def test_unavailable_credentials_are_still_skipped_when_benched() -> None:
-    state = CredentialRotationState(3, "round_robin")
+    state = rotation_state(3, "round_robin")
     await state.report_failure(2, _RetryableError())
     picks = {await state.acquire(frozenset({0})) for _ in range(4)}
     assert picks == {1}
@@ -609,9 +701,7 @@ async def test_rotating_provider_uses_a_throttled_credential_when_all_are():
 def test_key_health_reports_the_throttle_window() -> None:
     providers = [_ThrottledProvider(throttled_for=12.0), _FakeProvider()]
     config = ProviderConfig(api_key="k1", base_url="http://x", api_keys=("k1", "k2"))
-    rotating = RotatingProvider(
-        config, providers, CredentialRotationState(2, "round_robin")
-    )
+    rotating = RotatingProvider(config, providers, rotation_state(2, "round_robin"))
     health = rotating.key_health()
     assert health[0]["throttle_remaining"] == 12.0
     assert health[1]["throttle_remaining"] == 0.0
@@ -659,34 +749,6 @@ class _ManualClock:
         return self.now
 
 
-@pytest.mark.asyncio
-async def test_half_open_admits_exactly_one_probe() -> None:
-    """A recovered breaker admits ONE probe until that probe settles.
-
-    While the probe is outstanding the credential must not be handed out
-    again; only its success restores full service.
-    """
-    clock = _ManualClock()
-    state = CredentialRotationState(2, "failover", clock=clock)
-    for _ in range(3):
-        await state.report_failure(0, Exception("boom"))
-    assert state.get_metrics()[0]["state"] == "CIRCUIT_OPEN"
-
-    # The longest cooldown tier elapses; key 0 wakes into HALF_OPEN...
-    clock.now += 61.0
-    # ...and key 1 benches only now, so it stays benched throughout.
-    await state.report_failure(1, _RetryableError())
-
-    assert await state.acquire() == 0
-    # The outstanding probe reserves the credential: no second admission.
-    assert await state.acquire() == -1
-
-    await state.report_success(0)
-    states = [entry["state"] for entry in state.get_metrics()]
-    assert states == ["HEALTHY", "COOLDOWN"]
-    assert await state.acquire() == 0
-
-
 # --- Request-shaped failures must not be charged to a credential ------------
 #
 # A malformed request fails identically on every key, so counting it against
@@ -717,6 +779,23 @@ def _context_length() -> ExecutionFailure:
     )
 
 
+def _failure_record(state: CredentialRotationState) -> list[dict[str, object]]:
+    """Everything a failure could move, and nothing a request moves anyway.
+
+    ``request_count`` climbs on every acquire, success or not, so a snapshot
+    that included it could never answer "did this failure cost the key
+    anything".
+    """
+    return [
+        {
+            key: value
+            for key, value in entry.items()
+            if key not in {"request_count"} and not key.endswith("_remaining")
+        }
+        for entry in state.get_metrics()
+    ]
+
+
 def _health(state: CredentialRotationState) -> list[dict[str, object]]:
     """Full per-credential health snapshot, minus the wall-clock remainders."""
     return [
@@ -734,7 +813,7 @@ def _health(state: CredentialRotationState) -> list[dict[str, object]]:
 async def test_request_shaped_failure_leaves_health_byte_identical(
     error_factory,
 ) -> None:
-    state = CredentialRotationState(2, "round_robin")
+    state = rotation_state(2, "round_robin")
     before = _health(state)
 
     for _ in range(10):
@@ -747,7 +826,7 @@ async def test_request_shaped_failure_leaves_health_byte_identical(
 @pytest.mark.asyncio
 async def test_duck_typed_400_also_leaves_health_untouched() -> None:
     """Not every provider raises a canonical failure; a bare 400 counts too."""
-    state = CredentialRotationState(2, "round_robin")
+    state = rotation_state(2, "round_robin")
     before = _health(state)
 
     for _ in range(10):
@@ -760,7 +839,7 @@ async def test_duck_typed_400_also_leaves_health_untouched() -> None:
 @pytest.mark.parametrize("status", [401, 403])
 async def test_auth_failures_still_lock_out_and_escalate(status: int) -> None:
     """Regression guard: the failover multi-key rotation exists for."""
-    state = CredentialRotationState(2, "failover")
+    state = rotation_state(2, "failover")
 
     assert await state.report_failure(0, _classified(status)) is True
     first = state.get_metrics()[0]
@@ -775,51 +854,43 @@ async def test_auth_failures_still_lock_out_and_escalate(status: int) -> None:
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_still_escalates_cooldown_without_circuit_progress() -> None:
-    """Throttled is not broken: the tier climbs, the breaker never trips."""
-    state = CredentialRotationState(2, "round_robin")
+async def test_upstream_and_transport_failures_never_charge_health() -> None:
+    """The live cause of 1,529 "all keys in cooldown" answers in one day.
 
-    for expected_tier in (1, 2, 3, 4):
-        assert await state.report_failure(0, _RetryableError()) is True
-        metrics = state.get_metrics()[0]
-        assert metrics["tier"] == expected_tier
-        assert metrics["consecutive_failures"] == 0
-        assert metrics["state"] == "COOLDOWN"
+    A 410 on one chain entry, 5xx from an overloaded upstream and first-token
+    timeouts were all charged to whichever key carried them, walking three
+    working credentials up a cooldown ladder for faults none of them caused.
+    """
+    state = rotation_state(2, "round_robin")
+    before = _health(state)
 
-    assert state.get_metrics()[0]["failure_count"] == 4
+    for _ in range(5):
+        await state.report_failure(0, _classified(503))
+        await state.report_failure(0, _classified(500))
+        await state.report_failure(0, _classified(410))
+        await state.report_failure(0, httpx.ConnectError("boom"))
+        await state.report_failure(0, httpx.ReadTimeout("slow"))
+        await state.report_failure(0, _timeout())
 
-
-@pytest.mark.asyncio
-async def test_upstream_failures_still_trip_the_circuit() -> None:
-    state = CredentialRotationState(2, "round_robin")
-
-    for _ in range(3):
-        assert await state.report_failure(0, _classified(503)) is True
-
-    metrics = state.get_metrics()[0]
-    assert metrics["state"] == "CIRCUIT_OPEN"
-    assert metrics["consecutive_failures"] == 3
-    assert metrics["failure_count"] == 3
+    assert _health(state) == before
+    assert [entry["state"] for entry in state.get_metrics()] == ["HEALTHY"] * 2
 
 
 @pytest.mark.asyncio
-async def test_transport_failures_still_trip_the_circuit() -> None:
-    state = CredentialRotationState(2, "round_robin")
+async def test_rotation_follows_the_credential_shaped_rule() -> None:
+    """Rotating and charging health are separate answers to separate questions."""
+    state = rotation_state(1, "single")
 
-    for _ in range(3):
-        assert await state.report_failure(0, httpx.ConnectError("boom")) is True
-
-    assert state.get_metrics()[0]["state"] == "CIRCUIT_OPEN"
-
-
-@pytest.mark.asyncio
-async def test_rotate_return_value_unchanged_for_every_failure_class() -> None:
-    state = CredentialRotationState(1, "single")
-
+    # Key-shaped: rotate.
     assert await state.report_failure(0, _classified(401)) is True
     assert await state.report_failure(0, _RetryableError()) is True
-    assert await state.report_failure(0, _classified(503)) is True
+    # Transport: rotate for free -- another key is another connection.
     assert await state.report_failure(0, httpx.ConnectError("boom")) is True
+    assert await state.report_failure(0, _classified_unavailable()) is True
+    # Model- or request-shaped: raise, so the chain tries the next model.
+    assert await state.report_failure(0, _classified(503)) is False
+    assert await state.report_failure(0, _classified(410)) is False
+    assert await state.report_failure(0, _timeout()) is False
     assert await state.report_failure(0, _invalid_request()) is False
     assert await state.report_failure(0, _context_length()) is False
     assert await state.report_failure(0, _InvalidRequestError()) is False
@@ -833,7 +904,7 @@ async def test_repeated_400s_never_dry_up_a_healthy_pool() -> None:
     carried it, and within a few requests the pool answered "All API keys for
     this provider are in cooldown".
     """
-    state = CredentialRotationState(3, "round_robin")
+    state = rotation_state(3, "round_robin")
 
     for _ in range(60):
         index = await state.acquire()
@@ -853,7 +924,91 @@ async def test_rotating_provider_survives_a_run_of_invalid_requests() -> None:
         api_keys=("k1", "k2", "k3"),
         credential_rotation="round_robin",
     )
-    state = CredentialRotationState(3, "round_robin")
+    state = rotation_state(3, "round_robin")
+    rotating = RotatingProvider(config, providers, state)
+
+    for _ in range(20):
+        with pytest.raises(ExecutionFailure):
+            [c async for c in rotating.stream_response(_request())]
+
+    assert [entry["state"] for entry in rotating.key_health()] == ["HEALTHY"] * 3
+
+
+@pytest.mark.asyncio
+async def test_rotating_provider_raises_a_timeout_without_touching_the_pool():
+    """The behaviour the whole PR exists for.
+
+    Live symptom: one three-key pool, a chain five models deep, and a
+    ``Credential 3 produced no first token within 25.0s of its share of this
+    attempt`` line for a timer nobody configured. A model that does not answer
+    is the model's problem, so the pool must hand the failure straight back and
+    let the executor try the next model -- with every key untouched, and the
+    key that was actually tried recorded for analytics.
+    """
+    from my_claude_code.core.credential_attribution import install_attribution
+
+    providers = [
+        _FakeProvider(fail_before_first=_timeout()),
+        _FakeProvider(chunks=("never",)),
+        _FakeProvider(chunks=("never",)),
+    ]
+    config = ProviderConfig(
+        api_key="k1",
+        base_url="http://x",
+        api_keys=("k1", "k2", "k3"),
+        credential_rotation="failover",
+    )
+    state = rotation_state(3, "failover")
+    rotating = RotatingProvider(
+        config, providers, state, key_labels=("…key1", "…key2", "…key3")
+    )
+    before = _failure_record(state)
+
+    slot = install_attribution()
+    with pytest.raises(ExecutionFailure) as excinfo:
+        [c async for c in rotating.stream_response(_request())]
+
+    assert excinfo.value.kind is FailureKind.TIMEOUT
+    assert [p.calls for p in providers] == [1, 0, 0]
+    assert _failure_record(state) == before
+    assert [entry["state"] for entry in rotating.key_health()] == ["HEALTHY"] * 3
+    assert (slot.index, slot.label) == (0, "…key1")
+
+
+@pytest.mark.asyncio
+async def test_rotating_provider_rotates_on_a_connection_error_for_free():
+    """Transport faults still fail over -- and still cost the key nothing."""
+    first = _FakeProvider(fail_before_first=httpx.ConnectError("refused"))
+    second = _FakeProvider(chunks=("ok",))
+    state = rotation_state(2, "failover")
+    config = ProviderConfig(
+        api_key="k1",
+        base_url="http://x",
+        api_keys=("k1", "k2"),
+        credential_rotation="failover",
+    )
+    rotating = RotatingProvider(config, [first, second], state)
+    before = _failure_record(state)
+
+    assert [c async for c in rotating.stream_response(_request())] == ["ok"]
+    assert first.calls == 1
+    assert second.calls == 1
+    # Key 0's failure counters are untouched; key 1 only gained a success.
+    assert _failure_record(state) == before
+    assert [entry["state"] for entry in rotating.key_health()] == ["HEALTHY"] * 2
+
+
+@pytest.mark.asyncio
+async def test_a_five_hundred_walks_the_chain_not_the_pool():
+    """A 5xx must reach the executor rather than burn the remaining keys."""
+    providers = [_FakeProvider(fail_before_first=_classified(503)) for _ in range(3)]
+    config = ProviderConfig(
+        api_key="k1",
+        base_url="http://x",
+        api_keys=("k1", "k2", "k3"),
+        credential_rotation="round_robin",
+    )
+    state = rotation_state(3, "round_robin")
     rotating = RotatingProvider(config, providers, state)
 
     for _ in range(20):

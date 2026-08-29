@@ -26,6 +26,13 @@ class ExecutionFailure(Exception):
     status_code: int
     message: str
     retryable: bool
+    #: For a ``RATE_LIMIT`` failure, how long the upstream said to wait --
+    #: parsed from its own ``Retry-After`` / ``x-ratelimit-reset-*`` headers,
+    #: or the operator's configured default when it published none. Carried on
+    #: the failure so every bench downstream (the credential pool, the route's
+    #: ejection registry) uses the provider's number instead of inventing one.
+    #: ``None`` on every other kind, and on a rate limit no classifier touched.
+    retry_after_seconds: float | None = None
 
     def __post_init__(self) -> None:
         Exception.__init__(self, self.message)

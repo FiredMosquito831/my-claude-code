@@ -516,9 +516,11 @@ def _rotation_field_specs() -> tuple[dict[str, Any], ...]:
                     "round_robin = spread requests across healthy keys; "
                     "least_used = least-used healthy key first; "
                     "failover = stick to one key until it fails, then move on. "
-                    "Failing keys are benched automatically: tiered cooldowns "
-                    "(10s-120s), circuit breaker after 3 failures, escalating "
-                    "auth lockouts (5min-24h for 401/403). Requires restart."
+                    "A key is benched only for what the provider says about the "
+                    "key itself: an escalating lockout on 401/403, and a 429 "
+                    "bench lasting exactly as long as the provider asked. "
+                    "Timeouts, 5xx and 4xx leave every key untouched and move "
+                    "the fallback chain to the next model. Requires restart."
                 ),
             }
         )

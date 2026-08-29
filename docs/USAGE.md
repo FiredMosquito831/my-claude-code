@@ -893,7 +893,7 @@ EXA_API_KEY_ROTATION=failover
 
 ### Health tracking
 
-Each key carries its own state. Repeated failures cool a key down on a rising ladder; sustained failures open a circuit; auth failures lock the key out for progressively longer.
+Each key carries its own state, and only two things change it. A **401/403** locks the key out on an escalating ladder (`CREDENTIAL_LOCKOUT_TIERS`). A **429** benches it for exactly as long as the provider asked. Nothing else does — a timeout, a 5xx, a `410 model gone`, a 400 or a dropped connection leaves every key exactly as it was, because the same keys serve every model in your chain and none of those failures is the key's doing. When a model will not answer, the fallback chain moves to the next **model**.
 
 A **rate-limited key is benched for exactly as long as the provider says** — parsed from `Retry-After`, `retry-after-ms` or `x-ratelimit-reset-*` — rather than an invented fixed delay. A key that resets in one second isn't idled for a minute, and one that needs an hour isn't hammered.
 

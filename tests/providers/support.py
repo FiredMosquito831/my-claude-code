@@ -7,6 +7,7 @@ from my_claude_code.application.reasoning import client_reasoning_policy
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.providers.base import ProviderConfig
+from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
     create_openai_chat_provider,
@@ -53,6 +54,38 @@ class ImmediateRetryProviderRateLimiter(ProviderRateLimiter):
     def extend_reactive_block(self, seconds: float) -> None:
         """Leave reactive timing to the limiter's dedicated unit tests."""
         del seconds
+
+
+#: What a stock install configures: RATE_LIMIT_COOLDOWN_SECONDS and the
+#: default auth lockout ladder. Tests that care about either value pass their
+#: own instead, which is the point of the keywords being required.
+DEFAULT_RATE_LIMIT_SECONDS = 60.0
+DEFAULT_LOCKOUT_TIERS = (300.0, 3600.0, 86400.0)
+
+
+def rotation_state(
+    key_count: int,
+    policy: str = "single",
+    *,
+    rate_limit_seconds: float = DEFAULT_RATE_LIMIT_SECONDS,
+    lockout_tiers: tuple[float, ...] = DEFAULT_LOCKOUT_TIERS,
+    clock: Callable[[], float] | None = None,
+) -> CredentialRotationState:
+    """Build a rotation pool with the settings a default install would give it."""
+    if clock is None:
+        return CredentialRotationState(
+            key_count,
+            policy,
+            rate_limit_seconds=rate_limit_seconds,
+            lockout_tiers=lockout_tiers,
+        )
+    return CredentialRotationState(
+        key_count,
+        policy,
+        rate_limit_seconds=rate_limit_seconds,
+        lockout_tiers=lockout_tiers,
+        clock=clock,
+    )
 
 
 def passthrough_rate_limiter() -> ProviderRateLimiter:

@@ -169,7 +169,19 @@ FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT = 300.0
 STREAM_COMMIT_HOLDBACK_MAX_BYTES_DEFAULT = 65_536
 # Used only when a rate-limited provider sends no Retry-After to obey.
 RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT = 60.0
-CREDENTIAL_CIRCUIT_THRESHOLD_DEFAULT = 3
+# Escalating bench for a credential the provider keeps rejecting with 401/403,
+# indexed by consecutive auth failures and clamped at the last entry. Auth is
+# the one failure a key can own outright, so it is the one ladder that stays.
+CREDENTIAL_LOCKOUT_TIERS_DEFAULT = "300,3600,86400"
+# Stepping a cooled-down model over costs the chain a slot, so the wait has to
+# outlive the hop it saves before routing is worth doing.
+FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT = 5.0
+# Exponential backoff between one provider's own retries of a 429 or 5xx:
+# first wait, ceiling, and the random spread added to each so a pool of
+# clients does not retry in lockstep.
+PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT = 2.0
+PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT = 60.0
+PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT = 1.0
 
 # Graceful shutdown budget (seconds) handed to the supervisor for each server
 # generation. It bounds how long in-flight requests get to finish while the

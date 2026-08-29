@@ -2220,3 +2220,49 @@ def test_the_executor_holds_no_cross_request_retry_state() -> None:
     )
 
     assert not hasattr(executor, "_retried_positions")
+
+
+def test_the_cooldown_step_over_floor_comes_from_settings() -> None:
+    """The floor was a module constant, so the knob beside it was unreachable."""
+    from my_claude_code.application.execution import route_execution_policy
+
+    def _settings(**overrides) -> Settings:
+        return Settings(**overrides)
+
+    policy = route_execution_policy(_settings(FALLBACK_COOLDOWN_STEP_OVER_FLOOR=12.0))
+    assert policy.cooldown_step_over_floor == 12.0
+    assert route_execution_policy(_settings()).cooldown_step_over_floor == 5.0
+
+
+@pytest.mark.asyncio
+async def test_a_configured_step_over_floor_decides_which_cooldowns_are_routed() -> (
+    None
+):
+    """A 10s cooldown is waited out under a 12s floor and stepped over under 5s."""
+
+    async def _run(floor: float, cooldown: float) -> bool:
+        primary = FakeProvider()
+        primary.cooldown_seconds = cooldown
+        secondary = FakeProvider()
+        executor = ProviderExecutor(
+            lambda provider_id: {"primary": primary, "secondary": secondary}[
+                provider_id
+            ],
+            token_counter=lambda _messages, _system, _tools: 17,
+            policy=RouteExecutionPolicy(cooldown_step_over_floor=floor),
+        )
+        stream = executor.stream(
+            _plan(
+                _routed_request(provider_id="primary"),
+                _routed_request(provider_id="secondary"),
+            ),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id="req_floor",
+        )
+        [chunk async for chunk in stream]
+        return bool(primary.preflight_calls)
+
+    assert await _run(12.0, 10.0) is True, "under the floor: wait rather than route"
+    assert await _run(5.0, 10.0) is False, "over the floor: step the model over"

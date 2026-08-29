@@ -57,7 +57,10 @@ def _make_settings(**overrides):
     mock.stream_midstream_recovery_attempts = 5
     mock.stream_commit_holdback_seconds = 0.75
     mock.rate_limit_cooldown_seconds = 60.0
-    mock.credential_circuit_threshold = 3
+    mock.credential_lockout_tiers = "300,3600,86400"
+    mock.provider_retry_backoff_base_seconds = 2.0
+    mock.provider_retry_backoff_max_seconds = 60.0
+    mock.provider_retry_backoff_jitter_seconds = 1.0
     mock.model = "nvidia_nim/meta/llama3"
     mock.model_fable = None
     mock.model_opus = None
@@ -540,6 +543,11 @@ def test_create_provider_instantiates_each_builtin():
                 max_concurrency=3,
                 # Attempts include the first try; the limiter counts retries.
                 max_retries=4,
+                # The retry schedule is configured, not hardcoded at the
+                # call sites that ask the limiter to run something.
+                backoff_base_seconds=2.0,
+                backoff_max_seconds=60.0,
+                backoff_jitter_seconds=1.0,
             )
             limiter_factory.reset_mock()
 

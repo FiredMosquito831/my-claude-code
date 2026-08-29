@@ -166,21 +166,16 @@ class RouteHealthRegistry:
         rate = failures / len(health.outcomes)
         if rate < self.eject_failure_rate:
             return
-        # 5xx / transient get a short bench (the model is probably
-        # fine). Rate-limit honors the provider signal. Auth and
-        # quota use eject_seconds (longer, because the failure is
-        # more permanent).
+        # A rate limit honours the provider's own signal; everything else is
+        # benched for exactly what the operator configured. The one number
+        # here that was neither -- a `min(eject_seconds, 1.0)` clamp for
+        # timeout/5xx -- silently overrode FALLBACK_EJECT_SECONDS with one
+        # second for the most common failure classes, so a model that had
+        # just failed half of its last ten requests was back in the rotation
+        # before the next request arrived.
         duration = self.eject_seconds
         if failure_kind == "rate_limit" and retry_after_seconds:
             duration = max(retry_after_seconds, 1.0)
-        elif failure_kind in (
-            "rate_limit",
-            "upstream",
-            "timeout",
-            "overloaded",
-            "unavailable",
-        ):
-            duration = min(self.eject_seconds, 1.0)  # transient / 5xx-ish
         health.ejected_until = self.now() + duration
         logger.warning(
             "MODEL EJECTED (rate-based): '%s' at %d/%d failures (%.0f%%) in its last %d requests; skipping it for %gs (kind=%s)",

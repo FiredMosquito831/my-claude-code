@@ -992,15 +992,75 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
-        "CREDENTIAL_CIRCUIT_THRESHOLD",
-        "Bench a key after",
+        "CREDENTIAL_LOCKOUT_TIERS",
+        "Auth lockout ladder (seconds, comma-separated)",
         "limits",
-        "number",
-        settings_attr="credential_circuit_threshold",
-        default="3",
+        "text",
+        settings_attr="credential_lockout_tiers",
+        default="300,3600,86400",
         restart_required=True,
         advanced=True,
-        description="Consecutive failures before one API key is benched by rotation.",
+        description=(
+            "How long a key is benched after the provider rejects it with "
+            "401/403, escalating one step per consecutive rejection and "
+            "staying at the last entry. This is the only ladder left: a 429 "
+            "waits exactly as long as the provider asked, and nothing else "
+            "changes a key's health."
+        ),
+    ),
+    ConfigFieldSpec(
+        "FALLBACK_COOLDOWN_STEP_OVER_FLOOR",
+        "Step over a cooled-down model when its wait is at least",
+        "limits",
+        "number",
+        settings_attr="fallback_cooldown_step_over_floor",
+        default="5",
+        restart_required=True,
+        advanced=True,
+        description=(
+            "Seconds of remaining rate-limit cooldown that make it worth "
+            "trying the next model instead of waiting. Shorter waits are "
+            "waited out, because stepping over costs the chain a slot."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROVIDER_RETRY_BACKOFF_BASE_SECONDS",
+        "Retry backoff: first wait",
+        "limits",
+        "number",
+        settings_attr="provider_retry_backoff_base_seconds",
+        default="2",
+        restart_required=True,
+        advanced=True,
+        description=(
+            "How long a provider waits before its first retry of a 429 or "
+            "5xx. Each further retry doubles it."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROVIDER_RETRY_BACKOFF_MAX_SECONDS",
+        "Retry backoff: longest wait",
+        "limits",
+        "number",
+        settings_attr="provider_retry_backoff_max_seconds",
+        default="60",
+        restart_required=True,
+        advanced=True,
+        description="Ceiling the doubling retry backoff stops growing past.",
+    ),
+    ConfigFieldSpec(
+        "PROVIDER_RETRY_BACKOFF_JITTER_SECONDS",
+        "Retry backoff: jitter",
+        "limits",
+        "number",
+        settings_attr="provider_retry_backoff_jitter_seconds",
+        default="1",
+        restart_required=True,
+        advanced=True,
+        description=(
+            "Random spread added to each retry wait so several clients "
+            "hitting the same limit do not retry in lockstep."
+        ),
     ),
     # ---- Limits: what to keep --------------------------------------------
     ConfigFieldSpec(

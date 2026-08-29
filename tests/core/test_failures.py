@@ -53,18 +53,25 @@ def test_execution_failure_is_the_direct_frozen_slotted_exception() -> None:
     )
 
     assert is_dataclass(failure)
+    # ``retry_after_seconds`` carries the window a rate-limiting upstream
+    # published for itself, so a bench downstream uses the provider's number
+    # instead of one this stack invented. Optional, and None on every other
+    # kind, so the four required fields keep their positions.
     assert tuple(field.name for field in fields(failure)) == (
         "kind",
         "status_code",
         "message",
         "retryable",
+        "retry_after_seconds",
     )
     assert ExecutionFailure.__slots__ == (
         "kind",
         "status_code",
         "message",
         "retryable",
+        "retry_after_seconds",
     )
+    assert failure.retry_after_seconds is None
     assert str(failure) == "Provider rate limit reached."
     assert failure.args == ("Provider rate limit reached.",)
 

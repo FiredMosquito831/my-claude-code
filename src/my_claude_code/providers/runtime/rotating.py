@@ -1,31 +1,34 @@
 """Provider wrapper that rotates requests across multiple credentials."""
 
-import asyncio
-import time
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic.models import MessagesRequest
-from my_claude_code.core.attempt_budget import current_attempt_deadline
 from my_claude_code.core.credential_attribution import record_credential
-from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.http import maybe_await_aclose
 
-#: Floor for one credential's slice of the attempt's first-token budget. A
-#: three-key pool on a 60s attempt gets 20s a key, but a pool large enough to
-#: divide the share into single-digit seconds would reject keys that were only
-#: connecting slowly. Below this the pool simply tries fewer credentials
-#: within the attempt; the executor's own deadline still bounds the total.
-MIN_CREDENTIAL_FIRST_TOKEN_SECONDS = 5.0
-
 
 class RotatingProvider(BaseProvider):
     """Fan requests out to one sub-provider per configured credential.
+
+    The rotation policy picks the credential for each request. After that,
+    the pool moves to another key only for a failure that is *about the key* --
+    an auth rejection, a 429, or a transport fault. A model that answers slowly
+    or not at all, a 5xx, a 410 or any other 4xx is not the credential's fault
+    and would meet the same answer on every key in the pool, so it is raised
+    and the executor's fallback chain tries the next *model* instead.
+
+    No clock of this wrapper's own bounds a credential's turn. An earlier
+    version divided the executor's per-attempt share by the untried keys and
+    abandoned a credential that produced no first token inside its slice; with
+    a three-key pool five models deep that worked out to a 25s timer nobody
+    configured, which rotated keys on what was always a model-shaped stall.
+    The executor still owns the outer deadline and ends the attempt itself.
 
     Failover only happens before the first SSE chunk of a request: once output
     has started streaming to the client, switching credentials would duplicate
@@ -84,7 +87,8 @@ class RotatingProvider(BaseProvider):
 
         Two independent things bench a credential and both have to be read.
         The rate limiter is the provider's own throttle window. Health is the
-        rotation engine's -- COOLDOWN, CIRCUIT_OPEN, LOCKED_OUT. Reading only
+        rotation engine's -- COOLDOWN (a 429 the provider timed) or
+        LOCKED_OUT (an auth rejection). Reading only
         the limiter meant a pool whose every key was health-benched but not
         throttled still reported 0: routing skipped its step-over, committed
         the attempt, and the request paid a full round trip only to be told
@@ -151,62 +155,6 @@ class RotatingProvider(BaseProvider):
             reasoning=reasoning,
         )
 
-    def _first_token_budget(self, untried: int) -> float | None:
-        """How long one credential may take to produce a first token.
-
-        The executor hands this attempt a share of the request budget and
-        counts every model still behind it, so that a chain of models each
-        gets a turn. Inside the attempt the same argument applies one level
-        down: with the whole share spent on the first credential, keys two
-        through N are never tried and a configured rotation pool looks
-        ignored. The live symptom was a single key stalling for the full 66s
-        attempt, five models deep, with two idle keys beside it.
-
-        The share is divided by the credentials this request has not tried
-        yet and clamped to what is actually left, so the total can never
-        exceed what the executor already allowed -- the executor keeps the
-        outer bound and this only subdivides it. ``None`` when the executor
-        set no deadline, which leaves the wait exactly as unbounded as it was.
-        """
-        deadline = current_attempt_deadline()
-        if deadline is None:
-            return None
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return 0.0
-        share = remaining / max(1, untried)
-        return min(remaining, max(share, MIN_CREDENTIAL_FIRST_TOKEN_SECONDS))
-
-    async def _first_chunk(
-        self, iterator: AsyncIterator[str], index: int, budget: float | None
-    ) -> str:
-        """Await this credential's first chunk within its slice of the attempt.
-
-        A blown budget is reported as a canonical ``TIMEOUT`` failure so the
-        rest of the stack reads it exactly as it reads an upstream timeout:
-        it rotates to the next credential, and it charges that credential's
-        health nothing, because a model that produced no first token would
-        have been just as silent on any other key.
-        """
-        if budget is None:
-            return await iterator.__anext__()
-        try:
-            async with asyncio.timeout(budget) as bound:
-                return await iterator.__anext__()
-        except TimeoutError as exc:
-            if not bound.expired():
-                # An upstream timeout of the provider's own, not this bound.
-                raise
-            raise ExecutionFailure(
-                kind=FailureKind.TIMEOUT,
-                status_code=504,
-                message=(
-                    f"Credential {index + 1} produced no first token within "
-                    f"{budget:.1f}s of its share of this attempt."
-                ),
-                retryable=True,
-            ) from exc
-
     async def _stream_with_rotation(
         self,
         request: MessagesRequest,
@@ -219,9 +167,17 @@ class RotatingProvider(BaseProvider):
         last_error: Exception | None = None
 
         while len(attempted) < len(self._providers):
-            index = await self._state.acquire(self._unavailable_now())
+            # Credentials this request has already spent are steered away from
+            # alongside the throttled ones. Rotation used to rely on the
+            # failure having benched the key it left behind, which stopped
+            # being true once a transport fault costs a credential nothing:
+            # ``failover`` would re-pick slot 0 and the loop would give up
+            # with the other keys untouched.
+            index = await self._state.acquire(
+                self._unavailable_now() | frozenset(attempted)
+            )
             if index < 0:
-                # Every credential is benched (cooldown/circuit-open/lockout).
+                # Every credential is benched (cooldown or auth lockout).
                 wait = await self._state.shortest_cooldown_remaining()
                 raise ApplicationUnavailableError(
                     "All API keys for this provider are in cooldown. "
@@ -233,10 +189,6 @@ class RotatingProvider(BaseProvider):
                 # the pool for an untried index, which would bypass the health
                 # checks and could dispatch to a locked-out credential.
                 break
-            # Counts this credential and every one still behind it, and is
-            # recomputed per credential, so time an early key did not spend
-            # flows forward to the ones after it.
-            budget = self._first_token_budget(len(self._providers) - len(attempted))
             attempted.add(index)
             record_credential(index, self._key_label(index))
 
@@ -247,13 +199,18 @@ class RotatingProvider(BaseProvider):
                 reasoning=reasoning,
             )
             try:
-                first_chunk = await self._first_chunk(iterator, index, budget)
+                first_chunk = await iterator.__anext__()
             except StopAsyncIteration:
                 await self._state.report_success(index)
                 return
             except Exception as error:
                 last_error = error
                 await maybe_await_aclose(iterator)
+                # Two independent answers: whether this key's health record
+                # moves at all, and whether another key is worth trying. Only
+                # a key-shaped failure does the first; a timeout or a 5xx does
+                # neither, and raising here is what hands the request to the
+                # next model on the chain.
                 rotate = await self._state.report_failure(
                     index, error, model=request.model
                 )
@@ -277,11 +234,9 @@ class RotatingProvider(BaseProvider):
                 raise
             finally:
                 if not settled:
-                    await maybe_await_aclose(iterator)
                     # Covers client disconnect and cancellation, where neither
-                    # success nor failure is reported: release any half-open
-                    # probe so the credential is not benched permanently.
-                    self._state.release_probe(index)
+                    # success nor failure is reported.
+                    await maybe_await_aclose(iterator)
             await self._state.report_success(index)
             return
 

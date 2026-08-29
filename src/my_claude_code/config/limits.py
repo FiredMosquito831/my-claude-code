@@ -82,7 +82,20 @@ LIMIT_RANGES: dict[str, LimitRange] = {
         0.0, 30.0, "0 commits the first chunk immediately"
     ),
     "rate_limit_cooldown_seconds": LimitRange(0.0, DAY, "0 does not pause"),
-    "credential_circuit_threshold": LimitRange(1, 1_000),
+    # Below this a cooldown is not worth spending a chain slot on; the ceiling
+    # is ten minutes, past which nothing would ever be stepped over.
+    "fallback_cooldown_step_over_floor": LimitRange(
+        0.0, 600.0, "0 steps over any cooldown at all"
+    ),
+    # Backoff between a provider's own retries. 0 retries immediately, which
+    # is a real choice for a local runtime that has no rate limit to respect.
+    "provider_retry_backoff_base_seconds": LimitRange(
+        0.0, 60.0, "0 retries immediately"
+    ),
+    "provider_retry_backoff_max_seconds": LimitRange(0.0, HOUR),
+    "provider_retry_backoff_jitter_seconds": LimitRange(
+        0.0, 60.0, "0 makes every client retry in lockstep"
+    ),
     # --- how much of a tool result to keep ---------------------------------
     # Longest a single Read/Grep/Glob result may be before a trim rule looks at
     # it. 0 would mean "consider everything", which is exactly the setting most

@@ -4,13 +4,17 @@ from collections import deque
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import openai
 import pytest
 
 from my_claude_code.config.nim import NimSettings
 from my_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from my_claude_code.core.async_iterators import AsyncCloseable
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
+from my_claude_code.core.rate_limit import MAX_RATE_LIMIT_COOLDOWN_SECONDS
 from my_claude_code.providers.base import ProviderConfig
+from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import close_provider_stream
 from my_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from tests.providers.request_factory import make_messages_request
@@ -262,3 +266,68 @@ async def test_closing_public_openai_stream_closes_raw_stream_once() -> None:
         await stream.aclose()
 
     assert raw_stream.close_calls == 1
+
+
+# --- The provider's own Retry-After has to survive classification -----------
+#
+# Every bench downstream -- the credential pool's 429 window, the route's
+# ejection registry -- is supposed to use the number the upstream published.
+# Classification is the only place that still has the response headers, so if
+# the value is not carried on the failure it is gone for good and the stack
+# falls back to a number it invented.
+
+
+def _rate_limited_error(headers: dict[str, str]) -> openai.RateLimitError:
+    request = httpx.Request("POST", "https://upstream.invalid/v1/chat")
+    return openai.RateLimitError(
+        "rate limited",
+        response=httpx.Response(429, headers=headers, request=request),
+        body=None,
+    )
+
+
+def _classify(exc: Exception) -> ExecutionFailure:
+    return classify_provider_failure(
+        exc,
+        provider_name="test",
+        read_timeout_s=60.0,
+        request_id="req_test",
+        mark_rate_limited=lambda *_args, **_kwargs: None,
+        cooldown_seconds=60.0,
+    )
+
+
+def test_a_429_carries_the_retry_after_the_provider_published() -> None:
+    failure = _classify(_rate_limited_error({"retry-after": "7"}))
+
+    assert failure.kind is FailureKind.RATE_LIMIT
+    assert failure.retry_after_seconds == 7.0
+
+
+def test_a_429_without_a_header_carries_no_window_of_its_own() -> None:
+    """None means "the provider said nothing", not "wait the default".
+
+    Keeping the two apart is what lets the credential pool apply the
+    operator's RATE_LIMIT_COOLDOWN_SECONDS only when there is nothing better.
+    """
+    failure = _classify(_rate_limited_error({}))
+
+    assert failure.kind is FailureKind.RATE_LIMIT
+    assert failure.retry_after_seconds is None
+
+
+def test_a_hostile_retry_after_is_capped() -> None:
+    failure = _classify(_rate_limited_error({"retry-after": "999999"}))
+
+    assert failure.retry_after_seconds == MAX_RATE_LIMIT_COOLDOWN_SECONDS
+
+
+def test_other_failure_kinds_carry_no_retry_after() -> None:
+    request = httpx.Request("POST", "https://upstream.invalid/v1/chat")
+    failure = _classify(
+        openai.APIStatusError(
+            "upstream", response=httpx.Response(503, request=request), body=None
+        )
+    )
+
+    assert failure.retry_after_seconds is None

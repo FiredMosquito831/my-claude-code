@@ -177,3 +177,40 @@ def test_consecutive_mode_is_preserved() -> None:
 
     registry.record_failure("a/one")
     assert registry.is_ejected("a/one")
+
+
+def test_a_timeout_bench_lasts_the_configured_eject_window() -> None:
+    """The 1s clamp silently overrode FALLBACK_EJECT_SECONDS.
+
+    Timeout/5xx/overloaded/unavailable -- between them almost every real
+    ejection -- were benched for ``min(eject_seconds, 1.0)``, so a model that
+    had just failed half of its last ten requests was back in the rotation
+    before the next request arrived and the setting the operator configured
+    did nothing.
+    """
+    clock = [0.0]
+    registry = _registry(clock, mode="rate_based", eject_seconds=30.0)
+
+    for _ in range(8):
+        registry.record_failure("sick/model", failure_kind="timeout")
+
+    assert registry.is_ejected("sick/model")
+    clock[0] = 29.0
+    assert registry.is_ejected("sick/model"), "the bench ended a second in"
+    clock[0] = 31.0
+    assert not registry.is_ejected("sick/model")
+
+
+def test_a_rate_limited_bench_still_honours_the_providers_own_window() -> None:
+    """The one duration that is not ours to choose stays the provider's."""
+    clock = [0.0]
+    registry = _registry(clock, mode="rate_based", eject_seconds=300.0)
+
+    for _ in range(8):
+        registry.record_failure(
+            "busy/model", failure_kind="rate_limit", retry_after_seconds=7.0
+        )
+
+    assert registry.is_ejected("busy/model")
+    clock[0] = 8.0
+    assert not registry.is_ejected("busy/model")

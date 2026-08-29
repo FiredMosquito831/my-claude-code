@@ -8,10 +8,13 @@ from loguru import logger
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.constants import (
-    CREDENTIAL_CIRCUIT_THRESHOLD_DEFAULT,
+    CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
     FALLBACK_ON_REASONING_ONLY_DEFAULT,
     HTTP_CONNECT_TIMEOUT_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
+    PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
+    PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
+    PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
     STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
     STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT,
@@ -61,7 +64,16 @@ class ProviderConfig:
     commit_holdback_seconds: float = STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT
     fallback_on_reasoning_only: bool = FALLBACK_ON_REASONING_ONLY_DEFAULT
     rate_limit_cooldown_seconds: float = RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT
-    circuit_threshold: int = CREDENTIAL_CIRCUIT_THRESHOLD_DEFAULT
+    # Backoff schedule for this provider's own retries of a 429 or 5xx.
+    retry_backoff_base_seconds: float = PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT
+    retry_backoff_max_seconds: float = PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT
+    retry_backoff_jitter_seconds: float = PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT
+    # The escalating bench a credential earns for a 401/403, in seconds. The
+    # only ladder a key still walks: a 429 waits exactly as long as the
+    # provider asked, and nothing else changes a key's health at all.
+    lockout_tiers: tuple[float, ...] = tuple(
+        float(part) for part in CREDENTIAL_LOCKOUT_TIERS_DEFAULT.split(",")
+    )
 
 
 class BaseProvider(ABC):

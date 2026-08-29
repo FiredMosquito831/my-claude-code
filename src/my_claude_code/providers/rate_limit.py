@@ -9,6 +9,11 @@ from typing import Any, TypeVar
 
 from loguru import logger
 
+from my_claude_code.config.constants import (
+    PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
+    PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
+    PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
+)
 from my_claude_code.core.rate_limit import StrictSlidingWindowLimiter
 from my_claude_code.core.trace import trace_event
 from my_claude_code.providers.failure_policy import (
@@ -45,6 +50,9 @@ class ProviderRateLimiter:
         rate_window: float = 60.0,
         max_concurrency: int = 5,
         max_retries: int = DEFAULT_UPSTREAM_MAX_RETRIES,
+        backoff_base_seconds: float = PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
+        backoff_max_seconds: float = PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
+        backoff_jitter_seconds: float = PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
     ):
         if rate_limit <= 0:
             raise ValueError("rate_limit must be > 0")
@@ -60,6 +68,11 @@ class ProviderRateLimiter:
             self._rate_limit, self._rate_window
         )
         self._max_retries = max(0, max_retries)
+        # The retry schedule is a deployment choice, not a protocol fact, so
+        # it is configured once here rather than hardcoded at every call site.
+        self._backoff_base_seconds = backoff_base_seconds
+        self._backoff_max_seconds = backoff_max_seconds
+        self._backoff_jitter_seconds = backoff_jitter_seconds
         self._blocked_until: float = 0
         self._concurrency_sem = asyncio.Semaphore(max_concurrency)
         logger.info(
@@ -138,9 +151,9 @@ class ProviderRateLimiter:
         *args: Any,
         provider_failure_override: ProviderFailureOverride | None = None,
         max_retries: int | None = None,
-        base_delay: float = 2.0,
-        max_delay: float = 60.0,
-        jitter: float = 1.0,
+        base_delay: float | None = None,
+        max_delay: float | None = None,
+        jitter: float | None = None,
         **kwargs: Any,
     ) -> Any:
         """Execute an async callable with rate limiting and retry on transient limits.
@@ -156,9 +169,11 @@ class ProviderRateLimiter:
             provider_failure_override: Optional provider-specific semantic
                 classifier applied before shared retry qualification.
             max_retries: Maximum number of retry attempts after the first failure.
-            base_delay: Base delay in seconds for exponential backoff.
-            max_delay: Maximum delay cap in seconds.
-            jitter: Maximum random jitter in seconds added to each delay.
+            base_delay: Base delay in seconds for exponential backoff; the
+                limiter's configured value when omitted.
+            max_delay: Maximum delay cap in seconds; configured when omitted.
+            jitter: Maximum random jitter in seconds added to each delay;
+                configured when omitted.
 
         Returns:
             The result of the callable.
@@ -169,6 +184,12 @@ class ProviderRateLimiter:
         last_exc: Exception | None = None
         if max_retries is None:
             max_retries = self._max_retries
+        if base_delay is None:
+            base_delay = self._backoff_base_seconds
+        if max_delay is None:
+            max_delay = self._backoff_max_seconds
+        if jitter is None:
+            jitter = self._backoff_jitter_seconds
         total_attempts = 1 + max_retries
 
         for attempt in range(total_attempts):

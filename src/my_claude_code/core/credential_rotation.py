@@ -9,10 +9,24 @@ of the same mechanism:
   material, masking, and admin snapshots on top).
 
 The mechanism -- health states, cooldown/lockout ladders, the circuit breaker,
-half-open probe admission, and the selection policies -- exists once. Every
-point of divergence between the historical engines is a :class:`RotationTuning`
-field; :data:`PROVIDER_TUNING` and :data:`WEBSEARCH_TUNING` reproduce the two
-engines' documented behavior exactly.
+and the selection policies -- exists once. Every point of divergence between
+the two pools is a :class:`RotationTuning` field.
+
+The presets are no longer variations on one policy. :data:`WEBSEARCH_TUNING`
+keeps the failure ladder and the breaker: a search key that keeps erroring is
+worth resting. :data:`PROVIDER_TUNING` deliberately does not. A model
+provider's pool only ever hears about *credential-shaped* signals -- auth
+rejections and 429s -- so its slots are benched for exactly as long as the
+provider asked and never for a fault the credential did not cause. The
+provider adapter enforces that by never classifying anything as
+``"transient"``; the generic ladder below is reachable only from websearch.
+
+There is no half-open probe state. It existed to re-admit a single request to
+a credential coming back from a long bench, and it leaked: a slot reserved on
+acquire stayed reserved whenever the request ended without reporting either
+success or failure, leaving the key permanently unselectable until someone
+reset it by hand. Waking straight to HEALTHY costs at most one extra failed
+request and cannot strand a key.
 """
 
 import time
@@ -20,6 +34,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
+
+from my_claude_code.core.rate_limit import (
+    DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
+    MAX_RATE_LIMIT_COOLDOWN_SECONDS,
+)
 
 POLICIES: frozenset[str] = frozenset(
     {"single", "round_robin", "least_used", "failover"}
@@ -33,15 +52,14 @@ class PoolHealthState(StrEnum):
     COOLDOWN = "cooldown"
     CIRCUIT_OPEN = "circuit_open"
     LOCKED_OUT = "locked_out"
-    HALF_OPEN = "half_open"
 
 
 @dataclass(frozen=True, slots=True)
 class RotationTuning:
     """Behavioral configuration for :class:`RotationEngine`.
 
-    Defaults reproduce the provider engine; :data:`WEBSEARCH_TUNING` overrides
-    the fields where the websearch pool historically differed.
+    Defaults reproduce the historical generic engine; each preset below names
+    the fields it means to differ on.
     """
 
     cooldown_tiers: tuple[float, ...] = (10.0, 30.0, 60.0, 120.0)
@@ -59,8 +77,6 @@ class RotationTuning:
     #: Whether an auth failure resets the generic consecutive-failure counter
     #: (websearch) or climbs alongside it (provider).
     lockout_resets_consecutive: bool = False
-    #: Expired slots become HALF_OPEN (one admitted probe) instead of HEALTHY.
-    half_open: bool = True
     #: ``ladder``: 429s escalate the shared cooldown tier ladder and never trip
     #: the breaker; a standalone rate-limit note only bumps the tier.
     #: ``fixed``: 429s bench the slot for a flat window (honoring the
@@ -79,19 +95,28 @@ class RotationTuning:
     single_key_forces_slot_zero: bool = True
 
 
-PROVIDER_TUNING = RotationTuning()
+#: The model-provider credential pool. A 429 benches the slot for exactly the
+#: window the provider published, falling back to the operator's
+#: ``RATE_LIMIT_COOLDOWN_SECONDS`` when it published none, under the same
+#: one-hour sanity cap the rest of the stack applies to a header. The
+#: ``cooldown_tiers``/``circuit_threshold`` defaults are inherited but
+#: unreachable: nothing in the provider path classifies a failure as generic.
+PROVIDER_TUNING = RotationTuning(
+    rate_limit_mode="fixed",
+    rate_limit_seconds=DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
+    rate_limit_max_seconds=MAX_RATE_LIMIT_COOLDOWN_SECONDS,
+)
 
 #: Reproduces the websearch KeyPool: doubling lockout capped at one hour, the
 #: circuit tripping exactly on the 4th consecutive failure for a fixed minute,
-#: flat rate-limit windows honoring Retry-After, lazy expiry straight back to
-#: HEALTHY (no probe), and strict single-pool exhaustion.
+#: flat rate-limit windows honoring Retry-After, and strict single-pool
+#: exhaustion.
 WEBSEARCH_TUNING = RotationTuning(
     lockout_tiers=(300.0, 600.0, 1200.0, 2400.0, 3600.0),
     circuit_threshold=4,
     circuit_exact=True,
     circuit_fixed_seconds=60.0,
     lockout_resets_consecutive=True,
-    half_open=False,
     rate_limit_mode="fixed",
     rate_limit_seconds=60.0,
     rate_limit_max_seconds=3600.0,
@@ -128,7 +153,6 @@ class PoolSlot:
     lockout_until: float = 0.0
     last_used_at: float | None = None
     last_error: str | None = None
-    is_probing: bool = False
 
     @property
     def deadline(self) -> float:
@@ -187,24 +211,14 @@ class RotationEngine:
         return self._slots
 
     def refresh(self) -> None:
-        """Expire benched slots whose deadline has passed.
+        """Expire benched slots whose deadline has passed, straight to HEALTHY.
 
-        With ``half_open`` tuning the slot wakes into HALF_OPEN (a single
-        admitted probe must succeed before full reuse); otherwise it returns
-        straight to HEALTHY. Deadlines are left stale -- projections gate on
-        the live state, matching the historical engines.
+        Deadlines are left stale -- projections gate on the live state,
+        matching the historical engines.
         """
         now = self._clock()
-        wake_state = (
-            PoolHealthState.HALF_OPEN
-            if self._tuning.half_open
-            else PoolHealthState.HEALTHY
-        )
         for slot in self._slots:
-            # Slots already in the wake state are left exactly as they are:
-            # re-waking a HALF_OPEN slot would clear an outstanding probe
-            # reservation and let a second request through mid-probe.
-            if slot.state is PoolHealthState.HEALTHY or slot.state is wake_state:
+            if slot.state is PoolHealthState.HEALTHY:
                 continue
             deadline = (
                 slot.lockout_until
@@ -212,15 +226,11 @@ class RotationEngine:
                 else slot.cooldown_until
             )
             if deadline > 0 and now >= deadline:
-                slot.state = wake_state
-                slot.is_probing = False
+                slot.state = PoolHealthState.HEALTHY
 
     def selectable(self, index: int) -> bool:
         """Whether slot ``index`` may take new work right now."""
-        slot = self._slots[index]
-        return slot.state is PoolHealthState.HEALTHY or (
-            slot.state is PoolHealthState.HALF_OPEN and not slot.is_probing
-        )
+        return self._slots[index].state is PoolHealthState.HEALTHY
 
     def _forced_single(self) -> bool:
         """Whether the policy serves slot 0 regardless of blocklists and health."""
@@ -276,19 +286,6 @@ class RotationEngine:
         now = self._clock()
         slot.requests += 1
         slot.last_used_at = now
-        if slot.state is PoolHealthState.HALF_OPEN:
-            slot.is_probing = True
-
-    def release_probe(self, index: int) -> None:
-        """Clear a half-open probe reservation without judging the credential.
-
-        Used when a request neither succeeded nor failed -- a client disconnect
-        or cancellation mid-stream. Deliberately synchronous: callers invoke it
-        from ``finally`` blocks where awaiting is unsafe, and a lone attribute
-        write has no await point.
-        """
-        if 0 <= index < self._count:
-            self._slots[index].is_probing = False
 
     def succeed(self, index: int) -> None:
         """Mark a credential fully healthy after a successful request."""
@@ -299,7 +296,12 @@ class RotationEngine:
         self._clear_benching(slot)
 
     def fail(
-        self, index: int, failure_class: str, *, message: str | None = None
+        self,
+        index: int,
+        failure_class: str,
+        *,
+        message: str | None = None,
+        retry_after: float | None = None,
     ) -> None:
         """Record one classified failure.
 
@@ -307,19 +309,22 @@ class RotationEngine:
         (tuning-dependent), or ``"transient"`` (cooldown ladder / breaker).
         Classification from raw errors belongs to the adapters; the engine owns
         what each class means for health.
+
+        ``retry_after`` is the wait the upstream published with its 429. A
+        fixed-mode pool benches for exactly that, under the cap; a ladder-mode
+        pool has no flat window to put it in and ignores it.
         """
         if not (0 <= index < self._count):
             return
         slot = self._slots[index]
         now = self._clock()
         slot.failures += 1
-        slot.is_probing = False
         slot.last_error = message
         if failure_class == "auth":
             self._auth_failure(slot, now)
         elif failure_class == "rate_limit":
             if self._tuning.rate_limit_mode == "fixed":
-                self._fixed_rate_window(slot, now, None)
+                self._fixed_rate_window(slot, now, retry_after)
             else:
                 self._escalate_tier_window(slot, now)
         else:
@@ -463,4 +468,3 @@ class RotationEngine:
         slot.tier = 0
         slot.cooldown_until = 0.0
         slot.lockout_until = 0.0
-        slot.is_probing = False

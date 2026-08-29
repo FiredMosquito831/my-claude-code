@@ -819,7 +819,12 @@ def test_credential_key_listing_reports_cached_rotating_health(monkeypatch, tmp_
             credential_rotation="round_robin",
         ),
         [MagicMock(spec=BaseProvider), MagicMock(spec=BaseProvider)],
-        CredentialRotationState(2, "round_robin"),
+        CredentialRotationState(
+            2,
+            "round_robin",
+            rate_limit_seconds=60.0,
+            lockout_tiers=(300.0, 3600.0, 86400.0),
+        ),
     )
     app = create_test_app(providers={"nvidia_nim": rotating})
     client = _local_client(app)

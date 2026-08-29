@@ -144,7 +144,10 @@ def _factory_settings() -> MagicMock:
     settings.stream_midstream_recovery_attempts = 5
     settings.stream_commit_holdback_seconds = 0.75
     settings.rate_limit_cooldown_seconds = 60.0
-    settings.credential_circuit_threshold = 3
+    settings.credential_lockout_tiers = "300,3600,86400"
+    settings.provider_retry_backoff_base_seconds = 2.0
+    settings.provider_retry_backoff_max_seconds = 60.0
+    settings.provider_retry_backoff_jitter_seconds = 1.0
     settings.provider_rate_limit = 40
     settings.provider_rate_window = 60
     settings.provider_max_concurrency = 5

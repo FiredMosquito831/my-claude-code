@@ -1909,11 +1909,15 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   <code>single</code> with one.
                 </p>
                 <p>
-                  Health is tracked per key: repeated failures cool a key down on a rising
-                  ladder, sustained failures open a circuit, auth failures lock it out for
-                  progressively longer. A rate-limited key is benched for exactly as long
-                  as the provider asks via its <code>Retry-After</code> header, not an
-                  invented fixed delay.
+                  Health is tracked per key, and only the provider's own verdict on the
+                  key changes it: a <strong>401/403</strong> locks the key out on an
+                  escalating ladder, and a <strong>429</strong> benches it for exactly as
+                  long as the provider asks via its <code>Retry-After</code> header, never
+                  an invented delay. Anything else &mdash; a timeout, a 5xx, a
+                  <code>410</code>, a 400 &mdash; leaves every key untouched, because the
+                  same keys serve every model in your chain and none of those is the key's
+                  doing. A model that will not answer is handed to the next
+                  <em>model</em> on the chain instead.
                 </p>
 
                 <h3 id="guide-updates">Update the server</h3>

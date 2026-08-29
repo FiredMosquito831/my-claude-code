@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from .constants import (
     ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
-    CREDENTIAL_CIRCUIT_THRESHOLD_DEFAULT,
+    CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
     DESKTOP_ACTIVATION_POLL_SECONDS_DEFAULT,
     DESKTOP_ADMIN_REQUEST_TIMEOUT_DEFAULT,
     DESKTOP_HEALTH_CHECK_INTERVAL_DEFAULT,
@@ -21,6 +21,7 @@ from .constants import (
     DESKTOP_WINDOW_WIDTH_DEFAULT,
     FAILURE_KIND_NAMES,
     FALLBACK_BEHAVIOR_DEFAULT,
+    FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT,
     FALLBACK_EJECT_AFTER_FAILURES_DEFAULT,
     FALLBACK_EJECT_FAILURE_RATE_DEFAULT,
     FALLBACK_EJECT_MIN_SAMPLES_DEFAULT,
@@ -41,6 +42,9 @@ from .constants import (
     MODEL_VISIBILITY_ALLOW_DEFAULT,
     MODEL_VISIBILITY_DENY_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
+    PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
+    PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
+    PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
     REASONING_ANSWER_FLOOR_MAX,
     REQUEST_LOG_COMPRESSION_LEVEL_DEFAULT,
@@ -69,6 +73,30 @@ from .paths import anthropic_oauth_managed_store_path, chatgpt_oauth_auth_path
 from .provider_registry import get_provider_registry
 from .reasoning import ReasoningPreference
 from .websearch_catalog import SUPPORTED_WEBSEARCH_PROVIDER_IDS
+
+
+def parse_lockout_tiers(value: str) -> tuple[float, ...]:
+    """Turn a comma-separated auth lockout ladder into seconds.
+
+    Each entry is one step of the bench a credential earns for a 401/403, so
+    every one has to be a positive number and there has to be at least one --
+    an empty or zero ladder would silently mean "a rejected key is never
+    benched", which is the opposite of what configuring it says.
+    """
+    parts = [part.strip() for part in (value or "").split(",")]
+    kept = [part for part in parts if part]
+    if not kept:
+        raise ValueError("needs at least one duration in seconds")
+    tiers: list[float] = []
+    for part in kept:
+        try:
+            seconds = float(part)
+        except ValueError as exc:
+            raise ValueError(f"{part!r} is not a number of seconds") from exc
+        if seconds <= 0:
+            raise ValueError(f"{part!r} must be greater than 0")
+        tiers.append(seconds)
+    return tuple(tiers)
 
 
 def _require_provider_prefixed_model_ref(model_ref: str) -> None:
@@ -591,10 +619,30 @@ class Settings(BaseSettings):
         default=RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
         validation_alias="RATE_LIMIT_COOLDOWN_SECONDS",
     )
-    # Consecutive failures before one credential is benched by rotation.
-    credential_circuit_threshold: int = Field(
-        default=CREDENTIAL_CIRCUIT_THRESHOLD_DEFAULT,
-        validation_alias="CREDENTIAL_CIRCUIT_THRESHOLD",
+    # The escalating bench for a key the provider keeps rejecting with
+    # 401/403. Comma-separated seconds, walked by consecutive auth failures
+    # and clamped at the last entry. Nothing else moves a key's health.
+    credential_lockout_tiers: str = Field(
+        default=CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
+        validation_alias="CREDENTIAL_LOCKOUT_TIERS",
+    )
+    # Backoff between a provider's own retries of a 429 or 5xx.
+    provider_retry_backoff_base_seconds: float = Field(
+        default=PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
+        validation_alias="PROVIDER_RETRY_BACKOFF_BASE_SECONDS",
+    )
+    provider_retry_backoff_max_seconds: float = Field(
+        default=PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
+        validation_alias="PROVIDER_RETRY_BACKOFF_MAX_SECONDS",
+    )
+    provider_retry_backoff_jitter_seconds: float = Field(
+        default=PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
+        validation_alias="PROVIDER_RETRY_BACKOFF_JITTER_SECONDS",
+    )
+    # Shortest cooldown worth routing a model around rather than waiting out.
+    fallback_cooldown_step_over_floor: float = Field(
+        default=FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT,
+        validation_alias="FALLBACK_COOLDOWN_STEP_OVER_FLOOR",
     )
     # Longest text stored per field; longer text is truncated, which also bounds
     # what content search can ever find.
@@ -1183,6 +1231,22 @@ class Settings(BaseSettings):
                 f"Known kinds: {', '.join(sorted(known))}"
             )
         return ",".join(dict.fromkeys(kept))
+
+    @field_validator("credential_lockout_tiers")
+    @classmethod
+    def validate_credential_lockout_tiers(cls, v: str) -> str:
+        """Reject a ladder that cannot be walked, at load rather than at 401.
+
+        Stored as the operator typed it so the admin form round-trips the same
+        string it showed; :func:`parse_lockout_tiers` turns it into seconds
+        where it is used. A ladder is not a range, so it has no LIMIT_RANGES
+        entry to clamp it -- this is the check that stands in for one.
+        """
+        try:
+            parse_lockout_tiers(v)
+        except ValueError as exc:
+            raise ValueError(f"CREDENTIAL_LOCKOUT_TIERS: {exc}") from exc
+        return v
 
     @field_validator(
         "tool_result_trim_read",

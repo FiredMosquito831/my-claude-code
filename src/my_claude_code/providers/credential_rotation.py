@@ -2,17 +2,43 @@
 
 Thin async adapter over the consolidated engine in
 ``my_claude_code.core.credential_rotation`` (:data:`PROVIDER_TUNING`): this
-layer owns asyncio lock semantics and classifies SDK/HTTP errors into pool
-failure classes. Every health-transition rule -- ladders, thresholds, probe
-admission, selection policies -- lives once in the shared engine.
+layer owns asyncio lock semantics and decides which upstream failures are
+*about the credential*. Every health-transition rule lives once in the engine.
+
+One rule, two questions
+-----------------------
+
+**A key's health changes only on a key-shaped signal.** There are exactly two:
+
+- ``401``/``403`` -- the credential was rejected. It walks the escalating
+  lockout ladder (``CREDENTIAL_LOCKOUT_TIERS``, 5min -> 1h -> 24h by default).
+- ``429`` -- the credential is throttled. It is benched for exactly the window
+  the provider published in its own ``Retry-After`` / ``x-ratelimit-reset-*``
+  header, or for ``RATE_LIMIT_COOLDOWN_SECONDS`` when it published none, capped
+  at one hour. No ladder, no tier escalation, no circuit breaker.
+
+Everything else -- timeouts, 5xx, 410 model gone, overloaded, 400 invalid
+request, context length, transport faults, anything unclassified -- leaves the
+credential's health record byte-identical. Those are properties of the model,
+the request, or the moment, and the same three keys serve every model in a
+fallback chain: charging them walked live keys up an invented 10/30/60/120s
+ladder and tripped a breaker at three in a row. Measured on one live install,
+that produced "All API keys for this provider are in cooldown" 1,529 times in
+a day, driven by a ``410 model gone`` on one chain entry and by first-token
+timeouts. A model that does not answer is the model's problem: the fallback
+chain moves to the next *model*, not the next key.
+
+**Rotation is a separate question from health.** Trying another credential can
+only help when the failure is about this credential or its connection, so
+rotation happens for auth, for 429, and for transport-level faults -- and for
+nothing else. A timeout, a 5xx, a 410 or any other 4xx raise out of the
+rotating loop so the executor advances the fallback chain instead of burning
+the remaining keys on a model that is not answering.
 
 Health model:
   - HEALTHY: serving requests.
-  - COOLDOWN: briefly benched after an error (tiered 10s -> 30s -> 60s -> 120s).
-  - CIRCUIT_OPEN: 3+ consecutive failures; benched until cooldown elapses.
-  - HALF_OPEN: recovering; a single probe request is allowed through.
-  - LOCKED_OUT: auth failure (401/403); escalating lockout 5min -> 1h -> 24h,
-    then a half-open probe before full reuse.
+  - COOLDOWN: rate-limited, for exactly as long as the provider asked.
+  - LOCKED_OUT: auth failure (401/403); escalating lockout ladder.
 
 Policies:
   - ``single``: always the first key.
@@ -25,7 +51,7 @@ Policies:
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -36,13 +62,8 @@ from my_claude_code.core.credential_rotation import (
     PROVIDER_TUNING,
     RotationEngine,
 )
-from my_claude_code.core.failures import (
-    ExecutionFailure,
-    FailureKind,
-    find_execution_failure,
-)
+from my_claude_code.core.failures import FailureKind, find_execution_failure
 from my_claude_code.providers.failure_policy import (
-    retryable_transient_status,
     retryable_upstream_transport_error,
 )
 
@@ -52,47 +73,23 @@ ROTATION_POLICIES = frozenset(
     {"single", "round_robin", "least_used", "failover", "on_error"}
 )
 
-# Historical names, now derived from the shared tuning preset.
-COOLDOWN_TIERS_SECONDS = PROVIDER_TUNING.cooldown_tiers
-AUTH_LOCKOUT_TIERS_SECONDS = PROVIDER_TUNING.lockout_tiers
-CIRCUIT_OPEN_THRESHOLD = PROVIDER_TUNING.circuit_threshold
-
-STATE_HEALTHY = "HEALTHY"
-STATE_COOLDOWN = "COOLDOWN"
-STATE_CIRCUIT_OPEN = "CIRCUIT_OPEN"
-STATE_HALF_OPEN = "HALF_OPEN"
-STATE_LOCKED_OUT = "LOCKED_OUT"
-
-
 AUTH_STATUS_CODES = (401, 403)
 
+#: The only canonical kinds that say anything about the credential that carried
+#: the request. An allow-list on purpose: the previous deny-list grew a new
+#: exemption every time a class of route-shaped failure was found charging
+#: healthy keys, and each addition left the default -- "charge it" -- wrong for
+#: everything not yet enumerated.
+CREDENTIAL_SHAPED_KINDS = frozenset(
+    {FailureKind.AUTHENTICATION, FailureKind.PERMISSION, FailureKind.RATE_LIMIT}
+)
 
-def error_justifies_rotation(error: BaseException) -> bool:
-    """Return True when trying a different credential may resolve the failure.
-
-    Rotating is worthwhile for authentication problems, rate limits, upstream
-    5xx/overload responses, and transport errors. A plain 400 invalid request
-    will fail identically with every key, so it is not rotated.
-    """
-    if isinstance(error, openai.AuthenticationError):
-        return True
-    if (
-        isinstance(error, httpx.HTTPStatusError)
-        and error.response.status_code in AUTH_STATUS_CODES
-    ):
-        return True
-    # Providers classify their own SDK/HTTP failures before the wrapper sees
-    # them, so a rejected credential arrives as ExecutionFailure(retryable=
-    # False) rather than a raw SDK error. ``retryable`` there means "safe to
-    # retry the same credential", which a 401 never is -- but a *different*
-    # credential may well succeed, and that is exactly what rotation is for.
-    # Without this branch a revoked or exhausted key fails the request instead
-    # of failing over, defeating multi-key rotation in its main use case.
-    if isinstance(error, ExecutionFailure) and error.status_code in AUTH_STATUS_CODES:
-        return True
-    if retryable_transient_status(error) is not None:
-        return True
-    return retryable_upstream_transport_error(error)
+#: Kinds that justify handing this request to another credential.
+#: ``UNAVAILABLE`` is how providers classify a dead socket or a refused
+#: connection: it says nothing about the credential, but another key means
+#: another connection, so the attempt is worth making -- for free, because
+#: rotation and health accounting are separate decisions.
+ROTATING_KINDS = CREDENTIAL_SHAPED_KINDS | {FailureKind.UNAVAILABLE}
 
 
 def _status_from_error(error: BaseException) -> int | None:
@@ -104,74 +101,60 @@ def _status_from_error(error: BaseException) -> int | None:
     return status if isinstance(status, int) else None
 
 
-#: Failure kinds that describe the *request*, not the credential that carried
-#: it. A malformed body and an over-long prompt are rejected identically by
-#: every key in the pool, so charging them to one key's health is a category
-#: error: it benches working credentials for a fault they did not cause.
-REQUEST_SHAPED_KINDS = frozenset(
-    {FailureKind.INVALID_REQUEST, FailureKind.CONTEXT_LENGTH}
-)
+def credential_failure_class(error: BaseException) -> str | None:
+    """Name the key-shaped signal in ``error``, or ``None`` if there is none.
 
-#: Failure kinds that describe the *route* -- this model on this provider, at
-#: this moment -- rather than either the request or the credential. A model
-#: that never emits a first token is equally silent on every key in the pool,
-#: so charging the wait to whichever credential happened to carry it walks
-#: each key up the cooldown ladder and trips its breaker at three, emptying a
-#: pool of working credentials over a fault no credential caused.
-#:
-#: Unlike a request-shaped failure these still *rotate*: a different key can
-#: land on a different upstream replica and answer promptly, so trying the
-#: next one is worth the attempt even though the first one is not to blame.
-#: Rotation and health accounting are therefore two independent axes, and a
-#: timeout is the one class that says yes to the first and no to the second.
-#:
-#: Only the canonical ``TIMEOUT`` kind qualifies. A dead socket -- classified
-#: ``UNAVAILABLE`` -- does implicate the connection this credential is using
-#: and keeps charging health exactly as before, as does any timeout that
-#: reaches this layer without a provider classification.
-ROUTE_SHAPED_KINDS = frozenset({FailureKind.TIMEOUT})
-
-#: Every kind that leaves the credential's health record untouched.
-UNCHARGED_KINDS = REQUEST_SHAPED_KINDS | ROUTE_SHAPED_KINDS
-
-
-def failure_implicates_credential(error: BaseException) -> bool:
-    """Return whether a failure says anything about the credential that served it.
-
-    Auth rejections, rate limits, upstream 5xx, overload and transport faults
-    all do -- they are properties of this key or of its connection, and the
-    health ladders exist to bench a key that keeps producing them.
-
-    A request-shaped failure does not: the same 400 comes back from every key,
-    so counting it would escalate the whole pool into cooldown over a fault no
-    rotation can fix. Neither does a route-shaped one: a first-token timeout is
-    a property of the model and the moment, and counting it drove three live
-    keys to the 120s tier and the request straight into "all API keys for this
-    provider are in cooldown".
-
-    Deliberately narrow: only failures positively identified as request- or
-    route-shaped skip health accounting. Anything unrecognized keeps counting
-    exactly as it did before, so failover for genuinely broken credentials is
-    untouched.
+    ``"auth"`` and ``"rate_limit"`` are the only two the provider pool acts on.
+    Providers classify their own SDK/HTTP failures before the wrapper sees
+    them, so the canonical kind is read first; raw SDK and ``httpx`` errors
+    that reach this layer unclassified are matched on their status code.
     """
     failure = find_execution_failure(error)
-    if failure is not None and failure.kind in UNCHARGED_KINDS:
-        return False
-    if _status_from_error(error) != 400:
-        return True
-    # A bare 400 with no canonical kind: request-shaped unless classification
-    # reads it as a throttle or an upstream fault wearing a 400 (some gateways
-    # report "rate limit" that way), which does implicate the credential.
-    return retryable_transient_status(error) is not None
-
-
-def _failure_class(status: int | None) -> str:
-    """Map a classified upstream status onto the shared engine's classes."""
+    if failure is not None:
+        if failure.kind is FailureKind.RATE_LIMIT:
+            return "rate_limit"
+        if failure.kind in CREDENTIAL_SHAPED_KINDS:
+            return "auth"
+    if isinstance(error, openai.AuthenticationError | openai.PermissionDeniedError):
+        return "auth"
+    if isinstance(error, openai.RateLimitError):
+        return "rate_limit"
+    # A status carried without a matching kind: a provider that reported a 401
+    # or a 429 under a coarser classification still described the credential.
+    status = _status_from_error(error) if failure is None else failure.status_code
     if status in AUTH_STATUS_CODES:
         return "auth"
     if status == 429:
         return "rate_limit"
-    return "transient"
+    return None
+
+
+def error_justifies_rotation(error: BaseException) -> bool:
+    """Whether trying a different credential could resolve this failure.
+
+    True for the two key-shaped signals and for transport faults, where a
+    different key means a different connection. False for everything else --
+    a timeout, a 5xx, a 410, any 4xx -- because every key in the pool talks to
+    the same model and would meet the same answer. Those raise out of the
+    rotating loop so the *fallback chain* gets its turn instead.
+    """
+    failure = find_execution_failure(error)
+    if failure is not None:
+        return (
+            failure.kind in ROTATING_KINDS
+            or failure.status_code in AUTH_STATUS_CODES
+            or failure.status_code == 429
+        )
+    if credential_failure_class(error) is not None:
+        return True
+    if isinstance(
+        error, openai.APITimeoutError | httpx.TimeoutException | TimeoutError
+    ):
+        # ``openai.APITimeoutError`` subclasses ``APIConnectionError``, so the
+        # transport check below would otherwise read a model that never
+        # answered as a broken socket and spend the rest of the pool on it.
+        return False
+    return retryable_upstream_transport_error(error)
 
 
 class CredentialRotationState:
@@ -181,14 +164,19 @@ class CredentialRotationState:
         self,
         key_count: int,
         policy: str = "single",
-        circuit_threshold: int = CIRCUIT_OPEN_THRESHOLD,
         *,
+        rate_limit_seconds: float,
+        lockout_tiers: Sequence[float],
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if policy == "on_error":
             policy = "failover"
         canonical = policy if policy in ROTATION_POLICIES else "single"
-        tuning = replace(PROVIDER_TUNING, circuit_threshold=circuit_threshold)
+        tuning = replace(
+            PROVIDER_TUNING,
+            rate_limit_seconds=rate_limit_seconds,
+            lockout_tiers=tuple(lockout_tiers),
+        )
         self._engine = RotationEngine(
             key_count, policy=canonical, tuning=tuning, clock=clock
         )
@@ -216,10 +204,6 @@ class CredentialRotationState:
             self._engine.mark_acquired(selected)
             return selected
 
-    def release_probe(self, index: int) -> None:
-        """Clear a half-open probe reservation without judging the credential."""
-        self._engine.release_probe(index)
-
     async def report_success(self, index: int) -> None:
         """Mark a credential as healthy after a successful request."""
         async with self._lock:
@@ -230,41 +214,38 @@ class CredentialRotationState:
     ) -> bool:
         """Record a failure for one credential; return whether to rotate.
 
-        The return value tells the caller whether trying the next credential
-        could resolve this request (auth/rate-limit/5xx/transport errors),
-        as opposed to a plain 400 that would fail identically on every key.
-
-        Health is only updated for failures that implicate the credential.
-        Request-shaped failures -- a malformed body, a prompt past the model's
-        context window -- and route-shaped ones -- a model that produced no
-        first token in time -- leave the credential's health record
-        byte-identical: they are a property of the request or of the model, so
-        escalating one key's cooldown ladder for them (and, three in a row, its
-        circuit breaker) would empty a pool of perfectly good keys. A timeout
-        still returns ``True`` here: rotating to another key may well be
-        faster, it just must not cost the key it left behind any health.
+        The two answers are independent. Health moves only for a key-shaped
+        signal (401/403, or a 429 and the window the provider asked for).
+        Rotation additionally covers transport faults. Everything else returns
+        ``False`` with the credential untouched, which raises out of the
+        rotating loop and lets the fallback chain try the next model -- the
+        outcome the user asked for and the one the numbers support.
         """
         rotate = error_justifies_rotation(error)
-        status = _status_from_error(error)
-        if not failure_implicates_credential(error):
+        failure_class = credential_failure_class(error)
+        failure = find_execution_failure(error)
+        if failure_class is None:
             logger.debug(
-                "Credential %d health unchanged: failure is not attributable "
-                "to the credential (kind=%s, status=%s, model=%s)",
+                "Credential %d health unchanged: failure is not credential-shaped "
+                "(kind=%s, status=%s, model=%s, rotate=%s)",
                 index,
-                getattr(find_execution_failure(error), "kind", None),
-                status,
+                getattr(failure, "kind", None),
+                _status_from_error(error),
                 model or "unknown",
+                rotate,
             )
             return rotate
-        failure_class = _failure_class(status)
+        # ``None`` means the provider published no Retry-After, which the
+        # engine answers with the operator's RATE_LIMIT_COOLDOWN_SECONDS --
+        # never with a number invented here.
+        retry_after = (
+            failure.retry_after_seconds
+            if failure_class == "rate_limit" and failure is not None
+            else None
+        )
         async with self._lock:
-            self._engine.fail(index, failure_class)
+            self._engine.fail(index, failure_class, retry_after=retry_after)
         return rotate
-
-    async def report_rate_limit(self, index: int) -> None:
-        """Bump the escalation tier without changing health state."""
-        async with self._lock:
-            self._engine.note_rate_limit(index)
 
     async def reset_key(self, index: int) -> bool:
         """Manually restore one credential to HEALTHY."""
@@ -303,12 +284,10 @@ class CredentialRotationState:
                 "state": slot.state.name,
                 "request_count": slot.requests,
                 "failure_count": slot.failures,
-                "consecutive_failures": slot.consecutive_failures,
                 "auth_failures": slot.auth_failures,
-                "tier": slot.tier,
+                "rate_limits": slot.rate_limits,
                 "cooldown_remaining": max(0.0, slot.cooldown_until - now),
                 "lockout_remaining": max(0.0, slot.lockout_until - now),
-                "is_probing": slot.is_probing,
             }
             for slot in self._engine.slots()
         ]

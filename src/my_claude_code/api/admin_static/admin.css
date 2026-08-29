@@ -764,11 +764,6 @@ textarea:focus-visible,
   border-color: var(--error, #f87171);
 }
 
-.key-health-half-open {
-  color: var(--accent, #818cf8);
-  border-color: var(--accent, #818cf8);
-}
-
 /* Forms layout */
 .form-sections {
   display: grid;

@@ -9,7 +9,7 @@ from my_claude_code.config.credentials import parse_credential_keys
 from my_claude_code.config.env_files import env_file_override
 from my_claude_code.config.provider_catalog import ProviderDescriptor
 from my_claude_code.config.provider_registry import get_provider_registry
-from my_claude_code.config.settings import Settings
+from my_claude_code.config.settings import Settings, parse_lockout_tiers
 from my_claude_code.providers.base import ProviderConfig
 
 CREDENTIAL_ROTATION_POLICIES = frozenset(
@@ -125,7 +125,10 @@ def build_provider_config(
         commit_holdback_seconds=settings.stream_commit_holdback_seconds,
         fallback_on_reasoning_only=settings.fallback_on_reasoning_only,
         rate_limit_cooldown_seconds=settings.rate_limit_cooldown_seconds,
-        circuit_threshold=settings.credential_circuit_threshold,
+        retry_backoff_base_seconds=settings.provider_retry_backoff_base_seconds,
+        retry_backoff_max_seconds=settings.provider_retry_backoff_max_seconds,
+        retry_backoff_jitter_seconds=settings.provider_retry_backoff_jitter_seconds,
+        lockout_tiers=parse_lockout_tiers(settings.credential_lockout_tiers),
     )
 
 
@@ -161,6 +164,9 @@ def _build_dynamic_provider_config(
         commit_holdback_seconds=settings.stream_commit_holdback_seconds,
         fallback_on_reasoning_only=settings.fallback_on_reasoning_only,
         rate_limit_cooldown_seconds=settings.rate_limit_cooldown_seconds,
-        circuit_threshold=settings.credential_circuit_threshold,
+        retry_backoff_base_seconds=settings.provider_retry_backoff_base_seconds,
+        retry_backoff_max_seconds=settings.provider_retry_backoff_max_seconds,
+        retry_backoff_jitter_seconds=settings.provider_retry_backoff_jitter_seconds,
+        lockout_tiers=parse_lockout_tiers(settings.credential_lockout_tiers),
         credential_rotation=rotation,
     )

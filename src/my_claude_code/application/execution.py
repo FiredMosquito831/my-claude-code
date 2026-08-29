@@ -10,6 +10,7 @@ from typing import Literal, cast
 from loguru import logger
 
 from my_claude_code.config.constants import (
+    FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT,
     FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
     FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
     FALLBACK_STALL_TIMEOUT_DEFAULT,
@@ -27,7 +28,6 @@ from my_claude_code.core.anthropic.stream_contracts import (
     REASONING_HEARTBEAT,
     sse_carries_content,
 )
-from my_claude_code.core.attempt_budget import set_attempt_deadline
 from my_claude_code.core.credential_attribution import record_credential
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import (
@@ -135,19 +135,17 @@ class RouteExecutionPolicy:
     # is a property of this model's window, which is exactly what a chain of
     # differently-sized models can answer. It classifies as CONTEXT_LENGTH.
     skip_kinds: frozenset[FailureKind] = frozenset({FailureKind.INVALID_REQUEST})
+    # Stepping a model over costs the chain a slot, so a wait worth having is
+    # one that outlives the hop it saves: sub-second remainders logged as
+    # "cooldown for 0s" three requests running were never worth routing around
+    # in the first place. 0 steps over any cooldown at all.
+    cooldown_step_over_floor: float = FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT
 
 
 # The wait is scheduled for exactly the remaining stall budget, so by the time
 # it elapses the measured gap lands a hair under the limit. Without a tolerance
 # the decision below would attribute every stall to the request budget instead.
 _STALL_DECISION_TOLERANCE = 0.05
-
-
-# Stepping a model over costs the chain a slot, so a wait worth having is
-# one that outlives the hop it saves: sub-second remainders logged as
-# "cooldown for 0s" three requests running were never worth routing
-# around in the first place.
-_COOLDOWN_STEP_OVER_FLOOR_SECONDS = 5.0
 
 
 class _DeadlineExceeded(Exception):
@@ -566,12 +564,6 @@ class ProviderExecutor:
                     if attempt_deadline is None
                     else max(0.0, attempt_deadline - time.monotonic())
                 )
-                # A rotating provider has to subdivide this share across its
-                # credentials, or the first key it tries spends the whole
-                # attempt and the rest of the pool is never reached. The
-                # executor still owns the outer bound; this only tells the
-                # provider what that bound is.
-                set_attempt_deadline(attempt_deadline)
 
                 provider_stream: AsyncIterator[str] | None = None
                 committed = False
@@ -1046,7 +1038,7 @@ class ProviderExecutor:
             cooldown = (
                 provider.throttle_remaining() if position + 1 < len(order) else 0.0
             )
-            if cooldown >= _COOLDOWN_STEP_OVER_FLOOR_SECONDS:
+            if cooldown >= self._policy.cooldown_step_over_floor:
                 logger.warning(
                     "MODEL COOLDOWN: '{}' is rate-limited for {:.0f}s;"
                     " trying the next model instead of waiting",
@@ -1167,6 +1159,7 @@ def route_execution_policy(settings: Settings) -> RouteExecutionPolicy:
         stall_timeout=settings.fallback_stall_timeout,
         reasoning_answer_timeout=settings.fallback_reasoning_answer_timeout,
         skip_kinds=parse_failure_kinds(settings.fallback_skip_kinds),
+        cooldown_step_over_floor=settings.fallback_cooldown_step_over_floor,
     )
 
 
