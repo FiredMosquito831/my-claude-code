@@ -9,6 +9,7 @@ this proxy actually routes to, so a regression shows up as a model the user
 recognises rather than an abstract one.
 """
 
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -24,6 +25,7 @@ from my_claude_code.application.routing import (
 from my_claude_code.config.constants import (
     ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     MAX_OUTPUT_TOKENS_CEILING,
+    MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
     MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
     MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
 )
@@ -51,6 +53,7 @@ def resolve(
     unknown_default: int | None = MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
     ceiling: int | None = MAX_OUTPUT_TOKENS_CEILING,
     context_margin: int = MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
+    context_floor: int = MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
     input_tokens: int = 0,
 ) -> int | None:
     """Resolve one budget against the shipped configuration defaults."""
@@ -63,6 +66,7 @@ def resolve(
             unknown_default=unknown_default,
             ceiling=ceiling,
             context_margin=context_margin,
+            context_floor=context_floor,
         ),
         input_tokens=input_tokens,
         model_ref="nvidia_nim/minimaxai/minimax-m3",
@@ -226,6 +230,96 @@ def test_context_margin_of_zero_reserves_nothing():
             context_margin=0,
         )
         == HY3_FREE - 8_000
+    )
+
+
+def test_headroom_above_the_floor_is_still_sent(caplog):
+    """The live case: opencode/hy3-free style, 131,072 context, 100,000 prompt.
+
+    Pinned separately from the bounding test above so the floor cannot quietly
+    start rejecting the requests this path exists to rescue. 30,048 is far
+    above the 4,096 floor, so nothing changes.
+    """
+
+    with caplog.at_level("WARNING"):
+        resolved = resolve(
+            None,
+            limit=LONGCAT,
+            context_length=LONGCAT,
+            input_tokens=100_000,
+        )
+
+    expected = LONGCAT - 100_000 - MAX_OUTPUT_TOKENS_CONTEXT_MARGIN
+    assert resolved == expected == 30_048
+    assert expected > MAX_OUTPUT_TOKENS_CONTEXT_FLOOR
+    assert "MAX TOKENS BOUNDED BY CONTEXT" in caplog.text
+    assert "unchanged" not in caplog.text
+
+
+def test_a_positive_headroom_below_the_floor_leaves_the_request_unmodified(caplog):
+    """max_tokens: 3 technically succeeds, and a one-token answer is worse than
+    a clear error. Below the floor, do what headroom <= 0 already does."""
+
+    with caplog.at_level("WARNING"):
+        resolved = resolve(
+            None,
+            limit=LONGCAT,
+            context_length=LONGCAT,
+            input_tokens=LONGCAT - MAX_OUTPUT_TOKENS_CONTEXT_MARGIN - 3,
+        )
+
+    assert resolved == LONGCAT
+    assert "MAX TOKENS BOUNDED BY CONTEXT" in caplog.text
+    assert "nvidia_nim/minimaxai/minimax-m3" in caplog.text
+    assert str(LONGCAT) in caplog.text  # the context length
+    assert "leaving only 3 output tokens" in caplog.text
+    assert "MAX_OUTPUT_TOKENS_CONTEXT_FLOOR=4096" in caplog.text
+
+
+def test_headroom_exactly_at_the_floor_is_sent():
+    """The floor is inclusive: a budget equal to it is worth sending."""
+
+    assert (
+        resolve(
+            None,
+            limit=LONGCAT,
+            context_length=LONGCAT,
+            input_tokens=LONGCAT
+            - MAX_OUTPUT_TOKENS_CONTEXT_MARGIN
+            - MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
+        )
+        == MAX_OUTPUT_TOKENS_CONTEXT_FLOOR
+    )
+
+
+def test_a_floor_of_zero_restores_the_pre_floor_behaviour():
+    """Operators who want any positive headroom sent can still have it."""
+
+    assert (
+        resolve(
+            None,
+            limit=LONGCAT,
+            context_length=LONGCAT,
+            input_tokens=LONGCAT - MAX_OUTPUT_TOKENS_CONTEXT_MARGIN - 3,
+            context_floor=0,
+        )
+        == 3
+    )
+
+
+def test_the_floor_is_configurable_from_the_environment():
+    # Env values arrive as strings and the model coerces them, which a
+    # precisely-typed kwargs dict cannot express -- same shape as
+    # tests/config/test_limit_bounds.py.
+    overridden: dict[str, Any] = {
+        "_env_file": None,
+        "MAX_OUTPUT_TOKENS_CONTEXT_FLOOR": "8192",
+    }
+    shipped: dict[str, Any] = {"_env_file": None}
+    assert Settings(**overridden).max_output_tokens_context_floor == 8_192
+    assert (
+        Settings(**shipped).max_output_tokens_context_floor
+        == MAX_OUTPUT_TOKENS_CONTEXT_FLOOR
     )
 
 

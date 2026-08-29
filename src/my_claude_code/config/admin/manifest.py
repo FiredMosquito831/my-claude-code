@@ -719,6 +719,22 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "MAX_OUTPUT_TOKENS_CONTEXT_FLOOR",
+        "Smallest bounded budget",
+        "limits",
+        "number",
+        settings_attr="max_output_tokens_context_floor",
+        default="4096",
+        advanced=True,
+        description=(
+            "Smallest output budget the prompt reserve above is allowed to "
+            "produce. When a model's remaining context leaves less than this, "
+            "the request is sent unchanged so the provider reports the real "
+            "context error, instead of succeeding with a budget too small to "
+            "answer with. 0 sends any positive headroom, however small."
+        ),
+    ),
+    ConfigFieldSpec(
         "REASONING_ANSWER_FLOOR_MAX",
         "Answer reserve when thinking",
         "limits",

@@ -9,9 +9,8 @@ HTTP_CONNECT_TIMEOUT_DEFAULT = 10.0
 # can actually emit, that number governs instead (WORKING-NOTES 54).
 ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS = 81920
 
-# Output-token budget for one request. Three separate decisions, three separate
-# names -- fusing them into one expression is how a fallback silently becomes a
-# cap.
+# Output-token budget for one request. Separate decisions, separate names --
+# fusing them into one expression is how a fallback silently becomes a cap.
 #
 # 1. What to send when *no* source knows the model's output limit. A fallback,
 #    never a limit: it supplies a value the client did not give, and it must
@@ -31,6 +30,28 @@ MAX_OUTPUT_TOKENS_CEILING: int | None = None
 #    wraps around the messages; 1,024 is small against any real context window
 #    (the smallest in the catalogue is 4,096) and large enough to cover both.
 MAX_OUTPUT_TOKENS_CONTEXT_MARGIN = 1024
+# 4. The smallest budget that bounding by context is allowed to produce. The
+#    headroom subtraction above is bounded below by 1, not by anything useful:
+#    a catalogue ``context_length`` that is wrong or simply small against a
+#    large prompt can leave a headroom of 3, and a request carrying
+#    ``max_tokens: 3`` succeeds and returns a one-token answer. That reads as
+#    "the model had nothing to say" when it is really "the configuration is
+#    wrong", which is strictly worse than failing. Below this floor the request
+#    is left unmodified so the provider reports the real context error, exactly
+#    as the ``headroom <= 0`` case already does.
+#
+#    4,096 because it has to clear two bars at once. Large enough to be worth
+#    sending: it is the entire output limit many catalogue entries publish, and
+#    it is the smallest context window in the catalogue, so a model given 4,096
+#    output tokens is being asked for no less than a real small model can do --
+#    a tool call plus a genuine answer fits. Small enough not to reject workable
+#    requests: it is a quarter of REASONING_ANSWER_FLOOR_MAX (16,384), which is
+#    the *most* the reasoning split ever holds back for the visible answer and
+#    is applied as ``min(that, output // 2)``. Setting the floor at or near
+#    16,384 would reject prompts the reasoning path itself is content to run at
+#    2,048 answer tokens. A quarter leaves the split its full working range and
+#    still refuses the arbitrarily small budgets this floor exists to stop.
+MAX_OUTPUT_TOKENS_CONTEXT_FLOOR = 4096
 
 # Upper bound on the slice of the output allowance held back for the visible
 # answer when thinking is enabled. Thinking tokens and answer tokens come out of

@@ -35,6 +35,7 @@ from .constants import (
     FALLBACK_TOTAL_TIMEOUT_DEFAULT,
     HTTP_CONNECT_TIMEOUT_DEFAULT,
     MAX_OUTPUT_TOKENS_CEILING,
+    MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
     MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
     MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
     MODEL_VISIBILITY_ALLOW_DEFAULT,
@@ -405,7 +406,7 @@ class Settings(BaseSettings):
 
     # ==================== Output tokens ====================
     # What one request may ask the routed model to generate. The model's own
-    # published limit governs whenever a source has one; these three only cover
+    # published limit governs whenever a source has one; these only cover
     # the cases where it does not, or where the operator wants a hard stop.
     #
     # Used only when nothing published an output limit for the routed model.
@@ -428,6 +429,13 @@ class Settings(BaseSettings):
     max_output_tokens_context_margin: int = Field(
         default=MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
         validation_alias="MAX_OUTPUT_TOKENS_CONTEXT_MARGIN",
+    )
+    # Smallest budget that bounding by remaining context may produce. Below it
+    # the request is sent unmodified so the provider names the real context
+    # error, rather than succeeding with a max_tokens too small to answer with.
+    max_output_tokens_context_floor: int = Field(
+        default=MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
+        validation_alias="MAX_OUTPUT_TOKENS_CONTEXT_FLOOR",
     )
     # Most tokens ever held back from the output allowance for the visible
     # answer when thinking is on. Applied as

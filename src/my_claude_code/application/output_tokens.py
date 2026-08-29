@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from loguru import logger
 
 from my_claude_code.config.constants import (
+    MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
     MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
     REASONING_ANSWER_FLOOR_MAX,
 )
@@ -46,6 +47,10 @@ class OutputTokenLimits:
     unknown_default: int | None = None
     ceiling: int | None = None
     context_margin: int = MAX_OUTPUT_TOKENS_CONTEXT_MARGIN
+    # Smallest budget the headroom bound may produce. Travels with the margin
+    # because the two describe one subtraction: how much to hold back, and how
+    # little a result may be before it is not worth sending at all.
+    context_floor: int = MAX_OUTPUT_TOKENS_CONTEXT_FLOOR
     # Thinking tokens come out of this same allowance, so the answer
     # reserve travels with it rather than in a parallel record: the two
     # numbers only mean anything together (WORKING-NOTES 54).
@@ -159,6 +164,14 @@ def _apply_context_headroom(
     negative ``max_tokens`` turns a prompt that is merely too long into a
     malformed request, and the provider's own error names the real window far
     better than a guess made here can.
+
+    A *small but positive* headroom is left alone for the same reason. The
+    subtraction is bounded below by 1, so a wrong or simply small published
+    context can produce a budget of 3, and a request carrying ``max_tokens:
+    3`` succeeds -- returning a one-token answer that reads as a useless model
+    rather than as a misconfigured catalogue. Below ``context_floor`` the
+    honest outcome is the one the ``headroom <= 0`` branch already takes: send
+    the request unchanged and let the provider report the real error.
     """
 
     context_length = limits.context_length
@@ -166,6 +179,20 @@ def _apply_context_headroom(
         return resolved
     headroom = context_length - input_tokens - limits.context_margin
     if headroom <= 0 or headroom >= resolved:
+        return resolved
+    if headroom < limits.context_floor:
+        logger.warning(
+            "MAX TOKENS BOUNDED BY CONTEXT: '{}' has a {}-token context and the"
+            " prompt uses {}, leaving only {} output tokens -- below"
+            " MAX_OUTPUT_TOKENS_CONTEXT_FLOOR={}. Sending the request"
+            " unchanged so the provider reports the real context error; the"
+            " published context length for this model is probably wrong",
+            model_ref,
+            context_length,
+            input_tokens,
+            headroom,
+            limits.context_floor,
+        )
         return resolved
     logger.warning(
         "MAX TOKENS BOUNDED BY CONTEXT: '{}' has a {}-token context and the"
