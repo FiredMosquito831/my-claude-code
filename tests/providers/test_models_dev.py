@@ -13,6 +13,7 @@ from my_claude_code.application.model_metadata import (
     ModelReasoningCapability,
     ProviderModelInfo,
 )
+from my_claude_code.core import model_ids
 from my_claude_code.providers.runtime import models_dev
 from my_claude_code.providers.runtime.models_dev import (
     enrich_model_infos,
@@ -212,7 +213,7 @@ async def test_fetch_returns_none_on_httpx_failure(
 
 
 def test_normalize_candidates() -> None:
-    candidates = models_dev._normalize_candidates("Acme/Llama-3.3-70B")
+    candidates = model_ids.normalize_candidates("Acme/Llama-3.3-70B")
 
     assert "acme/llama-3.3-70b" in candidates
     assert "llama-3.3-70b" in candidates
@@ -1234,6 +1235,17 @@ _CROSS_INDEX = {
             }
         }
     },
+    # Publishes a vocabulary but no limit, so the two votes have deliberately
+    # different denominators: four rows match the name, three report a limit,
+    # three report a vocabulary.
+    "delta": {
+        "models": {
+            "tencent/hy3": {
+                "reasoning": True,
+                "reasoning_options": [{"type": "effort", "values": ["low", "high"]}],
+            }
+        }
+    },
 }
 
 
@@ -1249,7 +1261,9 @@ def test_cross_provider_uses_the_modal_value_not_the_min_or_max(
     # 64000 and one says 262144, and the answer is the value two agreed on.
     match = models_dev.cross_provider_match("nous_portal", "tencent/hy3:free", path)
     assert match is not None
-    assert match.match_count == 3
+    assert match.match_count == 4
+    # Three of the four matched rows publish a limit; the ratio is over those.
+    assert match.output_reporters == 3
     assert match.output_agreement == pytest.approx(2 / 3)
     assert limit == 64000
 
@@ -1300,8 +1314,12 @@ def test_cross_provider_resolution_is_logged_as_approximate(
     line = records[0]
     assert "APPROXIMATE" in line
     assert "no bucket for nous_portal" in line
-    assert "matches=3" in line
-    assert "67% agreement" in line
+    # The rung that answered, by number and by name.
+    assert "tier 6 (cross_provider_tag_stripped)" in line
+    assert "across 4 rows" in line
+    # The real agreement, over the rows that actually reported a limit --
+    # never "100%" off a single sample.
+    assert "67% agreement across 3 reporting rows" in line
     assert "64000" in line
 
 

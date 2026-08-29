@@ -26,6 +26,7 @@ from my_claude_code.config.model_overrides import (
     reset_model_overrides_cache,
 )
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.model_visibility import ModelVisibility
 from my_claude_code.core.reasoning import ReasoningEffort
 from tests.api.support import create_test_app, provider_manager_for_app
@@ -398,6 +399,8 @@ def test_a_provider_reported_capability_is_labelled_authoritative():
         "source": "provider",
         "source_label": "provider /models",
         "approximate": False,
+        "tier": 1,
+        "tier_label": "provider /models, exact id",
     }
     assert payload["reasoning"]["can_reason"]["source"] == "provider"
     assert payload["reasoning"]["mandatory"]["value"] is True
@@ -422,27 +425,32 @@ def test_an_unreported_capability_says_unknown_rather_than_guessing(
     assert payload["reasoning"]["can_reason"]["source"] == "unknown"
 
 
-def test_the_approximate_tier_is_marked_and_carries_its_sample_size(
-    monkeypatch, tmp_path
-):
-    """One cross-provider match reporting 100% agreement is still one sample."""
+def test_the_approximate_tier_is_marked_and_carries_its_sample_size(monkeypatch):
+    """An approximate answer must show its rung, its sample and real agreement."""
 
     monkeypatch.setattr(
         "my_claude_code.api.model_admin.models_dev_describes_provider",
         lambda provider_id: False,
     )
     monkeypatch.setattr(
-        "my_claude_code.api.model_admin.model_output_limit_from_models_dev",
-        lambda provider_id, model_id: 1048576,
+        "my_claude_code.api.model_admin.model_output_limit_tiered",
+        lambda provider_id, model_id: (
+            512000,
+            ResolutionTier.CROSS_PROVIDER_BARE_UNTAGGED,
+        ),
     )
     monkeypatch.setattr(
-        "my_claude_code.api.model_admin.model_reasoning_capability_from_models_dev",
-        lambda provider_id, model_id: ModelReasoningCapability(can_reason=True),
+        "my_claude_code.api.model_admin.model_reasoning_capability_tiered",
+        lambda provider_id, model_id: (
+            ModelReasoningCapability(can_reason=True),
+            {"can_reason": ResolutionTier.CROSS_PROVIDER_BARE_UNTAGGED},
+        ),
     )
 
     class _Match:
-        match_count = 1
-        output_agreement = 1.0
+        match_count = 51
+        output_agreement = 0.6
+        output_reporters = 45
         capability = ModelReasoningCapability(can_reason=True)
 
     monkeypatch.setattr(
@@ -453,12 +461,69 @@ def test_the_approximate_tier_is_marked_and_carries_its_sample_size(
     payload = capability_payload("commandcode", "minimax/minimax-m3-free", None)
 
     output = payload["max_output_tokens"]
-    assert output["value"] == 1048576
+    assert output["value"] == 512000
     assert output["source"] == "approximate"
     assert output["approximate"] is True
-    assert output["match_count"] == 1
-    assert output["agreement"] == 1.0
+    assert output["tier"] == 8
+    assert output["tier_label"] == "cross-provider, bare model"
+    assert output["match_count"] == 51
+    assert output["agreement"] == 0.6
+    assert output["reporters"] == 45
     assert payload["reasoning"]["can_reason"]["source"] == "approximate"
+    assert payload["reasoning"]["can_reason"]["tier"] == 8
+
+
+def test_an_under_sampled_approximate_limit_renders_as_unknown(monkeypatch):
+    """The guard's whole point: no number, so no tier and no agreement."""
+
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.models_dev_describes_provider",
+        lambda provider_id: False,
+    )
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.model_output_limit_tiered",
+        lambda provider_id, model_id: (None, None),
+    )
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.model_reasoning_capability_tiered",
+        lambda provider_id, model_id: (
+            ModelReasoningCapability(can_reason=True),
+            {"can_reason": ResolutionTier.CROSS_PROVIDER_EXACT},
+        ),
+    )
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.cross_provider_match",
+        lambda provider_id, model_id: None,
+    )
+
+    payload = capability_payload("commandcode", "minimax/minimax-m3-free", None)
+
+    assert payload["max_output_tokens"]["value"] is None
+    assert payload["max_output_tokens"]["source"] == "unknown"
+    assert payload["max_output_tokens"]["tier"] is None
+    assert "agreement" not in payload["max_output_tokens"]
+    assert payload["reasoning"]["can_reason"]["tier"] == 5
+
+
+def test_a_tag_stripped_provider_hit_is_tier_two_not_tier_one():
+    """Tier 2 is still the provider's own answer, but must not pass as exact."""
+
+    info = ProviderModelInfo("minimax/minimax-m3", max_output_tokens=512000)
+
+    payload = capability_payload(
+        "commandcode",
+        "minimax/minimax-m3-free",
+        info,
+        ResolutionTier.PROVIDER_TAG_STRIPPED,
+    )
+
+    assert payload["max_output_tokens"]["value"] == 512000
+    assert payload["max_output_tokens"]["source"] == "provider"
+    assert payload["max_output_tokens"]["approximate"] is False
+    assert payload["max_output_tokens"]["tier"] == 2
+    assert (
+        payload["max_output_tokens"]["tier_label"] == "provider /models, tag stripped"
+    )
 
 
 def test_a_configured_model_with_no_discovered_metadata_still_appears():

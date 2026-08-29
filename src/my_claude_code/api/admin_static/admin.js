@@ -10143,8 +10143,9 @@ function buildEffectiveTable(rows) {
 /* Read-only. The point of this panel is that a number here can come from the
    provider's own /models, from models.dev, or from a vote across same-named
    rows in *other* providers' buckets -- and the third is regularly wrong. So
-   the tier is rendered beside every field, and the approximate one says how
-   many rows voted and how far they agreed. */
+   the exact ladder rung (1-8) is rendered beside every field, and an
+   approximate one additionally says how many rows voted and how far they
+   agreed. */
 function buildCapabilityPanel(capabilities, labels) {
   const wrap = document.createElement("div");
   wrap.className = "models-capabilities";
@@ -10194,9 +10195,20 @@ function buildCapabilityRow(label, field, labels) {
   badge.className = `models-source models-source-${field.source}`;
   badge.textContent = field.source_label || labels[field.source] || field.source;
   source.appendChild(badge);
+  // The exact rung of the resolution ladder, not just the coarse badge: a
+  // "provider /models" answer that matched the id exactly reads very
+  // differently from one that only matched after the pricing tag came off.
+  if (field.tier) {
+    const tier = document.createElement("span");
+    tier.className = "models-approx-note";
+    tier.textContent = `tier ${field.tier}: ${field.tier_label || ""}`.trim();
+    source.appendChild(tier);
+  }
   if (field.approximate) {
     const warn = document.createElement("span");
     warn.className = "models-approx-note";
+    // Agreement is over the rows that actually published the field, which is
+    // never the same as the number of rows that merely share the name.
     const agreement =
       field.agreement === null || field.agreement === undefined
         ? "agreement unreported"
@@ -10205,7 +10217,12 @@ function buildCapabilityRow(label, field, labels) {
       field.match_count === null || field.match_count === undefined
         ? "an unknown number of"
         : String(field.match_count);
-    warn.textContent = `guessed from ${matches} same-named row(s), ${agreement}`;
+    const reporters =
+      field.reporters === null || field.reporters === undefined
+        ? ""
+        : ` across ${field.reporters} that published one`;
+    warn.textContent =
+      `guessed from ${matches} same-named row(s), ${agreement}${reporters}`;
     source.appendChild(warn);
   }
   if (field.note) {

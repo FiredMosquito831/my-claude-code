@@ -19,7 +19,7 @@ import os
 import threading
 import uuid
 from collections import Counter
-from collections.abc import Callable, Hashable, Iterable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,6 +33,13 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
 )
 from my_claude_code.config.paths import config_dir_path
+from my_claude_code.core.model_ids import (
+    STRIPPABLE_MODEL_ID_TAGS,
+    ResolutionTier,
+    candidate_ladder,
+    normalize_candidates,
+    strip_model_id_tag,
+)
 from my_claude_code.core.reasoning import EFFORT_BY_VALUE, ReasoningEffort
 from my_claude_code.providers.reasoning_vocabulary import (
     provider_reasoning_vocabulary,
@@ -241,21 +248,6 @@ def _swallow_refresh_outcome(task: asyncio.Task[bool]) -> None:
     task.exception()
 
 
-def _normalize_candidates(model_id: str) -> set[str]:
-    """Return normalized match keys for one model id."""
-    lowered = model_id.strip().lower()
-    if not lowered:
-        return set()
-    candidates = {lowered}
-    _prefix, separator, remainder = lowered.partition("/")
-    if separator and remainder:
-        candidates.add(remainder)
-    last_segment = lowered.rsplit("/", 1)[-1]
-    if last_segment:
-        candidates.add(last_segment)
-    return candidates
-
-
 @dataclass(frozen=True, slots=True)
 class _ModelsDevModelMetadata:
     context_length: int | None
@@ -289,7 +281,7 @@ def _flatten_index(index: Mapping[str, Any]) -> dict[str, _ModelsDevModelMetadat
             if not isinstance(model_id, str) or not isinstance(metadata, Mapping):
                 continue
             parsed = _parse_models_dev_metadata(metadata)
-            for candidate in _normalize_candidates(model_id):
+            for candidate in normalize_candidates(model_id):
                 existing = flattened.get(candidate)
                 flattened[candidate] = (
                     parsed if existing is None else _merge_metadata(existing, parsed)
@@ -401,7 +393,7 @@ def _provider_bucket_metadata(
         if not isinstance(model_id, str) or not isinstance(metadata, Mapping):
             continue
         parsed = _parse_models_dev_metadata(metadata)
-        for candidate in _normalize_candidates(model_id):
+        for candidate in normalize_candidates(model_id):
             scoped.setdefault(candidate, parsed)
     return scoped
 
@@ -414,7 +406,7 @@ def _match_metadata(
         (
             table[candidate]
             for candidate in sorted(
-                _normalize_candidates(model_id), key=len, reverse=True
+                normalize_candidates(model_id), key=len, reverse=True
             )
             if candidate in table
         ),
@@ -611,42 +603,11 @@ PROVIDER_ID_ALIASES: dict[str, str] = {
 # allowed to read outside it, because a wrong same-name row would then
 # override its own provider's authoritative one.
 
-# Pricing/routing/capability tags some providers accept in a model ref but
-# models.dev does not list (e.g. "deepseek/deepseek-r1:free"). Every tag here
-# alters price, routing, or a non-reasoning capability and leaves thinking
-# behaviour untouched, so stripping it is safe by the same logic as ":free".
-# ":online" and ":extended" are OpenRouter request suffixes a user may type;
-# ":discounted" appears in the upstream index itself.
-#
-# Strictly allow-listed, because the excluded tags ARE the reasoning
-# difference: ":thinking" (69 occurrences upstream), numeric budget tags
-# (":32000", ":32768", ":8192", ":1024", ":64000") and effort tags (":low",
-# ":medium", ":high", ":max") are NEVER stripped -- models.dev ships
-# "nano-gpt/claude-opus-4-thinking:32000" and ":32768", and
-# "gemini-2.5-flash-preview:thinking" -- so stripping those would be wrong in
-# exactly the dimension configured here.
-_STRIPPABLE_MODEL_ID_TAGS: frozenset[str] = frozenset(
-    {"free", "nitro", "floor", "online", "extended", "discounted"}
-)
-
-
-def _tag_stripped_candidates(model_id: str) -> set[str]:
-    """Return match keys for ``model_id`` minus a trailing pricing/routing tag.
-
-    Empty when the id carries no tag, or carries a tag outside the allow-list.
-    """
-    head, separator, tag = model_id.strip().lower().rpartition(":")
-    if not separator or "/" in tag:
-        return set()
-    if tag not in _STRIPPABLE_MODEL_ID_TAGS or not head:
-        return set()
-    return _normalize_candidates(head)
-
 
 def _single_tagged_variant[T](bucket: Mapping[str, T], model_id: str) -> T | None:
     """Find the one allow-list-tagged variant of an untagged ``model_id``.
 
-    The reverse of :func:`_tag_stripped_candidates`: a user who configures
+    The reverse of :func:`strip_model_id_tag`: a user who configures
     ``foo`` should still match an index that only lists ``foo:free``. Used ONLY
     when exactly one such variant exists in this bucket -- with both
     ``foo:free`` and ``foo:nitro`` present, picking either would assert a
@@ -655,14 +616,15 @@ def _single_tagged_variant[T](bucket: Mapping[str, T], model_id: str) -> T | Non
     Costs at most one dict lookup per allow-listed tag per candidate, so no
     side index is needed: this stays cheap enough to run per request.
     """
-    for candidate in sorted(_normalize_candidates(model_id), key=len, reverse=True):
+    for candidate in sorted(normalize_candidates(model_id), key=len, reverse=True):
         if ":" in candidate:
             # A query that already carries a tag is the forward case.
             continue
         matches = [
             bucket[key]
-            for tag in sorted(_STRIPPABLE_MODEL_ID_TAGS)
-            if (key := f"{candidate}:{tag}") in bucket
+            for tag in sorted(STRIPPABLE_MODEL_ID_TAGS)
+            for separator in (":", "-")
+            if (key := f"{candidate}{separator}{tag}") in bucket
         ]
         if len(matches) > 1:
             return None
@@ -671,23 +633,40 @@ def _single_tagged_variant[T](bucket: Mapping[str, T], model_id: str) -> T | Non
     return None
 
 
-def _lookup_in_bucket[T](bucket: Mapping[str, T], model_id: str) -> T | None:
-    """Find ``model_id`` in one provider bucket.
+def _lookup_in_bucket_tiered[T](
+    bucket: Mapping[str, T], model_id: str
+) -> tuple[T, ResolutionTier] | None:
+    """Find ``model_id`` in one provider bucket, reporting the rung that hit.
 
-    Exact first, then tag-stripped, then the single allow-list-tagged variant
-    of an untagged query. Never looks outside ``bucket``; an exact hit always
-    beats either fallback, so "x" and "x:free" coexisting keep their own
-    distinct entries.
+    Tier 3 is the id exactly as routed; tier 4 is the same id with its
+    pricing/routing tag stripped, and is also where the reverse case (an
+    untagged query against an index that only lists a tagged variant) lands.
+    Never looks outside ``bucket``; an exact hit always beats either fallback,
+    so "x" and "x:free" coexisting keep their own distinct entries.
     """
-    for candidates in (
-        _normalize_candidates(model_id),
-        _tag_stripped_candidates(model_id),
-    ):
+    stripped = strip_model_id_tag(model_id)
+    rungs: tuple[tuple[ResolutionTier, set[str]], ...] = (
+        (ResolutionTier.MODELS_DEV_BUCKET_EXACT, normalize_candidates(model_id)),
+        (
+            ResolutionTier.MODELS_DEV_BUCKET_TAG_STRIPPED,
+            normalize_candidates(stripped) if stripped is not None else set(),
+        ),
+    )
+    for tier, candidates in rungs:
         for candidate in sorted(candidates, key=len, reverse=True):
             found = bucket.get(candidate)
             if found is not None:
-                return found
-    return _single_tagged_variant(bucket, model_id)
+                return found, tier
+    variant = _single_tagged_variant(bucket, model_id)
+    if variant is None:
+        return None
+    return variant, ResolutionTier.MODELS_DEV_BUCKET_TAG_STRIPPED
+
+
+def _lookup_in_bucket[T](bucket: Mapping[str, T], model_id: str) -> T | None:
+    """The value half of :func:`_lookup_in_bucket_tiered`."""
+    found = _lookup_in_bucket_tiered(bucket, model_id)
+    return None if found is None else found[0]
 
 
 def _parse_reasoning_capability(
@@ -763,7 +742,7 @@ def _build_reasoning_index(
             if not isinstance(model_id, str) or not isinstance(metadata, Mapping):
                 continue
             capability = _parse_reasoning_capability(metadata)
-            for candidate in _normalize_candidates(model_id):
+            for candidate in normalize_candidates(model_id):
                 per_model.setdefault(candidate, capability)
         if per_model:
             built[provider_id] = per_model
@@ -809,6 +788,18 @@ def model_reasoning_capability_from_models_dev(
     before any admin refresh has ever run, and it is a pure, cheap, memoized
     lookup: safe to call per request.
     """
+    return model_reasoning_capability_tiered(provider_id, model_id, path)[0]
+
+
+def model_reasoning_capability_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[ModelReasoningCapability | None, Mapping[str, ResolutionTier]]:
+    """As above, plus the ladder rung that stated each field.
+
+    Tiers 3-4 when models.dev describes this provider (the whole record comes
+    off one row, so every stated field shares that rung); tiers 5-8 per field
+    when it does not.
+    """
     reasoning_index = _cached_reasoning_index(path)
     bucket = reasoning_index.get(provider_id)
     if bucket is None:
@@ -817,10 +808,20 @@ def model_reasoning_capability_from_models_dev(
             bucket = reasoning_index.get(alias)
     if bucket is None:
         if _has_models_dev_bucket(_cached_raw_index(path), provider_id):
-            return None
+            return None, {}
         match = cross_provider_match(provider_id, model_id, path)
-        return match.capability if match is not None else None
-    return _lookup_in_bucket(bucket, model_id)
+        if match is None:
+            return None, {}
+        return match.capability, match.capability_tiers
+    found = _lookup_in_bucket_tiered(bucket, model_id)
+    if found is None:
+        return None, {}
+    capability, tier = found
+    return capability, {
+        name: tier
+        for name in (*_BOOLEAN_CAPABILITY_FIELDS, "supported_efforts")
+        if getattr(capability, name) is not None
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -846,8 +847,22 @@ class CrossProviderMatch:
     output_limit: int | None
     match_count: int
     # Share of the rows reporting an output limit that agreed on the modal
-    # value. ``None`` when none of them reported one.
+    # value. ``None`` when too few of them reported one to vote at all.
     output_agreement: float | None
+    # How many of the matched rows published an output limit / an effort
+    # vocabulary. These are the denominators of the two agreement ratios and
+    # the quantities the minimum-sample guard is applied to -- ``match_count``
+    # counts rows that merely share the name, most of which state neither.
+    output_reporters: int
+    efforts_reporters: int
+    efforts_agreement: float | None
+    # The tightest rung of the ladder that matched any rows at all (tier 5-8).
+    tier: ResolutionTier
+    # The rung that actually supplied each field. ``None``/absent means the
+    # minimum-sample guard withheld it and the field is unknown, which is not
+    # the same as a rung stating it is unsupported.
+    output_tier: ResolutionTier | None
+    capability_tiers: Mapping[str, ResolutionTier]
 
 
 def _build_cross_provider_index(
@@ -878,15 +893,49 @@ def _build_cross_provider_index(
                     else None
                 ),
             )
-            for candidate in _normalize_candidates(model_id):
+            for candidate in normalize_candidates(model_id):
                 built.setdefault(candidate, []).append(row)
     return {candidate: tuple(rows) for candidate, rows in built.items()}
 
 
+# How many matching rows must actually state a field before the approximate
+# tier is allowed to answer with it.
+#
+# Numbers and vocabularies: three. One reporter is not a vote -- it is a
+# transcription, and it always "agrees" with itself, which is how a single
+# models.dev row credited one gateway's free model with a 1,048,576-token
+# output limit at "100% agreement" when the modal value across the ~51 hosts
+# that actually serve it is 512,000 and NVIDIA serves it at 16,384. Two cannot
+# break a tie from evidence. Three is the smallest sample where the modal
+# value can be a real majority rather than an arbitrary pick, so below it the
+# honest answer is unknown and the caller falls through to its own default.
+MIN_APPROXIMATE_NUMERIC_REPORTERS = 3
+MIN_APPROXIMATE_VOCABULARY_REPORTERS = 3
+# Booleans: one. Measured on the live 2026-08 index, same-named rows across
+# providers are near-unanimous about whether a model reasons at all (28/28,
+# 32/32, 50/51), because that is a property of the model rather than of the
+# deployment. Limits are the opposite -- they are exactly what each host
+# chooses -- which is why the guard differs per field rather than per tier.
+MIN_APPROXIMATE_BOOLEAN_REPORTERS = 1
+
+
+@dataclass(frozen=True, slots=True)
+class _Vote[T]:
+    """A modal value plus the evidence behind it."""
+
+    value: T
+    agreement: float
+    reporters: int
+
+
 def _modal[T: Hashable](
-    values: Iterable[T | None], tie_break: Callable[[T], Any]
-) -> tuple[T, float] | None:
-    """Return the most common non-None value and how many reporters agreed.
+    reported: Sequence[T], tie_break: Callable[[T], Any], minimum: int
+) -> _Vote[T] | None:
+    """Return the most common value, the agreement, and the sample size.
+
+    ``reported`` is only the rows that stated the field; ``None`` comes back
+    when fewer than ``minimum`` of them did, because an under-sampled field is
+    unknown, never a guess.
 
     Ties are broken by ``tie_break`` descending, which every caller points at
     the more capable option (True over False, the larger limit, the larger
@@ -894,37 +943,83 @@ def _modal[T: Hashable](
     when the evidence is split, do not be the source that shrinks a model
     below its declared capability.
     """
-    reported = [value for value in values if value is not None]
-    if not reported:
+    if len(reported) < minimum:
         return None
     counts = Counter(reported)
     winner = max(counts, key=lambda value: (counts[value], tie_break(value)))
-    return winner, counts[winner] / len(reported)
+    return _Vote(winner, counts[winner] / len(reported), len(reported))
+
+
+_BOOLEAN_CAPABILITY_FIELDS: tuple[str, ...] = (
+    "can_reason",
+    "supports_effort_control",
+    "supports_toggle_control",
+    "supports_budget_control",
+    "mandatory",
+    "default_enabled",
+)
+
+
+def _vote_across_rungs[T: Hashable](
+    rungs: tuple[tuple[ResolutionTier, tuple[_CrossProviderRow, ...]], ...],
+    reader: Callable[[_CrossProviderRow], T | None],
+    tie_break: Callable[[T], Any],
+    minimum: int,
+) -> tuple[_Vote[T], ResolutionTier] | None:
+    """Walk the rungs for ONE field and answer from the first that can.
+
+    The ladder runs per field, not per source. A rung that matched rows but
+    whose rows are all silent about this field -- or too few of them to clear
+    the guard -- has not answered it, so the next looser rung gets its turn for
+    that field alone while the fields it did answer stay pinned to it.
+    """
+    for tier, rows in rungs:
+        reported = [value for row in rows if (value := reader(row)) is not None]
+        vote = _modal(reported, tie_break, minimum)
+        if vote is not None:
+            return vote, tier
+    return None
 
 
 def _cross_provider_capability(
-    rows: tuple[_CrossProviderRow, ...],
-) -> ModelReasoningCapability:
-    """Vote each capability field independently across the matching rows."""
-    capabilities = [row.capability for row in rows]
+    rungs: tuple[tuple[ResolutionTier, tuple[_CrossProviderRow, ...]], ...],
+) -> tuple[
+    ModelReasoningCapability,
+    dict[str, ResolutionTier],
+    tuple[_Vote[frozenset[ReasoningEffort]], ResolutionTier] | None,
+]:
+    """Vote each capability field independently, and say which rung won it.
 
-    def vote_bool(reader: Callable[[ModelReasoningCapability], bool | None]):
-        result = _modal((reader(item) for item in capabilities), lambda value: value)
-        return result[0] if result else None
+    Guarded per field: a boolean needs
+    :data:`MIN_APPROXIMATE_BOOLEAN_REPORTERS` reporter, an effort vocabulary
+    needs :data:`MIN_APPROXIMATE_VOCABULARY_REPORTERS`.
+    """
+    tiers: dict[str, ResolutionTier] = {}
+    values: dict[str, bool | None] = {}
+    for name in _BOOLEAN_CAPABILITY_FIELDS:
+        won = _vote_across_rungs(
+            rungs,
+            lambda row, name=name: getattr(row.capability, name),
+            lambda value: value,
+            MIN_APPROXIMATE_BOOLEAN_REPORTERS,
+        )
+        values[name] = won[0].value if won is not None else None
+        if won is not None:
+            tiers[name] = won[1]
 
-    efforts = _modal(
-        (item.supported_efforts for item in capabilities),
+    efforts = _vote_across_rungs(
+        rungs,
+        lambda row: row.capability.supported_efforts,
         lambda value: (len(value), sorted(effort.value for effort in value)),
+        MIN_APPROXIMATE_VOCABULARY_REPORTERS,
     )
-    return ModelReasoningCapability(
-        can_reason=vote_bool(lambda item: item.can_reason),
-        supports_effort_control=vote_bool(lambda item: item.supports_effort_control),
-        supports_toggle_control=vote_bool(lambda item: item.supports_toggle_control),
-        supports_budget_control=vote_bool(lambda item: item.supports_budget_control),
-        supported_efforts=efforts[0] if efforts else None,
-        mandatory=vote_bool(lambda item: item.mandatory),
-        default_enabled=vote_bool(lambda item: item.default_enabled),
+    if efforts is not None:
+        tiers["supported_efforts"] = efforts[1]
+    capability = ModelReasoningCapability(
+        supported_efforts=efforts[0].value if efforts is not None else None,
+        **values,
     )
+    return capability, tiers, efforts
 
 
 _cross_provider_index_lock = threading.Lock()
@@ -958,6 +1053,143 @@ _cross_provider_match_cache: dict[
 ] = {}
 
 
+def _walk_cross_provider_ladder(
+    index: Mapping[str, tuple[_CrossProviderRow, ...]],
+    provider_id: str,
+    model_id: str,
+) -> CrossProviderMatch | None:
+    """Assemble tiers 5-8 and resolve every field down them, tightest first.
+
+    The rungs loosen one thing each, tag before vendor prefix, so the widest
+    set of same-named rows is only ever consulted for a field no narrower
+    reading of the id could answer. That ordering is why
+    ``minimax/minimax-m3-free`` takes anything the vendor-qualified name can
+    state before falling back to every host of the bare ``minimax-m3``, and
+    why a bare name never overrides a vendor-qualified hit.
+    """
+    rungs = tuple(
+        (tier, rows)
+        for tier, candidate in candidate_ladder(model_id)
+        if (rows := index.get(candidate))
+    )
+    if not rungs:
+        return None
+    capability, capability_tiers, efforts = _cross_provider_capability(rungs)
+    output = _vote_across_rungs(
+        rungs,
+        lambda row: row.output_limit,
+        lambda value: value,
+        MIN_APPROXIMATE_NUMERIC_REPORTERS,
+    )
+    match = CrossProviderMatch(
+        capability=capability,
+        output_limit=output[0].value if output is not None else None,
+        match_count=_answering_row_count(rungs, output),
+        output_agreement=output[0].agreement if output is not None else None,
+        output_reporters=(
+            output[0].reporters
+            if output is not None
+            else _best_stated_count(rungs, lambda row: row.output_limit)
+        ),
+        output_tier=output[1] if output is not None else None,
+        efforts_reporters=(
+            efforts[0].reporters
+            if efforts is not None
+            else _best_stated_count(rungs, lambda row: row.capability.supported_efforts)
+        ),
+        efforts_agreement=efforts[0].agreement if efforts is not None else None,
+        capability_tiers=capability_tiers,
+        tier=rungs[0][0],
+    )
+    _log_cross_provider_match(provider_id, model_id, match)
+    return match
+
+
+def _answering_row_count(
+    rungs: tuple[tuple[ResolutionTier, tuple[_CrossProviderRow, ...]], ...],
+    output: tuple[_Vote[int], ResolutionTier] | None,
+) -> int:
+    """How many same-named rows stand behind the headline number.
+
+    The rung that answered the output limit, not the tightest rung that
+    matched anything: on the live index ``minimax/minimax-m3-free`` matches one
+    row at tier 5 whose limit the guard rejects, and the 512,000 actually
+    reported comes off the twelve rows at tier 6. Saying "one match" beside
+    that number would misdescribe it in the same direction the old code did.
+    """
+    if output is not None:
+        return next(len(rows) for tier, rows in rungs if tier is output[1])
+    return len(rungs[0][1])
+
+
+def _best_stated_count(
+    rungs: tuple[tuple[ResolutionTier, tuple[_CrossProviderRow, ...]], ...],
+    reader: Callable[[_CrossProviderRow], object | None],
+) -> int:
+    """The most rows any single rung had stating a field it could not answer.
+
+    Kept only so a withheld field can say how far short of the guard it fell.
+    Zero means nothing anywhere published it, which is a different sentence.
+    """
+    return max(
+        (sum(1 for row in rows if reader(row) is not None) for _tier, rows in rungs),
+        default=0,
+    )
+
+
+def _log_cross_provider_match(
+    provider_id: str, model_id: str, match: CrossProviderMatch
+) -> None:
+    """Say which rung answered each field, on what sample, and how it agreed.
+
+    Never reports an agreement ratio for a field the minimum-sample guard
+    rejected: "100% agreement" off one row is the claim this ladder exists to
+    stop making.
+    """
+    logger.info(
+        "models.dev has no bucket for {}; APPROXIMATE cross-provider match for "
+        "{}: matched at tier {} ({}) across {} rows; output limit {} from {} "
+        "({}); efforts {} from {} ({})",
+        provider_id,
+        model_id,
+        int(match.tier),
+        match.tier.name.lower(),
+        match.match_count,
+        match.output_limit,
+        _tier_note(match.output_tier),
+        _sample_note(
+            match.output_reporters,
+            match.output_agreement,
+            MIN_APPROXIMATE_NUMERIC_REPORTERS,
+        ),
+        (
+            "unknown"
+            if match.capability.supported_efforts is None
+            else sorted(effort.value for effort in match.capability.supported_efforts)
+        ),
+        _tier_note(match.capability_tiers.get("supported_efforts")),
+        _sample_note(
+            match.efforts_reporters,
+            match.efforts_agreement,
+            MIN_APPROXIMATE_VOCABULARY_REPORTERS,
+        ),
+    )
+
+
+def _tier_note(tier: ResolutionTier | None) -> str:
+    """Name the rung that supplied one field, or say none did."""
+    return "no tier" if tier is None else f"tier {int(tier)} ({tier.name.lower()})"
+
+
+def _sample_note(reporters: int, agreement: float | None, minimum: int) -> str:
+    """Human-readable evidence for one voted field."""
+    if agreement is None:
+        if reporters == 0:
+            return "unreported"
+        return f"withheld: {reporters} of the required {minimum} rows reported one"
+    return f"{agreement:.0%} agreement across {reporters} reporting rows"
+
+
 def cross_provider_match(
     provider_id: str, model_id: str, path: Path | None = None
 ) -> CrossProviderMatch | None:
@@ -978,36 +1210,9 @@ def cross_provider_match(
         if cached is not None and cached[0] == mtime and key in cached[1]:
             return cached[1][key]
 
-    rows = _lookup_in_bucket(_cached_cross_provider_index(cache_path), model_id)
-    match: CrossProviderMatch | None = None
-    if rows:
-        output = _modal((row.output_limit for row in rows), lambda value: value)
-        match = CrossProviderMatch(
-            capability=_cross_provider_capability(rows),
-            output_limit=output[0] if output else None,
-            match_count=len(rows),
-            output_agreement=output[1] if output else None,
-        )
-        logger.info(
-            "models.dev has no bucket for {}; APPROXIMATE cross-provider match "
-            "for {}: matches={}, output limit {} ({} agreement), efforts {}",
-            provider_id,
-            model_id,
-            match.match_count,
-            match.output_limit,
-            (
-                "unreported"
-                if match.output_agreement is None
-                else f"{match.output_agreement:.0%}"
-            ),
-            (
-                "unknown"
-                if match.capability.supported_efforts is None
-                else sorted(
-                    effort.value for effort in match.capability.supported_efforts
-                )
-            ),
-        )
+    match = _walk_cross_provider_ladder(
+        _cached_cross_provider_index(cache_path), provider_id, model_id
+    )
 
     with _cross_provider_match_lock:
         cached = _cross_provider_match_cache.get(cache_path)
@@ -1088,7 +1293,7 @@ def _build_output_limit_index(
             output = _positive_int_or_none(limit.get("output"))
             if output is None:
                 continue
-            for candidate in _normalize_candidates(model_id):
+            for candidate in normalize_candidates(model_id):
                 per_model.setdefault(candidate, output)
         if per_model:
             built[provider_id] = per_model
@@ -1124,6 +1329,18 @@ def model_output_limit_from_models_dev(
     Same disk-cache-only, memoized lookup contract as
     :func:`model_reasoning_capability_from_models_dev`; safe per request.
     """
+    return model_output_limit_tiered(provider_id, model_id, path)[0]
+
+
+def model_output_limit_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[int | None, ResolutionTier | None]:
+    """As above, plus the ladder rung the number came from (tier 3-8).
+
+    ``(None, None)`` covers both "no row anywhere" and "the approximate tier
+    matched but too few of its rows published a limit to vote": either way the
+    limit is unknown and the caller must fall through to its own default.
+    """
     limit_index = _cached_output_limit_index(path)
     bucket = limit_index.get(provider_id)
     if bucket is None:
@@ -1132,10 +1349,13 @@ def model_output_limit_from_models_dev(
             bucket = limit_index.get(alias)
     if bucket is None:
         if _has_models_dev_bucket(_cached_raw_index(path), provider_id):
-            return None
+            return None, None
         match = cross_provider_match(provider_id, model_id, path)
-        return match.output_limit if match is not None else None
-    return _lookup_in_bucket(bucket, model_id)
+        if match is None:
+            return None, None
+        return match.output_limit, match.output_tier
+    found = _lookup_in_bucket_tiered(bucket, model_id)
+    return (None, None) if found is None else found
 
 
 def merge_reasoning_capabilities(

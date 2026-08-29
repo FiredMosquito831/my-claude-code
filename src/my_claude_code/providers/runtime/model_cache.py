@@ -8,6 +8,7 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
 )
 from my_claude_code.config.provider_registry import get_provider_registry
+from my_claude_code.core.model_ids import ResolutionTier, strip_model_id_tag
 from my_claude_code.providers.model_listing import model_infos_from_ids
 
 
@@ -69,11 +70,47 @@ class ProviderModelCache:
         """Return whether this provider has any cached model-list result."""
         return provider_id in self._model_infos_by_provider
 
+    def cached_model_info_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[ProviderModelInfo, ResolutionTier] | None:
+        """Find one model in its own provider's catalogue, and say how.
+
+        Tier 1 is the id exactly as routed. Tier 2 is the same id with its
+        pricing/routing tag stripped -- ``minimax/minimax-m3-free`` against a
+        catalogue that lists ``minimax/minimax-m3``, or ``tencent/hy3-paid``
+        against ``tencent/hy3``. Tier 2 is the rung that did not exist before:
+        a tagged model whose own host publishes limits under the untagged name
+        used to skip straight past it to a stranger's catalogue, and a
+        stranger's catalogue must never be consulted while the model's own
+        host still has an untried answer.
+
+        The tag is stripped from the *query*, never from the catalogue, so an
+        exact entry always wins and a provider listing both ``x`` and
+        ``x:free`` keeps them distinct.
+        """
+        infos = self._model_infos_by_provider.get(provider_id, {})
+        info = infos.get(model_id)
+        if info is not None:
+            return info, ResolutionTier.PROVIDER_EXACT
+        stripped = strip_model_id_tag(model_id)
+        if stripped is None:
+            return None
+        for candidate, entry in infos.items():
+            if candidate.strip().lower() == stripped:
+                return entry, ResolutionTier.PROVIDER_TAG_STRIPPED
+        return None
+
+    def _cached_model_info(
+        self, provider_id: str, model_id: str
+    ) -> ProviderModelInfo | None:
+        found = self.cached_model_info_tiered(provider_id, model_id)
+        return None if found is None else found[0]
+
     def cached_model_supports_thinking(
         self, provider_id: str, model_id: str
     ) -> bool | None:
         """Return cached thinking support when a provider exposes it."""
-        info = self._model_infos_by_provider.get(provider_id, {}).get(model_id)
+        info = self._cached_model_info(provider_id, model_id)
         if info is None:
             return None
         return info.supports_thinking
@@ -82,7 +119,7 @@ class ProviderModelCache:
         self, provider_id: str, model_id: str
     ) -> bool | None:
         """Return cached image-input support when a provider exposes it."""
-        info = self._model_infos_by_provider.get(provider_id, {}).get(model_id)
+        info = self._cached_model_info(provider_id, model_id)
         if info is None:
             return None
         return info.supports_vision
@@ -95,7 +132,7 @@ class ProviderModelCache:
         ``None`` when the provider does not publish one, which is unknown, not
         unlimited and not zero.
         """
-        info = self._model_infos_by_provider.get(provider_id, {}).get(model_id)
+        info = self._cached_model_info(provider_id, model_id)
         if info is None:
             return None
         return info.max_output_tokens
@@ -109,7 +146,7 @@ class ProviderModelCache:
         :meth:`cached_model_max_output_tokens`. ``None`` when the provider does
         not publish one.
         """
-        info = self._model_infos_by_provider.get(provider_id, {}).get(model_id)
+        info = self._cached_model_info(provider_id, model_id)
         if info is None:
             return None
         return info.context_length
@@ -128,7 +165,7 @@ class ProviderModelCache:
         ``None`` when the model is not cached, or when the provider said
         nothing at all about its reasoning.
         """
-        info = self._model_infos_by_provider.get(provider_id, {}).get(model_id)
+        info = self._cached_model_info(provider_id, model_id)
         if info is None:
             return None
         capability = info.reasoning_capability

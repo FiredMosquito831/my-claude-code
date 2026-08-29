@@ -40,6 +40,7 @@ from my_claude_code.config.model_refs import (
     parse_model_name,
     parse_provider_type,
 )
+from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.model_visibility import (
     MODEL_PATTERN_SEPARATOR,
     ModelVisibility,
@@ -47,8 +48,8 @@ from my_claude_code.core.model_visibility import (
 from my_claude_code.providers.reasoning_vocabulary import provider_reasoning_vocabulary
 from my_claude_code.providers.runtime.models_dev import (
     cross_provider_match,
-    model_output_limit_from_models_dev,
-    model_reasoning_capability_from_models_dev,
+    model_output_limit_tiered,
+    model_reasoning_capability_tiered,
     models_dev_describes_provider,
 )
 
@@ -68,6 +69,19 @@ SOURCE_LABELS: dict[str, str] = {
     SOURCE_APPROXIMATE: "approximate cross-provider",
     SOURCE_PROVIDER_VOCABULARY: "provider API docs",
     SOURCE_UNKNOWN: "unknown",
+}
+
+# What each rung of the ladder means, for the page's per-field tier column.
+TIER_LABELS: dict[ResolutionTier, str] = {
+    ResolutionTier.PROVIDER_EXACT: "provider /models, exact id",
+    ResolutionTier.PROVIDER_TAG_STRIPPED: "provider /models, tag stripped",
+    ResolutionTier.MODELS_DEV_BUCKET_EXACT: "models.dev bucket, exact id",
+    ResolutionTier.MODELS_DEV_BUCKET_TAG_STRIPPED: ("models.dev bucket, tag stripped"),
+    ResolutionTier.CROSS_PROVIDER_EXACT: "cross-provider, exact id",
+    ResolutionTier.CROSS_PROVIDER_TAG_STRIPPED: "cross-provider, tag stripped",
+    ResolutionTier.CROSS_PROVIDER_BARE_TAGGED: "cross-provider, bare model + tag",
+    ResolutionTier.CROSS_PROVIDER_BARE_UNTAGGED: "cross-provider, bare model",
+    ResolutionTier.FALLBACK_DEFAULT: "fallback default",
 }
 
 REASONING_FIELDS: tuple[str, ...] = (
@@ -102,14 +116,25 @@ CONTEXT_LENGTH_SOURCE_NOTE = (
 )
 
 
-def _sourced(value: Any, source: str, **extra: Any) -> dict[str, Any]:
-    """One capability field plus the tier that stated it."""
+def _sourced(
+    value: Any, source: str, tier: ResolutionTier | None = None, **extra: Any
+) -> dict[str, Any]:
+    """One capability field plus the rung of the ladder that stated it.
+
+    ``source`` is the coarse badge the page has always rendered; ``tier`` is
+    the exact rung (1-8) the resolver actually stopped at, which is what tells
+    a "provider /models" answer that matched the id exactly from one that only
+    matched after its pricing tag was stripped, and an approximate answer that
+    kept the vendor prefix from one that fell back to the bare model name.
+    """
 
     field: dict[str, Any] = {
         "value": value,
         "source": source,
         "source_label": SOURCE_LABELS[source],
         "approximate": source == SOURCE_APPROXIMATE,
+        "tier": None if tier is None else int(tier),
+        "tier_label": None if tier is None else TIER_LABELS[tier],
     }
     field.update(extra)
     return field
@@ -127,36 +152,58 @@ def _reasoning_source(
     provider: ModelReasoningCapability | None,
     from_models_dev: ModelReasoningCapability | None,
     vocabulary: ModelReasoningCapability | None,
+    models_dev_tiers: Mapping[str, ResolutionTier],
     *,
-    described_by_models_dev: bool,
-) -> str:
-    """Which layer stated one reasoning field, mirroring the resolve order.
+    provider_tier: ResolutionTier | None,
+) -> tuple[str, ResolutionTier | None]:
+    """Which layer and which rung stated one reasoning field.
 
     ``resolve_model_reasoning_capability`` layers provider over models.dev over
     the provider's documented vocabulary, field by field, so the first layer
-    with a stated value is the one whose number is on screen.
+    with a stated value is the one whose value is on screen. The rung comes
+    from the resolver itself rather than being re-derived here: models.dev's
+    answer may have come off this provider's own bucket (tiers 3-4) or off the
+    approximate cross-provider vote (tiers 5-8), and only the resolver knows
+    which, per field.
     """
 
     if provider is not None and getattr(provider, name) is not None:
-        return SOURCE_PROVIDER
+        return SOURCE_PROVIDER, provider_tier
     if from_models_dev is not None and getattr(from_models_dev, name) is not None:
-        # `model_reasoning_capability_from_models_dev` silently falls through
-        # to the cross-provider vote when models.dev has no bucket for the
-        # provider, and returns the same type either way.
-        return SOURCE_MODELS_DEV if described_by_models_dev else SOURCE_APPROXIMATE
+        tier = models_dev_tiers.get(name)
+        source = (
+            SOURCE_APPROXIMATE
+            if tier is not None and tier.is_approximate
+            else SOURCE_MODELS_DEV
+        )
+        return source, tier
     if vocabulary is not None and getattr(vocabulary, name) is not None:
-        return SOURCE_PROVIDER_VOCABULARY
-    return SOURCE_UNKNOWN
+        # The provider's documented vocabulary is not a rung of the id-matching
+        # ladder at all: it is what the provider's API docs say about every
+        # model behind it, so there is no tier to report.
+        return SOURCE_PROVIDER_VOCABULARY, None
+    return SOURCE_UNKNOWN, None
 
 
 def capability_payload(
-    provider_id: str, model_id: str, info: ProviderModelInfo | None
+    provider_id: str,
+    model_id: str,
+    info: ProviderModelInfo | None,
+    provider_tier: ResolutionTier | None = None,
 ) -> dict[str, Any]:
-    """Read-only capability record for one model, tier-tagged per field."""
+    """Read-only capability record for one model, tier-tagged per field.
+
+    ``provider_tier`` is the rung the caller's own ``info`` was found at --
+    tier 1 for an exact id, tier 2 when the pricing tag had to be stripped.
+    It defaults to tier 1 because every existing caller looks the model up by
+    its exact id.
+    """
 
     described = models_dev_describes_provider(provider_id)
     provider_capability = info.reasoning_capability if info is not None else None
-    models_dev_capability = model_reasoning_capability_from_models_dev(
+    if provider_tier is None and info is not None:
+        provider_tier = ResolutionTier.PROVIDER_EXACT
+    models_dev_capability, models_dev_tiers = model_reasoning_capability_tiered(
         provider_id, model_id
     )
     vocabulary = provider_reasoning_vocabulary(provider_id)
@@ -164,23 +211,27 @@ def capability_payload(
 
     provider_output = info.max_output_tokens if info is not None else None
     if provider_output is not None:
-        output = _sourced(provider_output, SOURCE_PROVIDER)
+        output = _sourced(provider_output, SOURCE_PROVIDER, provider_tier)
     else:
-        published = model_output_limit_from_models_dev(provider_id, model_id)
+        published, output_tier = model_output_limit_tiered(provider_id, model_id)
         if published is None:
+            # Includes the case where the approximate tier matched but too few
+            # of its rows published a limit to vote: unknown, not a guess.
             output = _sourced(None, SOURCE_UNKNOWN)
-        elif described:
-            output = _sourced(published, SOURCE_MODELS_DEV)
-        else:
+        elif output_tier is not None and output_tier.is_approximate:
             # The number the user most needs warned about: a mode across rows
-            # that merely share a name, whose agreement ratio is computed over
-            # however few of them reported a limit at all.
+            # that merely share a name. The counts reported are the ones the
+            # vote was actually taken over, never the raw match count.
             output = _sourced(
                 published,
                 SOURCE_APPROXIMATE,
+                output_tier,
                 match_count=None if match is None else match.match_count,
                 agreement=None if match is None else match.output_agreement,
+                reporters=None if match is None else match.output_reporters,
             )
+        else:
+            output = _sourced(published, SOURCE_MODELS_DEV, output_tier)
 
     layers: dict[str, ModelReasoningCapability | None] = {
         SOURCE_PROVIDER: provider_capability,
@@ -190,19 +241,20 @@ def capability_payload(
     }
     reasoning: dict[str, Any] = {}
     for name in REASONING_FIELDS:
-        source = _reasoning_source(
+        source, tier = _reasoning_source(
             name,
             provider_capability,
             models_dev_capability,
             vocabulary,
-            described_by_models_dev=described,
+            models_dev_tiers,
+            provider_tier=provider_tier,
         )
         layer = layers.get(source)
         value = None if layer is None else _reasoning_field_value(layer, name)
         extra: dict[str, Any] = {}
         if source == SOURCE_APPROXIMATE and match is not None:
             extra = {"match_count": match.match_count}
-        reasoning[name] = _sourced(value, source, **extra)
+        reasoning[name] = _sourced(value, source, tier, **extra)
 
     context_length = info.context_length if info is not None else None
     supports_vision = info.supports_vision if info is not None else None

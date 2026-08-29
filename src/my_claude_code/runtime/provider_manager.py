@@ -15,6 +15,7 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.trace import trace_event
 from my_claude_code.providers.base import BaseProvider
 from my_claude_code.providers.runtime import ProviderRuntime
@@ -24,7 +25,7 @@ from my_claude_code.providers.runtime.discovery import (
 )
 from my_claude_code.providers.runtime.model_cache import ProviderModelCache
 from my_claude_code.providers.runtime.models_dev import (
-    model_output_limit_from_models_dev,
+    model_output_limit_tiered,
     resolve_model_reasoning_capability,
 )
 from my_claude_code.providers.runtime.validation import ConfiguredModelValidator
@@ -177,9 +178,21 @@ class ProviderRuntimeManager:
         name match win would halve the model's real capacity for no reason
         (WORKING-NOTES 54).
         """
-        return self._model_cache.cached_model_max_output_tokens(
-            provider_id, model_id
-        ) or model_output_limit_from_models_dev(provider_id, model_id)
+        return self.model_output_limit_tiered(provider_id, model_id)[0]
+
+    def model_output_limit_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[int | None, ResolutionTier | None]:
+        """The same ladder, plus the rung the number came from (tier 1-8).
+
+        Tiers 1-2 are the routing target's own ``/models`` payload -- exact,
+        then with the pricing/routing tag stripped. Tiers 3-8 are models.dev,
+        its own bucket first and the approximate cross-provider vote last.
+        """
+        found = self._model_cache.cached_model_info_tiered(provider_id, model_id)
+        if found is not None and found[0].max_output_tokens is not None:
+            return found[0].max_output_tokens, found[1]
+        return model_output_limit_tiered(provider_id, model_id)
 
     def model_context_length(self, provider_id: str, model_id: str) -> int | None:
         """Return the routed deployment's own context window, if it publishes one.
