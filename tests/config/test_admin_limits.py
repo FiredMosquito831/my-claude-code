@@ -1,7 +1,8 @@
-"""Limits are editable, and saving cannot delete what the form never showed."""
+"""Limits are editable, and saving cannot delete or invent what it showed."""
 
 import pytest
 
+from my_claude_code.config.admin import sources as admin_sources
 from my_claude_code.config.admin.manifest import FIELD_BY_KEY, FIELDS, SECTIONS
 from my_claude_code.config.admin.persistence import (
     render_env_file,
@@ -9,7 +10,30 @@ from my_claude_code.config.admin.persistence import (
     target_values_with_updates,
     unmanaged_env_values,
 )
+from my_claude_code.config.admin.sources import dotenv_values_from_text
+from my_claude_code.config.admin.validation import settings_from_values
+from my_claude_code.config.admin.values import load_value_state, normalize_for_env
 from my_claude_code.config.settings import Settings
+
+
+@pytest.fixture
+def isolated_config(monkeypatch, tmp_path):
+    """Point both env layers at a scratch directory with nothing in them.
+
+    Every test below is about what a Save writes, so the two files it reads --
+    the managed one under HOME and the repo-local one beside the working
+    directory -- have to be this test's files and nobody else's.
+    """
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("FCC_ENV_FILE", raising=False)
+    for key in FIELD_BY_KEY:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".fcc").mkdir()
+    return tmp_path
+
 
 LIMIT_KEYS = (
     "MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT",
@@ -162,8 +186,9 @@ def test_a_managed_key_is_not_duplicated_into_the_preserved_block(tmp_path) -> N
 
     assert unmanaged_env_values(env) == {}
 
+    values, _ = target_values_with_updates({})
     rendered = render_env_file(
-        target_values_with_updates({}) | {"REQUEST_LOG_MAX_ROWS": "500000"},
+        values | {"REQUEST_LOG_MAX_ROWS": "500000"},
         preserved=unmanaged_env_values(env),
     )
     assert rendered.count("REQUEST_LOG_MAX_ROWS=") == 1
@@ -171,7 +196,7 @@ def test_a_managed_key_is_not_duplicated_into_the_preserved_block(tmp_path) -> N
 
 def test_retention_survives_a_round_trip_through_the_form() -> None:
     """The exact failure reported: a raised cap reverting to the default."""
-    values = target_values_with_updates({"REQUEST_LOG_MAX_ROWS": "500000"})
+    values, _ = target_values_with_updates({"REQUEST_LOG_MAX_ROWS": "500000"})
     assert values["REQUEST_LOG_MAX_ROWS"] == "500000"
     assert "REQUEST_LOG_MAX_ROWS=500000" in render_env_file(values)
 
@@ -180,3 +205,201 @@ def test_no_limit_field_is_orphaned() -> None:
     """Every field in the section is listed above, so the list cannot rot."""
     declared = {f.key for f in FIELDS if f.section_id == "limits"}
     assert declared == set(LIMIT_KEYS)
+
+
+# --------------------------------------------------------------------------
+# A Save records choices. Everything below pins one half of that sentence.
+# The bug these come from: the first Save of any field materialised every
+# manifest default into the managed file as if the user had picked it, so
+# FALLBACK_BENCH_ENABLED=false outlived the release that changed the default
+# to true and silently disabled every Eject setting on that install.
+
+
+def test_a_save_writes_only_what_was_set(isolated_config) -> None:
+    values, warnings = target_values_with_updates({"REQUEST_LOG_MAX_ROWS": "500000"})
+
+    assert values == {"REQUEST_LOG_MAX_ROWS": "500000"}
+    assert warnings == ()
+
+    rendered = render_env_file(values)
+    value_lines = [
+        line
+        for line in rendered.splitlines()
+        if line and not line.startswith("#") and "=" in line
+    ]
+    assert value_lines == ["REQUEST_LOG_MAX_ROWS=500000"]
+    assert "# FALLBACK_BENCH_ENABLED= (default: true)" in rendered
+
+
+def test_dotenv_sees_only_set_keys_in_the_rendered_file(isolated_config) -> None:
+    """The placeholder has to be a comment to dotenv, not a key set to ""."""
+
+    values, _ = target_values_with_updates({"LOG_LEVEL": "DEBUG"})
+    parsed = dotenv_values_from_text(render_env_file(values))
+
+    assert parsed == {"LOG_LEVEL": "DEBUG"}
+
+
+def test_an_unset_field_follows_a_changed_default(isolated_config, monkeypatch) -> None:
+    """The regression that started this: a default that could never move.
+
+    A default materialised into the managed file outranks every layer below it
+    forever, so an install that pressed Save once was pinned to whatever the
+    shipped default was on that day -- which is how FALLBACK_BENCH_ENABLED
+    stayed false through the release that made it true. With nothing written,
+    changing the shipped default changes what the field reports.
+    """
+
+    key = "FALLBACK_BENCH_ENABLED"
+    monkeypatch.setattr(
+        admin_sources, "load_env_template_or_empty", lambda: f"{key}=false\n"
+    )
+    assert load_value_state()[key] == {"value": "false", "source": "template"}
+
+    values, _ = target_values_with_updates({})
+    assert key not in values
+
+    monkeypatch.setattr(
+        admin_sources, "load_env_template_or_empty", lambda: f"{key}=true\n"
+    )
+    assert load_value_state()[key]["value"] == "true"
+
+    settings, errors = settings_from_values(values)
+    assert errors == []
+    assert settings is not None
+    # Nothing is stored for it, so the running server uses the code default.
+    assert settings.fallback_bench_enabled is True
+
+
+def test_blanking_unsets_when_the_repo_env_is_silent(isolated_config) -> None:
+    managed = isolated_config / ".fcc" / ".env"
+    managed.write_text("LOG_LEVEL=DEBUG\n", encoding="utf-8")
+
+    values, warnings = target_values_with_updates({"LOG_LEVEL": ""})
+
+    assert "LOG_LEVEL" not in values
+    assert warnings == ()
+    assert "# LOG_LEVEL= (default: INFO)" in render_env_file(values)
+
+
+def test_blanking_masks_a_repo_env_value_when_the_type_accepts_it(
+    isolated_config,
+) -> None:
+    """MODEL_OPUS is an optional string: "" is how you say "no override"."""
+
+    (isolated_config / ".env").write_text(
+        "MODEL_OPUS=open_router/x/y\n", encoding="utf-8"
+    )
+    managed = isolated_config / ".fcc" / ".env"
+    managed.write_text("MODEL_OPUS=open_router/a/b\n", encoding="utf-8")
+
+    values, warnings = target_values_with_updates({"MODEL_OPUS": ""})
+
+    assert values["MODEL_OPUS"] == ""
+    assert warnings == ()
+    assert "MODEL_OPUS=\n" in render_env_file(values)
+
+
+def test_blanking_a_boolean_the_repo_env_sets_warns_instead(isolated_config) -> None:
+    """A bool has no blank validator: KEY= would stop the server starting."""
+
+    (isolated_config / ".env").write_text(
+        "FALLBACK_BENCH_ENABLED=false\n", encoding="utf-8"
+    )
+    managed = isolated_config / ".fcc" / ".env"
+    managed.write_text("FALLBACK_BENCH_ENABLED=true\n", encoding="utf-8")
+
+    values, warnings = target_values_with_updates({"FALLBACK_BENCH_ENABLED": ""})
+
+    assert "FALLBACK_BENCH_ENABLED" not in values
+    assert warnings == (
+        "FALLBACK_BENCH_ENABLED: cannot be blanked while the repo .env sets it; "
+        "remove it there",
+    )
+
+
+def test_a_value_equal_to_the_default_is_still_recorded(isolated_config) -> None:
+    """An explicit choice has to survive a later change of that default."""
+
+    field = FIELD_BY_KEY["FALLBACK_BENCH_ENABLED"]
+    values, _ = target_values_with_updates({"FALLBACK_BENCH_ENABLED": field.default})
+
+    assert values == {"FALLBACK_BENCH_ENABLED": field.default}
+
+
+# The managed file now prints ``# KEY= (default: X)`` for every field nobody
+# set, so X has to be true. These are the fields where the manifest default is
+# deliberately NOT the bare code default, each with the reason. The test fails
+# if a listed field starts matching, so the list cannot rot.
+_SHIPPED_TEMPLATE_VALUE = (
+    "the manifest shows the value shipped in .env.example -- the configuration "
+    "this project recommends -- rather than the barer library default"
+)
+_BUILT_IN_ENDPOINT = (
+    "the code default is empty, meaning 'use the provider's own endpoint'; the "
+    "manifest names that endpoint so the field is not an unexplained empty box"
+)
+DEFAULTS_THAT_DIFFER_FROM_THE_CODE = {
+    "VERTEX_LOCATION": "the manifest leaves it blank; .env.example supplies it",
+    "ANTHROPIC_UPSTREAM_BASE_URL": _BUILT_IN_ENDPOINT,
+    "ANTHROPIC_OAUTH_UPSTREAM_BASE_URL": _BUILT_IN_ENDPOINT,
+    "CHATGPT_OAUTH_BASE_URL": _BUILT_IN_ENDPOINT,
+    "ALIBABA_BASE_URL": _BUILT_IN_ENDPOINT,
+    "ALIBABA_CN_BASE_URL": _BUILT_IN_ENDPOINT,
+    "ALIBABA_CODING_BASE_URL": _BUILT_IN_ENDPOINT,
+    "ALIBABA_CODING_CN_BASE_URL": _BUILT_IN_ENDPOINT,
+    "VERTEX_BASE_URL": _SHIPPED_TEMPLATE_VALUE,
+    "PROVIDER_RATE_LIMIT": _SHIPPED_TEMPLATE_VALUE,
+    "PROVIDER_RATE_WINDOW": _SHIPPED_TEMPLATE_VALUE,
+    "HTTP_READ_TIMEOUT": _SHIPPED_TEMPLATE_VALUE,
+    "HTTP_WRITE_TIMEOUT": _SHIPPED_TEMPLATE_VALUE,
+    "HTTP_CONNECT_TIMEOUT": _SHIPPED_TEMPLATE_VALUE,
+    "VOICE_NOTE_ENABLED": _SHIPPED_TEMPLATE_VALUE,
+    "WHISPER_DEVICE": _SHIPPED_TEMPLATE_VALUE,
+    "WHISPER_MODEL": _SHIPPED_TEMPLATE_VALUE,
+    "ANTHROPIC_AUTH_TOKEN": (
+        "the code default is the shared local proxy password; a credential "
+        "field ships showing nothing rather than pre-filling it"
+    ),
+}
+
+
+def _defaults_agree(manifest_default: str, actual: object) -> bool:
+    if actual is None:
+        return manifest_default == ""
+    if isinstance(actual, bool):
+        return manifest_default == ("true" if actual else "false")
+    if isinstance(actual, int | float):
+        try:
+            return float(manifest_default) == float(actual)
+        except ValueError:
+            return False
+    return manifest_default == normalize_for_env(actual)
+
+
+@pytest.mark.parametrize("key", [field.key for field in FIELDS if field.settings_attr])
+def test_every_manifest_default_matches_the_settings_default(
+    key: str, isolated_config
+) -> None:
+    """Generalises the limits-only check to every field bound to a setting."""
+
+    field = FIELD_BY_KEY[key]
+    attr = field.settings_attr
+    assert attr is not None
+    # Built the way the admin layer builds it: no dotenv files, no values, so
+    # every attribute is the code default and nothing else.
+    settings, errors = settings_from_values({})
+    assert errors == []
+    assert settings is not None
+    agree = _defaults_agree(field.default, getattr(settings, attr))
+    reason = DEFAULTS_THAT_DIFFER_FROM_THE_CODE.get(key)
+    if reason is None:
+        assert agree, (
+            f"{key} shows a default the code does not use; fix the manifest or "
+            "record the reason in DEFAULTS_THAT_DIFFER_FROM_THE_CODE"
+        )
+        return
+    assert not agree, (
+        f"{key} now matches the code default -- remove it from "
+        f"DEFAULTS_THAT_DIFFER_FROM_THE_CODE ({reason})"
+    )

@@ -79,6 +79,40 @@ const FIELDS = [
     value: "200000",
     default: "200000",
   },
+  /* Nobody ever set this one: `value` is empty and `set` is false. It has to
+     load showing its default and count as no change -- the bug was that it
+     displayed the first option ("false"), disagreed with dataset.original, and
+     every Save wrote that value. */
+  {
+    key: "FALLBACK_BENCH_ENABLED",
+    label: "Bench failures",
+    section: "limits",
+    type: "select",
+    value: "",
+    default: "true",
+    set: false,
+    source: "default",
+    options: [
+      { value: "false", label: "false" },
+      { value: "true", label: "true" },
+    ],
+  },
+  /* Set from the dashboard, and to something other than the default: this is
+     the field that gets a "Use default" button. */
+  {
+    key: "LOG_LEVEL",
+    label: "Log level",
+    section: "limits",
+    type: "select",
+    value: "DEBUG",
+    default: "INFO",
+    set: true,
+    source: "managed_env",
+    options: [
+      { value: "INFO", label: "INFO" },
+      { value: "DEBUG", label: "DEBUG" },
+    ],
+  },
   {
     key: "MODEL",
     label: "Default Model",
@@ -430,6 +464,68 @@ const rowsOf = (id) =>
 const cacheRows = rowsOf("optCache");
 const ruleRows = rowsOf("optRules");
 
+/* ------------------------------------------------- unset fields and defaults
+   Read before anything on this page is clicked: these describe the state the
+   form loaded in, and "loaded clean" is half of what is being proved. */
+const limitsView = doc.querySelector('.admin-view[data-view="limits"]');
+// The wrapper carries data-key too, so ask for the control element by name:
+// the shared dirty machinery only ever looks at input/select/textarea.
+const CONTROL_SELECTOR = (key) =>
+  `select[data-key="${key}"], input[data-key="${key}"], textarea[data-key="${key}"]`;
+const controlIn = (key) =>
+  limitsView ? limitsView.querySelector(CONTROL_SELECTOR(key)) : null;
+const describeControl = (control) =>
+  control
+    ? {
+        tag: control.tagName.toLowerCase(),
+        value: control.value,
+        original: control.dataset.original,
+        defaultAttr: control.dataset.default,
+        optionValues: Array.from(control.options || []).map((item) => item.value),
+        firstOptionLabel: control.options ? control.options[0].textContent : null,
+      }
+    : null;
+const rowIn = (key) =>
+  limitsView ? limitsView.querySelector(`.field[data-key="${key}"]`) : null;
+const metaTextIn = (key) => {
+  const row = rowIn(key);
+  const meta = row ? row.querySelector(".field-default") : null;
+  return meta ? meta.textContent.trim() : null;
+};
+
+const unsetSelect = describeControl(controlIn("FALLBACK_BENCH_ENABLED"));
+const setSelect = describeControl(controlIn("LOG_LEVEL"));
+const booleanControl = describeControl(
+  doc.querySelector(CONTROL_SELECTOR("ENABLE_TOOL_RESULT_TRIMMING")),
+);
+const fieldDefaults = {
+  FALLBACK_BENCH_ENABLED: metaTextIn("FALLBACK_BENCH_ENABLED"),
+  LOG_LEVEL: metaTextIn("LOG_LEVEL"),
+};
+const resetButtons = {
+  FALLBACK_BENCH_ENABLED: Boolean(
+    rowIn("FALLBACK_BENCH_ENABLED")?.querySelector(".field-reset"),
+  ),
+  LOG_LEVEL: Boolean(rowIn("LOG_LEVEL")?.querySelector(".field-reset")),
+};
+const dirtyOnLoad = (doc.getElementById("dirtyState") || {}).textContent || null;
+
+/* "Use default" has to submit the empty value -- that is what tells the server
+   to drop the line rather than to store a second copy of the default. The
+   control is put back afterwards so the counter below still starts at zero. */
+let useDefault = null;
+const resetButton = rowIn("LOG_LEVEL")?.querySelector(".field-reset");
+if (resetButton) {
+  const select = controlIn("LOG_LEVEL");
+  resetButton.click();
+  useDefault = {
+    value: select.value,
+    dirty: (doc.getElementById("dirtyState") || {}).textContent || null,
+  };
+  select.value = select.dataset.original;
+  select.dispatchEvent(new window.Event("change", { bubbles: true }));
+}
+
 // Snapshot the KPIs BEFORE anything is clicked: they describe the state the
 // page loaded in, and a toggle below deliberately changes that state.
 const kpiText = optimizer
@@ -461,6 +557,15 @@ console.log(
       consoleErrors,
       navLabels: navLinks.map((link) => link.textContent),
       views,
+      fields: {
+        unsetSelect,
+        setSelect,
+        booleanControl,
+        fieldDefaults,
+        resetButtons,
+        dirtyOnLoad,
+        useDefault,
+      },
       requestCards,
       docs,
       optimizer: {

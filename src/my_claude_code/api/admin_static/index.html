@@ -1234,6 +1234,16 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   Everything is stored in <code>~/.fcc/.env</code>. Edit that file directly
                   if you prefer, then restart the server &mdash; config is read at startup.
                 </p>
+                <p>
+                  The file records what you chose, not what the defaults are. A
+                  setting you never touched is written as a commented placeholder
+                  naming its default &mdash; <code># FALLBACK_BENCH_ENABLED= (default: true)</code>
+                  &mdash; while a plain <code>KEY=value</code> line means the dashboard
+                  set it, and the field shows <em>set here</em>. Every field prints its
+                  default underneath, and one that was set gets a <strong>Use default</strong>
+                  button that removes the line again. Leaving a setting alone is what
+                  lets a later release improve its default for you.
+                </p>
 
                 <h3 id="guide-claude-models">Use Claude models</h3>
                 <p>

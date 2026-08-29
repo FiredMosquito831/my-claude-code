@@ -440,12 +440,20 @@ def test_admin_static_no_longer_fetches_global_status_header():
     assert "modelBadge" not in script
 
 
-def test_admin_static_hides_managed_source_label():
+def test_admin_static_names_the_managed_source_label():
+    """A stored value has to look like one.
+
+    This label used to be blank, on the reasoning that "managed here" was the
+    normal case and not worth a badge. It stopped being true once the managed
+    file only records choices: a value written from the dashboard is now the
+    one thing that outranks a changed default, so the field has to say so.
+    """
+
     script = Path("src/my_claude_code/api/admin_static/admin.js").read_text(
         encoding="utf-8"
     )
 
-    assert 'managed_env: "",' in script
+    assert 'managed_env: "set here",' in script
     assert "hasOwnProperty.call(labels, source)" in script
     assert 'parts.push("locked")' in script
     assert "sourceEl.textContent = source" in script
@@ -753,6 +761,41 @@ def test_admin_apply_persists_open_browser_for_next_launch(monkeypatch, tmp_path
     }
     managed_env = tmp_path / ".fcc" / ".env"
     assert "FCC_OPEN_BROWSER=false" in managed_env.read_text(encoding="utf-8")
+
+
+def test_apply_with_an_unrelated_field_does_not_write_other_defaults(
+    monkeypatch, tmp_path
+):
+    """Saving one field must not record a choice for every other field.
+
+    It used to: the first Save materialised every manifest default into the
+    managed file, so a later release could never change one. The install that
+    reported this had FALLBACK_BENCH_ENABLED=false written by a dashboard it
+    had only ever used to set something else, which made every Eject setting
+    inert.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    client = _local_client(create_test_app())
+
+    response = client.post(
+        "/admin/api/config/apply",
+        json={"values": {"LOG_LEVEL": "DEBUG"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["applied"] is True
+    assert response.json()["warnings"] == []
+
+    written = (tmp_path / ".fcc" / ".env").read_text(encoding="utf-8")
+    value_lines = [
+        line
+        for line in written.splitlines()
+        if line and not line.startswith("#") and "=" in line
+    ]
+    assert value_lines == ["LOG_LEVEL=DEBUG"]
+    assert "# FALLBACK_BENCH_ENABLED= (default: true)" in written
 
 
 def test_credential_key_management_flow(monkeypatch, tmp_path):
@@ -1131,7 +1174,12 @@ def test_admin_apply_writes_huggingface_key_and_masks_preview(monkeypatch, tmp_p
     assert response.status_code == 200
     body = response.json()
     assert body["applied"] is True
-    assert body["pending_fields"] == []
+    # Nothing sets VOICE_NOTE_ENABLED, so the prospective Settings snapshot
+    # uses the code default (on) exactly as the server will when it reloads
+    # this file -- which makes the Hugging Face key the live voice credential
+    # and its change a restart. The admin used to predict otherwise, because
+    # it wrote every manifest default into the file first.
+    assert body["pending_fields"] == ["HUGGINGFACE_API_KEY"]
     assert "HUGGINGFACE_API_KEY=********" in body["env_preview"]
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")

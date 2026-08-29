@@ -816,6 +816,41 @@ textarea:focus-visible,
   border-radius: var(--radius-sm);
 }
 
+/* The default a field falls back to, and the way back to it. Quiet by
+   design: it is reference information, not a call to action. */
+.field-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  min-height: 18px;
+}
+
+.field-default {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field-reset {
+  flex: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.field-reset:hover {
+  text-decoration: underline;
+}
+
 /* Form Inputs, Select, Textareas */
 .field input[type="text"],
 .field input[type="number"],

@@ -227,7 +227,7 @@ function sourceLabel(source) {
     default: "default",
     template: "template",
     repo_env: "repo .env",
-    managed_env: "",
+    managed_env: "set here",
     explicit_env_file: "FCC_ENV_FILE",
     process: "process env",
   };
@@ -1603,6 +1603,10 @@ function buildFieldControl(field) {
   input.id = `field-${field.key}`;
   input.dataset.key = field.key;
   input.dataset.original = field.value || "";
+  // The value this control falls back to when it holds nothing. Read by the
+  // optimizer's proxied widgets and by "Use default", so neither has to guess
+  // what an empty control means.
+  input.dataset.default = field.default ?? "";
   input.dataset.secret = field.secret ? "true" : "false";
   input.dataset.configured = field.configured ? "true" : "false";
   input.dataset.fieldType = field.type;
@@ -1659,8 +1663,10 @@ function renderField(field) {
     label.appendChild(sourceEl);
   }
 
-  const { control } = buildFieldControl(field);
+  const { input, control } = buildFieldControl(field);
   wrapper.append(label, control);
+  const meta = fieldMetaRow(field, input);
+  if (meta) wrapper.appendChild(meta);
   if (field.description) {
     const description = document.createElement("div");
     description.className = "field-description";
@@ -1690,6 +1696,49 @@ function renderField(field) {
     wrapper.appendChild(keyManagerForField(field));
   }
   return wrapper;
+}
+
+/** The line under a control: what it falls back to, and a way back to it.
+ *
+ * A dashboard that shows a value and nothing else cannot tell you whether the
+ * value is yours or the code's, so a default that later changed looked
+ * identical to a deliberate choice. `field.set` is true only when the managed
+ * file holds a line for the key, which is the only thing that means "chosen".
+ */
+function fieldMetaRow(field, input) {
+  if (field.type === "oauth_login") return null;
+  const row = document.createElement("div");
+  row.className = "field-meta";
+  const defaults = document.createElement("span");
+  defaults.className = "field-default";
+  defaults.textContent = `default: ${field.default || "none"}`;
+  row.appendChild(defaults);
+  if (fieldCanResetToDefault(field)) {
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "field-reset";
+    reset.textContent = "Use default";
+    reset.addEventListener("click", () => resetFieldToDefault(input));
+    row.appendChild(reset);
+  }
+  return row;
+}
+
+/** Secrets are managed as a key pool and chains by their own editor; clearing
+ *  either from here would be a second, contradictory way to edit them. */
+function fieldCanResetToDefault(field) {
+  if (!field.set || field.locked || field.secret) return false;
+  return field.type !== "model_chain" && field.type !== "oauth_login";
+}
+
+function resetFieldToDefault(input) {
+  if (input.type === "checkbox") {
+    input.checked = String(input.dataset.default).toLowerCase() === "true";
+  } else {
+    input.value = "";
+  }
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  updateDirtyState();
 }
 
 function keyManagerForField(field, { idSuffix = "" } = {}) {
@@ -1927,13 +1976,36 @@ async function removeCredentialKey(field, index, button) {
   }
 }
 
+/** Build an option control that can say "nobody chose this".
+ *
+ * The unset option comes first and carries the empty value, so a field the
+ * user never touched loads showing the default it will actually use. Falling
+ * back to `field.options[0]` instead -- which is what this did -- displayed
+ * the first option, disagreed with `dataset.original`, and made every Save
+ * submit a value nobody had picked: that is how `FALLBACK_BENCH_ENABLED=false`
+ * ended up written into managed .env files that had never been edited.
+ */
+function selectWithDefaultOption(field, options) {
+  const select = document.createElement("select");
+  const fallback = field.default ?? "";
+  const match = options.find((item) => item.value === fallback);
+  select.appendChild(
+    option("", `Default (${match ? match.label : fallback || "none"})`),
+  );
+  options.forEach((item) => select.appendChild(option(item.value, item.label)));
+  select.value = field.value ?? "";
+  return select;
+}
+
 function inputForField(field) {
   if (field.type === "boolean") {
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = String(field.value).toLowerCase() === "true";
-    input.dataset.original = input.checked ? "true" : "false";
-    return input;
+    // A checkbox has two positions and a setting has three states: on, off,
+    // and never chosen. Rendered as a checkbox, an untouched setting showed
+    // its default as if someone had picked it, and the first Save wrote it.
+    return selectWithDefaultOption(field, [
+      { value: "true", label: "On" },
+      { value: "false", label: "Off" },
+    ]);
   }
 
   if (field.type === "oauth_login") {
@@ -1976,12 +2048,7 @@ function inputForField(field) {
   }
 
   if (field.type === "select") {
-    const select = document.createElement("select");
-    field.options.forEach((item) =>
-      select.appendChild(option(item.value, item.label)),
-    );
-    select.value = field.value || field.options[0]?.value || "";
-    return select;
+    return selectWithDefaultOption(field, field.options);
   }
 
   if (field.type === "textarea") {
@@ -2010,6 +2077,7 @@ function inputForField(field) {
 
   const input = document.createElement("input");
   input.type = field.type === "number" ? "number" : "text";
+  if (field.default) input.placeholder = field.default;
   // Bounds come from the server so the browser refuses a value the server
   // would only clamp afterwards; a form that silently changes what was typed
   // teaches nobody anything.
@@ -2500,6 +2568,17 @@ function option(value, label) {
   return optionEl;
 }
 
+/** What a control is actually configuring, unset controls included.
+ *
+ * `readFieldValue` answers what would be *saved*; this answers what is in
+ * effect. A widget that renders state -- a switch, a segmented control -- has
+ * to draw the second one or an unset setting reads as off.
+ */
+function effectiveControlValue(input) {
+  if (input.type === "checkbox") return input.checked ? "true" : "false";
+  return input.value || input.dataset.default || "";
+}
+
 function readFieldValue(input) {
   if (input.type === "checkbox") return input.checked ? "true" : "false";
   if (
@@ -2589,12 +2668,14 @@ async function apply() {
     return;
   }
   const pending = restart.required ? restart.fields || [] : result.pending_fields || [];
+  const warnings = result.warnings || [];
   await load();
+  const applied = pending.length
+    ? `Applied. Restart my-claude-code to use: ${pending.join(", ")}`
+    : "Applied";
   showMessage(
-    pending.length
-      ? `Applied. Restart my-claude-code to use: ${pending.join(", ")}`
-      : "Applied",
-    "ok",
+    warnings.length ? `${applied} ${warnings.join("; ")}` : applied,
+    warnings.length ? "warn" : "ok",
   );
 }
 
@@ -9179,11 +9260,7 @@ function optimizerTrimSummary() {
   const readField = (key) => {
     const input = document.querySelector(`[data-key="${key}"]`);
     if (input && input.matches("input, select, textarea")) {
-      return input.type === "checkbox"
-        ? input.checked
-          ? "true"
-          : "false"
-        : input.value;
+      return effectiveControlValue(input);
     }
     const field = state.fields?.get(key);
     return field ? field.value || field.default || "" : "";
@@ -9435,6 +9512,15 @@ function renderOptimizerCache() {
  * it and dispatches `change`, so the dirty counter still counts one change per
  * setting rather than one per widget.
  */
+/** Write a value into whichever control kind is behind a proxied widget. */
+function setControlValue(input, value) {
+  if (input.type === "checkbox") {
+    input.checked = String(value).toLowerCase() === "true";
+    return;
+  }
+  input.value = value;
+}
+
 function optProxiedField(field) {
   const { input, control } = buildFieldControl(field);
   const holder = document.createElement("div");
@@ -9451,9 +9537,12 @@ function optSwitch(field, describedBy) {
   button.setAttribute("aria-label", field.label);
   if (describedBy) button.setAttribute("aria-describedby", describedBy);
   button.disabled = Boolean(field.locked);
-  const sync = () => button.setAttribute("aria-pressed", String(input.checked));
+  const isOn = () => effectiveControlValue(input) === "true";
+  const sync = () => button.setAttribute("aria-pressed", String(isOn()));
   button.addEventListener("click", () => {
-    input.checked = !input.checked;
+    // Clicking the switch is a choice, so it writes an explicit value rather
+    // than leaving the field unset at whatever the default happens to be.
+    setControlValue(input, isOn() ? "false" : "true");
     input.dispatchEvent(new Event("change", { bubbles: true }));
     sync();
     renderOptimizerKpis();
@@ -9473,11 +9562,9 @@ function optSegmented(field, options, label) {
   group.setAttribute("role", "group");
   group.setAttribute("aria-label", label);
   const sync = () => {
+    const current = effectiveControlValue(input);
     buttons.forEach((button) => {
-      button.setAttribute(
-        "aria-pressed",
-        String(button.dataset.state === input.value),
-      );
+      button.setAttribute("aria-pressed", String(button.dataset.state === current));
     });
   };
   const buttons = options.map(([value, text]) => {
@@ -9487,7 +9574,7 @@ function optSegmented(field, options, label) {
     button.textContent = text;
     button.disabled = Boolean(field.locked);
     button.addEventListener("click", () => {
-      input.value = value;
+      setControlValue(input, value);
       input.dispatchEvent(new Event("change", { bubbles: true }));
       sync();
       renderOptimizerKpis();
@@ -9510,7 +9597,7 @@ function syncOptimizerTrimControls() {
   const master = document.querySelector('[data-key="ENABLE_TOOL_RESULT_TRIMMING"]');
   const note = byId("optPerToolNote");
   if (!master || !note) return;
-  const on = master.checked;
+  const on = effectiveControlValue(master) === "true";
   note.textContent = on
     ? "Each rule runs independently. Observe changes nothing on the wire."
     : "Disabled while the master switch is off.";

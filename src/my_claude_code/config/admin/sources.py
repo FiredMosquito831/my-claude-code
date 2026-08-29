@@ -61,7 +61,14 @@ def dotenv_values_from_text(text: str) -> dict[str, str]:
 
 
 def template_values() -> dict[str, str]:
-    """Return .env.example values plus manifest defaults for newer fields."""
+    """Return .env.example values plus manifest defaults for newer fields.
+
+    Read-only display state. This is what a field falls back to when nothing
+    sets it, so the dashboard can show the effective value of a field nobody
+    has ever touched. It must never seed a write: materialising these into the
+    managed file turns every default into a stored user choice, which is how a
+    default that later changed could never reach an existing install.
+    """
 
     values = dotenv_values_from_text(load_env_template_or_empty())
     for field in FIELDS:

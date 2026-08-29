@@ -21,14 +21,22 @@ def validate_values(values: Mapping[str, str]) -> tuple[bool, list[str]]:
 def settings_from_values(
     values: Mapping[str, str],
 ) -> tuple[Settings | None, list[str]]:
-    """Build the prospective Settings snapshot without reading dotenv files."""
+    """Build the prospective Settings snapshot without reading dotenv files.
+
+    A key that is absent from ``values`` is left out of the kwargs entirely so
+    Settings supplies its own default -- which is exactly what the running
+    server does when it loads a file that has no line for it. Passing ``""``
+    instead would push an empty string into every ``bool`` and ``int`` field
+    that has no blank validator and fail validation on settings nobody touched.
+    """
 
     kwargs: dict[str, Any] = {"_env_file": None}
     for field in FIELDS:
         input_key = field_input_key(field)
         if input_key is None:
             continue
-        kwargs[input_key] = values.get(field.key, "")
+        if field.key in values:
+            kwargs[input_key] = values[field.key]
 
     out_of_range = range_errors(values)
     if out_of_range:

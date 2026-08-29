@@ -150,6 +150,7 @@ def _applied_response(pending_fields: tuple[str, ...] = ()) -> dict[str, object]
         "applied": True,
         "valid": True,
         "errors": [],
+        "warnings": [],
         "env_preview": "MODEL=updated\n",
         "path": ".env",
         "pending_fields": list(pending_fields),

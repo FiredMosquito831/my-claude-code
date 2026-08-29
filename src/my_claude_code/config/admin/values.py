@@ -3,12 +3,14 @@
 import os
 from typing import Any
 
+from my_claude_code.config.limits import LIMIT_RANGES
 from my_claude_code.config.model_refs import (
     format_model_ref_list,
     parse_model_ref_list,
 )
 from my_claude_code.config.paths import managed_env_path
 from my_claude_code.config.provider_catalog import PROVIDER_GROUPS
+from my_claude_code.config.settings import BLANK_MEANS_UNSET_FIELDS
 
 from .manifest import (
     FIELD_BY_KEY,
@@ -54,6 +56,33 @@ def normalize_field_value(field: ConfigFieldSpec, value: Any) -> str:
     if field.field_type == "model_chain":
         return format_model_ref_list(parse_model_ref_list(normalized))
     return normalized
+
+
+# Field types whose value is a free string: an empty one is a legal value the
+# Settings model already stores as "" or maps to None, so writing ``KEY=`` for
+# them says "deliberately nothing" rather than "unparseable".
+_BLANK_TOLERANT_FIELD_TYPES = frozenset(
+    {"text", "secret", "model", "optional_model", "model_chain", "textarea"}
+)
+
+
+def blank_is_accepted(field: ConfigFieldSpec) -> bool:
+    """Return whether ``KEY=`` is a value this field's Settings type accepts.
+
+    Clearing a field normally means removing its line, so the layer underneath
+    (the repo ``.env`` or the code default) shows through again. When the repo
+    ``.env`` sets the key that is not enough -- only an explicit empty value in
+    the managed file outranks it -- and an explicit empty value is only safe
+    where a validator turns it back into the default. A plain ``bool`` or
+    ``int`` has no such validator and would refuse to start the server.
+    """
+
+    if field.field_type in _BLANK_TOLERANT_FIELD_TYPES:
+        return True
+    attr = field.settings_attr
+    if attr is None:
+        return False
+    return attr in LIMIT_RANGES or attr in BLANK_MEANS_UNSET_FIELDS
 
 
 def display_value(field: ConfigFieldSpec, value: str) -> str:
@@ -108,6 +137,12 @@ def load_config_response() -> dict[str, Any]:
                 "provider": field.provider or None,
                 "type": field.field_type,
                 "value": display_value(field, raw_value),
+                "effective": display_value(field, raw_value),
+                "default": field.default,
+                # A line in the managed file is the only thing that means "the
+                # user chose this". Anything else is a value the code or the
+                # template supplied, and offering to reset it would be noise.
+                "set": source == "managed_env",
                 "configured": bool(str(raw_value).strip()),
                 "source": source,
                 "locked": is_locked_source(source),

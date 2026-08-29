@@ -850,13 +850,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="true",
         options=("false", "true"),
         description=(
-            "Whether the chain skips a model that fails repeatedly. ON "
-            "(default) enables ejection and honors the provider Retry-After, "
-            "with per-failure cooldowns keyed on error kind: 1s for "
-            "transient, the provider signal for rate limits, longer for "
-            "auth/quota and sustained failures. OFF falls back on every error "
-            "immediately with no per-failure throttling, which also makes "
-            "every Eject setting below inert."
+            "Whether the chain benches a model that keeps failing. ON "
+            "(default) ejects it for the configured time and honours a "
+            "provider Retry-After. OFF makes every Eject setting below inert "
+            "and retries a failing model at every request."
         ),
     ),
     ConfigFieldSpec(

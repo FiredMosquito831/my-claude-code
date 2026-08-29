@@ -74,6 +74,41 @@ from .provider_registry import get_provider_registry
 from .reasoning import ReasoningPreference
 from .websearch_catalog import SUPPORTED_WEBSEARCH_PROVIDER_IDS
 
+# Settings fields whose validators read a blank value as "not set" rather than
+# as a broken value. The admin layer needs the same list: writing ``KEY=`` is
+# how the dashboard masks a repo ``.env`` entry without inventing a value, and
+# it is only safe for a field that actually accepts the empty string.
+BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
+    "telegram_bot_token",
+    "allowed_telegram_user_id",
+    "discord_bot_token",
+    "allowed_discord_channels",
+    "model_fable",
+    "model_opus",
+    "model_sonnet",
+    "model_haiku",
+    "model_vision",
+    "model_fallbacks",
+    "model_fable_fallbacks",
+    "model_opus_fallbacks",
+    "model_sonnet_fallbacks",
+    "model_haiku_fallbacks",
+    "model_vision_fallbacks",
+    "ollama_search_api_key",
+    "exa_api_key",
+    "tavily_api_key",
+    "brave_search_api_key",
+    "jina_api_key",
+    "serper_api_key",
+    "firecrawl_api_key",
+    "linkup_api_key",
+    "perplexity_search_api_key",
+    "parallel_api_key",
+    "searchapi_api_key",
+    "serpapi_api_key",
+    "searxng_base_url",
+)
+
 
 def parse_lockout_tiers(value: str) -> tuple[float, ...]:
     """Turn a comma-separated auth lockout ladder into seconds.
@@ -1080,37 +1115,7 @@ class Settings(BaseSettings):
     )
 
     # Handle empty strings for optional string fields
-    @field_validator(
-        "telegram_bot_token",
-        "allowed_telegram_user_id",
-        "discord_bot_token",
-        "allowed_discord_channels",
-        "model_fable",
-        "model_opus",
-        "model_sonnet",
-        "model_haiku",
-        "model_vision",
-        "model_fallbacks",
-        "model_fable_fallbacks",
-        "model_opus_fallbacks",
-        "model_sonnet_fallbacks",
-        "model_haiku_fallbacks",
-        "model_vision_fallbacks",
-        "ollama_search_api_key",
-        "exa_api_key",
-        "tavily_api_key",
-        "brave_search_api_key",
-        "jina_api_key",
-        "serper_api_key",
-        "firecrawl_api_key",
-        "linkup_api_key",
-        "perplexity_search_api_key",
-        "parallel_api_key",
-        "searchapi_api_key",
-        "serpapi_api_key",
-        "searxng_base_url",
-        mode="before",
-    )
+    @field_validator(*BLANK_MEANS_UNSET_FIELDS, mode="before")
     @classmethod
     def parse_optional_str(cls, v: Any) -> Any:
         if v == "":

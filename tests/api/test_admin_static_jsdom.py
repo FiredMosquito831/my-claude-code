@@ -202,6 +202,59 @@ def test_the_trimming_warning_states_the_measured_result(rendered) -> None:
     assert "Observe" in warning
 
 
+# ------------------------------------------------- unset fields and defaults
+# The dashboard used to have no way to say "nobody chose this". A select fell
+# back to its first option, `dataset.original` stayed empty, and the next Save
+# submitted the option it happened to be showing -- which is how installs got
+# `FALLBACK_BENCH_ENABLED=false` written into a managed .env nobody had edited.
+
+
+def test_an_unset_select_loads_clean_and_shows_its_default(rendered) -> None:
+    control = rendered["fields"]["unsetSelect"]
+
+    assert control["tag"] == "select"
+    assert control["value"] == ""
+    assert control["original"] == ""
+    assert control["optionValues"][0] == ""
+    assert control["firstOptionLabel"].startswith("Default (true)")
+    # The whole point: a form nobody touched has nothing to save.
+    assert rendered["fields"]["dirtyOnLoad"] == "No changes"
+
+
+def test_every_field_says_what_its_default_is(rendered) -> None:
+    defaults = rendered["fields"]["fieldDefaults"]
+
+    assert defaults["FALLBACK_BENCH_ENABLED"] == "default: true"
+    assert defaults["LOG_LEVEL"] == "default: INFO"
+
+
+def test_only_a_field_someone_set_offers_to_go_back_to_the_default(rendered) -> None:
+    buttons = rendered["fields"]["resetButtons"]
+
+    assert buttons["LOG_LEVEL"] is True
+    assert buttons["FALLBACK_BENCH_ENABLED"] is False
+
+
+def test_use_default_marks_the_form_dirty_and_submits_empty(rendered) -> None:
+    """Empty is the wire value that means "drop the line", not "store INFO"."""
+
+    use_default = rendered["fields"]["useDefault"]
+
+    assert use_default is not None
+    assert use_default["value"] == ""
+    assert use_default["dirty"] == "1 unsaved change"
+
+
+def test_boolean_fields_render_three_states(rendered) -> None:
+    """On, off, and never chosen -- a checkbox can only show two of them."""
+
+    control = rendered["fields"]["booleanControl"]
+
+    assert control["tag"] == "select"
+    assert control["optionValues"] == ["", "true", "false"]
+    assert control["firstOptionLabel"] == "Default (Off)"
+
+
 # ----------------------------------------------------------- fresh install
 
 
