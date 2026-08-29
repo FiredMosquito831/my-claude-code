@@ -2100,6 +2100,195 @@ def test_attempt_params_round_trip(store: RequestLogStore) -> None:
     assert bare["route_attempts"] == []
 
 
+def test_attempt_credentials_round_trip(store: RequestLogStore) -> None:
+    """Which key served which attempt, per attempt rather than per request."""
+    store.enqueue(
+        _record(
+            "req_keys",
+            attempts=(
+                RouteAttempt(
+                    attempt=0,
+                    provider="nvidia_nim",
+                    model_ref="nvidia_nim/m1",
+                    outcome=RouteAttemptOutcome.FAILED,
+                    key_index=0,
+                    key_label="ab...cd",
+                ),
+                RouteAttempt(
+                    attempt=1,
+                    provider="nvidia_nim",
+                    model_ref="nvidia_nim/m1",
+                    outcome=RouteAttemptOutcome.FAILED,
+                    key_index=-1,
+                    key_label="(no key available)",
+                ),
+            ),
+        )
+    )
+    store.close()
+
+    stored = store.get_request("req_keys")
+    assert stored is not None
+    first, second = stored["route_attempts"]
+    assert (first["key_index"], first["key_label"]) == (0, "ab...cd")
+    # The sentinel, not a NULL: the pool was fully benched, which is a
+    # measurement rather than a gap.
+    assert (second["key_index"], second["key_label"]) == (-1, "(no key available)")
+
+
+def test_migrates_a_database_created_before_attempt_credentials(tmp_path) -> None:
+    """The two credential columns arrive without disturbing existing rows."""
+    db_path = tmp_path / "requests.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(_OLD_SCHEMA)
+        conn.executescript(_LEGACY_ATTEMPTS_SCHEMA)
+        conn.execute(
+            "INSERT INTO requests (id, ts_epoch, ts_iso, endpoint, protocol,"
+            " status) VALUES ('legacy', ?, 'x', '/v1/messages', 'anthropic',"
+            " 'success')",
+            (time.time(),),
+        )
+        conn.execute(
+            "INSERT INTO request_attempts (request_id, attempt, provider,"
+            " model_ref, outcome) VALUES ('legacy', 0, 'nvidia_nim',"
+            " 'nvidia_nim/old', 'failed')"
+        )
+        conn.commit()
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(request_attempts)")
+        }
+        assert "key_index" not in columns
+        assert "key_label" not in columns
+    finally:
+        conn.close()
+
+    store = RequestLogStore(db_path, max_rows=100)
+    try:
+        # The width guard skips an empty batch, so this must actually write.
+        store.enqueue(_record("fresh", attempts=_recovered_attempts()))
+        store.close()
+
+        check = sqlite3.connect(db_path)
+        try:
+            columns = {
+                str(row[1])
+                for row in check.execute("PRAGMA table_info(request_attempts)")
+            }
+            indexes = {
+                str(row[1])
+                for row in check.execute("PRAGMA index_list(request_attempts)")
+            }
+        finally:
+            check.close()
+        assert {"key_index", "key_label"} <= columns
+        assert "idx_request_attempts_model_v1" in indexes
+
+        legacy = store.get_request("legacy")
+        assert legacy is not None
+        (attempt,) = legacy["route_attempts"]
+        assert attempt["outcome"] == "failed"
+        # Written before the columns existed: NULL, which the UI renders as a
+        # dash rather than as a keyless request.
+        assert attempt["key_index"] is None
+        assert attempt["key_label"] is None
+    finally:
+        store.close()
+
+
+def test_the_attempt_model_index_exists_after_migration(store: RequestLogStore) -> None:
+    store.enqueue(_record("indexed", attempts=_recovered_attempts()))
+    store.close()
+    with sqlite3.connect(store.db_path) as conn:
+        indexes = {
+            str(row[1]) for row in conn.execute("PRAGMA index_list(request_attempts)")
+        }
+    assert "idx_request_attempts_model_v1" in indexes
+
+
+def _reasoning_record(request_id: str, *, emitted, thinking_chars: int, **overrides):
+    return _record(
+        request_id,
+        thinking_chars=thinking_chars,
+        attempts=(
+            RouteAttempt(
+                attempt=0,
+                provider="commandcode",
+                model_ref="commandcode/m1",
+                outcome=RouteAttemptOutcome.SUCCEEDED,
+                reasoning_emitted=emitted,
+            ),
+        ),
+        **overrides,
+    )
+
+
+def test_reasoning_by_model_reports_requested_and_returned_separately(
+    store: RequestLogStore,
+) -> None:
+    """Asked and answered are two facts, and their four combinations differ."""
+    store.enqueue(_reasoning_record("asked_thought", emitted=True, thinking_chars=100))
+    store.enqueue(_reasoning_record("asked_silent", emitted=True, thinking_chars=0))
+    store.enqueue(
+        _reasoning_record("unasked_thought", emitted=False, thinking_chars=50)
+    )
+    store.enqueue(
+        _record(
+            "failed_one",
+            attempts=(
+                RouteAttempt(
+                    attempt=0,
+                    provider="commandcode",
+                    model_ref="commandcode/m1",
+                    outcome=RouteAttemptOutcome.FAILED,
+                    reasoning_emitted=True,
+                ),
+            ),
+        )
+    )
+    store.close()
+
+    (row,) = store.reasoning_by_model()
+    assert row["model_ref"] == "commandcode/m1"
+    # The failed attempt is excluded: it answered nothing either way.
+    assert row["attempts"] == 3
+    assert row["requested"] == 2
+    assert row["returned"] == 2
+    assert row["unmeasured"] == 0
+
+
+def test_reasoning_by_model_counts_unmeasured_attempts_separately(
+    store: RequestLogStore,
+) -> None:
+    store.enqueue(_reasoning_record("measured", emitted=True, thinking_chars=10))
+    store.enqueue(_reasoning_record("unmeasured", emitted=None, thinking_chars=10))
+    store.close()
+
+    (row,) = store.reasoning_by_model()
+    assert row["attempts"] == 2
+    assert row["requested"] == 1
+    # Not folded into "requested 0": nobody was recording, which is not the
+    # same fact as a body that carried nothing.
+    assert row["unmeasured"] == 1
+
+
+def test_reasoning_by_model_honours_the_since_window(store: RequestLogStore) -> None:
+    now = time.time()
+    store.enqueue(
+        _reasoning_record(
+            "old", emitted=True, thinking_chars=10, ts_epoch=now - 10 * 86_400
+        )
+    )
+    store.enqueue(
+        _reasoning_record("recent", emitted=True, thinking_chars=10, ts_epoch=now)
+    )
+    store.close()
+
+    assert store.reasoning_by_model()[0]["attempts"] == 2
+    (row,) = store.reasoning_by_model(since=now - 86_400)
+    assert row["attempts"] == 1
+
+
 def test_migrates_a_database_created_before_attempt_params(tmp_path) -> None:
     """Existing attempt rows must gain the params column without losing data."""
     db_path = tmp_path / "requests.db"

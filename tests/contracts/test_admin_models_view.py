@@ -396,3 +396,15 @@ def test_the_page_says_hiding_is_display_only_where_the_user_ticks() -> None:
     ]
     assert "Hiding wins over showing" in view
     assert "exact-match pattern into the hide list" in view
+
+
+def test_the_measured_reasoning_chip_names_its_window_and_both_numbers() -> None:
+    """Requested and returned are independent facts, and the chip says both."""
+    assert "reasoning requested ${measured.requested}/${measured.attempts}" in _script()
+    assert "returned ${measured.returned}/${measured.attempts}" in _script()
+    assert "measured_days" in _script()
+
+
+def test_the_measured_chip_is_not_rendered_without_a_measurement() -> None:
+    """No traffic is not a measured zero, so no chip rather than a zeroed one."""
+    assert "if (measured && measured.attempts) {" in _script()

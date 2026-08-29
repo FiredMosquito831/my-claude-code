@@ -830,6 +830,140 @@ if (masterButton) {
   dirtyAfterToggle = (doc.getElementById("dirtyState") || {}).textContent || null;
 }
 
+/* ------------------------------------------------- request detail (wire pane)
+   The modal's renderers are driven directly with fixture rows rather than
+   through openRequestDetail(), because the point here is what each stored
+   shape renders as: a degraded body, an unmeasured attempt, a legacy
+   truncated body, a benched-out pool, and gating disagreeing with the wire. */
+function driveDetail(row) {
+  window.eval(
+    `renderWireRequest(${JSON.stringify(row)});` +
+      `renderRequestChain(${JSON.stringify(row)});`,
+  );
+  const wire = doc.getElementById("reqDetailWire");
+  const chain = doc.getElementById("reqDetailChain");
+  return {
+    hidden: wire.hidden,
+    text: (wire.textContent || "").replace(/\s+/g, " ").trim(),
+    knobs: Array.from(wire.querySelectorAll(".req-wire-knobs dd")).map(
+      (dd) => dd.textContent,
+    ),
+    knobKeys: Array.from(wire.querySelectorAll(".req-wire-knobs dt")).map(
+      (dt) => dt.textContent,
+    ),
+    reasoningBadge: textOf(wire, ".req-wire-reasoning"),
+    contradictions: wire.querySelectorAll(".req-wire-contradiction").length,
+    pre: wire.querySelector("pre") ? wire.querySelector("pre").textContent : null,
+    unmeasured: wire.querySelectorAll(".req-wire-unmeasured").length,
+    chainKeys: Array.from(chain.querySelectorAll(".req-chain-key")).map(
+      (el) => el.textContent,
+    ),
+  };
+}
+
+const degradedBody = {
+  model: "z-ai/glm-5.3-flash",
+  reasoning_effort: "max",
+  temperature: 0.7,
+  messages: { _degraded: "list", _count: 40, _chars: 1200 },
+  tools: { _degraded: "names", _count: 59, _names: ["Read", "Bash"] },
+  _degraded: ["messages", "tools"],
+  _original_chars: 41000,
+  _limit: 8000,
+};
+
+const detailAttempt = (extra) =>
+  Object.assign(
+    {
+      attempt: 0,
+      provider: "commandcode",
+      model_ref: "commandcode/z-ai/glm-5.3-flash",
+      outcome: "succeeded",
+      duration_ms: 900,
+      params: null,
+      wire_body: null,
+      reasoning_emitted: null,
+      key_index: null,
+      key_label: null,
+    },
+    extra,
+  );
+
+const requestDetail = {
+  degraded: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        wire_body: degradedBody,
+        reasoning_emitted: 1,
+        params: {
+          wire: {
+            model: "z-ai/glm-5.3-flash",
+            max_tokens: 16384,
+            tools: 59,
+            temperature: 0.7,
+            top_p: 0.9,
+            reasoning: { reasoning_effort: "max" },
+          },
+        },
+      }),
+    ],
+  }),
+  unmeasured: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [detailAttempt({})],
+  }),
+  contradiction: driveDetail({
+    reasoning_adaptation: "REASONING EFFORT CLAMPED: ...",
+    reasoning_adaptation_kind: "clamped",
+    route_attempts: [detailAttempt({ wire_body: { model: "m" }, reasoning_emitted: 0 })],
+  }),
+  suppressed: driveDetail({
+    reasoning_adaptation: "REASONING SUPPRESSED: ...",
+    reasoning_adaptation_kind: "suppressed",
+    route_attempts: [detailAttempt({ wire_body: { model: "m" }, reasoning_emitted: 0 })],
+  }),
+  unkinded: driveDetail({
+    reasoning_adaptation: "REASONING LEVEL DROPPED: ...",
+    reasoning_adaptation_kind: null,
+    route_attempts: [detailAttempt({ wire_body: { model: "m" }, reasoning_emitted: 0 })],
+  }),
+  legacyTruncated: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        wire_body: {
+          _truncated: true,
+          _limit: 8000,
+          _original_chars: 41000,
+          _preview: '{"messages": [{"role": "us',
+        },
+      }),
+    ],
+  }),
+  benched: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({ key_index: 0, key_label: "ab...cd" }),
+      detailAttempt({
+        attempt: 1,
+        outcome: "failed",
+        key_index: -1,
+        key_label: "(no key available)",
+      }),
+    ],
+  }),
+};
+
+requestDetail.reasoningRow = window.eval(
+  `formatRequestReasoningEmitted({route_attempts:[{outcome:"succeeded",reasoning_emitted:0}]})`,
+);
+requestDetail.unmeasuredNumber = window.eval(`formatOptionalNumber(null)`);
+
 console.log(
   JSON.stringify(
     {
@@ -848,6 +982,7 @@ console.log(
         useDefault,
       },
       requestCards,
+      requestDetail,
       docs,
       limits,
       optimizer: {

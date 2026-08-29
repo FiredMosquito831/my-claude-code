@@ -18,3 +18,9 @@ def test_request_log_env_overrides(monkeypatch) -> None:
     assert settings.request_log_enabled is False
     assert settings.request_log_capture_bodies is False
     assert settings.request_log_max_rows == 1234
+
+
+def test_the_wire_body_cap_defaults_and_overrides(monkeypatch) -> None:
+    assert Settings().request_log_wire_body_max_chars == 8000
+    monkeypatch.setenv("REQUEST_LOG_WIRE_BODY_MAX_CHARS", "1234")
+    assert Settings().request_log_wire_body_max_chars == 1234

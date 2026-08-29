@@ -88,6 +88,11 @@ TIER_LABELS: dict[ResolutionTier, str] = {
     ResolutionTier.FALLBACK_DEFAULT: "fallback default",
 }
 
+# Window the Models page measures reasoning over. A module constant, not a
+# setting: the Models page is not a place to add a knob, and the chip names
+# its own window in its text.
+REASONING_MEASUREMENT_DAYS = 7
+
 REASONING_FIELDS: tuple[str, ...] = (
     "can_reason",
     "supports_effort_control",
@@ -463,6 +468,7 @@ def _model_entry(
     overrides: ModelParameterOverrides,
     configured_refs: frozenset[str],
     dialect_lookup: ReasoningDialectLookup | None = None,
+    measured: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     provider_id = parse_provider_type(model_ref)
     model_id = parse_model_name(model_ref) if "/" in model_ref else model_ref
@@ -475,6 +481,11 @@ def _model_entry(
         "has_metadata": info is not None,
         "override": _row_state(model_row),
         "effective": effective_parameters(overrides, provider_id, model_ref),
+        # What the log measured for this model over the window, or None
+        # when it served no succeeded attempt in it. None rather than a
+        # zeroed row: never measured is not the same fact as measured
+        # zero, and the chip must not claim the first as the second.
+        "reasoning_measured": None if measured is None else dict(measured),
         "capabilities": capability_payload(
             provider_id,
             model_id,
@@ -494,6 +505,9 @@ def build_models_page_payload(
     visibility: ModelVisibility,
     overrides: ModelParameterOverrides,
     dialect_lookup: ReasoningDialectLookup | None = None,
+    *,
+    measured: Mapping[str, Mapping[str, Any]] | None = None,
+    measured_days: int = REASONING_MEASUREMENT_DAYS,
 ) -> dict[str, Any]:
     """Everything the Models page renders, in one request.
 
@@ -520,6 +534,7 @@ def build_models_page_payload(
                 overrides=overrides,
                 configured_refs=configured_refs,
                 dialect_lookup=dialect_lookup,
+                measured=None if measured is None else measured.get(model_ref),
             )
         )
 
@@ -540,6 +555,7 @@ def build_models_page_payload(
         "visibility": visibility_payload(visibility, tuple(by_ref), configured_list),
         "overrides": overrides_payload(overrides),
         "source_labels": dict(SOURCE_LABELS),
+        "measured_days": measured_days,
     }
 
 

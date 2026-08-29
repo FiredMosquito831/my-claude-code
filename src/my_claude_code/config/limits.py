@@ -121,6 +121,9 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     # --- what to keep ------------------------------------------------------
     "request_log_max_rows": LimitRange(0, 100_000_000, "0 keeps every request"),
     "request_log_text_max_chars": LimitRange(0, 10_000_000, "0 stores no text"),
+    "request_log_wire_body_max_chars": LimitRange(
+        0, 1_000_000, "0 stores the knobs only, with no message or tool structure"
+    ),
     "request_log_compression_level": LimitRange(1, ZSTD_MAX_LEVEL),
     # Longest edge of a stored image thumbnail. The ceiling is a full-HD edge:
     # past that it stops being a thumbnail and starts being the original.

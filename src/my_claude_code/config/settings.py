@@ -51,6 +51,7 @@ from .constants import (
     REQUEST_LOG_IMAGE_MAX_PIXELS_DEFAULT,
     REQUEST_LOG_QUEUE_MAX_SIZE_DEFAULT,
     REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT,
+    REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT,
     SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
     STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
     STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT,
@@ -1008,6 +1009,12 @@ class Settings(BaseSettings):
     request_log_image_max_pixels: int = Field(
         default=REQUEST_LOG_IMAGE_MAX_PIXELS_DEFAULT,
         validation_alias="REQUEST_LOG_IMAGE_MAX_PIXELS",
+    )
+    # Bounds the message/tool structure stored beside the knobs; the knobs
+    # themselves are always stored whole (core/wire_capture.py).
+    request_log_wire_body_max_chars: int = Field(
+        default=REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT,
+        validation_alias="REQUEST_LOG_WIRE_BODY_MAX_CHARS",
     )
 
     # ==================== NIM Settings ====================

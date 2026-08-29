@@ -1607,6 +1607,18 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   prompt and "port 8082 is busy" in the reasoning. One word behaves as it
                   always did. Matching ignores case and matches inside words.
                 </p>
+                <h4>What the request body pane says</h4>
+                <p>
+                  The request detail view shows the body that actually left, per
+                  attempt, in one of three states: <strong>reasoning sent</strong>
+                  with the value that was carried, <strong>no reasoning
+                  instruction sent (model default applies)</strong>, or
+                  <strong>not measured</strong> when that provider has no
+                  instrumented commit boundary. A badge appears when gating asked
+                  for reasoning and the body carried none. The Models page adds a
+                  measured chip per model: how often reasoning was requested, and
+                  how often it came back — two independent facts.
+                </p>
                 <h4>When the numbers stop moving</h4>
                 <p>
                   <code>REQUEST_LOG_MAX_ROWS</code> caps stored rows, so once the log is

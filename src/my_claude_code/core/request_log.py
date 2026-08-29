@@ -111,6 +111,7 @@ _LIST_METADATA_COLUMNS = (
     # warning gating would otherwise emit only to the server log. NULL whenever
     # gating changed nothing, so a list row never carries an empty warning.
     "reasoning_adaptation",
+    "reasoning_adaptation_kind",
     # Shape of the assistant turn. These are counts, not bodies, so list views
     # can show what a turn contained without loading the transcript.
     "thinking_chars",
@@ -426,6 +427,16 @@ _ADDED_COLUMNS = (
         "reasoning_adaptation",
         "ALTER TABLE requests ADD COLUMN reasoning_adaptation TEXT",
     ),
+    # The programmatic half of the adaptation. ``reasoning_adaptation`` is
+    # prose written for an operator and reworded whenever gating is reworded;
+    # the kind is a fixed vocabulary (unchanged/substituted/clamped/dropped/
+    # suppressed) the UI can style on without pattern-matching a sentence.
+    # NULL on every unadapted request and on every row written before the
+    # column existed, which is why the wire pane badges nothing without it.
+    (
+        "reasoning_adaptation_kind",
+        "ALTER TABLE requests ADD COLUMN reasoning_adaptation_kind TEXT",
+    ),
     (
         "optimization",
         "ALTER TABLE requests ADD COLUMN optimization TEXT",
@@ -450,6 +461,8 @@ _ATTEMPT_ADDED_COLUMNS = (
         "reasoning_emitted",
         "ALTER TABLE request_attempts ADD COLUMN reasoning_emitted INTEGER",
     ),
+    ("key_index", "ALTER TABLE request_attempts ADD COLUMN key_index INTEGER"),
+    ("key_label", "ALTER TABLE request_attempts ADD COLUMN key_label TEXT"),
 )
 
 # Written in this order by ``_store_attempts``; the placeholder count is
@@ -466,6 +479,8 @@ _ATTEMPT_INSERT_COLUMNS = (
     "params",
     "wire_body",
     "reasoning_emitted",
+    "key_index",
+    "key_label",
 )
 
 _ADDED_INDEXES = ("CREATE INDEX IF NOT EXISTS idx_requests_key ON requests(key_label)",)
@@ -590,6 +605,13 @@ class RouteAttempt:
     # Whether that body carried a reasoning instruction. None is "not
     # measured" and is deliberately distinct from False.
     reasoning_emitted: bool | None = None
+    # The credential this attempt used, captured at the attempt boundary
+    # rather than at the end of the request: a route that rotates keys or
+    # crosses providers used to be attributed entirely to its last one.
+    # ``key_index`` -1 with the sentinel label means the pool had nothing
+    # available and the attempt never reached a key.
+    key_index: int | None = None
+    key_label: str | None = None
 
 
 # ---------------------------------------------------- recovery observability --
@@ -695,6 +717,9 @@ class RequestRecord:
     # "no warning was raised" and "nobody was recording" are the same shape
     # here only because no warning could have fired unrecorded.
     reasoning_adaptation: str | None = None
+    # The same verdict as a fixed word rather than a sentence, so the UI
+    # can distinguish a suppression from a clamp without reading prose.
+    reasoning_adaptation_kind: str | None = None
     params: dict[str, Any] | None = None
     tokens_in: int | None = None
     tokens_out: int | None = None
@@ -956,6 +981,9 @@ class RequestLogStore:
                 self._ensure_added_columns(conn)
                 self._ensure_input_sha_column(conn)
                 self._ensure_attempt_columns(conn)
+                # After the ALTERs: the index does not reference the new
+                # columns, but the table must exist before it is created.
+                self._ensure_attempt_index(conn)
                 self._relax_bodies_sha_constraint(conn)
                 self._ensure_bodies_index(conn)
         finally:
@@ -980,6 +1008,24 @@ class RequestLogStore:
                     raise
         for index_sql in _ADDED_INDEXES:
             conn.execute(index_sql)
+
+    @staticmethod
+    def _ensure_attempt_index(conn: sqlite3.Connection) -> None:
+        """Covering index for the per-model reasoning query.
+
+        ``reasoning_by_model`` groups succeeded attempts by model and reads
+        only ``reasoning_emitted`` and ``request_id`` off each one; without
+        this the scan walks every attempt row, and an attempt row co-locates
+        its stored wire body. Versioned name per the index rule: changing the
+        column list means ``_v2`` plus an explicit drop of ``_v1``.
+        """
+
+        with contextlib.suppress(sqlite3.Error):
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_request_attempts_model_v1"
+                " ON request_attempts(model_ref, outcome, reasoning_emitted,"
+                " request_id)"
+            )
 
     @staticmethod
     def _ensure_stats_index(conn: sqlite3.Connection) -> None:
@@ -1113,6 +1159,10 @@ class RequestLogStore:
           this model held the request, plus the resolved wire parameters.
         * ``wire_body`` -- the redacted, text-free outbound body.
         * ``reasoning_emitted`` -- whether that body carried reasoning.
+        * ``key_index``/``key_label`` -- the credential this attempt used,
+          captured at the attempt boundary instead of at the end of the
+          request. Index -1 with the sentinel label means the pool was
+          fully benched and the attempt never reached a key.
         """
         for column, ddl in _ATTEMPT_ADDED_COLUMNS:
             columns = {
@@ -1570,6 +1620,8 @@ class RequestLogStore:
                 None
                 if attempt.reasoning_emitted is None
                 else int(attempt.reasoning_emitted),
+                attempt.key_index,
+                attempt.key_label,
             )
             for record in batch
             for attempt in record.attempts
@@ -1599,7 +1651,8 @@ class RequestLogStore:
         """Return one request's attempts in the order the chain tried them."""
         rows = conn.execute(
             "SELECT attempt, provider, model_ref, outcome, error_kind,"
-            " error_message, duration_ms, params, wire_body, reasoning_emitted"
+            " error_message, duration_ms, params, wire_body, reasoning_emitted,"
+            " key_index, key_label"
             " FROM request_attempts"
             " WHERE request_id = ? ORDER BY attempt",
             (request_id,),
@@ -1620,6 +1673,11 @@ class RequestLogStore:
                     if row["reasoning_emitted"] is None
                     else bool(row["reasoning_emitted"])
                 ),
+                # NULL on every attempt written before these columns existed:
+                # not measured, which the UI renders as a dash rather than as
+                # a keyless request.
+                "key_index": row["key_index"],
+                "key_label": row["key_label"],
             }
             for row in rows
         ]
@@ -1725,7 +1783,8 @@ class RequestLogStore:
                         id, ts_epoch, ts_iso, endpoint, protocol, requested_model,
                         provider, resolved_model, stream, input_text, output_text,
                         input_sha256, output_sha256, input_chars, output_chars,
-                        reasoning, requested_reasoning, reasoning_adaptation, params,
+                        reasoning, requested_reasoning, reasoning_adaptation,
+                        reasoning_adaptation_kind, params,
                         tokens_in, tokens_out,
                         cache_read_tokens, cache_write_tokens, ttft_ms,
                         duration_ms, status, error_kind, error_message, headers,
@@ -1734,7 +1793,7 @@ class RequestLogStore:
                         route_primary_model, route_chain, route_diverted_from,
                         route_diversion, input_image_count,
                         optimization, optimization_tokens_saved
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     rows,
                 )
@@ -1784,6 +1843,7 @@ class RequestLogStore:
             record.reasoning,
             record.requested_reasoning,
             record.reasoning_adaptation,
+            record.reasoning_adaptation_kind,
             json.dumps(record.params) if record.params is not None else None,
             record.tokens_in,
             record.tokens_out,
@@ -2436,6 +2496,74 @@ class RequestLogStore:
             while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
                 self._stats_cache.popitem(last=False)
         return dict(payload)
+
+    def reasoning_by_model(
+        self, *, since: float | None = None, limit: int = _BREAKDOWN_LIMIT
+    ) -> list[dict[str, Any]]:
+        """Per model: how often reasoning was asked for, and how often it came back.
+
+        Requested is what the outbound body carried (``reasoning_emitted``);
+        returned is whether the reply contained any thinking text. They are
+        independent, and every "does this model actually think" question is one
+        of the four combinations -- a model asked three times that never
+        thought, and one never asked that thought every time, are both real and
+        both invisible until the two are counted side by side. Only succeeded
+        attempts count: a model that failed answered nothing either way.
+
+        ``unmeasured`` is the attempts whose ``reasoning_emitted`` is NULL,
+        kept apart from a measured zero so the caller never reports "asked 0
+        times" for a provider with no instrumented commit boundary.
+        """
+
+        cache_key = ("reasoning_by_model", since, limit)
+        now = time.monotonic()
+        with self._stats_lock:
+            cached = self._stats_cache.get(cache_key)
+            if cached is not None:
+                if now - cached[0] < _STATS_CACHE_TTL_SECONDS:
+                    self._stats_cache.move_to_end(cache_key)
+                    return [dict(row) for row in cached[1]["rows"]]
+                del self._stats_cache[cache_key]
+        since_clause = "" if since is None else " AND r.ts_epoch >= ?"
+        args: list[Any] = [] if since is None else [since]
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT a.model_ref AS model_ref,"
+                " COUNT(*) AS attempts,"
+                " SUM(CASE WHEN a.reasoning_emitted = 1 THEN 1 ELSE 0 END)"
+                " AS requested,"
+                " SUM(CASE WHEN a.reasoning_emitted IS NULL THEN 1 ELSE 0 END)"
+                " AS unmeasured,"
+                " SUM(CASE WHEN COALESCE(r.thinking_chars, 0) > 0 THEN 1 ELSE 0 END)"
+                " AS returned"
+                " FROM request_attempts a"
+                " JOIN requests r ON r.id = a.request_id"
+                " WHERE a.outcome = 'succeeded' AND a.model_ref IS NOT NULL"
+                f"{since_clause}"
+                " GROUP BY a.model_ref"
+                " ORDER BY attempts DESC"
+                " LIMIT ?",
+                [*args, limit],
+            ).fetchall()
+        payload = [
+            {
+                "model_ref": row["model_ref"],
+                "attempts": int(row["attempts"] or 0),
+                "requested": int(row["requested"] or 0),
+                "returned": int(row["returned"] or 0),
+                "unmeasured": int(row["unmeasured"] or 0),
+            }
+            for row in rows
+        ]
+        with self._stats_lock:
+            # Shares ``stats()``'s cache and its 5 s TTL. The key starts with a
+            # string, so it can never collide with the 8-tuple ``stats`` uses,
+            # and the value is wrapped in a dict because the cache stores one.
+            self._stats_cache[cache_key] = (now, {"rows": payload})
+            self._stats_cache.move_to_end(cache_key)
+            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
+                self._stats_cache.popitem(last=False)
+        return [dict(row) for row in payload]
 
     def optimization_stats(
         self,

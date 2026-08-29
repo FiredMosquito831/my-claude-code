@@ -4615,12 +4615,14 @@ function renderWebSearchAnalytics(
   const keyRows = asAnalyticsRows(attemptStats.by_key, "key_label").map((row) => [
     row.provider || "—",
     row.key_label || row.key || "—",
-    formatAnalyticsNumber(row.requests ?? 0),
-    formatAnalyticsNumber(row.errors ?? 0),
+    // Not coerced to zero: an unmeasured column is a dash, so a credential
+    // whose counters were never recorded cannot read as one that did nothing.
+    formatOptionalNumber(row.requests),
+    formatOptionalNumber(row.errors),
     row.avg_duration_ms != null
       ? `${formatAnalyticsNumber(row.avg_duration_ms)} ms`
-      : "—",
-    formatAnalyticsNumber(row.results ?? 0),
+      : NOT_MEASURED,
+    formatOptionalNumber(row.results),
   ]);
   container.appendChild(
     analyticsBlock(
@@ -5121,7 +5123,9 @@ async function openWebSearchDetail(requestId) {
     ["Route ID", row.route_id],
     ["Attempt", row.attempt_number],
     ["Provider", row.provider],
-    ["Credential", row.key_label || "keyless"],
+    // A dash, not "keyless": the field was not recorded, which is not the
+    // same claim as the provider having needed no key.
+    ["Credential", row.key_label || NOT_MEASURED],
     ["Status", row.status],
     ["Results", row.results_count],
     ["Latency", row.duration_ms != null ? `${Math.round(row.duration_ms)} ms` : "—"],
@@ -7961,6 +7965,7 @@ function renderStatCards(container, cards) {
   });
 }
 
+/* Same as the key breakdown: COALESCE-d sums, so a zero here was counted. */
 function renderRequestProviderBreakdown(rows) {
   const container = byId("reqProviderBreakdown");
   container.innerHTML = "";
@@ -7995,6 +8000,9 @@ function renderRequestProviderBreakdown(rows) {
   );
 }
 
+/* The aggregates below are SQL COALESCE(...,0) sums, so their zeros are
+   measured zeros and Number(x || 0) is honest here. avg_duration_ms is the
+   one genuinely NULL-able column and uses the dash convention. */
 function renderRequestKeyBreakdown(rows) {
   const container = byId("reqKeyBreakdown");
   container.innerHTML = "";
@@ -8415,6 +8423,7 @@ async function openRequestDetail(requestId) {
     ["Requested reasoning", formatRequestedReasoning(row)],
     ["Reasoning adaptation", formatReasoningAdaptation(row)],
     ["Reasoning sent", formatRequestReasoningEmitted(row)],
+    ["Reasoning wire", formatWireVerdict(row)],
     ["Params", row.params ? JSON.stringify(row.params) : ""],
     ["Input SHA-256", row.input_sha256],
     ["Output SHA-256", row.output_sha256],
@@ -8465,12 +8474,30 @@ function formatReasoningAdaptation(row) {
 // Read off the attempt that answered, since a fallback may differ from the
 // primary. Blank when nothing was measured, so no claim is made about old rows.
 function formatRequestReasoningEmitted(row) {
+  const answered = answeringAttempt(row);
+  // A dash, not an empty string: the field loop drops empties, so "this row
+  // predates the column" used to render exactly like "nothing to say" -- i.e.
+  // as no row at all. Not measured is a fact and gets a line of its own.
+  if (!answered || answered.reasoning_emitted == null) return NOT_MEASURED;
+  return answered.reasoning_emitted ? "sent" : "not sent (model default applies)";
+}
+
+/* The attempt whose verdict the request row describes: the one that answered,
+   or the last one tried when none did. */
+function answeringAttempt(row) {
   const attempts = row.route_attempts || [];
-  const answered =
+  return (
     attempts.find((attempt) => attempt.outcome === "succeeded") ||
-    attempts[attempts.length - 1];
-  if (!answered || answered.reasoning_emitted == null) return "";
-  return answered.reasoning_emitted ? "yes" : "no";
+    attempts[attempts.length - 1]
+  );
+}
+
+/* The measured half of the pair above, in the modal's own dash convention:
+   what the body carried, independent of what gating decided it should. */
+function formatWireVerdict(row) {
+  const answered = answeringAttempt(row);
+  if (!answered || answered.reasoning_emitted == null) return NOT_MEASURED;
+  return answered.reasoning_emitted ? "sent" : "not sent";
 }
 
 function formatChars(count) {
@@ -8478,8 +8505,13 @@ function formatChars(count) {
   return `${count.toLocaleString()} chars`;
 }
 
+/* One convention across every surface: a dash means the number was never
+   measured; a zero means it was measured and was zero. The two used to be
+   rendered identically in the breakdown tables and distinctly in the modal. */
+const NOT_MEASURED = "—";
+
 function formatOptionalNumber(value) {
-  return value == null ? "—" : Number(value).toLocaleString();
+  return value == null ? NOT_MEASURED : Number(value).toLocaleString();
 }
 
 /** Share of this request's input that the provider served from its cache. */
@@ -8590,6 +8622,23 @@ function renderRequestChain(row) {
       took.textContent = formatChainDuration(attempt.duration_ms);
       head.appendChild(took);
     }
+
+    // Which credential served this attempt. The request row names only the
+    // last one, so a route that rotated keys used to be attributed whole to
+    // whichever key happened to finish it.
+    const credential = document.createElement("span");
+    credential.className = "req-chain-key";
+    if (attempt.key_index === -1) {
+      credential.classList.add("req-chain-nokey");
+      credential.textContent = "no key available";
+      credential.title = "Every credential in the pool was benched; this attempt never reached a key.";
+    } else if (attempt.key_label) {
+      credential.textContent = attempt.key_label;
+    } else {
+      credential.textContent = NOT_MEASURED;
+      credential.title = "No credential was recorded for this attempt.";
+    }
+    head.appendChild(credential);
     item.appendChild(head);
 
     // The reason, which is the entire point of the panel.
@@ -8628,7 +8677,11 @@ function renderWireRequest(row) {
   const container = byId("reqDetailWire");
   if (!container) return;
   container.innerHTML = "";
-  const attempts = (row.route_attempts || []).filter((a) => a.wire_body);
+  // Every attempt, not only the instrumented ones. Hiding the pane when no
+  // body was captured read as "no request body was sent", which is the one
+  // thing it never meant: a provider with no instrumented commit boundary
+  // still sent a body, and this pane now says so instead of vanishing.
+  const attempts = row.route_attempts || [];
   if (!attempts.length) {
     container.hidden = true;
     return;
@@ -8667,6 +8720,14 @@ function renderWireRequest(row) {
     summary.appendChild(reasoning);
     pane.appendChild(summary);
 
+    if (wireContradicts(row, attempt)) {
+      const clash = document.createElement("span");
+      clash.className = "req-wire-contradiction";
+      clash.textContent = "gating asked for reasoning; nothing was sent";
+      clash.title = row.reasoning_adaptation || "";
+      summary.appendChild(clash);
+    }
+
     const body = attempt.wire_body;
     if (body && body._truncated) {
       const note = document.createElement("p");
@@ -8676,14 +8737,54 @@ function renderWireRequest(row) {
         `${Number(body._original_chars).toLocaleString()} characters.`;
       pane.appendChild(note);
     }
+    if (body && Array.isArray(body._degraded)) {
+      const note = document.createElement("p");
+      note.className = "req-wire-truncated";
+      note.textContent =
+        `Message and tool structure reduced to counts at ` +
+        `${Number(body._limit).toLocaleString()} of ` +
+        `${Number(body._original_chars).toLocaleString()} characters ` +
+        `(${body._degraded.join(", ")}). Every parameter is stored whole ` +
+        `and shown above.`;
+      pane.appendChild(note);
+    }
 
-    const pre = document.createElement("pre");
-    pre.className = "requests-detail-body req-wire-body";
-    pre.textContent = formatWireBody(body);
-    pane.appendChild(pre);
+    const knobs = buildWireKnobs(attempt);
+    if (knobs) pane.appendChild(knobs);
+
+    if (body == null) {
+      const note = document.createElement("p");
+      note.className = "req-wire-unmeasured";
+      note.textContent =
+        attempt.outcome === "skipped"
+          ? "Never sent — the chain skipped this model."
+          : "Not measured — this provider has no instrumented commit " +
+            "boundary, or the attempt was never sent.";
+      pane.appendChild(note);
+    } else {
+      const pre = document.createElement("pre");
+      pre.className = "requests-detail-body req-wire-body";
+      pre.textContent = formatWireBody(body);
+      pane.appendChild(pre);
+    }
     container.appendChild(pane);
   });
 }
+
+/* Every sampling field the writer summarises, in its declared order.
+   tests/contracts/test_admin_wire_view.py pins this list against
+   core/wire_capture.py::_SAMPLING_FIELDS so the two cannot drift. */
+const WIRE_SAMPLING_FIELDS = [
+  "temperature",
+  "top_p",
+  "top_k",
+  "presence_penalty",
+  "frequency_penalty",
+  "repetition_penalty",
+  "seed",
+  "stop",
+  "n",
+];
 
 /** One line of the numbers people open this panel to check. */
 function formatWireFacts(attempt) {
@@ -8692,7 +8793,75 @@ function formatWireFacts(attempt) {
   if (wire.max_tokens != null) parts.push(`max_tokens ${Number(wire.max_tokens).toLocaleString()}`);
   if (wire.tools != null) parts.push(wire.tools === 1 ? "1 tool" : `${wire.tools} tools`);
   if (wire.temperature != null) parts.push(`temp ${wire.temperature}`);
+  const reasoning = wire.reasoning || null;
+  if (reasoning) {
+    const keys = Object.keys(reasoning);
+    if (keys.length === 1) {
+      parts.push(`${keys[0]} ${wireValueText(reasoning[keys[0]])}`);
+    } else if (keys.length > 1) {
+      parts.push(`${keys.length} reasoning fields`);
+    }
+  }
   return parts.join(" · ");
+}
+
+function wireValueText(value) {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+/* The knobs, read from params.wire, which is never truncated. The body pane
+   below can degrade its message and tool structure under the size cap; this
+   block cannot, because it is built from the compact summary the writer
+   always stores whole. A key that was not sent has no row: absence is the
+   finding here, so it is shown as absence rather than as a dash. */
+function buildWireKnobs(attempt) {
+  const wire = (attempt.params && attempt.params.wire) || null;
+  if (!wire) return null;
+  const rows = [];
+  ["model", "max_tokens", "tools"].forEach((name) => {
+    if (wire[name] != null) rows.push([name, wireValueText(wire[name])]);
+  });
+  const reasoning = wire.reasoning || {};
+  Object.keys(reasoning).forEach((name) => {
+    rows.push([name, wireValueText(reasoning[name])]);
+  });
+  WIRE_SAMPLING_FIELDS.forEach((name) => {
+    if (wire[name] != null) rows.push([name, wireValueText(wire[name])]);
+  });
+  if (!rows.length) return null;
+  const list = document.createElement("dl");
+  list.className = "req-wire-knobs";
+  rows.forEach(([name, value]) => {
+    const dt = document.createElement("dt");
+    dt.textContent = name;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    list.append(dt, dd);
+  });
+  return list;
+}
+
+/* Gating said one thing; the wire did another. Both are facts, and only the
+   pair is diagnostic: an adaptation that is not a suppression means gating
+   intended a reasoning instruction, so an empty body is a gap between the
+   policy and the encoder -- the exact divergence reasoning_emitted exists to
+   expose. A SUPPRESSED adaptation means gating intended nothing, and an empty
+   body agrees with it.
+
+   Keyed on the stored adaptation *kind*, never on the message text: the
+   message is prose that gets reworded, and a badge that reads a sentence
+   fires or stops firing on an edit nobody connected to it. A row written
+   before the kind column existed carries null and is badged as nothing --
+   not measured is not a finding. */
+const CONTRADICTING_ADAPTATION_KINDS = ["substituted", "clamped", "dropped"];
+
+function wireContradicts(row, attempt) {
+  if (attempt.reasoning_emitted !== 0 && attempt.reasoning_emitted !== false) {
+    return false;
+  }
+  const kind = row.reasoning_adaptation_kind;
+  if (kind == null || kind === "") return false;
+  return CONTRADICTING_ADAPTATION_KINDS.includes(String(kind).toLowerCase());
 }
 
 // Null is "not measured" -- an attempt written before wire capture existed, or
@@ -8706,11 +8875,32 @@ function wireReasoningState(attempt) {
 function formatReasoningEmitted(attempt) {
   const state = wireReasoningState(attempt);
   if (state === "unknown") return "reasoning not measured";
-  return state === "on" ? "reasoning sent" : "no reasoning sent";
+  if (state === "on") {
+    const value = wireReasoningValue(attempt);
+    return value ? `reasoning sent: ${value}` : "reasoning sent";
+  }
+  // Not a fault. For a toggle-only model on an effort-only host, sending
+  // nothing is the correct outcome and the model's own default applies; the
+  // old wording ("no reasoning sent") read as a failure of the proxy.
+  return "no reasoning instruction sent (model default applies)";
+}
+
+/** What params.wire.reasoning actually carried, for the badge headline. */
+function wireReasoningValue(attempt) {
+  const reasoning = (attempt.params && attempt.params.wire &&
+    attempt.params.wire.reasoning) || null;
+  if (!reasoning) return "";
+  const keys = Object.keys(reasoning);
+  if (!keys.length) return "";
+  if (keys.length === 1) return wireValueText(reasoning[keys[0]]);
+  return keys.join(", ");
 }
 
 function formatWireBody(body) {
   if (body == null) return "";
+  // Rows written before the writer stopped cutting JSON stored a truncated
+  // string under _preview. It is not parseable, so it is shown as-is with the
+  // note above saying why. New bodies never set _truncated and always parse.
   if (body._truncated) return String(body._preview || "");
   try {
     return JSON.stringify(body, null, 2);
@@ -10806,6 +10996,22 @@ function buildModelSummary(model) {
     summary.appendChild(
       buildModelsChip("forced", `${forced.length} override(s) active`),
     );
+  }
+  // Measured, not declared: what the log saw leave and come back. Absent when
+  // the model served no succeeded attempt in the window -- never measured is
+  // not the same fact as measured zero, so no chip rather than a zeroed one.
+  const measured = model.reasoning_measured;
+  if (measured && measured.attempts) {
+    const days = (modelsState.data && modelsState.data.measured_days) || 7;
+    const chip = buildModelsChip(
+      "measured",
+      `last ${days}d: reasoning requested ${measured.requested}/${measured.attempts}, ` +
+        `returned ${measured.returned}/${measured.attempts}`,
+    );
+    chip.title =
+      "Requested is what the outbound body carried; returned is whether the " +
+      "reply contained thinking text. Succeeded attempts only.";
+    summary.appendChild(chip);
   }
   return summary;
 }

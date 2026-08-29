@@ -861,6 +861,7 @@ MCC keeps a persistent log of every completed request (non-blocking background w
 REQUEST_LOG_ENABLED=true
 REQUEST_LOG_MAX_ROWS=50000        # retention cap; oldest rows pruned periodically
 REQUEST_LOG_CAPTURE_BODIES=true   # false stores only body lengths + SHA-256 hashes
+REQUEST_LOG_WIRE_BODY_MAX_CHARS=8000  # bounds stored message/tool structure only
 ```
 
 <a id="retention-and-all-time"></a>
@@ -893,6 +894,8 @@ Setting `REQUEST_LOG_CAPTURE_BODIES=false` remains the extreme option — metada
 **All time** is a separate, permanent rollup — one small row per day, provider and model, incremented as requests complete and never pruned. It keeps counting after stored rows begin rolling over, so per-model request counts and token usage remain true however far the window has slid. It costs a few hundred KB and ignores the filter row and time range by design. Upgrading seeds it from whatever history retention has not yet eaten; rows already pruned are gone and cannot be recovered. **Clear log** erases it along with everything else.
 
 **Uptime.** A flat stretch in the request chart is ambiguous on its own — no traffic and no server look identical. The server records when it was actually running, so Analytics can tell you which one you are looking at instead of leaving you to guess.
+
+The request detail view shows the body that actually left the process, per attempt. Sampling and reasoning parameters are stored whole however large the body is; only the message and tool structure is reduced to counts and names when it exceeds `REQUEST_LOG_WIRE_BODY_MAX_CHARS`, and the stored body always remains valid JSON. On the Models page, **reasoning requested** and **reasoning returned** are two independent measurements — what the outbound body carried, and whether the reply contained thinking text — so a model that is asked and never thinks, and one that thinks without being asked, are both visible instead of being averaged into one number.
 
 **Privacy note:** request bodies are stored locally on disk by default. They never leave your machine, but set `REQUEST_LOG_CAPTURE_BODIES=false` (or disable the log entirely) if you'd rather not persist conversation text.
 

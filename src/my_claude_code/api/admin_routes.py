@@ -18,6 +18,7 @@ from my_claude_code.api.docs_render import render_document
 from my_claude_code.api.model_admin import (
     MODEL_SCOPE,
     PROVIDER_SCOPE,
+    REASONING_MEASUREMENT_DAYS,
     apply_visibility_toggle,
     build_models_page_payload,
     render_patterns,
@@ -832,12 +833,27 @@ async def update_onboarding(
 
 def _models_page_payload(services: ApiServices) -> dict[str, Any]:
     settings = services.requests.current_settings()
+    # Runs on a worker thread (see the two ``to_thread`` call sites), so the
+    # log query never sits on the event loop. An unavailable log is not an
+    # error here: the page renders with no measurement rather than not at all.
+    store = _request_log_store_or_none(settings)
+    measured: dict[str, dict[str, Any]] = {}
+    if store is not None:
+        # Floored to the minute so two page loads a few seconds apart share
+        # a cache key: the query is cached on ``since``, and a raw
+        # ``time.time()`` would miss the cache on every single load.
+        window = int(time.time() - REASONING_MEASUREMENT_DAYS * 86_400) // 60 * 60
+        measured = {
+            str(row["model_ref"]): row for row in store.reasoning_by_model(since=window)
+        }
     return build_models_page_payload(
         services.requests.cached_prefixed_model_infos(),
         configured_chat_model_refs(settings),
         settings_model_visibility(settings),
         current_model_overrides(),
         dialect_lookup=services.requests.model_reasoning_dialect,
+        measured=measured,
+        measured_days=REASONING_MEASUREMENT_DAYS,
     )
 
 

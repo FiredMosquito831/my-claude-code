@@ -6,7 +6,11 @@ from typing import Any
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic.models import MessagesRequest
-from my_claude_code.core.credential_attribution import record_credential
+from my_claude_code.core.credential_attribution import (
+    NO_CREDENTIAL_INDEX,
+    NO_CREDENTIAL_LABEL,
+    record_credential,
+)
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningDialect,
@@ -191,6 +195,11 @@ class RotatingProvider(BaseProvider):
             if index < 0:
                 # Every credential is benched (cooldown or auth lockout).
                 wait = await self._state.shortest_cooldown_remaining()
+                # No key served this attempt, and the request-level baseline
+                # (execution.py) has already claimed key 0 with a NULL label,
+                # which renders as an ordinary keyless request. Say what
+                # actually happened instead.
+                record_credential(NO_CREDENTIAL_INDEX, NO_CREDENTIAL_LABEL)
                 raise ApplicationUnavailableError(
                     "All API keys for this provider are in cooldown. "
                     f"Retry in {max(1, int(wait))}s."

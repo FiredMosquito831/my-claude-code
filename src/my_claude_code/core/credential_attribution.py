@@ -27,6 +27,13 @@ class CredentialAttribution:
     label: str | None = None
 
 
+# The pool had nothing to offer: every credential was benched before one was
+# chosen, so no key served this attempt. Recorded as a value rather than left
+# NULL, because NULL already means "not measured" and a benched-out pool is a
+# measurement, not a gap.
+NO_CREDENTIAL_INDEX = -1
+NO_CREDENTIAL_LABEL = "(no key available)"
+
 _CURRENT: ContextVar[CredentialAttribution | None] = ContextVar(
     "fcc_credential_attribution", default=None
 )

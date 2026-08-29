@@ -10,8 +10,10 @@ import json
 
 import pytest
 
+from my_claude_code.config.constants import REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT
 from my_claude_code.core.wire_capture import (
-    MAX_WIRE_BODY_CHARS,
+    _SAMPLING_FIELDS,
+    DEFAULT_WIRE_BODY_MAX_CHARS,
     install_wire_trace,
     reasoning_was_emitted,
     record_wire_request,
@@ -151,19 +153,121 @@ def test_redaction_reaches_nested_lists_and_maps():
 # --------------------------------------------------------------------------- #
 
 
-def test_oversize_bodies_are_capped_and_say_so():
-    huge = _body(extra_body={"padding": "x" * (MAX_WIRE_BODY_CHARS * 2)})
-    stored = json.loads(summarize_wire_body(huge))
-    assert stored["_truncated"] is True
-    assert stored["_limit"] == MAX_WIRE_BODY_CHARS
-    assert stored["_original_chars"] > MAX_WIRE_BODY_CHARS
-    assert len(stored["_preview"]) == MAX_WIRE_BODY_CHARS
+def _tool(index):
+    return {
+        "type": "function",
+        "function": {
+            "name": f"tool_{index}",
+            "description": "d" * 200,
+            "parameters": {"type": "object", "properties": {"a": {"type": "string"}}},
+        },
+        "name": f"tool_{index}",
+    }
+
+
+def _fat_body(**overrides):
+    """A Claude Code shaped request: ~59 tools, many turns, every knob set."""
+    return _body(
+        tools=[_tool(i) for i in range(60)],
+        messages=[{"role": "user", "content": "x" * 400} for _ in range(120)],
+        reasoning_effort="max",
+        reasoning={"effort": "high"},
+        thinking={"type": "enabled", "budget_tokens": 4096},
+        extra_body={"chat_template_kwargs": {"thinking": True}},
+        temperature=0.7,
+        top_p=0.9,
+        top_k=40,
+        presence_penalty=0.1,
+        frequency_penalty=0.2,
+        repetition_penalty=1.1,
+        seed=7,
+        stop=["</done>"],
+        n=1,
+        **overrides,
+    )
+
+
+def test_an_oversize_body_degrades_its_bulk_and_stays_parseable():
+    stored = json.loads(summarize_wire_body(_fat_body()))
+    assert "_preview" not in stored
+    assert "_truncated" not in stored
+    assert set(stored["_degraded"]) <= {"messages", "tools"}
+    assert stored["_degraded"]
+    assert stored["_original_chars"] > stored["_limit"]
 
 
 def test_ordinary_bodies_are_stored_whole():
     stored = json.loads(summarize_wire_body(_body()))
     assert "_truncated" not in stored
+    assert "_degraded" not in stored
     assert stored["max_tokens"] == 16384
+
+
+def test_every_knob_survives_a_body_that_blows_the_budget():
+    """The regression that pays for this change.
+
+    Measured before it: ``reasoning_effort`` survived in 0 of 212 truncated
+    bodies stored in one day, because ``sort_keys=True`` spent the whole
+    budget inside ``tools`` before it ever reached a knob.
+    """
+
+    body = _fat_body()
+    stored = json.loads(summarize_wire_body(body))
+    for key in (
+        "reasoning_effort",
+        "reasoning",
+        "thinking",
+        "extra_body",
+        *_SAMPLING_FIELDS,
+    ):
+        assert key in stored, key
+        assert stored[key] == body[key], key
+
+
+def test_the_knobs_come_first_and_in_a_stable_order():
+    text = summarize_wire_body(_fat_body())
+    stored = json.loads(text)
+    keys = list(stored)
+    assert keys[0] == "model"
+    assert keys.index("reasoning_effort") < keys.index("temperature")
+    assert keys.index("temperature") < keys.index("top_p")
+    assert summarize_wire_body(_fat_body()) == text
+
+
+def test_tools_degrade_to_names_before_they_degrade_to_a_count():
+    body = _fat_body()
+    generous = json.loads(summarize_wire_body(body, limit=1_000_000))
+    assert isinstance(generous["tools"], list)
+    mid = json.loads(summarize_wire_body(body, limit=1_500))
+    assert mid["tools"]["_degraded"] == "names"
+    assert mid["tools"]["_names"][0] == "tool_0"
+    tiny = json.loads(summarize_wire_body(body, limit=500))
+    assert tiny["tools"]["_degraded"] == "count"
+    assert tiny["tools"]["_count"] == 60
+
+
+def test_knobs_alone_may_exceed_the_limit_and_are_still_stored_whole():
+    body = _body(extra_body={"padding": "x" * 20_000})
+    stored = json.loads(summarize_wire_body(body, limit=1_000))
+    assert stored["extra_body"]["padding"] == "x" * 20_000
+
+
+def test_the_limit_is_read_from_the_trace_not_a_module_constant():
+    trace = install_wire_trace(200)
+    record_wire_request(_fat_body())
+    stored = json.loads(trace.requests[0].body_json)
+    assert stored["_limit"] == 200
+
+
+def test_a_degraded_body_never_returns_a_cut_json_string():
+    body = _fat_body()
+    for limit in range(50, 5_000, 50):
+        json.loads(summarize_wire_body(body, limit=limit))
+
+
+def test_the_settings_default_matches_the_writer_default():
+    """``core`` may not import ``config``, so the two constants are pinned."""
+    assert REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT == DEFAULT_WIRE_BODY_MAX_CHARS
 
 
 # --------------------------------------------------------------------------- #

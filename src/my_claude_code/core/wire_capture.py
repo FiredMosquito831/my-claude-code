@@ -23,6 +23,16 @@ Two rules govern what is stored:
 * **No credentials, ever.** Bodies can carry keys in ``extra_body``, in a
   provider-specific auth field, or inside a header-ish blob. Redaction is by
   key *name* and by value *shape*, and it is applied to the whole tree.
+
+A third rule was added once the first measurement came in: **the size cap may
+only cost structure, never a knob.** The old writer serialised with
+``sort_keys=True`` and cut the resulting string at 8,000 characters, so a
+Claude Code request with ~59 tools spent its whole budget inside ``tools`` and
+every alphabetically later key fell off the end -- ``reasoning_effort``
+survived in **0 of 212** truncated bodies stored in one day, and what remained
+was a cut JSON string no reader could parse. Now every non-content key is
+emitted whole and first; only ``messages``/``tools`` degrade, to counts and
+names; and the output always parses as JSON.
 """
 
 import json
@@ -33,10 +43,14 @@ from typing import Any
 
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
 
-# The stored JSON per attempt. Generous enough for a 40-tool Claude Code
-# request with its sampling and reasoning fields intact, small enough that
+# Default bound on the stored JSON per attempt. It bounds the *message and
+# tool structure* only: every other key is stored whole regardless, because a
+# cut knob is exactly the defect this cap used to cause. Small enough that
 # 65,000 attempt rows stay a rounding error next to the prompt blobs.
-MAX_WIRE_BODY_CHARS = 8_000
+# ``config.constants.REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT`` mirrors this
+# number for the settings layer -- ``core`` may not import ``config`` -- and
+# ``tests/core/test_wire_capture.py`` pins the two together.
+DEFAULT_WIRE_BODY_MAX_CHARS = 8_000
 
 REDACTED = "<redacted>"
 
@@ -342,20 +356,110 @@ def wire_params_summary(body: Mapping[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def summarize_wire_body(body: Mapping[str, Any]) -> str:
-    """Serialize the redacted, text-free body, capped and visibly truncated."""
-    safe = redact_wire_value(strip_request_content(body))
-    text = json.dumps(safe, default=str, sort_keys=True)
-    if len(text) <= MAX_WIRE_BODY_CHARS:
-        return text
-    return json.dumps(
-        {
-            "_truncated": True,
-            "_original_chars": len(text),
-            "_limit": MAX_WIRE_BODY_CHARS,
-            "_preview": text[:MAX_WIRE_BODY_CHARS],
+# Keys the operator opens this panel for. Emitted first and whole, so a body
+# that overruns its budget loses turn structure -- which is recoverable from
+# the Prompt pane -- and never loses a knob, which is not recoverable at all.
+_BULK_FIELDS = frozenset(_CONTENT_FIELDS) | {"tools"}
+
+
+def _knob_sort_key(key: str) -> tuple[int, str]:
+    """Order the non-bulk keys: model, reasoning, sampling, extra_body, rest.
+
+    Deterministic, so the same body always serialises to the same string --
+    which is what makes a stored body comparable across attempts, and testable.
+    """
+
+    if key == "model":
+        return (0, "")
+    if _is_reasoning_key(key):
+        return (1, key)
+    if key in _SAMPLING_FIELDS:
+        return (2, f"{_SAMPLING_FIELDS.index(key):02d}")
+    if key == "extra_body":
+        return (3, "")
+    return (4, key)
+
+
+def _shape_chars(value: Any) -> int:
+    """Sum every ``chars`` count in a stripped content shape."""
+    if isinstance(value, Mapping):
+        total = 0
+        for key, item in value.items():
+            if key == "chars" and isinstance(item, int) and not isinstance(item, bool):
+                total += item
+            else:
+                total += _shape_chars(item)
+        return total
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return sum(_shape_chars(item) for item in value)
+    return 0
+
+
+def _degraded_bulk(name: str, value: Any) -> dict[str, Any]:
+    """The stand-in stored for a bulk field that does not fit the budget."""
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        if name == "tools":
+            return {
+                "_degraded": "names",
+                "_count": len(value),
+                "_names": [
+                    str(item.get("name"))
+                    for item in value
+                    if isinstance(item, Mapping) and item.get("name") is not None
+                ],
+            }
+        return {
+            "_degraded": "list",
+            "_count": len(value),
+            "_chars": _shape_chars(value),
         }
-    )
+    return {"_degraded": "content", "_chars": _shape_chars(value)}
+
+
+def summarize_wire_body(
+    body: Mapping[str, Any], *, limit: int = DEFAULT_WIRE_BODY_MAX_CHARS
+) -> str:
+    """Serialize the redacted, text-free body; always parseable JSON.
+
+    Knobs first and whole -- even when they alone exceed ``limit`` -- then as
+    much message and tool structure as the remaining budget allows. A field
+    that does not fit is replaced by its own shape (a count, or tool names),
+    and every degraded field is named in ``_degraded``, so the reader can say
+    what is missing instead of printing a cut string.
+    """
+
+    safe = redact_wire_value(strip_request_content(body))
+    out: dict[str, Any] = {
+        key: safe[key]
+        for key in sorted(
+            (key for key in safe if key not in _BULK_FIELDS), key=_knob_sort_key
+        )
+    }
+    degraded: list[str] = []
+    # ``tools`` last: it is the largest field, so spending the budget on turn
+    # structure first keeps the more diagnostic half of the body whole.
+    bulk = [key for key in safe if key in _BULK_FIELDS and key != "tools"]
+    if "tools" in safe:
+        bulk.append("tools")
+    for name in bulk:
+        value = safe[name]
+        out[name] = value
+        if len(json.dumps(out, default=str)) <= limit:
+            continue
+        shape = _degraded_bulk(name, value)
+        out[name] = shape
+        degraded.append(name)
+        if (
+            name == "tools"
+            and shape.get("_degraded") == "names"
+            and len(json.dumps(out, default=str)) > limit
+        ):
+            out[name] = {"_degraded": "count", "_count": shape["_count"]}
+    if degraded:
+        out["_degraded"] = degraded
+        out["_original_chars"] = len(json.dumps(safe, default=str))
+        out["_limit"] = limit
+    return json.dumps(out, default=str)
 
 
 @dataclass(slots=True)
@@ -371,6 +475,7 @@ class WireRequest:
 class WireTrace:
     """Mutable per-request collector of outbound bodies, keyed by attempt."""
 
+    body_limit: int = DEFAULT_WIRE_BODY_MAX_CHARS
     current_attempt: int = 0
     requests: dict[int, WireRequest] = field(default_factory=dict)
 
@@ -380,7 +485,7 @@ class WireTrace:
         # produced the attempt's outcome is the last one sent, not the first.
         self.requests[self.current_attempt] = WireRequest(
             params=wire_params_summary(body),
-            body_json=summarize_wire_body(body),
+            body_json=summarize_wire_body(body, limit=self.body_limit),
             reasoning_emitted=reasoning_was_emitted(body),
         )
 
@@ -388,9 +493,11 @@ class WireTrace:
 _WIRE_TRACE: ContextVar[WireTrace | None] = ContextVar("fcc_wire_trace", default=None)
 
 
-def install_wire_trace() -> WireTrace:
+def install_wire_trace(
+    body_limit: int = DEFAULT_WIRE_BODY_MAX_CHARS,
+) -> WireTrace:
     """Start recording outbound bodies for the current request."""
-    slot = WireTrace()
+    slot = WireTrace(body_limit=body_limit)
     _WIRE_TRACE.set(slot)
     return slot
 

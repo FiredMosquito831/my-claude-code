@@ -577,3 +577,72 @@ def test_request_log_settings_moved_to_analytics(rendered) -> None:
 def test_desktop_settings_moved_to_providers(rendered) -> None:
     """Two pages, one subsystem: the live desktop panel is already there."""
     assert rendered["limits"]["desktopCardView"] == "providers"
+
+
+# --------------------------------------------------------------------------- #
+# The request-detail wire pane. Every case here is a stored shape the pane has
+# to render honestly: what left, what did not, and what was never measured.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_wire_pane_shows_a_knobs_block_from_params_wire(rendered) -> None:
+    """params.wire is never truncated, so the knobs survive a degraded body."""
+    detail = rendered["requestDetail"]["degraded"]
+    assert "reasoning_effort" in detail["knobKeys"]
+    assert "max" in detail["knobs"]
+    assert "temperature" in detail["knobKeys"]
+    assert "0.7" in detail["knobs"]
+
+
+def test_a_degraded_body_renders_as_parseable_json(rendered) -> None:
+    json.loads(rendered["requestDetail"]["degraded"]["pre"])
+
+
+def test_the_wire_pane_is_visible_when_no_attempt_was_measured(rendered) -> None:
+    """It used to vanish, which read as "no request body was sent"."""
+    detail = rendered["requestDetail"]["unmeasured"]
+    assert detail["hidden"] is False
+    assert detail["unmeasured"] == 1
+    assert "Not measured" in detail["text"]
+
+
+def test_an_empty_body_reads_as_the_model_default_not_as_a_fault(rendered) -> None:
+    badge = rendered["requestDetail"]["contradiction"]["reasoningBadge"]
+    assert badge == "no reasoning instruction sent (model default applies)"
+
+
+def test_a_contradiction_between_gating_and_the_wire_is_badged(rendered) -> None:
+    assert rendered["requestDetail"]["contradiction"]["contradictions"] == 1
+
+
+def test_a_suppressed_adaptation_with_an_empty_body_is_not_a_contradiction(
+    rendered,
+) -> None:
+    """Gating intended nothing and nothing was sent: the two agree."""
+    assert rendered["requestDetail"]["suppressed"]["contradictions"] == 0
+
+
+def test_an_adaptation_written_before_the_kind_column_badges_nothing(
+    rendered,
+) -> None:
+    """Not measured is not a finding, so an old row raises no badge."""
+    assert rendered["requestDetail"]["unkinded"]["contradictions"] == 0
+
+
+def test_an_old_truncated_body_still_renders_with_its_note(rendered) -> None:
+    detail = rendered["requestDetail"]["legacyTruncated"]
+    assert "Truncated at 8,000 of 41,000 characters" in detail["text"]
+    assert detail["pre"].startswith('{"messages"')
+
+
+def test_a_benched_out_pool_renders_its_sentinel_not_a_key(rendered) -> None:
+    keys = rendered["requestDetail"]["benched"]["chainKeys"]
+    assert "no key available" in keys
+    assert "ab...cd" in keys
+
+
+def test_an_unmeasured_number_is_a_dash_not_a_zero(rendered) -> None:
+    assert rendered["requestDetail"]["unmeasuredNumber"] == "—"
+    assert (
+        rendered["requestDetail"]["reasoningRow"] == "not sent (model default applies)"
+    )

@@ -211,6 +211,12 @@ DASHBOARD_RECONNECT_TIMEOUT_SECONDS = (
 # Request log storage.
 REQUEST_LOG_MAX_ROWS_DEFAULT = 50_000
 REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT = 50_000
+# How much of each outbound request body the log stores. The cap bounds the
+# stored *message and tool structure* only: sampling and reasoning parameters
+# are always stored whole, because a cut knob is unrecoverable and a cut turn
+# list is not. Mirrors ``core.wire_capture.DEFAULT_WIRE_BODY_MAX_CHARS``,
+# which cannot be imported here because ``core`` may not import ``config``.
+REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT = 8_000
 REQUEST_LOG_COMPRESSION_LEVEL_DEFAULT = 9
 REQUEST_LOG_QUEUE_MAX_SIZE_DEFAULT = 10_000
 # Longest edge of the thumbnail kept for an image a request carried. A pasted

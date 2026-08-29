@@ -30,7 +30,10 @@ from my_claude_code.core.async_iterators import try_close_async_iterator
 from my_claude_code.core.credential_attribution import install_attribution
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import failure_kind_name, find_execution_failure
-from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    ReasoningAdaptationKind,
+    ReasoningPolicy,
+)
 from my_claude_code.core.request_headers import capture_headers
 from my_claude_code.core.request_images import capture_images
 from my_claude_code.core.request_log import (
@@ -42,7 +45,11 @@ from my_claude_code.core.request_log import (
     install_recovery_trace,
     store_from_settings,
 )
-from my_claude_code.core.wire_capture import WireRequest, install_wire_trace
+from my_claude_code.core.wire_capture import (
+    DEFAULT_WIRE_BODY_MAX_CHARS,
+    WireRequest,
+    install_wire_trace,
+)
 
 WireProtocol = Literal["anthropic", "openai_responses"]
 
@@ -64,6 +71,7 @@ class RequestCapture:
         capture_bodies: bool = True,
         images: tuple[ImageInput, ...] = (),
         capture_images_pixels: int = 0,
+        wire_body_max_chars: int = DEFAULT_WIRE_BODY_MAX_CHARS,
         headers: dict[str, str] | None = None,
     ) -> None:
         self._store = store
@@ -110,7 +118,7 @@ class RequestCapture:
         # and the tool count off the *inbound* request here -- which is what
         # ``params`` below still does, deliberately, as the client's ask --
         # reported the client's numbers as if they were the wire's.
-        self._wire = install_wire_trace() if self.enabled else None
+        self._wire = install_wire_trace(wire_body_max_chars) if self.enabled else None
         input_chars = len(input_text) if input_text else None
         self._record = RequestRecord(
             id=request_id,
@@ -154,6 +162,11 @@ class RequestCapture:
                 params=self._attempt_params(attempt.attempt, wire),
                 wire_body=None if wire is None else wire.body_json,
                 reasoning_emitted=None if wire is None else wire.reasoning_emitted,
+                # Captured at the attempt boundary, not at the end of the
+                # request: a route that rotates keys or crosses providers
+                # used to be attributed entirely to its last credential.
+                key_index=self._credential.index,
+                key_label=self._credential.label,
             )
         )
 
@@ -233,6 +246,13 @@ class RequestCapture:
         # gating would otherwise emit only to the server log, now surfaced in
         # the request log and admin UI. NULL whenever gating changed nothing.
         self._record.reasoning_adaptation = routed.reasoning_adaptation.message
+        # The message is prose and PR-owned; the kind is the programmatic
+        # signal the wire pane styles on, so a reworded warning can never
+        # move a badge. UNCHANGED is stored as NULL: nothing happened.
+        kind = routed.reasoning_adaptation.kind
+        self._record.reasoning_adaptation_kind = (
+            None if kind is ReasoningAdaptationKind.UNCHANGED else str(kind)
+        )
 
     def set_optimization(self, rule: str, tokens_saved: int) -> None:
         """Record that a local rule answered this request, and drop the route.
@@ -531,6 +551,13 @@ def build_capture(
         capture_bodies=bool(getattr(settings, "request_log_capture_bodies", True)),
         images=request_image_inputs(request),
         capture_images_pixels=_image_pixels(settings),
+        wire_body_max_chars=int(
+            getattr(
+                settings,
+                "request_log_wire_body_max_chars",
+                DEFAULT_WIRE_BODY_MAX_CHARS,
+            )
+        ),
         headers=capture_headers(headers),
     )
 

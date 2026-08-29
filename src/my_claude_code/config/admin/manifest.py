@@ -1170,6 +1170,20 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "REQUEST_LOG_WIRE_BODY_MAX_CHARS",
+        "Outbound body detail to store",
+        "request_log",
+        "number",
+        settings_attr="request_log_wire_body_max_chars",
+        default="8000",
+        restart_required=True,
+        description=(
+            "How much of each outbound request body the log stores. Sampling "
+            "and reasoning parameters are always stored whole; this bounds the "
+            "message and tool structure stored beside them."
+        ),
+    ),
+    ConfigFieldSpec(
         "REQUEST_LOG_COMPRESS_BODIES",
         "Compress stored text",
         "request_log",

@@ -550,3 +550,59 @@ def test_a_configured_model_with_no_discovered_metadata_still_appears():
     model = payload["providers"][0]["models"][0]
     assert model["has_metadata"] is False
     assert model["configured"] is True
+
+
+# --------------------------------------------------------------------------- #
+# The measured reasoning chip: what the log saw, not what metadata declares.
+# --------------------------------------------------------------------------- #
+
+
+def _payload_with_measurement(measured):
+    from my_claude_code.config.model_refs import ConfiguredChatModelRef
+
+    return build_models_page_payload(
+        (),
+        (
+            ConfiguredChatModelRef(
+                model_ref="ghost/model",
+                provider_id="ghost",
+                model_id="model",
+                sources=("MODEL",),
+            ),
+        ),
+        ModelVisibility(),
+        ModelParameterOverrides(),
+        measured=measured,
+    )
+
+
+def test_the_models_payload_carries_the_measured_reasoning_counts():
+    payload = _payload_with_measurement(
+        {
+            "ghost/model": {
+                "model_ref": "ghost/model",
+                "attempts": 317,
+                "requested": 3,
+                "returned": 0,
+                "unmeasured": 170,
+            }
+        }
+    )
+    model = payload["providers"][0]["models"][0]
+    assert model["reasoning_measured"]["requested"] == 3
+    assert model["reasoning_measured"]["returned"] == 0
+    assert payload["measured_days"] == 7
+
+
+def test_a_model_with_no_traffic_reports_no_measurement():
+    """Absence is not zero: a zeroed row would claim a measurement never made."""
+    payload = _payload_with_measurement({})
+    model = payload["providers"][0]["models"][0]
+    assert model["reasoning_measured"] is None
+
+
+def test_the_models_payload_still_builds_with_the_request_log_disabled():
+    payload = _payload_with_measurement(None)
+    model = payload["providers"][0]["models"][0]
+    assert model["reasoning_measured"] is None
+    assert payload["measured_days"] == 7

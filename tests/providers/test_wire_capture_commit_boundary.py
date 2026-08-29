@@ -7,6 +7,7 @@ routed value differs from the client's: a client asking for 64,000 tokens
 against a model whose upstream cap is 40,960 must be recorded as 40,960.
 """
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -170,3 +171,48 @@ async def test_the_recorded_body_carries_no_prompt_text_and_no_api_key(groq_prov
     # ``stream`` is passed to the SDK as a keyword, not inside the dict, so the
     # capture has to add it back or the record is not the whole call.
     assert '"stream": true' in stored
+
+
+@pytest.mark.asyncio
+async def test_the_recorded_reasoning_knob_survives_a_fifty_nine_tool_request(
+    groq_provider,
+):
+    """The end-to-end shape of the measured defect.
+
+    A Claude Code request carries ~59 tools. The writer used to serialise the
+    body alphabetically and cut it at 8,000 characters, so ``tools`` consumed
+    the whole budget and ``reasoning_effort`` survived in 0 of 212 truncated
+    bodies. The stored body must now parse, and must still carry the knob.
+    """
+
+    body = _client_body(groq_provider)
+    body["tools"] = [
+        {
+            "type": "function",
+            "name": f"tool_{index}",
+            "function": {
+                "name": f"tool_{index}",
+                "description": "d" * 300,
+                "parameters": {
+                    "type": "object",
+                    "properties": {f"p{n}": {"type": "string"} for n in range(8)},
+                },
+            },
+        }
+        for index in range(59)
+    ]
+    body["reasoning_effort"] = "high"
+    body["temperature"] = 0.7
+
+    trace = install_wire_trace()
+    with patch.object(
+        groq_provider._client.chat.completions,
+        "create",
+        AsyncMock(return_value=object()),
+    ):
+        await groq_provider._create_stream(body)
+
+    stored = json.loads(trace.requests[0].body_json)
+    assert stored["reasoning_effort"] == "high"
+    assert stored["temperature"] == 0.7
+    assert trace.requests[0].reasoning_emitted is True

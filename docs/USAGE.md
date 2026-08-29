@@ -769,6 +769,8 @@ Every row's dialog also shows the full request and response, the resolved config
 
 #### Why the totals stop rising
 
+The request detail view shows the outbound body per attempt: sampling and reasoning parameters are stored whole however large the body is, and only the message and tool structure degrades to counts and names under `REQUEST_LOG_WIRE_BODY_MAX_CHARS`. On the Models page, *reasoning requested* and *reasoning returned* are independent measurements — what left, and whether thinking text came back.
+
 `REQUEST_LOG_MAX_ROWS` caps **stored rows**. Once the table is full, one row is deleted for every row that arrives, so everything computed from those rows is a rolling window:
 
 | Section | Covers | Affected by retention |
@@ -802,6 +804,7 @@ REQUEST_LOG_MAX_ROWS=50000         # oldest rows pruned beyond this
 REQUEST_LOG_COMPRESS_BODIES=true   # false stores text inline, as before
 REQUEST_LOG_CAPTURE_BODIES=true    # false drops text entirely, ~77x more rows/GB
 REQUEST_LOG_TEXT_MAX_CHARS=50000   # longer text is truncated before storage
+REQUEST_LOG_WIRE_BODY_MAX_CHARS=8000  # bounds stored message/tool structure only
 REQUEST_LOG_COMPRESSION_LEVEL=9    # 1-22; 19 measured 4.9% smaller at 9x the time
 ```
 

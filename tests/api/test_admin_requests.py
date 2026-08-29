@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from my_claude_code.core.request_log import (
     RequestRecord,
+    RouteAttempt,
+    RouteAttemptOutcome,
     get_request_log_store,
 )
 from tests.api.support import create_test_app
@@ -375,3 +377,44 @@ def test_the_list_accepts_the_largest_page_size_the_ui_offers(
     payload = client.get("/admin/api/requests", params={"limit": 500}).json()
     assert payload["limit"] == 500
     assert len(payload["rows"]) == 5
+
+
+def test_the_request_detail_carries_the_credential_for_each_attempt(client) -> None:
+    """A route that rotated keys used to be attributed whole to its last one."""
+    store = get_request_log_store()
+    assert store is not None
+    store.enqueue(
+        RequestRecord(
+            id="rotated",
+            endpoint="/v1/messages",
+            protocol="anthropic",
+            provider="nvidia_nim",
+            resolved_model="m1",
+            ts_epoch=time.time(),
+            status="success",
+            attempts=(
+                RouteAttempt(
+                    attempt=0,
+                    provider="nvidia_nim",
+                    model_ref="nvidia_nim/m1",
+                    outcome=RouteAttemptOutcome.FAILED,
+                    key_index=0,
+                    key_label="aa...11",
+                ),
+                RouteAttempt(
+                    attempt=1,
+                    provider="nvidia_nim",
+                    model_ref="nvidia_nim/m1",
+                    outcome=RouteAttemptOutcome.SUCCEEDED,
+                    key_index=1,
+                    key_label="bb...22",
+                ),
+            ),
+        )
+    )
+    store.close()
+
+    detail = client.get("/admin/api/requests/rotated").json()
+    first, second = detail["route_attempts"]
+    assert first["key_label"] != second["key_label"]
+    assert (first["key_index"], second["key_index"]) == (0, 1)
