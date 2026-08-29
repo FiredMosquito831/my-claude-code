@@ -145,6 +145,7 @@ def test_the_models_page_talks_to_the_endpoints_that_exist() -> None:
         "/admin/api/model-admin/visibility",
         "/admin/api/model-admin/visibility/preview",
         "/admin/api/model-admin/visibility/toggle",
+        "/admin/api/model-admin/visibility/bulk",
         "/admin/api/model-admin/overrides",
     ):
         assert f'"{path}"' in script, f"admin.js never calls {path}"
@@ -408,3 +409,143 @@ def test_the_measured_reasoning_chip_names_its_window_and_both_numbers() -> None
 def test_the_measured_chip_is_not_rendered_without_a_measurement() -> None:
     """No traffic is not a measured zero, so no chip rather than a zeroed one."""
     assert "if (measured && measured.attempts) {" in _script()
+
+
+def _bulk_slice() -> str:
+    """The bulk runner, up to the single-tick route it must not fall back to."""
+
+    section = _models_section()
+    return section[
+        section.index("async function runModelsBulk(") : section.index(
+            "async function toggleModelVisibility("
+        )
+    ]
+
+
+def test_the_selection_box_is_not_inside_a_summary_element() -> None:
+    """The gutter checkbox is a sibling of the <details>, like the tick.
+
+    Two controls per row is the redesign's biggest legibility bet; putting
+    either of them inside a ``<summary>`` would also make it the a11y
+    violation Chrome reported 1,021 times before the tick was moved out.
+    """
+
+    section = _models_section()
+    row_builder = section[
+        section.index("function buildModelRow(") : section.index(
+            "function buildModelNode("
+        )
+    ]
+    assert 'select.className = "models-select";' in row_builder
+    assert "row.appendChild(buildModelNode(model, editable));" in row_builder
+    summary_builder = section[
+        section.index("function buildModelSummary(") : section.index(
+            "function fillModelBody("
+        )
+    ]
+    assert 'createElement("input")' not in summary_builder
+    assert 'createElement("select")' not in summary_builder
+
+
+def test_the_provider_bulk_controls_are_not_inside_a_summary_element() -> None:
+    """The provider-side twin of the rule the model rows already follow.
+
+    A ``<summary>`` must be the first child of its ``<details>``, which leaves
+    nowhere legal for a select-all checkbox and three buttons; the provider
+    header is a button with ``aria-expanded`` and a sibling body instead.
+    """
+
+    section = _models_section()
+    builder = section[
+        section.index("function buildModelsProviderNode(") : section.index(
+            "function providerHasOverrides("
+        )
+    ]
+    assert 'createElement("summary")' not in builder
+    assert 'toggle.setAttribute("aria-expanded"' in builder
+    assert "head.appendChild(selectAll);" in builder
+    assert "head.appendChild(bulk);" in builder
+
+
+def test_a_bulk_action_is_one_request_and_never_a_loop_of_toggles() -> None:
+    """N toggles is not a slow implementation of "hide all"; it is a lossy one.
+
+    Each toggle derives a full replacement pattern pair from a base it read
+    before the others committed, so the last writer wins and the earlier
+    patterns vanish.
+    """
+
+    slice_ = _bulk_slice()
+    assert '"/admin/api/model-admin/visibility/bulk"' in slice_
+    assert "Promise.all" not in slice_
+    assert '"/admin/api/model-admin/visibility/toggle"' not in slice_
+
+
+def test_a_bulk_action_does_not_refetch_the_whole_page_payload() -> None:
+    """Re-reading 3.4 MB after a bulk write is the cost the bulk route removes."""
+
+    assert 'api("/admin/api/model-admin")' not in _bulk_slice()
+
+
+def test_the_selection_is_held_in_state_not_in_the_dom() -> None:
+    """renderModelsTree() empties the tree on every filter keystroke.
+
+    A selection kept in checkboxes would not survive typing one character.
+    """
+
+    section = _models_section()
+    assert "selected: new Set()," in section
+    assert 'tree.textContent = "";' in section
+
+
+def test_the_bulk_result_is_a_live_region_that_says_a_whole_sentence() -> None:
+    """One atomic status, never a competing live region per counter."""
+
+    markup = _markup()
+    panel = markup[markup.index('id="modelsBulkResult"') :][:400]
+    assert 'role="status"' in panel
+    assert 'aria-live="polite"' in panel
+    assert 'aria-atomic="true"' in panel
+
+
+def test_the_page_still_says_hiding_is_display_only_where_a_bulk_action_lands() -> None:
+    """The hide-only principle is repeated where the user acts, not only at the top."""
+
+    section = _models_section()
+    builder = section[
+        section.index("function renderModelsBulkResult(") : section.index(
+            "async function runModelsBulk("
+        )
+    ]
+    assert "Routing is unaffected either way." in builder
+
+
+def test_the_bulk_buttons_name_what_they_act_on() -> None:
+    """ "Hide all" must say how many, and of what, to a screen reader."""
+
+    section = _models_section()
+    assert '["hide", "Hide all"]' in section
+    assert '["show", "Show all"]' in section
+    assert '["invert", "Invert"]' in section
+    assert "matching ${provider.provider_id} models" in section
+
+
+def test_range_selection_is_reachable_without_a_pointer() -> None:
+    """WCAG 2.2 wants a keyboard alternative to any author-controlled drag."""
+
+    section = _models_section()
+    assert 'event.key === " " && event.shiftKey' in section
+    assert '"ArrowDown"' in section and '"ArrowUp"' in section
+    assert "function startModelsDrag(" in section
+    assert "function continueModelsDrag(" in section
+
+
+def test_the_lazy_fill_and_the_page_size_survive_the_redesign() -> None:
+    """The regression this design is most at risk of, re-asserted after it."""
+
+    section = _models_section()
+    assert "const MODELS_PAGE_SIZE = 40;" in section
+    assert 'body.dataset.filled === "1"' in section
+    assert 'editor.dataset.filled === "1"' in section
+    assert "matching.length === 1" in section
+    assert "window.setTimeout" in section and "modelsState.filter = next;" in section

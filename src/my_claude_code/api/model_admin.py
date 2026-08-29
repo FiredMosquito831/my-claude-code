@@ -22,7 +22,8 @@ the existing owners (``apply_admin_config`` and ``save_model_overrides``).
 """
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from fnmatch import fnmatchcase
 from typing import Any
 
 from my_claude_code.application.model_metadata import (
@@ -387,6 +388,195 @@ def apply_visibility_toggle(
     if allow and not ModelVisibility(allow=allow, deny=deny).is_visible(model_ref):
         allow = (*allow, pattern)
     return ModelVisibility(allow=allow, deny=deny)
+
+
+# A malformed-client guard, not a product ceiling: the largest legitimate bulk
+# request is one provider's whole model list, and nothing here limits how many
+# models a provider may publish. It exists so a bad client cannot write an
+# unbounded ``MODEL_VISIBILITY_DENY`` line into the managed env file.
+MODEL_VISIBILITY_BULK_LIMIT = 2000
+
+_PATTERN_WILDCARDS = "*?["
+
+
+def provider_glob(provider_id: str) -> str:
+    """The one pattern that means "every model of this provider".
+
+    The ``/*`` convention has exactly one definition so the writer, the remover
+    and the tests can never disagree about it. ``fnmatchcase``'s ``*`` crosses
+    ``/``, so ``nous_portal/*`` covers ``nous_portal/anthropic/claude-opus-4.6``
+    as well as ``nous_portal/aion-2.0``.
+    """
+
+    return f"{normalize_override_key(provider_id)}/*"
+
+
+def is_exact_ref_under(pattern: str, provider_id: str) -> bool:
+    """Whether ``pattern`` is a wildcard-free ref belonging to ``provider_id``.
+
+    This is the predicate that decides what "Show all" may delete. It
+    deliberately does not run ``fnmatchcase``: "does this pattern happen to
+    match only this provider's models today" is a different question from "did
+    this pattern come from a tick on this provider", and only the second is
+    safe to remove on the user's behalf.
+    """
+
+    prefix = f"{normalize_override_key(provider_id)}/"
+    if not pattern.startswith(prefix):
+        return False
+    return not any(mark in pattern for mark in _PATTERN_WILDCARDS)
+
+
+@dataclass(frozen=True, slots=True)
+class BulkVisibilityOutcome:
+    """The result of one bulk visibility edit, before it is persisted."""
+
+    visibility: ModelVisibility
+    removed_patterns: tuple[str, ...]
+    wrote_glob: str | None
+    wanted: Mapping[str, bool]
+
+
+def _fold_toggles(
+    visibility: ModelVisibility, wanted: Mapping[str, bool]
+) -> ModelVisibility:
+    """Apply the single-tick rule once per ref, in order.
+
+    Reusing ``apply_visibility_toggle`` rather than reimplementing it is what
+    stops the single and bulk paths from ever diverging.
+    """
+
+    for model_ref, visible in wanted.items():
+        visibility = apply_visibility_toggle(visibility, model_ref, visible=visible)
+    return visibility
+
+
+def apply_visibility_bulk(
+    visibility: ModelVisibility,
+    *,
+    action: str,
+    refs: Iterable[str],
+    provider_id: str | None = None,
+    whole_provider: bool = False,
+) -> BulkVisibilityOutcome:
+    """Hide, show or invert many refs in one edit.
+
+    A whole-provider hide is a *policy* and is written as one glob; a partial
+    selection is a *fact* about a closed set and is written as exact patterns.
+    ``invert`` is partial by nature -- the inverse of an open-ended set is not
+    expressible as a glob -- so it always writes exact patterns.
+    """
+
+    model_refs = list(refs)
+    if action == "invert":
+        # Computed once against the incoming visibility, before any mutation:
+        # folding hides and shows as we go would let the first write decide the
+        # second ref's target.
+        wanted = {ref: not visibility.is_visible(ref) for ref in model_refs}
+        return BulkVisibilityOutcome(
+            visibility=_fold_toggles(visibility, wanted),
+            removed_patterns=(),
+            wrote_glob=None,
+            wanted=wanted,
+        )
+    if action not in {"hide", "show"}:
+        raise ValueError(f"unknown bulk visibility action: {action!r}")
+    visible = action == "show"
+    wanted = dict.fromkeys(model_refs, visible)
+    if not whole_provider or not provider_id:
+        return BulkVisibilityOutcome(
+            visibility=_fold_toggles(visibility, wanted),
+            removed_patterns=(),
+            wrote_glob=None,
+            wanted=wanted,
+        )
+
+    glob = provider_glob(provider_id)
+    removed: list[str] = []
+
+    def keep(pattern: str) -> bool:
+        # Every exact ref under the provider is subsumed by the glob either
+        # way: on hide it becomes redundant, on show it is one of the patterns
+        # this button owns.
+        if is_exact_ref_under(pattern, provider_id):
+            removed.append(pattern)
+            return False
+        return True
+
+    deny = tuple(pattern for pattern in visibility.deny if keep(pattern))
+    allow = tuple(
+        pattern
+        for pattern in visibility.allow
+        if not is_exact_ref_under(pattern, provider_id)
+    )
+    if not visible:
+        if glob not in deny:
+            deny = (*deny, glob)
+            wrote = glob
+        else:
+            # Idempotent: the user already wrote this pattern by hand.
+            wrote = None
+        return BulkVisibilityOutcome(
+            visibility=ModelVisibility(allow=allow, deny=deny),
+            removed_patterns=tuple(removed),
+            wrote_glob=wrote,
+            wanted=wanted,
+        )
+    if glob in deny:
+        removed.append(glob)
+        deny = tuple(pattern for pattern in deny if pattern != glob)
+    wrote: str | None = None
+    # An opt-in allow list hides everything it does not name, so showing a
+    # whole provider means naming it there too -- the bulk mirror of
+    # ``apply_visibility_toggle``'s allow-list rule.
+    if allow and glob not in allow:
+        allow = (*allow, glob)
+        wrote = glob
+    return BulkVisibilityOutcome(
+        visibility=ModelVisibility(allow=allow, deny=deny),
+        removed_patterns=tuple(removed),
+        wrote_glob=wrote,
+        wanted=wanted,
+    )
+
+
+ALLOW_LIST_SENTINEL = "__allow_list__"
+
+
+def bulk_result_rows(
+    visibility: ModelVisibility, wanted: Mapping[str, bool]
+) -> list[dict[str, Any]]:
+    """Per-ref truth after a bulk edit, naming the pattern that overruled it.
+
+    The single-toggle path only ever said "a pattern in your allow/deny lists",
+    which is not enough to act on when one glob quietly overrules an arbitrary
+    subset of three hundred refs.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for model_ref, target in wanted.items():
+        visible = visibility.is_visible(model_ref)
+        row: dict[str, Any] = {
+            "model_ref": model_ref,
+            "visible": visible,
+            "honored": visible == target,
+        }
+        if not row["honored"]:
+            row["blocked_by"] = _blocking_pattern(visibility, model_ref, target)
+        rows.append(row)
+    return rows
+
+
+def _blocking_pattern(visibility: ModelVisibility, model_ref: str, target: bool) -> str:
+    """The first pattern that explains why ``model_ref`` did not reach ``target``."""
+
+    candidate = model_ref.strip().casefold()
+    for pattern in visibility.deny:
+        if fnmatchcase(candidate, pattern):
+            return pattern
+    if visibility.allow:
+        return ALLOW_LIST_SENTINEL
+    return ""
 
 
 def render_patterns(patterns: Iterable[str]) -> str:

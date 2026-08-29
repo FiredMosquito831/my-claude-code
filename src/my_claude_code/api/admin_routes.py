@@ -3,6 +3,7 @@
 import asyncio
 import ipaddress
 import time
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -17,10 +18,13 @@ from my_claude_code.api.docs_content import available_documents
 from my_claude_code.api.docs_render import render_document
 from my_claude_code.api.model_admin import (
     MODEL_SCOPE,
+    MODEL_VISIBILITY_BULK_LIMIT,
     PROVIDER_SCOPE,
     REASONING_MEASUREMENT_DAYS,
+    apply_visibility_bulk,
     apply_visibility_toggle,
     build_models_page_payload,
+    bulk_result_rows,
     render_patterns,
     visibility_payload,
     with_override_row,
@@ -219,6 +223,21 @@ class ModelVisibilityTogglePayload(BaseModel):
 
     model_ref: str
     visible: bool
+
+
+class ModelVisibilityBulkPayload(BaseModel):
+    """One bulk visibility gesture: a provider button or a picked selection.
+
+    ``whole_provider`` is deliberately *not* a field. The server derives it as
+    ``scope == "provider" and not model_refs``, so the rule that decides
+    between one glob and N exact patterns lives where the tests do rather than
+    in a client flag a stale page could get wrong.
+    """
+
+    scope: str
+    action: str
+    provider_id: str | None = None
+    model_refs: list[str] = []
 
 
 class ModelOverridePayload(BaseModel):
@@ -922,16 +941,165 @@ async def toggle_model_visibility(
     """Tick one model on or off by writing an exact-match pattern."""
 
     require_loopback_admin(request)
-    settings = services.requests.current_settings()
-    updated = apply_visibility_toggle(
-        settings_model_visibility(settings), payload.model_ref, visible=payload.visible
-    )
-    result = await _apply_visibility(services, background_tasks, updated)
+    built: dict[str, ModelVisibility] = {}
+
+    def build(settings: Settings) -> ModelVisibility:
+        return apply_visibility_toggle(
+            settings_model_visibility(settings),
+            payload.model_ref,
+            visible=payload.visible,
+        )
+
+    result = await _apply_visibility_with(services, background_tasks, build, built)
+    result["model_ref"] = payload.model_ref
+    if result.get("errors"):
+        # A write that failed validation never reached the file, so claiming it
+        # was honored -- which this route used to do unconditionally -- told the
+        # user the opposite of what happened.
+        return result
     # What the toggle actually achieved, which a user-written glob can still
     # overrule in either direction.
-    result["model_ref"] = payload.model_ref
+    updated = built["visibility"]
     result["visible"] = updated.is_visible(payload.model_ref)
     result["honored"] = result["visible"] == payload.visible
+    return result
+
+
+@router.post("/admin/api/model-admin/visibility/bulk")
+async def bulk_model_visibility(
+    payload: ModelVisibilityBulkPayload,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    services: ApiServices = Depends(get_services),
+):
+    """Hide, show or invert many models in one settings commit.
+
+    One request and one commit rather than N: the per-model route re-reads the
+    whole catalogue after every tick, so hiding a 317-model provider from the
+    client cost 634 requests and about a gigabyte of JSON -- and, because each
+    toggle derived its replacement pattern list from a base it read before the
+    others committed, it was lossy as well as slow.
+    """
+
+    require_loopback_admin(request)
+    if payload.scope not in {"provider", "selection"}:
+        raise HTTPException(status_code=400, detail=f"Unknown scope: {payload.scope}")
+    if payload.action not in {"hide", "show", "invert"}:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {payload.action}")
+    if payload.scope == "provider" and not payload.provider_id:
+        raise HTTPException(
+            status_code=400, detail="A provider scope needs a provider_id."
+        )
+    if payload.scope == "selection" and not payload.model_refs:
+        raise HTTPException(
+            status_code=400, detail="A selection scope needs at least one model_ref."
+        )
+    if len(payload.model_refs) > MODEL_VISIBILITY_BULK_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{len(payload.model_refs)} refs exceeds "
+                f"MODEL_VISIBILITY_BULK_LIMIT ({MODEL_VISIBILITY_BULK_LIMIT})."
+            ),
+        )
+
+    whole_provider = payload.scope == "provider" and not payload.model_refs
+    page = await asyncio.to_thread(_models_page_payload, services)
+    known: dict[str, str] = {}
+    for provider in page.get("providers", []):
+        for model in provider.get("models", []):
+            known[str(model["model_ref"])] = str(provider["provider_id"])
+    if whole_provider:
+        refs = [
+            ref
+            for ref, provider_id in known.items()
+            if provider_id == payload.provider_id
+        ]
+    else:
+        refs = [ref for ref in payload.model_refs if ref in known]
+
+    outcome_box: dict[str, Any] = {}
+    previous_box: dict[str, list[str]] = {}
+
+    def build(settings: Settings) -> ModelVisibility:
+        base = settings_model_visibility(settings)
+        previous_box["allow"] = list(base.allow)
+        previous_box["deny"] = list(base.deny)
+        outcome = apply_visibility_bulk(
+            base,
+            action=payload.action,
+            refs=refs,
+            provider_id=payload.provider_id,
+            whole_provider=whole_provider,
+        )
+        outcome_box["outcome"] = outcome
+        return outcome.visibility
+
+    built: dict[str, ModelVisibility] = {}
+    result = await _apply_visibility_with(services, background_tasks, build, built)
+    result["action"] = payload.action
+    result["scope"] = payload.scope
+    result["provider_id"] = payload.provider_id
+    if result.get("errors"):
+        # Nothing landed, so there is nothing to report per ref and nothing to
+        # undo. Saying otherwise is the bug this route was written not to have.
+        return result
+    outcome = outcome_box["outcome"]
+    rows = bulk_result_rows(outcome.visibility, outcome.wanted)
+    result["results"] = rows
+    result["previous"] = previous_box
+    result["removed_patterns"] = list(outcome.removed_patterns)
+    result["wrote_glob"] = outcome.wrote_glob
+    result["changed"] = [row["model_ref"] for row in rows if row["honored"]]
+    result["honored_count"] = sum(1 for row in rows if row["honored"])
+    result["unhonored_count"] = sum(1 for row in rows if not row["honored"])
+    return result
+
+
+async def _apply_visibility_with(
+    services: ApiServices,
+    background_tasks: BackgroundTasks,
+    build: Callable[[Settings], ModelVisibility],
+    built: dict[str, ModelVisibility],
+) -> dict[str, Any]:
+    """Compute a visibility edit and write it inside one config lock.
+
+    The read and the write have to be the same critical section: two callers
+    that each read the pattern lists and then write a full replacement pair
+    derived from what they read will lose one of the two edits, and a bulk
+    action loses three hundred patterns rather than one.
+    """
+
+    def updates(settings: Settings) -> dict[str, str]:
+        visibility = build(settings)
+        built["visibility"] = visibility
+        return {
+            "MODEL_VISIBILITY_ALLOW": render_patterns(visibility.allow),
+            "MODEL_VISIBILITY_DENY": render_patterns(visibility.deny),
+        }
+
+    result = await services.admin.apply_admin_config_with(updates)
+    visibility = built.get("visibility")
+    if visibility is None:
+        # The runtime refused before it ever asked for the new values, so
+        # there is no edit to describe.
+        return result
+    return _finish_visibility(services, background_tasks, result, visibility)
+
+
+def _finish_visibility(
+    services: ApiServices,
+    background_tasks: BackgroundTasks,
+    result: dict[str, Any],
+    visibility: ModelVisibility,
+) -> dict[str, Any]:
+    restart = result.get("restart")
+    if isinstance(restart, dict) and restart.get("automatic"):
+        background_tasks.add_task(services.admin.request_restart)
+    result["visibility"] = {
+        "allow": list(visibility.allow),
+        "deny": list(visibility.deny),
+    }
     return result
 
 

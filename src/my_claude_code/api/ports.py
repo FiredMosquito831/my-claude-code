@@ -1,11 +1,12 @@
 """Runtime capabilities consumed by the HTTP API adapter."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.ports import RequestRuntimePort, TaskController
+from my_claude_code.config.settings import Settings
 
 
 class AdminRuntimePort(Protocol):
@@ -13,6 +14,10 @@ class AdminRuntimePort(Protocol):
 
     async def apply_admin_config(
         self, updates: Mapping[str, Any]
+    ) -> dict[str, Any]: ...
+
+    async def apply_admin_config_with(
+        self, build: Callable[[Settings], Mapping[str, Any]]
     ) -> dict[str, Any]: ...
 
     def admin_status(self) -> dict[str, Any]: ...

@@ -10638,7 +10638,25 @@ const modelsState = {
   open: new Set(),
   // provider_id -> how many of its (filtered) models have been paged in.
   paged: new Map(),
+  // Selected model refs. Lives here, not in the DOM: renderModelsTree() does
+  // tree.textContent = "" on every filter keystroke, so a selection kept in
+  // checkboxes would not survive typing one character.
+  selected: new Set(),
+  // "all" | "visible" | "hidden" | "configured" | "overridden", or a Set of
+  // refs for the synthetic "the ones that did not take" facet.
+  facet: "all",
+  // { allow: [...], deny: [...] } from the last bulk write, or null.
+  undo: null,
 };
+
+// Range anchoring is view state, not data state: it must not survive a tree
+// rebuild, so it lives beside modelsState rather than in it.
+let modelsLastClickedRef = null;
+// The refs the last Shift+Arrow run selected, so walking back shrinks the
+// range instead of leaving a trail behind the cursor.
+let modelsArrowRange = [];
+// { on, providerId } while a pointer is dragging across selection boxes.
+let modelsDrag = null;
 
 // How many model rows a provider shows before the "Show more" button. Sized so
 // a page of rows is a scroll or two, not a wall.
@@ -10680,6 +10698,7 @@ function renderModelsPage() {
   const notice = byId("modelsHideOnlyNotice");
   if (notice) notice.textContent = data.visibility.hide_only_notice || "";
   syncModelsPatternFields(data);
+  renderModelsPatternProvenance();
   renderModelsOwnedElsewhere(data.overrides.owned_elsewhere || {});
   renderModelsHiddenRoutes(data.visibility.hidden_route_refs || []);
   renderModelsTree();
@@ -10763,10 +10782,221 @@ function modelsMatchesFilter(text) {
   return text.toLowerCase().includes(modelsState.filter);
 }
 
+/* The facet is the axis a visibility page is actually organised around, and
+   the filter never had it: "show me what is hidden" was a question the page
+   could not answer. A Set facet is the synthetic one the bulk result panel
+   installs when it offers "show the 12 that did not take". */
+function modelsMatchesFacet(model) {
+  const facet = modelsState.facet;
+  if (facet instanceof Set) return facet.has(model.model_ref);
+  if (facet === "visible") return Boolean(model.visible);
+  if (facet === "hidden") return !model.visible;
+  if (facet === "configured") return Boolean(model.configured);
+  if (facet === "overridden") {
+    return Object.keys(model.override || {}).length > 0;
+  }
+  return true;
+}
+
+function modelsFacetLabel() {
+  const facet = modelsState.facet;
+  if (facet instanceof Set) return "the models a pattern overruled";
+  return facet;
+}
+
+function modelsIsNarrowed() {
+  return Boolean(modelsState.filter) || modelsState.facet !== "all";
+}
+
 function modelsFilteredFor(provider) {
-  return (provider.models || []).filter((model) =>
-    modelsMatchesFilter(model.model_ref),
+  // Typing a provider name selects the provider, not zero models: the filter
+  // used to match model refs only, so "novita" found nothing on a page whose
+  // first column is provider names.
+  const wholeProvider = modelsMatchesFilter(provider.provider_id);
+  return (provider.models || []).filter(
+    (model) =>
+      (wholeProvider || modelsMatchesFilter(model.model_ref)) &&
+      modelsMatchesFacet(model),
   );
+}
+
+function modelsRefsFor(provider) {
+  return modelsFilteredFor(provider).map((model) => model.model_ref);
+}
+
+function modelsAllFilteredRefs() {
+  const data = modelsState.data;
+  const refs = [];
+  (((data && data.providers) || [])).forEach((provider) => {
+    modelsFilteredFor(provider).forEach((model) => refs.push(model.model_ref));
+  });
+  return refs;
+}
+
+function modelsProviderOf(modelRef) {
+  const data = modelsState.data;
+  const found = (((data && data.providers) || [])).find((provider) =>
+    (provider.models || []).some((model) => model.model_ref === modelRef),
+  );
+  return found ? found.provider_id : null;
+}
+
+function modelsSelectionSummary() {
+  const providers = new Set();
+  modelsState.selected.forEach((ref) => {
+    const providerId = modelsProviderOf(ref);
+    if (providerId) providers.add(providerId);
+  });
+  return { count: modelsState.selected.size, providers: providers.size };
+}
+
+function setModelsSelection(refs, on) {
+  refs.forEach((ref) => {
+    if (on) modelsState.selected.add(ref);
+    else modelsState.selected.delete(ref);
+  });
+  syncModelsSelectionUi();
+}
+
+function clearModelsSelection() {
+  modelsState.selected.clear();
+  modelsLastClickedRef = null;
+  modelsArrowRange = [];
+  syncModelsSelectionUi();
+}
+
+/* Walks rendered rows only, so its cost tracks what is on screen rather than
+   the thousand models the payload holds. */
+function syncModelsSelectionUi() {
+  document.querySelectorAll(".models-model-row").forEach((row) => {
+    const ref = row.dataset.ref;
+    const on = modelsState.selected.has(ref);
+    const box = row.querySelector("input.models-select");
+    if (box) box.checked = on;
+    row.classList.toggle("is-selected", on);
+  });
+  document.querySelectorAll(".models-provider").forEach((node) => {
+    const box = node.querySelector("input.models-select-all");
+    const provider = modelsProviderEntry(node.dataset.provider);
+    if (!box || !provider) return;
+    const refs = modelsRefsFor(provider);
+    const picked = refs.filter((ref) => modelsState.selected.has(ref)).length;
+    box.checked = refs.length > 0 && picked === refs.length;
+    box.indeterminate = picked > 0 && picked < refs.length;
+  });
+  renderModelsBulkBar();
+}
+
+function modelsProviderEntry(providerId) {
+  const data = modelsState.data;
+  return (((data && data.providers) || [])).find(
+    (provider) => provider.provider_id === providerId,
+  );
+}
+
+/* The contiguous rendered rows between two refs of the same provider. Rows
+   that were never paged in are not part of a visual range, so the range is
+   read from the list the user can actually see. */
+function modelsRenderedRefs(row) {
+  const list = row && row.parentElement;
+  if (!list) return [];
+  return Array.from(list.children)
+    .map((child) => child.dataset && child.dataset.ref)
+    .filter(Boolean);
+}
+
+function modelsRowFor(modelRef) {
+  // Scanned rather than selected: a model ref is upstream text that can carry
+  // any character, and building a selector out of it needs an escape the page
+  // cannot rely on.
+  return Array.from(document.querySelectorAll(".models-model-row")).find(
+    (row) => row.dataset.ref === modelRef,
+  );
+}
+
+function modelsRangeRefs(fromRef, toRef) {
+  const row = modelsRowFor(fromRef);
+  const refs = modelsRenderedRefs(row);
+  const start = refs.indexOf(fromRef);
+  const end = refs.indexOf(toRef);
+  if (start < 0 || end < 0) return [fromRef];
+  return refs.slice(Math.min(start, end), Math.max(start, end) + 1);
+}
+
+function onModelsSelectClick(modelRef, box, event) {
+  const on = box.checked;
+  if (event.shiftKey && modelsLastClickedRef) {
+    setModelsSelection(modelsRangeRefs(modelsLastClickedRef, modelRef), on);
+  } else {
+    setModelsSelection([modelRef], on);
+    modelsLastClickedRef = modelRef;
+  }
+  modelsArrowRange = [];
+}
+
+/* Range selection must not be pointer-only: WCAG 2.2 asks for a single-pointer
+   and keyboard alternative to any author-controlled drag, so the same range is
+   reachable with Shift+Space and Shift+Arrow. */
+function onModelsSelectKeydown(modelRef, box, event) {
+  if (event.key === " " && event.shiftKey) {
+    event.preventDefault();
+    const on = !box.checked;
+    setModelsSelection(modelsRangeRefs(modelsLastClickedRef || modelRef, modelRef), on);
+    modelsArrowRange = [];
+    return;
+  }
+  if (!event.shiftKey) return;
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const row = modelsRowFor(modelRef);
+  const refs = modelsRenderedRefs(row);
+  const here = refs.indexOf(modelRef);
+  const next = refs[here + (event.key === "ArrowDown" ? 1 : -1)];
+  if (!next) return;
+  if (!modelsLastClickedRef) modelsLastClickedRef = modelRef;
+  const wanted = modelsRangeRefs(modelsLastClickedRef, next);
+  // Walking back towards the anchor shrinks the range rather than leaving the
+  // rows behind the cursor selected.
+  const dropped = modelsArrowRange.filter((ref) => !wanted.includes(ref));
+  setModelsSelection(dropped, false);
+  setModelsSelection(wanted, true);
+  modelsArrowRange = wanted;
+  const nextRow = modelsRowFor(next);
+  const nextBox = nextRow && nextRow.querySelector("input.models-select");
+  if (nextBox) nextBox.focus();
+}
+
+function startModelsDrag(modelRef, box, event) {
+  // A touch that did not begin on the box itself is a scroll, not a drag.
+  if (event.pointerType === "touch" && event.target !== box) return;
+  if (typeof event.button === "number" && event.button !== 0) return;
+  const on = !modelsState.selected.has(modelRef);
+  modelsDrag = { on, providerId: modelsProviderOf(modelRef) };
+  const tree = byId("modelsTree");
+  if (tree) tree.classList.add("is-dragging");
+  if (event.target !== box) {
+    // The click that follows a press on the box does the box's own row; a
+    // press on the cell around it has to do it here.
+    setModelsSelection([modelRef], on);
+    modelsLastClickedRef = modelRef;
+  }
+}
+
+function continueModelsDrag(event) {
+  if (!modelsDrag) return;
+  const row = event.target.closest && event.target.closest(".models-model-row");
+  if (!row || !row.dataset.ref) return;
+  if (modelsProviderOf(row.dataset.ref) !== modelsDrag.providerId) return;
+  // Every row the pointer crosses takes the anchor row's new state, so a drag
+  // never leaves a mixed run behind it.
+  setModelsSelection([row.dataset.ref], modelsDrag.on);
+}
+
+function endModelsDrag() {
+  if (!modelsDrag) return;
+  modelsDrag = null;
+  const tree = byId("modelsTree");
+  if (tree) tree.classList.remove("is-dragging");
 }
 
 function renderModelsTree() {
@@ -10784,11 +11014,32 @@ function renderModelsTree() {
     matching.push([provider, models]);
   });
 
+  renderModelsFacets();
   renderModelsTreeSummary(providers.length, matching.length, shown);
+  syncModelsSelectionUi();
 
   if (!matching.length) {
     const empty = document.createElement("p");
     empty.className = "models-status";
+    if (modelsState.facet !== "all") {
+      // A bare "0 results" is a dead end. Name the facet that emptied the
+      // page and offer the way out in the same sentence.
+      empty.textContent = `Nothing matches the "${modelsFacetLabel()}" filter${
+        modelsState.filter ? ` and "${modelsState.filter}"` : ""
+      }.`;
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.className = "models-link-button models-facet-clear";
+      clear.textContent = "Show all models again";
+      clear.addEventListener("click", () => {
+        modelsState.facet = "all";
+        modelsState.paged.clear();
+        renderModelsTree();
+      });
+      tree.appendChild(empty);
+      tree.appendChild(clear);
+      return;
+    }
     empty.textContent = modelsState.filter
       ? "No model matches that filter."
       : "No models discovered yet. Refresh provider models on the Providers page.";
@@ -10808,43 +11059,196 @@ function renderModelsTree() {
 function renderModelsTreeSummary(providerCount, matchedProviders, shown) {
   const target = byId("modelsTreeSummary");
   if (!target) return;
+  target.textContent = "";
+  const line = document.createElement("span");
   if (modelsState.filter) {
-    target.textContent = `${shown} model(s) in ${matchedProviders} of ${providerCount} provider(s) match "${modelsState.filter}".`;
+    line.textContent = `${shown} model(s) in ${matchedProviders} of ${providerCount} provider(s) match "${modelsState.filter}".`;
   } else {
-    target.textContent = `${shown} model(s) across ${providerCount} provider(s). Open a provider to see its models.`;
+    line.textContent = `${shown} model(s) across ${providerCount} provider(s). Open a provider to see its models.`;
+  }
+  if (modelsState.facet !== "all") {
+    line.textContent += ` Showing only "${modelsFacetLabel()}".`;
+  }
+  target.appendChild(line);
+  // The page already counted the matches; what was missing was any way to act
+  // on what it counted.
+  if (modelsIsNarrowed() && shown) {
+    const pick = document.createElement("button");
+    pick.type = "button";
+    pick.className = "models-link-button models-select-matches";
+    pick.textContent = `Select all ${shown}`;
+    pick.addEventListener("click", () => {
+      setModelsSelection(modelsAllFilteredRefs(), true);
+    });
+    target.appendChild(pick);
   }
 }
 
-function buildModelsProviderNode(provider, models, autoOpen) {
-  const node = document.createElement("details");
-  node.className = "models-provider";
-  const key = `provider:${provider.provider_id}`;
-  node.open = modelsState.open.has(key) || autoOpen;
+const MODELS_FACETS = [
+  ["all", "All"],
+  ["visible", "Visible"],
+  ["hidden", "Hidden"],
+  ["configured", "Configured"],
+  ["overridden", "Overridden"],
+];
 
-  const summary = document.createElement("summary");
+function renderModelsFacets() {
+  const target = byId("modelsFacets");
+  const data = modelsState.data;
+  if (!target || !data) return;
+  target.textContent = "";
+  const models = [];
+  (data.providers || []).forEach((provider) => {
+    (provider.models || []).forEach((model) => models.push(model));
+  });
+  const saved = modelsState.facet;
+  const counts = new Map();
+  MODELS_FACETS.forEach(([key]) => {
+    modelsState.facet = key;
+    counts.set(key, models.filter((model) => modelsMatchesFacet(model)).length);
+  });
+  modelsState.facet = saved;
+  MODELS_FACETS.forEach(([key, label]) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "models-facet";
+    const active = modelsState.facet === key;
+    if (active) chip.classList.add("is-active");
+    chip.setAttribute("aria-pressed", active ? "true" : "false");
+    chip.textContent = `${label} ${counts.get(key)}`;
+    chip.addEventListener("click", () => {
+      modelsState.facet = key;
+      modelsState.paged.clear();
+      renderModelsTree();
+    });
+    target.appendChild(chip);
+  });
+  if (modelsState.facet instanceof Set) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "models-facet is-active";
+    chip.setAttribute("aria-pressed", "true");
+    chip.textContent = `Overruled ${modelsState.facet.size}`;
+    chip.addEventListener("click", () => {
+      modelsState.facet = "all";
+      modelsState.paged.clear();
+      renderModelsTree();
+    });
+    target.appendChild(chip);
+  }
+}
+
+/* The provider header is the page's one sticky element and it carries the
+   bulk controls, so a user half way down three hundred rows still knows which
+   provider they are in and can act on it without scrolling back.
+
+   It is a button plus a body rather than <details>/<summary> for one reason:
+   a checkbox and three buttons may not live inside a <summary> (Chrome
+   reported the nested-control violation 1,021 times on the model rows), and a
+   <summary> must be the first child of its <details>, which leaves nowhere
+   legal to put them. A button with aria-expanded is the same affordance with
+   room beside it. */
+function buildModelsProviderNode(provider, models, autoOpen) {
+  const node = document.createElement("div");
+  node.className = "models-provider";
+  node.dataset.provider = provider.provider_id;
+  const key = `provider:${provider.provider_id}`;
+  const open = modelsState.open.has(key) || autoOpen;
+
+  const head = document.createElement("div");
+  head.className = "models-provider-head";
+
+  const selectAll = document.createElement("input");
+  selectAll.type = "checkbox";
+  selectAll.className = "models-select-all";
+  selectAll.setAttribute(
+    "aria-label",
+    `Select every listed ${provider.provider_id} model`,
+  );
+  selectAll.addEventListener("change", () => {
+    setModelsSelection(modelsRefsFor(provider), selectAll.checked);
+  });
+  head.appendChild(selectAll);
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "models-provider-toggle";
+  toggle.setAttribute("aria-expanded", open ? "true" : "false");
   const name = document.createElement("span");
   name.className = "models-provider-name";
   name.textContent = provider.provider_id;
-  summary.appendChild(name);
+  toggle.appendChild(name);
   const count = document.createElement("span");
   count.className = "models-chip";
-  count.textContent = modelsState.filter
+  count.textContent = modelsIsNarrowed()
     ? `${models.length} of ${(provider.models || []).length} match`
     : `${models.length} models`;
-  summary.appendChild(count);
+  toggle.appendChild(count);
   // "0 hidden" on every provider is chrome with no information in it.
   if (provider.hidden_count) {
-    summary.appendChild(
+    toggle.appendChild(
       buildModelsChip("hidden", `${provider.hidden_count} hidden`),
     );
   }
-  if (providerHasOverrides(provider)) {
-    summary.appendChild(buildModelsChip("forced", "provider override"));
+  const configured = (provider.models || []).filter(
+    (model) => model.configured,
+  ).length;
+  if (configured) {
+    toggle.appendChild(buildModelsChip("route", `${configured} configured`));
   }
-  node.appendChild(summary);
+  if (providerHasOverrides(provider)) {
+    toggle.appendChild(buildModelsChip("forced", "provider override"));
+  }
+  head.appendChild(toggle);
+
+  const bulk = document.createElement("div");
+  bulk.className = "models-provider-bulk";
+  const narrowed = modelsIsNarrowed();
+  const scope = narrowed
+    ? `${models.length} matching ${provider.provider_id} models`
+    : `${models.length} ${provider.provider_id} models`;
+  [
+    ["show", "Show all"],
+    ["hide", "Hide all"],
+    ["invert", "Invert"],
+  ].forEach(([action, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button models-bulk-button";
+    button.textContent = label;
+    button.setAttribute(
+      "aria-label",
+      action === "invert"
+        ? `Invert the visibility of ${scope}`
+        : `${label} ${scope}`,
+    );
+    button.addEventListener("click", () => {
+      runModelsBulk({
+        scope: "provider",
+        action,
+        providerId: provider.provider_id,
+        // No refs means "the whole provider", which the server writes as one
+        // glob. A narrowed view is a selection, not a policy, so it sends the
+        // refs it can actually see.
+        refs: narrowed || action === "invert" ? modelsRefsFor(provider) : [],
+        affected: models.length,
+        button,
+      });
+    });
+    bulk.appendChild(button);
+  });
+  if (narrowed) {
+    const note = document.createElement("span");
+    note.className = "models-provider-match";
+    note.textContent = `${models.length} match filter`;
+    bulk.appendChild(note);
+  }
+  head.appendChild(bulk);
+  node.appendChild(head);
 
   const body = document.createElement("div");
   body.className = "models-provider-body";
+  body.hidden = !open;
   node.appendChild(body);
 
   // Built on first open, not up front. Ten providers' worth of editors and a
@@ -10855,15 +11259,19 @@ function buildModelsProviderNode(provider, models, autoOpen) {
     body.dataset.filled = "1";
     fillModelsProviderBody(body, provider, models);
   };
-  node.addEventListener("toggle", () => {
-    if (node.open) {
+  toggle.addEventListener("click", () => {
+    const next = body.hidden;
+    body.hidden = !next;
+    toggle.setAttribute("aria-expanded", next ? "true" : "false");
+    if (next) {
       modelsState.open.add(key);
       fill();
+      syncModelsSelectionUi();
     } else {
       modelsState.open.delete(key);
     }
   });
-  if (node.open) fill();
+  if (open) fill();
   return node;
 }
 
@@ -10937,6 +11345,31 @@ function fillModelsProviderBody(body, provider, models) {
 function buildModelRow(model, editable) {
   const row = document.createElement("div");
   row.className = "models-model-row";
+  row.dataset.ref = model.model_ref;
+
+  // Two checkboxes on one row is the design's biggest legibility bet, so they
+  // are separated three ways: the selection box sits in its own ruled gutter
+  // cell, it carries no visible word, and the visibility control keeps its
+  // "Show" label.
+  const cell = document.createElement("div");
+  cell.className = "models-select-cell";
+  const select = document.createElement("input");
+  select.type = "checkbox";
+  select.className = "models-select";
+  select.checked = modelsState.selected.has(model.model_ref);
+  select.setAttribute("aria-label", `Select ${model.model_ref}`);
+  select.addEventListener("click", (clicked) =>
+    onModelsSelectClick(model.model_ref, select, clicked),
+  );
+  select.addEventListener("keydown", (pressed) =>
+    onModelsSelectKeydown(model.model_ref, select, pressed),
+  );
+  cell.appendChild(select);
+  cell.addEventListener("pointerdown", (pressed) =>
+    startModelsDrag(model.model_ref, select, pressed),
+  );
+  row.appendChild(cell);
+  if (select.checked) row.classList.add("is-selected");
 
   const tick = document.createElement("label");
   tick.className = "models-visible-toggle";
@@ -10951,7 +11384,7 @@ function buildModelRow(model, editable) {
   });
   tick.appendChild(toggle);
   const tickText = document.createElement("span");
-  tickText.textContent = "Show";
+  tickText.textContent = model.visible ? "Show" : "Hidden";
   tick.appendChild(tickText);
   tick.title = `Show ${model.model_ref} in /v1/models and the admin pickers`;
   row.appendChild(tick);
@@ -11015,6 +11448,8 @@ function buildModelSummary(model) {
   // Measured, not declared: what the log saw leave and come back. Absent when
   // the model served no succeeded attempt in the window -- never measured is
   // not the same fact as measured zero, so no chip rather than a zeroed one.
+  const second = document.createElement("span");
+  second.className = "models-chip-row";
   const measured = model.reasoning_measured;
   if (measured && measured.attempts) {
     const days = (modelsState.data && modelsState.data.measured_days) || 7;
@@ -11026,8 +11461,18 @@ function buildModelSummary(model) {
     chip.title =
       "Requested is what the outbound body carried; returned is whether the " +
       "reply contained thinking text. Succeeded attempts only.";
-    summary.appendChild(chip);
+    second.appendChild(chip);
   }
+  // Only when a pattern that is not this model's own exact ref is what hides
+  // it: a row that springs back with no explanation is the complaint the
+  // single-toggle path never answered.
+  if (model.blocked_by) {
+    const note = document.createElement("span");
+    note.className = "models-blocked-note";
+    note.textContent = `hidden by your pattern ${model.blocked_by}`;
+    second.appendChild(note);
+  }
+  if (second.childElementCount) summary.appendChild(second);
   return summary;
 }
 
@@ -11510,21 +11955,337 @@ function refreshProviderRow(providerId) {
     (entry) => entry.provider_id === providerId,
   );
   if (!provider) return;
-  document.querySelectorAll("details.models-provider").forEach((node) => {
-    const name = node.querySelector(".models-provider-name");
-    if (!name || name.textContent !== providerId) return;
-    const summary = node.querySelector("summary");
-    if (!summary) return;
-    summary
+  document.querySelectorAll(".models-provider").forEach((node) => {
+    if (node.dataset.provider !== providerId) return;
+    const toggle = node.querySelector(".models-provider-toggle");
+    if (!toggle) return;
+    toggle
       .querySelectorAll(".models-chip-forced")
       .forEach((chip) => chip.remove());
     if (providerHasOverrides(provider)) {
-      summary.appendChild(buildModelsChip("forced", "provider override"));
+      toggle.appendChild(buildModelsChip("forced", "provider override"));
     }
   });
   // A provider override changes what every model under it sends, so the open
   // model bodies below it have to be repainted too.
   (provider.models || []).forEach((model) => refreshModelRow(model.model_ref));
+}
+
+/* One pass over the rendered rows for many refs. refreshModelRow() runs its
+   own document-wide query, so calling it three hundred times is quadratic in
+   the number of rows on screen -- which is exactly the size a bulk action
+   reaches. */
+function refreshModelRows(modelRefs) {
+  const wanted = new Set(modelRefs);
+  const editable =
+    (modelsState.data && modelsState.data.overrides.editable_parameters) || [];
+  document.querySelectorAll("details.models-model").forEach((node) => {
+    const ref = node.querySelector(".models-ref");
+    if (!ref || !wanted.has(ref.textContent)) return;
+    const model = findModelInData(ref.textContent);
+    if (!model) return;
+    const summary = node.querySelector("summary");
+    if (summary) node.replaceChild(buildModelSummary(model), summary);
+    const row = node.parentElement;
+    const tick =
+      row && row.querySelector(".models-visible-toggle input[type=checkbox]");
+    if (tick) tick.checked = model.visible;
+    const word = row && row.querySelector(".models-visible-toggle span");
+    if (word) word.textContent = model.visible ? "Show" : "Hidden";
+    const body = node.querySelector(".models-model-body");
+    if (!body || body.dataset.filled !== "1") return;
+    const readouts = body.querySelector(".models-readouts");
+    if (readouts) fillModelReadouts(readouts, model);
+    else fillModelBody(body, model, editable);
+  });
+}
+
+function renderModelsBulkBar() {
+  const bar = byId("modelsBulkBar");
+  if (!bar) return;
+  bar.textContent = "";
+  const { count, providers } = modelsSelectionSummary();
+  bar.hidden = count === 0;
+  if (!count) return;
+  // The global action bar is two lines tall on some views and one on others,
+  // so the offset is measured rather than guessed: a hardcoded 56px left this
+  // bar half hidden behind it on the Models page.
+  const globalBar = document.querySelector(".action-bar");
+  bar.style.bottom = `${globalBar ? globalBar.offsetHeight : 56}px`;
+  const line = document.createElement("span");
+  line.className = "models-bulk-count";
+  line.textContent = `${count} selected across ${providers} provider(s)`;
+  bar.appendChild(line);
+  [
+    ["show", "Show"],
+    ["hide", "Hide"],
+    ["invert", "Invert"],
+  ].forEach(([action, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button models-bulk-button";
+    button.textContent = label;
+    button.setAttribute("aria-label", `${label} the ${count} selected model(s)`);
+    button.addEventListener("click", () => {
+      runModelsBulk({
+        scope: "selection",
+        action,
+        providerId: null,
+        refs: Array.from(modelsState.selected),
+        affected: count,
+        button,
+      });
+    });
+    bar.appendChild(button);
+  });
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "secondary-button models-bulk-button";
+  clear.textContent = "Clear";
+  clear.addEventListener("click", clearModelsSelection);
+  bar.appendChild(clear);
+}
+
+/* A persistent, dismissible status panel rather than a toast. The skill's
+   toast rule says auto-dismiss after three to five seconds; a report that
+   names which of your own globs overruled which refs, and carries the only
+   Undo, must not vanish on a timer. One atomic live region, one whole
+   sentence, no bare numbers. */
+function renderModelsBulkResult(result) {
+  const target = byId("modelsBulkResult");
+  if (!target) return;
+  target.textContent = "";
+  target.hidden = false;
+  const rows = result.results || [];
+  const unhonored = rows.filter((row) => row.honored === false);
+  const verb =
+    result.action === "hide"
+      ? "Hid"
+      : result.action === "show"
+        ? "Showed"
+        : "Inverted";
+  const lead = document.createElement("p");
+  const where = result.provider_id ? ` ${result.provider_id}` : "";
+  let text = `${verb} ${result.honored_count} of ${rows.length}${where} model(s).`;
+  if (result.wrote_glob) {
+    text += ` Written as one pattern, ${result.wrote_glob}.`;
+  } else if (rows.length && result.action !== "show") {
+    // A show that only removed patterns has nothing to announce as written,
+    // and saying otherwise would name a write that did not happen.
+    text += " Written as one exact pattern per model.";
+  }
+  if ((result.removed_patterns || []).length) {
+    text += ` Removed ${result.removed_patterns.join(", ")} from your lists.`;
+  }
+  text += " Routing is unaffected either way.";
+  lead.textContent = text;
+  target.appendChild(lead);
+
+  if (unhonored.length) {
+    // Grouped by the pattern that won, so one offending glob is named once
+    // rather than three hundred times.
+    const byPattern = new Map();
+    unhonored.forEach((row) => {
+      const pattern = row.blocked_by || "";
+      if (!byPattern.has(pattern)) byPattern.set(pattern, []);
+      byPattern.get(pattern).push(row.model_ref);
+    });
+    const list = document.createElement("ul");
+    list.className = "models-bulk-blocked";
+    byPattern.forEach((refs, pattern) => {
+      const item = document.createElement("li");
+      item.textContent = pattern
+        ? `${refs.length} of them did not change: your pattern ${
+            pattern === "__allow_list__"
+              ? 'in the "Show only these" list'
+              : pattern
+          } overrules an exact tick.`
+        : `${refs.length} of them did not change.`;
+      list.appendChild(item);
+    });
+    target.appendChild(list);
+    const show = document.createElement("button");
+    show.type = "button";
+    show.className = "secondary-button models-bulk-button";
+    show.textContent = `Show the ${unhonored.length}`;
+    show.addEventListener("click", () => {
+      modelsState.facet = new Set(unhonored.map((row) => row.model_ref));
+      modelsState.paged.clear();
+      renderModelsTree();
+    });
+    target.appendChild(show);
+  }
+
+  if (modelsState.undo) {
+    const undo = document.createElement("button");
+    undo.type = "button";
+    undo.className = "secondary-button models-bulk-button models-bulk-undo";
+    undo.textContent = "Undo";
+    undo.title =
+      "Restores the two pattern lists as they were before this action. It does not undo a hand edit of the pattern fields made since.";
+    undo.addEventListener("click", () => {
+      const previous = modelsState.undo;
+      modelsState.undo = null;
+      api("/admin/api/model-admin/visibility", {
+        method: "POST",
+        body: JSON.stringify({
+          allow: (previous.allow || []).join(","),
+          deny: (previous.deny || []).join(","),
+        }),
+      })
+        .then(() => loadModelsView(true))
+        .then(() => {
+          target.textContent = "";
+          target.hidden = true;
+          showMessage("Restored the pattern lists.", "ok");
+        })
+        .catch((error) => showMessage(error.message, "error"));
+    });
+    target.appendChild(undo);
+  }
+
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "secondary-button models-bulk-button";
+  dismiss.textContent = "Dismiss";
+  dismiss.addEventListener("click", () => {
+    target.textContent = "";
+    target.hidden = true;
+  });
+  target.appendChild(dismiss);
+}
+
+/* One POST and one settings commit per gesture. The per-model route re-reads
+   the whole 3.4 MB catalogue after every tick; three hundred of those is two
+   thirds of a gigabyte and several minutes, and -- because each one derives
+   its replacement pattern list from a base it read before the others
+   committed -- it also loses writes. */
+async function runModelsBulk(request) {
+  const refs = request.refs || [];
+  const affected = request.affected || refs.length;
+  if (request.scope === "selection" && !refs.length) {
+    setModelsVisibilityStatus("Select at least one model first.", "error");
+    return;
+  }
+  if (!affected) {
+    setModelsVisibilityStatus("Nothing on screen to act on.", "error");
+    return;
+  }
+  const button = request.button;
+  // No modal: visibility is display-only and reversible, and a dialog on every
+  // "Hide all" is precisely the friction being removed. One inline confirm for
+  // the rare very large action.
+  if (button && affected >= 200 && button.dataset.confirming !== "1") {
+    const label = button.textContent;
+    button.dataset.confirming = "1";
+    button.textContent = `${label} ${affected} -- confirm`;
+    window.setTimeout(() => {
+      if (button.dataset.confirming !== "1") return;
+      button.dataset.confirming = "";
+      button.textContent = label;
+    }, 5000);
+    return;
+  }
+  if (button) button.dataset.confirming = "";
+  setModelsVisibilityStatus("Applying...");
+  try {
+    const result = await api("/admin/api/model-admin/visibility/bulk", {
+      method: "POST",
+      body: JSON.stringify({
+        scope: request.scope,
+        action: request.action,
+        provider_id: request.providerId,
+        model_refs: refs,
+      }),
+    });
+    if ((result.errors || []).length) {
+      modelsState.undo = null;
+      setModelsVisibilityStatus(result.errors.join(" "), "error");
+      return;
+    }
+    setModelsVisibilityStatus("");
+    modelsState.undo = result.previous || null;
+    applyModelsBulkResult(result);
+    clearModelsSelection();
+    renderModelsBulkResult(result);
+  } catch (error) {
+    modelsState.undo = null;
+    setModelsVisibilityStatus(error.message, "error");
+  }
+}
+
+/* Patch the payload the page already holds instead of re-fetching it: one
+   bulk gesture must not cost the 3.4 MB the per-tick refetch costs today. The
+   Reload button is still there for the server's word on it. */
+function applyModelsBulkResult(result) {
+  const data = modelsState.data;
+  if (!data) return;
+  const rows = new Map(
+    (result.results || []).map((row) => [row.model_ref, row]),
+  );
+  (data.providers || []).forEach((provider) => {
+    let hidden = 0;
+    (provider.models || []).forEach((model) => {
+      const row = rows.get(model.model_ref);
+      if (row) {
+        model.visible = row.visible;
+        model.blocked_by = row.honored === false ? row.blocked_by || "" : "";
+      }
+      if (!model.visible) hidden += 1;
+    });
+    provider.hidden_count = hidden;
+  });
+  const visibility = result.visibility || {};
+  data.visibility.allow_raw = (visibility.allow || []).join(",");
+  data.visibility.deny_raw = (visibility.deny || []).join(",");
+  syncModelsPatternFields(data);
+  renderModelsPatternProvenance();
+  refreshModelRows(Array.from(rows.keys()));
+  refreshModelsProviderHeads();
+  renderModelsFacets();
+}
+
+/* The header's "N hidden" chip is the answer to the question the sticky header
+   exists to answer, so a bulk hide that left it saying zero would undo the
+   point of the header. */
+function refreshModelsProviderHeads() {
+  document.querySelectorAll(".models-provider").forEach((node) => {
+    const provider = modelsProviderEntry(node.dataset.provider);
+    const toggle = node.querySelector(".models-provider-toggle");
+    if (!provider || !toggle) return;
+    toggle
+      .querySelectorAll(".models-chip-hidden")
+      .forEach((chip) => chip.remove());
+    if (provider.hidden_count) {
+      toggle.appendChild(
+        buildModelsChip("hidden", `${provider.hidden_count} hidden`),
+      );
+    }
+  });
+}
+
+/* The ticks and the two <textarea>s still share one field. Saying how the
+   list is made up is the cheap half of that problem: a user who sees "3
+   patterns you wrote by hand" knows Save patterns is about to overwrite the
+   other 314. */
+function renderModelsPatternProvenance() {
+  const target = byId("modelsPatternProvenance");
+  const data = modelsState.data;
+  if (!target || !data) return;
+  const deny = (data.visibility.deny_raw || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const allow = (data.visibility.allow_raw || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const globs = deny
+    .concat(allow)
+    .filter((entry) => /[*?[]/.test(entry)).length;
+  const exact = deny.length + allow.length - globs;
+  target.hidden = deny.length + allow.length === 0;
+  target.textContent = `${globs} glob pattern(s) and ${exact} exact model pattern(s) in your two lists.`;
 }
 
 async function toggleModelVisibility(modelRef, visible) {
@@ -11646,11 +12407,66 @@ function initModelsView() {
       }, 150);
     });
   }
+  if (filter) {
+    filter.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      // Enter commits the query: open every provider that matched, which is
+      // the thing the count sentence has always described but never showed.
+      modelsState.filter = filter.value.trim().toLowerCase();
+      modelsState.paged.clear();
+      ((modelsState.data && modelsState.data.providers) || []).forEach(
+        (provider) => {
+          if (modelsFilteredFor(provider).length) {
+            modelsState.open.add(`provider:${provider.provider_id}`);
+          }
+        },
+      );
+      renderModelsTree();
+    });
+  }
   if (reload) {
     reload.addEventListener("click", () => {
+      clearModelsSelection();
       loadModelsView(true).catch((error) => showMessage(error.message, "error"));
     });
   }
+
+  const tree = byId("modelsTree");
+  // Bound on the container: a pointerover dispatched on a row does not reach a
+  // listener on the checkbox cell inside it, because events bubble up.
+  if (tree) tree.addEventListener("pointerover", continueModelsDrag);
+  document.addEventListener("pointerup", endModelsDrag);
+  document.addEventListener("pointercancel", endModelsDrag);
+  document.addEventListener("keydown", (event) => {
+    const view = byId("view-models");
+    if (!view || view.hidden) return;
+    const target = event.target;
+    const typing =
+      target &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable);
+    if (event.key === "/" && !typing) {
+      event.preventDefault();
+      if (filter) filter.focus();
+      return;
+    }
+    if (event.key !== "Escape") return;
+    // Escape belongs to whichever modal is open; only when none is does it
+    // mean "drop this selection".
+    const modals = [
+      "webSearchDetailModal",
+      "exportModal",
+      "reqDetailModal",
+    ].map(byId);
+    if (modals.some((modal) => modal && !modal.hidden)) return;
+    if (modelsState.selected.size) {
+      clearModelsSelection();
+      return;
+    }
+    if (filter && document.activeElement === filter) filter.blur();
+  });
 }
 
 initModelsView();

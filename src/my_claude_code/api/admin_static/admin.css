@@ -5793,7 +5793,6 @@ details.turn-pane > summary:focus-visible {
   background: var(--panel);
 }
 
-.models-provider > summary,
 .models-model > summary {
   cursor: pointer;
   display: flex;
@@ -5802,6 +5801,221 @@ details.turn-pane > summary:focus-visible {
   flex-wrap: wrap;
   padding: var(--space-3);
   list-style: none;
+}
+
+/* The one sticky element on the page. A user thirty rows into a provider of
+   three hundred had no on-screen answer to "which provider am I in, and how
+   many of these are already hidden" -- and nowhere to put a bulk button that
+   did not need a scroll back to the top. */
+.models-provider-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.models-provider-toggle {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  text-align: left;
+  cursor: pointer;
+  border: 0;
+  background: none;
+  padding: var(--space-1) 0;
+  color: inherit;
+  font: inherit;
+}
+
+.models-provider-toggle:focus-visible,
+.models-facet:focus-visible,
+.models-bulk-button:focus-visible,
+.models-link-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.models-provider-bulk {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.models-bulk-button {
+  min-height: 32px;
+}
+
+.models-provider-match {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.models-provider-body {
+  padding-block-start: var(--space-2);
+}
+
+/* The 32x32 hit area comes from the cell, not from scaling the box: WCAG 2.2
+   asks for at least 24 CSS px of target and a scaled checkbox blurs. */
+.models-select-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 32px;
+  min-block-size: 32px;
+  align-self: stretch;
+  border-right: 1px solid var(--line);
+}
+
+.models-select,
+.models-select-all {
+  inline-size: 16px;
+  block-size: 16px;
+  cursor: pointer;
+}
+
+/* Selection is never colour-only: the box is checked and the row carries a
+   bar, so the state survives a monochrome or high-contrast rendering. */
+.models-model-row.is-selected {
+  background: var(--accent-muted);
+  box-shadow: inset 2px 0 0 var(--accent-border);
+}
+
+.models-tree.is-dragging {
+  user-select: none;
+}
+
+.models-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: baseline;
+  inline-size: 100%;
+}
+
+.models-blocked-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.models-facets {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  margin-block: var(--space-2);
+}
+
+.models-facet {
+  font-size: 11px;
+  padding: 4px 10px;
+  min-height: 24px;
+  border-radius: 999px;
+  border: 1px solid var(--neutral-border);
+  background: var(--neutral-bg);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.models-facet.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.models-link-button {
+  border: 0;
+  background: none;
+  padding: 0;
+  margin-inline-start: var(--space-2);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.models-facet-clear {
+  display: block;
+  margin-inline-start: 0;
+}
+
+.models-select-matches {
+  white-space: nowrap;
+}
+
+.models-bulk-result {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  background: var(--panel);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-block-end: var(--space-2);
+}
+
+.models-bulk-result > p {
+  inline-size: 100%;
+  margin: 0;
+}
+
+.models-bulk-blocked {
+  inline-size: 100%;
+  margin: 0;
+  padding-inline-start: var(--space-4);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.models-bulk-undo {
+  font-weight: 600;
+}
+
+/* Stacked directly above the global action bar, never replacing it: that one
+   still carries Save/Apply for the other views and the message area. */
+.models-bulk-bar {
+  position: fixed;
+  left: 260px;
+  right: 0;
+  bottom: 56px;
+  z-index: 99;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-4);
+  background: var(--panel-strong);
+  border-top: 1px solid var(--line-strong);
+}
+
+.models-bulk-count {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+#view-models {
+  padding-block-end: 160px;
+}
+
+@media (max-width: 900px) {
+  .models-bulk-bar {
+    left: 0;
+  }
+
+  /* A short viewport should not spend a third of itself on a pinned header. */
+  .models-provider-head {
+    position: static;
+  }
 }
 
 .models-provider-name {
@@ -5817,10 +6031,13 @@ details.turn-pane > summary:focus-visible {
 /* The visibility tick sits beside the disclosure, not inside its <summary>:
    a control in a summary is an a11y violation and steals the fold click. */
 .models-model-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 32px auto 1fr;
   align-items: flex-start;
   gap: var(--space-2);
   margin: 0 var(--space-3) var(--space-2);
+  scroll-margin-top: 56px;
+  border-radius: var(--radius-sm);
 }
 
 .models-model-row > .models-model {
@@ -5930,8 +6147,10 @@ details.turn-pane > summary:focus-visible {
 }
 
 .models-ref {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
 }
 
 .models-chip {

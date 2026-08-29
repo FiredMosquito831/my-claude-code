@@ -590,6 +590,20 @@ You do not have to work out which of your models are affected: a tier that needs
 
 The adapter is a route like any other, so it gets its own **Add fallback** chain. One unreachable vision model would otherwise lose every image on the machine.
 
+### Managing many models
+
+A provider with three hundred models is not manageable one tick at a time. Each provider header on **Admin UI → Models** carries **Show all**, **Hide all** and **Invert**, and each row has a selection box in the left gutter beside its visibility tick. Click one box and Shift-click another to take the range between them; Shift+ArrowDown and Shift+ArrowUp extend and shrink the same range from the keyboard; pressing and dragging down the gutter selects every row the pointer crosses. The bar that appears at the bottom applies Show, Hide or Invert to everything you picked, across providers, in one request.
+
+The filter and the state chips (All / Visible / Hidden / Configured / Overridden) narrow what those buttons act on, and the result count offers **Select all N** so "hide everything matching `opus`" is three interactions.
+
+What gets written matters, because it is the same `MODEL_VISIBILITY_DENY` you can edit by hand:
+
+- **Hide all on a whole provider writes one pattern**, `nous_portal/*`. It is a standing statement about the provider, so models it publishes next week are hidden on arrival — and one legible pattern beats three hundred exact refs in a text field you are invited to edit.
+- **A picked selection, or a provider narrowed by a filter, writes exact refs** — one per model. A closed set of hand-picked models is a fact, not a policy, and no glob describes it without hiding something you did not choose. **Invert** always writes exact refs for the same reason.
+- **Show all removes `provider/*` and the exact refs under it, and nothing else.** A glob you wrote yourself — `nous*`, `*:free` — is never deleted on your behalf. When one of them still hides a model, the result panel names that pattern once and offers to show you which models it caught.
+
+Every bulk action reports what it did, carries an **Undo** that restores both pattern lists exactly as they were, and changes no routing: hiding is display-only.
+
 ### Reasoning control
 
 Providers expose reasoning differently. MCC resolves your intent once at the boundary and each provider adapter translates it, so you configure it in one place rather than per provider. See the Model Config tab.

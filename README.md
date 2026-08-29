@@ -499,6 +499,8 @@ A gateway can publish hundreds of models — `nous_portal` alone lists 343 — a
 
 Patterns are matched case-insensitively against the full `provider/model` reference, so `nvidia_nim/thinkingmachines/inkling` picks one model, `commandcode/*` one provider, `*:free` every free variant, and `*inkling*` anything containing the word. An explicit pick is simply a pattern with no wildcards, which is why ticking models and writing globs are one mechanism rather than two that can disagree.
 
+The Models page writes both forms for you. Hiding a whole provider writes one glob, `nous_portal/*`, so models it publishes later are hidden too; hiding a selection, a filtered subset, or inverting writes exact refs. Showing a provider again removes that glob and the exact refs under it, and never a pattern you wrote yourself.
+
 **These lists hide; they never block.** A model named by `MODEL`, a tier override or a `MODEL_*_FALLBACKS` chain keeps routing normally while hidden. A visibility filter that silently broke a working chain would be worse than a chain entry that is invisible but alive, because the breakage would surface as an outage nowhere near the setting that caused it. The Admin pickers therefore also keep showing a model you have actually configured, even when the filter hides it — a picker has to be able to render the value that is saved.
 
 ### Fallback Chains

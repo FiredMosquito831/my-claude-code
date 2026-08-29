@@ -87,6 +87,11 @@ def _app_with_models(**visibility: str):
         ),
         (
             "post",
+            f"{MODELS_ENDPOINT}/visibility/bulk",
+            {"scope": "provider", "action": "hide", "provider_id": "open_router"},
+        ),
+        (
+            "post",
             f"{MODELS_ENDPOINT}/overrides",
             {"scope": "model", "key": "open_router/routed", "updates": {}},
         ),
@@ -722,3 +727,276 @@ def test_a_field_the_vote_won_is_labelled_at_the_vote_rung(monkeypatch):
     # subject to the same tie-break: a limit is a deployment property and stays
     # at the tightest rung that stated it.
     assert payload["max_output_tokens"]["tier"] == ResolutionTier.OPENROUTER_EXACT.value
+
+
+# ----------------------------------------------------------------------- bulk
+
+BULK_ENDPOINT = f"{MODELS_ENDPOINT}/visibility/bulk"
+
+
+def _bulk(client: TestClient, **body):
+    payload = {"scope": "provider", "action": "hide", "model_refs": []}
+    payload.update(body)
+    return client.post(BULK_ENDPOINT, json=payload)
+
+
+def test_hiding_a_whole_provider_writes_one_glob_not_one_pattern_per_model(
+    monkeypatch, tmp_path
+):
+    """317 exact refs is a 10 KB env line that stops applying the moment the
+    provider publishes model 318. One glob keeps meaning what it said."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models())
+
+    body = _bulk(client, provider_id="open_router").json()
+
+    assert body["visibility"]["deny"] == ["open_router/*"]
+    assert len(body["visibility"]["deny"]) == 1
+    assert body["wrote_glob"] == "open_router/*"
+    assert {row["visible"] for row in body["results"]} == {False}
+    assert all(row["honored"] for row in body["results"])
+
+
+def test_hiding_a_filtered_subset_writes_exact_patterns_not_a_glob(
+    monkeypatch, tmp_path
+):
+    """A filtered subset is a selection, not a standing policy about a provider."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models())
+
+    body = _bulk(
+        client, provider_id="open_router", model_refs=["open_router/routed"]
+    ).json()
+
+    assert body["visibility"]["deny"] == ["open_router/routed"]
+    assert body["wrote_glob"] is None
+
+
+def test_showing_a_whole_provider_removes_its_glob_and_its_exact_patterns(
+    monkeypatch, tmp_path
+):
+    _isolated_home(monkeypatch, tmp_path)
+    app = _app_with_models(
+        model_visibility_deny="open_router/*,open_router/extra,*:free"
+    )
+    client = _local_client(app)
+
+    body = _bulk(client, action="show", provider_id="open_router").json()
+
+    assert body["visibility"]["deny"] == ["*:free"]
+    assert set(body["removed_patterns"]) == {"open_router/*", "open_router/extra"}
+
+
+def test_showing_a_whole_provider_never_deletes_a_user_glob_that_merely_overlaps(
+    monkeypatch, tmp_path
+):
+    """Deleting a pattern we did not write is unrecoverable and its blast
+    radius is not confined to the provider the user clicked on."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models(model_visibility_deny="open*"))
+
+    body = _bulk(client, action="show", provider_id="open_router").json()
+
+    assert body["visibility"]["deny"] == ["open*"]
+    assert body["removed_patterns"] == []
+    assert all(row["honored"] is False for row in body["results"])
+    assert {row["blocked_by"] for row in body["results"]} == {"open*"}
+
+
+def test_a_bulk_result_reports_honored_per_ref_and_names_the_blocking_pattern(
+    monkeypatch, tmp_path
+):
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models(model_visibility_deny="*extra"))
+
+    body = _bulk(client, action="show", provider_id="open_router").json()
+
+    assert body["honored_count"] == 1
+    assert body["unhonored_count"] == 1
+    blocked = [row for row in body["results"] if not row["honored"]]
+    assert blocked[0]["model_ref"] == "open_router/extra"
+    assert blocked[0]["blocked_by"] == "*extra"
+    assert all("blocked_by" not in row for row in body["results"] if row["honored"])
+
+
+def test_a_bulk_show_under_an_opt_in_allow_list_names_the_provider_there(
+    monkeypatch, tmp_path
+):
+    """The bulk mirror of the single toggle's allow-list rule."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models(model_visibility_allow="other/*"))
+
+    body = _bulk(client, action="show", provider_id="open_router").json()
+
+    assert body["visibility"]["allow"] == ["other/*", "open_router/*"]
+    assert all(row["honored"] for row in body["results"])
+
+
+def test_inverting_a_provider_writes_exact_patterns_and_flips_each_model(
+    monkeypatch, tmp_path
+):
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models(model_visibility_deny="open_router/extra"))
+
+    body = _bulk(client, action="invert", provider_id="open_router").json()
+
+    assert body["wrote_glob"] is None
+    states = {row["model_ref"]: row["visible"] for row in body["results"]}
+    assert states == {"open_router/routed": False, "open_router/extra": True}
+
+
+def test_invert_is_computed_against_the_state_before_any_mutation(
+    monkeypatch, tmp_path
+):
+    """Folding as it goes would let the first write decide the second target."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models(model_visibility_deny="open_router/extra"))
+
+    body = _bulk(client, action="invert", provider_id="open_router").json()
+
+    assert all(row["honored"] for row in body["results"])
+
+
+def test_a_bulk_action_writes_the_settings_exactly_once(monkeypatch, tmp_path):
+    """The §0.6 correctness claim: one gesture, one commit, one lock."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    app = _app_with_models()
+    runtime = app.state.services.admin
+    calls: list[int] = []
+    original = runtime.apply_admin_config_with
+
+    async def counted(build):
+        calls.append(1)
+        return await original(build)
+
+    runtime.apply_admin_config_with = counted
+    client = _local_client(app)
+
+    _bulk(client, provider_id="open_router")
+
+    assert calls == [1]
+
+
+def test_a_bulk_response_carries_the_previous_patterns_for_undo(monkeypatch, tmp_path):
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models(model_visibility_deny="*:free"))
+
+    body = _bulk(client, provider_id="open_router").json()
+    assert body["previous"] == {"allow": [], "deny": ["*:free"]}
+
+    restored = client.post(
+        f"{MODELS_ENDPOINT}/visibility",
+        json={
+            "allow": ",".join(body["previous"]["allow"]),
+            "deny": ",".join(body["previous"]["deny"]),
+        },
+    ).json()
+
+    assert restored["visibility"] == {"allow": [], "deny": ["*:free"]}
+
+
+def test_a_failed_bulk_write_reports_no_results_and_no_undo(monkeypatch, tmp_path):
+    """A response that claims a write it never made is worse than an error."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    app = _app_with_models()
+    runtime = app.state.services.admin
+
+    async def refuse(build):
+        return {"errors": ["nope"]}
+
+    runtime.apply_admin_config_with = refuse
+    body = _bulk(_local_client(app), provider_id="open_router").json()
+
+    assert body["errors"] == ["nope"]
+    for key in ("results", "honored_count", "previous", "wrote_glob"):
+        assert key not in body
+
+
+def test_a_failed_single_toggle_no_longer_claims_it_was_honored(monkeypatch, tmp_path):
+    _isolated_home(monkeypatch, tmp_path)
+    app = _app_with_models()
+    runtime = app.state.services.admin
+
+    async def refuse(build):
+        return {"errors": ["nope"]}
+
+    runtime.apply_admin_config_with = refuse
+    body = (
+        _local_client(app)
+        .post(
+            f"{MODELS_ENDPOINT}/visibility/toggle",
+            json={"model_ref": "open_router/routed", "visible": False},
+        )
+        .json()
+    )
+
+    assert body["errors"] == ["nope"]
+    assert "honored" not in body
+
+
+def test_a_bulk_request_over_the_limit_is_refused_by_name(monkeypatch, tmp_path):
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models())
+
+    response = _bulk(
+        client,
+        scope="selection",
+        model_refs=[f"open_router/m{index}" for index in range(2001)],
+    )
+
+    assert response.status_code == 400
+    assert "MODEL_VISIBILITY_BULK_LIMIT" in response.json()["detail"]
+
+
+def test_an_unknown_bulk_scope_or_action_is_rejected(monkeypatch, tmp_path):
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models())
+
+    assert _bulk(client, scope="everything").status_code == 400
+    assert _bulk(client, action="delete", provider_id="open_router").status_code == 400
+
+
+def test_a_bulk_action_never_returns_the_whole_model_tree(monkeypatch, tmp_path):
+    """Returning the tree would cost the same 3.4 MB the per-tick refetch does."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models())
+
+    assert "providers" not in _bulk(client, provider_id="open_router").json()
+
+
+def test_a_hidden_model_is_still_listed_and_still_routes_after_a_bulk_hide(
+    monkeypatch, tmp_path
+):
+    """The hide-only product principle, at bulk scale."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models())
+
+    # Asked before the write, because persisting settings in an isolated home
+    # rebuilds the provider from an env file that has no API key and so drops
+    # its cached catalogue -- an artefact of the fixture, not of hiding.
+    preview = client.post(
+        f"{MODELS_ENDPOINT}/visibility/preview",
+        json={"allow": "", "deny": "open_router/*"},
+    ).json()
+
+    # Hidden, and still a configured route that resolves and serves.
+    assert "open_router/routed" in preview["hidden_model_refs"]
+    assert any(
+        route["model_ref"] == "open_router/routed"
+        for route in preview["hidden_route_refs"]
+    )
+    assert "still resolves" in preview["hide_only_notice"]
+
+    body = _bulk(client, provider_id="open_router").json()
+
+    assert body["visibility"]["deny"] == ["open_router/*"]
+    assert {row["visible"] for row in body["results"]} == {False}

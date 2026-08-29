@@ -182,36 +182,61 @@ class ApplicationRuntime:
     ) -> dict[str, Any]:
         """Apply one validated config update without splitting runtime ownership."""
         async with self._config_lock:
-            prepared = prepare_admin_update(updates)
-            if not prepared.valid:
-                return prepared.applied_response()
-            assert prepared.settings is not None
+            return await self._apply_admin_config_locked(updates)
 
-            if prepared.pending_fields:
-                result = self._commit_admin_update(prepared)
-                restart = self._restart_metadata(
-                    prepared.pending_fields,
-                    prepared.settings,
-                )
-                result["restart"] = restart
-                self._pending_fields = (
-                    [] if restart["automatic"] else list(prepared.pending_fields)
-                )
-                return result
+    async def apply_admin_config_with(
+        self,
+        build: Callable[[Settings], Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Apply an update computed *inside* the config lock.
 
-            result: dict[str, Any] = {}
+        A caller that reads the current settings, derives a replacement value
+        and then calls :meth:`apply_admin_config` has already lost: two such
+        callers read the same base and each write a full replacement derived
+        from it, so the second commit silently drops the first one's edit. The
+        atomic ``os.replace`` behind the write does not help -- the staleness is
+        baked into the values before the file is ever touched.
 
-            def commit() -> None:
-                result.update(self._commit_admin_update(prepared))
+        ``build`` receives the settings as they are at commit time, under the
+        same lock, so a read-modify-write is one indivisible step.
+        """
+        async with self._config_lock:
+            return await self._apply_admin_config_locked(build(self.settings))
 
-            await self.provider_manager.replace(
+    async def _apply_admin_config_locked(
+        self,
+        updates: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        prepared = prepare_admin_update(updates)
+        if not prepared.valid:
+            return prepared.applied_response()
+        assert prepared.settings is not None
+
+        if prepared.pending_fields:
+            result = self._commit_admin_update(prepared)
+            restart = self._restart_metadata(
+                prepared.pending_fields,
                 prepared.settings,
-                commit=commit,
-                reason="admin_apply",
             )
-            self._pending_fields = []
-            result["restart"] = self._restart_metadata((), prepared.settings)
+            result["restart"] = restart
+            self._pending_fields = (
+                [] if restart["automatic"] else list(prepared.pending_fields)
+            )
             return result
+
+        result: dict[str, Any] = {}
+
+        def commit() -> None:
+            result.update(self._commit_admin_update(prepared))
+
+        await self.provider_manager.replace(
+            prepared.settings,
+            commit=commit,
+            reason="admin_apply",
+        )
+        self._pending_fields = []
+        result["restart"] = self._restart_metadata((), prepared.settings)
+        return result
 
     def cached_model_ids(self) -> dict[str, frozenset[str]]:
         """Return cached discovered model ids per provider for admin display."""

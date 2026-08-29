@@ -720,3 +720,164 @@ def test_the_dialect_panel_lists_learned_rejections(rendered) -> None:
         "Not sent since 2026-08-29: reasoning_effort — this host answered "
         "400 naming it."
     )
+
+
+# ------------------------------------------------------------------- models
+#
+# The Models page had no jsdom coverage at all until this suite: the harness's
+# route table had no /admin/api/model-admin entry, so loadModelsView() had
+# never been exercised in a DOM. These are its first behavioural tests.
+
+
+def test_the_models_view_renders_its_providers_without_expanding_them(
+    rendered,
+) -> None:
+    """The lazy-fill budget: 135 models, zero rows until something is opened."""
+
+    models = rendered["models"]
+    assert models["providerCount"] == 3
+    assert models["collapsedBodies"] == 3
+    assert models["rowsWhileCollapsed"] == 0
+
+
+def test_opening_a_provider_renders_one_page_of_rows_not_all_of_them(
+    rendered,
+) -> None:
+    models = rendered["models"]
+    assert models["rowsAfterOpen"] == 40
+    assert models["moreLabel"] == "Show 5 more of 5"
+
+
+def test_every_row_has_a_selection_box_and_a_visibility_tick(rendered) -> None:
+    """Two controls per row, and they must not be the same node."""
+
+    models = rendered["models"]
+    assert models["selectBoxes"] == models["rowsAfterOpen"]
+    assert models["visibilityTicks"] == models["rowsAfterOpen"]
+    assert models["controlsAreDistinct"] is True
+
+
+def test_selecting_rows_shows_the_bulk_bar_with_a_whole_sentence(rendered) -> None:
+    models = rendered["models"]
+    assert models["barHidden"] is False
+    assert models["barSentence"].startswith("9 selected across 1 provider(s)")
+
+
+def test_the_provider_checkbox_is_indeterminate_when_some_rows_are_selected(
+    rendered,
+) -> None:
+    models = rendered["models"]
+    assert models["indeterminateWhenPartial"] is True
+    assert models["selectAllChecked"] is True
+    assert models["selectAllIndeterminate"] is False
+
+
+def test_shift_clicking_selects_the_range_between_two_rows(rendered) -> None:
+    assert rendered["models"]["afterShiftClick"] == 9
+
+
+def test_shift_arrow_extends_the_range_and_walking_back_shrinks_it(
+    rendered,
+) -> None:
+    """WCAG 2.2 asks for a keyboard alternative to an author-controlled drag."""
+
+    models = rendered["models"]
+    assert models["afterArrowDown"] == 3
+    assert models["afterArrowUp"] == 2
+
+
+def test_dragging_across_five_rows_selects_five_rows(rendered) -> None:
+    assert rendered["models"]["afterDrag"] == 5
+
+
+def test_a_drag_that_starts_outside_the_gutter_selects_nothing(rendered) -> None:
+    """Pressing on a model ref and moving is a text gesture, not a selection."""
+
+    assert rendered["models"]["afterNonGutterDrag"] == 0
+
+
+def test_a_selection_survives_typing_in_the_filter(rendered) -> None:
+    """renderModelsTree() empties the tree on every keystroke."""
+
+    models = rendered["models"]
+    assert models["barAfterTyping"].startswith("45 selected")
+
+
+def test_hide_all_posts_one_bulk_request_with_no_model_refs(rendered) -> None:
+    models = rendered["models"]
+    assert models["bulkCalls"] == 1
+    assert models["bulkBody"]["body"] == {
+        "scope": "provider",
+        "action": "hide",
+        "provider_id": "alpha",
+        "model_refs": [],
+    }
+
+
+def test_hide_all_under_a_filter_posts_the_filtered_refs(rendered) -> None:
+    """A narrowed view is a selection, not a standing policy about a provider."""
+
+    body = rendered["models"]["filteredBody"]["body"]
+    assert body["model_refs"]
+    assert all(ref.startswith("alpha/model-1") for ref in body["model_refs"])
+
+
+def test_a_bulk_action_does_not_refetch_the_whole_catalogue(rendered) -> None:
+    """The headline: one gesture must not cost the 3.4 MB payload."""
+
+    assert rendered["models"]["catalogueRefetches"] == 0
+
+
+def test_a_partly_honored_bulk_result_names_the_pattern_once_not_per_model(
+    rendered,
+) -> None:
+    models = rendered["models"]
+    assert models["patternMentions"] == 1
+    assert "12 of them did not change" in models["partialText"]
+    assert "Routing is unaffected either way." in models["partialText"]
+
+
+def test_the_result_panel_offers_undo_and_undo_posts_the_previous_patterns(
+    rendered,
+) -> None:
+    models = rendered["models"]
+    assert models["hasUndo"] is True
+    assert models["undoBody"]["body"] == {"allow": "", "deny": "*:free"}
+
+
+def test_undo_is_gone_after_it_is_used(rendered) -> None:
+    assert rendered["models"]["undoGoneAfterUse"] is True
+
+
+def test_a_facet_narrows_the_tree_and_the_count_sentence_says_so(rendered) -> None:
+    assert 'Showing only "hidden"' in rendered["models"]["hiddenFacetSummary"]
+
+
+def test_select_all_selects_every_match_across_providers(rendered) -> None:
+    models = rendered["models"]
+    assert models["selectMatchesLabel"] == "Select all 3"
+    assert models["crossProviderSelection"].startswith("3 selected across 3")
+
+
+def test_escape_clears_the_selection(rendered) -> None:
+    assert rendered["models"]["barHiddenAfterEscape"] is True
+
+
+def test_the_measured_badge_still_renders_in_the_new_row(rendered) -> None:
+    """The 6.3.0-6.6.0 additions must survive the redesign of the row."""
+
+    models = rendered["models"]
+    assert models["measuredBadges"] == 1
+    assert models["openBodies"] == 1
+
+
+def test_the_bulk_bar_and_the_result_panel_are_toggled_by_hidden_not_by_style(
+    rendered,
+) -> None:
+    assert rendered["models"]["toggledByHidden"] is True
+
+
+def test_the_provider_header_is_the_pages_one_sticky_element(rendered) -> None:
+    """One per rendered provider, where there were none at all."""
+
+    assert rendered["models"]["stickyHeads"] == 3

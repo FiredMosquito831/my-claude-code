@@ -280,6 +280,68 @@ const daily = (n) =>
     tokens_saved: (10 + i) * 100,
   }));
 
+/* Three providers of 45 models each: deliberately above MODELS_PAGE_SIZE so
+   the 40-row page and its "Show 5 more of 5" button are exercised, with one
+   provider partly hidden by a *:free deny, one configured route, one measured
+   reasoning badge and one host dialect. */
+const modelsFor = (providerId, hiddenTail) =>
+  Array.from({ length: 45 }, (_, index) => ({
+    model_ref: `${providerId}/model-${String(index).padStart(2, "0")}${
+      index % 5 === 0 ? ":free" : ""
+    }`,
+    visible: !(hiddenTail && index % 5 === 0),
+    configured: providerId === "alpha" && index === 0,
+    has_metadata: true,
+    override: index === 1 ? { temperature: 0.1 } : {},
+    effective:
+      index === 1
+        ? [{ parameter: "temperature", action: "value", value: 0.1 }]
+        : [],
+    capabilities: {},
+    reasoning_measured:
+      index === 2 ? { attempts: 12, requested: 12, returned: 12 } : null,
+    reasoning_dialect:
+      index === 3 ? { known: true, style: "effort", origin: "stated" } : null,
+  }));
+
+const MODEL_ADMIN_PAGE = {
+  measured_days: 7,
+  source_labels: {},
+  providers: ["alpha", "beta", "gamma"].map((providerId) => ({
+    provider_id: providerId,
+    model_count: 45,
+    hidden_count: providerId === "beta" ? 9 : 0,
+    override: {},
+    models: modelsFor(providerId, providerId === "beta"),
+  })),
+  overrides: {
+    editable_parameters: ["temperature"],
+    owned_elsewhere: {},
+  },
+  visibility: {
+    allow_raw: "",
+    deny_raw: "*:free",
+    hide_only_notice: "Hiding is display-only; a hidden model still resolves.",
+    hidden_route_refs: [],
+  },
+};
+
+/* Mutated by the driving block below so one harness run can exercise a clean
+   result, a partly-overruled one and a refused write. */
+const BULK_RESULT = {
+  action: "hide",
+  scope: "provider",
+  provider_id: "alpha",
+  wrote_glob: "alpha/*",
+  removed_patterns: [],
+  previous: { allow: [], deny: ["*:free"] },
+  honored_count: 45,
+  unhonored_count: 0,
+  changed: [],
+  results: [],
+  visibility: { allow: [], deny: ["alpha/*"] },
+};
+
 const ROUTES = {
   "/admin/api/config": {
     fields: FIELDS,
@@ -302,6 +364,14 @@ const ROUTES = {
   "/admin/api/claude/config": { entries: [], values: {}, path: "", parsed: true },
   "/admin/api/providers/custom": { providers: [] },
   "/admin/api/models": { models: [] },
+  "/admin/api/model-admin": MODEL_ADMIN_PAGE,
+  "/admin/api/model-admin/visibility/bulk": BULK_RESULT,
+  "/admin/api/model-admin/visibility/toggle": {
+    visible: false,
+    honored: true,
+    visibility: { allow: [], deny: [] },
+  },
+  "/admin/api/model-admin/visibility": { visibility: { allow: [], deny: [] } },
   "/admin/api/requests/optimization-stats": {
     enabled: true,
     series_days: 14,
@@ -504,8 +574,19 @@ if (!window.requestAnimationFrame) {
   window.cancelAnimationFrame = (id) => window.clearTimeout(id);
 }
 const fetchCalls = [];
+const fetchBodies = [];
 window.fetch = async (url, options = {}) => {
   fetchCalls.push(String(url).split("?")[0]);
+  if (options && options.body) {
+    try {
+      fetchBodies.push({
+        path: String(url).split("?")[0],
+        body: JSON.parse(options.body),
+      });
+    } catch {
+      fetchBodies.push({ path: String(url).split("?")[0], body: null });
+    }
+  }
   const body = routeFor(url);
   return {
     ok: true,
@@ -1038,6 +1119,256 @@ const dialectPanels = {
   unknown: drivePanel({ known: false }),
 };
 
+// ------------------------------------------------------------------ models
+const settle = () => new Promise((resolve) => setTimeout(resolve, 140));
+const modelsLink = navLinks.find((link) => link.dataset.view === "models");
+const models = { present: Boolean(modelsLink) };
+if (modelsLink) {
+  modelsLink.click();
+  await settle();
+  const view = doc.querySelector('.admin-view[data-view="models"]');
+  const tree = doc.getElementById("modelsTree");
+  const bar = doc.getElementById("modelsBulkBar");
+  const panel = doc.getElementById("modelsBulkResult");
+  const rows = () => Array.from(tree.querySelectorAll(".models-model-row"));
+  const boxes = () => Array.from(tree.querySelectorAll("input.models-select"));
+  const flat = (el) => (el.textContent || "").replace(/\s+/g, " ").trim();
+  const click = async (el, init) => {
+    el.dispatchEvent(new window.MouseEvent("click", { bubbles: true, ...init }));
+    await settle();
+  };
+
+  models.providerCount = tree.querySelectorAll(".models-provider").length;
+  models.collapsedBodies = Array.from(
+    tree.querySelectorAll(".models-provider-body"),
+  ).filter((body) => body.hidden).length;
+  models.rowsWhileCollapsed = rows().length;
+  models.viewNodesCollapsed = view.querySelectorAll("*").length;
+  models.stickyHeads = tree.querySelectorAll(".models-provider-head").length;
+  models.facets = Array.from(doc.querySelectorAll(".models-facet")).map((chip) => [
+    flat(chip),
+    chip.getAttribute("aria-pressed"),
+  ]);
+
+  const firstToggle = tree.querySelector(".models-provider-toggle");
+  await click(firstToggle);
+  models.rowsAfterOpen = rows().length;
+  models.moreLabel = flat(tree.querySelector(".models-more"));
+  models.selectBoxes = boxes().length;
+  models.visibilityTicks = tree.querySelectorAll(
+    ".models-visible-toggle input",
+  ).length;
+  models.controlsAreDistinct =
+    boxes()[0] !== tree.querySelector(".models-visible-toggle input");
+  models.measuredBadges = tree.querySelectorAll(".models-chip-measured").length;
+
+  // --- plain click, then a shift-click range
+  await click(boxes()[0]);
+  models.afterOneClick = flat(bar);
+  await click(boxes()[8], { shiftKey: true });
+  models.afterShiftClick = tree.querySelectorAll(".models-model-row.is-selected")
+    .length;
+  models.barSentence = flat(bar);
+  models.barHidden = bar.hidden;
+
+  // --- provider checkbox is tri-state
+  const selectAll = tree.querySelector("input.models-select-all");
+  models.indeterminateWhenPartial = selectAll.indeterminate;
+  selectAll.checked = true;
+  selectAll.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await settle();
+  models.selectAllChecked = selectAll.checked;
+  models.selectAllIndeterminate = selectAll.indeterminate;
+  models.selectedAfterSelectAll = flat(bar);
+
+  // --- a selection survives a filter rebuild
+  const filter = doc.getElementById("modelsFilter");
+  filter.value = "mo";
+  filter.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 320));
+  models.barAfterTyping = flat(bar);
+  filter.value = "";
+  filter.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 320));
+
+  // --- Escape clears
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+  );
+  await settle();
+  models.barHiddenAfterEscape = bar.hidden;
+
+  // --- Shift+ArrowDown extends, Shift+ArrowUp shrinks
+  const openToggle = tree.querySelector(".models-provider-toggle");
+  if (tree.querySelector(".models-provider-body").hidden) await click(openToggle);
+  await click(boxes()[2]);
+  const arrow = (key) =>
+    doc.activeElement && doc.activeElement.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key, shiftKey: true, bubbles: true }),
+    );
+  boxes()[2].focus();
+  arrow("ArrowDown");
+  await settle();
+  arrow("ArrowDown");
+  await settle();
+  models.afterArrowDown = tree.querySelectorAll(".models-model-row.is-selected")
+    .length;
+  arrow("ArrowUp");
+  await settle();
+  models.afterArrowUp = tree.querySelectorAll(".models-model-row.is-selected")
+    .length;
+
+  // --- pointer drag across five rows
+  window.eval("clearModelsSelection()");
+  await settle();
+  const cells = Array.from(tree.querySelectorAll(".models-select-cell"));
+  const press = (el, init) =>
+    el.dispatchEvent(
+      new window.MouseEvent("pointerdown", { bubbles: true, button: 0, ...init }),
+    );
+  press(cells[10]);
+  for (let index = 10; index < 15; index += 1) {
+    rows()[index].dispatchEvent(
+      new window.MouseEvent("pointerover", { bubbles: true }),
+    );
+  }
+  doc.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true }));
+  await settle();
+  models.afterDrag = tree.querySelectorAll(".models-model-row.is-selected").length;
+
+  // --- a drag that starts outside the gutter selects nothing
+  window.eval("clearModelsSelection()");
+  await settle();
+  rows()[20]
+    .querySelector(".models-ref")
+    .dispatchEvent(
+      new window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+    );
+  for (let index = 20; index < 25; index += 1) {
+    rows()[index].dispatchEvent(
+      new window.MouseEvent("pointerover", { bubbles: true }),
+    );
+  }
+  doc.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true }));
+  await settle();
+  models.afterNonGutterDrag = tree.querySelectorAll(
+    ".models-model-row.is-selected",
+  ).length;
+  window.eval("clearModelsSelection()");
+  await settle();
+
+  // --- Hide all: one request, no refs, no refetch
+  BULK_RESULT.results = MODEL_ADMIN_PAGE.providers[0].models.map((model) => ({
+    model_ref: model.model_ref,
+    visible: false,
+    honored: true,
+  }));
+  BULK_RESULT.honored_count = BULK_RESULT.results.length;
+  BULK_RESULT.unhonored_count = 0;
+  fetchCalls.length = 0;
+  fetchBodies.length = 0;
+  const hideAll = Array.from(
+    tree.querySelectorAll(".models-provider-bulk button"),
+  ).find((button) => flat(button) === "Hide all");
+  await click(hideAll);
+  // 45 models is under the 200-row confirm step, so this lands directly.
+  models.bulkCalls = fetchCalls.filter((path) => path.endsWith("/visibility/bulk"))
+    .length;
+  models.catalogueRefetches = fetchCalls.filter(
+    (path) => path === "/admin/api/model-admin",
+  ).length;
+  models.bulkBody = fetchBodies.find((entry) =>
+    entry.path.endsWith("/visibility/bulk"),
+  );
+  models.resultText = flat(panel);
+  models.hasUndo = Array.from(panel.querySelectorAll("button")).some(
+    (button) => flat(button) === "Undo",
+  );
+
+  // --- a partly overruled result names the pattern once
+  BULK_RESULT.results = MODEL_ADMIN_PAGE.providers[0].models.map((model, index) => ({
+    model_ref: model.model_ref,
+    visible: index < 12,
+    honored: index >= 12,
+    blocked_by: index < 12 ? "*:free" : undefined,
+  }));
+  BULK_RESULT.honored_count = 33;
+  BULK_RESULT.unhonored_count = 12;
+  const showAll = Array.from(
+    tree.querySelectorAll(".models-provider-bulk button"),
+  ).find((button) => flat(button) === "Show all");
+  await click(showAll);
+  models.partialText = flat(panel);
+  models.patternMentions = (models.partialText.match(/\*:free/g) || []).length;
+
+  // --- undo posts the previous pair and then goes away
+  fetchBodies.length = 0;
+  const undo = Array.from(panel.querySelectorAll("button")).find(
+    (button) => flat(button) === "Undo",
+  );
+  if (undo) await click(undo);
+  models.undoBody = fetchBodies.find(
+    (entry) => entry.path === "/admin/api/model-admin/visibility",
+  );
+  models.undoGoneAfterUse = !Array.from(panel.querySelectorAll("button")).some(
+    (button) => flat(button) === "Undo",
+  );
+
+  // --- a filtered Hide all sends the refs it can see
+  filter.value = "model-1";
+  filter.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 320));
+  fetchBodies.length = 0;
+  const narrowedHide = Array.from(
+    tree.querySelectorAll(".models-provider-bulk button"),
+  ).find((button) => flat(button) === "Hide all");
+  await click(narrowedHide);
+  models.filteredBody = fetchBodies.find((entry) =>
+    entry.path.endsWith("/visibility/bulk"),
+  );
+  filter.value = "";
+  filter.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 320));
+
+  // --- facets
+  const hiddenFacet = Array.from(doc.querySelectorAll(".models-facet")).find(
+    (chip) => flat(chip).startsWith("Hidden"),
+  );
+  await click(hiddenFacet);
+  models.hiddenFacetSummary = flat(doc.getElementById("modelsTreeSummary"));
+  const overridden = Array.from(doc.querySelectorAll(".models-facet")).find(
+    (chip) => flat(chip).startsWith("Overridden"),
+  );
+  await click(overridden);
+  models.overriddenSummary = flat(doc.getElementById("modelsTreeSummary"));
+  const all = Array.from(doc.querySelectorAll(".models-facet")).find(
+    (chip) => flat(chip).startsWith("All"),
+  );
+  await click(all);
+
+  // --- select all matches across providers
+  filter.value = "model-01";
+  filter.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 320));
+  const selectMatches = doc.querySelector(".models-select-matches");
+  models.selectMatchesLabel = selectMatches ? flat(selectMatches) : "";
+  if (selectMatches) await click(selectMatches);
+  models.crossProviderSelection = flat(bar);
+  filter.value = "";
+  filter.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 320));
+  window.eval("clearModelsSelection()");
+  await settle();
+
+  models.toggledByHidden =
+    bar.hasAttribute("hidden") && panel.getAttribute("style") === null;
+  const modelSummary = tree.querySelector(".models-model > summary");
+  if (modelSummary) modelSummary.click();
+  await settle();
+  models.openBodies = tree.querySelectorAll(".models-readouts").length;
+  models.viewNodesOneProviderOpen = view.querySelectorAll("*").length;
+}
+
 requestDetail.reasoningRow = window.eval(
   `formatRequestReasoningEmitted({route_attempts:[{outcome:"succeeded",reasoning_emitted:0}]})`,
 );
@@ -1065,6 +1396,7 @@ console.log(
       dialectPanels,
       docs,
       limits,
+      models,
       optimizer: {
         present: Boolean(optimizer),
         kpis: optimizer ? optimizer.querySelectorAll(".opt-kpi").length : 0,
