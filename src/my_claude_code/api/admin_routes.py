@@ -837,6 +837,7 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
         configured_chat_model_refs(settings),
         settings_model_visibility(settings),
         current_model_overrides(),
+        dialect_lookup=services.requests.model_reasoning_dialect,
     )
 
 

@@ -319,8 +319,8 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         # its reasoning controls and publishes no effort vocabulary at all
         # (https://docs.cohere.com/docs/reasoning), so there is one on-value to
         # send and no scale to map onto. The clamp from a lower effort is
-        # performed and recorded by capability gating against
-        # ``providers.reasoning_vocabulary`` rather than disappearing here.
+        # performed and recorded by capability gating against this encoder's
+        # declared dialect (one rung, "high") rather than disappearing here.
         NamedEffortReasoning(
             tuple((effort, "high") for effort in ReasoningEffort),
             disabled_value="none",

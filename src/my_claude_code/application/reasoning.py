@@ -3,6 +3,8 @@
 from collections.abc import Mapping
 from typing import Any
 
+from loguru import logger
+
 from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.core.anthropic.models import MessagesRequest, ThinkingConfig
 from my_claude_code.core.reasoning import (
@@ -89,6 +91,15 @@ def _output_effort(value: Any) -> tuple[ReasoningEffort | None, bool]:
     try:
         return ReasoningEffort(normalized), False
     except ValueError:
+        # Swallowed silently until now, which made a client typo and a client
+        # that never asked for an effort indistinguishable in every log the
+        # proxy writes. The value is still dropped -- inventing a rung from a
+        # word nobody recognises would be worse -- but the drop is stated.
+        logger.warning(
+            "REASONING EFFORT IGNORED: client sent {!r}, not one of {}",
+            raw,
+            ", ".join(effort.value for effort in ReasoningEffort),
+        )
         return None, False
 
 

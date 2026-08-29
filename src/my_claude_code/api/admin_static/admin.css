@@ -6085,6 +6085,16 @@ details.turn-pane > summary:focus-visible {
   margin-top: var(--space-3);
 }
 
+/* The host half of the capability panel. Separated by a rule rather than
+   another table: what a gateway parses is a declaration, not a voted field
+   with a resolution tier, and giving it tier-shaped rows would blur exactly
+   the distinction this block exists to draw. */
+.models-dialect {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
 .models-override-mode {
   font-size: 12px;
 }

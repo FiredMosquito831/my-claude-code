@@ -277,3 +277,106 @@ def test_command_code_thin_catalog_reports_nothing_it_does_not_know() -> None:
     assert info.default_parameters is None
     assert info.reasoning_capability is None
     assert info.supports_thinking is None
+
+
+# ---------------------------------------------------------------------------
+# ``supported_parameters`` is itself a capability statement, per model.
+# ---------------------------------------------------------------------------
+
+
+def test_a_listed_effort_field_with_no_block_states_an_effort_knob() -> None:
+    """The nous_portal split, in miniature.
+
+    One gateway lists ``reasoning_effort`` for one model and not for another.
+    That is the only per-model dialect statement any gateway makes, and it was
+    parsed, stored, and consulted for nothing but ``supports_thinking``.
+    """
+
+    info = _one(
+        {
+            "data": [
+                {
+                    "id": "gateway/effort-model",
+                    "supported_parameters": ["tools", "reasoning_effort"],
+                }
+            ]
+        }
+    )
+
+    capability = info.reasoning_capability
+    assert capability is not None
+    assert capability.can_reason is True
+    assert capability.supports_effort_control is True
+    # A field name says nothing about which words it accepts.
+    assert capability.supported_efforts is None
+    assert capability.supports_toggle_control is None
+
+
+def test_a_listed_reasoning_object_states_a_toggle_and_a_budget() -> None:
+    """OpenRouter's ``reasoning`` object carries ``enabled`` and ``max_tokens``."""
+
+    info = _one(
+        {
+            "data": [
+                {
+                    "id": "gateway/toggle-model",
+                    "supported_parameters": ["tools", "reasoning"],
+                }
+            ]
+        }
+    )
+
+    capability = info.reasoning_capability
+    assert capability is not None
+    assert capability.supports_toggle_control is True
+    assert capability.supports_budget_control is True
+    assert capability.supports_effort_control is None
+
+
+def test_a_published_block_wins_over_the_parameter_list() -> None:
+    """A block is the stronger statement, field by field.
+
+    It may still be silent about a field the list names, and then the list
+    answers -- the same "first stated wins" rule every other layer uses.
+    """
+
+    info = _one(
+        {
+            "data": [
+                {
+                    "id": "gateway/both",
+                    "supported_parameters": ["tools", "reasoning", "reasoning_effort"],
+                    "reasoning": {
+                        "supported_efforts": ["low", "high"],
+                        "supports_max_tokens": False,
+                    },
+                }
+            ]
+        }
+    )
+
+    capability = info.reasoning_capability
+    assert capability is not None
+    assert capability.supported_efforts == frozenset(
+        {ReasoningEffort.LOW, ReasoningEffort.HIGH}
+    )
+    assert capability.supports_effort_control is True
+    # The block says no budget; the parameter list must not overrule it.
+    assert capability.supports_budget_control is False
+
+
+def test_a_gateway_silent_about_reasoning_stays_unknown() -> None:
+    """No block and no reasoning-shaped parameter is still no statement."""
+
+    info = _one(
+        {
+            "data": [
+                {
+                    "id": "gateway/quiet",
+                    "supported_parameters": ["tools", "temperature"],
+                }
+            ]
+        }
+    )
+
+    assert info.reasoning_capability is None

@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from loguru import logger
@@ -16,6 +16,7 @@ from my_claude_code.application.model_metadata import (
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.model_ids import ResolutionTier
+from my_claude_code.core.reasoning import ReasoningDialect
 from my_claude_code.core.trace import trace_event
 from my_claude_code.providers.base import BaseProvider
 from my_claude_code.providers.runtime import ProviderRuntime
@@ -167,6 +168,91 @@ class ProviderRuntimeManager:
             self._model_cache.cached_model_reasoning_capability(provider_id, model_id),
         )
 
+    def model_reasoning_dialect(
+        self, provider_id: str, model_id: str
+    ) -> ReasoningDialect | None:
+        """Which reasoning fields the HOST parses for this (provider, model).
+
+        The second of the two facts gating needs, and the one nothing used to
+        supply: ``model_reasoning_capability`` above says what the *model* can
+        be told, this says what the *gateway in front of it* will read. A
+        control reaches the wire only when both agree.
+
+        Synchronous on purpose. ``ProviderRuntime.resolve_provider`` builds and
+        caches the provider instance without awaiting anything, and a lease
+        exists to hold a generation across ``await``s -- which a single
+        in-line lookup never crosses. Constructing a provider can raise for one
+        that is not configured at all, and that is simply unknown, so the whole
+        lookup degrades to ``None`` rather than failing a request.
+        """
+        try:
+            provider = self._current.runtime.resolve_provider(provider_id)
+        except Exception:
+            return None
+        dialect = provider.reasoning_dialect(model_id)
+        if dialect is None:
+            return None
+        return self._narrow_dialect_by_gateway(provider_id, model_id, dialect)
+
+    def _narrow_dialect_by_gateway(
+        self, provider_id: str, model_id: str, dialect: ReasoningDialect
+    ) -> ReasoningDialect:
+        """Narrow a provider-wide dialect by this model's own ``/models`` row.
+
+        One gateway can parse different fields for different models --
+        ``nous_portal`` publishes ``reasoning_effort`` for ``tencent/hy3:free``
+        and not for ``meituan/longcat-2.0:free`` -- which is a statement no
+        per-provider encoder can make. Only an authoritative rung (the
+        provider's own catalogue, exact or tag-stripped) may narrow: a foreign
+        catalogue does not know what this host parses.
+
+        Narrowing only. Where the gateway advertises a field the profile has no
+        way to emit, the dialect is left alone and the gap is logged: widening
+        here would claim a wire shape the encoder cannot produce, and the fix
+        for that is a profile change, not a runtime guess.
+        """
+        found = self._model_cache.cached_model_info_tiered(provider_id, model_id)
+        if found is None or not found[1].is_authoritative:
+            return dialect
+        info, _tier = found
+        published = info.supported_parameters
+        if published is None:
+            return dialect
+
+        lists_effort = "reasoning_effort" in published
+        lists_reasoning = "reasoning" in published
+        effort_values = dialect.effort_values
+        if effort_values is not None and not (
+            lists_effort
+            or (lists_reasoning and dialect.effort_field.startswith("reasoning."))
+        ):
+            effort_values = None
+        # A chat-template or ``thinking``-object toggle is not an OpenAI
+        # request parameter, so a gateway that never lists it is not denying
+        # it. Only a toggle the gateway *could* have listed is narrowed away.
+        toggle = dialect.toggle
+        if toggle and dialect.toggle_field.startswith("reasoning"):
+            toggle = lists_reasoning or lists_effort
+        budget = dialect.budget
+        if budget and dialect.budget_field.startswith("reasoning."):
+            budget = lists_reasoning
+        if lists_effort and dialect.effort_values is None:
+            logger.debug(
+                "REASONING DIALECT GAP: '{}/{}' advertises reasoning_effort but"
+                " its provider profile has no effort field to send it through.",
+                provider_id,
+                model_id,
+            )
+        if (
+            effort_values == dialect.effort_values
+            and toggle == dialect.toggle
+            and budget == dialect.budget
+        ):
+            return dialect
+        return replace(
+            dialect, effort_values=effort_values, toggle=toggle, budget=budget
+        )
+
     def model_output_limit(self, provider_id: str, model_id: str) -> int | None:
         """Return the model's published output-token limit, if anything has one.
 
@@ -183,11 +269,12 @@ class ProviderRuntimeManager:
     def model_output_limit_tiered(
         self, provider_id: str, model_id: str
     ) -> tuple[int | None, ResolutionTier | None]:
-        """The same ladder, plus the rung the number came from (tier 1-8).
+        """The same ladder, plus the rung the number came from (tier 1-10).
 
         Tiers 1-2 are the routing target's own ``/models`` payload -- exact,
-        then with the pricing/routing tag stripped. Tiers 3-8 are models.dev,
-        its own bucket first and the approximate cross-provider vote last.
+        then with the pricing/routing tag stripped. Tiers 3-10 are models.dev:
+        its own bucket first, then the OpenRouter reference catalogue, then the
+        approximate cross-provider vote last.
         """
         found = self._model_cache.cached_model_info_tiered(provider_id, model_id)
         if found is not None and found[0].max_output_tokens is not None:

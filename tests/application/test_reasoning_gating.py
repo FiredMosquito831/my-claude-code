@@ -21,6 +21,7 @@ from my_claude_code.core.reasoning import (
     MINIMUM_BUDGET_TOKENS,
     ReasoningAdaptationKind,
     ReasoningControl,
+    ReasoningDialect,
     ReasoningEffort,
     ReasoningPolicy,
 )
@@ -91,6 +92,56 @@ ALL_CAPABILITIES = (
     TOGGLE_ONLY,
     BUDGET_ONLY,
     NO_CONTROL,
+)
+
+# The HOST half of the two-fact rule: which reasoning fields a gateway parses.
+# One per shape that exists in the fleet, so the matrix below covers every
+# combination of "the model has this knob" x "the host has this field".
+NO_DIALECT = None
+EFFORT_ONLY_HOST = ReasoningDialect(
+    effort_values=frozenset(
+        {ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH}
+    ),
+    effort_field="reasoning_effort",
+)
+EFFORT_ALL_HOST = ReasoningDialect(
+    effort_values=frozenset(ReasoningEffort),
+    off=True,
+    effort_field="reasoning_effort",
+)
+TOGGLE_HOST = ReasoningDialect(toggle=True, off=True, toggle_field="thinking")
+BUDGET_HOST = ReasoningDialect(
+    budget=True, off=True, budget_field="thinking.budget_tokens"
+)
+EFFORT_AND_TOGGLE_HOST = ReasoningDialect(
+    effort_values=frozenset(ReasoningEffort),
+    toggle=True,
+    budget=True,
+    off=True,
+    effort_field="reasoning.effort",
+    toggle_field="reasoning.enabled",
+    budget_field="reasoning.max_tokens",
+)
+# Command Code's shape: an effort field whose "on" value is one of its own
+# rungs. That is a default rung, not an on/off channel.
+EFFORT_HOST_WITH_DEFAULT_RUNG = ReasoningDialect(
+    effort_values=frozenset(
+        {ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH}
+    ),
+    toggle=True,
+    effort_field="reasoning_effort",
+    toggle_field="reasoning_effort",
+)
+NO_CONTROL_HOST = ReasoningDialect()
+ALL_DIALECTS = (
+    NO_DIALECT,
+    EFFORT_ONLY_HOST,
+    EFFORT_ALL_HOST,
+    TOGGLE_HOST,
+    BUDGET_HOST,
+    EFFORT_AND_TOGGLE_HOST,
+    EFFORT_HOST_WITH_DEFAULT_RUNG,
+    NO_CONTROL_HOST,
 )
 
 ALL_POLICIES = (
@@ -338,18 +389,190 @@ def test_toggle_only_model_turns_thinking_on_and_loses_the_level() -> None:
     )
 
 
-def test_toggle_only_model_sends_the_encoders_own_enabled_value() -> None:
-    """An effort-only encoder expresses "thinking on" in its own vocabulary.
+def test_a_toggle_only_model_on_an_effort_only_host_sends_nothing() -> None:
+    """The defect this PR exists for, stated as a test.
 
-    groq has no toggle field, so the nearest thing it can express is its
-    documented ``enabled_value``. The requested level is still discarded.
+    groq has no on/off field: its ``enabled_value`` is written into the very
+    ``reasoning_effort`` field the model has no knob for. Sending it answers a
+    request for one level with the host's own default level, on a model that
+    cannot read either. Nothing at all is the honest wire, and the model's own
+    default reasoning behaviour stands.
     """
 
-    body = gated_body(
-        "groq", ReasoningPolicy.on(effort=ReasoningEffort.HIGH), TOGGLE_ONLY
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(effort=ReasoningEffort.LOW),
+        TOGGLE_ONLY,
+        dialect=EFFORT_HOST_WITH_DEFAULT_RUNG,
+        model_ref="commandcode/a-model",
     )
-    assert body == encode("groq", ReasoningPolicy.on())
-    assert body["reasoning_effort"] != "high"
+
+    assert adapted == ReasoningPolicy.provider_default()
+    assert adaptation.kind is ReasoningAdaptationKind.DROPPED
+    assert adaptation.message is not None
+    assert "no on/off field" in adaptation.message
+    assert encode("groq", adapted) == {"model": "a-model", "messages": []}
+
+
+def test_effort_model_on_effort_host_sends_the_users_rung_not_the_hosts_default() -> (
+    None
+):
+    """And an effort the host cannot spell clamps to the nearest rung it can.
+
+    ``max`` against ``low/medium/high`` is ``high`` -- the strongest rung at or
+    below the ask -- never the encoder's ``enabled_value``, which is where a
+    request for ``max`` used to leave as groq's ``medium``.
+    """
+
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+        EFFORT_ONLY_LOW_MEDIUM_HIGH,
+        dialect=EFFORT_ONLY_HOST,
+        model_ref="groq/a-model",
+    )
+
+    assert adapted == ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
+    assert adaptation.kind is ReasoningAdaptationKind.CLAMPED
+    assert encode("groq", adapted)["reasoning_effort"] == "high"
+
+
+# ---------------------------------------------------------------------------
+# The two-fact rule -- model capability x host dialect.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("capability", ALL_CAPABILITIES)
+@pytest.mark.parametrize("policy", ALL_POLICIES)
+def test_unknown_dialect_leaves_gating_byte_identical(
+    capability: ModelReasoningCapability | None, policy: ReasoningPolicy
+) -> None:
+    """An absent dialect must change nothing, for every cell of the matrix.
+
+    Most providers declare none, so this is the guarantee that shipping the
+    two-fact rule cannot regress them.
+    """
+
+    with_dialect, with_adaptation = adapt_reasoning_policy(
+        policy, capability, dialect=None, model_ref="provider/a-model"
+    )
+    without = adapt_reasoning_policy(policy, capability, model_ref="provider/a-model")
+
+    assert with_dialect == without[0]
+    assert with_adaptation == without[1]
+
+
+@pytest.mark.parametrize("dialect", ALL_DIALECTS)
+@pytest.mark.parametrize("policy", ALL_POLICIES)
+def test_unknown_capability_with_known_dialect_only_narrows(
+    dialect: ReasoningDialect | None, policy: ReasoningPolicy
+) -> None:
+    """Nothing is known about the model, so only the host may narrow.
+
+    In particular nothing is ever *added*: an unknown model never acquires a
+    control it was not asked for, and an OFF is never rewritten, because only a
+    stated ``mandatory`` may do that.
+    """
+
+    adapted, _adaptation = adapt_reasoning_policy(
+        policy, None, dialect=dialect, model_ref="provider/a-model"
+    )
+
+    if policy.control is ReasoningControl.OFF:
+        assert adapted == policy
+    if not policy.requests_reasoning:
+        assert adapted == policy
+    if adapted.effort is not None and dialect is not None:
+        assert dialect.effort_values is None or adapted.effort in dialect.effort_values
+
+
+def test_tier_one_supported_parameters_lets_a_toggle_model_take_an_effort() -> None:
+    """The gateway's own per-model statement outranks the cross-provider vote.
+
+    ``nous_portal`` publishes ``reasoning_effort`` in ``supported_parameters``
+    for ``tencent/hy3:free`` and not for ``meituan/longcat-2.0:free``. That is
+    a tier-1 fact about one model, and it turns the model's capability record
+    into one that has an effort knob -- so the effort is sent rather than
+    discarded, even though the cross-provider vote calls the model toggle-only.
+    """
+
+    stated_by_the_gateway = ModelReasoningCapability(
+        can_reason=True,
+        supports_effort_control=True,
+        supports_toggle_control=True,
+        supports_budget_control=None,
+    )
+
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+        stated_by_the_gateway,
+        dialect=EFFORT_ONLY_HOST,
+        model_ref="nous_portal/tencent/hy3:free",
+    )
+
+    assert adapted == ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
+    assert adaptation.kind is ReasoningAdaptationKind.UNCHANGED
+
+
+def test_mandatory_off_floor_comes_from_the_intersection() -> None:
+    """A floor only the model knows is no more sendable than the OFF was."""
+
+    mandatory_low_to_max = ModelReasoningCapability(
+        can_reason=True,
+        supports_effort_control=True,
+        supported_efforts=frozenset(
+            {ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.MAX}
+        ),
+        mandatory=True,
+    )
+    host_without_low = ReasoningDialect(
+        effort_values=frozenset({ReasoningEffort.MEDIUM, ReasoningEffort.MAX}),
+        effort_field="reasoning_effort",
+    )
+
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.off(),
+        mandatory_low_to_max,
+        dialect=host_without_low,
+        model_ref="provider/a-model",
+    )
+
+    assert adapted == ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM)
+    assert adaptation.kind is ReasoningAdaptationKind.SUBSTITUTED
+
+
+@pytest.mark.parametrize("dialect", ALL_DIALECTS)
+@pytest.mark.parametrize("capability", ALL_CAPABILITIES)
+@pytest.mark.parametrize("policy", ALL_POLICIES)
+def test_every_adaptation_message_names_the_field_or_says_nothing_is_sent(
+    dialect: ReasoningDialect | None,
+    capability: ModelReasoningCapability | None,
+    policy: ReasoningPolicy,
+) -> None:
+    """An operator reading the request log must learn what actually went out.
+
+    Only checked where a dialect is known: with no dialect there is no field
+    name to give, and the messages there are deliberately unchanged.
+    """
+
+    _adapted, adaptation = adapt_reasoning_policy(
+        policy, capability, dialect=dialect, model_ref="provider/a-model"
+    )
+    if adaptation.kind is ReasoningAdaptationKind.UNCHANGED or dialect is None:
+        return
+
+    message = adaptation.message
+    assert message is not None
+    fields = {
+        name
+        for name in (dialect.effort_field, dialect.toggle_field, dialect.budget_field)
+        if name
+    }
+    says_nothing = (
+        "sending no reasoning instruction" in message
+        or "dropping the requested reasoning controls" in message
+        or "adaptive thinking" in message
+        or "will be sent as a thinking budget" in message
+    )
+    assert says_nothing or any(f"`{name}`" in message for name in fields), message
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ from my_claude_code.core.gateway_model_ids import decode_gateway_model_id
 from my_claude_code.core.reasoning import (
     ReasoningAdaptation,
     ReasoningAdaptationKind,
+    ReasoningDialect,
     ReasoningPolicy,
     combine_reasoning_adaptations,
 )
@@ -143,6 +144,7 @@ VisionCapabilityLookup = Callable[[str, str], bool | None]
 # ``vision_lookup`` already is. Both default to absent, and an absent lookup
 # means every model is unknown -- which by design changes nothing at all.
 ReasoningCapabilityLookup = Callable[[str, str], ModelReasoningCapability | None]
+ReasoningDialectLookup = Callable[[str, str], ReasoningDialect | None]
 OutputLimitLookup = Callable[[str, str], int | None]
 ContextLengthLookup = Callable[[str, str], int | None]
 
@@ -213,12 +215,14 @@ class ModelRouter:
         *,
         vision_lookup: VisionCapabilityLookup | None = None,
         reasoning_capability_lookup: ReasoningCapabilityLookup | None = None,
+        reasoning_dialect_lookup: ReasoningDialectLookup | None = None,
         output_limit_lookup: OutputLimitLookup | None = None,
         context_length_lookup: ContextLengthLookup | None = None,
     ):
         self._settings = settings
         self._vision_lookup = vision_lookup
         self._reasoning_capability_lookup = reasoning_capability_lookup
+        self._reasoning_dialect_lookup = reasoning_dialect_lookup
         self._output_limit_lookup = output_limit_lookup
         self._context_length_lookup = context_length_lookup
 
@@ -577,15 +581,32 @@ class ModelRouter:
     ) -> tuple[ReasoningPolicy, ReasoningAdaptation]:
         """Narrow one resolved policy to what the resolved model accepts."""
 
-        if self._reasoning_capability_lookup is None:
+        if (
+            self._reasoning_capability_lookup is None
+            and self._reasoning_dialect_lookup is None
+        ):
             return policy, ReasoningAdaptation(ReasoningAdaptationKind.UNCHANGED, None)
-        capability = self._reasoning_capability_lookup(
-            resolved.provider_id, resolved.provider_model
+        capability = (
+            self._reasoning_capability_lookup(
+                resolved.provider_id, resolved.provider_model
+            )
+            if self._reasoning_capability_lookup is not None
+            else None
+        )
+        # The host's own fields, which the model's capability record cannot
+        # state: one gateway can parse a different set per model.
+        dialect = (
+            self._reasoning_dialect_lookup(
+                resolved.provider_id, resolved.provider_model
+            )
+            if self._reasoning_dialect_lookup is not None
+            else None
         )
         output_limit = self._model_output_limit(resolved)
         return adapt_reasoning_policy(
             policy,
             capability,
+            dialect=dialect,
             max_tokens=request.max_tokens,
             output_limit=output_limit,
             answer_floor_max=self._settings.reasoning_answer_floor_max,

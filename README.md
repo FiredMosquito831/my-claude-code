@@ -607,7 +607,18 @@ You can instead select **Off**, **Adaptive**, **Low**, **Medium**, **High**, **X
 
 Providers with named effort receive those names; boolean providers receive on or off. A provider that takes a numeric thinking budget instead gets a **share of the output budget** rather than a fixed number: `budget = clamp(effective_max × ratio, 1,024, model output limit)`, where `effective_max` is the smaller of the request's `max_tokens` and the model's own output limit. The ratios are **Minimal 0.10**, **Low 0.20**, **Medium 0.50**, **High 0.80**, **X-High 0.95**, and **Max 0.95** — the published OpenRouter/Vercel AI Gateway ratios, with the top two held below 1.00 because the thinking budget must stay strictly under `max_tokens`. The 1,024 floor is Anthropic's documented minimum extended-thinking budget. This keeps a big request's thinking proportional to it instead of pinning every level to a constant.
 
-**The level is then narrowed to what the resolved model accepts.** An effort above the model's published vocabulary clamps down to the nearest one it does offer; an effort below everything it offers clamps up to its lowest, because only an explicit **Off** may take reasoning away. A model that can only switch thinking on or off gets thinking on with the level discarded; a model known not to reason at all gets no reasoning controls; and a model MCC has no capability data for is left **exactly** as before, since most providers publish nothing and clamping on silence would regress them. Each request logs both the reasoning policy applied and the one originally requested, so any narrowing is visible in the request detail view. Unsupported controls safely remain provider-defined.
+**The level is then narrowed by two independent facts, and both have to agree.** What the *model* supports — can it reason, does it have an effort scale and which words, an on/off switch, a numeric budget — and what the *host in front of it* actually parses for this request. They are genuinely different things: `nous_portal` publishes a `reasoning_effort` field for `tencent/hy3:free` and none for `meituan/longcat-2.0:free`, one gateway with two dialects; and a model whose only knob is an on/off switch, sitting behind a gateway whose only field is an effort word, has nothing the two can say to each other.
+
+A control is sent only when the model has that knob **and** the host has a field for it. Otherwise MCC sends the nearest thing both can express:
+
+- effort above the shared vocabulary clamps **down** to the nearest word both accept; below it clamps **up** to the lowest, because only an explicit **Off** may take reasoning away;
+- a model with an on/off switch behind a host that has one gets thinking on, level discarded;
+- a model with an on/off switch behind a host that has *only* an effort field gets **nothing** — its own default reasoning behaviour applies. Sending the host's default rung there would answer a request for `low` with a stranger's `max`;
+- an effort against a host that takes only a number becomes a thinking budget sized to the model, and a budget against a host that takes only a word becomes the nearest word;
+- a model known not to reason at all gets no reasoning controls;
+- and where MCC knows neither fact, the request is left **exactly** as before — most providers publish nothing, and narrowing on silence would regress them.
+
+Each request logs both the reasoning policy applied and the one originally requested, and every adaptation names the wire field it will be sent through (or says plainly that nothing is being sent), so what left the proxy is visible in the request detail view. Unsupported controls safely remain provider-defined.
 
 <div align="center">
   <img src="assets/admin-model-config.png" alt="Model configuration with tier routing and reasoning control" width="820">

@@ -21,7 +21,7 @@ Read-only for capabilities; the visibility and override sections write through
 the existing owners (``apply_admin_config`` and ``save_model_overrides``).
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -45,7 +45,7 @@ from my_claude_code.core.model_visibility import (
     MODEL_PATTERN_SEPARATOR,
     ModelVisibility,
 )
-from my_claude_code.providers.reasoning_vocabulary import provider_reasoning_vocabulary
+from my_claude_code.core.reasoning import ReasoningDialect
 from my_claude_code.providers.runtime.models_dev import (
     cross_provider_match,
     model_output_limit_tiered,
@@ -59,7 +59,9 @@ SOURCE_PROVIDER = "provider"
 SOURCE_PROVIDER_OR_MODELS_DEV = "provider_or_models_dev"
 SOURCE_MODELS_DEV = "models_dev"
 SOURCE_APPROXIMATE = "approximate"
-SOURCE_PROVIDER_VOCABULARY = "provider_vocabulary"
+SOURCE_HOST_DIALECT = "host_dialect"
+
+ReasoningDialectLookup = Callable[[str, str], ReasoningDialect | None]
 SOURCE_UNKNOWN = "unknown"
 
 SOURCE_LABELS: dict[str, str] = {
@@ -67,7 +69,7 @@ SOURCE_LABELS: dict[str, str] = {
     SOURCE_PROVIDER_OR_MODELS_DEV: "provider /models or models.dev",
     SOURCE_MODELS_DEV: "models.dev",
     SOURCE_APPROXIMATE: "approximate cross-provider",
-    SOURCE_PROVIDER_VOCABULARY: "provider API docs",
+    SOURCE_HOST_DIALECT: "host dialect",
     SOURCE_UNKNOWN: "unknown",
 }
 
@@ -77,6 +79,8 @@ TIER_LABELS: dict[ResolutionTier, str] = {
     ResolutionTier.PROVIDER_TAG_STRIPPED: "provider /models, tag stripped",
     ResolutionTier.MODELS_DEV_BUCKET_EXACT: "models.dev bucket, exact id",
     ResolutionTier.MODELS_DEV_BUCKET_TAG_STRIPPED: ("models.dev bucket, tag stripped"),
+    ResolutionTier.OPENROUTER_EXACT: "OpenRouter catalogue, exact id",
+    ResolutionTier.OPENROUTER_TAG_STRIPPED: "OpenRouter catalogue, tag stripped",
     ResolutionTier.CROSS_PROVIDER_EXACT: "cross-provider, exact id",
     ResolutionTier.CROSS_PROVIDER_TAG_STRIPPED: "cross-provider, tag stripped",
     ResolutionTier.CROSS_PROVIDER_BARE_TAGGED: "cross-provider, bare model + tag",
@@ -122,7 +126,7 @@ def _sourced(
     """One capability field plus the rung of the ladder that stated it.
 
     ``source`` is the coarse badge the page has always rendered; ``tier`` is
-    the exact rung (1-8) the resolver actually stopped at, which is what tells
+    the exact rung (1-11) the resolver actually stopped at, which is what tells
     a "provider /models" answer that matched the id exactly from one that only
     matched after its pricing tag was stripped, and an approximate answer that
     kept the vendor prefix from one that fell back to the bare model name.
@@ -133,6 +137,7 @@ def _sourced(
         "source": source,
         "source_label": SOURCE_LABELS[source],
         "approximate": source == SOURCE_APPROXIMATE,
+        "reference": tier is not None and tier.is_reference,
         "tier": None if tier is None else int(tier),
         "tier_label": None if tier is None else TIER_LABELS[tier],
     }
@@ -151,7 +156,6 @@ def _reasoning_source(
     name: str,
     provider: ModelReasoningCapability | None,
     from_models_dev: ModelReasoningCapability | None,
-    vocabulary: ModelReasoningCapability | None,
     models_dev_tiers: Mapping[str, ResolutionTier],
     *,
     provider_tier: ResolutionTier | None,
@@ -162,8 +166,10 @@ def _reasoning_source(
     the provider's documented vocabulary, field by field, so the first layer
     with a stated value is the one whose value is on screen. The rung comes
     from the resolver itself rather than being re-derived here: models.dev's
-    answer may have come off this provider's own bucket (tiers 3-4) or off the
-    approximate cross-provider vote (tiers 5-8), and only the resolver knows
+    answer may have come off this provider's own bucket (tiers 3-4), off the
+    OpenRouter reference catalogue (tiers 5-6), or off the
+    reference catalogue (tiers 5-6) or the approximate cross-provider vote
+    (tiers 7-10), and only the resolver knows
     which, per field.
     """
 
@@ -177,12 +183,43 @@ def _reasoning_source(
             else SOURCE_MODELS_DEV
         )
         return source, tier
-    if vocabulary is not None and getattr(vocabulary, name) is not None:
-        # The provider's documented vocabulary is not a rung of the id-matching
-        # ladder at all: it is what the provider's API docs say about every
-        # model behind it, so there is no tier to report.
-        return SOURCE_PROVIDER_VOCABULARY, None
     return SOURCE_UNKNOWN, None
+
+
+def dialect_payload(dialect: ReasoningDialect | None) -> dict[str, Any]:
+    """What the HOST parses for this model, beside what the MODEL supports.
+
+    Two visibly different statements, which the page used to conflate: "this
+    model can reason" is a vote across catalogues, "this host parses
+    reasoning_effort" is a declaration by the code that will build the body (or
+    by the gateway's own ``supported_parameters``, per model). A control
+    reaches the wire only when both say yes, so an operator looking at a model
+    that sends nothing needs to see which half said no.
+    """
+
+    if dialect is None:
+        return {
+            "known": False,
+            "source": SOURCE_UNKNOWN,
+            "source_label": SOURCE_LABELS[SOURCE_UNKNOWN],
+        }
+    return {
+        "known": True,
+        "source": SOURCE_HOST_DIALECT,
+        "source_label": SOURCE_LABELS[SOURCE_HOST_DIALECT],
+        "effort_field": dialect.effort_field or None,
+        "effort_values": (
+            None
+            if dialect.effort_values is None
+            else sorted(effort.value for effort in dialect.effort_values)
+        ),
+        "toggle": dialect.toggle,
+        "toggle_field": dialect.toggle_field or None,
+        "budget": dialect.budget,
+        "budget_field": dialect.budget_field or None,
+        "off": dialect.off,
+        "adaptive": dialect.adaptive,
+    }
 
 
 def capability_payload(
@@ -190,6 +227,7 @@ def capability_payload(
     model_id: str,
     info: ProviderModelInfo | None,
     provider_tier: ResolutionTier | None = None,
+    dialect: ReasoningDialect | None = None,
 ) -> dict[str, Any]:
     """Read-only capability record for one model, tier-tagged per field.
 
@@ -206,7 +244,6 @@ def capability_payload(
     models_dev_capability, models_dev_tiers = model_reasoning_capability_tiered(
         provider_id, model_id
     )
-    vocabulary = provider_reasoning_vocabulary(provider_id)
     match = None if described else cross_provider_match(provider_id, model_id)
 
     provider_output = info.max_output_tokens if info is not None else None
@@ -237,7 +274,6 @@ def capability_payload(
         SOURCE_PROVIDER: provider_capability,
         SOURCE_MODELS_DEV: models_dev_capability,
         SOURCE_APPROXIMATE: models_dev_capability,
-        SOURCE_PROVIDER_VOCABULARY: vocabulary,
     }
     reasoning: dict[str, Any] = {}
     for name in REASONING_FIELDS:
@@ -245,7 +281,6 @@ def capability_payload(
             name,
             provider_capability,
             models_dev_capability,
-            vocabulary,
             models_dev_tiers,
             provider_tier=provider_tier,
         )
@@ -284,6 +319,7 @@ def capability_payload(
             SOURCE_UNKNOWN if defaults is None else SOURCE_PROVIDER,
         ),
         "reasoning": reasoning,
+        "reasoning_dialect": dialect_payload(dialect),
     }
 
 
@@ -426,6 +462,7 @@ def _model_entry(
     visibility: ModelVisibility,
     overrides: ModelParameterOverrides,
     configured_refs: frozenset[str],
+    dialect_lookup: ReasoningDialectLookup | None = None,
 ) -> dict[str, Any]:
     provider_id = parse_provider_type(model_ref)
     model_id = parse_model_name(model_ref) if "/" in model_ref else model_ref
@@ -438,7 +475,16 @@ def _model_entry(
         "has_metadata": info is not None,
         "override": _row_state(model_row),
         "effective": effective_parameters(overrides, provider_id, model_ref),
-        "capabilities": capability_payload(provider_id, model_id, info),
+        "capabilities": capability_payload(
+            provider_id,
+            model_id,
+            info,
+            dialect=(
+                None
+                if dialect_lookup is None
+                else dialect_lookup(provider_id, model_id)
+            ),
+        ),
     }
 
 
@@ -447,6 +493,7 @@ def build_models_page_payload(
     configured: Iterable[ConfiguredChatModelRef],
     visibility: ModelVisibility,
     overrides: ModelParameterOverrides,
+    dialect_lookup: ReasoningDialectLookup | None = None,
 ) -> dict[str, Any]:
     """Everything the Models page renders, in one request.
 
@@ -472,6 +519,7 @@ def build_models_page_payload(
                 visibility=visibility,
                 overrides=overrides,
                 configured_refs=configured_refs,
+                dialect_lookup=dialect_lookup,
             )
         )
 

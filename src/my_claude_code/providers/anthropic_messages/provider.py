@@ -9,7 +9,11 @@ import httpx
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic.models import MessagesRequest
-from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningDialect,
+    ReasoningPolicy,
+)
 from my_claude_code.core.trace import trace_event
 from my_claude_code.core.wire_capture import record_wire_request
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
@@ -26,9 +30,28 @@ from .auth import AnthropicMessagesAuth, BearerTokenAuth
 from .request import build_anthropic_messages_body
 from .streaming import iter_anthropic_sse_frames
 
+ANTHROPIC_REASONING_DIALECT = ReasoningDialect(
+    budget=True,
+    toggle=True,
+    off=True,
+    adaptive=True,
+    toggle_field="thinking.type",
+    budget_field="thinking.budget_tokens",
+)
+"""Anthropic's ``thinking`` object: a budget, an on/off, and adaptive.
+
+The one host in the fleet with a genuine adaptive channel, which is why
+``ReasoningControl.ADAPTIVE`` encodes to something here and to nothing
+everywhere else. No effort field: the wire takes a number.
+"""
+
 
 class AnthropicMessagesProvider(BaseProvider):
     """Provider for upstream APIs implementing native Anthropic Messages SSE."""
+
+    def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
+        """See :data:`ANTHROPIC_REASONING_DIALECT`."""
+        return ANTHROPIC_REASONING_DIALECT
 
     def __init__(
         self,

@@ -8,6 +8,7 @@ from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
+    ReasoningDialect,
     ReasoningEffort,
     ReasoningPolicy,
 )
@@ -109,6 +110,15 @@ class CommandCodeProvider(BaseProvider):
             provider_name="COMMANDCODE",
             rate_limiter=rate_limiter,
         )
+
+    def reasoning_dialect(self, model_id: str) -> ReasoningDialect | None:
+        """Ask whichever protocol family actually serves this model.
+
+        One Command Code catalogue is split across delegates with different
+        wire shapes, so the dialect is per model even though nothing about the
+        model itself is being read here -- only which delegate will encode it.
+        """
+        return self._delegate(model_id).reasoning_dialect(model_id)
 
     def throttle_remaining(self) -> float:
         return self._openai.throttle_remaining()

@@ -9,7 +9,11 @@ from loguru import logger
 from my_claude_code.config.nim import NimSettings
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.failures import ExecutionFailure
-from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningDialect,
+    ReasoningPolicy,
+)
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.failure_policy import (
     overloaded_provider_failure,
@@ -52,8 +56,28 @@ _PROFILE = OpenAIChatProfile(
 )
 
 
+NIM_REASONING_DIALECT = ReasoningDialect(
+    toggle=True,
+    budget=True,
+    off=True,
+    toggle_field="chat_template_kwargs.thinking",
+    budget_field="chat_template_kwargs.reasoning_budget",
+)
+"""NIM builds its own body and never reaches the profile encoder.
+
+``request_options`` writes ``chat_template_kwargs.thinking`` /
+``enable_thinking`` and a numeric ``reasoning_budget`` beside them, and
+strips every ``reasoning_effort``-shaped key on the way out -- so an
+effort word has nowhere to go here and must not be claimed.
+"""
+
+
 class NvidiaNimProvider(OpenAIChatProvider):
     """NVIDIA NIM provider using official OpenAI client."""
+
+    def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
+        """See :data:`NIM_REASONING_DIALECT`."""
+        return NIM_REASONING_DIALECT
 
     def __init__(
         self,

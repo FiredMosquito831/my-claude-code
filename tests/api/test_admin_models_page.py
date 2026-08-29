@@ -399,6 +399,7 @@ def test_a_provider_reported_capability_is_labelled_authoritative():
         "source": "provider",
         "source_label": "provider /models",
         "approximate": False,
+        "reference": False,
         "tier": 1,
         "tier_label": "provider /models, exact id",
     }
@@ -464,13 +465,13 @@ def test_the_approximate_tier_is_marked_and_carries_its_sample_size(monkeypatch)
     assert output["value"] == 512000
     assert output["source"] == "approximate"
     assert output["approximate"] is True
-    assert output["tier"] == 8
+    assert output["tier"] == 10
     assert output["tier_label"] == "cross-provider, bare model"
     assert output["match_count"] == 51
     assert output["agreement"] == 0.6
     assert output["reporters"] == 45
     assert payload["reasoning"]["can_reason"]["source"] == "approximate"
-    assert payload["reasoning"]["can_reason"]["tier"] == 8
+    assert payload["reasoning"]["can_reason"]["tier"] == 10
 
 
 def test_an_under_sampled_approximate_limit_renders_as_unknown(monkeypatch):
@@ -502,7 +503,7 @@ def test_an_under_sampled_approximate_limit_renders_as_unknown(monkeypatch):
     assert payload["max_output_tokens"]["source"] == "unknown"
     assert payload["max_output_tokens"]["tier"] is None
     assert "agreement" not in payload["max_output_tokens"]
-    assert payload["reasoning"]["can_reason"]["tier"] == 5
+    assert payload["reasoning"]["can_reason"]["tier"] == 7
 
 
 def test_a_tag_stripped_provider_hit_is_tier_two_not_tier_one():

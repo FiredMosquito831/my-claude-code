@@ -7,6 +7,7 @@ from my_claude_code.application.errors import InvalidRequestError
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningControl,
+    ReasoningDialect,
     ReasoningPolicy,
 )
 from my_claude_code.providers.openai_chat import (
@@ -43,6 +44,17 @@ class VertexReasoningEncoder:
 
         if policy.control is ReasoningControl.ON:
             _thinking_config(body)["include_thoughts"] = True
+
+    @property
+    def dialect(self) -> ReasoningDialect:
+        """Google's thinking config takes a number and a flag, never a word."""
+        return ReasoningDialect(
+            toggle=True,
+            budget=True,
+            off=True,
+            toggle_field="google.thinking_config.include_thoughts",
+            budget_field="google.thinking_config.thinking_budget",
+        )
 
 
 def validate_google_extra_body(extra: dict[str, Any]) -> None:

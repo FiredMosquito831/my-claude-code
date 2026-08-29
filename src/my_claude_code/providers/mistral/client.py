@@ -6,7 +6,12 @@ from loguru import logger
 
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
-from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningDialect,
+    ReasoningEffort,
+    ReasoningPolicy,
+)
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -37,8 +42,26 @@ _REQUEST_POLICY = OpenAIChatRequestPolicy(
 _PROFILE = OpenAIChatProfile(_REQUEST_POLICY, NO_REASONING)
 
 
+MISTRAL_REASONING_DIALECT = ReasoningDialect(
+    effort_values=frozenset({ReasoningEffort.HIGH}),
+    off=True,
+    effort_field="reasoning_effort",
+)
+"""Mistral's OpenAPI declares ``reasoning_effort: enum [high, none]``.
+
+One on-value and one off-value, which is a host vocabulary of exactly
+``{high}`` plus a spellable OFF. Gating clamps every lower rung onto it
+and records the clamp, which is where this fact used to live as a
+hardcoded provider vocabulary table.
+"""
+
+
 class MistralProvider(OpenAIChatProvider):
     """Mistral API using ``https://api.mistral.ai/v1/chat/completions``."""
+
+    def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
+        """See :data:`MISTRAL_REASONING_DIALECT`."""
+        return MISTRAL_REASONING_DIALECT
 
     def __init__(self, config: ProviderConfig, *, rate_limiter: ProviderRateLimiter):
         super().__init__(

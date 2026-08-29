@@ -1,4 +1,3 @@
-from dataclasses import replace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -600,18 +599,28 @@ def test_create_response_quarantines_malformed_prior_function_call() -> None:
 
 
 @pytest.mark.parametrize(
-    ("reasoning", "expected_policy"),
+    ("reasoning", "expected_policy", "expected_preflight"),
     [
-        ({"effort": "none"}, ReasoningPolicy.off()),
+        ({"effort": "none"}, ReasoningPolicy.off(), ReasoningPolicy.off()),
         (
             {"effort": "low"},
             # effort_budget_tokens is the "low" ratio (0.20) of the 32,768-token
             # unknown-model fallback: nothing publishes a limit for this test
             # model, so that fallback is the allowance the budget is sized from.
+            # NVIDIA NIM parses no effort field -- ``request_options`` strips
+            # every ``reasoning_effort``-shaped key and writes a numeric
+            # ``chat_template_kwargs.reasoning_budget`` instead -- so gating
+            # records a SUBSTITUTED adaptation saying so and deliberately
+            # leaves the number to the reconciliation that knows the real
+            # allowance.
             ReasoningPolicy(
                 control=ReasoningControl.DEFAULT,
                 effort=ReasoningEffort.LOW,
                 effort_budget_tokens=6553,
+            ),
+            ReasoningPolicy(
+                control=ReasoningControl.DEFAULT,
+                effort=ReasoningEffort.LOW,
             ),
         ),
     ],
@@ -619,6 +628,7 @@ def test_create_response_quarantines_malformed_prior_function_call() -> None:
 def test_create_response_preserves_and_resolves_reasoning_effort(
     reasoning: dict[str, str],
     expected_policy: ReasoningPolicy,
+    expected_preflight: ReasoningPolicy,
 ) -> None:
     provider = FakeProvider(_anthropic_text_stream("done"))
     app = create_test_app()
@@ -645,9 +655,7 @@ def test_create_response_preserves_and_resolves_reasoning_effort(
     # before the thinking budget is reconciled against the resolved max_tokens.
     # It sees the same intent with the numeric translation not yet filled in,
     # which is immaterial to a capability probe.
-    assert provider.preflight_stream.call_args.kwargs["reasoning"] == replace(
-        expected_policy, effort_budget_tokens=None
-    )
+    assert provider.preflight_stream.call_args.kwargs["reasoning"] == expected_preflight
 
 
 def test_create_response_maps_redacted_thinking_to_encrypted_reasoning() -> None:

@@ -594,6 +594,10 @@ The adapter is a route like any other, so it gets its own **Add fallback** chain
 
 Providers expose reasoning differently. MCC resolves your intent once at the boundary and each provider adapter translates it, so you configure it in one place rather than per provider. See the Model Config tab.
 
+Two independent facts decide what actually goes on the wire: what the **model** supports, and which reasoning fields the **host** in front of it parses. A control is sent only when both agree; otherwise the nearest thing both can express goes instead, and the request log names the field it went through. A model with only an on/off switch behind a gateway with only an effort field gets no reasoning instruction at all — its own default applies — because the gateway's default effort word is not the level you asked for. Where MCC knows neither fact the request is unchanged.
+
+The Models page shows the two side by side: what the model can do, with the resolution tier each field came from, and what the host parses, labelled as a declaration rather than a vote.
+
 ---
 
 ## 9. Web search

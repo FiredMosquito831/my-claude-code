@@ -5,7 +5,12 @@ from typing import Any
 from loguru import logger
 
 from my_claude_code.core.anthropic.models import MessagesRequest
-from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningDialect,
+    ReasoningEffort,
+    ReasoningPolicy,
+)
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -35,8 +40,29 @@ _PROFILE = OpenAIChatProfile(
 )
 
 
+DEEPSEEK_REASONING_DIALECT = ReasoningDialect(
+    effort_values=frozenset(ReasoningEffort),
+    toggle=True,
+    off=True,
+    effort_field="reasoning_effort",
+    toggle_field="thinking.type",
+)
+"""DeepSeek's own enum is FCC's ladder, value for value.
+
+It named it itself when rejecting an invalid one: ``none``, ``minimal``,
+``low``, ``medium``, ``high``, ``xhigh``, ``max`` -- so the whole
+vocabulary is expressible, and ``thinking.type`` carries on/off beside
+it. DeepSeek overrides ``_build_request_body`` and never consults the
+profile encoder, so this cannot be read off the profile.
+"""
+
+
 class DeepSeekProvider(OpenAIChatProvider):
     """DeepSeek using ``https://api.deepseek.com`` Chat Completions."""
+
+    def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
+        """See :data:`DEEPSEEK_REASONING_DIALECT`."""
+        return DEEPSEEK_REASONING_DIALECT
 
     def __init__(self, config: ProviderConfig, *, rate_limiter: ProviderRateLimiter):
         super().__init__(

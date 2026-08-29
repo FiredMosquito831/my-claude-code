@@ -28,7 +28,11 @@ from my_claude_code.core.anthropic.streaming import (
     tool_schemas_by_name,
 )
 from my_claude_code.core.failures import ExecutionFailure
-from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningDialect,
+    ReasoningPolicy,
+)
 from my_claude_code.core.request_log import (
     RECOVERY_EARLY_RETRIES,
     RECOVERY_MIDSTREAM_RECOVERIES,
@@ -135,6 +139,16 @@ class OpenAIChatProvider(BaseProvider):
             ),
             http_client=http_client,
         )
+
+    def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
+        """What this profile's encoder can put on the wire, for any model.
+
+        Provider-wide by construction: one profile serves the whole catalogue.
+        The per-model narrowing from the gateway's own ``supported_parameters``
+        happens above this, in the provider manager, which is the layer that
+        holds the model cache.
+        """
+        return self._profile.reasoning.dialect
 
     def throttle_remaining(self) -> float:
         """Seconds this credential is rate-limited for; 0 when free to serve."""

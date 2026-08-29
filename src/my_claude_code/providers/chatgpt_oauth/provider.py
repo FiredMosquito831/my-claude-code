@@ -20,7 +20,12 @@ from my_claude_code.core.diagnostics import (
     redacted_exception_traceback,
 )
 from my_claude_code.core.failures import ExecutionFailure
-from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningDialect,
+    ReasoningEffort,
+    ReasoningPolicy,
+)
 from my_claude_code.core.trace import trace_event
 from my_claude_code.core.version import package_version
 from my_claude_code.core.wire_capture import record_wire_request
@@ -122,8 +127,29 @@ def _build_headers(credentials: Any, session_id: str) -> dict[str, str]:
     return headers
 
 
+CHATGPT_OAUTH_REASONING_DIALECT = ReasoningDialect(
+    effort_values=frozenset(ReasoningEffort),
+    toggle=True,
+    off=False,
+    effort_field="reasoning.effort",
+    toggle_field="reasoning.effort",
+)
+"""The Responses endpoint takes ``reasoning.effort`` and nothing else.
+
+``off=False`` on purpose: an explicit OFF omits the whole ``reasoning``
+block rather than spelling a disable, so the endpoint has no OFF at
+all. It also has no bare ON -- a policy naming no effort falls back to
+the endpoint's long-standing ``medium`` -- so the toggle channel is
+real and its on-value is a default rung.
+"""
+
+
 class ChatGPTOAuthProvider(BaseProvider):
     """ChatGPT/Codex OAuth provider using the Responses API."""
+
+    def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
+        """See :data:`CHATGPT_OAUTH_REASONING_DIALECT`."""
+        return CHATGPT_OAUTH_REASONING_DIALECT
 
     def __init__(
         self,

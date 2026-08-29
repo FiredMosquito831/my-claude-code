@@ -19,7 +19,7 @@ from my_claude_code.providers.http import maybe_await_aclose
 # request has to become it: mapping those to "none" would disable the
 # thinking that was asked for, which WORKING-NOTES 54 forbids. The clamp
 # itself is performed and recorded one layer up, by capability gating
-# against ``providers.reasoning_vocabulary``, so it appears in the
+# against ``MistralProvider.reasoning_dialect``, so it appears in the
 # request log instead of happening silently here.
 MISTRAL_REASONING_EFFORT = "high"
 

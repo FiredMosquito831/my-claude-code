@@ -8,6 +8,7 @@ from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.reasoning import ReasoningDialect, ReasoningEffort
 from my_claude_code.providers.base import BaseProvider
 from my_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from my_claude_code.providers.runtime import ProviderRuntime
@@ -820,3 +821,128 @@ async def test_catalog_publication_failure_is_warning_only_and_secret_safe() -> 
     assert "PermissionError" in log_blob
     assert secret not in log_blob
     await manager.close()
+
+
+# ---------------------------------------------------------------------------
+# The host half of the two-fact rule, narrowed per model by the gateway.
+# ---------------------------------------------------------------------------
+
+
+class DialectRuntime(FakeRuntime):
+    """A runtime whose provider declares one dialect for every model."""
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings)
+        self.declared = ReasoningDialect(
+            effort_values=frozenset({ReasoningEffort.LOW, ReasoningEffort.HIGH}),
+            toggle=True,
+            budget=True,
+            off=True,
+            effort_field="reasoning_effort",
+            toggle_field="reasoning.enabled",
+            budget_field="reasoning.max_tokens",
+        )
+        self.provider.reasoning_dialect = lambda model_id: self.declared
+
+
+def _dialect_manager() -> tuple[ProviderRuntimeManager, DialectRuntime]:
+    runtimes: list[DialectRuntime] = []
+
+    def factory(settings: Settings) -> ProviderRuntime:
+        runtime = DialectRuntime(settings)
+        runtimes.append(runtime)
+        return cast(ProviderRuntime, runtime)
+
+    manager = ProviderRuntimeManager(_catalog_settings("m"), runtime_factory=factory)
+    return manager, runtimes[0]
+
+
+def test_a_provider_dialect_reaches_the_caller_synchronously() -> None:
+    """No lease and no await: a lookup that never crosses a suspension point."""
+
+    manager, runtime = _dialect_manager()
+
+    assert manager.model_reasoning_dialect("gateway", "any/model") == runtime.declared
+
+
+def test_an_unconfigured_provider_is_unknown_rather_than_an_error() -> None:
+    """Constructing a provider can raise, and unknown must never fail a request."""
+
+    class UnconfiguredRuntime(DialectRuntime):
+        def resolve_provider(self, provider_id: str) -> BaseProvider:
+            raise RuntimeError("not configured")
+
+    def factory(settings: Settings) -> ProviderRuntime:
+        return cast(ProviderRuntime, UnconfiguredRuntime(settings))
+
+    manager = ProviderRuntimeManager(_catalog_settings("m"), runtime_factory=factory)
+
+    assert manager.model_reasoning_dialect("gateway", "any/model") is None
+
+
+def test_the_gateways_own_parameter_list_narrows_the_dialect_per_model() -> None:
+    """One gateway, two dialects -- the statement no encoder can make.
+
+    The provider-wide declaration is the ceiling; this model's own ``/models``
+    row takes fields off it. Only a top-level parameter can be narrowed away
+    this way: ``reasoning.effort`` lives *inside* the ``reasoning`` object, so
+    a gateway listing ``reasoning`` has already permitted it and narrowing on
+    the absence of a separate ``reasoning_effort`` entry would be wrong.
+    """
+
+    manager, _runtime = _dialect_manager()
+    manager.cache_model_infos(
+        "nvidia_nim",
+        [
+            ProviderModelInfo(
+                "effort/model",
+                supported_parameters=frozenset({"reasoning", "reasoning_effort"}),
+            ),
+            ProviderModelInfo(
+                "toggle/model",
+                supported_parameters=frozenset({"reasoning"}),
+            ),
+        ],
+    )
+
+    with_effort = manager.model_reasoning_dialect("nvidia_nim", "effort/model")
+    without_effort = manager.model_reasoning_dialect("nvidia_nim", "toggle/model")
+
+    assert with_effort is not None and with_effort.effort_values is not None
+    assert without_effort is not None
+    assert without_effort.effort_values is None
+    # Narrowing only: the toggle and the budget the gateway does list survive.
+    assert without_effort.toggle is True
+    assert without_effort.budget is True
+
+
+def test_narrowing_never_widens_a_dialect() -> None:
+    """A gateway advertising a field the profile cannot emit is a profile gap.
+
+    Deciding at runtime to send it anyway would claim a wire shape the encoder
+    has no code for, so the declaration stands and the gap is logged instead.
+    """
+
+    runtimes: list[DialectRuntime] = []
+
+    def factory(settings: Settings) -> ProviderRuntime:
+        runtime = DialectRuntime(settings)
+        runtime.declared = ReasoningDialect(toggle=True, toggle_field="thinking")
+        runtimes.append(runtime)
+        return cast(ProviderRuntime, runtime)
+
+    manager = ProviderRuntimeManager(_catalog_settings("m"), runtime_factory=factory)
+    manager.cache_model_infos(
+        "nvidia_nim",
+        [
+            ProviderModelInfo(
+                "a/model", supported_parameters=frozenset({"reasoning_effort"})
+            )
+        ],
+    )
+
+    dialect = manager.model_reasoning_dialect("nvidia_nim", "a/model")
+
+    assert dialect is not None
+    assert dialect.effort_values is None
+    assert dialect.toggle is True

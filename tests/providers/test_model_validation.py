@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from my_claude_code.application.errors import ApplicationUnavailableError
-from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.application.model_metadata import (
+    ModelReasoningCapability,
+    ProviderModelInfo,
+)
 from my_claude_code.config.nim import NimSettings
 from my_claude_code.config.provider_catalog import (
     DEEPSEEK_DEFAULT_BASE,
@@ -227,6 +230,16 @@ async def test_openrouter_lists_tool_metadata_with_thinking_support() -> None:
                 supports_thinking=True,
                 supported_parameters=frozenset(
                     {"tools", "reasoning", "include_reasoning"}
+                ),
+                # No ``reasoning`` block on this row, but the gateway listing
+                # the ``reasoning`` parameter IS a statement about this model:
+                # OpenRouter's reasoning object carries both ``enabled`` and
+                # ``max_tokens``. Read since 6.3.0; it used to be parsed and
+                # thrown away.
+                reasoning_capability=ModelReasoningCapability(
+                    can_reason=True,
+                    supports_toggle_control=True,
+                    supports_budget_control=True,
                 ),
             ),
             ProviderModelInfo(

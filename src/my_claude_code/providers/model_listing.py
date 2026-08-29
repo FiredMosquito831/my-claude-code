@@ -402,6 +402,7 @@ def _openrouter_dialect_model_info(
         reasoning_capability=_openrouter_reasoning(
             _field(item, "reasoning"),
             supports_thinking="reasoning" in supported_parameter_names,
+            supported_parameter_names=supported_parameter_names,
         ),
     )
 
@@ -437,17 +438,27 @@ def _default_parameters(value: Any) -> ModelDefaultParameters | None:
 
 
 def _openrouter_reasoning(
-    reasoning: Any, *, supports_thinking: bool
+    reasoning: Any,
+    *,
+    supports_thinking: bool,
+    supported_parameter_names: set[str] | None = None,
 ) -> ModelReasoningCapability | None:
     """Map a gateway ``reasoning`` block onto the neutral capability record.
 
-    ``None`` when the gateway publishes no block at all -- unknown. A block
-    that omits ``supported_efforts`` yields a capability whose
+    A block that omits ``supported_efforts`` yields a capability whose
     ``supported_efforts`` is ``None`` (known model, unknown vocabulary), which
     stays distinct from a published-but-empty vocabulary.
+
+    With no block at all, the gateway's own ``supported_parameters`` list is
+    still a statement about this model and is read as one. It was parsed and
+    stored already and only ever consulted for ``supports_thinking``, which is
+    how ``nous_portal`` publishing ``reasoning_effort`` for ``tencent/hy3:free``
+    and not for ``meituan/longcat-2.0:free`` -- one gateway, two dialects, per
+    model -- went unnoticed by everything downstream. ``None`` comes back only
+    when the gateway says nothing about reasoning at all.
     """
     if not isinstance(reasoning, Mapping):
-        return None
+        return _reasoning_from_supported_parameters(supported_parameter_names)
     mandatory = _bool_or_none(reasoning.get("mandatory"))
     raw_efforts = reasoning.get("supported_efforts")
     supported_efforts: frozenset[ReasoningEffort] | None = None
@@ -466,6 +477,15 @@ def _openrouter_reasoning(
     # published "none" effort can only ever confirm it.
     if mandatory is not None and not can_switch_off:
         can_switch_off = not mandatory
+    if (
+        supports_effort is None
+        and supported_parameter_names is not None
+        and "reasoning_effort" in supported_parameter_names
+    ):
+        # The block is silent about an effort knob and the parameter list is
+        # not. A published block wins every field it states; this one does not
+        # state this field.
+        supports_effort = True
     return ModelReasoningCapability(
         can_reason=supports_thinking,
         supports_effort_control=supports_effort,
@@ -474,6 +494,35 @@ def _openrouter_reasoning(
         supported_efforts=supported_efforts,
         mandatory=mandatory,
         default_enabled=_bool_or_none(reasoning.get("default_enabled")),
+    )
+
+
+def _reasoning_from_supported_parameters(
+    names: set[str] | None,
+) -> ModelReasoningCapability | None:
+    """Read capability off a ``supported_parameters`` list with no block beside it.
+
+    A field name is a weaker statement than a ``reasoning`` block and says
+    nothing about a vocabulary, so only the flags it genuinely implies are set
+    and ``supported_efforts`` stays unknown. ``can_reason`` is ``True`` rather
+    than the plain ``"reasoning" in names``: a gateway that parses
+    ``reasoning_effort`` is a gateway that reasons, and reporting ``False``
+    there would suppress reasoning outright on exactly the models this is meant
+    to enable.
+    """
+    if not names:
+        return None
+    lists_effort = "reasoning_effort" in names
+    lists_reasoning = "reasoning" in names
+    if not (lists_effort or lists_reasoning):
+        return None
+    return ModelReasoningCapability(
+        can_reason=True,
+        supports_effort_control=True if lists_effort else None,
+        # OpenRouter's ``reasoning`` object carries both ``enabled`` and
+        # ``max_tokens``, so listing it states two channels at once.
+        supports_toggle_control=True if lists_reasoning else None,
+        supports_budget_control=True if lists_reasoning else None,
     )
 
 

@@ -192,6 +192,94 @@ class ReasoningPolicy:
         return self.effort.budget_tokens
 
 
+# Declaration order is the documented ordering:
+# minimal < low < medium < high < xhigh < max.
+EFFORT_ORDER: tuple[ReasoningEffort, ...] = tuple(ReasoningEffort)
+EFFORT_RANK: dict[ReasoningEffort, int] = {
+    effort: rank for rank, effort in enumerate(EFFORT_ORDER)
+}
+
+
+def nearest_effort(
+    requested: ReasoningEffort, supported: frozenset[ReasoningEffort]
+) -> ReasoningEffort:
+    """Return the closest supported effort at or below ``requested``.
+
+    A request below everything on offer clamps *up* to the lowest supported
+    effort: the caller asked for reasoning, and only an explicit OFF may take
+    it away (WORKING-NOTES 54). ``supported`` must be non-empty.
+    """
+
+    at_or_below = [
+        effort for effort in supported if EFFORT_RANK[effort] <= EFFORT_RANK[requested]
+    ]
+    if at_or_below:
+        return max(at_or_below, key=lambda effort: EFFORT_RANK[effort])
+    return min(supported, key=lambda effort: EFFORT_RANK[effort])
+
+
+def effort_intersection(
+    first: frozenset[ReasoningEffort] | None,
+    second: frozenset[ReasoningEffort] | None,
+) -> frozenset[ReasoningEffort] | None:
+    """Intersect two effort vocabularies, treating ``None`` as "no opinion".
+
+    Unknown never adds a restriction, so ``None`` on either side yields the
+    other side untouched, and ``None`` on both stays unknown. An intersection
+    that comes out genuinely empty is returned as the empty set -- "these two
+    vocabularies share nothing" is a stated fact, not silence, and the caller
+    has to decide what to do about it.
+    """
+
+    if first is None:
+        return second
+    if second is None:
+        return first
+    return first & second
+
+
+@dataclass(frozen=True, slots=True)
+class ReasoningDialect:
+    """Which reasoning fields one HOST parses for one request.
+
+    Deliberately not a model capability. A model's knobs (can it reason, does
+    it have an effort scale, a toggle, a budget) and the fields the gateway in
+    front of it will actually read are two independent facts, and a control may
+    only be emitted when both agree. Command Code parses ``reasoning_effort``
+    and nothing else; the model behind it may have only an on/off switch. One
+    fact alone cannot decide the wire.
+
+    Every field defaults to "this host has no such field", so a partially
+    described dialect never claims a channel it does not have. ``None`` for
+    :attr:`effort_values` means there is no effort field at all -- distinct
+    from an empty frozenset, which no encoder produces.
+    """
+
+    effort_values: frozenset[ReasoningEffort] | None = None
+    """The effort words this host accepts, or ``None`` for no effort field."""
+
+    toggle: bool = False
+    """Whether an on/off channel exists (enabled_value, thinking object, flag)."""
+
+    budget: bool = False
+    """Whether a numeric thinking-budget field exists."""
+
+    off: bool = False
+    """Whether OFF can be spelled at all (disabled_value, thinking disabled)."""
+
+    adaptive: bool = False
+    """Whether the host has a channel for "let the model decide" (Anthropic)."""
+
+    effort_field: str = ""
+    """Wire name of the effort field, for adaptation messages only."""
+
+    toggle_field: str = ""
+    """Wire name of the on/off field, for adaptation messages only."""
+
+    budget_field: str = ""
+    """Wire name of the budget field, for adaptation messages only."""
+
+
 class ReasoningAdaptationKind(StrEnum):
     """What per-model capability gating did to a requested reasoning policy.
 

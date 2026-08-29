@@ -45,6 +45,7 @@ def _model_router(services: ApiServices, lease: RequestRuntimeLease) -> ModelRou
         lease.settings,
         vision_lookup=services.requests.cached_model_supports_vision,
         reasoning_capability_lookup=services.requests.model_reasoning_capability,
+        reasoning_dialect_lookup=services.requests.model_reasoning_dialect,
         output_limit_lookup=services.requests.model_output_limit,
         context_length_lookup=services.requests.model_context_length,
     )

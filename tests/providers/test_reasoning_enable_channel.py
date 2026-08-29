@@ -20,7 +20,7 @@ is a stated product decision, pinned by ``tests/application/test_adaptive_reason
 
 import pytest
 
-from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from my_claude_code.providers.commandcode.client import _PROFILE as COMMANDCODE_PROFILE
 from my_claude_code.providers.openai_chat.profiles import (
     GENERIC_OPENAI_PROFILE,
@@ -99,3 +99,91 @@ def test_opencode_still_abstains_from_an_on_value() -> None:
     assert _encode(profile, ReasoningPolicy.on()) == {}
     # The effort channel itself is untouched, including its real OFF value.
     assert _encode(profile, ReasoningPolicy.off()) == {"reasoning_effort": "none"}
+
+
+# ---------------------------------------------------------------------------
+# The declaration and the encoder are two views of one fact.
+# ---------------------------------------------------------------------------
+
+
+def _declared_paths(dialect) -> set[str]:
+    """Every wire object this dialect claims it can write.
+
+    Compared at the top-level key: a dialect that names
+    ``thinking.budget_tokens`` claims the ``thinking`` object, and the exact
+    sub-keys it fills inside one object it owns are the encoder's business.
+    What must not happen is an encoder writing into an object -- a whole
+    reasoning channel -- that its dialect never mentions.
+    """
+
+    claimed = {
+        dialect.effort_field if dialect.effort_values is not None else "",
+        dialect.toggle_field if dialect.toggle or dialect.off else "",
+        dialect.budget_field if dialect.budget else "",
+    }
+    return {path.split(".")[0] for path in claimed if path}
+
+
+def _emitted_paths(body: dict, prefix: str = "") -> set[str]:
+    paths: set[str] = set()
+    for key, value in body.items():
+        # ``extra_body`` is an SDK transport envelope, not a wire field: the
+        # gateway sees its contents at the top level.
+        path = prefix if key == "extra_body" else (f"{prefix}.{key}" if prefix else key)
+        if isinstance(value, dict) and value:
+            paths |= _emitted_paths(value, path)
+        else:
+            paths.add(path)
+    return paths
+
+
+@pytest.mark.parametrize("name,profile", _ALL_PROFILES)
+def test_every_encoder_declares_a_dialect_consistent_with_what_it_emits(
+    name: str, profile
+) -> None:
+    """No encoder may write a field its dialect does not claim.
+
+    Gating decides what to send from the declaration alone, so a declaration
+    that undersells its encoder is a control silently suppressed and one that
+    oversells it is a control silently dropped. Both are invisible without
+    this sweep, and both are exactly the class of defect this PR is fixing.
+    """
+
+    dialect = profile.reasoning.dialect
+    declared = _declared_paths(dialect)
+
+    policies = [
+        ReasoningPolicy.on(),
+        ReasoningPolicy.off(),
+        ReasoningPolicy.on(budget_tokens=4096),
+        *(ReasoningPolicy.on(effort=effort) for effort in ReasoningEffort),
+    ]
+    for policy in policies:
+        emitted = _emitted_paths(_encode(profile, policy))
+        # ``reasoning_split`` is an output-routing request, not a compute
+        # control, and is emitted unconditionally by design.
+        emitted = {path.split(".")[0] for path in emitted} - {"reasoning_split"}
+        assert emitted <= declared, (name, policy, emitted, declared)
+
+
+@pytest.mark.parametrize("name,profile", _ALL_PROFILES)
+def test_a_declared_effort_vocabulary_is_one_the_encoder_can_reach(
+    name: str, profile
+) -> None:
+    """Every rung the dialect advertises must actually change the body.
+
+    An encoder that maps all six FCC efforts onto one wire word has a
+    one-rung vocabulary, not a six-rung one, and saying otherwise tells gating
+    a clamp is unnecessary -- which is how Cohere's flattening of low to
+    "high" went unrecorded for so long.
+    """
+
+    dialect = profile.reasoning.dialect
+    if dialect.effort_values is None:
+        return
+    emitted = {
+        effort: _encode(profile, ReasoningPolicy.on(effort=effort))
+        for effort in dialect.effort_values
+    }
+    distinct = {repr(sorted(body.items())) for body in emitted.values()}
+    assert len(distinct) == len(dialect.effort_values), (name, emitted)

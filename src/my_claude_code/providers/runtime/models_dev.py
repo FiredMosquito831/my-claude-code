@@ -38,12 +38,10 @@ from my_claude_code.core.model_ids import (
     ResolutionTier,
     candidate_ladder,
     normalize_candidates,
+    retagged_model_ids,
     strip_model_id_tag,
 )
 from my_claude_code.core.reasoning import EFFORT_BY_VALUE, ReasoningEffort
-from my_claude_code.providers.reasoning_vocabulary import (
-    provider_reasoning_vocabulary,
-)
 
 MODELS_DEV_URL = "https://models.dev/api.json"
 MODELS_DEV_CACHE_TTL_SECONDS = 24 * 60 * 60
@@ -663,6 +661,61 @@ def _lookup_in_bucket_tiered[T](
     return variant, ResolutionTier.MODELS_DEV_BUCKET_TAG_STRIPPED
 
 
+_REFERENCE_TIER_FOR_BUCKET_TIER: dict[ResolutionTier, ResolutionTier] = {
+    ResolutionTier.MODELS_DEV_BUCKET_EXACT: ResolutionTier.OPENROUTER_EXACT,
+    ResolutionTier.MODELS_DEV_BUCKET_TAG_STRIPPED: (
+        ResolutionTier.OPENROUTER_TAG_STRIPPED
+    ),
+}
+
+REFERENCE_BUCKET_ID = "openrouter"
+"""models.dev bucket consulted as the reference rung (tiers 5-6).
+
+The largest curated catalogue in the index -- one editorial source describing
+the model itself, rather than a modal value across strangers who merely share
+its name. It sits below the provider's own answer and above the vote for
+exactly that reason, and it is never consulted for OpenRouter itself, where
+the same rows already ARE tier 3.
+"""
+
+
+def _lookup_in_reference_bucket[T](
+    bucket: Mapping[str, T], model_id: str
+) -> tuple[T, ResolutionTier] | None:
+    """Find ``model_id`` in the reference catalogue, reporting tier 5 or 6.
+
+    Tries the id as routed first, then the same id with its routing tag
+    respelled: ``minimax/minimax-m3-free`` and ``minimax/minimax-m3:free`` are
+    one routing variant of one model written by two gateways, and a respelling
+    is still an exact match on the model -- the vendor and the model name are
+    untouched, only the punctuation between the name and the tag differs. Only
+    then does the tag come off, which is a genuine loosening and reports as
+    such.
+    """
+    found = _lookup_in_bucket_tiered(bucket, model_id)
+    if found is not None:
+        return found[0], _REFERENCE_TIER_FOR_BUCKET_TIER[found[1]]
+    for respelled in retagged_model_ids(model_id):
+        alternative = _lookup_in_bucket_tiered(bucket, respelled)
+        if alternative is not None:
+            return (
+                alternative[0],
+                _REFERENCE_TIER_FOR_BUCKET_TIER[alternative[1]],
+            )
+    return None
+
+
+def _reference_bucket[T](
+    index: Mapping[str, Mapping[str, T]], provider_id: str
+) -> Mapping[str, T] | None:
+    """The reference catalogue, unless ``provider_id`` IS that catalogue."""
+    if provider_id == REFERENCE_BUCKET_ID or (
+        PROVIDER_ID_ALIASES.get(provider_id) == REFERENCE_BUCKET_ID
+    ):
+        return None
+    return index.get(REFERENCE_BUCKET_ID)
+
+
 def _lookup_in_bucket[T](bucket: Mapping[str, T], model_id: str) -> T | None:
     """The value half of :func:`_lookup_in_bucket_tiered`."""
     found = _lookup_in_bucket_tiered(bucket, model_id)
@@ -797,8 +850,9 @@ def model_reasoning_capability_tiered(
     """As above, plus the ladder rung that stated each field.
 
     Tiers 3-4 when models.dev describes this provider (the whole record comes
-    off one row, so every stated field shares that rung); tiers 5-8 per field
-    when it does not.
+    off one row, so every stated field shares that rung); the reference
+    catalogue at tiers 5-6 and then the cross-provider vote at tiers 7-10, per
+    field, when it does not.
     """
     reasoning_index = _cached_reasoning_index(path)
     bucket = reasoning_index.get(provider_id)
@@ -809,10 +863,9 @@ def model_reasoning_capability_tiered(
     if bucket is None:
         if _has_models_dev_bucket(_cached_raw_index(path), provider_id):
             return None, {}
-        match = cross_provider_match(provider_id, model_id, path)
-        if match is None:
-            return None, {}
-        return match.capability, match.capability_tiers
+        return _reference_then_vote_capability(
+            reasoning_index, provider_id, model_id, path
+        )
     found = _lookup_in_bucket_tiered(bucket, model_id)
     if found is None:
         return None, {}
@@ -822,6 +875,44 @@ def model_reasoning_capability_tiered(
         for name in (*_BOOLEAN_CAPABILITY_FIELDS, "supported_efforts")
         if getattr(capability, name) is not None
     }
+
+
+def _reference_then_vote_capability(
+    reasoning_index: Mapping[str, Mapping[str, ModelReasoningCapability]],
+    provider_id: str,
+    model_id: str,
+    path: Path | None,
+) -> tuple[ModelReasoningCapability | None, Mapping[str, ResolutionTier]]:
+    """Resolve a bucket-less provider: reference catalogue first, then the vote.
+
+    Per field, not per source. A field the reference row states wins, because
+    one curated description of this model beats a modal value across hosts that
+    merely share its name; a field it leaves unstated falls straight through to
+    the vote, which is the same "first stated wins" rule every other layer
+    uses. Either half alone is a complete answer when the other misses.
+    """
+    reference = _reference_bucket(reasoning_index, provider_id)
+    found = (
+        None if reference is None else _lookup_in_reference_bucket(reference, model_id)
+    )
+    match = cross_provider_match(provider_id, model_id, path)
+    if found is None:
+        if match is None:
+            return None, {}
+        return match.capability, match.capability_tiers
+
+    capability, reference_tier = found
+    voted = match.capability if match is not None else None
+    merged = merge_reasoning_capabilities(capability, voted)
+    tiers: dict[str, ResolutionTier] = dict(
+        match.capability_tiers if match is not None else {}
+    )
+    for name in (*_BOOLEAN_CAPABILITY_FIELDS, "supported_efforts"):
+        if getattr(capability, name) is not None:
+            tiers[name] = reference_tier
+        elif merged is not None and getattr(merged, name) is None:
+            tiers.pop(name, None)
+    return merged, tiers
 
 
 @dataclass(frozen=True, slots=True)
@@ -856,7 +947,7 @@ class CrossProviderMatch:
     output_reporters: int
     efforts_reporters: int
     efforts_agreement: float | None
-    # The tightest rung of the ladder that matched any rows at all (tier 5-8).
+    # The tightest rung of the ladder that matched any rows at all (tier 7-10).
     tier: ResolutionTier
     # The rung that actually supplied each field. ``None``/absent means the
     # minimum-sample guard withheld it and the field is unknown, which is not
@@ -911,12 +1002,17 @@ def _build_cross_provider_index(
 # honest answer is unknown and the caller falls through to its own default.
 MIN_APPROXIMATE_NUMERIC_REPORTERS = 3
 MIN_APPROXIMATE_VOCABULARY_REPORTERS = 3
-# Booleans: one. Measured on the live 2026-08 index, same-named rows across
-# providers are near-unanimous about whether a model reasons at all (28/28,
-# 32/32, 50/51), because that is a property of the model rather than of the
-# deployment. Limits are the opposite -- they are exactly what each host
-# chooses -- which is why the guard differs per field rather than per tier.
-MIN_APPROXIMATE_BOOLEAN_REPORTERS = 1
+# Booleans: three, same as everything else. They were one, on the reasoning
+# that same-named rows are near-unanimous about whether a model reasons at all
+# (28/28, 32/32, 50/51 on the live 2026-08 index). Near-unanimous is not the
+# point: one row is a transcription, not a vote, and it always "agrees" with
+# itself. It also let a single foreign row *veto* a capability -- one row
+# saying ``supports_effort_control: false`` decided the field for
+# ``minimax/minimax-m3-free`` at tier 5 while twelve rows at tier 8 published
+# an effort vocabulary for the same name, so the record contradicted itself
+# and gating discarded the caller's effort on the strength of the veto.
+# Three is the smallest sample where the modal value can be a real majority.
+MIN_APPROXIMATE_BOOLEAN_REPORTERS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -1015,8 +1111,27 @@ def _cross_provider_capability(
     )
     if efforts is not None:
         tiers["supported_efforts"] = efforts[1]
+
+    # Two fields voted independently can disagree about the same fact, and a
+    # record that says "this model has no effort knob" while also listing the
+    # effort words it accepts is not a fact about anything. The vocabulary and
+    # the flag are one statement, so they are reconciled here, at the only
+    # point that holds both and the rung each came from.
+    vocabulary = efforts[0].value if efforts is not None else None
+    if values["supports_effort_control"] is False:
+        # The flag is the stronger claim: it says the knob is absent, which no
+        # list of words the knob would accept can survive.
+        vocabulary = None
+        tiers.pop("supported_efforts", None)
+    elif values["supports_effort_control"] is None and vocabulary:
+        # And the converse: a vocabulary that cleared its own quorum IS the
+        # statement that an effort knob exists, so an unvoted flag takes it
+        # from the same rung rather than staying unknown beside it.
+        values["supports_effort_control"] = True
+        tiers["supports_effort_control"] = tiers["supported_efforts"]
+
     capability = ModelReasoningCapability(
-        supported_efforts=efforts[0].value if efforts is not None else None,
+        supported_efforts=vocabulary,
         **values,
     )
     return capability, tiers, efforts
@@ -1058,7 +1173,7 @@ def _walk_cross_provider_ladder(
     provider_id: str,
     model_id: str,
 ) -> CrossProviderMatch | None:
-    """Assemble tiers 5-8 and resolve every field down them, tightest first.
+    """Assemble tiers 7-10 and resolve every field down them, tightest first.
 
     The rungs loosen one thing each, tag before vendor prefix, so the widest
     set of same-named rows is only ever consulted for a field no narrower
@@ -1113,8 +1228,8 @@ def _answering_row_count(
 
     The rung that answered the output limit, not the tightest rung that
     matched anything: on the live index ``minimax/minimax-m3-free`` matches one
-    row at tier 5 whose limit the guard rejects, and the 512,000 actually
-    reported comes off the twelve rows at tier 6. Saying "one match" beside
+    row at tier 7 whose limit the guard rejects, and the 512,000 actually
+    reported comes off the twelve rows at tier 8. Saying "one match" beside
     that number would misdescribe it in the same direction the old code did.
     """
     if output is not None:
@@ -1335,7 +1450,7 @@ def model_output_limit_from_models_dev(
 def model_output_limit_tiered(
     provider_id: str, model_id: str, path: Path | None = None
 ) -> tuple[int | None, ResolutionTier | None]:
-    """As above, plus the ladder rung the number came from (tier 3-8).
+    """As above, plus the ladder rung the number came from (tier 3-10).
 
     ``(None, None)`` covers both "no row anywhere" and "the approximate tier
     matched but too few of its rows published a limit to vote": either way the
@@ -1350,6 +1465,14 @@ def model_output_limit_tiered(
     if bucket is None:
         if _has_models_dev_bucket(_cached_raw_index(path), provider_id):
             return None, None
+        reference = _reference_bucket(limit_index, provider_id)
+        found = (
+            None
+            if reference is None
+            else _lookup_in_reference_bucket(reference, model_id)
+        )
+        if found is not None and found[0] is not None:
+            return found
         match = cross_provider_match(provider_id, model_id, path)
         if match is None:
             return None, None
@@ -1416,17 +1539,16 @@ def resolve_model_reasoning_capability(
     ordering that matters, since for ``tencent/hy3:free`` the cross-provider
     modal output limit is 64,000 while the gateway reports 128,000.
 
-    A third and lowest layer follows: what the provider's API documents for
-    every model behind it (see ``providers.reasoning_vocabulary``). It fills
-    only fields the two per-model layers left unstated, so a gateway that
-    publishes a richer vocabulary for one model always wins.
+    There used to be a third and lowest layer -- a hardcoded table of the
+    effort vocabularies two endpoints (Mistral, Cohere) document for every
+    model behind them. That was a statement about the *host*, not the model,
+    and it now lives where host statements belong: those providers' own
+    ``reasoning_dialect``, which gating intersects with whatever the model
+    turns out to support. One fact, one owner.
 
     Returns ``None`` only when no layer has any data at all.
     """
     return merge_reasoning_capabilities(
-        merge_reasoning_capabilities(
-            provider_capability,
-            model_reasoning_capability_from_models_dev(provider_id, model_id, path),
-        ),
-        provider_reasoning_vocabulary(provider_id),
+        provider_capability,
+        model_reasoning_capability_from_models_dev(provider_id, model_id, path),
     )

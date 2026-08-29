@@ -11040,7 +11040,14 @@ function buildEffectiveTable(rows) {
    rows in *other* providers' buckets -- and the third is regularly wrong. So
    the exact ladder rung (1-8) is rendered beside every field, and an
    approximate one additionally says how many rows voted and how far they
-   agreed. */
+   agreed (1-4 authoritative, 5-6 the OpenRouter reference catalogue, 7-10 the
+   vote).
+
+   Below the table sits the other half of the answer: what the HOST parses.
+   "This model can reason" is a vote about a model; "this host reads
+   reasoning_effort" is a declaration about a gateway. MCC sends a control only
+   when both say yes, so a model that sends nothing needs both halves visible
+   to explain which one said no. */
 function buildCapabilityPanel(capabilities, labels) {
   const wrap = document.createElement("div");
   wrap.className = "models-capabilities";
@@ -11077,6 +11084,55 @@ function buildCapabilityPanel(capabilities, labels) {
     return wrap;
   }
   wrap.appendChild(table);
+  const dialect = buildDialectPanel(capabilities && capabilities.reasoning_dialect);
+  if (dialect) wrap.appendChild(dialect);
+  return wrap;
+}
+
+/* The host half of the two-fact rule. Deliberately plain text rather than
+   tier-badged rows: none of this is a vote, it is what the code that builds
+   the body will actually emit (narrowed, where the gateway publishes a
+   per-model parameter list, by that list). */
+function buildDialectPanel(dialect) {
+  if (!dialect) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "models-dialect";
+  const head = document.createElement("p");
+  head.className = "models-subhead";
+  head.textContent = "What this host parses (declared, not voted)";
+  wrap.appendChild(head);
+  const body = document.createElement("p");
+  body.className = "models-empty-note";
+  if (!dialect.known) {
+    body.textContent =
+      "Not declared for this provider, so reasoning is decided by the model's " +
+      "capabilities alone — exactly as it was before host dialects existed.";
+    wrap.appendChild(body);
+    return wrap;
+  }
+  const parts = [];
+  if (dialect.effort_values) {
+    parts.push(
+      `effort via ${dialect.effort_field || "an effort field"}: ` +
+        dialect.effort_values.join(", "),
+    );
+  } else {
+    parts.push("no effort field");
+  }
+  parts.push(
+    dialect.toggle
+      ? `on/off via ${dialect.toggle_field || "a toggle field"}`
+      : "no on/off field",
+  );
+  parts.push(
+    dialect.budget
+      ? `thinking budget via ${dialect.budget_field || "a budget field"}`
+      : "no thinking-budget field",
+  );
+  parts.push(dialect.off ? "can be switched off" : "cannot be switched off");
+  if (dialect.adaptive) parts.push("has an adaptive channel");
+  body.textContent = parts.join(" · ");
+  wrap.appendChild(body);
   return wrap;
 }
 
@@ -11108,7 +11164,7 @@ function buildCapabilityRow(label, field, labels) {
     const tier = document.createElement("span");
     tier.className = "models-approx-note";
     tier.textContent =
-      `matched at tier ${field.tier} of 9 — ${field.tier_label || ""}`.trim();
+      `matched at tier ${field.tier} of 11 — ${field.tier_label || ""}`.trim();
     source.appendChild(tier);
   }
   if (field.approximate) {

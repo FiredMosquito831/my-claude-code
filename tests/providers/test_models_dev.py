@@ -1315,7 +1315,7 @@ def test_cross_provider_resolution_is_logged_as_approximate(
     assert "APPROXIMATE" in line
     assert "no bucket for nous_portal" in line
     # The rung that answered, by number and by name.
-    assert "tier 6 (cross_provider_tag_stripped)" in line
+    assert "tier 8 (cross_provider_tag_stripped)" in line
     assert "across 4 rows" in line
     # The real agreement, over the rows that actually reported a limit --
     # never "100%" off a single sample.

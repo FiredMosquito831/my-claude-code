@@ -7,7 +7,11 @@ from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.credential_attribution import record_credential
-from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningDialect,
+    ReasoningPolicy,
+)
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.http import maybe_await_aclose
@@ -112,6 +116,14 @@ class RotatingProvider(BaseProvider):
             ),
             default=0.0,
         )
+
+    def reasoning_dialect(self, model_id: str) -> ReasoningDialect | None:
+        """Every credential in a pool talks to the same upstream endpoint.
+
+        So the first sub-provider's answer is the pool's answer, exactly as it
+        already is for ``preflight_stream`` and ``list_model_infos``.
+        """
+        return self._providers[0].reasoning_dialect(model_id)
 
     def preflight_stream(
         self,

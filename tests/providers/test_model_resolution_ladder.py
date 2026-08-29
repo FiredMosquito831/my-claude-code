@@ -394,11 +394,14 @@ def test_the_guard_is_exactly_the_documented_threshold(tmp_path: Path) -> None:
     assert model_output_limit_tiered("commandcode", "minimax-m3", at)[0] == 512000
 
 
-def test_a_boolean_survives_a_sample_a_number_would_not(tmp_path: Path) -> None:
-    """The guard differs per field, because the fields differ.
+def test_one_foreign_row_no_longer_decides_a_boolean(tmp_path: Path) -> None:
+    """Booleans need three reporters too, since 6.3.0.
 
-    Whether a model reasons is a property of the model and is near-unanimous
-    across hosts; what it will emit is a property of the deployment.
+    They used to need one, on the reasoning that same-named rows are
+    near-unanimous about whether a model reasons at all. Near-unanimous is not
+    the point: one row is a transcription, not a vote, and it always agrees
+    with itself. It also let a single row *veto* a capability that a dozen
+    rows one rung down contradicted.
     """
 
     path = _cache(tmp_path, _hosts("minimax-m3", 1, 1048576))
@@ -406,8 +409,19 @@ def test_a_boolean_survives_a_sample_a_number_would_not(tmp_path: Path) -> None:
     match = cross_provider_match("commandcode", "minimax/minimax-m3-free", path)
 
     assert match is not None
-    assert match.capability.can_reason is True
+    assert match.capability.can_reason is None
     assert match.output_limit is None
+
+
+def test_three_rows_are_enough_for_a_boolean(tmp_path: Path) -> None:
+    """And at the threshold the vote answers, for every field alike."""
+
+    path = _cache(tmp_path, _hosts("minimax-m3", 3, 512000))
+
+    match = cross_provider_match("commandcode", "minimax/minimax-m3-free", path)
+
+    assert match is not None
+    assert match.capability.can_reason is True
 
 
 def test_the_log_line_names_the_tier_and_never_claims_full_agreement_on_one(
@@ -429,7 +443,7 @@ def test_the_log_line_names_the_tier_and_never_claims_full_agreement_on_one(
 
     assert len(records) == 1
     line = records[0]
-    assert "tier 8 (cross_provider_bare_untagged)" in line
+    assert "tier 10 (cross_provider_bare_untagged)" in line
     assert "100% agreement" not in line
     assert "withheld: 1 of the required 3 rows reported one" in line
 
@@ -523,3 +537,160 @@ def test_untagged_models_behave_exactly_as_before(
     limit, tier = model_output_limit_tiered("commandcode", model_id, path)
 
     assert (limit, tier) == (96000, ResolutionTier.CROSS_PROVIDER_EXACT)
+
+
+# ---------------------------------------------------------------------------
+# Tiers 5-6: the OpenRouter reference catalogue
+# ---------------------------------------------------------------------------
+
+
+def _openrouter(**models: object) -> dict[str, object]:
+    return {"openrouter": _bucket(**models)}
+
+
+def test_tier_five_is_the_openrouter_catalogue_exact_with_tag_normalised(
+    tmp_path: Path,
+) -> None:
+    """One routing variant, two spellings, one model.
+
+    OpenRouter writes ``minimax/minimax-m3:free``; Command Code writes
+    ``minimax/minimax-m3-free``. The tag is the same tag, so respelling it is
+    an exact match -- tier 5 -- not the looser tag-stripped rung.
+    """
+
+    path = _cache(
+        tmp_path,
+        _openrouter(**{"minimax/minimax-m3:free": _row(512000, efforts=True)}),
+    )
+
+    capability, tiers = model_reasoning_capability_tiered(
+        "commandcode", "minimax/minimax-m3-free", path
+    )
+
+    assert capability is not None
+    assert capability.can_reason is True
+    assert tiers["can_reason"] is ResolutionTier.OPENROUTER_EXACT
+    assert ResolutionTier.OPENROUTER_EXACT.is_reference
+    assert not ResolutionTier.OPENROUTER_EXACT.is_approximate
+    assert not ResolutionTier.OPENROUTER_EXACT.is_authoritative
+
+
+def test_tier_six_strips_the_tag_in_the_openrouter_catalogue(tmp_path: Path) -> None:
+    """No tagged variant to respell, so the tag comes off and the rung says so."""
+
+    path = _cache(tmp_path, _openrouter(**{"minimax/minimax-m3": _row(512000)}))
+
+    _capability, tiers = model_reasoning_capability_tiered(
+        "commandcode", "minimax/minimax-m3-free", path
+    )
+
+    assert tiers["can_reason"] is ResolutionTier.OPENROUTER_TAG_STRIPPED
+
+
+def test_openrouter_itself_uses_its_bucket_at_tier_three_not_five(
+    tmp_path: Path,
+) -> None:
+    """For OpenRouter the same rows ARE its own bucket, and rank accordingly."""
+
+    path = _cache(tmp_path, _openrouter(**{"minimax/minimax-m3": _row(512000)}))
+
+    _capability, tiers = model_reasoning_capability_tiered(
+        "open_router", "minimax/minimax-m3", path
+    )
+
+    assert tiers["can_reason"] is ResolutionTier.MODELS_DEV_BUCKET_EXACT
+
+
+def test_a_field_the_openrouter_row_leaves_unstated_falls_to_the_vote(
+    tmp_path: Path,
+) -> None:
+    """Per field, not per source -- the same rule every other layer uses."""
+
+    index: dict[str, object] = {
+        "openrouter": _bucket(**{"minimax/minimax-m3:free": {"reasoning": True}}),
+        **{
+            f"host{n}": _bucket(**{"minimax/minimax-m3": _row(512000, efforts=True)})
+            for n in range(3)
+        },
+    }
+    path = _cache(tmp_path, index)
+
+    capability, tiers = model_reasoning_capability_tiered(
+        "commandcode", "minimax/minimax-m3-free", path
+    )
+
+    assert capability is not None
+    assert tiers["can_reason"] is ResolutionTier.OPENROUTER_EXACT
+    # The reference row says nothing about a vocabulary, so the vote answers it.
+    assert capability.supported_efforts is not None
+    assert tiers["supported_efforts"] is ResolutionTier.CROSS_PROVIDER_TAG_STRIPPED
+
+
+def test_the_reference_rung_outranks_the_vote_but_not_the_providers_bucket(
+    tmp_path: Path,
+) -> None:
+    """Ordering, stated as an assertion rather than as a comment."""
+
+    assert (
+        ResolutionTier.MODELS_DEV_BUCKET_TAG_STRIPPED
+        < ResolutionTier.OPENROUTER_EXACT
+        < ResolutionTier.CROSS_PROVIDER_EXACT
+    )
+
+
+def test_a_record_never_carries_a_vocabulary_without_effort_control(
+    tmp_path: Path,
+) -> None:
+    """The two fields are one statement, so they may not contradict each other.
+
+    Live: ``commandcode/minimax/minimax-m3-free`` resolved
+    ``supports_effort_control=False`` off one row and
+    ``supported_efforts=[high, low, medium]`` off twelve, and gating believed
+    the veto.
+    """
+
+    index: dict[str, object] = {
+        f"host{n}": _bucket(
+            **{
+                "minimax/minimax-m3": {
+                    "reasoning": True,
+                    "reasoning_options": [
+                        {"type": "effort", "values": ["low", "high"]}
+                    ],
+                }
+            }
+        )
+        for n in range(3)
+    }
+    path = _cache(tmp_path, index)
+
+    capability, tiers = model_reasoning_capability_tiered(
+        "commandcode", "minimax/minimax-m3-free", path
+    )
+
+    assert capability is not None
+    assert capability.supported_efforts is not None
+    # A vocabulary that cleared its quorum IS the statement that a knob exists.
+    assert capability.supports_effort_control is True
+    assert tiers["supports_effort_control"] is tiers["supported_efforts"]
+
+
+def test_a_vetoed_effort_knob_takes_its_vocabulary_with_it(tmp_path: Path) -> None:
+    """And in the other direction: no knob, no words for the knob."""
+
+    index: dict[str, object] = {
+        f"host{n}": _bucket(
+            **{"minimax/minimax-m3": {"reasoning": True, "reasoning_options": []}}
+        )
+        for n in range(3)
+    }
+    path = _cache(tmp_path, index)
+
+    capability, tiers = model_reasoning_capability_tiered(
+        "commandcode", "minimax/minimax-m3-free", path
+    )
+
+    assert capability is not None
+    assert capability.supports_effort_control is False
+    assert capability.supported_efforts is None
+    assert "supported_efforts" not in tiers

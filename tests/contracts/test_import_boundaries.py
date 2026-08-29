@@ -63,15 +63,6 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "exists to show. Read-only, admin surface only."
     ),
     (
-        "my_claude_code.api.model_admin",
-        "my_claude_code.providers.reasoning_vocabulary",
-    ): (
-        "Owner: admin Models page capability inspector. "
-        "Reason: the lowest resolution tier is what a provider's API documents "
-        "for every model behind it, and the page reports it as a source in its "
-        "own right. Read-only, admin surface only."
-    ),
-    (
         "my_claude_code.api.admin_routes",
         "my_claude_code.providers.anthropic_oauth.credentials",
     ): (

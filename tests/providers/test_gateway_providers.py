@@ -152,7 +152,7 @@ async def test_kilo_lists_only_tool_capable_models(kilo_provider):
 
 
 @pytest.mark.parametrize("fixture_name", ["nous_provider", "kilo_provider"])
-def test_gateways_share_openrouter_reasoning_dialect(fixture_name, request):
+def test_gateways_share_the_openrouter_reasoning_profile(fixture_name, request):
     """Both gateways negotiate reasoning the way OpenRouter does."""
     provider = request.getfixturevalue(fixture_name)
     policy = provider._profile.request_policy

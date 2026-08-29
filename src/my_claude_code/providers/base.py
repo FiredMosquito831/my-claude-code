@@ -26,7 +26,11 @@ from my_claude_code.core.diagnostics import (
     exception_cause_types,
     redacted_exception_traceback,
 )
-from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningDialect,
+    ReasoningPolicy,
+)
 from my_claude_code.core.trace import trace_event
 from my_claude_code.providers.model_listing import model_infos_from_ids
 
@@ -81,6 +85,21 @@ class BaseProvider(ABC):
 
     def __init__(self, config: ProviderConfig):
         self._config = config
+
+    def reasoning_dialect(self, model_id: str) -> ReasoningDialect | None:
+        """Which reasoning fields this host parses for ``model_id``.
+
+        ``None`` -- the default -- means unknown, and unknown never adds a
+        restriction: gating then behaves exactly as it did before dialects
+        existed. A provider overrides this only once it can say what its
+        upstream actually reads, because a wrong answer here suppresses a
+        control the gateway would have honoured.
+
+        Deliberately NOT on ``application.ports.ProviderPort``: routing reads
+        it through the provider manager, not through the executor's port, so
+        no test double has to grow a member for it.
+        """
+        return None
 
     def throttle_remaining(self) -> float:
         """Seconds this provider's credential is rate-limited for, 0 if free.

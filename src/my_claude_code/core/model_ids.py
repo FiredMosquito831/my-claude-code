@@ -29,21 +29,26 @@ class ResolutionTier(IntEnum):
     the rung is carried back so callers can say how much to trust the number.
 
     Tiers 1-4 are authoritative: they are this model, on this provider (or on
-    the models.dev bucket that describes exactly this provider). Tiers 5-8 are
-    approximations assembled from rows in *other* providers' buckets that
-    merely share a name, and are subject to a minimum-sample guard before they
-    may supply a number or an effort vocabulary.
+    the models.dev bucket that describes exactly this provider). Tiers 5-6 are
+    the *reference* rung: one curated catalogue (OpenRouter's) that describes
+    the model itself rather than this deployment of it -- a single editorial
+    source, not a vote, and richer than anything a name match can assemble.
+    Tiers 7-10 are approximations assembled from rows in *other* providers'
+    buckets that merely share a name, and are subject to a minimum-sample guard
+    before they may supply a number or an effort vocabulary.
     """
 
     PROVIDER_EXACT = 1
     PROVIDER_TAG_STRIPPED = 2
     MODELS_DEV_BUCKET_EXACT = 3
     MODELS_DEV_BUCKET_TAG_STRIPPED = 4
-    CROSS_PROVIDER_EXACT = 5
-    CROSS_PROVIDER_TAG_STRIPPED = 6
-    CROSS_PROVIDER_BARE_TAGGED = 7
-    CROSS_PROVIDER_BARE_UNTAGGED = 8
-    FALLBACK_DEFAULT = 9
+    OPENROUTER_EXACT = 5
+    OPENROUTER_TAG_STRIPPED = 6
+    CROSS_PROVIDER_EXACT = 7
+    CROSS_PROVIDER_TAG_STRIPPED = 8
+    CROSS_PROVIDER_BARE_TAGGED = 9
+    CROSS_PROVIDER_BARE_UNTAGGED = 10
+    FALLBACK_DEFAULT = 11
 
     @property
     def is_approximate(self) -> bool:
@@ -51,9 +56,25 @@ class ResolutionTier(IntEnum):
         return CROSS_PROVIDER_TIERS[0] <= self <= CROSS_PROVIDER_TIERS[-1]
 
     @property
+    def is_reference(self) -> bool:
+        """Whether this rung is the curated OpenRouter catalogue.
+
+        Between authoritative and approximate on purpose: one named source
+        that describes this model, rather than this provider's own answer and
+        rather than a modal value across strangers.
+        """
+        return self in REFERENCE_TIERS
+
+    @property
     def is_authoritative(self) -> bool:
         """Whether this rung is this provider's (or its bucket's) own answer."""
         return self <= ResolutionTier.MODELS_DEV_BUCKET_TAG_STRIPPED
+
+
+REFERENCE_TIERS: tuple[ResolutionTier, ...] = (
+    ResolutionTier.OPENROUTER_EXACT,
+    ResolutionTier.OPENROUTER_TAG_STRIPPED,
+)
 
 
 CROSS_PROVIDER_TIERS: tuple[ResolutionTier, ...] = (
@@ -118,6 +139,38 @@ def strip_model_id_tag(model_id: str) -> str | None:
     return None
 
 
+def retagged_model_ids(model_id: str) -> tuple[str, ...]:
+    """Spellings of ``model_id`` with its routing tag written the other way.
+
+    One routing variant of one model is spelled ``vendor/model:free`` by
+    OpenRouter and ``vendor/model-free`` by Command Code, so an exact lookup of
+    the routed id against a foreign catalogue misses for no reason other than
+    punctuation. This returns the same id with the separator swapped -- never
+    a new tag, never a stripped one -- so a caller that wants to consult
+    another catalogue by exact name can, while every caller that only wants the
+    id as written is untouched.
+
+    Empty when the id carries no allow-listed tag. :func:`strip_model_id_tag`
+    deliberately stays the function that *removes* a tag; this one only
+    respells it.
+    """
+    lowered = model_id.strip().lower()
+    if not lowered:
+        return ()
+    prefix, slash, last_segment = lowered.rpartition("/")
+    respelled: list[str] = []
+    for separator in _TAG_SEPARATORS:
+        head, found, tag = last_segment.rpartition(separator)
+        if not found or not head or tag not in STRIPPABLE_MODEL_ID_TAGS:
+            continue
+        for other in _TAG_SEPARATORS:
+            if other == separator:
+                continue
+            variant = f"{head}{other}{tag}"
+            respelled.append(f"{prefix}/{variant}" if slash else variant)
+    return tuple(dict.fromkeys(respelled))
+
+
 def bare_model_id(model_id: str) -> str:
     """Return just the last path segment: the model without its vendor prefix."""
     return model_id.strip().lower().rsplit("/", 1)[-1]
@@ -127,7 +180,7 @@ def candidate_ladder(model_id: str) -> tuple[tuple[ResolutionTier, str], ...]:
     """The cross-provider rungs for ``model_id``, tightest first.
 
     Exactly two loosenings, in a fixed order -- drop the tag, then drop the
-    vendor prefix -- giving tiers 5 through 8. Rungs that would repeat an
+    vendor prefix -- giving tiers 7 through 10. Rungs that would repeat an
     earlier key (an untagged id, or one with no vendor prefix) are omitted
     rather than retried, so a caller can stop at the first hit and report the
     rung honestly.
