@@ -1,6 +1,5 @@
 """NVIDIA NIM provider implementation."""
 
-import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -24,9 +23,15 @@ from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .request_options import NIM_REQUEST_POLICY, build_nim_request_body
 from .retry import (
+    chat_template_evidence,
     clone_body_without_chat_template,
     clone_body_without_reasoning_budget,
     clone_body_without_reasoning_content,
+    complaint_evidence_snippet,
+    reasoning_budget_evidence,
+    reasoning_content_evidence,
+    sampling_parameter_evidence,
+    upstream_complaint,
 )
 from .tool_schema import (
     body_without_nim_tool_argument_aliases,
@@ -81,48 +86,99 @@ class NvidiaNimProvider(OpenAIChatProvider):
         return nim_tool_argument_aliases_from_body(body)
 
     def _get_retry_request_body(self, error: Exception, body: dict) -> dict | None:
-        """Retry once with a downgraded body when NIM rejects a known field."""
+        """Retry once with a downgraded body when NIM names the field it rejected.
+
+        Each rung fires only on evidence that the upstream complaint is *about*
+        the field that rung removes. Ordering, and why:
+
+        1. ``reasoning_budget`` -- the narrowest removal, and the only one that
+           keeps the thinking instruction itself. Also the only rung that
+           accepts a 500, because NIM has been seen failing on the budget
+           control server-side rather than validating it.
+        2. ``chat_template`` / ``chat_template_kwargs`` -- load-bearing recovery
+           for models that reject the field outright, so a complaint naming it
+           wins even if a sampling parameter is named alongside: naming the
+           field is direct evidence, a sampling name is only a negative signal.
+        3. sampling-parameter guard -- a 400 that names ``top_p`` and friends
+           and does *not* name the chat template is a complaint about sampling.
+           Stripping the reasoning instruction cannot fix it and silently
+           downgrades the answer, so this returns ``None`` and lets the failure
+           surface. (Per-model sampling correction lives in request options.)
+        4. ``reasoning_content`` -- replayed assistant reasoning, named.
+        5. anything unrecognised -- ``None``. Retrying an unchanged body is
+           pointless and retrying a degraded one trades a visible failure for
+           an invisible loss of reasoning, so an unreadable 400 is failed
+           rather than guessed at.
+        """
         status_code = getattr(error, "status_code", None)
         bad_request_like = isinstance(error, openai.BadRequestError) or (
             status_code == 400
         )
 
-        error_text = str(error)
-        error_body = getattr(error, "body", None)
-        if error_body is not None:
-            error_text = f"{error_text} {json.dumps(error_body, default=str)}"
-        error_text = error_text.lower()
+        complaint = upstream_complaint(error)
+        evidence = complaint_evidence_snippet(complaint)
 
-        if _is_reasoning_budget_rejection(error_text) and (
-            bad_request_like or status_code == 500
-        ):
+        budget_match = reasoning_budget_evidence(complaint)
+        if budget_match is not None and (bad_request_like or status_code == 500):
             retry_body = clone_body_without_reasoning_budget(body)
             if retry_body is None:
                 return None
             logger.warning(
-                "NIM_STREAM: retrying without reasoning budget after upstream rejection"
+                "NIM_STREAM: retrying without reasoning budget -- upstream named "
+                "{!r} (status {}): {}",
+                budget_match,
+                status_code,
+                evidence,
             )
             return retry_body
 
         if not bad_request_like:
             return None
 
-        if "chat_template" in error_text:
+        template_match = chat_template_evidence(complaint)
+        if template_match is not None:
             retry_body = clone_body_without_chat_template(body)
             if retry_body is None:
                 return None
-            logger.warning("NIM_STREAM: retrying without chat_template after 400 error")
+            logger.warning(
+                "NIM_STREAM: retrying without chat_template -- upstream named "
+                "{!r} in a 400: {}",
+                template_match,
+                evidence,
+            )
             return retry_body
 
-        if "reasoning_content" in error_text:
+        sampling_match = sampling_parameter_evidence(complaint)
+        if sampling_match is not None:
+            logger.warning(
+                "NIM_STREAM: keeping chat_template_kwargs -- the 400 names "
+                "sampling parameter {!r}, not the chat template, so removing "
+                "the reasoning instruction would degrade the request without "
+                "addressing the rejection: {}",
+                sampling_match,
+                evidence,
+            )
+            return None
+
+        content_match = reasoning_content_evidence(complaint)
+        if content_match is not None:
             retry_body = clone_body_without_reasoning_content(body)
             if retry_body is None:
                 return None
             logger.warning(
-                "NIM_STREAM: retrying without reasoning_content after 400 error"
+                "NIM_STREAM: retrying without reasoning_content -- upstream "
+                "named {!r} in a 400: {}",
+                content_match,
+                evidence,
             )
             return retry_body
 
+        logger.warning(
+            "NIM_STREAM: no retry -- the 400 names no request field this "
+            "provider can downgrade, and reasoning fields are preserved rather "
+            "than stripped on an unrecognised rejection: {}",
+            evidence,
+        )
         return None
 
     def _provider_failure_override(self, error: Exception) -> ExecutionFailure | None:
@@ -147,10 +203,3 @@ class NvidiaNimProvider(OpenAIChatProvider):
         ):
             return None
         return overloaded_provider_failure()
-
-
-def _is_reasoning_budget_rejection(error_text: str) -> bool:
-    """Return whether NIM rejected optional thinking budget control."""
-    if "reasoning_budget" in error_text:
-        return True
-    return "thinking_token_budget" in error_text and "reasoning_config" in error_text

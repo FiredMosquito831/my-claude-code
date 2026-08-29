@@ -951,3 +951,152 @@ async def test_stream_response_internal_reasoning_content_error_does_not_downgra
 
     assert mock_create.await_count == 1
     assert "Provider API request failed" in exc_info.value.message
+
+
+def _thinking_provider(provider_config):
+    return NvidiaNimProvider(
+        provider_config,
+        nim_settings=NimSettings(),
+        rate_limiter=passthrough_rate_limiter(),
+    )
+
+
+# The exact string NVIDIA NIM returned for kimi-k3, which used to cost every
+# affected request its reasoning instruction.
+_TOP_P_REJECTION = (
+    "Validation: top_p is immutable for this model and must be 0.95, got 1"
+)
+
+
+@pytest.mark.asyncio
+async def test_sampling_parameter_400_keeps_chat_template_kwargs(provider_config):
+    """A 400 about sampling must not strip the NIM thinking instruction."""
+    provider = _thinking_provider(provider_config)
+    req = make_request(model="moonshotai/kimi-k3")
+    error = _make_bad_request_error(_TOP_P_REJECTION)
+
+    with patch.object(
+        provider._client.chat.completions, "create", new_callable=AsyncMock
+    ) as mock_create:
+        mock_create.side_effect = error
+
+        with pytest.raises(ExecutionFailure):
+            [e async for e in provider.stream_response(req, reasoning=REASONING_ON)]
+
+    # No second, silently downgraded attempt: a re-send without the reasoning
+    # instruction would earn the same sampling rejection while losing thinking.
+    assert mock_create.await_count == 1
+    sent_extra = mock_create.call_args_list[0].kwargs["extra_body"]
+    assert sent_extra["chat_template_kwargs"] == {
+        "thinking": True,
+        "enable_thinking": True,
+    }
+
+
+def test_sampling_parameter_400_returns_no_downgrade(provider_config):
+    provider = _thinking_provider(provider_config)
+    body = {
+        "model": "moonshotai/kimi-k3",
+        "extra_body": {"chat_template_kwargs": {"thinking": True}},
+    }
+    error = _make_bad_request_error(_TOP_P_REJECTION)
+
+    assert provider._get_retry_request_body(error, body) is None
+    assert body["extra_body"]["chat_template_kwargs"] == {"thinking": True}
+
+
+def test_validation_error_echoing_request_does_not_strip_chat_template(
+    provider_config,
+):
+    """A pydantic-style 400 echoes the request; only the objection is evidence."""
+    provider = _thinking_provider(provider_config)
+    body = {
+        "model": "moonshotai/kimi-k3",
+        "extra_body": {"chat_template_kwargs": {"thinking": True}},
+    }
+    response = Response(
+        status_code=400,
+        request=Request("POST", f"{NVIDIA_NIM_DEFAULT_BASE}/chat/completions"),
+    )
+    error = openai.BadRequestError(
+        "Error code: 400",
+        response=response,
+        body={
+            "detail": [
+                {
+                    "type": "value_error",
+                    "loc": ["body", "top_p"],
+                    "msg": "top_p is immutable for this model",
+                    # The whole submitted request, chat_template_kwargs and all.
+                    "input": {
+                        "chat_template_kwargs": {"thinking": True},
+                        "top_p": 1,
+                    },
+                }
+            ]
+        },
+    )
+
+    assert provider._get_retry_request_body(error, body) is None
+    assert body["extra_body"]["chat_template_kwargs"] == {"thinking": True}
+
+
+def test_unrecognised_400_does_not_strip_reasoning(provider_config):
+    provider = _thinking_provider(provider_config)
+    body = {
+        "model": "moonshotai/kimi-k3",
+        "extra_body": {"chat_template_kwargs": {"thinking": True}},
+        "messages": [{"role": "assistant", "reasoning_content": "prior"}],
+    }
+    error = _make_bad_request_error("Internal validation failure")
+
+    assert provider._get_retry_request_body(error, body) is None
+    assert body["extra_body"]["chat_template_kwargs"] == {"thinking": True}
+    assert body["messages"][0]["reasoning_content"] == "prior"
+
+
+def test_named_chat_template_400_still_strips(provider_config):
+    """The load-bearing recovery is unchanged when the 400 names the field."""
+    provider = _thinking_provider(provider_config)
+    body = {
+        "model": "mistralai/mixtral-8x7b-instruct-v0.1",
+        "extra_body": {
+            "chat_template": "custom",
+            "chat_template_kwargs": {"thinking": True},
+        },
+    }
+    error = _make_bad_request_error(
+        "chat_template_kwargs is not supported for Mistral tokenizers."
+    )
+
+    retry_body = provider._get_retry_request_body(error, body)
+
+    assert retry_body is not None
+    assert "extra_body" not in retry_body
+
+
+def test_chat_template_evidence_wins_over_sampling_evidence(provider_config):
+    """Naming the field is direct evidence; a sampling name is only a hint."""
+    provider = _thinking_provider(provider_config)
+    body = {"extra_body": {"chat_template_kwargs": {"thinking": True}, "top_p": 1}}
+    error = _make_bad_request_error(
+        "chat_template_kwargs and top_p cannot be combined for this model"
+    )
+
+    retry_body = provider._get_retry_request_body(error, body)
+
+    assert retry_body is not None
+    assert retry_body["extra_body"] == {"top_p": 1}
+
+
+def test_named_reasoning_content_400_still_strips(provider_config):
+    provider = _thinking_provider(provider_config)
+    body = {"messages": [{"role": "assistant", "reasoning_content": "prior"}]}
+    error = _make_bad_request_error(
+        "reasoning_content is not an accepted message field"
+    )
+
+    retry_body = provider._get_retry_request_body(error, body)
+
+    assert retry_body is not None
+    assert "reasoning_content" not in retry_body["messages"][0]
