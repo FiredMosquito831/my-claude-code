@@ -56,7 +56,7 @@ Run your coding agents with free, paid, or local models. Choose and validate pro
 | **Protocol fidelity** | Streaming, tool use, reasoning, and image input preserved across compatible models, with configurable reasoning control. |
 | **Key rotation** | Multi-key credential rotation for both model and web search providers: comma-separated keys, four rotation policies, key health driven only by the provider's own auth and rate-limit signals, and per-key admin management. |
 | **Web search** | Claude Code's official `web_search` server tool fulfilled at the proxy level by 14 search providers, with 66 advanced per-provider options, full-page-text retrieval, domain filtering, rich result digests, and zero-config keyless fallback. |
-| **Limits** | Deadlines, retry budgets and retention are editable in the dashboard, each with a stated cost and an enforced range — a stalled model stops holding a request, and a known-bad model is skipped rather than re-tried. |
+| **Limits & Resilience** | Deadlines, output budgets, chain benching, provider retries and credential health on one page, each field with a stated cost and an enforced range — plus a calculator that tells you what each model on *your* chains actually gets, which is rarely the number in the box. |
 | **Observability** | Persistent local request and web-search analytics with consistent filters, range-aware rollups, provider/key health, latency, errors, known spend, export, and auto-refresh. |
 | **Editor integrations** | Claude Code and Codex in VS Code, or Claude Code through JetBrains ACP. |
 | **Messaging** | Optionally run Claude Code sessions through Discord or Telegram with voice-note transcription. |
@@ -330,7 +330,7 @@ The installer's opt-in `--desktop` flag (`-Desktop` on PowerShell) adds a Start 
 
 ### DESKTOP_* settings
 
-Nine settings, editable from **Admin → Limits → Desktop** or directly in `~/.fcc/.env`, tune how `mcc-desktop` behaves: `DESKTOP_HEALTH_POLL_SECONDS`, `DESKTOP_HEALTH_FAILURE_THRESHOLD`, `DESKTOP_ACTIVATION_POLL_SECONDS`, `DESKTOP_SERVER_START_TIMEOUT`, `DESKTOP_ADMIN_REQUEST_TIMEOUT`, `DESKTOP_HEALTH_CHECK_INTERVAL`, `DESKTOP_WINDOW_WIDTH`, `DESKTOP_WINDOW_HEIGHT`, and `DESKTOP_BROWSER_PATH` (points at a browser binary in a nonstandard location; falls back to the built-in search with a warning if it no longer exists). Full ranges and defaults are in [docs/USAGE.md](docs/USAGE.md#desktop-settings-apply-on-the-next-launch) and the Admin UI itself.
+Nine settings, editable from **Admin → Providers → Desktop** (they moved off the Limits page in 6.2.0, to sit beside the live desktop panel) or directly in `~/.fcc/.env`, tune how `mcc-desktop` behaves: `DESKTOP_HEALTH_POLL_SECONDS`, `DESKTOP_HEALTH_FAILURE_THRESHOLD`, `DESKTOP_ACTIVATION_POLL_SECONDS`, `DESKTOP_SERVER_START_TIMEOUT`, `DESKTOP_ADMIN_REQUEST_TIMEOUT`, `DESKTOP_HEALTH_CHECK_INTERVAL`, `DESKTOP_WINDOW_WIDTH`, `DESKTOP_WINDOW_HEIGHT`, and `DESKTOP_BROWSER_PATH` (points at a browser binary in a nonstandard location; falls back to the built-in search with a warning if it no longer exists). Full ranges and defaults are in [docs/USAGE.md](docs/USAGE.md#desktop-settings-apply-on-the-next-launch) and the Admin UI itself.
 
 **These settings apply on the next `mcc-desktop` launch, not to a tray already running** — `mcc-desktop` is a separate process that reads them once at start.
 
@@ -465,6 +465,9 @@ Each key gets its own upstream client and its own rate-limit window, so one key 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `CREDENTIAL_LOCKOUT_TIERS` | `300,3600,86400` | The escalating bench for a key the provider keeps rejecting with 401/403, in comma-separated seconds. One step per consecutive rejection, staying at the last entry. This is the only ladder left — a 429 waits exactly as long as the provider asked, and nothing else changes a key's health. |
+| `RATE_LIMIT_COOLDOWN_SECONDS` | `60` | Used **only** when a 429 carries no `Retry-After`, `retry-after-ms` or `x-ratelimit-reset-*` header at all. A header always wins, and whatever the header asks for is capped at one hour. |
+
+Both live on **Admin UI → Limits & Resilience → Credential health**. Rotation *policy* is not there: it is per pool, on each provider's card.
 
 **Everything else leaves every key untouched** — timeouts, 5xx, `410 model gone`, overloaded, 400s, context overflows, transport faults. Those are properties of the model, the request or the moment, and the same keys serve every model in a fallback chain, so charging them benched working credentials for faults they did not cause. A model that will not answer is the model's problem: the **fallback chain moves to the next model**, not the next key.
 
@@ -476,11 +479,20 @@ Each key gets its own upstream client and its own rate-limit window, so one key 
 
 **No invented ceilings.** MCC never caps a key at a number it made up. Every limit it applies comes from the provider's own response — the reset window on a 429, the status on a rejection. Providers change their limits without notice, so a hardcoded budget is wrong the moment it ships; reading what the upstream actually reports stays right.
 
-**When rotation happens.** Only for errors another key could actually fix: authentication, rate limits, 5xx/overload, and transport failures. A plain 400 fails identically on every key and is not rotated. Failover happens before the first streamed chunk; once output has started, switching credentials would corrupt the response, so a mid-stream failure is recorded against the key but propagated to the client.
+**When rotation happens.** Exactly three cases, because they are the only ones a different key could fix: a 401/403, a 429, and a transport fault (a different key means a different connection). A timeout, a 5xx, an overload, a `410`, a plain 400 — every key in the pool talks to the same model and would meet the same answer, so those raise out of the rotating loop and the **fallback chain** gets its turn instead. One consequence is worth stating: a **timeout is not a transport fault** here. `openai.APITimeoutError` subclasses `APIConnectionError`, and reading a model that never answered as a broken socket would spend the whole pool on it, so it is excluded by name.
+
+Failover happens before the first streamed chunk; once output has started, switching credentials would corrupt the response, so a mid-stream failure is recorded against the key but propagated to the client.
+
+**The deliberate cost of that rule.** A key that fails with a 5xx or a dropped connection on *every* request is no longer benched — rotation tries it once per request and the chain absorbs the wasted attempt. That was the trade: on a live three-key pool, the failure classes that could have identified a dead key were the same ones benching healthy keys **1,529 times in one day** (a `410 model gone`, a rejected `top_p`, a model that stayed silent). A truly dead credential still answers 401/403, and that still locks it out.
 
 All of this is visible and manageable from **Admin UI → Providers**: press **Configure** on a provider's card to open its key pool, which lists every key with its own health and usage, lets you add keys (one, or several comma-separated) and remove them individually, and carries the rotation policy. **Refresh models** on the card face makes a real call to the provider. For historical per-key request volume, error rate, tokens, and latency, see [Per-Key Attribution](#per-key-attribution).
 
 Web search provider keys share the same rotation engine — see [Web Search → Multi-key rotation](#multi-key-rotation-web-search-keys).
+
+<div align="center">
+  <img src="assets/admin-credential-health.png" alt="Credential health card showing the auth lockout ladder and the rate-limit cooldown fallback" width="820">
+  <p><em>Credential health, on Limits &amp; Resilience: the two settings that can bench a key, and nothing else.</em></p>
+</div>
 
 ### Optional Model-Tier Routing
 
@@ -500,6 +512,17 @@ A gateway can publish hundreds of models — `nous_portal` alone lists 343 — a
 Patterns are matched case-insensitively against the full `provider/model` reference, so `nvidia_nim/thinkingmachines/inkling` picks one model, `commandcode/*` one provider, `*:free` every free variant, and `*inkling*` anything containing the word. An explicit pick is simply a pattern with no wildcards, which is why ticking models and writing globs are one mechanism rather than two that can disagree.
 
 The Models page writes both forms for you. Hiding a whole provider writes one glob, `nous_portal/*`, so models it publishes later are hidden too; hiding a selection, a filtered subset, or inverting writes exact refs. Showing a provider again removes that glob and the exact refs under it, and never a pattern you wrote yourself.
+
+**Bulk actions.** Every provider header carries **Show all**, **Hide all** and **Invert**, and every row has a checkbox in a ruled left gutter. Ranges select by Shift+click, by Shift+Arrow, and by pressing and dragging down the gutter — a swept row takes the anchor's state, so a drag never leaves a mixed run. Filter first and the actions apply to exactly the filtered set; `Select all N` sits on the result-count line, and facets narrow to All / Visible / Hidden / Configured / Overridden. `/` focuses the search box, `Escape` clears the selection. Provider headers are sticky and carry their own visible/hidden/configured counts, and the disclosure is a real `<button aria-expanded>` rather than a `<summary>`, so **Hide all** works on a provider you never expanded.
+
+The result is one persistent `role=status` panel with **Undo**, not a toast that disappears while you are still reading it. It says which pattern was written or removed, and where one of *your own* globs still overrules an exact tick it names that pattern once, grouped — "honoured by your glob" — instead of reporting 317 individual no-ops or pretending to have removed a pattern you wrote. Above 200 models the button asks for one inline confirmation rather than opening a modal.
+
+The point is arithmetic: hiding a 317-model provider used to cost 325 clicks, 634 requests, about 1.07 GB of traffic and 5–9 minutes. It is now **2 clicks, 1 request, 41 KB, 7 ms**, and Invert is one click.
+
+<div align="center">
+  <img src="assets/admin-models-bulk.png" alt="Models page with the bulk action bar, row checkboxes and a sticky provider header" width="820">
+  <p><em>Models page: selection gutter, the bulk action bar with its live count, and the sticky provider header carrying that provider's counts.</em></p>
+</div>
 
 **These lists hide; they never block.** A model named by `MODEL`, a tier override or a `MODEL_*_FALLBACKS` chain keeps routing normally while hidden. A visibility filter that silently broke a working chain would be worse than a chain entry that is invisible but alive, because the breakage would surface as an outage nowhere near the setting that caused it. The Admin pickers therefore also keep showing a model you have actually configured, even when the filter hides it — a picker has to be able to render the value that is saved.
 
@@ -526,17 +549,30 @@ A tier with its own override uses only its own chain; the two are never merged. 
 
 Requests that name a provider and model directly (`open_router/…`) are never redirected — an explicit choice is honoured as given.
 
-**A silent model counts as a failure too.** A provider that accepts the request and then produces nothing would otherwise hold it until the transport read timeout — minutes — and the chain would get its turn long after the client gave up. Three limits bound that, all editable in **Admin UI → Limits**:
+**A silent model counts as a failure too.** A provider that accepts the request and then produces nothing would otherwise hold it until the transport read timeout — minutes — and the chain would get its turn long after the client gave up. These bound it, on **Admin UI → Limits & Resilience** (deadlines on the **Deadlines** card, the last two on **Chain benching**):
 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `FALLBACK_FIRST_TOKEN_TIMEOUT` | `120` | The first-token deadline: seconds a model may stay silent before the next model takes over. Nothing has streamed yet, so the handover is invisible. `0` waits indefinitely. This is a **ceiling, not the allowance** — each attempt gets an equal share of what is left of `FALLBACK_TOTAL_TIMEOUT`, counting itself and every model still behind it, and what applies is whichever is smaller. On a ten-model chain with the defaults that is `min(120, 600 ÷ 10)` = 60s. **Admin UI → Limits & Resilience** computes it per route for your own chains. |
 | `FALLBACK_TOTAL_TIMEOUT` | `600` | Whole-request budget across every attempt, retry and recovery — the backstop for a stream that committed and then stalled. `0` disables it. |
 | `FALLBACK_STALL_TIMEOUT` | `120` | Seconds a stream that *has* started producing may then go quiet. Measured from the last chunk that moved the answer forward, so keepalives cannot hold a dead stream open and a model producing steadily is never cut. `0` allows an unlimited pause. |
-| `FALLBACK_EJECT_AFTER_FAILURES` / `FALLBACK_EJECT_SECONDS` | `3` / `30` | Skip a model that just failed repeatedly, so a request stops re-paying its timeout on the way to a healthy fallback. |
+| `FALLBACK_EJECT_SECONDS` | `30` | How long a benched model stays out of the chains that name it. |
 | `FALLBACK_COOLDOWN_STEP_OVER_FLOOR` | `5` | Seconds of remaining rate-limit cooldown that make it worth trying the next model rather than waiting. Shorter waits are waited out, because stepping over costs the chain a slot. |
 
 Ejection can never empty a chain: if every model on a route is benched, they are tried in order anyway — skipping a bad model is an optimisation, refusing to try anything is an outage.
+
+**What benches a model.** `FALLBACK_BENCH_ENABLED` is the master switch, and with it off *every* control below is inert — a model failing half its requests is retried at chain position 0 on every single request. `FALLBACK_BEHAVIOR` then picks the evidence:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `FALLBACK_BENCH_ENABLED` | `true` | Master switch for benching. Off makes the whole card inert, not just the mode you can see. |
+| `FALLBACK_BEHAVIOR` | `rate_based` | `rate_based` benches on a failure rate over a window; `legacy` restores the older consecutive-count rule. |
+| `FALLBACK_EJECT_WINDOW` / `FALLBACK_EJECT_FAILURE_RATE` | `10` / `0.5` | `rate_based` only: benched once 5 of the last 10 requests fail. |
+| `FALLBACK_EJECT_MIN_SAMPLES` | `8` | `rate_based` only: nothing is benched until that many of its requests have been seen, so one failure on a barely-used model cannot trip it. |
+| `FALLBACK_EJECT_AFTER_FAILURES` | `3` | `legacy` only: consecutive failures. `0` turns counting off. |
+| `FALLBACK_RETRY_FIRST` | `skip` | `retry_once` gives the **primary only** one more attempt on a transient error before the chain moves on. An already-failed fallback is never retried. |
+
+The card keeps the *unselected* mode's fields visible but disabled, each carrying its own note — "Not used while eject mode is `legacy`", "Not used while benching is off" — rather than dimming them and leaving you to infer why. Disabled fields are skipped by the change tracker, so switching modes cannot save the other mode's values by accident.
 
 **One model is retried before the chain is used at all.** A 429 or 5xx is retried against the same model on an exponential backoff, and three settings shape that wait:
 
@@ -554,7 +590,7 @@ Ejection can never empty a chain: if every model on a route is benched, they are
 
 **Thinking is not answering.** A reasoning model that streams its thoughts and never writes an answer used to commit the route on its very first thought: from that moment no other model could take over, the stall guard never fired because thoughts kept arriving, and the request ran until the whole budget ended it. Measured across 21 days of real traffic, 44 of 499 budget exhaustions were a stream that had only reasoned, and 490 of the 499 never left the first model on the chain.
 
-Since 5.50.0 reasoning is held back like an envelope frame, so the attempt stays abandonable and the next model can still answer. Two settings control it, both in **Admin UI → Models**:
+Since 5.50.0 reasoning is held back like an envelope frame, so the attempt stays abandonable and the next model can still answer. Two settings control it, both on **Admin UI → Limits & Resilience → Deadlines** — beside the first-token deadline they pre-empt, rather than on Model Config where the reasoning deadline used to sit:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -581,16 +617,16 @@ For a 64,000-token ask at the `max` reasoning tier on a 262,144-output model, th
 | thinking budget | 47,616 | 114,688 |
 | answer room left | 16,384 | 16,384 |
 
-On a host that takes an effort word rather than a number, nothing about the level changes — only the answer stops being squeezed out by the thinking in front of it.
+**The rung does not widen anything — the presence of reasoning does.** `low` and `max` produce the same `max_tokens`; the rung then decides how much of that allowance the thinking may spend. On a host that takes an effort word rather than a number, nothing about the level changes at all — only the answer stops being squeezed out by the thinking in front of it. With reasoning off, the wire is byte-identical to 6.7.0 apart from the ceiling, which now applies to every request.
 
 This replaces a flat 81,920 that every model got regardless. On real routes that number was simultaneously too high (`minimaxai/minimax-m3` and `thinkingmachines/inkling` both stop at 16,384) and too low (`tencent/hy3:free` does 128,000, `meituan/longcat-2.0:free` 131,072).
 
-Four settings cover what the model itself cannot answer, all editable in **Admin UI → Limits**:
+These cover what the model itself cannot answer, all on **Admin UI → Limits & Resilience → Output & thinking budgets**:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT` | `32768` | Used **only** when no source publishes a limit for the routed model. A fallback for a missing client value, never a cap on a present one — a number nobody published has no business shrinking an explicit request. |
-| `MAX_OUTPUT_TOKENS_CEILING` | `131072` | Absolute head on every request, whatever the model can do — reasoning or not. It ships set because a thinking request is sized from the routed model's full published limit, and an unbounded ask can reserve an entire rate-limit bucket on hosts that pre-reserve `max_tokens`. It never raises a model above its own limit. `0` lifts it entirely; blank means "use the default". |
+| `MAX_OUTPUT_TOKENS_CEILING` | `131072` | Absolute head on every request, whatever the model can do — reasoning or not. It ships set because a thinking request is sized from the routed model's full published limit, and OpenAI/Azure-style limiters reserve `max_tokens` against the TPM bucket *before* generating — so an unbounded thinking turn on a 262,144-output model can 429 a request that would otherwise have been served. It never raises a model above its own limit. Range `0`–`1048576`; **`0` is the sentinel for "no ceiling"**, and blank resolves to the default rather than to off. |
 | `MAX_OUTPUT_TOKENS_CONTEXT_MARGIN` | `1024` | Tokens reserved for the prompt when a model's output limit is as large as its whole context window — about 15% of the catalog reports exactly that, and on those, asking for the full output leaves no room for the messages. |
 | `MAX_OUTPUT_TOKENS_CONTEXT_FLOOR` | `4096` | Smallest budget the reserve above may produce. A wrong or small published context can leave a handful of tokens, and a request carrying `max_tokens: 3` succeeds with a one-token answer — which looks like a useless model rather than a misconfigured catalog. Below this, the request is sent unchanged so the provider reports the real context error. `0` sends any positive headroom. |
 | `REASONING_ANSWER_FLOOR_MAX` | `16384` | Most tokens ever held back from the output allowance for the visible answer while extended thinking is on. Thinking and the answer share one `max_tokens`. The reserve applied is `min(this, output // 2)`, so a 16,384-output model keeps a working thinking budget instead of zero. |
@@ -634,7 +670,9 @@ A control is sent only when the model has that knob **and** the host has a field
 - a model known not to reason at all gets no reasoning controls;
 - and where MCC knows neither fact, the request is left **exactly** as before — most providers publish nothing, and narrowing on silence would regress them.
 
-**Every OpenAI-compatible host now declares the standard `reasoning_effort` field by default.** That field is defined by the Chat Completions API itself, so a host claiming compatibility either reads it or ignores it — and roughly twenty hosts that previously sent nothing at all now speak it. Which *models* are actually sent it is still the capability gate's decision above, so a mixed roster is protected per model rather than by silencing the whole host. A host that genuinely refuses the field says so with a 400 naming it: MCC strips the field, retries that one request without it, and never asks for it again on that model. A 400 that names a sampling parameter instead is *not* treated as a reasoning rejection — it is raised, because dropping thinking would not have fixed it.
+**Every OpenAI-compatible host now declares the standard `reasoning_effort` field by default.** That field is defined by the Chat Completions API itself, so a host claiming compatibility either reads it or ignores it — and roughly twenty hosts that previously sent nothing at all now speak it. Which *models* are actually sent it is still the capability gate's decision above, so a mixed roster is protected per model rather than by silencing the whole host. A host that genuinely refuses the field says so with a 400 naming it: MCC strips the field, retries that one request without it, and never asks for it again on that model. A 400 that names a sampling parameter instead is *not* treated as a reasoning rejection — it is raised, because dropping thinking would not have fixed it, and an unrecognised 400 fails visibly rather than being absorbed. The strip is the last retry rung, and it is remembered only on a retry that actually *succeeded*. That memory lives for the life of the process: a config reload rebuilds the provider and forgets it, which is deliberate — a host that was briefly broken heals by itself instead of staying blacklisted.
+
+Two smaller behaviours worth knowing. A `REASONING_*` setting naming a level a given host cannot spell is now **clamped to the nearest rung that host can** — before, it silently became that encoder's own default, which could be *below* what you asked for. And an effort string MCC does not recognise at all logs `REASONING EFFORT IGNORED` instead of being swallowed.
 
 The Models page states which of the three you are looking at: **default OpenAI dialect**, **declared by this provider** (someone probed this gateway and wrote down what it parses), or **learned from the host's own rejection**, dated.
 
@@ -649,10 +687,56 @@ Each request logs both the reasoning policy applied and the one originally reque
   <p><em>Model Config: the fallback <code>MODEL</code> picker, per-tier routing, and reasoning control.</em></p>
 </div>
 
+### Limits & Resilience
+
+Everything above that is a number rather than a model lives on one page, **Admin UI → Limits & Resilience**. It was a single flat grid of 37 fields until 6.2.0; it is now six cards behind a sticky section rail, each stating in one line what it decides:
+
+| Card | What it decides |
+| --- | --- |
+| **Output & thinking budgets** | How large one answer may be, and how it is split between thinking and the answer. A per-model limit published by the provider always wins over anything here. |
+| **Deadlines** | How long one model may hold a request before the chain moves on — including `FALLBACK_REASONING_ANSWER_TIMEOUT`, which used to sit on Model Config away from the deadline it pre-empts. |
+| **Chain benching** | Whether a model that keeps failing is skipped, and on what evidence. |
+| **Provider retries & throughput** | How hard one model is retried, and how fast requests may leave — `HTTP_*_TIMEOUT`, `PROVIDER_RATE_*` and `MAX_CONCURRENCY` moved here from Providers, where the transport ceiling underneath every deadline had no description at all. |
+| **Credential health** | What one API key's failures cost it. Nothing else can bench a key. |
+| **Diagnostics** | Logging and debugging flags, `LOG_LEVEL` included. |
+
+Two groups deliberately left: the nine `REQUEST_LOG_*` settings are at the bottom of **Analytics**, and the nine `DESKTOP_*` ones on **Providers** — the page that shows the consequence owns the control. `FALLBACK_SKIP_KINDS` stays on **Model Config** with a cross-link, because it is a routing decision, not a limit.
+
 <div align="center">
-  <img src="assets/admin-limits.png" alt="Limits and resilience configuration with the deadline calculator" width="820">
-  <p><em>Limits &amp; Resilience: budgets, deadlines and the per-route deadline calculator, chain benching, provider retries, credential health, and diagnostics.</em></p>
+  <img src="assets/admin-limits.png" alt="Limits and Resilience page showing the section rail and the output budgets card" width="820">
+  <p><em>Limits &amp; Resilience: six cards behind a section rail, each one subsystem.</em></p>
 </div>
+
+**The number in the box is not the number you get.** `FALLBACK_FIRST_TOKEN_TIMEOUT` is a ceiling; the allowance is `min(first-token deadline, total budget ÷ models in that route's chain)`. On a ten-model Opus chain with the defaults the field reads `120` and each model actually gets 60 s. So the Deadlines card carries a calculator that computes it per route from your own chains, and warns with the fix rather than the complaint: it names the total budget that *would* honour the deadline you configured ("a total budget of 1200 s would give every model the 120 s you asked for"), or points out that `HTTP_READ_TIMEOUT` sits below the deadline above it — in which case a slow model produces a transport error instead of a clean handover.
+
+<div align="center">
+  <img src="assets/admin-limits-calculator.png" alt="Per-route deadline calculator showing each route's chain length and real first-token share" width="820">
+  <p><em>The deadline calculator: one row per route, the real first-token share, and the budget that would honour the number you typed.</em></p>
+</div>
+
+What it deliberately does *not* model: time already spent on the request, a primary retried under `FALLBACK_RETRY_FIRST`, benched models shortening the chain, or the reasoning deadline taking over once a model starts thinking. It is the worst case for the first model on a route, not a fixed slot — time an attempt does not use flows to the models behind it.
+
+<a id="saving-settings"></a>
+
+### Saving Settings: Blank Means Unset
+
+Pressing **Apply** writes only what you actually changed. Until 6.1.0 it did the opposite: the first Save of any field materialised *every* manifest default into `~/.fcc/.env` as a real value — and a value on disk outranks a code default forever, so on any install that had pressed Save once, **no shipped default could ever change again**. `FALLBACK_BENCH_ENABLED=false` outliving the release that flipped its default to `true` is the casualty people actually hit.
+
+Now the managed file is the starting point, and an untouched field is written as a commented placeholder that records what it would do:
+
+```bash
+# FALLBACK_BENCH_ENABLED= (default: true)
+```
+
+The rules that follow from that:
+
+- **Blank means unset.** Clearing a field removes its line and the code default applies again. Every field carries its default underneath it and a **Use default** button that does exactly that.
+- **Setting a field *to* its current default still writes it.** That is an explicit choice, and it survives a later change to the shipped default — which is the whole point of the distinction.
+- **Unless the repo `.env` sets the key.** Then blanking writes `KEY=` to mask it where the type accepts an empty string, and Save returns a named warning where it does not — surfaced in the dashboard rather than swallowed.
+- **Booleans are three-state selects** — `Default (On)` / `On` / `Off` — and selects carry an explicit `Default (…)` option. Before, an unset select rendered its first option as if you had chosen it, and merely loading the page could save it.
+- A source chip reads **"set here"** for a value the managed file owns, so "this is my value" and "this is the shipped default" are never the same pixel.
+
+No migration ran: defaults already materialised in an existing `.env` are left alone, because a value on disk is effective configuration and silently rewriting it would be the worse bug. Clear them yourself with **Use default** if you want the shipped default back.
 
 <a id="web-search"></a>
 
@@ -868,7 +952,9 @@ The Admin UI (`http://127.0.0.1:8082/admin`, local-only) is the control center f
 - **Providers** — one searchable card per provider (name, id and variable name all match); **Configure** opens its key pool for adding and removing keys with per-key health and usage plus the rotation policy, **Refresh models** makes a live call to that provider, and **Validate** / **Apply** cover the remaining fields.
 - **Model Config** — the `MODEL` picker, model-tier routing (`MODEL_FABLE` / `MODEL_OPUS` / `MODEL_SONNET` / `MODEL_HAIKU`), per-tier fallback chains, the vision adapter and its own chain, and reasoning control.
 - **Web Search** — configured and last-observed route summaries, strict/fallback policy, provider cards, key health, advanced options, separate route/attempt analytics, and full captured input/output drill-down.
-- **Analytics** — the full model-request observability dashboard (see below).
+- **Models** — every model every configured provider publishes, with per-provider bulk **Show all / Hide all / Invert**, range selection, filters and facets, and one undoable status report per action (see [Model Visibility](#model-visibility)).
+- **Limits & Resilience** — output budgets, deadlines and the per-route deadline calculator, chain benching, provider retries and throughput, credential health, and diagnostics (see [Limits & Resilience](#limits--resilience)).
+- **Analytics** — the full model-request observability dashboard (see below), with the `REQUEST_LOG_*` storage settings at the bottom of the page that shows their consequence.
 - **Messaging** — Discord/Telegram bot and voice-note settings.
 - **Version** — running version, update announcements, and one-click upgrades (see [Version & Updates](#version--updates)).
 
@@ -887,6 +973,8 @@ REQUEST_LOG_MAX_ROWS=50000        # retention cap; oldest rows pruned periodical
 REQUEST_LOG_CAPTURE_BODIES=true   # false stores only body lengths + SHA-256 hashes
 REQUEST_LOG_WIRE_BODY_MAX_CHARS=8000  # bounds stored message/tool structure only
 ```
+
+All nine `REQUEST_LOG_*` settings are editable at the bottom of the Analytics page itself. Every one of them is read at startup, so a change needs a restart before the tables above it reflect it.
 
 <a id="retention-and-all-time"></a>
 
@@ -919,7 +1007,28 @@ Setting `REQUEST_LOG_CAPTURE_BODIES=false` remains the extreme option — metada
 
 **Uptime.** A flat stretch in the request chart is ambiguous on its own — no traffic and no server look identical. The server records when it was actually running, so Analytics can tell you which one you are looking at instead of leaving you to guess.
 
-The request detail view shows the body that actually left the process, per attempt. Sampling and reasoning parameters are stored whole however large the body is; only the message and tool structure is reduced to counts and names when it exceeds `REQUEST_LOG_WIRE_BODY_MAX_CHARS`, and the stored body always remains valid JSON. On the Models page, **reasoning requested** and **reasoning returned** are two independent measurements — what the outbound body carried, and whether the reply contained thinking text — so a model that is asked and never thinks, and one that thinks without being asked, are both visible instead of being averaged into one number.
+<a id="the-wire-pane"></a>
+
+#### What Actually Left The Process
+
+The request detail view shows the body that actually left the process, **per attempt**, and the parameters are the headline: every top-level key plus every `extra_body.<name>` entry is listed above the message structure, and that list is **never truncated**. Only `messages` and `tools` degrade — to counts and names — when the body exceeds `REQUEST_LOG_WIRE_BODY_MAX_CHARS`, and the stored body always remains valid JSON. This ordering is the fix for a real failure: bodies used to be serialized alphabetically and cut at 8,000 characters, so a Claude Code request with ~59 tools spent its whole budget inside `tools` and `reasoning_effort`, `temperature` and `top_p` survived in **0 of 212** truncated previews.
+
+Three things the pane will tell you that a body alone cannot:
+
+- **"Not measured"** rather than a hidden pane. A provider with no instrumented commit boundary — Vertex, permanently — records nothing, and that is a different fact from "no body was sent". A skipped chain entry says so in its own words.
+- **`(no key available)`** on an attempt that never reached a credential because every key in the pool was benched. It is not the same as keyless, and the old fabricated `keyless` label is gone. Each attempt names its own key, so a request that rotated mid-route is no longer attributed whole to whichever key happened to finish it.
+- A **contradiction badge** — *gating asked for reasoning; nothing was sent* — keyed on the persisted `reasoning_adaptation_kind` column, never on message text. It fires for `clamped` and `substituted`. `nothing_sent` never badges, because "the host has no reasoning field, so the model's own default applies" is an outcome, not a fault, and the pane says exactly that: **no reasoning instruction sent (model default applies)**. Rows written before 6.4.0 have no kind recorded and badge nothing.
+
+Where a thinking turn was given a wider allowance, the pane says so in the same line as the number — `max_tokens 131,072 · raised from 64,000 for reasoning` — so a value that would otherwise look invented carries its own explanation.
+
+One NULL convention holds across the whole surface: **a dash means not measured, a zero means measured and zero.** `thinking_chars` obeys it — a completed stream that produced no reasoning stores a real `0`.
+
+On the Models page, **reasoning requested** and **reasoning returned** are two independent measurements over the last 7 days — what the outbound body carried, and whether the reply contained thinking text. A model asked 3 times out of 6,614 that thought 0 times, and one asked 0 times out of 977 that thought all 977, are both visible instead of being averaged into one number.
+
+<div align="center">
+  <img src="assets/admin-request-detail.png" alt="Request detail wire pane listing every outbound parameter above the message structure" width="820">
+  <p><em>Request detail: the wire pane, one per attempt, parameters first and never truncated.</em></p>
+</div>
 
 **Privacy note:** request bodies are stored locally on disk by default. They never leave your machine, but set `REQUEST_LOG_CAPTURE_BODIES=false` (or disable the log entirely) if you'd rather not persist conversation text.
 
@@ -1047,6 +1156,18 @@ When a newer release exists, a banner announces it and carries the release notes
 If `uv` is not on `PATH`, the upgrade declines and tells you to re-run the install script instead. These endpoints (`/admin/api/version*`) are loopback-only, like the rest of the Admin API.
 
 Prefer the command line? Re-running the install command from [Quick Start](#install) does exactly the same thing.
+
+<a id="upgrading-to-6x"></a>
+
+### Upgrading to 6.x
+
+Nothing in the 6.x line requires you to edit a file before it will start, and the one schema change — three `ALTER`s and an index on the request log, about half a second on a 200 MB database — runs itself on first start and backfills nothing. Three things are worth doing by hand:
+
+1. **Check `MAX_OUTPUT_TOKENS_CEILING`.** It ships set to `131072` as of 6.8.0, where it was previously unset. If you want no ceiling at all, the value is now **`0`** — a blank field resolves to the default, not to off. See [Output Token Budget](#output-token-budget) for why it ships set.
+2. **Check `FALLBACK_BENCH_ENABLED` on Limits & Resilience.** If it reads `false` and you never chose that, an older Save wrote the then-current default into your `.env` and it outlived the release that flipped it. Press **Use default**, or delete the line. Nothing was migrated for you on purpose: a value on disk is effective configuration, and rewriting it silently would be the worse bug.
+3. **Delete any `CREDENTIAL_CIRCUIT_THRESHOLD=` line from `~/.fcc/.env`.** The setting was removed in 6.0.0 along with the circuit breaker it configured. `Settings` is declared `extra="ignore"`, so the stale line starts fine and does nothing — which is exactly why it is worth deleting before it reads as live configuration to the next person.
+
+Your first Save after 6.2.0 will rewrite `~/.fcc/.env` with six section headings where there was one `# Limits` heading. No value changes; the diff just looks larger than it is.
 
 <a id="oauth-providers"></a>
 

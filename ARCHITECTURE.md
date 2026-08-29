@@ -587,6 +587,44 @@ configured-model validation belong to `ProviderRuntimeManager` in the runtime
 package. This separates a single generation's resources from process-lifetime
 state.
 
+### Credential Rotation and Key Health
+
+A provider holding several keys asks two independent questions of one failure,
+and answers each from its own allow-list rather than from a single deny-list
+that defaulted to blaming the credential.
+[providers/credential_rotation.py](src/my_claude_code/providers/credential_rotation.py)
+owns both answers.
+
+*Try another key?* An auth rejection, a 429, and a transport fault do justify
+it: a different credential means a different account or a different connection.
+Nothing else does. Every key in the pool reaches the same model and would meet
+the same timeout, 5xx, 410 or 400, so those raise out of the rotating loop and
+the fallback chain moves on to the next **model** instead.
+`openai.APITimeoutError` subclasses `APIConnectionError` and is excluded by
+name, so a model that never answered is not read as a broken socket and spent
+against the rest of the pool. Credentials already tried in this request are
+passed to `acquire` as an avoid set, so rotation cannot end with keys untried.
+
+*Charge the credential?* Only the two signals that describe it. A 401/403 walks
+`CREDENTIAL_LOCKOUT_TIERS`; a 429 is benched for exactly the `Retry-After` the
+provider published, carried on `ExecutionFailure.retry_after_seconds`, or for
+`RATE_LIMIT_COOLDOWN_SECONDS` when it published none, under a one-hour cap. No
+bench duration is invented at this layer. The deliberate cost is that a key
+failing 5xx or transport on every request is retried once per request rather
+than benched: the failure classes able to identify a dead key were the same
+ones emptying healthy pools.
+
+The mechanism itself exists once, in
+[core/credential_rotation.py](src/my_claude_code/core/credential_rotation.py),
+and each frontend parameterises it through `RotationTuning`. `PROVIDER_TUNING`
+reaches neither the generic cooldown ladder nor the circuit breaker, because
+the provider adapter never classifies a failure as transient; `WEBSEARCH_TUNING`
+keeps both, since a search key that keeps erroring is worth resting. No
+half-open probe state remains in `core/`: a slot reserved on acquire outlived
+any request that reported neither success nor failure, leaving the key
+unselectable until reset by hand, so a credential now wakes straight to
+`HEALTHY` at the cost of at most one extra failed request.
+
 [application/model_metadata.py](src/my_claude_code/application/model_metadata.py) owns the immutable
 `ProviderModelInfo` value consumed by the application catalog. Provider-specific
 model-list modules retain response parsing and construct that value directly;
@@ -678,6 +716,31 @@ objects, chat-template booleans, numeric llama.cpp budgets, and split reasoning
 output. Specialized providers keep only translations that cannot be expressed
 by those encoders.
 
+`ReasoningDialect`, also in [core/reasoning.py](src/my_claude_code/core/reasoning.py),
+states which reasoning *fields* one host parses: an effort field and the words
+it accepts, an on/off channel, a numeric budget, an OFF spelling, an adaptive
+channel. Every encoder and self-building provider declares one through
+`reasoning_dialect(model_id)`, and the provider manager narrows it per model by
+the gateway's own published `supported_parameters` -- narrowing only, never
+widening. A control is emitted only where the model has that knob *and* the
+host has a field to spell it in. Where one of the two is missing, the nearest
+thing both can express goes instead: an effort outside the host's vocabulary
+clamps to the nearest rung that host spells, and a toggle-only model on an
+effort-only host is sent the rung the client asked for, clamped to that host's
+enum, rather than the encoder's own default value. Where nothing can be
+expressed, nothing is sent, the model's own default applies, and the request log
+records that instead of implying an instruction was honoured. Model capability
+comes from published metadata, with a curated OpenRouter reference rung
+consulted ahead of the cross-provider vote and the more capable of two
+disagreeing records winning for reasoning controls. This replaced an earlier
+single capability vote that decided the wire without asking what the host reads.
+
+A 400 that names the reasoning field is retried once without it, and that
+`(provider, model)` pair is remembered for the life of the process on retry
+success only -- never on a complaint naming a sampling field, and an
+unrecognised 400 still fails visibly. The learned narrowing is instance-scoped,
+so a configuration reload rebuilds the provider and discards it.
+
 Reasoning history replay is a separate request-conversion decision. Every
 profile explicitly chooses native `reasoning_content`, native `reasoning`,
 `<think>` tags, provider-specific chunks, or no replay. Turning off computation
@@ -695,6 +758,22 @@ The boundary has four hard rules:
 4. Provider-default intent emits no compute-control field. Explicit off requests
    an upstream disable where supported and always suppresses reasoning output at
    the FCC protocol boundary.
+
+The output allowance is resolved separately, in
+[application/output_tokens.py](src/my_claude_code/application/output_tokens.py).
+`resolve_max_output_tokens` applies one optional widening and then four clamps,
+in order. When the resolved policy will ask the model to think, the ask is first
+raised to the model's own published output limit -- the *presence* of reasoning
+decides this, not the named effort -- because thinking and answer tokens are
+spent from one allowance the client sized for the answer alone. Then the model
+limit, then `MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT` where nothing published a limit,
+then `MAX_OUTPUT_TOKENS_CEILING`, then context headroom. An unknown limit never
+widens an ask, by the same rule that stops it lowering one, and `max_tokens: 0`
+is left alone. The ceiling ships set because limiters that reserve `max_tokens`
+against a rate bucket charge for a widened allowance before generating anything;
+`0` is the sentinel for no ceiling. The effort rung then decides how much of the
+resulting allowance the thinking may take, against an unchanged answer reserve
+of `min(REASONING_ANSWER_FLOOR_MAX, output // 2)`.
 
 Shared provider responsibilities include upstream rate limiting, model listing,
 SDK/HTTP failure classification, safe diagnostic construction, HTTP resource

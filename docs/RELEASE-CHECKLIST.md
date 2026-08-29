@@ -86,25 +86,38 @@ publish flow), and the checksum-verified in-place update path serves it.
 
 ## 4. Dashboard screenshots (manual step)
 
-The admin dashboard screenshots under `assets/` (e.g. `admin-analytics.png`,
-`admin-model-config.png`) should be re-captured against the rebranded console
-to reflect the new "My Claude Code" header, "MC" brand mark, and any theme
-changes. **This is a manual step** â€” capture from a locally running
-`mcc-server` (default `:8082`) in a browser. Do **not** point any automated
-screenshot tool at the live WSL `:8082` instance.
+The admin dashboard screenshots under `assets/` go stale whenever a view is
+rebuilt, not only at a rebrand. **This is a manual step** — capture from a
+locally running `mcc-server` (default `:8082`) in a browser. Do **not** point
+any automated screenshot tool at the live WSL `:8082` instance.
 
-Captured views to refresh:
-- `assets/admin-page.png`, `assets/admin-version.png`, `assets/admin-analytics.png`
-- `assets/admin-model-config.png`, `assets/admin-websearch.png`
-- `assets/admin-key-performance.png`, `assets/admin-requests.png`
+Current as of the 6.x arc (re-captured in the 6.x docs pass):
+
+- `assets/admin-limits.png` — the six-card **Limits & Resilience** page (6.2.0);
+  the old flat `Limits` grid no longer exists.
+- `assets/admin-limits-calculator.png` — the per-route deadline calculator.
+- `assets/admin-model-config.png`, `assets/admin-models-bulk.png` — Models
+  page, including per-provider Show all / Hide all / Invert and the selection
+  action bar (6.7.0).
+- `assets/admin-analytics.png`, `assets/admin-request-detail.png` — Analytics,
+  and a request detail showing the wire knobs block (6.4.0, 6.8.0).
+- `assets/admin-credential-health.png` — per-key lockout and 429 bench state.
+
+Still stale, showing a pre-6.x dashboard:
+
+- `assets/admin-page.png`, `assets/admin-version.png`
+- `assets/admin-requests.png`, `assets/admin-key-performance.png`
+- `assets/admin-websearch.png`, `assets/admin-websearch-analytics.png`
 - `assets/admin-messaging.png`, `assets/admin-update-banner.png`
-- `assets/admin-limits.png`
 
 The in-dashboard Guide serves its **own** copies from
 `src/my_claude_code/api/admin_static/img/`, which is a different set of files
-from `assets/`. Re-capturing one set does not update the other, and nothing
-checks that they match, so refresh both together or the Guide keeps showing
-the previous release's dashboard.
+from `assets/`. Only four filenames exist in both today — `admin-analytics.png`,
+`admin-limits.png`, `admin-model-config.png`, `admin-websearch.png` — and
+nothing checks that the two copies match. **Refreshing a screenshot means
+writing the same filename into both directories**; refreshing one leaves the
+Guide showing the previous release's dashboard. A screenshot the Guide embeds
+for the first time has to be added to both as well.
 
 ## 5. Pre-release verification
 

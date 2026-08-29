@@ -1184,6 +1184,7 @@
                 <a href="#guide-keys">Add a provider</a>
                 <a href="#guide-claude-models">Use Claude models</a>
                 <a href="#guide-models">Map model tiers</a>
+                <a href="#guide-reasoning">Reasoning</a>
                 <a href="#guide-cli">Claude Code</a>
                 <a href="#guide-desktop">Claude Desktop</a>
                 <a href="#guide-other">Codex &amp; Pi</a>
@@ -1271,8 +1272,12 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   &mdash; while a plain <code>KEY=value</code> line means the dashboard
                   set it, and the field shows <em>set here</em>. Every field prints its
                   default underneath, and one that was set gets a <strong>Use default</strong>
-                  button that removes the line again. Leaving a setting alone is what
-                  lets a later release improve its default for you.
+                  button that removes the line again. That is also why a switch is a
+                  three-way select &mdash; <em>Default</em>, <em>On</em>, <em>Off</em>
+                  &mdash; and why every list carries a <em>Default</em> option: a
+                  checkbox has nowhere to say "I have not chosen". Leaving a setting
+                  alone is what lets a later release improve its default for you;
+                  choosing the default explicitly pins it against that.
                 </p>
 
                 <h3 id="guide-claude-models">Use Claude models</h3>
@@ -1328,7 +1333,8 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   unmodified agent run on any backend.
                 </p>
                 <img class="guide-shot" src="/admin/img/admin-model-config.png"
-                     alt="Model tier configuration" loading="lazy">
+                     alt="Model Config: tier mapping, fallback chains and reasoning controls"
+                     loading="lazy">
                 <p class="guide-note">
                   <strong>Map Haiku to something cheap and fast.</strong> Agents use the
                   small tier constantly for internal bookkeeping, and a slow model there
@@ -1348,12 +1354,26 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <em>Shift</em>+arrow to extend or shrink one from the keyboard, or press
                   and drag down the gutter &mdash; then use the bar at the bottom.
                   <em>Hide all</em> for a whole provider writes <em>one</em> pattern like
-                  <code>nous_portal/*</code>, so models that provider adds later stay
-                  hidden too; <em>Show all</em> removes that pattern and the exact refs
-                  under it, but never a glob you wrote yourself &mdash; if one of yours
-                  still hides a model, the result panel names it. Every bulk action
-                  offers <em>Undo</em>. None of this changes routing: a hidden model
-                  still resolves and still serves.
+                  <code>nous_portal/*</code> as a standing policy, so models that provider
+                  adds next week are hidden on arrival too; <em>Show all</em> removes that
+                  pattern and the exact refs under it, but never a glob you wrote yourself
+                  &mdash; if one of yours still hides a model, the result panel names that
+                  pattern once as <em>honoured by your glob</em>. None of this changes
+                  routing: a hidden model still resolves and still serves.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-models-bulk.png"
+                     alt="Models page: bulk action bar below a sticky provider header"
+                     loading="lazy">
+                <p class="guide-note">
+                  Filter first, then act on what is left: <code>/</code> jumps to the
+                  search box, <em>Select all N</em> on the result count takes exactly the
+                  filtered set, and <code>Escape</code> clears the selection again.
+                  Provider headers stick to the top of the list with their
+                  visible/hidden/configured counts, and <em>Hide all</em> works while the
+                  provider is collapsed. Above 200 models the button asks once, in place.
+                  What happened is written into the status panel and stays there &mdash;
+                  no toast to miss &mdash; with an <em>Undo</em> that restores both lists
+                  exactly.
                 </p>
                 <p>
                   <strong>Give each tier a fallback chain.</strong> Press
@@ -1398,6 +1418,69 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   Afterwards, <a href="#guide-analytics">Analytics</a> shows the whole path
                   a request took: which models were tried, which one answered, and whether
                   the vision adapter stepped in.
+                </p>
+
+                <h3 id="guide-reasoning">Reasoning</h3>
+                <p>
+                  Whether a request carries a reasoning instruction is decided by two
+                  facts, not one: <strong>what the model has a knob for</strong>, and
+                  <strong>what the host has a field for</strong>. A control is only sent
+                  when both are true. When they disagree the nearest thing both can
+                  express is sent instead, and when nothing can be, nothing is sent and
+                  the request detail says so in those words &mdash;
+                  <em>no reasoning instruction sent (model default applies)</em>. Each
+                  model on the Models page states which dialect its host speaks and
+                  where that came from: <em>default OpenAI dialect</em>,
+                  <em>declared by this provider</em>, or <em>learned from the host's own
+                  rejection</em>.
+                </p>
+                <p class="guide-note">
+                  <strong>Hosts that never mention reasoning still get it.</strong> Any
+                  OpenAI-compatible host with no dialect of its own is assumed to parse
+                  <code>reasoning_effort</code> over the classic four rungs
+                  <code>minimal | low | medium | high</code> &mdash; sent only when the
+                  model's own metadata says it has effort control. If such a host answers
+                  400 naming that field, the request is retried once without it, that
+                  <em>provider and model</em> is remembered for the life of the process,
+                  and the Models page relabels the dialect as learned. A 400 about
+                  anything else still fails visibly.
+                </p>
+                <p>
+                  <strong>A rung you ask for is a rung you get.</strong> An effort you
+                  name that the host cannot spell is clamped to the nearest rung it can,
+                  never quietly replaced by that host's own default &mdash; so
+                  <code>max</code> becomes <code>high</code> on a four-rung host rather
+                  than <code>medium</code>. The same rule covers a model that only has
+                  on/off sitting behind a host that only speaks effort: it leaves as your
+                  rung, clamped. Hosts with an honest on/off field keep using it. Where a
+                  catalogue disagrees with itself about a reasoning control, the more
+                  capable of the two records wins &mdash; controls only; numeric limits
+                  still take the tightest.
+                </p>
+                <p class="guide-note">
+                  <strong>Reasoning needs room, and takes it from the same budget as the
+                  answer.</strong> Thinking tokens and reply tokens come out of one
+                  <code>max_tokens</code>, so an agent asking for 8,000 can spend all of
+                  it thinking and return one sentence. When the resolved policy asks for
+                  reasoning, the budget now starts from
+                  <strong>the larger of the client's ask and the model's own published
+                  output limit</strong>, then narrows as before &mdash; model limit,
+                  ceiling, context headroom. A model whose limit nobody publishes is
+                  never widened, and <code>max_tokens: 0</code> is left alone. The
+                  request detail names it when it happens:
+                  <em>max_tokens raised from 64,000 to 131,072 for reasoning</em>.
+                  Turning reasoning off changes nothing about the ask.
+                </p>
+                <p>
+                  <code>MAX_OUTPUT_TOKENS_CEILING</code> on
+                  <a href="#guide-limits">Limits &amp; Resilience</a> caps that widening
+                  and ships set to <strong>131,072</strong>. It is set on purpose:
+                  widening asks for the model's maximum, and OpenAI- and Azure-style
+                  limiters reserve <code>max_tokens</code> against your per-minute budget
+                  <em>before</em> generating a word, so an unbounded thinking turn on a
+                  262,144-output model can be rate-limited for tokens it was never going
+                  to use. Blank means the default; <code>0</code> is the sentinel for no
+                  ceiling at all.
                 </p>
 
                 <h3 id="guide-cli">Point Claude Code here</h3>
@@ -1637,15 +1720,43 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 </p>
                 <h4>What the request body pane says</h4>
                 <p>
-                  The request detail view shows the body that actually left, per
-                  attempt, in one of three states: <strong>reasoning sent</strong>
-                  with the value that was carried, <strong>no reasoning
-                  instruction sent (model default applies)</strong>, or
-                  <strong>not measured</strong> when that provider has no
-                  instrumented commit boundary. A badge appears when gating asked
-                  for reasoning and the body carried none. The Models page adds a
-                  measured chip per model: how often reasoning was requested, and
-                  how often it came back — two independent facts.
+                  The wire is the headline. Each attempt in the request detail opens
+                  with <strong>every parameter that actually left</strong> &mdash; every
+                  top-level key of the body plus each provider-specific
+                  <code>extra_body.&lt;name&gt;</code> &mdash; above the message
+                  structure, and that list is <strong>never truncated</strong>. Only
+                  <code>messages</code> and <code>tools</code> degrade, to counts and
+                  names, once the stored body passes
+                  <code>REQUEST_LOG_WIRE_BODY_MAX_CHARS</code> on the request-log card;
+                  what is kept always parses as JSON.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-request-detail.png"
+                     alt="Request detail: the wire pane listing every parameter sent"
+                     loading="lazy">
+                <p>
+                  Reasoning reads as one of three honest states: <strong>reasoning
+                  sent</strong> with the value carried, <strong>no reasoning instruction
+                  sent (model default applies)</strong>, or <strong>not measured</strong>
+                  where that provider has no instrumented commit boundary &mdash; the
+                  pane is never hidden, because a hidden pane reads as "no body was
+                  sent". A badge marks the one real contradiction: reasoning was resolved
+                  to something the wire then <em>clamped</em> or <em>substituted</em>.
+                  Sending nothing at all is not a contradiction and does not badge, and
+                  rows written before this was recorded badge nothing either way.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-request-contradiction.png"
+                     alt="Request detail: the reasoning adaptation line naming a substituted effort, beside the requested reasoning and the resolved policy"
+                     loading="lazy">
+                <p class="guide-note">
+                  <strong>A dash is not a zero anywhere on this page.</strong> A dash
+                  means nobody measured it; <code>0</code> means it was measured and was
+                  zero &mdash; a completed stream that returned no reasoning stores a
+                  real 0. The same rule covers keys: each attempt names the credential
+                  it used, and <strong>(no key available)</strong> is what you see when
+                  the whole pool was benched, rather than a key label invented after the
+                  fact. The Models page adds a measured chip per model &mdash; how often
+                  reasoning was requested over the last 7 days, and how often it came
+                  back &mdash; two independent facts.
                 </p>
                 <h4>When the numbers stop moving</h4>
                 <p>
@@ -1920,10 +2031,13 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                 <p>
                   Every value on the <strong>Limits &amp; Resilience</strong> tab
                   is a ceiling on one request, or what happens when a model will
-                  not honour one. It is six cards now, each saying what it
-                  decides: output and thinking budgets, deadlines, chain
-                  benching, provider retries, credential health, and
-                  diagnostics. Each field states what the value costs and the
+                  not honour one. It is six cards now behind a section rail that
+                  follows you down the page &mdash; <strong>Budgets</strong>,
+                  <strong>Deadlines</strong>, <strong>Chain benching</strong>,
+                  <strong>Retries &amp; throughput</strong>,
+                  <strong>Credential health</strong> and
+                  <strong>Diagnostics</strong> &mdash; each saying in one line
+                  what it decides. Each field states what the value costs and the
                   range it accepts, beside the box rather than at the end of the
                   paragraph.
                 </p>
@@ -1936,6 +2050,16 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   <strong>Providers</strong>, beside the desktop panel itself.
                   The token-optimizer controls moved earlier, to the
                   <a href="#guide-optimizer">Token Optimizer</a> page.
+                </p>
+                <h4>What one answer may cost</h4>
+                <p>
+                  <strong>Budgets</strong> bounds the tokens one reply may spend.
+                  <code>MAX_OUTPUT_TOKENS_CEILING</code> ships at
+                  <strong>131,072</strong> and is the cap on the room a
+                  <a href="#guide-reasoning">reasoning</a> request is given;
+                  blank falls back to that default and <code>0</code> means no
+                  ceiling at all, which is a real choice rather than the absence
+                  of one.
                 </p>
                 <h4>When to stop waiting</h4>
                 <p>
@@ -1969,8 +2093,20 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   default each model gets 60 s, not 120 — and the box reading
                   120 is inert for that route. The Deadlines card computes this
                   for your own routes, one row each, and says which total budget
-                  would honour the number you asked for. If the figure surprises
-                  you, either shorten the chain or raise the total budget.
+                  would honour the number you asked for &mdash; <em>a total budget
+                  of 1200s would give every model the 120s you asked for</em>. If
+                  the figure surprises you, either shorten the chain or raise the
+                  total budget.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-limits-calculator.png"
+                     alt="Deadlines card: the per-route first-token allowance calculator"
+                     loading="lazy">
+                <p class="guide-note">
+                  It answers one question exactly &mdash; what each model on this
+                  route is allowed before the handover &mdash; and deliberately
+                  does not model time already spent, a first model that was
+                  retried, benched models shortening the chain, or the reasoning
+                  answer deadline taking over.
                 </p>
                 <h4>When to stop trying a model</h4>
                 <ul>
@@ -1985,10 +2121,11 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                     (with a minimum number of samples first, so one bad minute
                     cannot bench anything); <code>legacy</code> counts
                     consecutive failures instead. The controls the unselected
-                    mode does not use stay on the page, dimmed and disabled, and
-                    are not saved — so switching mode drops a pending edit to
-                    them from the next Apply, and the unsaved-change counter
-                    drops with it.
+                    mode does not use stay on the page, dimmed and disabled, each
+                    saying why beside itself — <em>Not used while eject mode is
+                    legacy</em>, <em>Not used while benching is off</em>. They are
+                    not saved, so switching mode drops a pending edit to them from
+                    the next Apply, and the unsaved-change counter drops with it.
                   </li>
                   <li>
                     <strong>How long a benched model sits out</strong> applies in
@@ -2002,6 +2139,26 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   the <strong>Model Config</strong> page — it is a routing
                   decision, and it belongs beside the chains it ends. The
                   Benching card links to it.
+                </p>
+                <h4>What a key is judged on</h4>
+                <p>
+                  The <strong>Credential health</strong> card holds the only two
+                  penalties a key can earn.
+                  <code>CREDENTIAL_LOCKOUT_TIERS</code> is the ladder a
+                  <strong>401/403</strong> walks — <code>300,3600,86400</code>,
+                  so five minutes, then an hour, then a day for each successive
+                  auth failure — and <code>RATE_LIMIT_COOLDOWN_SECONDS</code> is
+                  only the fallback for a <strong>429</strong> that arrives
+                  without a <code>Retry-After</code> header, capped at an hour
+                  either way. Nothing else on this page benches a key; see
+                  <a href="#guide-rotation">Use more than one key safely</a>.
+                </p>
+                <p class="guide-note">
+                  <code>CREDENTIAL_CIRCUIT_THRESHOLD</code> no longer exists —
+                  the breaker it configured was removed along with the fixed
+                  cooldown ladder and half-open probing. A stale line for it in
+                  <code>~/.fcc/.env</code> is ignored rather than fatal, but it
+                  is doing nothing; delete it.
                 </p>
                 <h4>What to keep</h4>
                 <p>
@@ -2044,10 +2201,26 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   same keys serve every model in your chain and none of those is the key's
                   doing. A model that will not answer is handed to the next
                   <em>model</em> on the chain instead. How long each step of that
-                  ladder lasts is <code>CREDENTIAL_LOCKOUT_TIERS</code>, on the
-                  <a href="#guide-limits">Limits &amp; Resilience</a> page, which
-                  also spells the ladder out in words; the policy itself is the
-                  rotation select on each provider's own card.
+                  ladder lasts is <code>CREDENTIAL_LOCKOUT_TIERS</code>
+                  (<code>300,3600,86400</code>) on the
+                  <a href="#guide-limits">Limits &amp; Resilience</a> page, and
+                  <code>RATE_LIMIT_COOLDOWN_SECONDS</code> beside it is used only
+                  when a 429 arrives with no header to obey; the policy itself is
+                  the rotation select on each provider's own card.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-credential-health.png"
+                     alt="Credential health card: lockout ladder and rate-limit cooldown"
+                     loading="lazy">
+                <p class="guide-note">
+                  <strong>Rotating away is not the same as marking a key
+                  bad.</strong> Auth failures, 429s and connection errors move to
+                  the next key; anything else raises and the request moves to the
+                  next model, so a pool cannot be emptied by a model that is
+                  simply broken. The deliberate cost: a key failing 5xx or
+                  transport on every request is retried once per request rather
+                  than benched, because the failures that could have identified it
+                  were the same ones emptying healthy pools thousands of times a
+                  day. A 401/403 still locks it out.
                 </p>
 
                 <h3 id="guide-updates">Update the server</h3>
