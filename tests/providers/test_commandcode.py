@@ -2,24 +2,33 @@
 
 import json
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
+from my_claude_code.application.errors import InvalidRequestError
+from my_claude_code.config.model_overrides import ModelParameterOverrides
 from my_claude_code.config.provider_catalog import (
     COMMANDCODE_DEFAULT_BASE,
     PROVIDER_CATALOG,
 )
+from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
-from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.commandcode import (
     CommandCodeProvider,
     extract_commandcode_model_infos,
     is_anthropic_messages_model,
 )
+from my_claude_code.providers.commandcode.client import _PROFILE as _COMMANDCODE_PROFILE
 from my_claude_code.providers.model_listing import ModelListResponseError
+from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
+from my_claude_code.providers.openai_chat.request_policy import (
+    build_openai_chat_request_body,
+)
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.runtime.factory import create_provider
 from my_claude_code.providers.runtime.rotating import RotatingProvider
@@ -248,3 +257,170 @@ async def test_non_claude_models_delegate_to_chat_completions() -> None:
 
 async def _events(value: str) -> AsyncIterator[str]:
     yield value
+
+
+def _chat_body(model: str, reasoning: ReasoningPolicy, **overrides: object) -> dict:
+    data: dict[str, object] = {
+        "model": model,
+        "max_tokens": 32000,
+        "messages": [{"role": "user", "content": "ping"}],
+        "stream": True,
+    }
+    data.update(overrides)
+    return build_openai_chat_request_body(
+        MessagesRequest.model_validate(data),
+        reasoning=reasoning,
+        policy=_COMMANDCODE_PROFILE.request_policy,
+        postprocessors=_COMMANDCODE_PROFILE.request_postprocessors,
+        provider_id="commandcode",
+        overrides=ModelParameterOverrides(),
+    )
+
+
+def test_effort_max_sends_the_gateway_effort_enum() -> None:
+    """The probed dialect: a top-level ``reasoning_effort`` string, nothing else."""
+    body = _chat_body(
+        "minimax/minimax-m3-free",
+        ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+    )
+
+    assert body["reasoning_effort"] == "max"
+    # The gateway parses none of these: it returns 200 and silently discards
+    # them, so emitting one would look like reasoning was requested when it
+    # was not.
+    assert "reasoning" not in body
+    assert "thinking" not in body
+    assert "chat_template_kwargs" not in body.get("extra_body", {})
+
+
+@pytest.mark.parametrize(
+    ("effort", "wire"),
+    [
+        (ReasoningEffort.MINIMAL, "low"),
+        (ReasoningEffort.LOW, "low"),
+        (ReasoningEffort.MEDIUM, "medium"),
+        (ReasoningEffort.HIGH, "high"),
+        (ReasoningEffort.XHIGH, "xhigh"),
+        (ReasoningEffort.MAX, "max"),
+    ],
+)
+def test_every_effort_encodes_inside_the_published_enum(
+    effort: ReasoningEffort, wire: str
+) -> None:
+    """The gateway 400s on anything outside low|medium|high|xhigh|max."""
+    body = _chat_body("z-ai/glm-5.3-flash", ReasoningPolicy.on(effort=effort))
+
+    assert body["reasoning_effort"] == wire
+    assert wire in {"low", "medium", "high", "xhigh", "max"}
+
+
+def test_effort_clamped_to_a_model_vocabulary_still_encodes() -> None:
+    """The 5.68.1 resolution ladder can hand back a clamped effort."""
+    for effort in (ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH):
+        body = _chat_body("minimax/minimax-m3-free", ReasoningPolicy.on(effort=effort))
+        assert body["reasoning_effort"] == effort.value
+
+
+def test_reasoning_off_sends_no_reasoning_field() -> None:
+    """Command Code publishes no 'off' rung; "none" and "minimal" both 400."""
+    body = _chat_body("z-ai/glm-5.3-flash", ReasoningPolicy.off())
+
+    assert "reasoning_effort" not in body
+    assert "reasoning" not in body
+    assert "thinking" not in body
+
+
+def test_reasoning_on_without_an_effort_keeps_the_gateway_default() -> None:
+    """Bare requests already reason the most; naming a rung would reduce it."""
+    body = _chat_body("z-ai/glm-5.3-flash", ReasoningPolicy.on())
+
+    assert "reasoning_effort" not in body
+
+
+def test_caller_extra_body_reaches_the_gateway_but_cannot_forge_reasoning() -> None:
+    body = _chat_body(
+        "z-ai/glm-5.3-flash",
+        ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+        extra_body={"provider_hint": "commandcode"},
+    )
+    assert body["extra_body"] == {"provider_hint": "commandcode"}
+
+    with pytest.raises(InvalidRequestError):
+        _chat_body(
+            "z-ai/glm-5.3-flash",
+            ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+            extra_body={"reasoning_effort": "max"},
+        )
+
+
+def test_reasoning_is_read_and_replayed_on_the_field_it_arrives_on() -> None:
+    """The gateway streams ``reasoning`` deltas, never ``<think>`` tags."""
+    assert _COMMANDCODE_PROFILE.reasoning_delta_field == "reasoning"
+    assert (
+        _COMMANDCODE_PROFILE.request_policy.reasoning_replay
+        is ReasoningReplayMode.REASONING
+    )
+
+    delta = SimpleNamespace(reasoning="thought", reasoning_content=None)
+    assert _COMMANDCODE_PROFILE.reasoning_delta(delta) == "thought"
+
+    body = _chat_body(
+        "z-ai/glm-5.3-flash",
+        ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+        messages=[
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "earlier thought"},
+                    {"type": "text", "text": "earlier answer"},
+                ],
+            },
+            {"role": "user", "content": "again"},
+        ],
+    )
+    assistant = next(m for m in body["messages"] if m["role"] == "assistant")
+    assert assistant["reasoning"] == "earlier thought"
+    assert "reasoning_content" not in assistant
+    assert "<think>" not in json.dumps(assistant)
+
+
+def _profile_body(name: str) -> dict:
+    profile = OPENAI_CHAT_PROFILES[name]
+    return build_openai_chat_request_body(
+        MessagesRequest.model_validate(
+            {
+                "model": "some-model",
+                "max_tokens": 128,
+                "messages": [{"role": "user", "content": "ping"}],
+            }
+        ),
+        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+        policy=profile.request_policy,
+        postprocessors=profile.request_postprocessors,
+        provider_id=name,
+        overrides=ModelParameterOverrides(),
+    )
+
+
+def test_untouched_providers_keep_their_own_reasoning_shape() -> None:
+    """Regression guard: this change is scoped to Command Code alone.
+
+    Two kinds of neighbour are pinned -- providers that send no reasoning at
+    all, and providers that send a *different* dialect -- so a future edit to
+    the shared encoders cannot quietly spread Command Code's ``reasoning_effort``
+    across the fleet, nor erase somebody else's shape.
+    """
+    for name in ("bedrock", "cline"):
+        body = _profile_body(name)
+        assert "reasoning_effort" not in body
+        assert "reasoning" not in body
+        assert "reasoning_effort" not in body.get("extra_body", {})
+        assert "reasoning" not in body.get("extra_body", {})
+
+    # Ollama: its own named-effort vocabulary, which tops out at "max".
+    assert _profile_body("ollama")["reasoning_effort"] == "max"
+    # Zenmux: an extra_body reasoning *object*, which Command Code's gateway
+    # would accept and silently discard.
+    assert _profile_body("zenmux")["extra_body"]["reasoning"] == {"effort": "xhigh"}
+    assert "reasoning_effort" not in _profile_body("zenmux")

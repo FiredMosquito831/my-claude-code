@@ -6,25 +6,67 @@ from collections.abc import AsyncIterator
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
-from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningEffort,
+    ReasoningPolicy,
+)
 from my_claude_code.providers.anthropic_messages import AnthropicMessagesProvider
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.openai_chat import (
-    NO_REASONING,
+    NamedEffortReasoning,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
+    validate_extra_body_does_not_override_canonical_fields,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .models import extract_commandcode_model_infos, is_anthropic_messages_model
 
+_EFFORTS = (
+    # Command Code publishes no effort vocabulary of its own: every model row
+    # in /v1/models carries a null ``supported_parameters``. The vocabulary
+    # below is the one the gateway itself names when it rejects an unknown
+    # value -- "Invalid option: expected one of low|medium|high|xhigh|max" --
+    # so it is the documented enum for the whole gateway, not a per-model guess.
+    # FCC's MINIMAL has no counterpart there ("minimal" is rejected) and folds
+    # onto the nearest representable rung.
+    (ReasoningEffort.MINIMAL, "low"),
+    (ReasoningEffort.LOW, "low"),
+    (ReasoningEffort.MEDIUM, "medium"),
+    (ReasoningEffort.HIGH, "high"),
+    (ReasoningEffort.XHIGH, "xhigh"),
+    (ReasoningEffort.MAX, "max"),
+)
+
 _PROFILE = OpenAIChatProfile(
     OpenAIChatRequestPolicy(
         provider_name="COMMANDCODE",
-        reasoning_replay=ReasoningReplayMode.THINK_TAGS,
+        # The gateway streams reasoning as OpenRouter-style ``reasoning``
+        # deltas, never as ``<think>`` tags in ``content``, so assistant
+        # history must be replayed through the same field it was received on.
+        reasoning_replay=ReasoningReplayMode.REASONING,
+        include_extra_body=True,
+        extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
     ),
-    NO_REASONING,
+    # ``reasoning_effort`` is the only reasoning knob this gateway parses. A
+    # top-level ``reasoning`` object, a ``thinking`` object and
+    # ``chat_template_kwargs`` are all accepted and silently discarded -- a
+    # deliberately invalid ``reasoning: {"effort": "bogus_value"}`` still
+    # returns 200, while an invalid ``reasoning_effort`` returns 400.
+    #
+    # No disabled value: the enum has no "none"/"off" rung and the gateway
+    # 400s on both, so reasoning OFF sends no reasoning field at all. No
+    # enabled value either: with nothing sent, the gateway's own default is
+    # already its most verbose reasoning setting, so inventing a rung for
+    # "on, but no effort named" would reduce reasoning rather than request it.
+    NamedEffortReasoning(_EFFORTS),
+    # Delta field, not the ``reasoning_content`` default: the gateway emits
+    # ``reasoning`` (plus ``reasoning_details``). Reading the wrong field is
+    # why reasoning that did arrive was dropped before reaching the client.
+    reasoning_delta_field="reasoning",
+    reasoning_delta_fallback_field="reasoning_content",
 )
 
 
