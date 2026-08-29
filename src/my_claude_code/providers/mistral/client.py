@@ -28,6 +28,12 @@ _REQUEST_POLICY = OpenAIChatRequestPolicy(
     provider_name="MISTRAL",
     reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
 )
+# 2026-08-29 audit: ``NO_REASONING`` here is deliberate, not a dead wire.
+# Mistral's reasoning shape is applied by ``apply_mistral_reasoning_request_shape``
+# inside ``_build_request_body`` below, together with the once-only retry that
+# strips it again when a non-reasoning model rejects it -- a pairing the profile
+# encoder cannot express. models.dev reports reasoning on only 7 of 34 Mistral
+# rows, which is why that retry exists. An encoder here would never be consulted.
 _PROFILE = OpenAIChatProfile(_REQUEST_POLICY, NO_REASONING)
 
 

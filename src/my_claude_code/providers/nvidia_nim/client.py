@@ -41,6 +41,13 @@ from .tool_schema import (
 _DEGRADED_FUNCTION_STATE = "degraded function cannot be invoked"
 _PROFILE = OpenAIChatProfile(
     NIM_REQUEST_POLICY,
+    # 2026-08-29 audit: deliberate, not a dead wire. NIM's reasoning control is
+    # the chat-template boolean pair written by ``build_nim_request_body`` in
+    # ``.request_options`` (``chat_template_kwargs.thinking`` /
+    # ``enable_thinking``, plus ``reasoning_budget``), which this provider uses
+    # instead of the profile postprocessors. The operator's request log confirms
+    # it reaches the model: 18,744 of 24,620 NIM requests (76.1%) came back with
+    # thinking. An encoder here would be dead configuration that reads as live.
     NO_REASONING,
 )
 

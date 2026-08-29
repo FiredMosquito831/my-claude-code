@@ -181,7 +181,20 @@ def _policy(
     )
 
 
+# 2026-08-29 NO_REASONING audit. Every profile below that still carries
+# ``NO_REASONING`` was checked against, in order: the operator's request log
+# (228,104 rows), the models.dev capability index, the provider's own
+# ``/models`` payload, and -- where a credential exists -- a live dialect probe
+# that sends a deliberately invalid value so the gateway names its own accepted
+# enum. ``NO_REASONING`` is a *verdict*, not a default: each one is annotated
+# with what was checked and why nothing is sent. Do not re-run this audit
+# without new evidence, and do not wire a profile from models.dev alone --
+# that index describes what a *model* can do, not what a given gateway parses.
 OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
+    # 2026-08-29 audit: correctly NO_REASONING. Codestral is Mistral's
+    # completion/FIM family; models.dev has no ``mistral_codestral`` bucket at
+    # all, and the ``mistral`` bucket reports reasoning on 7 of 34 rows, none of
+    # them Codestral. No credential to probe with. There is nothing to request.
     "mistral_codestral": OpenAIChatProfile(
         _policy(
             "CODESTRAL",
@@ -191,15 +204,43 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         NO_REASONING,
     ),
+    # 2026-08-29: WIRED. OpenCode Zen reasons by default -- 12,068 of 47,152
+    # logged requests carried thinking while this profile sent nothing -- which
+    # is why it looked healthy. It was not: the gateway *does* parse
+    # ``reasoning_effort``, so a client asking for a particular effort, or for
+    # reasoning OFF, was silently ignored. A deliberately invalid value is
+    # rejected with the enum spelled out, identically across five models on two
+    # different upstream stacks: "reasoning_effort: Invalid option: expected one
+    # of max|xhigh|high|medium|low|minimal|none". That is exactly FCC's own
+    # effort ladder plus a "none" rung, so the mapping is 1:1 and OFF has a real
+    # wire value. A top-level ``reasoning`` object, a ``thinking`` object and
+    # ``chat_template_kwargs`` are all accepted and silently discarded -- a
+    # deliberately invalid ``reasoning: {"effort": "bogus_value"}`` still
+    # returns 200 -- so none of those is the dialect.
     "opencode": OpenAIChatProfile(
         _policy(
             "OPENCODE",
-            ReasoningReplayMode.THINK_TAGS,
+            # Reasoning arrives as ``reasoning_content`` deltas, never as
+            # ``<think>`` tags in ``content``, so assistant history is replayed
+            # through the field it was received on. Probed: an assistant turn
+            # carrying ``reasoning_content`` is accepted (HTTP 200).
+            ReasoningReplayMode.REASONING_CONTENT,
             include_extra_body=True,
             extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
-        NO_REASONING,
+        NamedEffortReasoning(_ALL_EFFORTS, disabled_value="none"),
     ),
+    # 2026-08-29 audit: SUSPECTED but unproven, deliberately unchanged. Same
+    # host as ``opencode`` (``/zen/go/v1``) and models.dev reports reasoning on
+    # all 33 rows of its bucket, so the sibling's ``reasoning_effort`` enum very
+    # probably applies here too. It could not be confirmed: the Go roster has no
+    # free tier, so every probe -- including the invalid-value probe that makes
+    # the sibling name its enum -- is rejected with HTTP 401 CreditsError before
+    # any body validation runs. The request log holds 9 rows on one model, all
+    # without thinking, which is far too small to separate "never asked" from
+    # "did not reason". Wiring this from the sibling's evidence would be a
+    # guess, and a wrong encoder 400s a provider that works today. Revisit with
+    # credit on the account.
     "opencode_go": OpenAIChatProfile(
         _policy(
             "OPENCODE_GO",
@@ -218,6 +259,14 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         ReasoningObject(_ALL_EFFORTS),
     ),
+    # 2026-08-29 audit: correctly NO_REASONING. HF Inference Providers routes to
+    # many independent third-party backends and models.dev shows no single
+    # vocabulary behind it: of 71 rows, 38 publish an empty
+    # ``reasoning_options``, 16 publish none at all, and the remainder split
+    # between low|medium|high and low|high|max. One encoder cannot be right for
+    # that set, and the project forbids branching on model names to pick between
+    # them. No credential to probe with; ``extra_body`` passes through for a user
+    # who knows their backend.
     "huggingface": OpenAIChatProfile(
         _policy(
             "HUGGINGFACE",
@@ -288,6 +337,16 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             disabled={"type": "disabled"},
         ),
     ),
+    # 2026-08-29 audit: SUSPECTED but unprobeable, deliberately unchanged.
+    # models.dev reports reasoning on all 4 ``kimi-for-coding`` rows and the
+    # sibling ``kimi`` profile above uses a ``thinking`` object, so the same
+    # dialect is plausible. It could not be checked: with the operator's
+    # KIMI_CODING credential, ``GET /coding/v1/models`` and every
+    # ``POST /chat/completions`` variant -- the bare body included -- return
+    # HTTP 500 "The server had an error while processing your request", so the
+    # endpoint answers nothing at all, valid or invalid. Copying the sibling's
+    # ``thinking`` object on that basis would be a guess against a Coding-Plan
+    # endpoint already known to differ from the main API elsewhere.
     "kimi_coding": OpenAIChatProfile(
         _policy(
             "KIMI_CODING",
@@ -374,6 +433,14 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             enabled_value="high",
         ),
     ),
+    # 2026-08-29 audit: unprobeable, deliberately unchanged. Novita hosts 155
+    # models from many vendors; models.dev reports reasoning on 57 of 107 rows
+    # and their controls disagree (50 publish no options, 23 a bare toggle, 2 a
+    # low|medium|high effort), so there is no provider-wide vocabulary to
+    # encode. The operator's credential has no balance and Novita bills before
+    # it validates -- every dialect, invalid ones included, returns the same
+    # HTTP 403 NOT_ENOUGH_BALANCE -- so the invalid-value trick yields nothing
+    # here.
     "novita": OpenAIChatProfile(
         _policy(
             "NOVITA",
@@ -383,6 +450,18 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         NO_REASONING,
     ),
+    # 2026-08-29 audit: SUSPECTED but unprobeable, deliberately unchanged. This
+    # is the strongest unwired candidate in the table: models.dev publishes an
+    # effort vocabulary for all 13 ``cline-pass`` rows, 11 of them the same
+    # none|low|medium|high|xhigh set, and the profile already reads
+    # OpenRouter-style ``reasoning`` deltas and structured
+    # ``reasoning_details``, which is the shape a ``reasoning`` object usually
+    # accompanies. What is missing is any evidence of which knob the Cline Pass
+    # gateway itself parses: models.dev states model capability, not gateway
+    # dialect, and the two differed on every gateway probed in this audit --
+    # OpenCode parses only ``reasoning_effort`` and silently discards
+    # ``reasoning``; Command Code does the same. There is no CLINE credential on
+    # this machine, so nothing can be sent. Probe before wiring.
     "cline": OpenAIChatProfile(
         _policy(
             "CLINE",
@@ -413,6 +492,11 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             disabled={"type": "disabled"},
         ),
     ),
+    # 2026-08-29 audit: unassessable, deliberately unchanged. models.dev has no
+    # ``qwencloud`` bucket and there is no credential to probe with. The
+    # DashScope-family control is ``enable_thinking``, which the ``alibaba`` note
+    # below explains is rejected outright by some models on these endpoints --
+    # the same trade-off applies here, and so does the same resolution.
     "qwencloud": OpenAIChatProfile(
         _policy(
             "QWENCLOUD",
@@ -423,6 +507,9 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         NO_REASONING,
     ),
+    # 2026-08-29 audit: unassessable, deliberately unchanged. As ``qwencloud``
+    # above -- no models.dev bucket, no credential, and a DashScope
+    # ``enable_thinking`` control that 400s on part of the roster.
     "qwencloud_coding": OpenAIChatProfile(
         _policy(
             "QWENCLOUD_CODING",
@@ -432,6 +519,12 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         NO_REASONING,
     ),
+    # 2026-08-29 audit: correctly NO_REASONING. models.dev reports reasoning on
+    # only 6 of 12 xAI rows, and even among those the vocabulary is not shared:
+    # 2 publish low|medium|high|xhigh, 1 publishes low|medium|high and 3 publish
+    # nothing. Sending ``reasoning_effort`` unconditionally would 400 every
+    # request on the non-reasoning half of the roster, and the project forbids
+    # branching on model names to avoid that. No credential to probe with.
     "xai": OpenAIChatProfile(
         _policy(
             "XAI",
@@ -447,6 +540,12 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             aliases_field="aliases",
         ),
     ),
+    # 2026-08-29 audit: correctly NO_REASONING. Together is a multi-vendor host:
+    # models.dev reports reasoning on 26 of 37 rows and, among those, 11 publish
+    # no options, 10 a bare toggle and 3 a high|max effort -- no provider-wide
+    # vocabulary to encode. The return path is already correct: this profile
+    # reads ``reasoning`` deltas and replays on the same field. No credential to
+    # probe with.
     "together": OpenAIChatProfile(
         _policy(
             "TOGETHER",
@@ -487,6 +586,14 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             non_thinking_tag="non-reasoning",
         ),
     ),
+    # 2026-08-29 audit: unprobeable, deliberately unchanged. SiliconFlow's
+    # control is a numeric ``thinking_budget``, not an effort enum: of the 24
+    # reasoning rows models.dev publishes, 19 state a budget_tokens range
+    # (min 128, max 32768) and not one states an effort vocabulary. No existing
+    # encoder emits a bare top-level numeric budget under that name --
+    # ``EffortOrThinkingBudgetReasoning`` nests it inside a ``thinking`` object
+    # and ``LlamaCppReasoning`` uses ``thinking_budget_tokens`` -- and inventing
+    # one is outside the scope of an audit. No credential to probe with.
     "siliconflow": OpenAIChatProfile(
         _policy(
             "SILICONFLOW",
@@ -520,6 +627,13 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             required_path_values=((("architecture", "modality"), ("text->text",)),),
         ),
     ),
+    # 2026-08-29 audit: correctly NO_REASONING. models.dev reports reasoning on
+    # 12 of 14 rows but publishes an effort vocabulary for none of them -- 10 are
+    # a bare toggle and the rest state nothing -- so there is no scale to map
+    # onto, and a toggle is what the upstream already does by default. Chutes
+    # serves open-weight models whose thinking is chat-template driven; the
+    # profile passes ``extra_body`` through for a user who knows their model's
+    # kwarg. No credential to probe with.
     "chutes": OpenAIChatProfile(
         _policy(
             "CHUTES",
@@ -609,6 +723,13 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         reasoning_delta_fallback_field="reasoning_content",
         structured_reasoning_details=True,
     ),
+    # 2026-08-29 audit: correctly NO_REASONING. Bedrock fronts 120 models from
+    # nine vendors behind one OpenAI-compatible shim; models.dev reports
+    # reasoning on 90 of them under mutually incompatible controls (Anthropic
+    # budget_tokens, Nova toggles, OpenAI-style efforts). There is no
+    # provider-wide knob, and a request addresses an inference profile whose
+    # vendor is not derivable without branching on the model id. No credential
+    # to probe with.
     "bedrock": OpenAIChatProfile(
         _policy(
             "BEDROCK",
@@ -629,6 +750,10 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         NamedEffortReasoning(_LOW_MEDIUM_HIGH, enabled_value="medium"),
     ),
+    # 2026-08-29 audit: unassessable, deliberately unchanged. models.dev has no
+    # ``tokenrouter`` bucket, TokenRouter publishes no reasoning documentation,
+    # and there is no credential on this machine. Nothing can be established
+    # either way, so the profile is left exactly as it was.
     "tokenrouter": OpenAIChatProfile(
         _policy(
             "TOKENROUTER",
@@ -646,6 +771,13 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
     # cannot check without a subscription. An unsent control costs thinking on
     # some models; a wrongly-sent one 400s every request. ``extra_body`` passes
     # through, so a user who knows their model supports it can send it.
+    #
+    # 2026-08-29 audit: re-confirmed, and now quantified. models.dev reports
+    # reasoning on 30 of 55 ``alibaba`` rows, 48 of 87 ``alibaba-cn`` and 9 of 12
+    # on each Coding Plan bucket, and the control it publishes for them is a
+    # toggle plus a numeric budget -- never an effort enum -- so roughly half of
+    # each roster would 400 on an unconditional control and the other half has
+    # no scale to map an effort onto. No credential to probe with.
     "alibaba": OpenAIChatProfile(
         _policy(
             "ALIBABA",
@@ -693,6 +825,10 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
     # ``max_completion_tokens`` rather than ``max_tokens``: the o-series and
     # gpt-5 deployments reject the older field outright, and Azure accepts the
     # newer one across the Chat Completions models that support either.
+    # 2026-08-29 audit: re-confirmed correct, with a number on the trade-off
+    # above -- models.dev reports reasoning on 52 of 84 ``azure`` rows, so
+    # roughly a third of a customer's possible deployments would 400 outright on
+    # an unconditional ``reasoning_effort``.
     "azure_openai": OpenAIChatProfile(
         _policy(
             "AZURE_OPENAI",
@@ -750,6 +886,16 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
 
 # Fallback profile for dynamic custom providers: plain OpenAI-compatible Chat
 # Completions with no provider-specific quirks.
+#
+# 2026-08-29 audit: correctly NO_REASONING, and the one profile in this file
+# where that is not even a close call. This profile backs every custom and
+# dynamically configured provider, so the endpoint behind it is unknown by
+# construction: it may be vLLM, llama.cpp, a corporate gateway or a vendor API,
+# and the audit above found that even *named* gateways disagree about which
+# reasoning knob they parse. Sending any of them here would 400 an unknown
+# share of user-configured endpoints in exchange for reasoning on the rest.
+# ``include_extra_body`` is the escape hatch: a user who knows their endpoint
+# can send its control verbatim.
 GENERIC_OPENAI_PROFILE = OpenAIChatProfile(
     _policy(
         "CUSTOM",

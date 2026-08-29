@@ -15,7 +15,6 @@ from my_claude_code.core.anthropic import (
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import (
     ReasoningControl,
-    ReasoningEffort,
     ReasoningPolicy,
 )
 from my_claude_code.providers.openai_chat import (
@@ -429,9 +428,16 @@ def _apply_deepseek_chat_extras(
     if policy.control is ReasoningControl.OFF:
         extra_body["thinking"] = {"type": "disabled"}
         return
-    if policy.effort in {ReasoningEffort.XHIGH, ReasoningEffort.MAX}:
-        body["reasoning_effort"] = "max"
-    elif policy.effort is not None:
-        body["reasoning_effort"] = "high"
+    # 2026-08-29: send the effort the caller actually asked for. This used to
+    # collapse the whole ladder onto two rungs -- "max" for XHIGH/MAX and "high"
+    # for everything else -- so a request for MINIMAL bought HIGH's latency and
+    # tokens, and MEDIUM and HIGH were indistinguishable. DeepSeek names its own
+    # enum when it rejects an invalid one: "reasoning_effort: unknown variant
+    # `bogus_value`, expected one of `none`, `minimal`, `low`, `medium`, `high`,
+    # `xhigh`, `max`". That is FCC's :class:`ReasoningEffort` ladder exactly,
+    # value for value, so the translation is the identity and no per-model
+    # branching is needed to pick it.
+    if policy.effort is not None:
+        body["reasoning_effort"] = policy.effort.value
     elif policy.requests_reasoning:
         extra_body["thinking"] = {"type": "enabled"}

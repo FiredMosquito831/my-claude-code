@@ -23,6 +23,14 @@ from .tool_choice import (
 
 _PROFILE = OpenAIChatProfile(
     DEEPSEEK_REQUEST_POLICY,
+    # 2026-08-29 audit: this ``NO_REASONING`` is deliberate and is *not* the
+    # "profile says nothing, so nothing is sent" defect it resembles.
+    # ``DeepSeekProvider`` overrides ``_build_request_body`` and never routes
+    # through ``OpenAIChatProfile.request_postprocessors``, so this encoder is
+    # never consulted at all; DeepSeek's reasoning is encoded by
+    # ``_apply_deepseek_chat_extras`` in ``.compat``, which owns the wire shape
+    # together with the tool-follow-up rules that have to disable thinking.
+    # Putting an encoder here would be dead configuration that reads as live.
     NO_REASONING,
 )
 
