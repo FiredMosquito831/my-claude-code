@@ -527,7 +527,6 @@
           </section>
 
           <section id="view-requests" class="admin-view" data-view="requests" hidden>
-            <div id="requestsSections" hidden></div>
             <div class="observability-heading">
               <div>
                 <p class="eyebrow">Local observability</p>
@@ -896,6 +895,11 @@
                 </div>
               </div>
             </div>
+            <div
+              id="requestsSections"
+              class="form-sections"
+              aria-label="Request log configuration"
+            ></div>
           </section>
 
           <section id="view-optimizer" class="admin-view" data-view="optimizer" hidden>
@@ -1135,16 +1139,30 @@
             </div>
           </section>
           <section id="view-limits" class="admin-view" data-view="limits" hidden>
-            <p class="view-intro">
-              What My Claude Code waits for, keeps, and records. Every value here is a
-              trade-off: how long a failing model may hold a request, and how
-              much history survives on disk. Each field says what it costs.
-            </p>
-            <div
-              id="limitsSections"
-              class="form-sections"
-              aria-label="Limits configuration"
-            ></div>
+            <div class="toc-layout">
+              <nav class="toc-rail" id="limitsToc" aria-label="Limits sections">
+                <p class="eyebrow toc-rail-eyebrow">On this page</p>
+                <a href="#section-budgets">Budgets</a>
+                <a href="#section-deadlines">Deadlines</a>
+                <a href="#section-benching">Chain benching</a>
+                <a href="#section-provider_retries">Retries &amp; throughput</a>
+                <a href="#section-credential_health">Credential health</a>
+                <a href="#section-diagnostics">Diagnostics</a>
+              </nav>
+              <div class="toc-body">
+                <p class="view-intro">
+                  Every value here is a ceiling on one request, or what happens
+                  when a model will not honour one. Request-log storage moved to
+                  <strong>Analytics</strong>; desktop tray timing moved to
+                  <strong>Providers</strong>.
+                </p>
+                <div
+                  id="limitsSections"
+                  class="form-sections"
+                  aria-label="Limits configuration"
+                ></div>
+              </div>
+            </div>
           </section>
           <section id="view-guide" class="admin-view" data-view="guide" hidden>
             <div class="guide">
@@ -1161,7 +1179,7 @@
                 <a href="#guide-analytics">See what happened</a>
                 <a href="#guide-deploy">Desktop &amp; RTK</a>
                 <a href="#guide-optimizer">Token Optimizer page</a>
-                <a href="#guide-limits">Set the limits</a>
+                <a href="#guide-limits">Limits &amp; resilience</a>
                 <a href="#guide-rotation">Rotate keys safely</a>
                 <a href="#guide-updates">Update the server</a>
                 <a href="#guide-security">Lock it down</a>
@@ -1842,14 +1860,41 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   These controls used to live on <strong>Limits</strong>. They are on this
                   page now, next to the figures that tell you whether they helped.
                 </p>
-
-                <h3 id="guide-limits">Set the limits</h3>
+                <h4>What the log keeps</h4>
                 <p>
-                  Everything on the <strong>Limits</strong> tab is a trade-off
-                  between how long a failing model may hold a live request and
-                  how much history survives on disk. Each field states what the
-                  value costs and the range it accepts. The token-optimizer
-                  controls used to be here; they now live on the
+                  The <strong>Request log storage</strong> card at the bottom of
+                  this page decides what these tables can ever show.
+                  <strong>Requests to keep</strong> is the retention cap: the
+                  newest N requests are kept and older rows are deleted as new
+                  ones arrive. All-time counters keep counting either way, so
+                  raising or lowering it never changes your lifetime totals.
+                  Bodies are about 99% of the stored bytes, so
+                  <strong>Store prompts and replies</strong> is the setting that
+                  decides whether content search works at all, and
+                  <strong>Compress stored text</strong> applies to new rows —
+                  run <code>mcc-compact-log</code> (legacy alias
+                  <code>fcc-compact-log</code>) to convert existing history.
+                </p>
+
+                <h3 id="guide-limits">Limits &amp; resilience</h3>
+                <p>
+                  Every value on the <strong>Limits &amp; Resilience</strong> tab
+                  is a ceiling on one request, or what happens when a model will
+                  not honour one. It is six cards now, each saying what it
+                  decides: output and thinking budgets, deadlines, chain
+                  benching, provider retries, credential health, and
+                  diagnostics. Each field states what the value costs and the
+                  range it accepts, beside the box rather than at the end of the
+                  paragraph.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-limits.png"
+                     alt="Limits and resilience settings" loading="lazy">
+                <p class="guide-note">
+                  Two cards left this page. Request-log storage is on
+                  <a href="#guide-analytics">Analytics</a>, beside the numbers it
+                  bounds; desktop tray and window timing is on
+                  <strong>Providers</strong>, beside the desktop panel itself.
+                  The token-optimizer controls moved earlier, to the
                   <a href="#guide-optimizer">Token Optimizer</a> page.
                 </p>
                 <h4>When to stop waiting</h4>
@@ -1872,30 +1917,57 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                     started no fallback can replace it, but it can still stop.
                   </li>
                   <li>
-                    <strong>Bench a model after</strong> — consecutive failures
-                    before routing skips a model, so a request stops re-paying a
-                    dead model's timeout on its way to a healthy one. A chain is
-                    never emptied: if every model on a route is benched they are
-                    tried in order anyway.
-                  </li>
-                  <li>
                     <strong>Retries before the chain</strong> — attempts against
                     one model on a 429 or 5xx before the next model is tried.
                     Each retry waits longer than the last.
                   </li>
                 </ul>
+                <p>
+                  The first-token deadline is a <em>ceiling</em>, not an
+                  allowance. A request's total budget is divided by the number
+                  of models still to try, so on a ten-model chain with the 600 s
+                  default each model gets 60 s, not 120 — and the box reading
+                  120 is inert for that route. The Deadlines card computes this
+                  for your own routes, one row each, and says which total budget
+                  would honour the number you asked for. If the figure surprises
+                  you, either shorten the chain or raise the total budget.
+                </p>
+                <h4>When to stop trying a model</h4>
+                <ul>
+                  <li>
+                    <strong>Bench failures</strong> — the master switch. With it
+                    off every other control in the card is inert and a failing
+                    model is retried at every request.
+                  </li>
+                  <li>
+                    <strong>Eject mode</strong> — <code>rate_based</code> benches
+                    a model when a share of a recent window of requests fails
+                    (with a minimum number of samples first, so one bad minute
+                    cannot bench anything); <code>legacy</code> counts
+                    consecutive failures instead. The controls the unselected
+                    mode does not use stay on the page, dimmed and disabled, and
+                    are not saved — so switching mode drops a pending edit to
+                    them from the next Apply, and the unsaved-change counter
+                    drops with it.
+                  </li>
+                  <li>
+                    <strong>How long a benched model sits out</strong> applies in
+                    both modes. A chain is never emptied: if every model on a
+                    route is benched they are tried in order anyway.
+                  </li>
+                </ul>
+                <p>
+                  Which failure kinds end a route outright rather than trying the
+                  next model is <code>FALLBACK_SKIP_KINDS</code>, and it stays on
+                  the <strong>Model Config</strong> page — it is a routing
+                  decision, and it belongs beside the chains it ends. The
+                  Benching card links to it.
+                </p>
                 <h4>What to keep</h4>
                 <p>
-                  <strong>Requests to keep</strong> is the retention cap: the
-                  newest N requests are kept and older rows are deleted as new
-                  ones arrive. All-time counters keep counting either way, so
-                  raising or lowering it never changes your lifetime totals.
-                  Bodies are about 99% of the stored bytes, so
-                  <strong>Store prompts and replies</strong> is the setting that
-                  decides whether content search works at all, and
-                  <strong>Compress stored text</strong> applies to new rows —
-                  run <code>mcc-compact-log</code> (legacy alias
-                  <code>fcc-compact-log</code>) to convert existing history.
+                  What the request log keeps is set on
+                  <a href="#guide-analytics">Analytics</a> now, at the bottom of
+                  the page whose tables it decides the contents of.
                 </p>
                 <h4>Blank means default</h4>
                 <p>
@@ -1905,7 +1977,11 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   range quoted; a value edited directly into
                   <code>~/.fcc/.env</code> is clamped at startup with a warning
                   in the log, because a proxy that will not start is worse than
-                  one running a sane number.
+                  one running a sane number. A setting you have never chosen is
+                  written to <code>~/.fcc/.env</code> as a commented placeholder
+                  rather than a value, and <strong>Use default</strong> removes
+                  the line again — so the file records what you chose, not what
+                  the defaults happened to be on the day you saved.
                 </p>
 
                 <h3 id="guide-rotation">Use more than one key safely</h3>
@@ -1927,7 +2003,11 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   <code>410</code>, a 400 &mdash; leaves every key untouched, because the
                   same keys serve every model in your chain and none of those is the key's
                   doing. A model that will not answer is handed to the next
-                  <em>model</em> on the chain instead.
+                  <em>model</em> on the chain instead. How long each step of that
+                  ladder lasts is <code>CREDENTIAL_LOCKOUT_TIERS</code>, on the
+                  <a href="#guide-limits">Limits &amp; Resilience</a> page, which
+                  also spells the ladder out in words; the policy itself is the
+                  rotation select on each provider's own card.
                 </p>
 
                 <h3 id="guide-updates">Update the server</h3>

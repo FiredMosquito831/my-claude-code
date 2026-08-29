@@ -161,6 +161,7 @@ def load_config_response() -> dict[str, Any]:
                 "description": field.description,
                 "minimum": field.minimum,
                 "maximum": field.maximum,
+                "range_hint": field.range_hint,
             }
         )
 

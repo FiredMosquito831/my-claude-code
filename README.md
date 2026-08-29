@@ -462,6 +462,10 @@ Each key gets its own upstream client and its own rate-limit window, so one key 
 - **401/403** — the provider rejected the credential. It is locked out on an escalating ladder (`CREDENTIAL_LOCKOUT_TIERS`, 5 min → 1 h → 24 h by default), on its own counter.
 - **429** — the credential is throttled. It is benched for exactly as long as the provider asked via `Retry-After` / `x-ratelimit-reset-*`, or for `RATE_LIMIT_COOLDOWN_SECONDS` when it sent no header, capped at one hour. No ladder, no escalation.
 
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `CREDENTIAL_LOCKOUT_TIERS` | `300,3600,86400` | The escalating bench for a key the provider keeps rejecting with 401/403, in comma-separated seconds. One step per consecutive rejection, staying at the last entry. This is the only ladder left — a 429 waits exactly as long as the provider asked, and nothing else changes a key's health. |
+
 **Everything else leaves every key untouched** — timeouts, 5xx, `410 model gone`, overloaded, 400s, context overflows, transport faults. Those are properties of the model, the request or the moment, and the same keys serve every model in a fallback chain, so charging them benched working credentials for faults they did not cause. A model that will not answer is the model's problem: the **fallback chain moves to the next model**, not the next key.
 
 **Rotation follows the same rule.** The pool tries another key for an auth rejection, a 429, or a connection fault — cases where a different key or a different connection can genuinely help. Anything else is raised so routing can spend the time on a different model instead of on the rest of the pool.
@@ -524,12 +528,21 @@ Requests that name a provider and model directly (`open_router/…`) are never r
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `FALLBACK_FIRST_TOKEN_TIMEOUT` | `120` | The first-token deadline: seconds a model may stay silent before the next model takes over. Nothing has streamed yet, so the handover is invisible. `0` waits indefinitely. |
+| `FALLBACK_FIRST_TOKEN_TIMEOUT` | `120` | The first-token deadline: seconds a model may stay silent before the next model takes over. Nothing has streamed yet, so the handover is invisible. `0` waits indefinitely. This is a **ceiling, not the allowance** — each attempt gets an equal share of what is left of `FALLBACK_TOTAL_TIMEOUT`, counting itself and every model still behind it, and what applies is whichever is smaller. On a ten-model chain with the defaults that is `min(120, 600 ÷ 10)` = 60s. **Admin UI → Limits & Resilience** computes it per route for your own chains. |
 | `FALLBACK_TOTAL_TIMEOUT` | `600` | Whole-request budget across every attempt, retry and recovery — the backstop for a stream that committed and then stalled. `0` disables it. |
 | `FALLBACK_STALL_TIMEOUT` | `120` | Seconds a stream that *has* started producing may then go quiet. Measured from the last chunk that moved the answer forward, so keepalives cannot hold a dead stream open and a model producing steadily is never cut. `0` allows an unlimited pause. |
 | `FALLBACK_EJECT_AFTER_FAILURES` / `FALLBACK_EJECT_SECONDS` | `3` / `30` | Skip a model that just failed repeatedly, so a request stops re-paying its timeout on the way to a healthy fallback. |
+| `FALLBACK_COOLDOWN_STEP_OVER_FLOOR` | `5` | Seconds of remaining rate-limit cooldown that make it worth trying the next model rather than waiting. Shorter waits are waited out, because stepping over costs the chain a slot. |
 
 Ejection can never empty a chain: if every model on a route is benched, they are tried in order anyway — skipping a bad model is an optimisation, refusing to try anything is an outage.
+
+**One model is retried before the chain is used at all.** A 429 or 5xx is retried against the same model on an exponential backoff, and three settings shape that wait:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `PROVIDER_RETRY_BACKOFF_BASE_SECONDS` | `2` | How long a provider waits before its first retry of a 429 or 5xx. Each further retry doubles it. |
+| `PROVIDER_RETRY_BACKOFF_MAX_SECONDS` | `60` | Ceiling the doubling backoff stops growing past. |
+| `PROVIDER_RETRY_BACKOFF_JITTER_SECONDS` | `1` | Random spread added to each wait, so several clients hitting the same limit do not retry in lockstep. |
 
 **A context overflow is not a malformed request.** Both usually arrive as HTTP `400`, and until 5.43.0 MCC treated every `400` the same way — as a client error that would fail identically everywhere, so the whole chain was abandoned. That is right for a malformed body and wrong for a conversation that outgrew the model's window, which is exactly the case a larger-window fallback exists to cover. Context-length failures are now classified as their own kind and fall through to the next model.
 
@@ -599,6 +612,11 @@ Providers with named effort receive those names; boolean providers receive on or
 <div align="center">
   <img src="assets/admin-model-config.png" alt="Model configuration with tier routing and reasoning control" width="820">
   <p><em>Model Config: the fallback <code>MODEL</code> picker, per-tier routing, and reasoning control.</em></p>
+</div>
+
+<div align="center">
+  <img src="assets/admin-limits.png" alt="Limits and resilience configuration with the deadline calculator" width="820">
+  <p><em>Limits &amp; Resilience: budgets, deadlines and the per-route deadline calculator, chain benching, provider retries, credential health, and diagnostics.</em></p>
 </div>
 
 <a id="web-search"></a>

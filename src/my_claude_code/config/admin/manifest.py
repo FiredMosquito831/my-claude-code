@@ -112,11 +112,45 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
         "the model nothing; these controls do.",
     ),
     ConfigSectionSpec(
-        "limits",
-        "Limits",
-        "What MCC waits for, keeps, and records. Every value here is a "
-        "trade-off between how long a failing model may hold a request, how "
-        "much history survives on disk, and how much log noise you want.",
+        "budgets",
+        "Output & thinking budgets",
+        "How many tokens one answer may be, and how they are split between "
+        "thinking and the answer. A per-model limit published by the provider "
+        "always wins over anything here.",
+    ),
+    ConfigSectionSpec(
+        "deadlines",
+        "Deadlines",
+        "How long one model may hold a request before the chain moves on. The "
+        "first-token deadline is not what a model on a long chain actually "
+        "gets -- the readout below this grid computes the real number from "
+        "your routes.",
+    ),
+    ConfigSectionSpec(
+        "benching",
+        "Chain benching",
+        "Whether a model that keeps failing is skipped for a while, and on "
+        "what evidence. With benching off, every control in this card is "
+        "inert and a failing model is retried at every request.",
+    ),
+    ConfigSectionSpec(
+        "provider_retries",
+        "Provider retries & throughput",
+        "How hard one model is retried, and how fast requests are allowed to "
+        "leave, before the fallback chain is used at all.",
+    ),
+    ConfigSectionSpec(
+        "credential_health",
+        "Credential health",
+        "What one API key's failures cost it, and how long it sits out. "
+        "Rotation policy is per pool and lives on each provider's card.",
+    ),
+    ConfigSectionSpec(
+        "request_log",
+        "Request log storage",
+        "What the request log keeps, and therefore what the tables above and "
+        "content search can ever show you. Every field here is read at "
+        "startup.",
     ),
     ConfigSectionSpec(
         "desktop",
@@ -129,7 +163,8 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
     ConfigSectionSpec(
         "diagnostics",
         "Diagnostics",
-        "Logging and debugging flags.",
+        "Logging and debugging flags. The log level decides how much the "
+        "server writes at all; the flags below add specific payloads to it.",
         advanced=True,
     ),
 )
@@ -275,43 +310,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
-        "FALLBACK_REASONING_ANSWER_TIMEOUT",
-        "Thinking time before the chain moves on",
-        "models",
-        "number",
-        settings_attr="fallback_reasoning_answer_timeout",
-        default="300",
-        restart_required=True,
-        description=(
-            "Seconds a model may think before the route stops waiting for it "
-            "to start an answer and tries the next model. Only applies while "
-            "the setting below is on, because only then is the attempt still "
-            "abandonable. Measured on real traffic: every request that ran out "
-            "of budget while thinking used the full 600s, and 98% of slow "
-            "reasoning requests that did answer had started by 300s. Set 0 to "
-            "let a thinking model run to the total request budget."
-        ),
-    ),
-    ConfigFieldSpec(
-        "FALLBACK_ON_REASONING_ONLY",
-        "Fall back when a model only thinks",
-        "models",
-        "boolean",
-        settings_attr="fallback_on_reasoning_only",
-        default="true",
-        restart_required=True,
-        description=(
-            "A model that streams its reasoning and never writes an answer "
-            "normally commits the route on the first thought, so the fallback "
-            "chain can no longer be used and the request runs until the total "
-            "budget ends it. With this on, reasoning is held back like an "
-            "envelope frame: the attempt stays uncommitted, its share of the "
-            "budget expires, and the next model answers instead. The cost is "
-            "that reasoning no longer streams live -- it appears when the "
-            "answer does. Turn this off to watch a model think in real time."
-        ),
-    ),
-    ConfigFieldSpec(
         "REASONING_POLICY",
         "Reasoning Policy",
         "reasoning",
@@ -370,54 +368,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         secret=True,
         restart_required=True,
         description="Bearer token protecting Claude/API access. It is not admin-page login.",
-    ),
-    ConfigFieldSpec(
-        "PROVIDER_RATE_LIMIT",
-        "Provider Rate Limit",
-        "runtime",
-        "number",
-        settings_attr="provider_rate_limit",
-        default="1",
-    ),
-    ConfigFieldSpec(
-        "PROVIDER_RATE_WINDOW",
-        "Provider Rate Window",
-        "runtime",
-        "number",
-        settings_attr="provider_rate_window",
-        default="3",
-    ),
-    ConfigFieldSpec(
-        "PROVIDER_MAX_CONCURRENCY",
-        "Provider Max Concurrency",
-        "runtime",
-        "number",
-        settings_attr="provider_max_concurrency",
-        default="5",
-    ),
-    ConfigFieldSpec(
-        "HTTP_READ_TIMEOUT",
-        "HTTP Read Timeout",
-        "runtime",
-        "number",
-        settings_attr="http_read_timeout",
-        default="300",
-    ),
-    ConfigFieldSpec(
-        "HTTP_WRITE_TIMEOUT",
-        "HTTP Write Timeout",
-        "runtime",
-        "number",
-        settings_attr="http_write_timeout",
-        default="60",
-    ),
-    ConfigFieldSpec(
-        "HTTP_CONNECT_TIMEOUT",
-        "HTTP Connect Timeout",
-        "runtime",
-        "number",
-        settings_attr="http_connect_timeout",
-        default="60",
     ),
     ConfigFieldSpec(
         "HOST",
@@ -600,6 +550,21 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
     ),
     ConfigFieldSpec(
+        "LOG_LEVEL",
+        "Log level",
+        "diagnostics",
+        "select",
+        settings_attr="log_level",
+        default="INFO",
+        options=("DEBUG", "INFO", "WARNING", "ERROR"),
+        restart_required=True,
+        description=(
+            "How much the server writes to its log file. DEBUG includes every "
+            "routing decision, which is what to use when a fallback behaves "
+            "unexpectedly."
+        ),
+    ),
+    ConfigFieldSpec(
         "DEBUG_PLATFORM_EDITS",
         "Debug Platform Edits",
         "diagnostics",
@@ -678,11 +643,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         advanced=True,
         restart_required=True,
     ),
-    # ---- Limits: how long one answer may be ------------------------------
+    # ---- Budgets: how long one answer may be -----------------------------
     ConfigFieldSpec(
         "MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT",
         "Output tokens when unknown",
-        "limits",
+        "budgets",
         "number",
         settings_attr="max_output_tokens_unknown_default",
         default="32768",
@@ -697,11 +662,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "MAX_OUTPUT_TOKENS_CEILING",
         "Output token ceiling",
-        "limits",
+        "budgets",
         "number",
         settings_attr="max_output_tokens_ceiling",
         default="",
-        advanced=True,
         description=(
             "Absolute cap on output tokens for every request, whatever the "
             "model can do. Empty by default and best left empty: a ceiling "
@@ -712,11 +676,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "MAX_OUTPUT_TOKENS_CONTEXT_MARGIN",
         "Prompt reserve",
-        "limits",
+        "budgets",
         "number",
         settings_attr="max_output_tokens_context_margin",
         default="1024",
-        advanced=True,
         description=(
             "Tokens held back from the context window when a model's output "
             "limit is large enough to swallow its own context. Absorbs the "
@@ -727,11 +690,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "MAX_OUTPUT_TOKENS_CONTEXT_FLOOR",
         "Smallest bounded budget",
-        "limits",
+        "budgets",
         "number",
         settings_attr="max_output_tokens_context_floor",
         default="4096",
-        advanced=True,
         description=(
             "Smallest output budget the prompt reserve above is allowed to "
             "produce. When a model's remaining context leaves less than this, "
@@ -743,11 +705,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "REASONING_ANSWER_FLOOR_MAX",
         "Answer reserve when thinking",
-        "limits",
+        "budgets",
         "number",
         settings_attr="reasoning_answer_floor_max",
         default="16384",
-        advanced=True,
         description=(
             "Most tokens ever held back from a request's output allowance for "
             "the visible answer while extended thinking is on. Thinking and "
@@ -757,11 +718,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "16,384-token model still gets a working budget."
         ),
     ),
-    # ---- Limits: when to stop waiting ------------------------------------
+    # ---- Deadlines: when to stop waiting ---------------------------------
     ConfigFieldSpec(
         "FALLBACK_FIRST_TOKEN_TIMEOUT",
         "First-token deadline",
-        "limits",
+        "deadlines",
         "number",
         settings_attr="fallback_first_token_timeout",
         default="120",
@@ -774,7 +735,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "FALLBACK_TOTAL_TIMEOUT",
         "Total request budget",
-        "limits",
+        "deadlines",
         "number",
         settings_attr="fallback_total_timeout",
         default="600",
@@ -789,7 +750,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "FALLBACK_STALL_TIMEOUT",
         "Stall deadline",
-        "limits",
+        "deadlines",
         "number",
         settings_attr="fallback_stall_timeout",
         default="120",
@@ -802,9 +763,99 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "FALLBACK_REASONING_ANSWER_TIMEOUT",
+        "Thinking time before the chain moves on",
+        "deadlines",
+        "number",
+        settings_attr="fallback_reasoning_answer_timeout",
+        default="300",
+        restart_required=True,
+        description=(
+            "Seconds a model may think before the route stops waiting for it "
+            "to start an answer and tries the next model. Only applies while "
+            "the setting below is on, because only then is the attempt still "
+            "abandonable. Measured on real traffic: every request that ran out "
+            "of budget while thinking used the full 600s, and 98% of slow "
+            "reasoning requests that did answer had started by 300s. Set 0 to "
+            "let a thinking model run to the total request budget."
+        ),
+    ),
+    ConfigFieldSpec(
+        "FALLBACK_ON_REASONING_ONLY",
+        "Fall back when a model only thinks",
+        "deadlines",
+        "boolean",
+        settings_attr="fallback_on_reasoning_only",
+        default="true",
+        restart_required=True,
+        description=(
+            "A model that streams its reasoning and never writes an answer "
+            "normally commits the route on the first thought, so the fallback "
+            "chain can no longer be used and the request runs until the total "
+            "budget ends it. With this on, reasoning is held back like an "
+            "envelope frame: the attempt stays uncommitted, its share of the "
+            "budget expires, and the next model answers instead. The cost is "
+            "that reasoning no longer streams live -- it appears when the "
+            "answer does. Turn this off to watch a model think in real time."
+        ),
+    ),
+    ConfigFieldSpec(
+        "STREAM_COMMIT_HOLDBACK_SECONDS",
+        "Commit holdback",
+        "deadlines",
+        "number",
+        settings_attr="stream_commit_holdback_seconds",
+        default="0.75",
+        restart_required=True,
+        description=(
+            "Seconds the first output is held before it goes to the client. "
+            "While it is held a failure can still fall back silently, so this "
+            "is the width of the invisible-recovery window. 0 commits at once "
+            "and disables invisible recovery."
+        ),
+    ),
+    ConfigFieldSpec(
+        "HTTP_READ_TIMEOUT",
+        "HTTP Read Timeout",
+        "deadlines",
+        "number",
+        settings_attr="http_read_timeout",
+        default="300",
+        description=(
+            "Transport ceiling on waiting for bytes from a provider. It sits under "
+            "every deadline above: set below the first-token deadline and a slow "
+            "model produces a transport error instead of a clean handover to the "
+            "next model."
+        ),
+    ),
+    ConfigFieldSpec(
+        "HTTP_WRITE_TIMEOUT",
+        "HTTP Write Timeout",
+        "deadlines",
+        "number",
+        settings_attr="http_write_timeout",
+        default="60",
+        description=(
+            "Transport ceiling on sending one request body to a provider. Large "
+            "image or document payloads are what run into it."
+        ),
+    ),
+    ConfigFieldSpec(
+        "HTTP_CONNECT_TIMEOUT",
+        "HTTP Connect Timeout",
+        "deadlines",
+        "number",
+        settings_attr="http_connect_timeout",
+        default="60",
+        description=(
+            "Transport ceiling on opening the connection. A provider that is down "
+            "usually refuses or times out here, before any deadline above applies."
+        ),
+    ),
+    ConfigFieldSpec(
         "SERVER_GRACEFUL_SHUTDOWN_SECONDS",
         "Graceful shutdown budget",
-        "limits",
+        "deadlines",
         "number",
         settings_attr="server_graceful_shutdown_seconds",
         default="300",
@@ -818,33 +869,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "0 would be an immediate, no-drain shutdown rather than waiting."
         ),
     ),
-    ConfigFieldSpec(
-        "FALLBACK_EJECT_AFTER_FAILURES",
-        "Bench a model after",
-        "limits",
-        "number",
-        settings_attr="fallback_eject_after_failures",
-        default="3",
-        description=(
-            "Consecutive failures before routing skips a model, so a request "
-            "stops re-paying a dead model's timeout on its way to a healthy "
-            "one. A chain is never emptied: if every model is benched they "
-            "are tried in order anyway. 0 disables benching."
-        ),
-    ),
-    ConfigFieldSpec(
-        "FALLBACK_EJECT_SECONDS",
-        "Keep it benched for",
-        "limits",
-        "number",
-        settings_attr="fallback_eject_seconds",
-        default="30",
-        description="Seconds a benched model stays out of routing.",
-    ),
+    # ---- Benching: when to stop trying a model ---------------------------
     ConfigFieldSpec(
         "FALLBACK_BENCH_ENABLED",
         "Bench failures",
-        "limits",
+        "benching",
         "select",
         settings_attr="fallback_bench_enabled",
         default="true",
@@ -859,7 +888,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "FALLBACK_BEHAVIOR",
         "Eject mode",
-        "limits",
+        "benching",
         "select",
         settings_attr="fallback_behavior",
         default="rate_based",
@@ -869,21 +898,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
-        "FALLBACK_RETRY_FIRST",
-        "Retry primary once",
-        "limits",
-        "select",
-        settings_attr="fallback_retry_first",
-        default="skip",
-        options=("skip", "retry_once"),
-        description=(
-            "What happens when the primary model fails. skip (default) moves straight to the next fallback. retry_once gives the primary one more chance for transient errors (timeout, 5xx, 429) before falling through. Auth and invalid-request errors are never retried regardless."
-        ),
-    ),
-    ConfigFieldSpec(
         "FALLBACK_EJECT_WINDOW",
         "Rate window (requests)",
-        "limits",
+        "benching",
         "number",
         settings_attr="fallback_eject_window",
         default="10",
@@ -895,7 +912,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "FALLBACK_EJECT_FAILURE_RATE",
         "Failure rate threshold",
-        "limits",
+        "benching",
         "number",
         settings_attr="fallback_eject_failure_rate",
         default="0.5",
@@ -908,7 +925,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "FALLBACK_EJECT_MIN_SAMPLES",
         "Min samples before evaluation",
-        "limits",
+        "benching",
         "number",
         settings_attr="fallback_eject_min_samples",
         default="8",
@@ -918,9 +935,60 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         minimum=1,
     ),
     ConfigFieldSpec(
+        "FALLBACK_EJECT_AFTER_FAILURES",
+        "Bench a model after",
+        "benching",
+        "number",
+        settings_attr="fallback_eject_after_failures",
+        default="3",
+        description=(
+            "Consecutive failures before routing skips a model, so a request "
+            "stops re-paying a dead model's timeout on its way to a healthy "
+            "one. A chain is never emptied: if every model is benched they "
+            "are tried in order anyway. 0 disables benching."
+        ),
+    ),
+    ConfigFieldSpec(
+        "FALLBACK_EJECT_SECONDS",
+        "Keep it benched for",
+        "benching",
+        "number",
+        settings_attr="fallback_eject_seconds",
+        default="30",
+        description="Seconds a benched model stays out of routing.",
+    ),
+    ConfigFieldSpec(
+        "FALLBACK_RETRY_FIRST",
+        "Retry primary once",
+        "benching",
+        "select",
+        settings_attr="fallback_retry_first",
+        default="skip",
+        options=("skip", "retry_once"),
+        description=(
+            "What happens when the primary model fails. skip (default) moves straight to the next fallback. retry_once gives the primary one more chance for transient errors (timeout, 5xx, 429) before falling through. Auth and invalid-request errors are never retried regardless."
+        ),
+    ),
+    ConfigFieldSpec(
+        "FALLBACK_COOLDOWN_STEP_OVER_FLOOR",
+        "Step over a cooled-down model when its wait is at least",
+        "benching",
+        "number",
+        settings_attr="fallback_cooldown_step_over_floor",
+        default="5",
+        restart_required=True,
+        advanced=True,
+        description=(
+            "Seconds of remaining rate-limit cooldown that make it worth "
+            "trying the next model instead of waiting. Shorter waits are "
+            "waited out, because stepping over costs the chain a slot."
+        ),
+    ),
+    # ---- Provider retries: how hard to try before the chain --------------
+    ConfigFieldSpec(
         "PROVIDER_RETRY_ATTEMPTS",
         "Retries before the chain",
-        "limits",
+        "provider_retries",
         "number",
         settings_attr="provider_retry_attempts",
         default="5",
@@ -934,7 +1002,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "STREAM_EARLY_RETRY_ATTEMPTS",
         "Retries inside one model",
-        "limits",
+        "provider_retries",
         "number",
         settings_attr="stream_early_retry_attempts",
         default="5",
@@ -948,7 +1016,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "STREAM_MIDSTREAM_RECOVERY_ATTEMPTS",
         "Mid-stream recovery attempts",
-        "limits",
+        "provider_retries",
         "number",
         settings_attr="stream_midstream_recovery_attempts",
         default="5",
@@ -960,70 +1028,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
-        "STREAM_COMMIT_HOLDBACK_SECONDS",
-        "Commit holdback",
-        "limits",
-        "number",
-        settings_attr="stream_commit_holdback_seconds",
-        default="0.75",
-        restart_required=True,
-        description=(
-            "Seconds the first output is held before it goes to the client. "
-            "While it is held a failure can still fall back silently, so this "
-            "is the width of the invisible-recovery window. 0 commits at once "
-            "and disables invisible recovery."
-        ),
-    ),
-    ConfigFieldSpec(
-        "RATE_LIMIT_COOLDOWN_SECONDS",
-        "Rate-limit cooldown",
-        "limits",
-        "number",
-        settings_attr="rate_limit_cooldown_seconds",
-        default="60",
-        restart_required=True,
-        advanced=True,
-        description=(
-            "How long a rate-limited provider is paused when it sends no "
-            "Retry-After header of its own to obey."
-        ),
-    ),
-    ConfigFieldSpec(
-        "CREDENTIAL_LOCKOUT_TIERS",
-        "Auth lockout ladder (seconds, comma-separated)",
-        "limits",
-        "text",
-        settings_attr="credential_lockout_tiers",
-        default="300,3600,86400",
-        restart_required=True,
-        advanced=True,
-        description=(
-            "How long a key is benched after the provider rejects it with "
-            "401/403, escalating one step per consecutive rejection and "
-            "staying at the last entry. This is the only ladder left: a 429 "
-            "waits exactly as long as the provider asked, and nothing else "
-            "changes a key's health."
-        ),
-    ),
-    ConfigFieldSpec(
-        "FALLBACK_COOLDOWN_STEP_OVER_FLOOR",
-        "Step over a cooled-down model when its wait is at least",
-        "limits",
-        "number",
-        settings_attr="fallback_cooldown_step_over_floor",
-        default="5",
-        restart_required=True,
-        advanced=True,
-        description=(
-            "Seconds of remaining rate-limit cooldown that make it worth "
-            "trying the next model instead of waiting. Shorter waits are "
-            "waited out, because stepping over costs the chain a slot."
-        ),
-    ),
-    ConfigFieldSpec(
         "PROVIDER_RETRY_BACKOFF_BASE_SECONDS",
         "Retry backoff: first wait",
-        "limits",
+        "provider_retries",
         "number",
         settings_attr="provider_retry_backoff_base_seconds",
         default="2",
@@ -1037,7 +1044,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "PROVIDER_RETRY_BACKOFF_MAX_SECONDS",
         "Retry backoff: longest wait",
-        "limits",
+        "provider_retries",
         "number",
         settings_attr="provider_retry_backoff_max_seconds",
         default="60",
@@ -1048,7 +1055,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "PROVIDER_RETRY_BACKOFF_JITTER_SECONDS",
         "Retry backoff: jitter",
-        "limits",
+        "provider_retries",
         "number",
         settings_attr="provider_retry_backoff_jitter_seconds",
         default="1",
@@ -1059,11 +1066,76 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "hitting the same limit do not retry in lockstep."
         ),
     ),
-    # ---- Limits: what to keep --------------------------------------------
+    ConfigFieldSpec(
+        "PROVIDER_RATE_LIMIT",
+        "Provider Rate Limit",
+        "provider_retries",
+        "number",
+        settings_attr="provider_rate_limit",
+        default="1",
+        description=(
+            "Requests one provider may start inside the window below. This is a "
+            "client-side pace, not the provider's own limit; it exists to stop a "
+            "burst turning into a wall of 429s."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROVIDER_RATE_WINDOW",
+        "Provider Rate Window",
+        "provider_retries",
+        "number",
+        settings_attr="provider_rate_window",
+        default="3",
+        description="Length of the window the request count above is measured over.",
+    ),
+    ConfigFieldSpec(
+        "PROVIDER_MAX_CONCURRENCY",
+        "Provider Max Concurrency",
+        "provider_retries",
+        "number",
+        settings_attr="provider_max_concurrency",
+        default="5",
+        description=(
+            "Streams one provider may have open at once. A further request waits "
+            "for a slot rather than being refused."
+        ),
+    ),
+    # ---- Credential health: what one key's failures cost it --------------
+    ConfigFieldSpec(
+        "RATE_LIMIT_COOLDOWN_SECONDS",
+        "Rate-limit cooldown",
+        "credential_health",
+        "number",
+        settings_attr="rate_limit_cooldown_seconds",
+        default="60",
+        restart_required=True,
+        advanced=True,
+        description=(
+            "How long a rate-limited provider is paused when it sends no "
+            "Retry-After header of its own to obey."
+        ),
+    ),
+    ConfigFieldSpec(
+        "CREDENTIAL_LOCKOUT_TIERS",
+        "Auth lockout ladder (seconds, comma-separated)",
+        "credential_health",
+        "text",
+        settings_attr="credential_lockout_tiers",
+        default="300,3600,86400",
+        restart_required=True,
+        description=(
+            "How long a key is benched after the provider rejects it with "
+            "401/403, escalating one step per consecutive rejection and "
+            "staying at the last entry. This is the only ladder left: a 429 "
+            "waits exactly as long as the provider asked, and nothing else "
+            "changes a key's health."
+        ),
+    ),
+    # ---- Request log: what to keep ---------------------------------------
     ConfigFieldSpec(
         "REQUEST_LOG_ENABLED",
         "Record requests",
-        "limits",
+        "request_log",
         "boolean",
         settings_attr="request_log_enabled",
         default="true",
@@ -1073,7 +1145,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "REQUEST_LOG_MAX_ROWS",
         "Requests to keep",
-        "limits",
+        "request_log",
         "number",
         settings_attr="request_log_max_rows",
         default="50000",
@@ -1087,7 +1159,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "REQUEST_LOG_CAPTURE_BODIES",
         "Store prompts and replies",
-        "limits",
+        "request_log",
         "boolean",
         settings_attr="request_log_capture_bodies",
         default="true",
@@ -1100,7 +1172,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "REQUEST_LOG_COMPRESS_BODIES",
         "Compress stored text",
-        "limits",
+        "request_log",
         "boolean",
         settings_attr="request_log_compress_bodies",
         default="true",
@@ -1114,7 +1186,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "REQUEST_LOG_CAPTURE_IMAGES",
         "Store image thumbnails",
-        "limits",
+        "request_log",
         "boolean",
         settings_attr="request_log_capture_images",
         default="true",
@@ -1128,7 +1200,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "REQUEST_LOG_IMAGE_MAX_PIXELS",
         "Thumbnail size",
-        "limits",
+        "request_log",
         "number",
         settings_attr="request_log_image_max_pixels",
         default="512",
@@ -1141,7 +1213,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "REQUEST_LOG_TEXT_MAX_CHARS",
         "Longest text stored",
-        "limits",
+        "request_log",
         "number",
         settings_attr="request_log_text_max_chars",
         default="50000",
@@ -1154,7 +1226,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "REQUEST_LOG_COMPRESSION_LEVEL",
         "Compression level",
-        "limits",
+        "request_log",
         "number",
         settings_attr="request_log_compression_level",
         default="9",
@@ -1168,7 +1240,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
     ConfigFieldSpec(
         "REQUEST_LOG_QUEUE_MAX_SIZE",
         "Pending writes held",
-        "limits",
+        "request_log",
         "number",
         settings_attr="request_log_queue_max_size",
         default="10000",
@@ -1177,22 +1249,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Records waiting to be written. When this fills under a burst, "
             "further records are dropped rather than slowing the request."
-        ),
-    ),
-    # ---- Limits: what to record ------------------------------------------
-    ConfigFieldSpec(
-        "LOG_LEVEL",
-        "Log level",
-        "limits",
-        "select",
-        settings_attr="log_level",
-        default="INFO",
-        options=("DEBUG", "INFO", "WARNING", "ERROR"),
-        restart_required=True,
-        description=(
-            "How much the server writes to its log file. DEBUG includes every "
-            "routing decision, which is what to use when a fallback behaves "
-            "unexpectedly."
         ),
     ),
     # ---- Desktop: mcc-desktop is a separate process, read once at launch --
@@ -1429,22 +1485,22 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
 
 
 def _with_range(field: ConfigFieldSpec) -> ConfigFieldSpec:
-    """Attach the usable range to a numeric field, and say so in its help.
+    """Attach the usable range to a numeric field.
 
-    Written here rather than in each spec so the bounds the form enforces are
-    the same object the server clamps to; two hand-maintained copies would
-    eventually disagree, and the form would accept a value the server changes.
+    The bounds the form enforces are the same object the server clamps to;
+    two hand-maintained copies would eventually disagree. The human form of
+    the range is published separately (``range_hint``) rather than glued to
+    the end of the description: measured on the Limits page, a field's help
+    ran to 80 words before the bound appeared.
     """
     limit = range_for(field.settings_attr)
     if limit is None:
         return field
-    text = f"Accepts {describe_range(limit)}."
-    description = f"{field.description} {text}".strip()
     return replace(
         field,
         minimum=limit.minimum,
         maximum=limit.maximum,
-        description=description,
+        range_hint=describe_range(limit),
     )
 
 

@@ -59,3 +59,7 @@ class ConfigFieldSpec:
     # a value before it is saved instead of the server clamping it afterwards.
     minimum: float | None = None
     maximum: float | None = None
+    # Human form of the numeric range, e.g. "0 to 3600 (0 waits indefinitely)".
+    # Published so the browser can show the bound as a hint beside the input
+    # instead of appending it to the end of the help text.
+    range_hint: str = ""

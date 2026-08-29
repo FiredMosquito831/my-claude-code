@@ -13,6 +13,7 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.application.release_updates import UpgradeResult
 from my_claude_code.config.admin.values import MASKED_SECRET
+from my_claude_code.config.limits import LIMIT_RANGES, describe_range
 from my_claude_code.config.server_urls import local_admin_url
 from my_claude_code.config.settings import Settings
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
@@ -507,6 +508,28 @@ def test_admin_static_model_combobox_preserves_custom_slugs_and_none_semantics()
     assert "Model fields remain editable" in script
     assert "result.failed_providers || []" in script
     assert '"warn"' in script
+
+
+def test_the_config_payload_publishes_a_range_hint(monkeypatch, tmp_path):
+    """The bound travels as its own field, not as the last sentence of the help.
+
+    ``_with_range`` used to append "Accepts 0 to 3600 (...)." to the end of the
+    description, so on the Limits page the bound arrived after up to 80 words
+    of explanation. The browser now renders it beside the input.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    app = create_test_app()
+
+    body = _local_client(app).get("/admin/api/config").json()
+    fields = {field["key"]: field for field in body["fields"]}
+
+    expected = describe_range(LIMIT_RANGES["fallback_first_token_timeout"])
+    assert fields["FALLBACK_FIRST_TOKEN_TIMEOUT"]["range_hint"] == expected
+    assert "Accepts" not in fields["FALLBACK_FIRST_TOKEN_TIMEOUT"]["description"]
+    # A field with no numeric range publishes an empty hint rather than none.
+    assert fields["CREDENTIAL_LOCKOUT_TIERS"]["range_hint"] == ""
 
 
 def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):

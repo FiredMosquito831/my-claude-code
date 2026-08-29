@@ -13,6 +13,7 @@ from my_claude_code.config.admin.persistence import (
 from my_claude_code.config.admin.sources import dotenv_values_from_text
 from my_claude_code.config.admin.validation import settings_from_values
 from my_claude_code.config.admin.values import load_value_state, normalize_for_env
+from my_claude_code.config.limits import range_for
 from my_claude_code.config.settings import Settings
 
 
@@ -35,44 +36,73 @@ def isolated_config(monkeypatch, tmp_path):
     return tmp_path
 
 
-LIMIT_KEYS = (
-    "MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT",
-    "MAX_OUTPUT_TOKENS_CEILING",
-    "MAX_OUTPUT_TOKENS_CONTEXT_MARGIN",
-    "MAX_OUTPUT_TOKENS_CONTEXT_FLOOR",
-    "REASONING_ANSWER_FLOOR_MAX",
-    "FALLBACK_FIRST_TOKEN_TIMEOUT",
-    "FALLBACK_TOTAL_TIMEOUT",
-    "FALLBACK_STALL_TIMEOUT",
-    "FALLBACK_EJECT_AFTER_FAILURES",
-    "FALLBACK_EJECT_SECONDS",
-    "FALLBACK_BENCH_ENABLED",
-    "FALLBACK_BEHAVIOR",
-    "FALLBACK_RETRY_FIRST",
-    "FALLBACK_EJECT_WINDOW",
-    "FALLBACK_EJECT_FAILURE_RATE",
-    "FALLBACK_EJECT_MIN_SAMPLES",
-    "PROVIDER_RETRY_ATTEMPTS",
-    "STREAM_EARLY_RETRY_ATTEMPTS",
-    "STREAM_MIDSTREAM_RECOVERY_ATTEMPTS",
-    "STREAM_COMMIT_HOLDBACK_SECONDS",
-    "RATE_LIMIT_COOLDOWN_SECONDS",
-    "CREDENTIAL_LOCKOUT_TIERS",
-    "FALLBACK_COOLDOWN_STEP_OVER_FLOOR",
-    "PROVIDER_RETRY_BACKOFF_BASE_SECONDS",
-    "PROVIDER_RETRY_BACKOFF_MAX_SECONDS",
-    "PROVIDER_RETRY_BACKOFF_JITTER_SECONDS",
-    "REQUEST_LOG_ENABLED",
-    "REQUEST_LOG_MAX_ROWS",
-    "REQUEST_LOG_CAPTURE_BODIES",
-    "REQUEST_LOG_COMPRESS_BODIES",
-    "REQUEST_LOG_TEXT_MAX_CHARS",
-    "REQUEST_LOG_CAPTURE_IMAGES",
-    "REQUEST_LOG_IMAGE_MAX_PIXELS",
-    "SERVER_GRACEFUL_SHUTDOWN_SECONDS",
-    "REQUEST_LOG_COMPRESSION_LEVEL",
-    "REQUEST_LOG_QUEUE_MAX_SIZE",
-    "LOG_LEVEL",
+# The six cards the old flat `limits` grid split into. The values partition
+# every resilience field exactly once: a key in two cards, or in none, is the
+# failure this mapping exists to make loud.
+SECTION_KEYS: dict[str, tuple[str, ...]] = {
+    "budgets": (
+        "MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT",
+        "MAX_OUTPUT_TOKENS_CEILING",
+        "MAX_OUTPUT_TOKENS_CONTEXT_MARGIN",
+        "MAX_OUTPUT_TOKENS_CONTEXT_FLOOR",
+        "REASONING_ANSWER_FLOOR_MAX",
+    ),
+    "deadlines": (
+        "FALLBACK_FIRST_TOKEN_TIMEOUT",
+        "FALLBACK_TOTAL_TIMEOUT",
+        "FALLBACK_STALL_TIMEOUT",
+        "FALLBACK_REASONING_ANSWER_TIMEOUT",
+        "FALLBACK_ON_REASONING_ONLY",
+        "STREAM_COMMIT_HOLDBACK_SECONDS",
+        "HTTP_READ_TIMEOUT",
+        "HTTP_WRITE_TIMEOUT",
+        "HTTP_CONNECT_TIMEOUT",
+        "SERVER_GRACEFUL_SHUTDOWN_SECONDS",
+    ),
+    "benching": (
+        "FALLBACK_BENCH_ENABLED",
+        "FALLBACK_BEHAVIOR",
+        "FALLBACK_EJECT_WINDOW",
+        "FALLBACK_EJECT_FAILURE_RATE",
+        "FALLBACK_EJECT_MIN_SAMPLES",
+        "FALLBACK_EJECT_AFTER_FAILURES",
+        "FALLBACK_EJECT_SECONDS",
+        "FALLBACK_RETRY_FIRST",
+        "FALLBACK_COOLDOWN_STEP_OVER_FLOOR",
+    ),
+    "provider_retries": (
+        "PROVIDER_RETRY_ATTEMPTS",
+        "STREAM_EARLY_RETRY_ATTEMPTS",
+        "STREAM_MIDSTREAM_RECOVERY_ATTEMPTS",
+        "PROVIDER_RETRY_BACKOFF_BASE_SECONDS",
+        "PROVIDER_RETRY_BACKOFF_MAX_SECONDS",
+        "PROVIDER_RETRY_BACKOFF_JITTER_SECONDS",
+        "PROVIDER_RATE_LIMIT",
+        "PROVIDER_RATE_WINDOW",
+        "PROVIDER_MAX_CONCURRENCY",
+    ),
+    "credential_health": (
+        "RATE_LIMIT_COOLDOWN_SECONDS",
+        "CREDENTIAL_LOCKOUT_TIERS",
+    ),
+    "request_log": (
+        "REQUEST_LOG_ENABLED",
+        "REQUEST_LOG_MAX_ROWS",
+        "REQUEST_LOG_CAPTURE_BODIES",
+        "REQUEST_LOG_COMPRESS_BODIES",
+        "REQUEST_LOG_CAPTURE_IMAGES",
+        "REQUEST_LOG_IMAGE_MAX_PIXELS",
+        "REQUEST_LOG_TEXT_MAX_CHARS",
+        "REQUEST_LOG_COMPRESSION_LEVEL",
+        "REQUEST_LOG_QUEUE_MAX_SIZE",
+    ),
+}
+
+# Kept flat for the default-matching check, which does not care where a
+# field renders -- only that the form and the code agree on its value.
+LIMIT_KEYS = tuple(key for keys in SECTION_KEYS.values() for key in keys)
+SECTION_KEY_PAIRS = tuple(
+    (section, key) for section, keys in SECTION_KEYS.items() for key in keys
 )
 
 # Tool-result trimming and the two local skip rules moved to their own section
@@ -95,14 +125,65 @@ OPTIMIZER_KEYS = (
 )
 
 
-def test_there_is_a_limits_section() -> None:
-    assert any(section.section_id == "limits" for section in SECTIONS)
+@pytest.mark.parametrize("section", sorted(SECTION_KEYS))
+def test_every_resilience_section_exists(section: str) -> None:
+    assert any(spec.section_id == section for spec in SECTIONS)
 
 
-@pytest.mark.parametrize("key", LIMIT_KEYS)
-def test_every_limit_is_editable_and_bound_to_a_real_setting(key: str) -> None:
+def test_the_limits_section_no_longer_exists() -> None:
+    """One 37-field grid mixed six concerns; half-reverting the split is worse."""
+    assert not any(section.section_id == "limits" for section in SECTIONS)
+    assert not any(field.section_id == "limits" for field in FIELDS)
+
+
+def test_log_level_lives_with_the_logging_flags() -> None:
+    """How much the server logs is one card, not one field plus eight flags."""
+    assert FIELD_BY_KEY["LOG_LEVEL"].section_id == "diagnostics"
+
+
+def test_the_skip_kinds_field_stays_with_the_routes() -> None:
+    """A routing decision belongs beside the chains it ends, and renders once."""
+    assert FIELD_BY_KEY["FALLBACK_SKIP_KINDS"].section_id == "models"
+
+
+def test_the_moved_fields_left_their_old_sections() -> None:
+    """A field claimed by two sections would render on two pages."""
+    runtime = {field.key for field in FIELDS if field.section_id == "runtime"}
+    for key in (
+        "HTTP_READ_TIMEOUT",
+        "HTTP_WRITE_TIMEOUT",
+        "HTTP_CONNECT_TIMEOUT",
+        "PROVIDER_RATE_LIMIT",
+        "PROVIDER_RATE_WINDOW",
+        "PROVIDER_MAX_CONCURRENCY",
+    ):
+        assert key not in runtime
+    models = {field.key for field in FIELDS if field.section_id == "models"}
+    assert "FALLBACK_REASONING_ANSWER_TIMEOUT" not in models
+    assert "FALLBACK_ON_REASONING_ONLY" not in models
+
+
+def test_every_numeric_limit_publishes_its_range_once() -> None:
+    """The bound is a field of its own now, not the last sentence of the help.
+
+    Scoped by ``settings_attr`` rather than by field type: ``_with_range``
+    keys off the attribute, and CREDENTIAL_LOCKOUT_TIERS is text with no range.
+    """
+    for field in FIELDS:
+        if range_for(field.settings_attr) is None:
+            continue
+        assert field.range_hint, f"{field.key} publishes no range hint"
+        assert "Accepts" not in field.description, (
+            f"{field.key} still glues its range onto the end of its help text"
+        )
+
+
+@pytest.mark.parametrize(("section", "key"), SECTION_KEY_PAIRS)
+def test_every_limit_is_editable_and_bound_to_a_real_setting(
+    section: str, key: str
+) -> None:
     field = FIELD_BY_KEY[key]
-    assert field.section_id == "limits"
+    assert field.section_id == section
     attr = field.settings_attr
     assert attr, f"{key} has no settings attribute"
     assert hasattr(Settings(), attr), f"{key} points at a setting that does not exist"
@@ -129,7 +210,28 @@ def test_no_optimizer_field_is_orphaned() -> None:
     assert declared == set(OPTIMIZER_KEYS)
 
 
-@pytest.mark.parametrize("key", LIMIT_KEYS + OPTIMIZER_KEYS)
+# Six fields moved in from `runtime`, where the manifest deliberately mirrors
+# what `.env.example` ships rather than the code default. That divergence is
+# recorded, with reasons, in DEFAULTS_THAT_DIFFER_FROM_THE_CODE below, and
+# checked by test_every_manifest_default_matches_the_settings_default -- which
+# generalises this check and has the escape hatch this one does not.
+DEFAULTS_OWNED_BY_THE_SHIPPED_TEMPLATE = (
+    "PROVIDER_RATE_LIMIT",
+    "PROVIDER_RATE_WINDOW",
+    "HTTP_READ_TIMEOUT",
+    "HTTP_WRITE_TIMEOUT",
+    "HTTP_CONNECT_TIMEOUT",
+)
+
+
+@pytest.mark.parametrize(
+    "key",
+    tuple(
+        key
+        for key in LIMIT_KEYS + OPTIMIZER_KEYS
+        if key not in DEFAULTS_OWNED_BY_THE_SHIPPED_TEMPLATE
+    ),
+)
 def test_each_limit_default_matches_the_setting_default(key: str) -> None:
     """A form that shows a different default than the code uses is a lie."""
     field = FIELD_BY_KEY[key]
@@ -201,10 +303,11 @@ def test_retention_survives_a_round_trip_through_the_form() -> None:
     assert "REQUEST_LOG_MAX_ROWS=500000" in render_env_file(values)
 
 
-def test_no_limit_field_is_orphaned() -> None:
+@pytest.mark.parametrize("section", sorted(SECTION_KEYS))
+def test_no_resilience_field_is_orphaned(section: str) -> None:
     """Every field in the section is listed above, so the list cannot rot."""
-    declared = {f.key for f in FIELDS if f.section_id == "limits"}
-    assert declared == set(LIMIT_KEYS)
+    declared = {f.key for f in FIELDS if f.section_id == section}
+    assert declared == set(SECTION_KEYS[section])
 
 
 # --------------------------------------------------------------------------

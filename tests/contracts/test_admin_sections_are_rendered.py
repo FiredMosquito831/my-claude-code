@@ -45,7 +45,7 @@ def test_the_view_registry_is_parsable() -> None:
 
     assert claimed, "found no `sections: [...]` arrays in admin.js"
     # Sanity anchors: long-standing sections that must always be claimed.
-    assert {"providers", "models", "limits"} <= claimed
+    assert {"providers", "models", "deadlines"} <= claimed
 
 
 # Sections that are deliberately not on any page, with the reason. Keep this

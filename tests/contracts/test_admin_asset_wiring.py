@@ -66,6 +66,10 @@ KNOWN_DYNAMIC_ONLY_IDS: set[str] = {
     # messagingAuthNotice: built dynamically by renderMessagingAuthNotice
     # (admin.js ~1144); it is never declared in index.html.
     "messagingAuthNotice",
+    # field-FALLBACK_SKIP_KINDS: buildFieldControl() ids every control
+    # `field-<KEY>`, so this one exists only once the Model Config view has
+    # rendered. The Benching card's cross-link focuses it after switching view.
+    "field-FALLBACK_SKIP_KINDS",
 }
 
 

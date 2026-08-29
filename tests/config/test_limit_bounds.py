@@ -6,7 +6,12 @@ import pytest
 
 from my_claude_code.config.admin.manifest import FIELDS
 from my_claude_code.config.admin.validation import range_errors
-from my_claude_code.config.limits import LIMIT_RANGES, ZSTD_MAX_LEVEL, range_for
+from my_claude_code.config.limits import (
+    LIMIT_RANGES,
+    ZSTD_MAX_LEVEL,
+    describe_range,
+    range_for,
+)
 from my_claude_code.config.settings import Settings
 
 LIMIT_ATTRS = tuple(LIMIT_RANGES)
@@ -93,7 +98,11 @@ def test_the_form_publishes_the_same_range_the_server_clamps_to(attr: str) -> No
     limit = LIMIT_RANGES[attr]
     assert field.minimum == limit.minimum
     assert field.maximum == limit.maximum
-    assert "Accepts" in field.description
+    # The human form of the bound is published as its own field now, so the
+    # browser can render it beside the input; gluing it onto the end of the
+    # description put it after up to 80 words of explanation.
+    assert field.range_hint == describe_range(limit)
+    assert "Accepts" not in field.description
 
 
 def test_the_form_rejects_an_out_of_range_value_instead_of_clamping() -> None:

@@ -68,6 +68,7 @@ def test_the_dashboard_script_evaluates_without_error(rendered) -> None:
 # no fields for `model_config` or `messaging`, so they legitimately render
 # empty here -- they do on unmodified main under the same payload, which is why
 # they are named rather than silently included in a blanket assertion.
+# `requests` now owns the request-log storage section as well as its tables.
 VIEWS_WITH_CONTENT = (
     "get_started",
     "providers",
@@ -97,10 +98,16 @@ def test_every_nav_entry_has_markup_to_render_into(rendered) -> None:
 
 
 def test_the_settings_views_still_render_their_sections(rendered) -> None:
+    """Exact counts, driven by the payload above rather than by a floor.
+
+    ">= 1" survived a six-way section split that could have rendered one card
+    and dropped five. The numbers are what this fixture's SECTIONS claims.
+    """
     views = rendered["views"]
-    assert views["providers"]["sections"] >= 1
-    assert views["limits"]["sections"] >= 1
+    assert views["providers"]["sections"] == 4
+    assert views["limits"]["sections"] == 6
     assert views["limits"]["fieldInputs"] >= 1
+    assert views["requests"]["sections"] == 1
     assert views["optimizer"]["sections"] >= 1
 
 
@@ -302,10 +309,10 @@ def test_registering_the_docs_view_did_not_break_the_other_views(rendered) -> No
         "get_started": 1,
         "providers": 4,
         "claude": 3,
-        "requests": 0,
+        "requests": 1,
         "optimizer": 6,
         "web_search": 1,
-        "limits": 1,
+        "limits": 6,
         "guide": 0,
         "docs": 0,
     }
@@ -370,3 +377,203 @@ def test_a_cross_reference_to_another_document_is_intercepted(rendered) -> None:
 def test_a_fresh_install_still_renders_the_docs_page(fresh_install) -> None:
     assert fresh_install["docs"]["present"] is True
     assert fresh_install["docs"]["docLinks"] == ["README", "Usage"]
+
+
+# ---------------------------------------------------------------------------
+# Limits & Resilience. The page was one flat grid of 37 fields mixing six
+# concerns, and the number that actually decides a handover -- the request
+# budget divided by the models still to try -- was shown nowhere.
+
+LIMITS_CARDS = [
+    "section-budgets",
+    "section-deadlines",
+    "section-benching",
+    "section-provider_retries",
+    "section-credential_health",
+    "section-diagnostics",
+]
+
+
+def test_the_limits_view_renders_one_card_per_section(rendered) -> None:
+    assert rendered["limits"]["cardIds"] == LIMITS_CARDS
+
+
+def test_every_limits_card_states_what_it_decides(rendered) -> None:
+    """A card with a title and no sentence under it is a heading, not a card."""
+    limits = rendered["limits"]
+    assert len(limits["cardDescriptions"]) == len(LIMITS_CARDS)
+    for text in limits["cardDescriptions"]:
+        assert text.strip()
+
+
+def test_no_limits_card_hides_every_control_behind_show_advanced(rendered) -> None:
+    """The trap the six-way split walks into, caught at render time.
+
+    Both of ``credential_health``'s fields shipped ``advanced``, which would
+    render a heading, a description, a toggle and nothing else.
+    """
+    for card, visible in zip(
+        rendered["limits"]["cardIds"],
+        rendered["limits"]["cardVisibleFields"],
+        strict=True,
+    ):
+        assert visible >= 1, f"{card} renders no field without a click"
+
+
+def test_the_calculator_divides_the_budget_by_the_longest_chain(rendered) -> None:
+    """600s over a ten-model chain is 60s each, not the 120s the box says."""
+    headline = rendered["limits"]["calcHeadline"]
+    assert "Opus" in headline
+    assert "10 models" in headline
+    assert "60 s" in headline
+
+
+def test_the_calculator_shows_the_first_token_deadline_for_a_one_model_route(
+    rendered,
+) -> None:
+    """min(120, 600/1) is the deadline, not the whole budget."""
+    rows = {row[0]: row[2] for row in rendered["limits"]["calcRows"][1:]}
+    assert rows["Haiku"] == "120 s"
+
+
+def test_a_three_model_chain_is_bounded_by_the_first_token_deadline(rendered) -> None:
+    """min(120, 600/3 = 200) is 120."""
+    rows = {row[0]: row[2] for row in rendered["limits"]["calcRows"][1:]}
+    assert rows["Sonnet"] == "120 s"
+
+
+def test_a_route_with_no_model_of_its_own_is_not_counted(rendered) -> None:
+    """Fable is empty on both halves: it falls back to MODEL, so counting it
+    would double-count the Default route."""
+    labels = [row[0] for row in rendered["limits"]["calcRows"][1:]]
+    assert "Fable" not in labels
+    assert labels == ["Default", "Opus", "Sonnet", "Haiku", "Vision"]
+
+
+def test_the_calculator_says_the_first_token_deadline_is_inert(rendered) -> None:
+    limits = rendered["limits"]
+    assert limits["calcWarningHidden"] is False
+    assert "1200 s" in limits["calcWarning"]
+    assert limits["calcWarning"].startswith("Warning:"), (
+        "the word carries the meaning; the colour is redundant"
+    )
+
+
+def test_the_calculator_shows_its_working(rendered) -> None:
+    formula = rendered["limits"]["calcFormula"]
+    assert "600 ÷ 10 = 60 s" in formula
+    assert "120 s" in formula
+
+
+def test_the_calculator_recomputes_when_a_deadline_is_edited(rendered) -> None:
+    """No reload: raising the budget to 1200 gives each of ten models 120s."""
+    headline = rendered["limits"]["calcHeadlineAfterEdit"]
+    assert "120 s" in headline
+    assert "60 s" not in headline
+
+
+def test_the_calculator_never_interpolates_a_model_name_into_markup(rendered) -> None:
+    """The vision route's primary model in this payload is an <img> tag.
+
+    The table names routes, not models, so the string never reaches the DOM at
+    all -- and the rows it does build come from createElement/textContent, so
+    a route label could not produce an element either. The static guard in
+    tests/contracts/test_admin_limits_view.py pins the second half.
+    """
+    limits = rendered["limits"]
+    assert "<img" not in limits["calcTableHtml"]
+    assert "onerror" not in limits["calcTableHtml"]
+    assert [row[0] for row in limits["calcRows"][1:]] == [
+        "Default",
+        "Opus",
+        "Sonnet",
+        "Haiku",
+        "Vision",
+    ]
+
+
+def test_switching_eject_mode_disables_the_other_modes_knobs(rendered) -> None:
+    groups = {g["mode"]: g for g in rendered["limits"]["afterLegacy"]["benchGroups"]}
+    assert groups["rate_based"]["inert"] is True
+    assert groups["rate_based"]["disabled"] is True
+    assert "rate_based" in groups["rate_based"]["note"] or groups["rate_based"]["note"]
+    assert groups["legacy"]["inert"] is False
+    assert groups["legacy"]["disabled"] is False
+
+
+def test_an_inert_knob_is_present_but_not_submitted(rendered) -> None:
+    """Kept, so a value typed before the switch is not lost; disabled, so
+    ``changedValues()`` skips it and the unused mode is never saved."""
+    after = rendered["limits"]["afterLegacy"]
+    assert after["windowStillInDom"] is True
+    assert after["windowValue"] == "10"
+    assert "FALLBACK_EJECT_WINDOW" not in after["submitted"]
+    assert after["submitted"] == ["FALLBACK_BEHAVIOR"]
+
+
+def test_one_setting_counts_as_one_unsaved_change(rendered) -> None:
+    """The mode, not the mode plus the three knobs it just disabled."""
+    assert rendered["limits"]["afterLegacy"]["dirty"] == "1 unsaved change"
+
+
+def test_turning_benching_off_makes_every_eject_knob_inert(rendered) -> None:
+    groups = rendered["limits"]["afterBenchOff"]["benchGroups"]
+    assert [g["inert"] for g in groups] == [True, True]
+    for group in groups:
+        assert "benching is off" in group["note"], (
+            "an inert group says why in words, not only by dimming"
+        )
+
+
+def test_the_benching_card_points_at_where_skip_kinds_lives(rendered) -> None:
+    """A setting rendered on two pages can show two answers."""
+    limits = rendered["limits"]
+    assert limits["crosslinks"] == 1
+    assert "Model Config" in limits["crosslinkText"]
+    assert limits["skipKindsOnLimits"] == 0
+
+
+def test_each_numeric_limit_shows_its_range_beside_the_input(rendered) -> None:
+    limits = rendered["limits"]
+    assert limits["ranges"]["count"] >= 1
+    assert limits["ranges"]["FALLBACK_FIRST_TOKEN_TIMEOUT"] == (
+        "Accepts 0 to 3600 (0 waits indefinitely for the first token)"
+    )
+
+
+def test_a_numeric_input_points_at_its_range_and_its_help(rendered) -> None:
+    described = rendered["limits"]["ranges"]["describedBy"].split()
+    assert "range-FALLBACK_FIRST_TOKEN_TIMEOUT" in described
+    assert "desc-FALLBACK_FIRST_TOKEN_TIMEOUT" in described
+
+
+def test_the_eject_window_says_how_many_failures_bench_a_model(rendered) -> None:
+    assert rendered["limits"]["hints"]["FALLBACK_EJECT_WINDOW"] == (
+        "benched after 5 of the last 10 requests fail"
+    )
+
+
+def test_the_lockout_ladder_is_spelled_out_in_words(rendered) -> None:
+    hint = rendered["limits"]["hints"]["CREDENTIAL_LOCKOUT_TIERS"]
+    for part in ("5m", "1h", "1d", "and after"):
+        assert part in hint
+
+
+def test_the_in_page_rail_links_to_a_section_that_exists(rendered) -> None:
+    """The rail is static markup and its targets are rendered: a card that
+    fails to render leaves a link that scrolls nowhere, silently."""
+    limits = rendered["limits"]
+    assert limits["tocLinks"] == [f"#{card}" for card in LIMITS_CARDS]
+    assert limits["deadLinks"] == 0
+
+
+def test_request_log_settings_moved_to_analytics(rendered) -> None:
+    """The page that shows the consequence owns the control."""
+    cards = rendered["limits"]["requestLogCards"]
+    assert cards == [{"id": "section-request_log", "fields": 9}]
+    assert "section-request_log" not in rendered["limits"]["cardIds"]
+
+
+def test_desktop_settings_moved_to_providers(rendered) -> None:
+    """Two pages, one subsystem: the live desktop panel is already there."""
+    assert rendered["limits"]["desktopCardView"] == "providers"

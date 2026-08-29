@@ -38,7 +38,7 @@ const FIELDS = [
   {
     key: "REQUEST_LOG_MAX_ROWS",
     label: "Retained rows",
-    section: "limits",
+    section: "budgets",
     type: "number",
     value: "200000",
     default: "200000",
@@ -46,7 +46,7 @@ const FIELDS = [
 ];
 
 const SECTIONS = [
-  { id: "limits", label: MALICIOUS.label, description: MALICIOUS.description },
+  { id: "budgets", label: MALICIOUS.label, description: MALICIOUS.description },
 ];
 
 const configPayload = {

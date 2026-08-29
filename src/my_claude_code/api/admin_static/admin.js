@@ -127,7 +127,7 @@ const VIEW_GROUPS = [
     id: "providers",
     label: "Providers",
     title: "Providers",
-    sections: ["providers", "runtime"],
+    sections: ["providers", "runtime", "desktop"],
     containerId: "providersSections",
   },
   {
@@ -166,7 +166,9 @@ const VIEW_GROUPS = [
     id: "requests",
     label: "Analytics",
     title: "Observability",
-    sections: [],
+    // The page that shows the consequence owns the control: what the log keeps
+    // is what these tables and content search can ever display.
+    sections: ["request_log"],
     containerId: "requestsSections",
   },
   {
@@ -187,16 +189,24 @@ const VIEW_GROUPS = [
     containerId: "webSearchSections",
   },
   {
-    // Deadlines, retention and log level. Grouped by what a value costs --
-    // live requests, then disk, then noise -- rather than by the subsystem
-    // that happens to read it.
+    // Ceilings on one request, and what happens when a model will not honour
+    // one. Request-log storage moved to Analytics and desktop timing to
+    // Providers, so each subsystem is configured on the page that shows it.
     id: "limits",
-    label: "Limits",
-    title: "Limits",
-    // "desktop" must be claimed by a view or its fields render nowhere: the
-    // manifest registers them and the API serves them, and nothing fails.
-    // That exact gap shipped once already, as a settings page with no page.
-    sections: ["limits", "desktop", "diagnostics"],
+    label: "Limits & Resilience",
+    title: "Limits & Resilience",
+    // Every one of these must be claimed by a view or its fields render
+    // nowhere: the manifest registers them and the API serves them, and
+    // nothing fails. That exact gap shipped once already, for "desktop", as a
+    // settings page with no page.
+    sections: [
+      "budgets",
+      "deadlines",
+      "benching",
+      "provider_retries",
+      "credential_health",
+      "diagnostics",
+    ],
     containerId: "limitsSections",
   },
   {
@@ -1138,6 +1148,540 @@ function renderModelRouting(fields) {
   return wrap;
 }
 
+/* ------------------------------------------------------- limits & resilience
+   One 37-field grid mixed six unrelated concerns, and the number that actually
+   decides a handover -- the total budget divided by the number of models still
+   to try -- was shown nowhere. Six cards, each stating what it decides, and a
+   calculator that reproduces `_attempt_deadline` + `_chunk_timeout` for the
+   reader's own routes. Nothing here changes what the server does. */
+
+const CALC_KEYS = new Set([
+  ...ROUTE_TIERS.flatMap((tier) => [tier.modelKey, tier.chainKey]),
+  "MODEL_VISION",
+  "MODEL_VISION_FALLBACKS",
+  "FALLBACK_TOTAL_TIMEOUT",
+  "FALLBACK_FIRST_TOKEN_TIMEOUT",
+  "HTTP_READ_TIMEOUT",
+  "SERVER_GRACEFUL_SHUTDOWN_SECONDS",
+]);
+
+let calcListenerBound = false;
+let limitsScrollspyBound = false;
+
+/** The value a setting holds right now: the live control first, payload second.
+ *
+ * Every view's fields are in the document at all times -- only the <section>
+ * is hidden -- so the Model Config page's chain editors are readable while
+ * Limits & Resilience is open, and an unsaved edit is reflected immediately.
+ */
+function liveValue(key) {
+  // The field wrapper carries data-key as well as the control, and a <div>'s
+  // .value is undefined -- ask for the control by tag or every read is stale.
+  const input = document.querySelector(
+    `input[data-key="${key}"], select[data-key="${key}"], textarea[data-key="${key}"]`,
+  );
+  if (input) return String(input.value ?? "");
+  return String((state.fields.get(key) || {}).value ?? "");
+}
+
+/** The control bound to a key, never the .field wrapper that repeats data-key. */
+const CONTROL_FOR_KEY = (key) =>
+  `input[data-key="${key}"], select[data-key="${key}"], textarea[data-key="${key}"]`;
+
+function chainLength(modelKey, chainKey) {
+  const primary = liveValue(modelKey).trim();
+  const chain = liveValue(chainKey)
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return (primary && primary.toLowerCase() !== "none" ? 1 : 0) + chain.length;
+}
+
+/** Mirror of `_attempt_deadline` + `_chunk_timeout` before the first chunk. */
+function firstTokenShare(total, first, n) {
+  const share = total > 0 ? total / Math.max(1, n) : Infinity;
+  const cap = first > 0 ? first : Infinity;
+  return Math.min(share, cap);
+}
+
+/** Routes with at least one model of their own. A route with none falls back
+ *  to MODEL, so counting it would double-count the default route. */
+function calculatorRoutes() {
+  return [
+    ...ROUTE_TIERS.map((tier) => ({
+      label: tier.label,
+      modelKey: tier.modelKey,
+      chainKey: tier.chainKey,
+    })),
+    { label: "Vision", modelKey: "MODEL_VISION", chainKey: "MODEL_VISION_FALLBACKS" },
+  ]
+    .map((route) => ({ label: route.label, models: chainLength(route.modelKey, route.chainKey) }))
+    .filter((route) => route.models > 0);
+}
+
+function formatShare(seconds) {
+  return Number.isFinite(seconds) ? `${Math.round(seconds)} s` : "no limit";
+}
+
+/** Append an empty live readout under a rendered field and point the input at
+ *  it, joined with whatever `renderField` already referenced. */
+function attachHint(wrapper) {
+  const hint = document.createElement("p");
+  hint.className = "field-hint";
+  hint.id = `hint-${wrapper.dataset.key}`;
+  // Deliberately not a live region. It is referenced by aria-describedby, so
+  // it is read when the field it belongs to takes focus, and it only ever
+  // changes because of what the reader just typed into that same field.
+  // Nine competing polite regions on one page announce over each other.
+  wrapper.appendChild(hint);
+  const input = wrapper.querySelector("input, select, textarea");
+  if (input) describedBy(input, hint.id);
+  return hint;
+}
+
+function describedBy(input, id) {
+  const ids = (input.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+  if (!ids.includes(id)) ids.push(id);
+  input.setAttribute("aria-describedby", ids.join(" "));
+}
+
+function renderDeadlines(fields) {
+  const wrap = document.createElement("div");
+  const grid = document.createElement("div");
+  grid.className = "field-grid";
+  fields.forEach((field) => grid.appendChild(renderField(field)));
+  wrap.appendChild(grid);
+
+  const card = document.createElement("div");
+  card.className = "calc-card";
+  const title = document.createElement("h4");
+  title.textContent = "What each model actually gets";
+  const headline = document.createElement("p");
+  headline.className = "calc-line";
+  headline.id = "calcHeadline";
+  headline.setAttribute("aria-live", "polite");
+  const formula = document.createElement("p");
+  formula.className = "calc-formula";
+  formula.id = "calcFormula";
+  const warning = document.createElement("p");
+  warning.className = "calc-warning";
+  warning.id = "calcWarning";
+  warning.hidden = true;
+  const table = document.createElement("table");
+  table.className = "calc-table";
+  table.id = "calcTable";
+  const caveat = document.createElement("p");
+  caveat.className = "calc-caveat";
+  caveat.textContent =
+    "Time an attempt does not use flows to the models behind it, so this is " +
+    "the worst case for the first model on the route, not a fixed slot. A " +
+    "model that has started thinking is governed by the thinking deadline " +
+    "above instead, while the fall-back-when-a-model-only-thinks switch is on.";
+  card.append(title, headline, formula, warning, table, caveat);
+  wrap.appendChild(card);
+
+  // Delegated, because the chain editor rebuilds its rows on every reorder and
+  // would strand a listener bound to a removed row. Registered once: a second
+  // renderSections() after load() must not stack recomputes.
+  if (!calcListenerBound) {
+    calcListenerBound = true;
+    const recompute = (event) => {
+      const key = event.target && event.target.dataset ? event.target.dataset.key : null;
+      if (key && CALC_KEYS.has(key)) updateDeadlineCalculator();
+    };
+    document.addEventListener("input", recompute);
+    document.addEventListener("change", recompute);
+  }
+  // The card is not in the document yet, so scope the first paint to it.
+  updateDeadlineCalculator(card);
+  return wrap;
+}
+
+function updateDeadlineCalculator(root) {
+  const scope = root || document;
+  const headline = scope.querySelector("#calcHeadline");
+  if (!headline) return;
+  const formula = scope.querySelector("#calcFormula");
+  const warning = scope.querySelector("#calcWarning");
+  const table = scope.querySelector("#calcTable");
+
+  const total = Number(liveValue("FALLBACK_TOTAL_TIMEOUT")) || 0;
+  const first = Number(liveValue("FALLBACK_FIRST_TOKEN_TIMEOUT")) || 0;
+  const httpRead = Number(liveValue("HTTP_READ_TIMEOUT")) || 0;
+  const shutdown = Number(liveValue("SERVER_GRACEFUL_SHUTDOWN_SECONDS")) || 0;
+  const routes = calculatorRoutes().map((route) => ({
+    ...route,
+    share: firstTokenShare(total, first, route.models),
+  }));
+
+  table.replaceChildren();
+  const head = document.createElement("tr");
+  ["Route", "Models", "First-token share"].forEach((text) => {
+    const cell = document.createElement("th");
+    cell.textContent = text;
+    head.appendChild(cell);
+  });
+  table.appendChild(head);
+  // Model names are user text: built with textContent, never interpolated.
+  routes.forEach((route) => {
+    const row = document.createElement("tr");
+    [route.label, String(route.models), formatShare(route.share)].forEach((text) => {
+      const cell = document.createElement("td");
+      cell.textContent = text;
+      row.appendChild(cell);
+    });
+    table.appendChild(row);
+  });
+
+  if (total === 0 && first === 0) {
+    headline.textContent =
+      "No first-token deadline is set: a silent model holds the request until " +
+      `the transport gives up (HTTP read timeout, currently ${httpRead || 300} s).`;
+    formula.textContent = "";
+    warning.hidden = true;
+    return;
+  }
+  if (routes.length === 0) {
+    headline.textContent =
+      "No route names a model of its own yet, so there is nothing to divide " +
+      "the request budget between.";
+    formula.textContent = "";
+    warning.hidden = true;
+    return;
+  }
+
+  const longest = routes.reduce((best, route) => (route.models > best.models ? route : best));
+  headline.textContent =
+    `With your longest chain (${longest.label}, ${longest.models} models), each ` +
+    `model gets about ${formatShare(longest.share)} to produce its first token.`;
+
+  const terms = [];
+  if (first > 0) terms.push(`the first-token deadline (${first} s)`);
+  if (total > 0) {
+    terms.push(
+      `its share of the total budget (${total} ÷ ${longest.models} = ` +
+        `${formatShare(total / longest.models)})`,
+    );
+  }
+  formula.textContent =
+    terms.length > 1 ? `= the smaller of ${terms.join(" and ")}.` : `= ${terms[0]}.`;
+
+  // One warning at a time, most severe first. The word "Warning" carries the
+  // meaning; the colour is redundant.
+  let text = "";
+  if (first > 0 && total > 0 && total / longest.models < first) {
+    text =
+      "Warning: The first-token deadline never applies on this route -- the " +
+      "budget share is smaller. A total budget of " +
+      `${Math.ceil(first * longest.models)} s would give every model the ` +
+      `${first} s you asked for.`;
+  } else if (httpRead > 0 && Number.isFinite(longest.share) && httpRead < longest.share) {
+    text =
+      `Warning: HTTP read timeout (${httpRead} s) is below the deadline above, ` +
+      "so a slow model produces a transport error instead of a clean handover.";
+  } else if (shutdown > 0 && total > 0 && shutdown < total) {
+    text =
+      `Warning: A reload force-drops requests after ${shutdown} s, before the ` +
+      `${total} s budget expires.`;
+  }
+  warning.textContent = text;
+  warning.hidden = !text;
+}
+
+const BENCH_RATE_KEYS = [
+  "FALLBACK_EJECT_WINDOW",
+  "FALLBACK_EJECT_FAILURE_RATE",
+  "FALLBACK_EJECT_MIN_SAMPLES",
+];
+const BENCH_LEGACY_KEYS = ["FALLBACK_EJECT_AFTER_FAILURES"];
+const BENCH_SHARED_KEYS = [
+  "FALLBACK_EJECT_SECONDS",
+  "FALLBACK_RETRY_FIRST",
+  "FALLBACK_COOLDOWN_STEP_OVER_FLOOR",
+];
+
+/** A control the manifest locked stays locked when a mode group re-enables. */
+function isLockedControl(el) {
+  const key = el.dataset ? el.dataset.key : null;
+  if (!key) return false;
+  return Boolean((state.fields.get(key) || {}).locked);
+}
+
+function applyBenchMode(root, mode, benchEnabled) {
+  root.querySelectorAll("[data-bench-mode]").forEach((group) => {
+    const inert = !benchEnabled || group.dataset.benchMode !== mode;
+    group.classList.toggle("is-inert", inert);
+    group.querySelectorAll("input, select, textarea, button").forEach((el) => {
+      el.disabled = inert || isLockedControl(el);
+    });
+    group.querySelector(".bench-group-note").textContent = inert
+      ? benchEnabled
+        ? `Not used while eject mode is ${mode}.`
+        : "Not used while benching is off."
+      : "";
+  });
+  // changedValues() already skips a disabled control, so the counter has to be
+  // re-read at the moment of the switch or the drop is only discovered at Apply.
+  updateDirtyState();
+}
+
+function benchGroup(mode, legendText, keys, fieldByKey) {
+  const group = document.createElement("fieldset");
+  group.className = "bench-group";
+  group.dataset.benchMode = mode;
+  const legend = document.createElement("legend");
+  legend.textContent = legendText;
+  const note = document.createElement("p");
+  note.className = "bench-group-note";
+  const grid = document.createElement("div");
+  grid.className = "field-grid";
+  keys.forEach((key) => {
+    const field = fieldByKey.get(key);
+    if (field) grid.appendChild(renderField(field));
+  });
+  group.append(legend, note, grid);
+  return group;
+}
+
+function benchHintText(key) {
+  const value = Number(liveValue(key));
+  switch (key) {
+    case "FALLBACK_EJECT_WINDOW":
+    case "FALLBACK_EJECT_FAILURE_RATE": {
+      const window = Number(liveValue("FALLBACK_EJECT_WINDOW"));
+      const rate = Number(liveValue("FALLBACK_EJECT_FAILURE_RATE"));
+      if (!Number.isFinite(window) || !Number.isFinite(rate) || window <= 0 || rate <= 0) return "";
+      return `benched after ${Math.ceil(window * rate)} of the last ${window} requests fail`;
+    }
+    case "FALLBACK_EJECT_MIN_SAMPLES":
+      if (!Number.isFinite(value) || value <= 0) return "";
+      return `no model is benched until ${value} of its requests have been seen`;
+    case "FALLBACK_EJECT_AFTER_FAILURES":
+      if (!Number.isFinite(value)) return "";
+      return value <= 0 ? "benching by count is off" : `${value} failures in a row`;
+    case "FALLBACK_EJECT_SECONDS":
+      if (!Number.isFinite(value) || value < 0) return "";
+      return `a benched model stays out for ${formatSeconds(value)}`;
+    case "FALLBACK_COOLDOWN_STEP_OVER_FLOOR":
+      if (!Number.isFinite(value) || value < 0) return "";
+      return `a model whose cooldown has ${formatSeconds(value)} or less left is tried anyway`;
+    default:
+      return "";
+  }
+}
+
+function renderBenching(fields) {
+  const fieldByKey = new Map(fields.map((field) => [field.key, field]));
+  const wrap = document.createElement("div");
+  const hints = new Map();
+
+  const master = document.createElement("div");
+  master.className = "bench-master";
+  const enabled = fieldByKey.get("FALLBACK_BENCH_ENABLED");
+  // No consequence line of its own: the field's own help already says that
+  // OFF makes every Eject setting below inert, and saying it twice in one
+  // card reads as two different rules.
+  if (enabled) master.appendChild(renderField(enabled));
+  wrap.appendChild(master);
+
+  const modeRow = document.createElement("div");
+  modeRow.className = "bench-mode";
+  const behavior = fieldByKey.get("FALLBACK_BEHAVIOR");
+  if (behavior) modeRow.appendChild(renderField(behavior));
+  const modeNote = document.createElement("p");
+  modeNote.className = "bench-group-note";
+  modeNote.textContent =
+    "The unused mode's controls stay on the page but are not saved, so " +
+    "switching mode drops a pending edit to them from the next Apply.";
+  modeRow.appendChild(modeNote);
+  wrap.appendChild(modeRow);
+
+  wrap.appendChild(benchGroup("rate_based", "Rate-based ejection", BENCH_RATE_KEYS, fieldByKey));
+  wrap.appendChild(benchGroup("legacy", "Legacy ejection", BENCH_LEGACY_KEYS, fieldByKey));
+
+  const shared = document.createElement("div");
+  shared.className = "field-grid";
+  BENCH_SHARED_KEYS.forEach((key) => {
+    const field = fieldByKey.get(key);
+    if (field) shared.appendChild(renderField(field));
+  });
+  wrap.appendChild(shared);
+
+  // FALLBACK_SKIP_KINDS is a routing decision and renders once, on Model
+  // Config. A setting rendered on two pages is a setting that can show two
+  // answers, and changedValues() would submit whichever control it walked last.
+  const crosslink = document.createElement("p");
+  crosslink.className = "bench-crosslink";
+  crosslink.append(
+    document.createTextNode(
+      "Which failure kinds end a route instead of trying the next model is set on ",
+    ),
+  );
+  const link = document.createElement("a");
+  link.href = "#";
+  link.textContent = "Model Config";
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    setActiveView("model_config", { scroll: true });
+    const target = byId("field-FALLBACK_SKIP_KINDS");
+    if (target) target.focus();
+  });
+  crosslink.append(link, document.createTextNode("."));
+  wrap.appendChild(crosslink);
+
+  const claimed = new Set([
+    "FALLBACK_BENCH_ENABLED",
+    "FALLBACK_BEHAVIOR",
+    ...BENCH_RATE_KEYS,
+    ...BENCH_LEGACY_KEYS,
+    ...BENCH_SHARED_KEYS,
+  ]);
+  const unclaimed = fields.filter((field) => !claimed.has(field.key));
+  if (unclaimed.length) {
+    const rest = document.createElement("div");
+    rest.className = "field-grid";
+    unclaimed.forEach((field) => rest.appendChild(renderField(field)));
+    wrap.appendChild(rest);
+  }
+
+  [...BENCH_RATE_KEYS, ...BENCH_LEGACY_KEYS, ...BENCH_SHARED_KEYS].forEach((key) => {
+    const wrapper = wrap.querySelector(`.field[data-key="${key}"]`);
+    if (wrapper) hints.set(key, attachHint(wrapper));
+  });
+  const paintHints = () => {
+    hints.forEach((hint, key) => {
+      hint.textContent = benchHintText(key);
+    });
+  };
+  paintHints();
+
+  const modeInput = modeRow.querySelector(CONTROL_FOR_KEY("FALLBACK_BEHAVIOR"));
+  const enabledInput = master.querySelector(CONTROL_FOR_KEY("FALLBACK_BENCH_ENABLED"));
+  const apply = () => {
+    // An unset select reads "" and would match neither mode, leaving both
+    // groups inert on first paint -- read what the control effectively means.
+    const mode = modeInput ? effectiveControlValue(modeInput) : "rate_based";
+    const on = enabledInput ? effectiveControlValue(enabledInput) !== "false" : true;
+    applyBenchMode(wrap, mode, on);
+  };
+  if (modeInput) modeInput.addEventListener("change", apply);
+  if (enabledInput) enabledInput.addEventListener("change", apply);
+  wrap.addEventListener("input", paintHints);
+  wrap.addEventListener("change", paintHints);
+  apply();
+  return wrap;
+}
+
+/** 86400 reads "24h" through formatSeconds; a lockout ladder is read in days. */
+function formatLockoutSpan(seconds) {
+  const value = Math.max(0, Math.round(seconds));
+  if (value >= 86400 && value % 86400 === 0) return `${value / 86400}d`;
+  return formatSeconds(value);
+}
+
+function describeLockoutTiers(raw) {
+  const parts = String(raw)
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const seconds = parts.map(Number);
+  if (!seconds.length || seconds.some((value) => !Number.isFinite(value) || value <= 0)) {
+    return "Enter one or more positive numbers of seconds, separated by commas.";
+  }
+  const ordinals = ["1st", "2nd", "3rd"];
+  return seconds
+    .map((value, index) => {
+      const ordinal = ordinals[index] || `${index + 1}th`;
+      const last = index === seconds.length - 1;
+      const lead = index === 0 ? `${ordinal} auth failure` : ordinal;
+      return `${lead}${last ? " and after" : ""}: ${formatLockoutSpan(value)} out`;
+    })
+    .join(" · ");
+}
+
+function poolNameFromKey(key) {
+  return key
+    .replace(/_(API_KEY|TOKEN|KEY)$/, "")
+    .toLowerCase();
+}
+
+function renderCredentialHealth(fields) {
+  const wrap = document.createElement("div");
+  const grid = document.createElement("div");
+  grid.className = "field-grid";
+  const wrappers = new Map();
+  fields.forEach((field) => {
+    const rendered = renderField(field);
+    wrappers.set(field.key, rendered);
+    grid.appendChild(rendered);
+  });
+  wrap.appendChild(grid);
+
+  const tiers = wrappers.get("CREDENTIAL_LOCKOUT_TIERS");
+  if (tiers) {
+    const hint = attachHint(tiers);
+    const paint = () => {
+      hint.textContent = describeLockoutTiers(liveValue("CREDENTIAL_LOCKOUT_TIERS"));
+    };
+    const input = tiers.querySelector("input, select, textarea");
+    if (input) {
+      input.addEventListener("input", paint);
+      input.addEventListener("change", paint);
+    }
+    paint();
+  }
+
+  const rule = document.createElement("p");
+  rule.className = "field-description";
+  rule.textContent =
+    "A 401/403 walks the lockout ladder; a 429 benches the key for the " +
+    "provider's Retry-After, or the cooldown above when it sends none; a " +
+    "timeout or 5xx costs a key nothing.";
+  wrap.appendChild(rule);
+
+  // Rotation is per pool and the provider card owns it; this is a readout, and
+  // the credential value is masked server-side so no key count is invented.
+  const pools = [];
+  state.fields.forEach((field, key) => {
+    if (!key.endsWith("_ROTATION")) return;
+    const credentialKey = key.slice(0, -"_ROTATION".length);
+    const credential = state.fields.get(credentialKey);
+    if (!credential || !credential.configured) return;
+    pools.push({
+      // Websearch rotation fields carry no provider, so the env key is the
+      // only name there is: read it as a pool name rather than as shouting.
+      label: field.provider || poolNameFromKey(credentialKey),
+      mode: String(field.value || field.default || "").trim() || "default",
+      credentialKey,
+    });
+  });
+  if (pools.length) {
+    const heading = document.createElement("p");
+    heading.className = "rotation-summary-heading";
+    heading.textContent = "Rotation, per pool";
+    wrap.appendChild(heading);
+    const list = document.createElement("ul");
+    list.className = "rotation-summary";
+    pools.forEach((pool) => {
+      const item = document.createElement("li");
+      item.append(document.createTextNode(`${pool.label} — ${pool.mode} `));
+      const open = document.createElement("a");
+      open.href = "#";
+      open.dataset.openProvider = pool.label;
+      open.textContent = "Open provider card";
+      open.addEventListener("click", (event) => {
+        event.preventDefault();
+        state.reopenKeyManager = pool.credentialKey;
+        setActiveView("providers", { scroll: true });
+      });
+      item.appendChild(open);
+      list.appendChild(item);
+    });
+    wrap.appendChild(list);
+  }
+  return wrap;
+}
+
 // Wave-2 cross-lane contract: the config GET payload carries a top-level
 // `messaging_auth_open` array naming every platform any unauthenticated
 // client can message right now ([] once every platform is locked behind an
@@ -1164,6 +1708,23 @@ function renderMessagingAuthNotice(openPlatforms) {
     "DISCORD_ALLOWED_CHANNEL_IDS.";
   view.insertBefore(notice, sections);
 }
+
+/* Per-section renderers. A section absent from this table renders as the
+   generic field grid, which is still what most sections want; adding a
+   renderer here must never change how any other section renders.
+
+   `providers` is grouped, searchable cards rather than catalog order in one
+   flat grid, which stopped scaling past 30 providers to scan; each provider's
+   own advanced fields (proxy, etc.) move into that provider's card instead of
+   floating in the same grid. */
+const SECTION_RENDERERS = {
+  models: renderModelRouting,
+  optimizer: renderOptimizerSettings,
+  providers: renderProviderGroups,
+  deadlines: renderDeadlines,
+  benching: renderBenching,
+  credential_health: renderCredentialHealth,
+};
 
 function renderSections(sections, fields) {
   state.modelComboboxes.clear();
@@ -1223,17 +1784,9 @@ function renderSections(sections, fields) {
       }
       sectionEl.appendChild(heading);
 
-      if (section.id === "models") {
-        sectionEl.appendChild(renderModelRouting(gridFields));
-      } else if (section.id === "optimizer") {
-        sectionEl.appendChild(renderOptimizerSettings(gridFields));
-      } else if (section.id === "providers") {
-        // Catalog order in one flat grid stopped scaling once there were 30+
-        // providers to scan; grouped, searchable cards replace it, and each
-        // provider's own advanced fields (proxy, etc.) move into that
-        // provider's card instead of floating in the same grid. See
-        // renderProviderGroups().
-        sectionEl.appendChild(renderProviderGroups(gridFields));
+      const renderer = SECTION_RENDERERS[section.id];
+      if (renderer) {
+        sectionEl.appendChild(renderer(gridFields));
       } else {
         const grid = document.createElement("div");
         grid.className = "field-grid";
@@ -1260,6 +1813,14 @@ function renderSections(sections, fields) {
       container.appendChild(sectionEl);
     });
   });
+
+  // The limits rail's targets are rendered, not static markup, so the observer
+  // cannot be set up at script evaluation time the way the guide's is. Guarded
+  // so a re-render after load() does not stack observers.
+  if (!limitsScrollspyBound && document.querySelector("#limitsToc a")) {
+    limitsScrollspyBound = true;
+    setupScrollspy("#limitsToc");
+  }
 }
 
 function prefersReducedMotion() {
@@ -1665,13 +2226,25 @@ function renderField(field) {
 
   const { input, control } = buildFieldControl(field);
   wrapper.append(label, control);
+  // Bounds, then provenance, then prose. The range used to be the last
+  // sentence of an up-to-80-word paragraph, which is where nobody looked.
+  if (field.range_hint) {
+    const hint = document.createElement("div");
+    hint.className = "field-range";
+    hint.id = `range-${field.key}`;
+    hint.textContent = `Accepts ${field.range_hint}`;
+    wrapper.appendChild(hint);
+    describedBy(input, hint.id);
+  }
   const meta = fieldMetaRow(field, input);
   if (meta) wrapper.appendChild(meta);
   if (field.description) {
     const description = document.createElement("div");
     description.className = "field-description";
+    description.id = `desc-${field.key}`;
     description.textContent = field.description;
     wrapper.appendChild(description);
+    describedBy(input, description.id);
   }
   if (
     field.secret &&
@@ -3546,6 +4119,9 @@ async function refreshConfigState() {
     }
   });
   updateWebSearchCardsFromState();
+  // state.fields is the calculator's fallback when a control has not been
+  // touched, so a refresh that repopulates it must repaint the readout.
+  updateDeadlineCalculator();
 }
 
 async function toggleKeyManager(provider, panel, button) {
@@ -8846,9 +9422,9 @@ function setupGuideScreenshots() {
   });
 }
 
-/** Mark the section currently being read in the guide's contents list. */
-function setupGuideScrollspy() {
-  const links = Array.from(document.querySelectorAll(".guide-toc a"));
+/** Mark the section currently being read in an in-page contents rail. */
+function setupScrollspy(railSelector) {
+  const links = Array.from(document.querySelectorAll(`${railSelector} a`));
   if (links.length === 0) return;
   const byHash = new Map(links.map((link) => [link.getAttribute("href"), link]));
   const headings = links
@@ -8926,7 +9502,7 @@ function setupGuideCodeCopy() {
 }
 
 setupGuideScreenshots();
-setupGuideScrollspy();
+setupScrollspy(".guide-toc");
 setupGuideCodeCopy();
 
 

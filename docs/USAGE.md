@@ -28,9 +28,10 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [The Token Optimizer page](#the-token-optimizer-page)
 - [11. Multi-key rotation](#11-multi-key-rotation)
   - [The RTK token optimizer](#the-rtk-token-optimizer)
-- [12. Updating](#12-updating)
-- [13. Security and networking](#13-security-and-networking)
-- [14. Troubleshooting](#14-troubleshooting)
+- [12. Limits and resilience](#12-limits-and-resilience)
+- [13. Updating](#13-updating)
+- [14. Security and networking](#14-security-and-networking)
+- [15. Troubleshooting](#15-troubleshooting)
 
 ---
 
@@ -142,7 +143,7 @@ On first run, the dashboard opens straight to a **Get Started** checklist instea
 | **Proxy API** | `http://127.0.0.1:8082` | your coding agent |
 | **Admin UI** | `http://127.0.0.1:8082/admin` | you, in a browser |
 
-Same port. The Admin UI is additionally restricted to loopback callers — see [Security and networking](#13-security-and-networking).
+Same port. The Admin UI is additionally restricted to loopback callers — see [Security and networking](#14-security-and-networking).
 
 ### Running the server with the desktop tray
 
@@ -292,7 +293,7 @@ would override the one you configure here.
 - `ANTHROPIC_BASE_URL` points Claude Code at your local server.
 - `ANTHROPIC_AUTH_TOKEN` is sent as a bearer token. It must match the proxy's own `ANTHROPIC_AUTH_TOKEN`, which ships as `freecc` in `.env.example`. If you changed it in the Admin UI, use your value here.
 
-> **On the token:** it authenticates your agent *to the proxy*, nothing more. It is not a provider key. If you clear `ANTHROPIC_AUTH_TOKEN` on the server, the proxy stops requiring authentication altogether — convenient on a single-user machine, but read [Security and networking](#13-security-and-networking) first.
+> **On the token:** it authenticates your agent *to the proxy*, nothing more. It is not a provider key. If you clear `ANTHROPIC_AUTH_TOKEN` on the server, the proxy stops requiring authentication altogether — convenient on a single-user machine, but read [Security and networking](#14-security-and-networking) first.
 
 ### Step 3 — restart Claude Code and verify
 
@@ -800,7 +801,7 @@ REQUEST_LOG_TEXT_MAX_CHARS=50000   # longer text is truncated before storage
 REQUEST_LOG_COMPRESSION_LEVEL=9    # 1-22; 19 measured 4.9% smaller at 9x the time
 ```
 
-All of these are editable in **Admin UI → Limits** without touching the file. Leaving one blank means "use the default" rather than "invalid", so clearing a field can never stop the server starting, and a value outside its range is refused by the form and clamped (with a warning) if it was edited into the file by hand.
+All of these are editable in **Admin UI → Analytics** without touching the file — they are the **Request log storage** card at the bottom of the same page whose contents they govern. Leaving one blank means "use the default" rather than "invalid", so clearing a field can never stop the server starting, and a value outside its range is refused by the form and clamped (with a warning) if it was edited into the file by hand.
 
 Two things not to worry about: the dictionary trains itself once the log has seen a few hundred requests, and each blob records which dictionary compressed it, so retraining never orphans an older row.
 
@@ -899,7 +900,7 @@ Each key carries its own state, and only two things change it. A **401/403** loc
 
 A **rate-limited key is benched for exactly as long as the provider says** — parsed from `Retry-After`, `retry-after-ms` or `x-ratelimit-reset-*` — rather than an invented fixed delay. A key that resets in one second isn't idled for a minute, and one that needs an hour isn't hammered.
 
-Per-key state, usage and health are visible in the Admin UI, including which key served which request.
+Per-key state, usage and health are visible in the Admin UI, including which key served which request; the ladder and the no-header cooldown are the **Credential health** card on [Limits and resilience](#12-limits-and-resilience).
 
 ### The RTK token optimizer
 
@@ -923,7 +924,53 @@ MCC reads RTK's own `rtk gain` report and shows the resulting savings on the [To
 
 ---
 
-## 12. Updating
+## 12. Limits and resilience
+
+<div align="center">
+  <img src="../assets/admin-limits.png" alt="Limits and resilience configuration" width="860">
+</div>
+
+**Admin UI → Limits & Resilience** holds every setting that decides how long MCC waits, how hard it retries, and when it stops. Six cards, one per question, reachable from the nav rail down the side of the page. Every numeric field carries its accepted range on its own line under the input, so you can see what a box will take without reading the help text.
+
+### Output & thinking budgets
+
+How large one answer may be. MCC sizes `max_tokens` from the routed model's own published limit; these settings only cover what the model cannot answer for itself — the budget used when nobody publishes a limit, an optional absolute ceiling, the tokens held back so a large output limit cannot swallow its own context window, the smallest bounded budget that reserve may produce, and the answer reserve kept back while extended thinking is on.
+
+### Deadlines
+
+When to stop waiting. The first-token deadline, the whole-request budget, the stall deadline for a stream that started and then went quiet, how long a model may think before the chain moves on, whether reasoning is held back so a thinking model can still be replaced, the commit holdback that keeps a recovery invisible, the three transport timeouts underneath all of it, and how long a closing process gives in-flight requests to drain.
+
+**A model's first-token allowance is not the first-token deadline.** Each attempt gets an equal share of whatever is left of the total budget, counting itself and every model still behind it on the chain, and what is actually applied is the smaller of that share and the first-token deadline. With the shipped defaults — 600s total, 120s first token — a route with ten models gives the first model `min(120, 600 ÷ 10)` = **60s**, and the 120 in the box never applies to that route at all. A total budget of 1,200s is what it would take for ten attempts to each be allowed the 120 you asked for.
+
+The Deadlines card works this out for you. It shows one row per configured route — Default, Fable, Opus, Sonnet, Haiku, Vision — with the arithmetic for that route's chain length, and where the first-token number cannot be honoured it names the total budget that would honour it. Routes with no model of their own are left out, because they run on `MODEL` and its chain.
+
+It is a model of the executor, not the executor. It does not know about time already spent earlier in the request, about **Retry primary once** adding an attempt, about a benched model shortening the chain, or about the reasoning path taking over. The card says so where it sits.
+
+### Chain benching
+
+When to stop trying a model. **Bench failures** is the master switch: turn it off and every other control in the card is inert, and a failing model is tried again on every request.
+
+With it on, **Eject mode** picks the arithmetic. `rate_based` (the default) benches a model when at least the failure-rate threshold of its last N requests failed, with a minimum sample count so one bad request on a quiet model cannot trip it. `legacy` benches after a number of *consecutive* failures instead. Each mode ignores the other's settings. Both share how long a benched model stays out of routing, whether the primary gets one more chance before the chain is used, and the shortest remaining rate-limit cooldown that makes stepping over a model worth the chain slot it costs.
+
+Benching never empties a chain: if every model on a route is benched they are tried in order anyway. Which failures abort the chain instead of falling through is a routing decision, not a resilience one, so `FALLBACK_SKIP_KINDS` stays on **Model Config**; the card links across to it.
+
+### Provider retries & throughput
+
+How hard one model is tried before the chain is used at all: the retries on a 429 or 5xx, the attempts a provider makes on its own before routing ever sees the failure, the recovery attempts after output has started and the connection dropped, and the exponential backoff between them — first wait, ceiling, and the random jitter that stops several clients retrying in lockstep. The same card carries the client-side pace: requests per window, the window, and how many streams one provider may have open at once.
+
+### Credential health
+
+What one key's failures cost it, and it is a short list. A **401 or 403** walks the lockout ladder — `CREDENTIAL_LOCKOUT_TIERS`, five minutes then an hour then a day by default, one step per consecutive rejection and staying at the last entry. A **429** benches the key for exactly as long as the provider asked in its `Retry-After`, or for `RATE_LIMIT_COOLDOWN_SECONDS` when it sends no header. A **timeout or a 5xx costs a key nothing at all**, because the same keys serve every model in your chain and neither failure is the key's doing.
+
+### Diagnostics
+
+The logging flags, and the log level that used to sit on its own. Leave them off unless you are chasing something: they are verbose by design.
+
+Two cards that used to live here now sit where you see their effect. The `REQUEST_LOG_*` retention settings are at the bottom of **Analytics**, and the `DESKTOP_*` settings are on **Providers**, beside the live desktop panel.
+
+---
+
+## 13. Updating
 
 <div align="center">
   <img src="../assets/admin-version.png" alt="Version panel" width="860">
@@ -957,7 +1004,7 @@ Re-running the install command does exactly the same thing and always fetches th
 
 ---
 
-## 13. Security and networking
+## 14. Security and networking
 
 Worth understanding before you expose anything.
 
@@ -984,7 +1031,7 @@ Provider API keys are never sent to your agent, never written to the analytics s
 
 ---
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 **`mcc-server: command not found` right after installing.**
 Close and reopen your terminal. The installer extends `PATH`; an existing shell won't see it. This is the single most common install issue.

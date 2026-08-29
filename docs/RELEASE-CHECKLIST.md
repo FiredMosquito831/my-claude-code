@@ -98,6 +98,13 @@ Captured views to refresh:
 - `assets/admin-model-config.png`, `assets/admin-websearch.png`
 - `assets/admin-key-performance.png`, `assets/admin-requests.png`
 - `assets/admin-messaging.png`, `assets/admin-update-banner.png`
+- `assets/admin-limits.png`
+
+The in-dashboard Guide serves its **own** copies from
+`src/my_claude_code/api/admin_static/img/`, which is a different set of files
+from `assets/`. Re-capturing one set does not update the other, and nothing
+checks that they match, so refresh both together or the Guide keeps showing
+the previous release's dashboard.
 
 ## 5. Pre-release verification
 

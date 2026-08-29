@@ -74,7 +74,7 @@ const FIELDS = [
   {
     key: "REQUEST_LOG_MAX_ROWS",
     label: "Retained rows",
-    section: "limits",
+    section: "request_log",
     type: "number",
     value: "200000",
     default: "200000",
@@ -86,7 +86,7 @@ const FIELDS = [
   {
     key: "FALLBACK_BENCH_ENABLED",
     label: "Bench failures",
-    section: "limits",
+    section: "benching",
     type: "select",
     value: "",
     default: "true",
@@ -102,7 +102,7 @@ const FIELDS = [
   {
     key: "LOG_LEVEL",
     label: "Log level",
-    section: "limits",
+    section: "diagnostics",
     type: "select",
     value: "DEBUG",
     default: "INFO",
@@ -116,17 +116,161 @@ const FIELDS = [
   {
     key: "MODEL",
     label: "Default Model",
-    section: "providers",
+    section: "models",
     type: "text",
     value: "p1/m1",
     default: "",
+  },
+  /* Routes the deadline calculator divides the budget between. Opus is the
+     longest chain (10), Sonnet 3, Haiku 1, and Fable is empty on both halves
+     so the "a route with no model of its own is skipped" branch is exercised
+     -- it falls back to MODEL, and counting it would double-count Default.
+     Vision's primary is markup, which must render as text. */
+  ...[
+    ["MODEL_FALLBACKS", ""],
+    ["MODEL_FABLE", ""],
+    ["MODEL_FABLE_FALLBACKS", ""],
+    ["MODEL_OPUS", "p1/o0"],
+    [
+      "MODEL_OPUS_FALLBACKS",
+      "p1/o1,p1/o2,p1/o3,p1/o4,p1/o5,p1/o6,p1/o7,p1/o8,p1/o9",
+    ],
+    ["MODEL_SONNET", "p1/s0"],
+    ["MODEL_SONNET_FALLBACKS", "p1/s1,p1/s2"],
+    ["MODEL_HAIKU", "p1/h0"],
+    ["MODEL_HAIKU_FALLBACKS", ""],
+    ["MODEL_VISION", "<img src=x onerror=boom()>"],
+    ["MODEL_VISION_FALLBACKS", ""],
+  ].map(([key, value]) => ({
+    key,
+    label: key,
+    section: "models",
+    // Plain text, not the chain editor: the calculator reads the joined
+    // string off [data-key], and the editor's own hidden input carries the
+    // same attribute, so the read path is identical either way.
+    type: "text",
+    value,
+    default: "",
+  })),
+  /* The Limits & Resilience payload. Realistic numbers, because the
+     calculator's arithmetic is asserted against hand-computed values. */
+  ...[
+    ["MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT", "budgets", "32768", "0 to 1048576"],
+    ["MAX_OUTPUT_TOKENS_CEILING", "budgets", "", "0 to 1048576"],
+    ["MAX_OUTPUT_TOKENS_CONTEXT_MARGIN", "budgets", "1024", "0 to 1048576"],
+    ["MAX_OUTPUT_TOKENS_CONTEXT_FLOOR", "budgets", "1024", "0 to 1048576"],
+    ["REASONING_ANSWER_FLOOR_MAX", "budgets", "8192", "0 to 1048576"],
+    [
+      "FALLBACK_FIRST_TOKEN_TIMEOUT",
+      "deadlines",
+      "120",
+      "0 to 3600 (0 waits indefinitely for the first token)",
+    ],
+    ["FALLBACK_TOTAL_TIMEOUT", "deadlines", "600", "0 to 86400"],
+    ["FALLBACK_STALL_TIMEOUT", "deadlines", "120", "0 to 3600"],
+    ["FALLBACK_REASONING_ANSWER_TIMEOUT", "deadlines", "300", "0 to 3600"],
+    ["STREAM_COMMIT_HOLDBACK_SECONDS", "deadlines", "0", "0 to 60"],
+    ["HTTP_READ_TIMEOUT", "deadlines", "300", "1 to 3600"],
+    ["HTTP_WRITE_TIMEOUT", "deadlines", "60", "1 to 3600"],
+    ["HTTP_CONNECT_TIMEOUT", "deadlines", "60", "1 to 600"],
+    ["SERVER_GRACEFUL_SHUTDOWN_SECONDS", "deadlines", "300", "0 to 3600"],
+    ["FALLBACK_EJECT_WINDOW", "benching", "10", "1 to 1000"],
+    ["FALLBACK_EJECT_FAILURE_RATE", "benching", "0.5", "0 to 1"],
+    ["FALLBACK_EJECT_MIN_SAMPLES", "benching", "8", "1 to 1000"],
+    ["FALLBACK_EJECT_AFTER_FAILURES", "benching", "3", "0 to 100"],
+    ["FALLBACK_EJECT_SECONDS", "benching", "30", "0 to 86400"],
+    ["FALLBACK_COOLDOWN_STEP_OVER_FLOOR", "benching", "5", "0 to 3600"],
+    ["PROVIDER_RETRY_ATTEMPTS", "provider_retries", "2", "0 to 10"],
+    ["RATE_LIMIT_COOLDOWN_SECONDS", "credential_health", "60", "0 to 86400"],
+  ].map(([key, section, value, rangeHint]) => ({
+    key,
+    label: key,
+    section,
+    type: "number",
+    value,
+    default: value || "0",
+    range_hint: rangeHint,
+    description: `What ${key} decides.`,
+  })),
+  // The nine storage fields now live on Analytics, and the desktop card now
+  // lives on Providers: both moves are asserted, so both need a payload.
+  ...[
+    ["REQUEST_LOG_ENABLED", "boolean", "true"],
+    ["REQUEST_LOG_CAPTURE_BODIES", "boolean", "true"],
+    ["REQUEST_LOG_COMPRESS_BODIES", "boolean", "true"],
+    ["REQUEST_LOG_CAPTURE_IMAGES", "boolean", "true"],
+    ["REQUEST_LOG_IMAGE_MAX_PIXELS", "number", "4000000"],
+    ["REQUEST_LOG_TEXT_MAX_CHARS", "number", "2000000"],
+    ["REQUEST_LOG_COMPRESSION_LEVEL", "number", "6"],
+    ["REQUEST_LOG_QUEUE_MAX_SIZE", "number", "10000"],
+  ].map(([key, type, value]) => ({
+    key,
+    label: key,
+    section: "request_log",
+    type,
+    value,
+    default: value,
+  })),
+  ...["DESKTOP_HEALTH_POLL_SECONDS", "DESKTOP_WINDOW_WIDTH"].map((key) => ({
+    key,
+    label: key,
+    section: "desktop",
+    type: "number",
+    value: "10",
+    default: "10",
+  })),
+  {
+    key: "FALLBACK_RETRY_FIRST",
+    label: "Retry the first model once",
+    section: "benching",
+    type: "boolean",
+    value: "false",
+    default: "false",
+  },
+  {
+    key: "FALLBACK_BEHAVIOR",
+    label: "Eject mode",
+    section: "benching",
+    type: "select",
+    value: "rate_based",
+    default: "rate_based",
+    set: true,
+    source: "managed_env",
+    options: [
+      { value: "rate_based", label: "rate_based" },
+      { value: "legacy", label: "legacy" },
+    ],
+  },
+  {
+    key: "CREDENTIAL_LOCKOUT_TIERS",
+    label: "Lockout ladder",
+    section: "credential_health",
+    type: "text",
+    value: "300,3600,86400",
+    default: "300,3600,86400",
   },
 ];
 
 const SECTIONS = [
   { id: "providers", label: "Providers", description: "" },
+  { id: "models", label: "Model Routing", description: "Where each tier sends." },
   { id: "optimizer", label: "Tool-result trimming", description: "" },
-  { id: "limits", label: "Limits", description: "" },
+  { id: "budgets", label: "Output & thinking budgets", description: "How big an answer." },
+  { id: "deadlines", label: "Deadlines", description: "How long a model may hold it." },
+  { id: "benching", label: "Chain benching", description: "When to stop trying a model." },
+  {
+    id: "provider_retries",
+    label: "Provider retries & throughput",
+    description: "How hard one model is retried.",
+  },
+  {
+    id: "credential_health",
+    label: "Credential health",
+    description: "What a key's failures cost it.",
+  },
+  { id: "request_log", label: "Request log storage", description: "What the log keeps." },
+  { id: "diagnostics", label: "Diagnostics", description: "Logging flags." },
+  { id: "desktop", label: "Desktop", description: "Tray and window timing." },
 ];
 
 const daily = (n) =>
@@ -539,6 +683,143 @@ const segDisabledWhileMasterOff = optimizer
     )
   : null;
 
+/* -------------------------------------------------- limits & resilience
+   Snapshot the six cards, the calculator's arithmetic and the derived
+   readouts, then drive the two mode switches and one deadline edit. */
+const textOf = (root, selector) => {
+  const el = root ? root.querySelector(selector) : null;
+  return el ? (el.textContent || "").replace(/\s+/g, " ").trim() : null;
+};
+const benchGroupsNow = () =>
+  limitsView
+    ? Array.from(limitsView.querySelectorAll("[data-bench-mode]")).map((group) => ({
+        mode: group.dataset.benchMode,
+        inert: group.classList.contains("is-inert"),
+        disabled: Array.from(group.querySelectorAll("input, select, textarea")).every(
+          (el) => el.disabled,
+        ),
+        note: textOf(group, ".bench-group-note"),
+      }))
+    : [];
+const calcRowsNow = () =>
+  limitsView
+    ? Array.from(limitsView.querySelectorAll("#calcTable tr")).map((tr) =>
+        Array.from(tr.children).map((cell) => cell.textContent.trim()),
+      )
+    : [];
+const hintOf = (key) => textOf(rowIn(key), ".field-hint");
+const tocLinks = Array.from(doc.querySelectorAll("#limitsToc a")).map((a) =>
+  a.getAttribute("href"),
+);
+const calcWarningEl = limitsView ? limitsView.querySelector("#calcWarning") : null;
+
+const limits = {
+  cardIds: limitsView
+    ? Array.from(limitsView.querySelectorAll(".settings-section")).map((el) => el.id)
+    : [],
+  cardTitles: limitsView
+    ? Array.from(limitsView.querySelectorAll(".settings-section .section-heading h3")).map(
+        (el) => el.textContent.trim(),
+      )
+    : [],
+  cardDescriptions: limitsView
+    ? Array.from(limitsView.querySelectorAll(".settings-section .section-heading p")).map(
+        (el) => el.textContent.trim(),
+      )
+    : [],
+  /* A card whose every field is behind "Show advanced" renders a heading, a
+     description and nothing else. That is the failure this counts. */
+  cardVisibleFields: limitsView
+    ? Array.from(limitsView.querySelectorAll(".settings-section")).map(
+        (el) => el.querySelectorAll(".field:not(.advanced-field)").length,
+      )
+    : [],
+  calcHeadline: textOf(limitsView, "#calcHeadline"),
+  calcFormula: textOf(limitsView, "#calcFormula"),
+  calcWarning: textOf(limitsView, "#calcWarning"),
+  calcWarningHidden: calcWarningEl ? calcWarningEl.hidden : null,
+  calcRows: calcRowsNow(),
+  calcTableHtml: limitsView
+    ? (limitsView.querySelector("#calcTable") || { innerHTML: "" }).innerHTML
+    : "",
+  benchGroups: benchGroupsNow(),
+  hints: {
+    FALLBACK_EJECT_WINDOW: hintOf("FALLBACK_EJECT_WINDOW"),
+    FALLBACK_EJECT_MIN_SAMPLES: hintOf("FALLBACK_EJECT_MIN_SAMPLES"),
+    FALLBACK_EJECT_AFTER_FAILURES: hintOf("FALLBACK_EJECT_AFTER_FAILURES"),
+    FALLBACK_EJECT_SECONDS: hintOf("FALLBACK_EJECT_SECONDS"),
+    CREDENTIAL_LOCKOUT_TIERS: hintOf("CREDENTIAL_LOCKOUT_TIERS"),
+  },
+  ranges: {
+    count: limitsView ? limitsView.querySelectorAll(".field-range").length : 0,
+    FALLBACK_FIRST_TOKEN_TIMEOUT: textOf(
+      rowIn("FALLBACK_FIRST_TOKEN_TIMEOUT"),
+      ".field-range",
+    ),
+    describedBy: controlIn("FALLBACK_FIRST_TOKEN_TIMEOUT")
+      ? controlIn("FALLBACK_FIRST_TOKEN_TIMEOUT").getAttribute("aria-describedby")
+      : null,
+  },
+  crosslinks: limitsView ? limitsView.querySelectorAll(".bench-crosslink").length : 0,
+  crosslinkText: textOf(limitsView, ".bench-crosslink"),
+  skipKindsOnLimits: limitsView
+    ? limitsView.querySelectorAll('[data-key="FALLBACK_SKIP_KINDS"]').length
+    : 0,
+  tocLinks,
+  deadLinks: tocLinks.filter((href) => !doc.querySelector(href)).length,
+  requestLogCards: requestsView
+    ? Array.from(requestsView.querySelectorAll(".settings-section")).map((el) => ({
+        id: el.id,
+        fields: el.querySelectorAll(".field").length,
+      }))
+    : [],
+  desktopCardView: doc.getElementById("section-desktop")
+    ? doc.getElementById("section-desktop").closest(".admin-view").dataset.view
+    : null,
+};
+
+// (a) switch to legacy: the rate_based knobs go inert, and the counter must
+// read one setting -- the mode -- not one plus the knobs it just disabled.
+const modeSelect = controlIn("FALLBACK_BEHAVIOR");
+if (modeSelect) {
+  modeSelect.value = "legacy";
+  modeSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+  limits.afterLegacy = {
+    benchGroups: benchGroupsNow(),
+    dirty: (doc.getElementById("dirtyState") || {}).textContent || null,
+    windowStillInDom: Boolean(controlIn("FALLBACK_EJECT_WINDOW")),
+    windowValue: controlIn("FALLBACK_EJECT_WINDOW")
+      ? controlIn("FALLBACK_EJECT_WINDOW").value
+      : null,
+    submitted: Object.keys(window.eval("changedValues()")),
+  };
+}
+
+// (b) benching off: both groups inert, whatever the mode says.
+const benchSelect = controlIn("FALLBACK_BENCH_ENABLED");
+if (benchSelect) {
+  benchSelect.value = "false";
+  benchSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+  limits.afterBenchOff = { benchGroups: benchGroupsNow() };
+}
+
+// (c) raise the total budget: the calculator recomputes without a reload.
+const totalInput = controlIn("FALLBACK_TOTAL_TIMEOUT");
+if (totalInput) {
+  totalInput.value = "1200";
+  totalInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+  limits.calcHeadlineAfterEdit = textOf(limitsView, "#calcHeadline");
+  limits.calcRowsAfterEdit = calcRowsNow();
+}
+
+// Every control the drive touched goes back to what it loaded with: the
+// optimizer's own dirty assertion below counts from zero.
+[modeSelect, benchSelect, totalInput].forEach((control) => {
+  if (!control) return;
+  control.value = control.dataset.original;
+  control.dispatchEvent(new window.Event("change", { bubbles: true }));
+});
+
 // The dirty counter must count settings, not widgets: the visible switch and
 // the hidden manifest input are one setting.
 let dirtyAfterToggle = null;
@@ -568,6 +849,7 @@ console.log(
       },
       requestCards,
       docs,
+      limits,
       optimizer: {
         present: Boolean(optimizer),
         kpis: optimizer ? optimizer.querySelectorAll(".opt-kpi").length : 0,
