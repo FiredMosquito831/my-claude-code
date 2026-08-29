@@ -885,11 +885,25 @@ def _reference_then_vote_capability(
 ) -> tuple[ModelReasoningCapability | None, Mapping[str, ResolutionTier]]:
     """Resolve a bucket-less provider: reference catalogue first, then the vote.
 
-    Per field, not per source. A field the reference row states wins, because
-    one curated description of this model beats a modal value across hosts that
-    merely share its name; a field it leaves unstated falls straight through to
-    the vote, which is the same "first stated wins" rule every other layer
-    uses. Either half alone is a complete answer when the other misses.
+    Per field, not per source. A field it leaves unstated falls straight
+    through to the vote, which is the same "first stated wins" rule every other
+    layer uses. Either half alone is a complete answer when the other misses.
+
+    Where both state a *reasoning control* -- effort, toggle or budget -- the
+    more capable record wins rather than the more authoritative one. That is
+    the same direction :func:`_modal` already takes inside a rung ("do not be
+    the source that shrinks a model below its declared capability"), extended
+    across rungs for the three fields where "more" is a ladder. Every other
+    field keeps reference-first: ``can_reason`` is not a ladder -- inverting a
+    curated "this model does not reason" sends reasoning to a model that has
+    none -- and ``mandatory`` and ``default_enabled`` describe a deployment,
+    where ``True`` is a different fact rather than a richer one. Numeric limits
+    are resolved by a different function entirely and are untouched: a limit is
+    a deployment property and belongs at the tightest rung.
+
+    The vote has already cleared its own quorum before it is a candidate here,
+    so this chooses between two records that each earned their place; it never
+    lowers a bar.
     """
     reference = _reference_bucket(reasoning_index, provider_id)
     found = (
@@ -903,16 +917,110 @@ def _reference_then_vote_capability(
 
     capability, reference_tier = found
     voted = match.capability if match is not None else None
-    merged = merge_reasoning_capabilities(capability, voted)
-    tiers: dict[str, ResolutionTier] = dict(
-        match.capability_tiers if match is not None else {}
+    if voted is None:
+        tiers = {
+            name: reference_tier
+            for name in (*_BOOLEAN_CAPABILITY_FIELDS, "supported_efforts")
+            if getattr(capability, name) is not None
+        }
+        return capability, tiers
+    return _richer_of_reference_and_vote(
+        capability,
+        reference_tier,
+        voted,
+        match.capability_tiers if match is not None else {},
     )
-    for name in (*_BOOLEAN_CAPABILITY_FIELDS, "supported_efforts"):
-        if getattr(capability, name) is not None:
+
+
+# The reasoning-control fields, and only these: for each one "stated True"
+# is strictly more capable than "stated False", so a disagreement between two
+# stated records has a defensible winner. ``can_reason``, ``mandatory`` and
+# ``default_enabled`` are deliberately absent -- see
+# :func:`_reference_then_vote_capability`.
+_RICHER_WINS: tuple[str, ...] = (
+    "supports_effort_control",
+    "supports_toggle_control",
+    "supports_budget_control",
+)
+
+
+def _vocabulary_rank(value: frozenset[ReasoningEffort]) -> tuple[int, list[str]]:
+    """Order two effort vocabularies the way the vote's own tie-break does."""
+
+    return len(value), sorted(effort.value for effort in value)
+
+
+def _richer_of_reference_and_vote(
+    reference: ModelReasoningCapability,
+    reference_tier: ResolutionTier,
+    voted: ModelReasoningCapability,
+    voted_tiers: Mapping[str, ResolutionTier],
+) -> tuple[ModelReasoningCapability, dict[str, ResolutionTier]]:
+    """Merge a reference row with a vote, field by field, and say which won.
+
+    The reported rung follows the value: a field the vote won is labelled at
+    the vote's rung (7-10), not at the reference's (5-6). Reporting the more
+    authoritative rung for a value that did not come from it is the same class
+    of untruth this whole ladder exists to remove.
+    """
+
+    values: dict[str, bool | None] = {}
+    tiers: dict[str, ResolutionTier] = {}
+    for name in _BOOLEAN_CAPABILITY_FIELDS:
+        from_reference = getattr(reference, name)
+        from_vote = getattr(voted, name)
+        if from_reference is None and from_vote is None:
+            values[name] = None
+            continue
+        if from_reference is None:
+            values[name] = from_vote
+            if name in voted_tiers:
+                tiers[name] = voted_tiers[name]
+            continue
+        if (
+            from_vote is None
+            or name not in _RICHER_WINS
+            or from_reference
+            or not from_vote
+        ):
+            # Reference-first everywhere except a stated ``False`` that a
+            # stated ``True`` can outrank; on an equal value the reference
+            # keeps the rung, because the answer is the same and the more
+            # authoritative source should be the one on screen.
+            values[name] = from_reference
             tiers[name] = reference_tier
-        elif merged is not None and getattr(merged, name) is None:
+            continue
+        values[name] = from_vote
+        if name in voted_tiers:
+            tiers[name] = voted_tiers[name]
+
+    vocabulary = reference.supported_efforts
+    if vocabulary is None:
+        vocabulary = voted.supported_efforts
+        if vocabulary is not None and "supported_efforts" in voted_tiers:
+            tiers["supported_efforts"] = voted_tiers["supported_efforts"]
+    elif voted.supported_efforts is not None and _vocabulary_rank(
+        voted.supported_efforts
+    ) > _vocabulary_rank(vocabulary):
+        vocabulary = voted.supported_efforts
+        if "supported_efforts" in voted_tiers:
+            tiers["supported_efforts"] = voted_tiers["supported_efforts"]
+    else:
+        tiers["supported_efforts"] = reference_tier
+
+    # Two records that were each self-consistent can merge into one that is
+    # not: a reference ``False`` outranked by the vote leaves a flag from one
+    # rung beside a vocabulary from another. Reconcile once, here, exactly as
+    # the vote does inside itself.
+    values["supports_effort_control"], vocabulary = _reconcile_effort_statement(
+        values["supports_effort_control"], vocabulary, tiers
+    )
+    if vocabulary is None:
+        tiers.pop("supported_efforts", None)
+    for name in (*_BOOLEAN_CAPABILITY_FIELDS, "supported_efforts"):
+        if name != "supported_efforts" and values[name] is None:
             tiers.pop(name, None)
-    return merged, tiers
+    return ModelReasoningCapability(supported_efforts=vocabulary, **values), tiers
 
 
 @dataclass(frozen=True, slots=True)
@@ -1077,6 +1185,41 @@ def _vote_across_rungs[T: Hashable](
     return None
 
 
+def _reconcile_effort_statement(
+    supports_effort_control: bool | None,
+    vocabulary: frozenset[ReasoningEffort] | None,
+    tiers: dict[str, ResolutionTier],
+) -> tuple[bool | None, frozenset[ReasoningEffort] | None]:
+    """Make one record's effort flag and effort vocabulary agree.
+
+    Two fields resolved independently can disagree about the same fact, and a
+    record that says "this model has no effort knob" while also listing the
+    effort words it accepts is not a fact about anything. The vocabulary and
+    the flag are one statement, so they are reconciled wherever both are held,
+    together with the rung each came from -- ``tiers`` is updated in place so
+    the Models page never reports a rung for a field that was withdrawn.
+
+    Called from the cross-provider vote, which has always done this inline, and
+    from the reference-then-vote rung, which merges two already-reconciled
+    records into one that could be contradictory again.
+    """
+
+    if supports_effort_control is False:
+        # The flag is the stronger claim: it says the knob is absent, which no
+        # list of words the knob would accept can survive.
+        tiers.pop("supported_efforts", None)
+        return supports_effort_control, None
+    if supports_effort_control is None and vocabulary:
+        # And the converse: a stated vocabulary IS the statement that an effort
+        # knob exists, so an unstated flag takes it from the same rung rather
+        # than staying unknown beside it.
+        vocabulary_tier = tiers.get("supported_efforts")
+        if vocabulary_tier is not None:
+            tiers["supports_effort_control"] = vocabulary_tier
+        return True, vocabulary
+    return supports_effort_control, vocabulary
+
+
 def _cross_provider_capability(
     rungs: tuple[tuple[ResolutionTier, tuple[_CrossProviderRow, ...]], ...],
 ) -> tuple[
@@ -1112,23 +1255,10 @@ def _cross_provider_capability(
     if efforts is not None:
         tiers["supported_efforts"] = efforts[1]
 
-    # Two fields voted independently can disagree about the same fact, and a
-    # record that says "this model has no effort knob" while also listing the
-    # effort words it accepts is not a fact about anything. The vocabulary and
-    # the flag are one statement, so they are reconciled here, at the only
-    # point that holds both and the rung each came from.
     vocabulary = efforts[0].value if efforts is not None else None
-    if values["supports_effort_control"] is False:
-        # The flag is the stronger claim: it says the knob is absent, which no
-        # list of words the knob would accept can survive.
-        vocabulary = None
-        tiers.pop("supported_efforts", None)
-    elif values["supports_effort_control"] is None and vocabulary:
-        # And the converse: a vocabulary that cleared its own quorum IS the
-        # statement that an effort knob exists, so an unvoted flag takes it
-        # from the same rung rather than staying unknown beside it.
-        values["supports_effort_control"] = True
-        tiers["supports_effort_control"] = tiers["supported_efforts"]
+    values["supports_effort_control"], vocabulary = _reconcile_effort_statement(
+        values["supports_effort_control"], vocabulary, tiers
+    )
 
     capability = ModelReasoningCapability(
         supported_efforts=vocabulary,

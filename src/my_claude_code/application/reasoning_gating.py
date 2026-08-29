@@ -135,9 +135,16 @@ class _Channels:
     channel. Command Code's ``NamedEffortReasoning(enabled_value="max")`` is
     the case -- perfect for "reason, I named no level", and completely wrong as
     a stand-in for a level the caller did name, which is how a request for
-    ``low`` used to leave as ``max``. :attr:`toggle` is therefore the channel a
-    *discarded* effort may fall back to, and :attr:`default_rung` is the wider
-    "this host can be told to reason at all".
+    ``low`` used to leave as ``max`` -- what PR G adds is that the level the
+    caller *did* name is now written into that same field, clamped, instead of
+    being discarded. :attr:`toggle` is therefore the channel a *discarded*
+    effort may fall back to, :attr:`default_rung` is the wider "this host can
+    be told to reason at all", and
+    :attr:`on_signal_is_the_effort_field` is the narrower "and the word it uses
+    is a rung, so the caller's own rung fits in it". Three overlapping booleans
+    describe one host's on-signal and they are not interchangeable: reading the
+    wrong one is what shipped the regression this class was added to end, so a
+    new consumer must choose between them deliberately.
     """
 
     effort_values: frozenset[ReasoningEffort] | None
@@ -147,6 +154,7 @@ class _Channels:
     budget: bool
     budget_denied: bool
     default_rung: bool
+    on_signal_is_the_effort_field: bool
     effort_field: str
     toggle_field: str
     budget_field: str
@@ -175,6 +183,23 @@ def _channels(
     )
     host_budget = dialect is None or dialect.budget
     host_default_rung = dialect is None or dialect.toggle
+    # The host can be told to reason, but the only word it has for "reason" is
+    # one of its own effort rungs. That is not an on/off channel -- hence the
+    # narrowing at ``host_toggle`` -- but it IS a field the caller's own rung
+    # can be written into, which is the one thing the toggle-only branch needs
+    # to know and the only reason this is a separate flag from ``toggle``.
+    # All four conjuncts are load-bearing: an unknown host must keep falling
+    # through untouched rather than clamp against a vocabulary nobody stated; a
+    # host that cannot be told to reason at all is never handed a rung it never
+    # advertised; a host with a real switch has already taken the toggle
+    # branch; and without an enum there is nothing to clamp to and nothing for
+    # the encoder to spell.
+    host_on_signal_is_effort = (
+        dialect is not None
+        and dialect.toggle
+        and dialect.toggle_field == dialect.effort_field
+        and dialect.effort_values is not None
+    )
 
     # An unknown model vocabulary leaves the host's enum in sole charge; a
     # stated one is intersected with it, because a value only one of the two
@@ -201,6 +226,7 @@ def _channels(
         and host_budget,
         budget_denied=model_budget is False or (known_host and not host_budget),
         default_rung=host_default_rung,
+        on_signal_is_the_effort_field=host_on_signal_is_effort,
         effort_field=dialect.effort_field if dialect else "",
         toggle_field=dialect.toggle_field if dialect else "",
         budget_field=dialect.budget_field if dialect else "",
@@ -235,10 +261,12 @@ def _drop_controls(
 ) -> tuple[ReasoningPolicy, ReasoningAdaptation]:
     """Keep thinking on for a model that accepts no reasoning control.
 
-    ``DROPPED`` rather than a new kind: it already means "the level was
-    discarded, thinking stays on", which is exactly this, and is what the
-    toggle-only case reports. A synonym would split one meaning across two
-    values and force every consumer to learn both.
+    The kind follows the wire, not the intent. Where the host has some field
+    to say "reason" with, the level was discarded and thinking stays on: that
+    is ``DROPPED``, and a body with no reasoning key would contradict it. Where
+    it has none, nothing at all leaves and the model's own default applies:
+    that is ``NOTHING_SENT``, and a body with no reasoning key is the outcome.
+    One value for both is what badged the correct case as a defect.
 
     A host with no way to say "reason" at all gets ``provider_default()``
     instead of a bare ON that would encode to nothing: an ON nobody can spell
@@ -271,7 +299,12 @@ def _drop_controls(
         f" reasoning control; {outcome} {asked}"
     )
     logger.warning(message)
-    return enabled, ReasoningAdaptation(ReasoningAdaptationKind.DROPPED, message)
+    kind = (
+        ReasoningAdaptationKind.DROPPED
+        if can_enable
+        else ReasoningAdaptationKind.NOTHING_SENT
+    )
+    return enabled, ReasoningAdaptation(kind, message)
 
 
 def _mandatory_off_rewrite(
@@ -394,7 +427,12 @@ def _adapt_budget(
             f" instead of the requested {budget} tokens"
         )
         logger.warning(message)
-        return kept, ReasoningAdaptation(ReasoningAdaptationKind.DROPPED, message)
+        return kept, ReasoningAdaptation(
+            ReasoningAdaptationKind.DROPPED
+            if channels.default_rung
+            else ReasoningAdaptationKind.NOTHING_SENT,
+            message,
+        )
 
     # Clamp whenever the model's output limit is known, not only when *budget
     # control* is known. ``supports_budget_control`` is ``None`` for most
@@ -506,12 +544,62 @@ def _adapt_effort(
             ReasoningAdaptationKind.DROPPED, message
         )
 
+    if channels.on_signal_is_the_effort_field and bool(
+        capability and capability.supports_toggle_control
+    ):
+        # The model publishes an on/off switch and no effort scale; this host
+        # has no on/off field and spells "reason" with one of its own effort
+        # rungs. Nothing at all was the old answer and it cost the whole
+        # instruction. The host's ``enabled_value`` is not the answer either --
+        # answering a request for 'low' with a stranger's 'max' is the
+        # regression the narrowing above removed. What IS honest is the
+        # caller's own rung, moved only as far as the host's enum forces: the
+        # field exists, the number in it is the number that was asked for, and
+        # no rung is invented. A host that forwards it to a model that refuses
+        # it pays one 400 and is remembered (openai_chat/reasoning_reject.py).
+        #
+        # ``channels.effort_values`` is the intersection, which for a
+        # self-consistent toggle-only record (no stated vocabulary) reduces to
+        # the host's own enum. An empty intersection means the two sides named
+        # disjoint vocabularies; the host's enum is then the only one the
+        # encoder can spell, so the fallback is deliberately the host's, never
+        # the unclamped request.
+        supported = channels.effort_values or (
+            dialect.effort_values if dialect is not None else None
+        )
+        sent = (
+            effort
+            if not supported or effort in supported
+            else nearest_effort(effort, supported)
+        )
+        if sent == effort:
+            # INFO, and ``_UNCHANGED``: ``ReasoningAdaptation`` documents
+            # ``message is None`` exactly when the kind is ``UNCHANGED``, and
+            # nothing about the request changed. The operator still sees the
+            # outcome, because the wire capture records the value that left.
+            logger.info(
+                f"REASONING LEVEL PASSED THROUGH: '{model_ref}' publishes only"
+                f" an on/off switch and this host has no on/off field; sending"
+                f" effort '{sent.value}'{_via(channels.effort_field)} as the"
+                f" host's on-signal"
+            )
+            return replace(policy, control=ReasoningControl.ON, effort=sent), _UNCHANGED
+        message = (
+            f"REASONING EFFORT CLAMPED: '{model_ref}' publishes only an on/off"
+            f" switch and this host has no on/off field; its on-signal is the"
+            f" effort field, so effort '{effort.value}' is sent as"
+            f" '{sent.value}'{_via(channels.effort_field)} -- the rung asked"
+            f" for, clamped to the host's enum, not the host's own default rung"
+        )
+        logger.warning(message)
+        return replace(policy, control=ReasoningControl.ON, effort=sent), (
+            ReasoningAdaptation(ReasoningAdaptationKind.CLAMPED, message)
+        )
+
     if dialect is not None and bool(capability and capability.supports_toggle_control):
-        # The model has an on/off switch and this host has no field to flip it
-        # through -- only an effort field, whose on-value is the *host's*
-        # default rung. Sending that rung would answer a request for 'low' with
-        # a stranger's 'max'. Nothing at all is the honest wire here, and the
-        # model's own default reasoning behaviour stands.
+        # Same model, but this host has no reasoning field of any kind to write
+        # the rung into. Nothing at all remains the honest wire and the model's
+        # own default reasoning behaviour stands.
         message = (
             f"REASONING LEVEL DROPPED: '{model_ref}' has an on/off switch only"
             f" and this host has no on/off field; sending no reasoning"
@@ -520,7 +608,7 @@ def _adapt_effort(
         )
         logger.warning(message)
         return ReasoningPolicy.provider_default(), ReasoningAdaptation(
-            ReasoningAdaptationKind.DROPPED, message
+            ReasoningAdaptationKind.NOTHING_SENT, message
         )
 
     return policy, _UNCHANGED

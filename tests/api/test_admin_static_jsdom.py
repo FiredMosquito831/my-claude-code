@@ -629,6 +629,43 @@ def test_an_adaptation_written_before_the_kind_column_badges_nothing(
     assert rendered["requestDetail"]["unkinded"]["contradictions"] == 0
 
 
+def test_a_nothing_sent_row_is_not_badged_as_a_wire_contradiction(rendered) -> None:
+    """No instruction was sent because none was meant to be. That is not a fault.
+
+    ``nothing_sent`` names the case where gating decided the request needed no
+    reasoning field at all, so an empty body is the outcome the row describes,
+    not evidence against it.
+    """
+    assert rendered["requestDetail"]["nothingSent"]["contradictions"] == 0
+
+
+def test_a_legacy_dropped_row_is_not_badged_as_a_wire_contradiction(rendered) -> None:
+    """The live false positive, removed: a stored ``dropped`` is ambiguous.
+
+    Until 6.6.0 one value covered both "the level was discarded and thinking
+    was switched on some other way" and "nothing was sent at all". Stored rows
+    are deliberately not migrated -- a row means what it meant when it was
+    written -- so every pre-6.6.0 ``dropped`` row could be either. On the
+    running 6.4.0 server one route had 38 such rows, all with
+    ``reasoning_emitted=0``, all of them the correct "nothing was sent" case,
+    and every one of them carried the badge. Flagging working behaviour as a
+    defect is worse than missing the rarer real contradiction, which the
+    adaptation message describes in full anyway.
+    """
+    assert rendered["requestDetail"]["legacyDropped"]["contradictions"] == 0
+
+
+def test_a_clamped_row_with_no_wire_reasoning_is_still_badged(rendered) -> None:
+    """The true positive survives, because ``clamped`` is not ambiguous.
+
+    ``clamped`` names a value gating chose to put on the wire, in both the old
+    version and the new one, so a body that carries no reasoning key really
+    does contradict it. Narrowing the badge must not turn it off.
+    """
+    detail = rendered["requestDetail"]["contradiction"]
+    assert detail["contradictions"] == 1
+
+
 def test_an_old_truncated_body_still_renders_with_its_note(rendered) -> None:
     detail = rendered["requestDetail"]["legacyTruncated"]
     assert "Truncated at 8,000 of 41,000 characters" in detail["text"]

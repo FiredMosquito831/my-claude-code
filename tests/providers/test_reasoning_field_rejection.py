@@ -15,9 +15,13 @@ import httpx
 import openai
 import pytest
 
+from my_claude_code.application.model_metadata import ModelReasoningCapability
+from my_claude_code.application.reasoning_gating import adapt_reasoning_policy
 from my_claude_code.core.reasoning import (
     ReasoningAdaptationKind,
     ReasoningDialectOrigin,
+    ReasoningEffort,
+    ReasoningPolicy,
 )
 from my_claude_code.core.wire_capture import install_wire_trace
 from my_claude_code.providers.base import ProviderConfig
@@ -26,6 +30,16 @@ from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 _MODEL = "m"
+
+# A model that publishes an on/off switch and no effort scale: the shape
+# whose rung this provider now forwards, and therefore the shape whose 400
+# this net has to absorb.
+_TOGGLE_ONLY = ModelReasoningCapability(
+    can_reason=True,
+    supports_effort_control=False,
+    supports_toggle_control=True,
+    supports_budget_control=False,
+)
 
 
 def _bad_request(body: Any, message: str = "Bad Request") -> openai.BadRequestError:
@@ -291,3 +305,36 @@ async def test_a_422_counts_as_a_rejection():
 
     assert len(create.bodies) == 2
     assert "reasoning_effort" not in create.bodies[1]
+
+
+@pytest.mark.asyncio
+async def test_a_rung_forwarded_for_a_toggle_only_model_stops_being_sent():
+    """The two halves, composed: G forwards a rung, this net withdraws it.
+
+    A toggle-only model on a host whose only on-channel is its effort field now
+    receives the caller's own rung rather than nothing at all. That is more
+    thinking on the wire, and its cost is one 400 on any host that forwards the
+    field to a model which refuses it. This closes that loop end to end: after
+    the strip is proven by a successful retry, the dialect this provider
+    reports no longer has an effort field at all, so gating stops producing the
+    rung and no second 400 is ever paid.
+    """
+
+    provider = _provider()
+    _install(provider, _FakeCreate([_named_field_error()]))
+
+    await provider._create_stream(_body(reasoning_effort="max"))
+
+    dialect = provider.reasoning_dialect(_MODEL)
+    assert dialect.effort_values is None
+    assert dialect.toggle is False
+
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+        _TOGGLE_ONLY,
+        dialect=dialect,
+        model_ref=f"a-host/{_MODEL}",
+    )
+
+    assert adapted == ReasoningPolicy.provider_default()
+    assert adaptation.kind is ReasoningAdaptationKind.NOTHING_SENT

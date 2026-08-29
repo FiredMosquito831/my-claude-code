@@ -8852,8 +8852,23 @@ function buildWireKnobs(attempt) {
    message is prose that gets reworded, and a badge that reads a sentence
    fires or stops firing on an edit nobody connected to it. A row written
    before the kind column existed carries null and is badged as nothing --
-   not measured is not a finding. */
-const CONTRADICTING_ADAPTATION_KINDS = ["substituted", "clamped", "dropped"];
+   not measured is not a finding.
+
+   "dropped" is deliberately NOT in this list, and "nothing_sent" is not
+   either. Until 6.6.0 one value covered both "the level was discarded and
+   thinking was switched on through another field" (where an empty body IS a
+   contradiction) and "no reasoning instruction was sent at all" (where an
+   empty body is the outcome). Stored rows are not migrated -- a row means what
+   it meant when it was written -- so every pre-6.6.0 "dropped" row is
+   ambiguous, and on the live install the correct, intended case was the
+   overwhelming majority: badging them all flagged working behaviour as a
+   defect. "substituted" and "clamped" carry no such ambiguity in either
+   version: both name a value that gating chose to put on the wire, so an
+   empty body still contradicts them and still badges. The cost is that the
+   post-6.6.0 "dropped" contradiction is no longer badged; a false alarm on
+   correct behaviour is worse than a missed one on a case the adaptation
+   message already describes in full. */
+const CONTRADICTING_ADAPTATION_KINDS = ["substituted", "clamped"];
 
 function wireContradicts(row, attempt) {
   if (attempt.reasoning_emitted !== 0 && attempt.reasoning_emitted !== false) {

@@ -128,16 +128,50 @@ def reasoning_keys(body: dict[str, Any]) -> dict[str, Any]:
 # provider/model, capability, dialect, requested effort, expected reasoning keys
 WIRE_TABLE: tuple[tuple[Any, ...], ...] = (
     # A toggle-only model on an effort-only host: no on/off field exists, and
-    # the host's on-value is one of its own effort rungs. Nothing is sent, and
-    # the model's own default reasoning behaviour stands. Live: this gateway
-    # returns reasoning_tokens=0 for this model whatever the body carries.
+    # the host's on-value is one of its own effort rungs. The caller's own rung
+    # goes into that field, clamped to the host's enum -- MAX is in Command
+    # Code's enum, so it passes through untouched. The host's own on-value is
+    # still never substituted for a level the caller named; see the `low` row
+    # below. Live: this gateway returns reasoning_tokens=0 for this model
+    # whatever the body carries, so this row fixes the request, not the model.
     (
         "commandcode",
         "minimax/minimax-m3-free",
         TOGGLE_ONLY,
         COMMANDCODE_DIALECT,
         ReasoningEffort.MAX,
-        {},
+        {"reasoning_effort": "max"},
+    ),
+    # The regression guard: a request for `low` leaves as `low`, never as the
+    # host's `max`.
+    (
+        "commandcode",
+        "minimax/minimax-m3-free",
+        TOGGLE_ONLY,
+        COMMANDCODE_DIALECT,
+        ReasoningEffort.LOW,
+        {"reasoning_effort": "low"},
+    ),
+    # The same model on a host whose enum stops at `high`: the rung moves only
+    # as far as that enum forces.
+    (
+        "groq",
+        "a-toggle-only-model",
+        TOGGLE_ONLY,
+        profile_dialect("groq"),
+        ReasoningEffort.MAX,
+        {"reasoning_effort": "high"},
+    ),
+    # And the honest toggle path is untouched wherever it exists: the shared
+    # OpenRouter dialect has a real on/off field, so the level is discarded and
+    # the switch is flipped, exactly as before.
+    (
+        "nous_portal",
+        "a-toggle-only-model",
+        TOGGLE_ONLY,
+        OPENROUTER_DIALECT,
+        ReasoningEffort.MAX,
+        {"reasoning": {"enabled": True}},
     ),
     # An effort model on the same host: the ask survives, clamped into the
     # gateway's own documented enum.

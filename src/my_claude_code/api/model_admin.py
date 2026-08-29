@@ -185,10 +185,17 @@ def _reasoning_source(
     with a stated value is the one whose value is on screen. The rung comes
     from the resolver itself rather than being re-derived here: models.dev's
     answer may have come off this provider's own bucket (tiers 3-4), off the
-    OpenRouter reference catalogue (tiers 5-6), or off the
-    reference catalogue (tiers 5-6) or the approximate cross-provider vote
-    (tiers 7-10), and only the resolver knows
-    which, per field.
+    OpenRouter reference catalogue (tiers 5-6), or off the approximate
+    cross-provider vote (tiers 7-10), and only the resolver knows which, per
+    field.
+
+    Reference before approximate is no longer a strict precedence for the three
+    reasoning-*control* fields. Where a provider has no models.dev bucket and
+    both rungs state one of them, the more capable stated record wins and the
+    rung reported here is the winner's -- so a field can read "cross-provider,
+    exact id" beside a field on the same model that reads "OpenRouter
+    catalogue, exact id". Numeric limits are unaffected and stay at the
+    tightest rung.
     """
 
     if provider is not None and getattr(provider, name) is not None:

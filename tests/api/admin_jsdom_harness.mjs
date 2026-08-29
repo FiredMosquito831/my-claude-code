@@ -930,6 +930,21 @@ const requestDetail = {
     reasoning_adaptation_kind: null,
     route_attempts: [detailAttempt({ wire_body: { model: "m" }, reasoning_emitted: 0 })],
   }),
+  /* Nothing was asked of the wire and nothing arrived on it: the row and the
+     body agree, and a badge here would flag correct behaviour. */
+  nothingSent: driveDetail({
+    reasoning_adaptation: "NO REASONING INSTRUCTION SENT: ...",
+    reasoning_adaptation_kind: "nothing_sent",
+    route_attempts: [detailAttempt({ wire_body: { model: "m" }, reasoning_emitted: 0 })],
+  }),
+  /* The same outcome as written by a pre-6.6.0 server, which had one value for
+     both meanings. Stored rows are never migrated, so this shape is still on
+     disk on every upgraded install. */
+  legacyDropped: driveDetail({
+    reasoning_adaptation: "REASONING LEVEL DROPPED: ...",
+    reasoning_adaptation_kind: "dropped",
+    route_attempts: [detailAttempt({ wire_body: { model: "m" }, reasoning_emitted: 0 })],
+  }),
   legacyTruncated: driveDetail({
     reasoning_adaptation: null,
     reasoning_adaptation_kind: null,

@@ -370,12 +370,22 @@ class ReasoningAdaptationKind(StrEnum):
 
     ``message`` on :class:`ReasoningAdaptation` carries the operator-facing
     warning; this enum is the programmatic signal a UI can style on.
+
+    :attr:`DROPPED` and :attr:`NOTHING_SENT` were one value until 6.6.0 and the
+    conflation cost a live false positive: ``DROPPED`` means the requested
+    *level* was discarded while thinking was still switched on through a field
+    the host does have, so a body with no reasoning key contradicts it;
+    ``NOTHING_SENT`` means no reasoning instruction of any kind left the proxy
+    and the model's own default applies, so a body with no reasoning key is the
+    outcome, not a fault. A dashboard that cannot tell them apart badges the
+    correct case as a defect, which is exactly what the shared value did.
     """
 
     UNCHANGED = "unchanged"
     SUBSTITUTED = "substituted"
     CLAMPED = "clamped"
     DROPPED = "dropped"
+    NOTHING_SENT = "nothing_sent"
     SUPPRESSED = "suppressed"
 
 
@@ -400,7 +410,11 @@ _ADAPTATION_SEVERITY: dict[ReasoningAdaptationKind, int] = {
     ReasoningAdaptationKind.SUBSTITUTED: 1,
     ReasoningAdaptationKind.CLAMPED: 2,
     ReasoningAdaptationKind.DROPPED: 3,
-    ReasoningAdaptationKind.SUPPRESSED: 4,
+    # Sending nothing at all is a larger departure from the request than
+    # sending a different level, and a smaller one than the host refusing the
+    # field outright, so it sits between them.
+    ReasoningAdaptationKind.NOTHING_SENT: 4,
+    ReasoningAdaptationKind.SUPPRESSED: 5,
 }
 
 

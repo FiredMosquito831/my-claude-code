@@ -7,9 +7,12 @@ from my_claude_code.application.reasoning import (
 from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import (
+    ReasoningAdaptation,
+    ReasoningAdaptationKind,
     ReasoningControl,
     ReasoningEffort,
     ReasoningPolicy,
+    combine_reasoning_adaptations,
 )
 
 
@@ -167,3 +170,70 @@ def test_reasoning_without_numeric_intensity_has_no_budget(
     policy: ReasoningPolicy,
 ) -> None:
     assert policy.numeric_budget_tokens is None
+
+
+# ---------------------------------------------------------------------------
+# The severity order two adaptations of one request are collapsed by
+# ---------------------------------------------------------------------------
+
+
+def test_nothing_sent_outranks_dropped_and_is_outranked_by_suppressed() -> None:
+    """``NOTHING_SENT`` sits between ``DROPPED`` and ``SUPPRESSED``, on purpose.
+
+    The three describe increasingly large departures from what was asked for.
+    ``DROPPED`` still put a reasoning key on the wire -- the level was
+    discarded but thinking was switched on through a field the host does have.
+    ``NOTHING_SENT`` put nothing there at all, so the model's own default
+    decides. ``SUPPRESSED`` is the host refusing the field outright, which is
+    the one an operator most needs to see.
+
+    Pinned behaviourally rather than against the severity table itself,
+    because the table is only ever read through this collapse: an entry
+    reordered by a later edit shows up here as the wrong verdict on a request,
+    which is what the dashboard would actually display.
+    """
+
+    dropped = ReasoningAdaptation(ReasoningAdaptationKind.DROPPED, "level dropped")
+    nothing = ReasoningAdaptation(ReasoningAdaptationKind.NOTHING_SENT, "nothing sent")
+    suppressed = ReasoningAdaptation(
+        ReasoningAdaptationKind.SUPPRESSED, "host refused it"
+    )
+
+    assert (
+        combine_reasoning_adaptations(dropped, nothing).kind
+        is ReasoningAdaptationKind.NOTHING_SENT
+    )
+    assert (
+        combine_reasoning_adaptations(nothing, suppressed).kind
+        is ReasoningAdaptationKind.SUPPRESSED
+    )
+    # Severity, not order of arrival: the same pair the other way round.
+    assert (
+        combine_reasoning_adaptations(nothing, dropped).kind
+        is ReasoningAdaptationKind.NOTHING_SENT
+    )
+    assert (
+        combine_reasoning_adaptations(suppressed, nothing).kind
+        is ReasoningAdaptationKind.SUPPRESSED
+    )
+
+
+def test_combining_a_clamp_and_a_nothing_sent_reports_nothing_sent() -> None:
+    """One request, two adaptations, one column to report them in.
+
+    Gating can clamp an effort at routing time and the encoder can then find
+    it has no field to write it into. The request log holds a single verdict,
+    and reporting the clamp would say a value went out that never did -- while
+    every message is still kept, because the clamp is how the operator
+    understands what was being attempted.
+    """
+
+    combined = combine_reasoning_adaptations(
+        ReasoningAdaptation(ReasoningAdaptationKind.CLAMPED, "clamped to high."),
+        ReasoningAdaptation(
+            ReasoningAdaptationKind.NOTHING_SENT, "no reasoning field on this host."
+        ),
+    )
+
+    assert combined.kind is ReasoningAdaptationKind.NOTHING_SENT
+    assert combined.message == "clamped to high. no reasoning field on this host."

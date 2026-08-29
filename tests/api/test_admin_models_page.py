@@ -663,3 +663,62 @@ def test_a_learned_rejection_is_dated_on_the_page() -> None:
     assert payload["learned_rejections"] == [
         {"field": "reasoning_effort", "since": "2026-08-29"}
     ]
+
+
+def test_a_field_the_vote_won_is_labelled_at_the_vote_rung(monkeypatch):
+    """Two rungs on one model, and each field says honestly where it came from.
+
+    For a gateway models.dev has no section of its own for, the reasoning
+    *controls* now resolve to the more capable of the reference row and the
+    cross-provider vote, so a single model can carry a field decided at tier 5
+    beside one decided at tier 7. The page must report the rung that actually
+    produced each value; labelling a voted value as the reference catalogue
+    would be exactly the kind of over-confident provenance this ladder exists
+    to remove.
+    """
+
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.models_dev_describes_provider",
+        lambda provider_id: False,
+    )
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.model_output_limit_tiered",
+        lambda provider_id, model_id: (100000, ResolutionTier.OPENROUTER_EXACT),
+    )
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.model_reasoning_capability_tiered",
+        lambda provider_id, model_id: (
+            ModelReasoningCapability(
+                can_reason=True,
+                supports_effort_control=True,
+                supports_toggle_control=True,
+            ),
+            {
+                "can_reason": ResolutionTier.OPENROUTER_EXACT,
+                "supports_toggle_control": ResolutionTier.OPENROUTER_EXACT,
+                "supports_effort_control": ResolutionTier.CROSS_PROVIDER_EXACT,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.cross_provider_match",
+        lambda provider_id, model_id: None,
+    )
+
+    payload = capability_payload("commandcode", "openai/o3", None)
+    reasoning = payload["reasoning"]
+
+    won_by_the_vote = reasoning["supports_effort_control"]
+    assert won_by_the_vote["tier"] == ResolutionTier.CROSS_PROVIDER_EXACT.value
+    assert won_by_the_vote["tier_label"] == "cross-provider, exact id"
+    assert won_by_the_vote["reference"] is False
+
+    kept_by_the_reference = reasoning["supports_toggle_control"]
+    assert kept_by_the_reference["tier"] == ResolutionTier.OPENROUTER_EXACT.value
+    assert kept_by_the_reference["tier_label"] == "OpenRouter catalogue, exact id"
+    assert kept_by_the_reference["reference"] is True
+
+    # The limit is resolved by a different function and is deliberately not
+    # subject to the same tie-break: a limit is a deployment property and stays
+    # at the tightest rung that stated it.
+    assert payload["max_output_tokens"]["tier"] == ResolutionTier.OPENROUTER_EXACT.value

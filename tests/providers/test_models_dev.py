@@ -1475,3 +1475,236 @@ async def test_a_stale_cache_survives_a_failed_revalidation(
     stored = read_models_dev_cache(path)
     assert stored is not None
     assert stored.index == _CROSS_INDEX
+
+
+# --------------------------------------------------------------------------
+# The effort flag and the effort vocabulary are one statement
+# --------------------------------------------------------------------------
+
+from my_claude_code.core.model_ids import ResolutionTier  # noqa: E402
+from my_claude_code.providers.runtime.models_dev import (  # noqa: E402
+    _BOOLEAN_CAPABILITY_FIELDS,
+    MIN_APPROXIMATE_BOOLEAN_REPORTERS,
+    MIN_APPROXIMATE_VOCABULARY_REPORTERS,
+    _build_cross_provider_index,
+    _cross_provider_capability,
+    _CrossProviderRow,
+    _reconcile_effort_statement,
+    _vote_across_rungs,
+)
+
+_LOW_HIGH = frozenset({ReasoningEffort.LOW, ReasoningEffort.HIGH})
+
+
+def test_a_stated_false_effort_flag_takes_the_vocabulary_down_with_it() -> None:
+    """A stated "no effort knob" is the stronger claim, and it wins outright.
+
+    A record that says the knob is absent while listing the words the knob
+    accepts is not a fact about anything, and gating believed the veto: it
+    discarded the caller's effort on the strength of the flag while the
+    Models page still showed the vocabulary beside it. The rung must go too,
+    or the page reports a source for a field that was withdrawn.
+    """
+
+    tiers = {
+        "supported_efforts": ResolutionTier.CROSS_PROVIDER_TAG_STRIPPED,
+        "supports_effort_control": ResolutionTier.CROSS_PROVIDER_EXACT,
+    }
+
+    flag, vocabulary = _reconcile_effort_statement(False, _LOW_HIGH, tiers)
+
+    assert flag is False
+    assert vocabulary is None
+    assert "supported_efforts" not in tiers
+    # Only the withdrawn field loses its rung.
+    assert tiers["supports_effort_control"] is ResolutionTier.CROSS_PROVIDER_EXACT
+
+    # A stated False with no vocabulary beside it is already consistent, and
+    # the rung it drops is one no field is claiming any more -- so applying
+    # the rule twice says the same thing as applying it once.
+    assert _reconcile_effort_statement(False, None, tiers) == (False, None)
+    assert "supported_efforts" not in tiers
+
+
+def test_an_unstated_flag_takes_true_from_the_vocabularys_own_rung() -> None:
+    """A vocabulary IS the statement that an effort knob exists.
+
+    Leaving the flag unknown beside three published effort words would make
+    the record say less than its own evidence, and gating reads the flag, not
+    the list. The rung is copied across because that is where the claim came
+    from -- reporting the flag at a rung that never stated it is the untruth
+    the whole ladder exists to remove.
+    """
+
+    tiers = {"supported_efforts": ResolutionTier.OPENROUTER_TAG_STRIPPED}
+
+    flag, vocabulary = _reconcile_effort_statement(None, _LOW_HIGH, tiers)
+
+    assert flag is True
+    assert vocabulary == _LOW_HIGH
+    assert tiers["supports_effort_control"] is ResolutionTier.OPENROUTER_TAG_STRIPPED
+
+
+@pytest.mark.parametrize(
+    ("flag", "vocabulary"),
+    [
+        # Already agreeing: a knob and the words for it.
+        (True, _LOW_HIGH),
+        # A knob nobody enumerated the words for.
+        (True, None),
+        # Nothing known about either half.
+        (None, None),
+        # An empty vocabulary is not a vocabulary, so it states nothing and
+        # may not promote an unknown flag to True.
+        (None, frozenset()),
+    ],
+)
+def test_an_already_consistent_effort_statement_passes_through_untouched(
+    flag: bool | None, vocabulary: frozenset[ReasoningEffort] | None
+) -> None:
+    """Reconciliation only fires on a contradiction; otherwise it is identity.
+
+    Pinned because the function mutates ``tiers`` in place: a version that
+    rewrote a rung on every call would move fields that nothing disagreed
+    about, and no assertion about the contradiction cases would notice.
+    """
+
+    tiers: dict[str, ResolutionTier] = {
+        "supported_efforts": ResolutionTier.CROSS_PROVIDER_EXACT
+    }
+    before = dict(tiers)
+
+    assert _reconcile_effort_statement(flag, vocabulary, tiers) == (flag, vocabulary)
+    assert tiers == before
+
+
+def _legacy_cross_provider_capability(
+    rungs: tuple[tuple[ResolutionTier, tuple[_CrossProviderRow, ...]], ...],
+) -> tuple[ModelReasoningCapability, dict[str, ResolutionTier], object]:
+    """The pre-extraction body of ``_cross_provider_capability``, verbatim.
+
+    Kept as a literal copy of the code that was replaced, so the "this is a
+    pure refactor" claim is checked rather than asserted. If someone later
+    changes the shared :func:`_reconcile_effort_statement` in a way that moves
+    the vote's answer, the two implementations diverge and say so here.
+    """
+
+    tiers: dict[str, ResolutionTier] = {}
+    values: dict[str, bool | None] = {}
+    for name in _BOOLEAN_CAPABILITY_FIELDS:
+        won = _vote_across_rungs(
+            rungs,
+            lambda row, name=name: getattr(row.capability, name),
+            lambda value: value,
+            MIN_APPROXIMATE_BOOLEAN_REPORTERS,
+        )
+        values[name] = won[0].value if won is not None else None
+        if won is not None:
+            tiers[name] = won[1]
+
+    efforts = _vote_across_rungs(
+        rungs,
+        lambda row: row.capability.supported_efforts,
+        lambda value: (len(value), sorted(effort.value for effort in value)),
+        MIN_APPROXIMATE_VOCABULARY_REPORTERS,
+    )
+    if efforts is not None:
+        tiers["supported_efforts"] = efforts[1]
+
+    vocabulary = efforts[0].value if efforts is not None else None
+    if values["supports_effort_control"] is False:
+        vocabulary = None
+        tiers.pop("supported_efforts", None)
+    elif values["supports_effort_control"] is None and vocabulary:
+        values["supports_effort_control"] = True
+        tiers["supports_effort_control"] = tiers["supported_efforts"]
+
+    capability = ModelReasoningCapability(supported_efforts=vocabulary, **values)
+    return capability, tiers, efforts
+
+
+def _rungs_for(
+    index: dict[str, object], model_id: str
+) -> tuple[tuple[ResolutionTier, tuple[_CrossProviderRow, ...]], ...]:
+    """Assemble the tier-7-to-10 rungs the vote walks, from a raw index."""
+
+    built = _build_cross_provider_index(index)
+    return tuple(
+        (tier, rows)
+        for tier, candidate in model_ids.candidate_ladder(model_id)
+        if (rows := built.get(candidate))
+    )
+
+
+# One toggle-only row and one effort row, lifted straight out of _CROSS_INDEX
+# so the veto case below is built from the same evidence every other test in
+# this section uses.
+_TOGGLE_ROW = _CROSS_INDEX["gamma"]["models"]["tencent/hy3"]
+_EFFORT_ROW = _CROSS_INDEX["alpha"]["models"]["tencent/hy3"]
+
+# The flag and the vocabulary deliberately come from different rungs: three
+# toggle-only rows answer supports_effort_control at tier 7, and the effort
+# rows one rung down are the only source of a vocabulary. That is the shape
+# the reconciliation exists for, and no single-rung fixture produces it.
+_SPLIT_RUNG_INDEX: dict[str, object] = {
+    **{
+        f"toggle{number}": {"models": {"tencent/hy3-free": _TOGGLE_ROW}}
+        for number in range(3)
+    },
+    **{
+        f"effort{number}": {"models": {"tencent/hy3": _EFFORT_ROW}}
+        for number in range(3)
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("index", "model_id"),
+    [
+        # Two effort rows against one toggle row, one row with no limit.
+        (_CROSS_INDEX, "tencent/hy3:free"),
+        # A single row everywhere: every field is under quorum and unknown.
+        (_CONTROL_INDEX, "thinkingmachines/inkling"),
+        (_REASONING_INDEX, "acme/all-controls"),
+        (_REASONING_INDEX, "acme/no-reasoning"),
+        # The veto arm: a flag from one rung against a vocabulary from another.
+        (_SPLIT_RUNG_INDEX, "tencent/hy3-free"),
+    ],
+)
+def test_extracting_the_reconciliation_did_not_change_the_vote(
+    index: dict[str, object], model_id: str
+) -> None:
+    """The extraction was a pure refactor at this call site, and this proves it.
+
+    ``_reconcile_effort_statement`` was lifted out of the middle of
+    ``_cross_provider_capability`` so the reference-then-vote rung could reuse
+    it. Moving working code is where silent behaviour changes hide, so the
+    live function is compared against a verbatim copy of what it replaced, on
+    the fixtures this file already votes over.
+    """
+
+    rungs = _rungs_for(index, model_id)
+
+    assert _cross_provider_capability(rungs) == _legacy_cross_provider_capability(rungs)
+
+
+def test_the_split_rung_fixture_really_exercises_the_veto() -> None:
+    """The guard above is only worth anything if its hardest case is reached.
+
+    A fixture that quietly stopped producing a flag/vocabulary disagreement
+    would still pass -- both implementations would agree about nothing
+    happening -- so the disagreement itself is asserted here.
+    """
+
+    rungs = _rungs_for(_SPLIT_RUNG_INDEX, "tencent/hy3-free")
+    capability, tiers, efforts = _cross_provider_capability(rungs)
+
+    # The vocabulary really was voted for, one rung below the flag...
+    assert efforts is not None
+    assert efforts[0].value == frozenset({ReasoningEffort.LOW, ReasoningEffort.HIGH})
+    assert efforts[1] is ResolutionTier.CROSS_PROVIDER_TAG_STRIPPED
+    # ...and the flag from the tighter rung took it away again.
+    assert capability.supports_effort_control is False
+    assert capability.supported_efforts is None
+    assert tiers["supports_effort_control"] is ResolutionTier.CROSS_PROVIDER_EXACT
+    assert "supported_efforts" not in tiers

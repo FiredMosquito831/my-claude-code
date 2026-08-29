@@ -613,7 +613,8 @@ A control is sent only when the model has that knob **and** the host has a field
 
 - effort above the shared vocabulary clamps **down** to the nearest word both accept; below it clamps **up** to the lowest, because only an explicit **Off** may take reasoning away;
 - a model with an on/off switch behind a host that has one gets thinking on, level discarded;
-- a model with an on/off switch behind a host that has *only* an effort field gets **nothing** — its own default reasoning behaviour applies. Sending the host's default rung there would answer a request for `low` with a stranger's `max`;
+- a model with an on/off switch behind a host whose only way of saying "reason" is one of its own effort words gets **the level you asked for**, clamped to that host's scale — `max` stays `max` where the host has it, and folds to `high` where it does not. The host's *own* default rung is still never substituted for a level you named: a request for `low` leaves as `low`, never as a stranger's `max`;
+- a model with an on/off switch behind a host with no reasoning field at all gets **nothing** — its own default reasoning behaviour applies, and the request log says so rather than reporting it as a fault;
 - an effort against a host that takes only a number becomes a thinking budget sized to the model, and a budget against a host that takes only a word becomes the nearest word;
 - a model known not to reason at all gets no reasoning controls;
 - and where MCC knows neither fact, the request is left **exactly** as before — most providers publish nothing, and narrowing on silence would regress them.
@@ -621,6 +622,8 @@ A control is sent only when the model has that knob **and** the host has a field
 **Every OpenAI-compatible host now declares the standard `reasoning_effort` field by default.** That field is defined by the Chat Completions API itself, so a host claiming compatibility either reads it or ignores it — and roughly twenty hosts that previously sent nothing at all now speak it. Which *models* are actually sent it is still the capability gate's decision above, so a mixed roster is protected per model rather than by silencing the whole host. A host that genuinely refuses the field says so with a 400 naming it: MCC strips the field, retries that one request without it, and never asks for it again on that model. A 400 that names a sampling parameter instead is *not* treated as a reasoning rejection — it is raised, because dropping thinking would not have fixed it.
 
 The Models page states which of the three you are looking at: **default OpenAI dialect**, **declared by this provider** (someone probed this gateway and wrote down what it parses), or **learned from the host's own rejection**, dated.
+
+For a gateway the catalog has no section of its own for, two descriptions of the same model can disagree. Where they do, the **reasoning controls** — effort, on/off, budget — resolve to the more capable of the two stated records, so a model is never held below a capability three or more independent hosts publish for it. Whether a model reasons at all is not decided that way and stays with the curated catalog, and **numeric limits never move**: an output or context limit is a property of the deployment and stays at the tightest rung that stated it. The Models page names the rung each field came from, so a field can honestly read "cross-provider" beside one on the same model that reads "OpenRouter catalogue".
 
 Each request logs both the reasoning policy applied and the one originally requested, and every adaptation names the wire field it will be sent through (or says plainly that nothing is being sent), so what left the proxy is visible in the request detail view. Unsupported controls safely remain provider-defined.
 

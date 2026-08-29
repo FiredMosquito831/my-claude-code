@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from my_claude_code.core.reasoning import ReasoningAdaptationKind
 from my_claude_code.core.request_log import (
     RequestRecord,
     RouteAttempt,
@@ -418,3 +419,77 @@ def test_the_request_detail_carries_the_credential_for_each_attempt(client) -> N
     first, second = detail["route_attempts"]
     assert first["key_label"] != second["key_label"]
     assert (first["key_index"], second["key_index"]) == (0, 1)
+
+
+# --------------------------------------------------------------------------- #
+# The reasoning adaptation kind, written once and read back for ever
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def adaptation_store(tmp_path):
+    """Two rows whose only interesting column is the adaptation kind.
+
+    ``dropped`` is written as the bare string it was stored as before 6.6.0,
+    not through the enum, because the point of the second test is that a value
+    on disk is not reinterpreted by the version that reads it.
+    """
+    store = get_request_log_store(tmp_path / "requests.db")
+    assert store is not None
+    for request_id, kind, message in (
+        ("nothing", ReasoningAdaptationKind.NOTHING_SENT.value, "nothing was sent."),
+        ("legacy", "dropped", "the level was dropped."),
+    ):
+        store.enqueue(
+            RequestRecord(
+                id=request_id,
+                endpoint="/v1/messages",
+                protocol="anthropic",
+                provider="commandcode",
+                resolved_model="z-ai/glm-5.3-flash",
+                status="success",
+                reasoning_adaptation=message,
+                reasoning_adaptation_kind=kind,
+            )
+        )
+    store.close()
+    yield store
+
+
+def test_a_nothing_sent_adaptation_survives_write_read_and_serialisation(
+    client, adaptation_store
+) -> None:
+    """The new kind has to reach the dashboard spelled exactly as stored.
+
+    The column is plain TEXT and nothing validates it against the enum, so a
+    new member is only really shipped once it has been through SQLite and the
+    JSON encoder unchanged -- the badge logic on the other end matches on the
+    literal string, and a value mangled anywhere in between would silently
+    stop matching.
+    """
+    detail = client.get("/admin/api/requests/nothing").json()
+
+    assert detail["reasoning_adaptation_kind"] == "nothing_sent"
+    assert detail["reasoning_adaptation"] == "nothing was sent."
+
+    rows = client.get("/admin/api/requests").json()["rows"]
+    stored = next(row for row in rows if row["id"] == "nothing")
+    assert stored["reasoning_adaptation_kind"] == "nothing_sent"
+
+
+def test_a_legacy_dropped_row_still_reads_back_as_dropped(
+    client, adaptation_store
+) -> None:
+    """Historic rows are deliberately NOT migrated, and this pins that choice.
+
+    A row means what it meant when it was written. Rewriting every stored
+    ``dropped`` to ``nothing_sent`` would be a guess about which of the two
+    meanings each one had -- the pre-6.6.0 server could not tell them apart,
+    so neither can a migration -- and it would destroy the only record of what
+    the server actually decided. The dashboard handles the ambiguity by not
+    badging the value; the store handles it by leaving it alone.
+    """
+    detail = client.get("/admin/api/requests/legacy").json()
+
+    assert detail["reasoning_adaptation_kind"] == "dropped"
+    assert detail["reasoning_adaptation"] == "the level was dropped."

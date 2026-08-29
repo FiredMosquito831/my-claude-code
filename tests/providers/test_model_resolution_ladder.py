@@ -22,9 +22,11 @@ from my_claude_code.core.model_ids import (
     candidate_ladder,
     strip_model_id_tag,
 )
+from my_claude_code.core.reasoning import ReasoningEffort
 from my_claude_code.providers.runtime import models_dev
 from my_claude_code.providers.runtime.model_cache import ProviderModelCache
 from my_claude_code.providers.runtime.models_dev import (
+    MIN_APPROXIMATE_BOOLEAN_REPORTERS,
     MIN_APPROXIMATE_NUMERIC_REPORTERS,
     cross_provider_match,
     model_output_limit_tiered,
@@ -694,3 +696,445 @@ def test_a_vetoed_effort_knob_takes_its_vocabulary_with_it(tmp_path: Path) -> No
     assert capability.supports_effort_control is False
     assert capability.supported_efforts is None
     assert "supported_efforts" not in tiers
+
+
+# ---------------------------------------------------------------------------
+# Tiers 5-6 against tiers 7-10: which record wins when both state a field
+# ---------------------------------------------------------------------------
+
+_ROUTE = "widget/w1-free"
+
+
+def _controls_row(
+    *,
+    efforts: tuple[str, ...] | None = None,
+    toggle: bool = False,
+    budget: bool = False,
+    output: int | None = None,
+) -> dict[str, object]:
+    """One models.dev row spelled by the reasoning controls it publishes.
+
+    ``reasoning_options`` is always written, because an absent list is
+    "unknown" and an empty one is "no controls at all" -- the difference every
+    test below turns on.
+    """
+
+    options: list[dict[str, object]] = []
+    if efforts is not None:
+        options.append({"type": "effort", "values": list(efforts)})
+    if toggle:
+        options.append({"type": "toggle"})
+    if budget:
+        options.append({"type": "budget_tokens"})
+    row: dict[str, object] = {"reasoning": True, "reasoning_options": options}
+    if output is not None:
+        row["limit"] = {"output": output}
+    return row
+
+
+def _reference_plus_hosts(
+    tmp_path: Path,
+    reference: dict[str, object],
+    *host_rows: dict[str, object],
+) -> Path:
+    """Build a cache where the reference row cannot also vote in the vote.
+
+    OpenRouter spells the routing tag ``:free`` and the gateway spells it
+    ``-free``. The reference lookup respells the tag and finds the row at tier
+    5; the cross-provider ladder never respells, so ``widget/w1:free`` is
+    absent from every rung of the vote it is being weighed against. Without
+    that separation "three rows voted" would silently mean four, and the
+    quorum assertions below would be measuring the wrong number.
+    """
+
+    index: dict[str, object] = {"openrouter": _bucket(**{"widget/w1:free": reference})}
+    for number, row in enumerate(host_rows):
+        index[f"host{number}"] = _bucket(**{_ROUTE: row})
+    return _cache(tmp_path, index)
+
+
+def test_a_richer_vote_beats_a_poorer_reference_row_for_effort_control(
+    tmp_path: Path,
+) -> None:
+    """Stated True outranks stated False for a reasoning *control*.
+
+    The reference catalogue is one editorial description and it is usually
+    right, but "this model has no effort knob" is a claim a dozen hosts that
+    accept ``reasoning_effort`` from it can refute. Taking the poorer answer
+    because it came from the tidier source is how a model that accepts an
+    effort ends up gated down to toggle-only.
+    """
+
+    path = _reference_plus_hosts(
+        tmp_path,
+        _controls_row(toggle=True),
+        *[_controls_row(efforts=("low", "high"))] * 3,
+    )
+
+    capability, tiers = model_reasoning_capability_tiered("commandcode", _ROUTE, path)
+
+    assert capability is not None
+    assert capability.supports_effort_control is True
+    assert tiers["supports_effort_control"].is_approximate
+    # And the rung on screen is the one the value actually came from.
+    assert tiers["supports_effort_control"] is ResolutionTier.CROSS_PROVIDER_EXACT
+
+
+def test_a_poorer_vote_never_beats_a_richer_reference_row(tmp_path: Path) -> None:
+    """The converse, the half that keeps the rule from being a coin toss.
+
+    "More capable wins" is directional, not "whoever disagrees last wins": a
+    vote saying the knob is absent may not take away a knob the curated
+    catalogue describes.
+    """
+
+    path = _reference_plus_hosts(
+        tmp_path,
+        _controls_row(efforts=("low", "high")),
+        *[_controls_row(toggle=True)] * 3,
+    )
+
+    capability, tiers = model_reasoning_capability_tiered("commandcode", _ROUTE, path)
+
+    assert capability is not None
+    assert capability.supports_effort_control is True
+    assert tiers["supports_effort_control"] is ResolutionTier.OPENROUTER_EXACT
+
+
+def test_a_reference_row_still_wins_can_reason(tmp_path: Path) -> None:
+    """``can_reason`` is not a ladder, so "more" is not a reason to overturn it.
+
+    The safety property: a curated "this model does not reason" that a name
+    vote could invert would send a thinking instruction to a model that has no
+    thinking to switch on, and the host answers that with a 400.
+    """
+
+    path = _reference_plus_hosts(
+        tmp_path,
+        {"reasoning": False},
+        *[_controls_row(efforts=("low", "high"))] * 3,
+    )
+
+    capability, tiers = model_reasoning_capability_tiered("commandcode", _ROUTE, path)
+
+    assert capability is not None
+    assert capability.can_reason is False
+    assert tiers["can_reason"] is ResolutionTier.OPENROUTER_EXACT
+    assert tiers["can_reason"].is_reference
+
+
+def test_two_outlier_rows_do_not_overturn_a_reference_row(tmp_path: Path) -> None:
+    """The live ``minimax-m3`` shape: the vote agrees with the reference.
+
+    Three same-named rows publish a toggle and no effort knob, two publish an
+    effort vocabulary. The vote's answer is therefore the modal ``False``, so
+    there is nothing richer to prefer and the reference row stands exactly as
+    it did before the tie-break existed. Two rows out of five may not quietly
+    promote a model.
+    """
+
+    path = _reference_plus_hosts(
+        tmp_path,
+        _controls_row(toggle=True),
+        *[_controls_row(toggle=True)] * 3,
+        *[_controls_row(efforts=("low", "high", "max"))] * 2,
+    )
+
+    capability, tiers = model_reasoning_capability_tiered("commandcode", _ROUTE, path)
+
+    assert capability is not None
+    assert capability.supports_effort_control is False
+    assert capability.supports_toggle_control is True
+    # Two reporters cannot supply a vocabulary either, and a withdrawn field
+    # must not leave a rung behind on the Models page.
+    assert capability.supported_efforts is None
+    assert "supported_efforts" not in tiers
+    assert tiers["supports_effort_control"] is ResolutionTier.OPENROUTER_EXACT
+
+
+def test_the_quorum_still_applies_before_richer_can_win(tmp_path: Path) -> None:
+    """The tie-break chooses between two answers; it does not create one.
+
+    Two rows are not a vote -- they cannot break a tie from evidence -- so
+    below :data:`MIN_APPROXIMATE_BOOLEAN_REPORTERS` the vote has nothing to
+    offer and the reference is not being outranked by anything. Letting
+    "richer wins" reach past the quorum would reinstate the single foreign row
+    that 6.3.0 removed, pointing the other way.
+    """
+
+    assert MIN_APPROXIMATE_BOOLEAN_REPORTERS == 3
+    path = _reference_plus_hosts(
+        tmp_path,
+        _controls_row(toggle=True),
+        *[_controls_row(efforts=("low", "high"))] * 2,
+    )
+
+    capability, tiers = model_reasoning_capability_tiered("commandcode", _ROUTE, path)
+
+    assert capability is not None
+    assert capability.supports_effort_control is False
+    assert capability.supported_efforts is None
+    assert tiers["supports_effort_control"] is ResolutionTier.OPENROUTER_EXACT
+
+
+def test_a_larger_voted_vocabulary_beats_a_smaller_reference_one(
+    tmp_path: Path,
+) -> None:
+    """Same direction for the vocabulary, ranked the way the vote ranks it.
+
+    A reference row listing one effort word beside a vote listing three is not
+    a disagreement about which words exist; it is one source knowing fewer of
+    them. Keeping the shorter list would refuse efforts the model accepts.
+    """
+
+    path = _reference_plus_hosts(
+        tmp_path,
+        _controls_row(efforts=("low",)),
+        *[_controls_row(efforts=("low", "high", "max"))] * 3,
+    )
+
+    capability, tiers = model_reasoning_capability_tiered("commandcode", _ROUTE, path)
+
+    assert capability is not None
+    assert capability.supported_efforts == frozenset(
+        {ReasoningEffort.LOW, ReasoningEffort.HIGH, ReasoningEffort.MAX}
+    )
+    assert tiers["supported_efforts"] is ResolutionTier.CROSS_PROVIDER_EXACT
+
+
+def test_prefer_richer_never_moves_a_numeric_limit(tmp_path: Path) -> None:
+    """Capabilities and limits are resolved by two different functions.
+
+    A limit is a property of *this deployment*, not of the model, so it stays
+    at the tightest rung that states it however capable a looser rung claims
+    the model is. This is the guard that a later "unify the two reference
+    lookups" refactor cannot silently start voting on token counts: the
+    reasoning fields on this very route come from the vote, and the number
+    does not move with them.
+    """
+
+    path = _reference_plus_hosts(
+        tmp_path,
+        _controls_row(toggle=True, output=111000),
+        *[_controls_row(efforts=("low", "high"), output=222000)] * 3,
+    )
+
+    capability, tiers = model_reasoning_capability_tiered("commandcode", _ROUTE, path)
+    assert capability is not None
+    assert tiers["supports_effort_control"] is ResolutionTier.CROSS_PROVIDER_EXACT
+
+    assert model_output_limit_tiered("commandcode", _ROUTE, path) == (
+        111000,
+        ResolutionTier.OPENROUTER_EXACT,
+    )
+
+
+def test_a_resolved_record_never_states_no_effort_control_beside_a_vocabulary(
+    tmp_path: Path,
+) -> None:
+    """Live: ``commandcode/openai/o3`` resolved exactly that contradiction.
+
+    The reference row publishes a toggle and no effort knob; the same-named
+    rows across other hosts publish an effort vocabulary. Merging them
+    reference-first kept the reference's ``supports_effort_control=False`` and
+    then filled the unstated ``supported_efforts`` from the vote, producing a
+    record that said "no effort knob" while listing the words the knob takes.
+    Whichever half wins, the two must agree afterwards.
+    """
+
+    index: dict[str, object] = {
+        "openrouter": _bucket(**{"openai/o3": _controls_row(toggle=True)}),
+        **{
+            f"host{number}": _bucket(
+                **{"openai/o3": _controls_row(efforts=("low", "high", "max"))}
+            )
+            for number in range(3)
+        },
+    }
+    path = _cache(tmp_path, index)
+
+    capability, _tiers = model_reasoning_capability_tiered(
+        "commandcode", "openai/o3", path
+    )
+
+    assert capability is not None
+    assert not (
+        capability.supports_effort_control is False
+        and capability.supported_efforts is not None
+    )
+    # The vocabulary is real, so it is the flag that gives way.
+    assert capability.supports_effort_control is True
+    assert capability.supported_efforts == frozenset(
+        {ReasoningEffort.LOW, ReasoningEffort.HIGH, ReasoningEffort.MAX}
+    )
+
+
+def test_a_provider_with_its_own_bucket_is_untouched_by_the_tie_break(
+    tmp_path: Path,
+) -> None:
+    """Tiers 5-10 are for a provider models.dev does not describe. Only those.
+
+    A provider with a bucket answers from its own row at tier 3 and stops, so
+    a richer reference row and a richer vote for the same name are both
+    invisible to it. Without this the tie-break would start editing the
+    authoritative rungs it was never allowed to reach.
+    """
+
+    index: dict[str, object] = {
+        "opencode": _bucket(**{"mimo-v2.5-free": _controls_row()}),
+        "openrouter": _bucket(
+            **{"mimo-v2.5-free": _controls_row(efforts=("low", "high", "max"))}
+        ),
+        **{
+            f"host{number}": _bucket(
+                **{"mimo-v2.5-free": _controls_row(efforts=("low", "high", "max"))}
+            )
+            for number in range(3)
+        },
+    }
+    path = _cache(tmp_path, index)
+
+    capability, tiers = model_reasoning_capability_tiered(
+        "opencode", "mimo-v2.5-free", path
+    )
+
+    assert capability is not None
+    assert capability.supports_effort_control is False
+    assert capability.supported_efforts is None
+    assert tiers["can_reason"] is ResolutionTier.MODELS_DEV_BUCKET_EXACT
+    assert tiers["can_reason"].is_authoritative
+
+
+# ---------------------------------------------------------------------------
+# The four routes that were measured on the live install before the tie-break
+# ---------------------------------------------------------------------------
+
+# A checked-in reproduction of the four shapes, NOT the operator's own
+# ``~/.fcc`` cache: a test that reads a live 4.4 MB file proves whatever that
+# file happened to say on the day it was fetched, and fails for a stranger.
+# Two routes resolve from a provider bucket (tier 3) and two from the
+# reference catalogue (tiers 5 and 6), so between them they cover both sides
+# of the rung the tie-break lives on.
+_LIVE_ROUTES_INDEX: dict[str, object] = {
+    "openrouter": _bucket(
+        **{
+            # Toggle only, and spelled untagged, so the ``-free`` route finds
+            # it one rung down at tier 6.
+            "minimax/minimax-m3": {
+                "reasoning": True,
+                "reasoning_options": [{"type": "toggle"}],
+            },
+            "z-ai/glm-5.3-flash": {
+                "reasoning": True,
+                "reasoning_options": [
+                    {"type": "effort", "values": ["low", "high", "max"]}
+                ],
+            },
+        }
+    ),
+    "opencode": _bucket(
+        **{"mimo-v2.5-free": {"reasoning": True, "reasoning_options": []}}
+    ),
+    "nvidia": _bucket(
+        **{
+            "moonshotai/kimi-k3": {
+                "reasoning": True,
+                "reasoning_options": [
+                    {"type": "effort", "values": ["low", "high", "max"]},
+                    {"type": "toggle"},
+                ],
+            }
+        }
+    ),
+    # The foreign rows that share the bare name ``minimax-m3``: three publish a
+    # toggle, two publish an effort vocabulary. This is the shape that made the
+    # tie-break worth checking against, and its modal answer agrees with the
+    # reference row.
+    **{
+        f"toggle-host{number}": _bucket(
+            **{
+                "minimax-m3": {
+                    "reasoning": True,
+                    "reasoning_options": [{"type": "toggle"}],
+                }
+            }
+        )
+        for number in range(3)
+    },
+    **{
+        f"effort-host{number}": _bucket(
+            **{
+                "minimax-m3": {
+                    "reasoning": True,
+                    "reasoning_options": [
+                        {"type": "effort", "values": ["low", "high", "max"]}
+                    ],
+                }
+            }
+        )
+        for number in range(2)
+    },
+}
+
+_LOW_HIGH_MAX = frozenset(
+    {ReasoningEffort.LOW, ReasoningEffort.HIGH, ReasoningEffort.MAX}
+)
+
+
+@pytest.mark.parametrize(
+    ("provider", "model_id", "expected", "tier"),
+    [
+        (
+            "commandcode",
+            "minimax/minimax-m3-free",
+            (True, False, True, False, None),
+            ResolutionTier.OPENROUTER_TAG_STRIPPED,
+        ),
+        (
+            "commandcode",
+            "z-ai/glm-5.3-flash",
+            (True, True, False, False, _LOW_HIGH_MAX),
+            ResolutionTier.OPENROUTER_EXACT,
+        ),
+        (
+            "opencode",
+            "mimo-v2.5-free",
+            (True, False, False, False, None),
+            ResolutionTier.MODELS_DEV_BUCKET_EXACT,
+        ),
+        (
+            "nvidia_nim",
+            "moonshotai/kimi-k3",
+            (True, True, True, False, _LOW_HIGH_MAX),
+            ResolutionTier.MODELS_DEV_BUCKET_EXACT,
+        ),
+    ],
+)
+def test_the_four_live_routes_are_unchanged_by_the_tie_break(
+    tmp_path: Path,
+    provider: str,
+    model_id: str,
+    expected: tuple[bool, bool, bool, bool, frozenset[ReasoningEffort] | None],
+    tier: ResolutionTier,
+) -> None:
+    """Four routes measured on the live install, pinned field by field.
+
+    Preferring the richer record is only defensible if it changes the records
+    that were wrong and leaves the rest alone. These four were correct before
+    the tie-break, and every one of them must resolve to the same five values
+    at the same rung afterwards.
+    """
+
+    path = _cache(tmp_path, _LIVE_ROUTES_INDEX)
+
+    capability, tiers = model_reasoning_capability_tiered(provider, model_id, path)
+
+    assert capability is not None
+    assert (
+        capability.can_reason,
+        capability.supports_effort_control,
+        capability.supports_toggle_control,
+        capability.supports_budget_control,
+        capability.supported_efforts,
+    ) == expected
+    assert tiers["can_reason"] is tier
