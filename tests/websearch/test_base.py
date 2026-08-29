@@ -65,7 +65,12 @@ async def test_invalid_request_raises_without_rotating() -> None:
     with pytest.raises(WebSearchInvalidRequestError):
         await provider.search("q")
     assert len(provider.calls) == 1  # key 1 never attempted
-    assert provider.key_pool.health_at(0).failures == 0
+    # Request-shaped faults never reach the pool here: they are re-raised
+    # before any report_failure call, so health stays completely untouched.
+    health = provider.key_pool.health_at(0)
+    assert health.failures == 0
+    assert health.consecutive_failures == 0
+    assert health.state is KeyHealthState.HEALTHY
 
 
 @pytest.mark.asyncio

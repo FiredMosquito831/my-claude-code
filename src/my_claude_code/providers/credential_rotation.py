@@ -23,6 +23,7 @@ Policies:
 """
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -35,11 +36,17 @@ from my_claude_code.core.credential_rotation import (
     PROVIDER_TUNING,
     RotationEngine,
 )
-from my_claude_code.core.failures import ExecutionFailure
+from my_claude_code.core.failures import (
+    ExecutionFailure,
+    FailureKind,
+    find_execution_failure,
+)
 from my_claude_code.providers.failure_policy import (
     retryable_transient_status,
     retryable_upstream_transport_error,
 )
+
+logger = logging.getLogger(__name__)
 
 ROTATION_POLICIES = frozenset(
     {"single", "round_robin", "least_used", "failover", "on_error"}
@@ -95,6 +102,40 @@ def _status_from_error(error: BaseException) -> int | None:
         return error.status_code
     status = getattr(error, "status_code", None)
     return status if isinstance(status, int) else None
+
+
+#: Failure kinds that describe the *request*, not the credential that carried
+#: it. A malformed body and an over-long prompt are rejected identically by
+#: every key in the pool, so charging them to one key's health is a category
+#: error: it benches working credentials for a fault they did not cause.
+REQUEST_SHAPED_KINDS = frozenset(
+    {FailureKind.INVALID_REQUEST, FailureKind.CONTEXT_LENGTH}
+)
+
+
+def failure_implicates_credential(error: BaseException) -> bool:
+    """Return whether a failure says anything about the credential that served it.
+
+    Auth rejections, rate limits, upstream 5xx, overload, timeouts and
+    transport faults all do -- they are properties of this key or of its
+    connection, and the health ladders exist to bench a key that keeps
+    producing them. A request-shaped failure does not: the same 400 comes back
+    from every key, so counting it would escalate the whole pool into cooldown
+    over a fault no rotation can fix.
+
+    Deliberately narrow: only failures positively identified as request-shaped
+    skip health accounting. Anything unrecognized keeps counting exactly as it
+    did before, so failover for genuinely broken credentials is untouched.
+    """
+    failure = find_execution_failure(error)
+    if failure is not None and failure.kind in REQUEST_SHAPED_KINDS:
+        return False
+    if _status_from_error(error) != 400:
+        return True
+    # A bare 400 with no canonical kind: request-shaped unless classification
+    # reads it as a throttle or an upstream fault wearing a 400 (some gateways
+    # report "rate limit" that way), which does implicate the credential.
+    return retryable_transient_status(error) is not None
 
 
 def _failure_class(status: int | None) -> str:
@@ -157,15 +198,34 @@ class CredentialRotationState:
         async with self._lock:
             self._engine.succeed(index)
 
-    async def report_failure(self, index: int, error: BaseException) -> bool:
+    async def report_failure(
+        self, index: int, error: BaseException, *, model: str | None = None
+    ) -> bool:
         """Record a failure for one credential; return whether to rotate.
 
         The return value tells the caller whether trying the next credential
         could resolve this request (auth/rate-limit/5xx/transport errors),
         as opposed to a plain 400 that would fail identically on every key.
+
+        Health is only updated for failures that implicate the credential.
+        Request-shaped failures -- a malformed body, a prompt past the model's
+        context window -- leave the credential's health record byte-identical:
+        they are a property of the request, so escalating one key's cooldown
+        ladder for them (and, three in a row, its circuit breaker) would empty
+        a pool of perfectly good keys.
         """
         rotate = error_justifies_rotation(error)
-        failure_class = _failure_class(_status_from_error(error))
+        status = _status_from_error(error)
+        if not failure_implicates_credential(error):
+            logger.debug(
+                "Credential %d health unchanged: request-shaped failure "
+                "(status=%s, model=%s) is not attributable to the credential",
+                index,
+                status,
+                model or "unknown",
+            )
+            return rotate
+        failure_class = _failure_class(status)
         async with self._lock:
             self._engine.fail(index, failure_class)
         return rotate

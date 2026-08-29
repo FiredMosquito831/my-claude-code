@@ -161,7 +161,9 @@ class RotatingProvider(BaseProvider):
             except Exception as error:
                 last_error = error
                 await maybe_await_aclose(iterator)
-                rotate = await self._state.report_failure(index, error)
+                rotate = await self._state.report_failure(
+                    index, error, model=request.model
+                )
                 if not rotate:
                     raise
                 continue
@@ -178,7 +180,7 @@ class RotatingProvider(BaseProvider):
                 # mid-stream would never cool down.
                 settled = True
                 await maybe_await_aclose(iterator)
-                await self._state.report_failure(index, error)
+                await self._state.report_failure(index, error, model=request.model)
                 raise
             finally:
                 if not settled:

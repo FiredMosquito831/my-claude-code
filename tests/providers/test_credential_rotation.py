@@ -11,7 +11,7 @@ from my_claude_code.config.credentials import parse_credential_keys
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
-from my_claude_code.core.failures import ExecutionFailure
+from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.credential_rotation import (
@@ -685,3 +685,179 @@ async def test_half_open_admits_exactly_one_probe() -> None:
     states = [entry["state"] for entry in state.get_metrics()]
     assert states == ["HEALTHY", "COOLDOWN"]
     assert await state.acquire() == 0
+
+
+# --- Request-shaped failures must not be charged to a credential ------------
+#
+# A malformed request fails identically on every key, so counting it against
+# the key that happened to carry it escalated that key's cooldown ladder and,
+# after three in a row, its circuit breaker. A pool of healthy keys could be
+# driven entirely into cooldown by a bug in the outbound request.
+
+
+def _request_failure(kind: FailureKind, message: str) -> ExecutionFailure:
+    """The shape a provider raises for a request-shaped 400."""
+    return ExecutionFailure(
+        kind=kind, status_code=400, message=message, retryable=False
+    )
+
+
+def _invalid_request() -> ExecutionFailure:
+    # The exact upstream wording from the live NVIDIA NIM incident.
+    return _request_failure(
+        FailureKind.INVALID_REQUEST,
+        "Validation: top_p is immutable for this model and must be 0.95",
+    )
+
+
+def _context_length() -> ExecutionFailure:
+    return _request_failure(
+        FailureKind.CONTEXT_LENGTH,
+        "Request exceeds this model's context window.",
+    )
+
+
+def _health(state: CredentialRotationState) -> list[dict[str, object]]:
+    """Full per-credential health snapshot, minus the wall-clock remainders."""
+    return [
+        {k: v for k, v in entry.items() if not k.endswith("_remaining")}
+        for entry in state.get_metrics()
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_factory",
+    [_invalid_request, _context_length],
+    ids=["invalid_request", "context_length"],
+)
+async def test_request_shaped_failure_leaves_health_byte_identical(
+    error_factory,
+) -> None:
+    state = CredentialRotationState(2, "round_robin")
+    before = _health(state)
+
+    for _ in range(10):
+        assert await state.report_failure(0, error_factory()) is False
+
+    assert _health(state) == before
+    assert all(entry["state"] == "HEALTHY" for entry in state.get_metrics())
+
+
+@pytest.mark.asyncio
+async def test_duck_typed_400_also_leaves_health_untouched() -> None:
+    """Not every provider raises a canonical failure; a bare 400 counts too."""
+    state = CredentialRotationState(2, "round_robin")
+    before = _health(state)
+
+    for _ in range(10):
+        assert await state.report_failure(1, _InvalidRequestError()) is False
+
+    assert _health(state) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403])
+async def test_auth_failures_still_lock_out_and_escalate(status: int) -> None:
+    """Regression guard: the failover multi-key rotation exists for."""
+    state = CredentialRotationState(2, "failover")
+
+    assert await state.report_failure(0, _classified(status)) is True
+    first = state.get_metrics()[0]
+    assert first["state"] == "LOCKED_OUT"
+    assert first["auth_failures"] == 1
+    assert 290.0 < first["lockout_remaining"] <= 300.0
+
+    assert await state.report_failure(0, _classified(status)) is True
+    second = state.get_metrics()[0]
+    assert second["auth_failures"] == 2
+    assert 3590.0 < second["lockout_remaining"] <= 3600.0
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_still_escalates_cooldown_without_circuit_progress() -> None:
+    """Throttled is not broken: the tier climbs, the breaker never trips."""
+    state = CredentialRotationState(2, "round_robin")
+
+    for expected_tier in (1, 2, 3, 4):
+        assert await state.report_failure(0, _RetryableError()) is True
+        metrics = state.get_metrics()[0]
+        assert metrics["tier"] == expected_tier
+        assert metrics["consecutive_failures"] == 0
+        assert metrics["state"] == "COOLDOWN"
+
+    assert state.get_metrics()[0]["failure_count"] == 4
+
+
+@pytest.mark.asyncio
+async def test_upstream_failures_still_trip_the_circuit() -> None:
+    state = CredentialRotationState(2, "round_robin")
+
+    for _ in range(3):
+        assert await state.report_failure(0, _classified(503)) is True
+
+    metrics = state.get_metrics()[0]
+    assert metrics["state"] == "CIRCUIT_OPEN"
+    assert metrics["consecutive_failures"] == 3
+    assert metrics["failure_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_transport_failures_still_trip_the_circuit() -> None:
+    state = CredentialRotationState(2, "round_robin")
+
+    for _ in range(3):
+        assert await state.report_failure(0, httpx.ConnectError("boom")) is True
+
+    assert state.get_metrics()[0]["state"] == "CIRCUIT_OPEN"
+
+
+@pytest.mark.asyncio
+async def test_rotate_return_value_unchanged_for_every_failure_class() -> None:
+    state = CredentialRotationState(1, "single")
+
+    assert await state.report_failure(0, _classified(401)) is True
+    assert await state.report_failure(0, _RetryableError()) is True
+    assert await state.report_failure(0, _classified(503)) is True
+    assert await state.report_failure(0, httpx.ConnectError("boom")) is True
+    assert await state.report_failure(0, _invalid_request()) is False
+    assert await state.report_failure(0, _context_length()) is False
+    assert await state.report_failure(0, _InvalidRequestError()) is False
+
+
+@pytest.mark.asyncio
+async def test_repeated_400s_never_dry_up_a_healthy_pool() -> None:
+    """The live incident: three good keys, one malformed request, pool empty.
+
+    Every request 400'd on `top_p is immutable`; each 400 benched the key that
+    carried it, and within a few requests the pool answered "All API keys for
+    this provider are in cooldown".
+    """
+    state = CredentialRotationState(3, "round_robin")
+
+    for _ in range(60):
+        index = await state.acquire()
+        assert index >= 0, "pool ran dry on request-shaped failures"
+        assert await state.report_failure(index, _invalid_request()) is False
+
+    assert [entry["state"] for entry in state.get_metrics()] == ["HEALTHY"] * 3
+
+
+@pytest.mark.asyncio
+async def test_rotating_provider_survives_a_run_of_invalid_requests() -> None:
+    """End-to-end: the wrapper still raises the 400, and never benches a key."""
+    providers = [_FakeProvider(fail_before_first=_invalid_request()) for _ in range(3)]
+    config = ProviderConfig(
+        api_key="k1",
+        base_url="http://x",
+        api_keys=("k1", "k2", "k3"),
+        credential_rotation="round_robin",
+    )
+    state = CredentialRotationState(3, "round_robin")
+    rotating = RotatingProvider(config, providers, state)
+
+    for _ in range(20):
+        with pytest.raises(ExecutionFailure):
+            [c async for c in rotating.stream_response(_request())]
+
+    assert [entry["state"] for entry in rotating.key_health()] == ["HEALTHY"] * 3
