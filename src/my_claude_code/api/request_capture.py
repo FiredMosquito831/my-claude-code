@@ -87,6 +87,12 @@ class RequestCapture:
         # verdict is never worth a database round trip while a client is
         # still waiting for tokens.
         self._attempts: list[RouteAttempt] = []
+        # The client's own ``max_tokens`` for any attempt whose allowance was
+        # raised because it was going to think, keyed by attempt index. Kept
+        # beside the attempts rather than on the record: it is a per-attempt
+        # fact, and a fallback on a smaller model may not have been widened at
+        # all. Absent means "the client's ask is what left", the common case.
+        self._output_widened_from: dict[int, int] = {}
         self._start = time.perf_counter()
         self._ttft_ms: float | None = None
         self._output_parts: list[str] = []
@@ -188,6 +194,12 @@ class RequestCapture:
         params = self._recovery_events_for(attempt_index) or {}
         if wire is not None and wire.params:
             params["wire"] = wire.params
+        # "From" for the "to" that ``params.wire.max_tokens`` already carries.
+        # Flat, beside the recovery counters, because it is a fact about the
+        # decision rather than about the body that left.
+        widened = self._output_widened_from.get(attempt_index)
+        if widened is not None:
+            params["output_widened_from"] = widened
         return params or None
 
     def _recovery_events_for(self, attempt_index: int) -> dict[str, Any] | None:
@@ -239,6 +251,11 @@ class RequestCapture:
         )
         self._record.provider = routed.resolved.provider_id
         self._record.resolved_model = routed.resolved.provider_model
+        # Recorded per attempt, and only when the reasoning widening actually
+        # raised the number that will be sent. ``None`` is not stored: absence
+        # is the finding, exactly as it is for every other wire knob.
+        if routed.output_widened_from is not None:
+            self._output_widened_from[attempt] = routed.output_widened_from
         # ``reasoning`` is the applied policy (post per-model gating);
         # ``requested_reasoning`` is what was asked for before it. They are
         # equal on an ungated request and differ exactly when the model's
@@ -538,7 +555,14 @@ class RequestCapture:
             record.output_sha256 = _sha256(output_text)
         tool_calls = self._collected_tool_calls()
         record.tool_call_count = len(tool_calls) or None
-        record.thinking_chars = self._thinking_chars or None
+        # 0 is a measurement ("this stream returned no reasoning"), NULL is
+        # the absence of one ("nobody was counting"). Folding them together
+        # with ``or None`` made a silent thinking model indistinguishable from
+        # an unmeasured row, which is precisely the question
+        # ``reasoning_by_model`` exists to answer. Rows written before 6.8.0
+        # keep their NULL and keep counting as unmeasured; a backfill would
+        # invent measurements.
+        record.thinking_chars = self._thinking_chars
         # Reasoning text and tool arguments are request bodies, so they follow
         # the same capture switch; the counts above stay either way.
         if self._capture_bodies:

@@ -156,7 +156,12 @@ const FIELDS = [
      calculator's arithmetic is asserted against hand-computed values. */
   ...[
     ["MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT", "budgets", "32768", "0 to 1048576"],
-    ["MAX_OUTPUT_TOKENS_CEILING", "budgets", "", "0 to 1048576"],
+    [
+      "MAX_OUTPUT_TOKENS_CEILING",
+      "budgets",
+      "131072",
+      "0 to 1048576 (0 lifts the ceiling entirely)",
+    ],
     ["MAX_OUTPUT_TOKENS_CONTEXT_MARGIN", "budgets", "1024", "0 to 1048576"],
     ["MAX_OUTPUT_TOKENS_CONTEXT_FLOOR", "budgets", "1024", "0 to 1048576"],
     ["REASONING_ANSWER_FLOOR_MAX", "budgets", "8192", "0 to 1048576"],
@@ -1017,6 +1022,55 @@ const requestDetail = {
     reasoning_adaptation: "NO REASONING INSTRUCTION SENT: ...",
     reasoning_adaptation_kind: "nothing_sent",
     route_attempts: [detailAttempt({ wire_body: { model: "m" }, reasoning_emitted: 0 })],
+  }),
+  /* A thinking attempt whose output allowance was raised to the routed
+     model's own published limit. params.wire.max_tokens carries the "to";
+     params.output_widened_from is the "from", and it is only ever present
+     when the raise actually happened. */
+  widened: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        reasoning_emitted: 1,
+        params: {
+          output_widened_from: 64000,
+          wire: {
+            model: "MiniMaxAI/MiniMax-M3",
+            max_tokens: 131072,
+            reasoning: { reasoning_effort: "max" },
+          },
+        },
+      }),
+    ],
+  }),
+  /* A body from a dialect whose knobs the pane was never taught by name. Every
+     one of these was already being captured and stored; none of them reached
+     the screen while the block rendered a hard-coded list. */
+  unusualKnobs: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        reasoning_emitted: 1,
+        params: {
+          wire: {
+            model: "deepseek-ai/DeepSeek-V4",
+            max_tokens: 32768,
+            tools: 12,
+            temperature: 0.6,
+            top_k: 40,
+            repetition_penalty: 1.05,
+            reasoning: { reasoning_effort: "high" },
+            min_p: 0.05,
+            parallel_tool_calls: false,
+            response_format: { type: "json_object" },
+            tool_choice: "auto",
+            "extra_body.chat_template_kwargs": { thinking: true },
+          },
+        },
+      }),
+    ],
   }),
   /* The same outcome as written by a pre-6.6.0 server, which had one value for
      both meanings. Stored rows are never migrated, so this shape is still on

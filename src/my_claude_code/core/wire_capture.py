@@ -313,8 +313,10 @@ def _int_or_none(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-# Sampling knobs worth pulling out of the body into the compact params summary,
-# because they are the ones an operator scans for first.
+# The sampling knobs an operator scans for first. Every parameter is kept now,
+# so this tuple no longer decides *what* is summarised -- it decides the order
+# the familiar ones are read in, ahead of the long alphabetical tail, and
+# ``admin.js``'s ``WIRE_SAMPLING_FIELDS`` mirrors it for the same reason.
 _SAMPLING_FIELDS = (
     "temperature",
     "top_p",
@@ -328,19 +330,54 @@ _SAMPLING_FIELDS = (
 )
 
 
+_OUTPUT_ALLOWANCE_FIELDS = (
+    "max_tokens",
+    "max_completion_tokens",
+    "max_output_tokens",
+)
+
+
 def wire_params_summary(body: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the compact, always-cheap facts about one outbound body."""
+    """Return every non-content parameter of one outbound body.
+
+    This used to keep a hand-picked shortlist -- model, the output allowance,
+    a tool count, nine sampling fields and the reasoning keys -- and silently
+    dropped everything else. That shortlist was written against the providers
+    MCC spoke to at the time, so each new dialect quietly went unrecorded:
+    ``min_p``, ``response_format``, ``stream_options``, ``tool_choice`` and
+    ``parallel_tool_calls`` were all sent and none of them were visible to
+    anyone debugging what left the process. The rule is now the same one the
+    body writer follows: content is structure, everything else is a knob, and
+    a knob is never dropped.
+
+    ``tools`` stays a count because the list itself is the largest thing in a
+    Claude Code body and the count is the parameter; ``_CONTENT_FIELDS`` stay
+    out because they are prompt text, which is captured once in the Prompt
+    pane. Every remaining top-level key, and every ``extra_body`` key under an
+    ``extra_body.<name>`` label, survives verbatim through
+    ``redact_wire_value`` -- which redacts by key name as well as by value
+    shape, so a credential that reaches a field nobody thought to name is
+    still removed here. Emission order is fixed rather than incidental, so the
+    same body always produces the same dict and the pane always reads the same
+    way.
+    """
     summary: dict[str, Any] = {}
+    # Names already spoken for by a summary row above, so the alphabetical
+    # tail below does not print the same parameter under two labels.
+    captured: set[str] = {"extra_body", "tools", *_CONTENT_FIELDS}
     model = body.get("model")
     if model is not None:
         summary["model"] = str(model)
-    max_tokens = _int_or_none(body.get("max_tokens"))
-    if max_tokens is None:
-        max_tokens = _int_or_none(body.get("max_completion_tokens"))
-    if max_tokens is None:
-        max_tokens = _int_or_none(body.get("max_output_tokens"))
-    if max_tokens is not None:
-        summary["max_tokens"] = max_tokens
+    captured.add("model")
+    for name in _OUTPUT_ALLOWANCE_FIELDS:
+        allowance = _int_or_none(body.get(name))
+        if allowance is not None:
+            summary["max_tokens"] = allowance
+            # Only the spelling that actually supplied the number is consumed:
+            # a body carrying two of them is a genuine oddity, and the second
+            # one still deserves a row of its own rather than a silent drop.
+            captured.add(name)
+            break
     tools = body.get("tools")
     if isinstance(tools, Sequence) and not isinstance(tools, str | bytes):
         summary["tools"] = len(tools)
@@ -348,6 +385,7 @@ def wire_params_summary(body: Mapping[str, Any]) -> dict[str, Any]:
         value = body.get(name)
         if value is not None:
             summary[name] = redact_wire_value(value)
+        captured.add(name)
     reasoning: dict[str, Any] = {}
     for raw_key, value in body.items():
         key = str(raw_key)
@@ -361,6 +399,30 @@ def wire_params_summary(body: Mapping[str, Any]) -> dict[str, Any]:
                 reasoning[f"extra_body.{key}"] = redact_wire_value(value)
     if reasoning:
         summary["reasoning"] = reasoning
+    # The tail: everything the named rows above did not claim. Redacting the
+    # leftovers as one mapping rather than value by value is deliberate --
+    # ``redact_wire_value`` only applies its by-name rule while descending a
+    # Mapping, and a top-level ``authorization`` whose value looks like
+    # nothing in particular is exactly the case that needs it.
+    rest = {
+        str(key): value
+        for key, value in body.items()
+        if str(key) not in captured
+        and not is_reasoning_key(str(key))
+        and value is not None
+    }
+    safe_rest = redact_wire_value(rest)
+    for key in sorted(safe_rest):
+        summary[key] = safe_rest[key]
+    if isinstance(extra, Mapping):
+        nested = {
+            str(key): value
+            for key, value in extra.items()
+            if not is_reasoning_key(str(key)) and value is not None
+        }
+        safe_nested = redact_wire_value(nested)
+        for key in sorted(safe_nested):
+            summary[f"extra_body.{key}"] = safe_nested[key]
     return summary
 
 

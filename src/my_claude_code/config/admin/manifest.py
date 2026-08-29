@@ -665,12 +665,14 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "budgets",
         "number",
         settings_attr="max_output_tokens_ceiling",
-        default="",
+        default="131072",
         description=(
-            "Absolute cap on output tokens for every request, whatever the "
-            "model can do. Empty by default and best left empty: a ceiling "
-            "below a model's published limit throws away capacity you are "
-            "paying for. Set one only as a runaway guard."
+            "Absolute head on output tokens for every request, reasoning or "
+            "not. Ships at 131,072 because a thinking request asks for the "
+            "routed model's full published limit, and an unbounded ask can "
+            "reserve a whole TPM bucket on hosts that pre-reserve max_tokens. "
+            "It never raises a model above its own limit. Set 0 to lift it "
+            "entirely."
         ),
     ),
     ConfigFieldSpec(
@@ -796,7 +798,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "envelope frame: the attempt stays uncommitted, its share of the "
             "budget expires, and the next model answers instead. The cost is "
             "that reasoning no longer streams live -- it appears when the "
-            "answer does. Turn this off to watch a model think in real time."
+            "answer does. Turn this off to watch a model think in real time. "
+            "Known gap: this covers a deadline reached while a stream is still "
+            "open, so a stream that thinks, then ends on time with an empty "
+            "visible answer, is never rescued -- raise the output ceiling or "
+            "lower the reasoning tier if you see it."
         ),
     ),
     ConfigFieldSpec(

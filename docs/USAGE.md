@@ -957,7 +957,11 @@ MCC reads RTK's own `rtk gain` report and shows the resulting savings on the [To
 
 ### Output & thinking budgets
 
-How large one answer may be. MCC sizes `max_tokens` from the routed model's own published limit; these settings only cover what the model cannot answer for itself — the budget used when nobody publishes a limit, an optional absolute ceiling, the tokens held back so a large output limit cannot swallow its own context window, the smallest bounded budget that reserve may produce, and the answer reserve kept back while extended thinking is on.
+How large one answer may be. MCC sizes `max_tokens` from the routed model's own published limit; these settings only cover what the model cannot answer for itself — the budget used when nobody publishes a limit, the absolute ceiling, the tokens held back so a large output limit cannot swallow its own context window, the smallest bounded budget that reserve may produce, and the answer reserve kept back while extended thinking is on.
+
+**A request that is going to think starts from the model's maximum, not from what the client asked for.** Thinking tokens and the answer are spent from one `max_tokens`, so a client that sized the number for an answer unknowingly sized the thinking as well — and it is the model, not the client, that knows how much it can emit. The ceiling, the context reserve and the model's own limit then clamp that exactly as they clamp any other ask.
+
+**The ceiling ships set at 131,072 for that reason.** Some hosts — OpenAI and Azure style limiters — reserve `max_tokens` against your rate-limit bucket *before* generating anything, so an unbounded thinking turn on a 262,144-output model can 429 a request that would otherwise have been served. The head applies uniformly, reasoning or not; it never raises a model above its own published limit. Set it to **0** to lift it entirely and let every model's own limit stand. Leaving the box empty now means "use the default", not "no ceiling" — that is the one upgrade edge worth knowing about.
 
 ### Deadlines
 
@@ -968,6 +972,8 @@ When to stop waiting. The first-token deadline, the whole-request budget, the st
 The Deadlines card works this out for you. It shows one row per configured route — Default, Fable, Opus, Sonnet, Haiku, Vision — with the arithmetic for that route's chain length, and where the first-token number cannot be honoured it names the total budget that would honour it. Routes with no model of their own are left out, because they run on `MODEL` and its chain.
 
 It is a model of the executor, not the executor. It does not know about time already spent earlier in the request, about **Retry primary once** adding an attempt, about a benched model shortening the chain, or about the reasoning path taking over. The card says so where it sits.
+
+**Known gap.** A stream that thinks and then ends with an empty visible answer — `finish_reason=length` after the thinking consumed the allowance — is not rescued by the fallback chain. **Fall back when a model only thinks** only covers a *deadline* reached while a stream is still open, so a stream that ended on time, with output, never reaches it. Raise `MAX_OUTPUT_TOKENS_CEILING`, or lower the reasoning tier, if you see it.
 
 ### Chain benching
 

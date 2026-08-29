@@ -45,7 +45,11 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     # on a hand-typed number, not an opinion about model capacity: a real
     # per-model limit is read from the model, never from this table.
     "max_output_tokens_unknown_default": LimitRange(1, 1_048_576),
-    "max_output_tokens_ceiling": LimitRange(1, 1_048_576),
+    # 0 lifts the head entirely. Needed because the field now ships set, and
+    # a blank value resolves to the default rather than to "unset".
+    "max_output_tokens_ceiling": LimitRange(
+        0, 1_048_576, "0 lifts the ceiling entirely"
+    ),
     # 0 turns the reservation off, which is only sane if you trust FCC's token
     # count to match the upstream's exactly.
     "max_output_tokens_context_margin": LimitRange(

@@ -523,11 +523,30 @@ class ProviderExecutor:
         # decision needs the prompt's token count.
         # Output budget first, then the thinking budget: the reasoning
         # reconciliation has to see the max_tokens that will actually be
-        # sent, or the two numbers disagree and the provider 400s.
+        # sent, or the two numbers disagree and the provider 400s. Since
+        # 6.8.0 the order is load-bearing in a second way -- the output
+        # budget *widens* a thinking attempt's allowance to the model's own
+        # published limit before clamping it, so the rung's ratio and the
+        # answer reserve are both priced from the real allowance rather than
+        # from a client's answer-sized ask.
         attempts = tuple(
             apply_reasoning_budget(apply_output_token_budget(attempt, input_tokens))
             for attempt in attempts
         )
+        announced = order[prepared[0]]
+        if (
+            on_attempt is not None
+            and attempts[announced].output_widened_from is not None
+        ):
+            # ``_prepare_from`` above announced this attempt before either
+            # budget existed -- it has to run first, because preflight stays
+            # ahead of token counting (WORKING-NOTES 56). Everything the
+            # observer records is the same on both objects except the one
+            # thing the budget just decided, so the announcement is repeated
+            # only when there is something new to say. Re-announcing every
+            # attempt would double the chain's announcement sequence, which
+            # is itself a contract ("announced before it is tried").
+            on_attempt(attempts[announced], announced)
 
         # Per-request, not per-executor. ProviderExecutor is constructed once
         # per handler and shared by every request in the process, so holding

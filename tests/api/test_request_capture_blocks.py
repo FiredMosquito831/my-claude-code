@@ -111,6 +111,27 @@ async def test_thinking_is_kept_out_of_the_response_text(
 
 
 @pytest.mark.asyncio
+async def test_a_completed_stream_with_no_reasoning_records_zero_not_null(
+    store: RequestLogStore,
+) -> None:
+    """0 is a measurement; NULL is the absence of one.
+
+    Folding them together with ``or None`` made a model that was asked to
+    think and returned nothing indistinguishable from a row nobody counted --
+    which is precisely the question ``reasoning_by_model`` exists to answer.
+    """
+    frames = _events(_delta(0, {"type": "text_delta", "text": "Done."}))
+    capture = _make_capture(store)
+    await _run(capture, frames)
+    store.close()
+
+    row = _detail(store)
+    assert row["thinking_chars"] == 0
+    assert row["thinking_chars"] is not None
+    assert row["thinking_text"] is None
+
+
+@pytest.mark.asyncio
 async def test_split_frames_across_chunks_still_capture(
     store: RequestLogStore,
 ) -> None:
@@ -213,7 +234,9 @@ async def test_turn_without_tools_or_thinking_records_nothing_extra(
 
     row = _detail(store)
     assert row["tool_call_count"] is None
-    assert row["thinking_chars"] is None
+    # ...except the thinking count, which since 6.8.0 is a measured 0 rather
+    # than a NULL: this stream was watched and it returned no reasoning.
+    assert row["thinking_chars"] == 0
     assert row["output_text"] == "hi"
 
 

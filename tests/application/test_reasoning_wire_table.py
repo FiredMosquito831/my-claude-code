@@ -55,6 +55,16 @@ CANNOT_REASON = ModelReasoningCapability(
     supports_budget_control=False,
 )
 
+# models.dev's ``reasoning: true`` with ``reasoning_options: []``: the model
+# reasons and the caller gets no knob at all. Every ``False`` is a stated fact,
+# which is what separates it from a record that simply says nothing.
+NO_CONTROL = ModelReasoningCapability(
+    can_reason=True,
+    supports_effort_control=False,
+    supports_toggle_control=False,
+    supports_budget_control=False,
+)
+
 # Every profile that carried ``NO_REASONING`` before PR F and now declares the
 # OpenAI standard field.
 _PREVIOUSLY_SILENT = (
@@ -327,6 +337,38 @@ WIRE_TABLE: tuple[tuple[Any, ...], ...] = (
             ),
         )
     ),
+    # A model that publishes NO control at all, on the host that produced the
+    # defect: Command Code's only on-signal is its own effort field, so the
+    # rung the caller named goes into it. 6.7.0 answered a request for ``low``
+    # with the host's ``enabled_value`` -- a stranger's ``max``.
+    (
+        "commandcode",
+        "no-control-model",
+        NO_CONTROL,
+        COMMANDCODE_DIALECT,
+        ReasoningEffort.LOW,
+        {"reasoning_effort": "low"},
+    ),
+    # The same capability against a host with a REAL on/off channel: the
+    # object toggle, not an effort. Rule 11, unchanged.
+    (
+        "open_router",
+        "no-control-model",
+        NO_CONTROL,
+        OPENROUTER_DIALECT,
+        ReasoningEffort.LOW,
+        {"reasoning": {"enabled": True}},
+    ),
+    # And against a host with neither: nothing leaves, and the model's own
+    # default reasoning behaviour stands. Rule 12, unchanged.
+    (
+        "xai",
+        "no-control-model",
+        NO_CONTROL,
+        ReasoningDialect(),
+        ReasoningEffort.LOW,
+        {},
+    ),
 )
 
 
@@ -380,6 +422,30 @@ def test_the_wire_table_is_what_leaves_the_proxy(
     profile.reasoning.encode(body, policy)
 
     assert reasoning_keys(body) == expected
+
+
+def test_a_no_control_model_on_command_code_sends_the_rung_that_was_asked_for() -> None:
+    """The 6.8.0 fix, as prose next to the rows it is proved by.
+
+    Command Code publishes one reasoning field, ``reasoning_effort``, and says
+    "reason" by writing one of its own rungs into it. A model behind it that
+    publishes no control has no rung of its own -- but the caller does, and it
+    is the only honest thing that fits in the only field there is.
+    """
+
+    policy = gated(
+        NO_CONTROL,
+        COMMANDCODE_DIALECT,
+        ReasoningEffort.LOW,
+        "commandcode/MiniMaxAI/MiniMax-M3",
+    )
+
+    assert policy == ReasoningPolicy.on(effort=ReasoningEffort.LOW)
+
+    body: dict[str, Any] = {"model": "MiniMaxAI/MiniMax-M3", "messages": []}
+    _PROFILES["commandcode"].reasoning.encode(body, policy)
+
+    assert reasoning_keys(body) == {"reasoning_effort": "low"}
 
 
 def test_a_toggle_and_effort_model_on_nim_takes_the_chat_template_toggle() -> None:

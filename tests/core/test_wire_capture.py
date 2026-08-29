@@ -12,8 +12,10 @@ import pytest
 
 from my_claude_code.config.constants import REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT
 from my_claude_code.core.wire_capture import (
+    _CONTENT_FIELDS,
     _SAMPLING_FIELDS,
     DEFAULT_WIRE_BODY_MAX_CHARS,
+    REDACTED,
     install_wire_trace,
     reasoning_was_emitted,
     record_wire_request,
@@ -327,6 +329,87 @@ def test_params_summary_reports_the_resolved_numbers():
 def test_params_summary_reads_the_openai_output_token_spellings():
     assert wire_params_summary({"max_completion_tokens": 40960})["max_tokens"] == 40960
     assert wire_params_summary({"max_output_tokens": 8192})["max_tokens"] == 8192
+
+
+def test_params_summary_keeps_every_parameter_the_body_carried():
+    """The old shortlist made each new dialect's knobs invisible.
+
+    ``min_p``, ``tool_choice``, ``response_format``, ``stream_options`` and
+    ``parallel_tool_calls`` were all being sent and none of them reached the
+    pane, because the summary kept a hand-picked list written against the
+    providers MCC spoke to when it was first added. The rule is now that
+    content is excluded and everything else survives, in a fixed order -- so
+    this pins the whole emitted key sequence rather than a sample of it.
+    """
+    summary = wire_params_summary(
+        _body(
+            top_k=40,
+            min_p=0.05,
+            repetition_penalty=1.05,
+            parallel_tool_calls=False,
+            response_format={"type": "json_object"},
+            stream_options={"include_usage": True},
+            tool_choice="auto",
+            extra_body={
+                "chat_template_kwargs": {"thinking": True},
+                "min_p": 0.02,
+                "authorization": "an-unrecognisable-value",
+                "upstream_note": REAL_KEY_SHAPES[0],
+            },
+        )
+    )
+    assert list(summary) == [
+        "model",
+        "max_tokens",
+        "tools",
+        "temperature",
+        "top_k",
+        "repetition_penalty",
+        "reasoning",
+        "min_p",
+        "parallel_tool_calls",
+        "response_format",
+        "stream",
+        "stream_options",
+        "tool_choice",
+        "extra_body.authorization",
+        "extra_body.min_p",
+        "extra_body.upstream_note",
+    ]
+    # ``tools`` is the largest field in a Claude Code body; the count is the
+    # parameter, and the list itself is structure the body pane renders.
+    assert summary["tools"] == 1
+    assert summary["parallel_tool_calls"] is False
+    assert summary["response_format"] == {"type": "json_object"}
+    assert summary["extra_body.min_p"] == 0.02
+    # A reasoning field keeps its dedicated nested home rather than joining
+    # the alphabetical tail, because the pane reads reasoning as one group.
+    assert summary["reasoning"] == {
+        "extra_body.chat_template_kwargs": {"thinking": True}
+    }
+    # Prompt text is captured once, in the Prompt pane; it is not a parameter.
+    for content_field in _CONTENT_FIELDS:
+        assert content_field not in summary
+
+
+def test_params_summary_redacts_the_keys_it_newly_keeps():
+    """Widening what is stored may not widen what escapes redaction.
+
+    Both halves of the rule still apply to a key that only reaches the summary
+    now that the shortlist is gone: an auth-shaped *name* is redacted whatever
+    it holds, and a credential-shaped *value* is scrubbed out of a field
+    nobody thought to name.
+    """
+    summary = wire_params_summary(
+        _body(
+            authorization="an-unrecognisable-value",
+            upstream_note=REAL_KEY_SHAPES[1],
+            extra_body={"session_key": "another-unrecognisable-value"},
+        )
+    )
+    assert summary["authorization"] == REDACTED
+    assert summary["extra_body.session_key"] == REDACTED
+    assert REAL_KEY_SHAPES[1] not in json.dumps(summary)
 
 
 def test_recording_outside_a_tracked_request_is_a_no_op():

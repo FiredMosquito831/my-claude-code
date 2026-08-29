@@ -1,5 +1,7 @@
 """Limits are editable, and saving cannot delete or invent what it showed."""
 
+from typing import Any
+
 import pytest
 
 from my_claude_code.config.admin import sources as admin_sources
@@ -241,9 +243,9 @@ def test_each_limit_default_matches_the_setting_default(key: str) -> None:
     actual = getattr(Settings(), attr)
     if actual is None:
         # An optional limit that ships unset shows an empty box, not the word
-        # "None". MAX_OUTPUT_TOKENS_CEILING is the only one: a ceiling that
-        # binds below a model's own published limit is exactly what the
-        # per-model output budget exists to avoid, so it is opt-in.
+        # "None". None do today -- MAX_OUTPUT_TOKENS_CEILING was the last one
+        # and ships at 131,072 since 6.8.0 -- but the branch is kept for the
+        # next one, and for the shape of the assertion it makes.
         assert field.default == ""
         return
     if isinstance(actual, bool):
@@ -252,6 +254,26 @@ def test_each_limit_default_matches_the_setting_default(key: str) -> None:
         assert float(field.default) == float(actual)
     else:
         assert field.default == str(actual)
+
+
+def test_a_zero_ceiling_is_stored_as_no_ceiling() -> None:
+    """The only way out now that the field ships set: the 0 sentinel."""
+    # Env values arrive as strings and the model coerces them, which a
+    # precisely-typed kwargs dict cannot express.
+    lifted: dict[str, Any] = {"_env_file": None, "MAX_OUTPUT_TOKENS_CEILING": "0"}
+    assert Settings(**lifted).max_output_tokens_ceiling is None
+
+
+def test_a_blank_ceiling_now_means_the_default_not_no_ceiling() -> None:
+    """The sharpest edge in 6.8.0, pinned so nobody "fixes" it back.
+
+    A cleared field is written as ``KEY=`` by the admin UI, and
+    ``blank_limit_falls_back_to_its_default`` resolves that to the field's
+    default -- which is now a number rather than None.
+    """
+    blank: dict[str, Any] = {"_env_file": None, "MAX_OUTPUT_TOKENS_CEILING": ""}
+    assert Settings(**blank).max_output_tokens_ceiling == 131_072
+    assert FIELD_BY_KEY["MAX_OUTPUT_TOKENS_CEILING"].default == "131072"
 
 
 def test_saving_keeps_an_env_key_the_form_never_showed(tmp_path) -> None:

@@ -52,7 +52,26 @@ def test_a_value_below_the_range_is_clamped_not_fatal(attr: str) -> None:
     """A proxy that will not start is worse than one running a sane number."""
     limit = LIMIT_RANGES[attr]
     resolved = getattr(_with(attr, str(limit.minimum - 1000)), attr)
+    if attr == "max_output_tokens_ceiling":
+        # This key's floor IS its sentinel: 0 means "no head at all", so
+        # clamping up to it resolves to None rather than to a ceiling of zero,
+        # which would cap every answer at nothing. Pinned on its own in
+        # test_a_negative_output_ceiling_lands_on_the_sentinel_not_on_zero.
+        assert resolved is None
+        return
     assert resolved == type(resolved)(limit.minimum)
+
+
+def test_a_negative_output_ceiling_lands_on_the_sentinel_not_on_zero() -> None:
+    """The clamp's floor for this key is the sentinel, so it must be read as one.
+
+    0 means "no head at all". A ceiling literally *of* zero would cap every
+    answer at nothing, which is why the sentinel is re-applied after the range
+    clamp rather than only before it.
+    """
+    limit = LIMIT_RANGES["max_output_tokens_ceiling"]
+    assert limit.minimum == 0
+    assert _with("max_output_tokens_ceiling", "-1000").max_output_tokens_ceiling is None
 
 
 @pytest.mark.parametrize("attr", LIMIT_ATTRS)
@@ -67,11 +86,19 @@ def test_the_default_sits_inside_its_own_range(attr: str) -> None:
     """A default outside its range would be clamped on every single boot."""
     default = Settings.model_fields[attr].default
     if default is None:
-        # An optional limit that ships unset -- MAX_OUTPUT_TOKENS_CEILING is
-        # the only one, and deliberately so. There is nothing to keep in range
-        # until an operator names a value, which the clamp tests above cover.
+        # No limit ships unset any more -- MAX_OUTPUT_TOKENS_CEILING was the
+        # last one and now ships at 131,072 (6.8.0). The branch is kept for
+        # the next optional limit: there is nothing to keep in range until an
+        # operator names a value, which the clamp tests above cover.
         return
     assert LIMIT_RANGES[attr].contains(default)
+
+
+def test_the_shipped_output_ceiling_is_inside_its_own_range() -> None:
+    """Stated explicitly so a future default change trips here first."""
+    assert Settings.model_fields["max_output_tokens_ceiling"].default == 131_072
+    assert LIMIT_RANGES["max_output_tokens_ceiling"].contains(131_072)
+    assert LIMIT_RANGES["max_output_tokens_ceiling"].minimum == 0
 
 
 def test_the_compression_level_cannot_exceed_what_zstd_accepts() -> None:

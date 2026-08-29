@@ -151,6 +151,16 @@ def _require_provider_prefixed_model_ref(model_ref: str) -> None:
         raise ValueError(f"Invalid provider: '{provider}'. Supported: {supported}")
 
 
+def _no_ceiling_when_zero(value: int | None) -> int | None:
+    """Read the output ceiling's 0 sentinel: "let every model's own limit stand".
+
+    Shared by the field validator and by the range clamp, because the clamp
+    can produce a 0 the field validator never saw.
+    """
+
+    return None if value == 0 else value
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
@@ -481,9 +491,10 @@ class Settings(BaseSettings):
         default=MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
         validation_alias="MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT",
     )
-    # Absolute runaway guard. Unset by default: a ceiling that binds below a
-    # model's declared capability under-uses the model, which is exactly what
-    # this whole path exists to stop.
+    # An absolute head on one answer, shipped set because a thinking turn now
+    # asks for the routed model's own maximum rather than for the client's
+    # answer-sized ask. It never raises a model above its own published limit,
+    # and 0 lifts it entirely.
     max_output_tokens_ceiling: int | None = Field(
         default=MAX_OUTPUT_TOKENS_CEILING,
         validation_alias="MAX_OUTPUT_TOKENS_CEILING",
@@ -1333,6 +1344,19 @@ class Settings(BaseSettings):
             return cls.model_fields[info.field_name].default
         return value
 
+    @field_validator("max_output_tokens_ceiling", mode="after")
+    @classmethod
+    def a_zero_ceiling_means_no_ceiling(cls, value: int | None) -> int | None:
+        """0 is how an operator says "let every model's own limit stand".
+
+        The field ships set (131,072), so "leave it blank" now resolves to the
+        default rather than to None -- see
+        :meth:`blank_limit_falls_back_to_its_default` directly above. A
+        sentinel is the only remaining way out, and 0 is the one this file
+        already uses for "this bound is off" (config/limits.py).
+        """
+        return _no_ceiling_when_zero(value)
+
     @model_validator(mode="after")
     def keep_limits_inside_their_usable_range(self) -> Settings:
         """Clamp a limit rather than refuse to start.
@@ -1361,6 +1385,13 @@ class Settings(BaseSettings):
                 coerced,
             )
             setattr(self, attr, coerced)
+        # The clamp above can land on 0 from below (a negative typed by hand),
+        # and 0 is the sentinel, not a value: a ceiling of 0 would cap every
+        # answer at nothing. Re-applied here because the field validator ran
+        # before the clamp, not after it.
+        self.max_output_tokens_ceiling = _no_ceiling_when_zero(
+            self.max_output_tokens_ceiling
+        )
         return self
 
     @model_validator(mode="after")

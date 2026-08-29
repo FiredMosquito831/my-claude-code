@@ -24,6 +24,7 @@ from my_claude_code.core.gateway_model_ids import decode_gateway_model_id
 from my_claude_code.core.reasoning import (
     ReasoningAdaptation,
     ReasoningAdaptationKind,
+    ReasoningControl,
     ReasoningDialect,
     ReasoningPolicy,
     combine_reasoning_adaptations,
@@ -74,6 +75,20 @@ class RoutedMessagesRequest:
     settings or the model catalogue. It is only the *inputs* to the decision:
     the budget itself needs the prompt's token count, which is not known until
     execution, so :func:`apply_output_token_budget` finishes the job there.
+
+    ``reasoning_dialect`` is the HOST fact gating already looks up and then
+    throws away: which reasoning fields this gateway parses for this model. It
+    is kept because two later decisions need it and neither can re-derive it --
+    whether ``ADAPTIVE`` is spellable here at all (and therefore whether this
+    attempt is really a thinking attempt, see :func:`_will_reason`), and, for
+    the request log, which channel the rung left through. Carried as the
+    dialect rather than as a boolean because the next consumer wants the
+    channel's name, not just its existence.
+
+    ``output_widened_from`` is the client's own ``max_tokens``, recorded only
+    when the reasoning widening actually raised the number that will be sent.
+    ``None`` means "the client's ask is the wire value's origin", which is the
+    common case and needs no row in the request log.
     """
 
     request: MessagesRequest
@@ -82,6 +97,8 @@ class RoutedMessagesRequest:
     requested_reasoning: ReasoningPolicy
     reasoning_adaptation: ReasoningAdaptation
     output_limits: OutputTokenLimits = UNKNOWN_OUTPUT_TOKEN_LIMITS
+    reasoning_dialect: ReasoningDialect | None = None
+    output_widened_from: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,18 +176,59 @@ def apply_output_token_budget(
     routed request itself, which is how it reaches
     ``build_base_request_body`` -- and every other provider dialect -- without
     ``core`` having to look anything up.
+
+    An attempt that is going to think starts from the model's own published
+    limit rather than from the client's ask, because the thinking and the
+    answer are spent from this one number (WORKING-NOTES 54). The clamps are
+    unchanged and still run in the same order afterwards, so the ceiling and
+    the context headroom have the last word either way.
     """
 
+    requested = routed.request.max_tokens
     resolved = resolve_max_output_tokens(
-        routed.request.max_tokens,
+        requested,
         limits=routed.output_limits,
         input_tokens=input_tokens,
         model_ref=routed.resolved.provider_model_ref,
+        for_reasoning=_will_reason(routed),
     )
-    if resolved == routed.request.max_tokens:
+    if resolved == requested:
         return routed
     return replace(
-        routed, request=routed.request.model_copy(update={"max_tokens": resolved})
+        routed,
+        request=routed.request.model_copy(update={"max_tokens": resolved}),
+        # Derived from the FINAL value, after the ceiling and the headroom have
+        # had their say: a widening one of them immediately took back is not a
+        # widening anybody should be told about. A ``requested is None`` case is
+        # not a widening either -- the model's full limit for a client that
+        # named nothing is what this function already did before any of this.
+        output_widened_from=(
+            requested
+            if requested is not None and resolved is not None and resolved > requested
+            else None
+        ),
+    )
+
+
+def _will_reason(routed: RoutedMessagesRequest) -> bool:
+    """Whether this attempt is going to ask the provider to think.
+
+    ``requests_reasoning`` (core/reasoning.py) answers ``False`` for ADAPTIVE
+    on purpose -- it names no effort and no budget, so a generic encoder sends
+    nothing, and widening an allowance for an instruction that never leaves
+    would be inventing a limit in the other direction. On the one host that
+    *does* have an adaptive channel (``ReasoningDialect.adaptive``), ADAPTIVE
+    really is a thinking request, so the dialect is consulted rather than the
+    policy alone.
+    """
+
+    policy = routed.reasoning
+    if policy.requests_reasoning:
+        return True
+    return (
+        policy.control is ReasoningControl.ADAPTIVE
+        and routed.reasoning_dialect is not None
+        and routed.reasoning_dialect.adaptive
     )
 
 
@@ -182,7 +240,14 @@ def apply_reasoning_budget(routed: RoutedMessagesRequest) -> RoutedMessagesReque
     that becomes ``max_tokens``, and that number is not final until the output
     budget has been resolved against the prompt's token count. Reconciling at
     gating time instead would use the client's raw ask, which the output budget
-    may then lower.
+    may then lower -- or, since 6.8.0, raise.
+
+    Nothing here knows about that raise and nothing here needs to. The rung's
+    ratio is priced against ``routed.request.max_tokens``, so a widened
+    allowance grows the thinking budget and the answer reserve
+    (``min(answer_floor_max, output // 2)``) together, by arithmetic rather
+    than by a second rule. On an effort-only host the rung itself is untouched
+    and only the answer stops starving, which is the whole point.
     """
 
     limits = routed.output_limits
@@ -533,7 +598,14 @@ class ModelRouter:
         routed = request.model_copy(deep=True)
         routed.model = resolved.provider_model
         policy = resolve_reasoning_policy(routed, resolved.reasoning_preference)
-        reasoning, reasoning_adaptation = self._gate_reasoning(policy, routed, resolved)
+        # Looked up once and handed to both consumers: gating decides what may
+        # be sent with it, and the routed request carries it onward so the
+        # execution layer can answer "is this really a thinking attempt" for
+        # ADAPTIVE without a second lookup.
+        dialect = self._dialect_for(resolved)
+        reasoning, reasoning_adaptation = self._gate_reasoning(
+            policy, routed, resolved, dialect
+        )
         return RoutedMessagesRequest(
             request=routed,
             resolved=resolved,
@@ -541,6 +613,7 @@ class ModelRouter:
             requested_reasoning=policy,
             reasoning_adaptation=reasoning_adaptation,
             output_limits=self._output_limits(resolved),
+            reasoning_dialect=dialect,
         )
 
     def _output_limits(self, resolved: ResolvedModel) -> OutputTokenLimits:
@@ -561,6 +634,20 @@ class ModelRouter:
             answer_floor_max=self._settings.reasoning_answer_floor_max,
         )
 
+    def _dialect_for(self, resolved: ResolvedModel) -> ReasoningDialect | None:
+        """Which reasoning fields the HOST parses for this model.
+
+        A fact the model's own capability record cannot state, because one
+        gateway can parse a different set per model. An absent lookup means
+        unknown, which leaves the model's capability in sole charge.
+        """
+
+        if self._reasoning_dialect_lookup is None:
+            return None
+        return self._reasoning_dialect_lookup(
+            resolved.provider_id, resolved.provider_model
+        )
+
     def _model_output_limit(self, resolved: ResolvedModel) -> int | None:
         if self._output_limit_lookup is None:
             return None
@@ -578,8 +665,13 @@ class ModelRouter:
         policy: ReasoningPolicy,
         request: MessagesRequest,
         resolved: ResolvedModel,
+        dialect: ReasoningDialect | None,
     ) -> tuple[ReasoningPolicy, ReasoningAdaptation]:
-        """Narrow one resolved policy to what the resolved model accepts."""
+        """Narrow one resolved policy to what the resolved model accepts.
+
+        ``dialect`` is passed in rather than looked up here so the route
+        resolves it exactly once: the routed request keeps it too.
+        """
 
         if (
             self._reasoning_capability_lookup is None
@@ -591,15 +683,6 @@ class ModelRouter:
                 resolved.provider_id, resolved.provider_model
             )
             if self._reasoning_capability_lookup is not None
-            else None
-        )
-        # The host's own fields, which the model's capability record cannot
-        # state: one gateway can parse a different set per model.
-        dialect = (
-            self._reasoning_dialect_lookup(
-                resolved.provider_id, resolved.provider_model
-            )
-            if self._reasoning_dialect_lookup is not None
             else None
         )
         output_limit = self._model_output_limit(resolved)

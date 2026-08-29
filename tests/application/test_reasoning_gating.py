@@ -175,12 +175,14 @@ def gated_body(
     policy: ReasoningPolicy,
     capability: ModelReasoningCapability | None,
     *,
+    dialect: ReasoningDialect | None = None,
     max_tokens: int | None = 4096,
     output_limit: int | None = 8192,
 ) -> dict[str, Any]:
     adapted, _adaptation = adapt_reasoning_policy(
         policy,
         capability,
+        dialect=dialect,
         max_tokens=max_tokens,
         output_limit=output_limit,
         model_ref="provider/a-model",
@@ -579,15 +581,16 @@ def test_the_intersected_vocabulary_is_the_hosts_for_a_toggle_only_model() -> No
     assert channels.toggle is False
 
 
-def test_a_model_that_publishes_no_control_still_gets_the_hosts_on_value() -> None:
-    """The deliberate asymmetry a reviewer will find, stated as a test.
+def test_a_no_control_model_on_an_effort_only_host_sends_the_callers_rung() -> None:
+    """The asymmetry PR G left behind, removed.
 
-    A toggle-only model asking for ``low`` now gets ``low``; a model that
-    publishes no control at all asking for ``low`` still gets the host's own
-    on-value. That is not an oversight. The toggle-only model told us it has a
-    switch, so a rung is the nearest legal thing to the request; the no-control
-    model told us it has no switch and no scale, so the level was genuinely
-    un-honourable and the host's on-signal is the only defensible thing left.
+    6.7.0 read ``dialect.toggle`` raw here -- the widest of the three booleans
+    ``_Channels`` keeps apart -- so a request for ``low`` on Command Code came
+    back as a bare ON and the encoder spelled it as the host's own
+    ``enabled_value``, ``max``. The rung is not a level this model can be
+    *told*, but on a host whose only word for "reason" is a rung it is the
+    most honest thing that fits in the only field there is, and it is strictly
+    better than a stranger's ``max``.
     """
 
     adapted, adaptation = adapt_reasoning_policy(
@@ -597,8 +600,69 @@ def test_a_model_that_publishes_no_control_still_gets_the_hosts_on_value() -> No
         model_ref="commandcode/a-model",
     )
 
+    assert adapted == ReasoningPolicy.on(effort=ReasoningEffort.LOW)
+    assert adaptation.kind is ReasoningAdaptationKind.UNCHANGED
+    assert adaptation.message is None
+
+
+def test_a_no_control_rung_outside_the_host_enum_is_clamped_and_recorded() -> None:
+    """``max`` against a host that stops at ``high`` folds, and says which two."""
+
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+        NO_CONTROL,
+        dialect=EFFORT_HOST_WITH_DEFAULT_RUNG,
+        model_ref="commandcode/a-model",
+    )
+
+    assert adapted == ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
+    assert adaptation.kind is ReasoningAdaptationKind.CLAMPED
+    assert adaptation.message is not None
+    assert "REASONING EFFORT CLAMPED" in adaptation.message
+    assert "'max'" in adaptation.message
+    assert "'high'" in adaptation.message
+
+
+def test_a_no_control_model_with_a_real_toggle_channel_still_sends_the_toggle() -> None:
+    """Rule 11, unchanged: a host with a real on/off field takes the bare ON."""
+
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(effort=ReasoningEffort.LOW),
+        NO_CONTROL,
+        dialect=TOGGLE_HOST,
+        model_ref="a-host/a-model",
+    )
+
     assert adapted == ReasoningPolicy.on()
     assert adaptation.kind is ReasoningAdaptationKind.DROPPED
+
+
+@pytest.mark.parametrize("effort", tuple(ReasoningEffort))
+def test_the_no_control_and_toggle_only_branches_share_one_implementation(
+    effort: ReasoningEffort,
+) -> None:
+    """What ``_send_rung_as_on_signal`` exists to guarantee.
+
+    The two models differ only in *why* they have no rung of their own -- never
+    in what is honest to write into the one field the host has.
+    """
+
+    policy = ReasoningPolicy.on(effort=effort)
+    no_control, no_control_adaptation = adapt_reasoning_policy(
+        policy,
+        NO_CONTROL,
+        dialect=EFFORT_HOST_WITH_DEFAULT_RUNG,
+        model_ref="commandcode/a-model",
+    )
+    toggle_only, toggle_only_adaptation = adapt_reasoning_policy(
+        policy,
+        TOGGLE_ONLY,
+        dialect=EFFORT_HOST_WITH_DEFAULT_RUNG,
+        model_ref="commandcode/a-model",
+    )
+
+    assert no_control == toggle_only
+    assert no_control_adaptation.kind is toggle_only_adaptation.kind
 
 
 def test_a_no_control_model_on_a_fieldless_host_reports_nothing_sent() -> None:
@@ -1154,11 +1218,48 @@ def test_no_control_and_unknown_do_not_collapse_into_each_other(
 
 
 @pytest.mark.parametrize("profile_id", REPRESENTATIVE_PROFILES)
-def test_a_no_control_model_never_receives_an_effort_level(profile_id: str) -> None:
+@pytest.mark.parametrize(
+    "dialect", [NO_DIALECT, TOGGLE_HOST, EFFORT_AND_TOGGLE_HOST, NO_CONTROL_HOST]
+)
+def test_a_no_control_model_never_receives_a_rung_the_host_cannot_spell(
+    profile_id: str, dialect: ReasoningDialect | None
+) -> None:
+    """The rung goes out only where the host's on-signal *is* the effort field.
+
+    Everywhere else -- an unknown host, a host with a real on/off channel, a
+    host with no reasoning field at all -- the level is still discarded and the
+    body is the one a bare ON produces.
+    """
+
     body = gated_body(
-        profile_id, ReasoningPolicy.on(effort=ReasoningEffort.MINIMAL), NO_CONTROL
+        profile_id,
+        ReasoningPolicy.on(effort=ReasoningEffort.MINIMAL),
+        NO_CONTROL,
+        dialect=dialect,
     )
-    assert body == encode(profile_id, ReasoningPolicy.on())
+    expected = ReasoningPolicy.on()
+    if dialect is NO_CONTROL_HOST:
+        # No field to say "reason" with at all: nothing leaves.
+        expected = ReasoningPolicy.provider_default()
+    assert body == encode(profile_id, expected)
+
+
+@pytest.mark.parametrize("effort", tuple(ReasoningEffort))
+def test_a_no_control_rung_is_always_inside_the_hosts_own_enum(
+    effort: ReasoningEffort,
+) -> None:
+    """And where it does go out, it is a word the host actually accepts."""
+
+    adapted, _adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(effort=effort),
+        NO_CONTROL,
+        dialect=EFFORT_HOST_WITH_DEFAULT_RUNG,
+        model_ref="commandcode/a-model",
+    )
+
+    host_enum = EFFORT_HOST_WITH_DEFAULT_RUNG.effort_values
+    assert host_enum is not None
+    assert adapted.effort in host_enum
 
 
 # ---------------------------------------------------------------------------

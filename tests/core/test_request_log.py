@@ -2257,6 +2257,25 @@ def test_reasoning_by_model_reports_requested_and_returned_separately(
     assert row["unmeasured"] == 0
 
 
+def test_reasoning_measured_counts_a_zero_char_row_as_measured_not_returned(
+    store: RequestLogStore,
+) -> None:
+    """A stored 0 is a completed stream that returned no reasoning (6.8.0).
+
+    Requested, measured, and the honest answer is "it thought nothing" -- not
+    "nobody was counting", which is what a NULL means and what this row used
+    to be written as.
+    """
+    store.enqueue(_reasoning_record("asked_silent", emitted=True, thinking_chars=0))
+    store.close()
+
+    (row,) = store.reasoning_by_model()
+    assert row["attempts"] == 1
+    assert row["requested"] == 1
+    assert row["returned"] == 0
+    assert row["unmeasured"] == 0
+
+
 def test_reasoning_by_model_counts_unmeasured_attempts_separately(
     store: RequestLogStore,
 ) -> None:

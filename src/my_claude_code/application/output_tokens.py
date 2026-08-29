@@ -68,18 +68,67 @@ def resolve_max_output_tokens(
     limits: OutputTokenLimits,
     input_tokens: int = 0,
     model_ref: str = "",
+    for_reasoning: bool = False,
 ) -> int | None:
     """Return the ``max_tokens`` to send, or ``None`` to leave it unset.
 
     ``None`` comes back only when nothing at all is known and the client named
     nothing either, which leaves the provider profile's last-resort default in
     charge exactly as before.
+
+    ``for_reasoning`` says this attempt is going to ask the provider to think.
+    It adds exactly one step, and it adds it *first*: the ask is raised to the
+    model's own published limit before the four clamps below run, so a thinking
+    turn is bounded by capability and configuration rather than by a number the
+    client chose for an answer it did not know would be sharing the allowance.
+    Every clamp then applies unchanged, in the same order, to the same kind of
+    value -- a request, from whatever origin.
     """
 
-    resolved = _apply_model_limit(requested, limits.limit, model_ref)
+    resolved = _widen_for_reasoning(requested, limits.limit, for_reasoning, model_ref)
+    resolved = _apply_model_limit(resolved, limits.limit, model_ref)
     resolved = _fall_back_when_unknown(resolved, limits.unknown_default, model_ref)
     resolved = _apply_ceiling(resolved, limits.ceiling, model_ref)
     return _apply_context_headroom(resolved, limits, input_tokens, model_ref)
+
+
+def _widen_for_reasoning(
+    requested: int | None, limit: int | None, for_reasoning: bool, model_ref: str
+) -> int | None:
+    """Raise a thinking turn's ask to the model's own maximum.
+
+    Thinking tokens and answer tokens come out of one allowance
+    (WORKING-NOTES 54), so a client that sized ``max_tokens`` for an answer has
+    unknowingly sized the thinking as well. When the routed model is going to
+    think, the honest starting point is what the model can actually emit; the
+    four steps below then clamp it exactly as they clamp any other ask.
+
+    Deliberately not reachable from the unknown fallback: a number nobody
+    published (``MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT``) has no standing to raise
+    an explicit request, the same rule that stops it lowering one.
+
+    ``requested <= 0`` is left alone. An explicit zero is a statement, and a
+    zero paired with a thinking request is the client contradicting itself,
+    not this function's contradiction to resolve.
+    """
+
+    if not for_reasoning or limit is None or requested is None:
+        return requested
+    if requested <= 0 or requested >= limit:
+        return requested
+    # INFO, not WARNING: nothing was refused and nothing was invented. The one
+    # operator-visible reduction in this chain -- the ceiling taking part of
+    # this back -- still warns, and that is the line that explains the number.
+    logger.info(
+        "MAX TOKENS WIDENED FOR REASONING: '{}' will think; raising max_tokens"
+        " from the requested {} to the model's published limit {} so the"
+        " thinking budget and the answer are not both priced from an"
+        " answer-sized allowance",
+        model_ref,
+        requested,
+        limit,
+    )
+    return limit
 
 
 def _fall_back_when_unknown(

@@ -570,6 +570,18 @@ Every attempt is recorded. **Analytics** shows the model that actually answered 
 - The client asked for **less** than the limit → it gets exactly what it asked for.
 - The client asked for **more** → the request is lowered to the model's maximum and a `MAX TOKENS CLAMPED` warning names the model, the ask and the limit. Sending the original value instead just buys a 400 from the provider.
 - The client asked for **nothing** → the model's **full** limit is sent. A model that can write 230,400 tokens is used as one.
+- The request is going to **think** → the ask is raised to the model's published limit first, and the clamps above then apply to *that*. Thinking tokens and answer tokens are spent from one `max_tokens`, so a client that sized the number for an answer unknowingly sized the thinking too — and the model, not the client, is the one that knows what it can emit. An unknown limit is never widened: a number nobody published has no standing to raise an explicit request, exactly as it has none to lower one.
+
+For a 64,000-token ask at the `max` reasoning tier on a 262,144-output model, that is the difference between starving the answer and not:
+
+| | before | after |
+| --- | --- | --- |
+| wire `max_tokens` | 64,000 | 131,072 (the model's limit, held to the ceiling) |
+| answer reserve | 16,384 | 16,384 |
+| thinking budget | 47,616 | 114,688 |
+| answer room left | 16,384 | 16,384 |
+
+On a host that takes an effort word rather than a number, nothing about the level changes — only the answer stops being squeezed out by the thinking in front of it.
 
 This replaces a flat 81,920 that every model got regardless. On real routes that number was simultaneously too high (`minimaxai/minimax-m3` and `thinkingmachines/inkling` both stop at 16,384) and too low (`tencent/hy3:free` does 128,000, `meituan/longcat-2.0:free` 131,072).
 
@@ -578,7 +590,7 @@ Four settings cover what the model itself cannot answer, all editable in **Admin
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT` | `32768` | Used **only** when no source publishes a limit for the routed model. A fallback for a missing client value, never a cap on a present one — a number nobody published has no business shrinking an explicit request. |
-| `MAX_OUTPUT_TOKENS_CEILING` | *(unset)* | Absolute cap on every request, whatever the model can do. Deliberately empty, and best left that way: a ceiling below a model's published limit throws away capacity for nothing. Set one only as a runaway guard. |
+| `MAX_OUTPUT_TOKENS_CEILING` | `131072` | Absolute head on every request, whatever the model can do — reasoning or not. It ships set because a thinking request is sized from the routed model's full published limit, and an unbounded ask can reserve an entire rate-limit bucket on hosts that pre-reserve `max_tokens`. It never raises a model above its own limit. `0` lifts it entirely; blank means "use the default". |
 | `MAX_OUTPUT_TOKENS_CONTEXT_MARGIN` | `1024` | Tokens reserved for the prompt when a model's output limit is as large as its whole context window — about 15% of the catalog reports exactly that, and on those, asking for the full output leaves no room for the messages. |
 | `MAX_OUTPUT_TOKENS_CONTEXT_FLOOR` | `4096` | Smallest budget the reserve above may produce. A wrong or small published context can leave a handful of tokens, and a request carrying `max_tokens: 3` succeeds with a one-token answer — which looks like a useless model rather than a misconfigured catalog. Below this, the request is sent unchanged so the provider reports the real context error. `0` sends any positive headroom. |
 | `REASONING_ANSWER_FLOOR_MAX` | `16384` | Most tokens ever held back from the output allowance for the visible answer while extended thinking is on. Thinking and the answer share one `max_tokens`. The reserve applied is `min(this, output // 2)`, so a 16,384-output model keeps a working thinking budget instead of zero. |
@@ -617,6 +629,7 @@ A control is sent only when the model has that knob **and** the host has a field
 - a model with an on/off switch behind a host that has one gets thinking on, level discarded;
 - a model with an on/off switch behind a host whose only way of saying "reason" is one of its own effort words gets **the level you asked for**, clamped to that host's scale — `max` stays `max` where the host has it, and folds to `high` where it does not. The host's *own* default rung is still never substituted for a level you named: a request for `low` leaves as `low`, never as a stranger's `max`;
 - a model with an on/off switch behind a host with no reasoning field at all gets **nothing** — its own default reasoning behaviour applies, and the request log says so rather than reporting it as a fault;
+- a model that reasons but publishes **no control at all** — `reasoning_options: []`, about a quarter of the reasoning catalog — is handled the same way rather than differently: on a host whose only word for "reason" is an effort rung, the rung you asked for goes into that field, clamped to what the host accepts. It is not a level the model can be *told*, but it is the most honest thing that fits in the only field there is, and it beats a stranger's `max`;
 - an effort against a host that takes only a number becomes a thinking budget sized to the model, and a budget against a host that takes only a word becomes the nearest word;
 - a model known not to reason at all gets no reasoning controls;
 - and where MCC knows neither fact, the request is left **exactly** as before — most providers publish nothing, and narrowing on silence would regress them.
@@ -627,7 +640,9 @@ The Models page states which of the three you are looking at: **default OpenAI d
 
 For a gateway the catalog has no section of its own for, two descriptions of the same model can disagree. Where they do, the **reasoning controls** — effort, on/off, budget — resolve to the more capable of the two stated records, so a model is never held below a capability three or more independent hosts publish for it. Whether a model reasons at all is not decided that way and stays with the curated catalog, and **numeric limits never move**: an output or context limit is a property of the deployment and stays at the tightest rung that stated it. The Models page names the rung each field came from, so a field can honestly read "cross-provider" beside one on the same model that reads "OpenRouter catalogue".
 
-Each request logs both the reasoning policy applied and the one originally requested, and every adaptation names the wire field it will be sent through (or says plainly that nothing is being sent), so what left the proxy is visible in the request detail view. Unsupported controls safely remain provider-defined.
+Each request logs both the reasoning policy applied and the one originally requested, and every adaptation names the wire field it will be sent through (or says plainly that nothing is being sent), so what left the proxy is visible in the request detail view. Unsupported controls safely remain provider-defined. Where the output allowance was raised because the request was going to think, the wire pane says so too — `max_tokens 131,072 · raised from 64,000 for reasoning`.
+
+**Known gaps.** A stream that thinks and then ends with an empty visible answer — `finish_reason=length` after the thinking consumed the allowance — is not rescued by the fallback chain. `FALLBACK_ON_REASONING_ONLY` only covers a *deadline* reached while a stream is still open, so a stream that ended on time, with output, never reaches it. Raise `MAX_OUTPUT_TOKENS_CEILING`, or lower the reasoning tier, if you see it.
 
 <div align="center">
   <img src="assets/admin-model-config.png" alt="Model configuration with tier routing and reasoning control" width="820">

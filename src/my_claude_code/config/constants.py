@@ -17,11 +17,20 @@ ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS = 81920
 #    never reduce a value the client did give, because a guess has no standing
 #    to override an explicit request.
 MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT = 32768
-# 2. An absolute runaway guard, off by default and deliberately so. A ceiling
-#    that binds below a model's own declared capability is the anti-pattern
-#    WORKING-NOTES 54 forbids -- it is what OpenCode does, and it silently caps
-#    a 262,144-output model at 32k. Set it only if you want one.
-MAX_OUTPUT_TOKENS_CEILING: int | None = None
+# 2. The operator's absolute head on one answer, applied uniformly whether the
+#    request reasons or not. 131,072 is the largest allowance any route on a
+#    real install has needed and the number a thinking turn is widened *to*
+#    rather than *past* (see application/output_tokens.py). It ships set
+#    because the reasoning widening asks for the model's maximum: without a
+#    head, one thinking turn on a 262,144-output model reserves 262,144 tokens
+#    against a TPM limiter that pre-reserves max_tokens, and 429s a request
+#    that would have been served.
+#
+#    It is still not a per-model opinion. A model that publishes less gets
+#    less; the ceiling never raises anything. Set MAX_OUTPUT_TOKENS_CEILING=0
+#    to lift it entirely and let every model's own published limit stand
+#    (WORKING-NOTES 54).
+MAX_OUTPUT_TOKENS_CEILING: int | None = 131072
 # 3. Tokens held back from the context window when bounding output by the
 #    remaining context. 1,117 of 7,440 models.dev entries report
 #    ``limit.output == limit.context``, so on those the full output leaves no

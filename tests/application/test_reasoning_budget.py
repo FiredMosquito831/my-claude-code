@@ -203,8 +203,18 @@ def test_an_off_policy_is_never_given_a_budget() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _settings() -> Settings:
+def _settings(*, ceiling: int | None = None) -> Settings:
+    """Router settings for these cases, with the output head lifted by default.
+
+    The shipped head is 131,072 and two of the live limits below are larger,
+    so leaving it on would make those cases assert the head rather than the
+    thing they are named for. The head has its own tests in
+    ``tests/application/test_output_tokens.py``; one case here passes it
+    explicitly to prove it still binds a widened allowance.
+    """
+
     settings = Settings()
+    settings.max_output_tokens_ceiling = ceiling
     settings.model = "nvidia_nim/a-model"
     settings.model_fable = None
     settings.model_opus = None
@@ -228,9 +238,18 @@ def _request(max_tokens: int | None = None) -> MessagesRequest:
     return MessagesRequest.model_validate(payload)
 
 
-def _routed(output_limit: int, max_tokens: int | None = None):
+def _routed(
+    output_limit: int,
+    max_tokens: int | None = None,
+    *,
+    ceiling: int | None = None,
+    reasoning: ReasoningPreference | None = None,
+):
+    settings = _settings(ceiling=ceiling)
+    if reasoning is not None:
+        settings.reasoning_policy = reasoning
     router = ModelRouter(
-        _settings(),
+        settings,
         reasoning_capability_lookup=lambda _p, _m: None,
         output_limit_lookup=lambda _p, _m: output_limit,
     )
@@ -260,13 +279,78 @@ def test_a_small_model_still_gets_a_working_budget() -> None:
     assert routed.reasoning.numeric_budget_tokens == 8192
 
 
-def test_a_client_max_tokens_lowers_the_budget_with_it() -> None:
-    routed = _routed(GLM_52_FREE, max_tokens=4096)
+def test_a_client_max_tokens_above_the_limit_lowers_the_budget_with_it() -> None:
+    """The clamp direction is unchanged: an ask above the model still comes down."""
 
-    assert routed.request.max_tokens == 4096
+    routed = _routed(MINIMAX_M3, max_tokens=GLM_52_FREE)
+
+    assert routed.request.max_tokens == MINIMAX_M3
     budget = routed.reasoning.numeric_budget_tokens
     assert budget is not None
-    assert budget < 4096
+    assert budget < MINIMAX_M3
+
+
+def test_a_client_max_tokens_below_the_limit_no_longer_starves_a_thinking_turn():
+    """6.7.0 priced a thinking budget from an answer-sized ask; 6.8.0 does not.
+
+    The client sent 4,096 for an answer. It did not know the route was a
+    thinking route, and it has no way to know how much this model can emit.
+    """
+
+    routed = _routed(GLM_52_FREE, max_tokens=4096)
+
+    assert routed.request.max_tokens == GLM_52_FREE
+    assert routed.output_widened_from == 4096
+    budget = routed.reasoning.numeric_budget_tokens
+    assert budget is not None
+    assert budget == GLM_52_FREE - REASONING_ANSWER_FLOOR_MAX
+    assert budget < routed.request.max_tokens
+
+
+def test_the_rung_ratio_applies_to_the_widened_allowance() -> None:
+    """The worked example, asserted: a 64,000 ask at ``max`` on a 262,144 model."""
+
+    routed = _routed(262_144, max_tokens=64_000, ceiling=131_072)
+
+    assert routed.request.max_tokens == 131_072
+    assert routed.output_widened_from == 64_000
+    assert answer_floor_tokens(131_072, REASONING_ANSWER_FLOOR_MAX) == 16_384
+    assert routed.reasoning.numeric_budget_tokens == 114_688
+    # 0.95 x 131,072 is 124,518, so the answer floor -- not the ratio -- is
+    # what decides here, exactly as it did at 64,000.
+    assert routed.reasoning.numeric_budget_tokens == 131_072 - 16_384
+
+
+def test_the_answer_floor_is_unchanged_by_widening() -> None:
+    """``min(16384, output // 2)`` on both sides of the widening: a cap, not a share."""
+
+    narrow = _routed(262_144, max_tokens=64_000, reasoning=ReasoningPreference.OFF)
+    assert narrow.request.max_tokens == 64_000
+
+    for output in (64_000, 131_072, 262_144):
+        assert answer_floor_tokens(output, REASONING_ANSWER_FLOOR_MAX) == 16_384
+    # And it is still proportional where the halving bites.
+    assert answer_floor_tokens(MINIMAX_M3, REASONING_ANSWER_FLOOR_MAX) == 8_192
+
+
+def test_an_effort_only_host_keeps_its_rung_and_only_gains_answer_room() -> None:
+    """The WORKING-NOTES 70(a) regression: the rung was right, the room was not.
+
+    Nothing about the level moves. The allowance it is spent from does, so the
+    answer stops being squeezed out by the thinking in front of it.
+    """
+
+    narrow = _routed(8_000, max_tokens=8_000, ceiling=131_072)
+    wide = _routed(262_144, max_tokens=8_000, ceiling=131_072)
+
+    # Same rung, asked for and applied, on both sides.
+    assert wide.reasoning.effort is wide.requested_reasoning.effort
+    assert wide.reasoning.effort is narrow.reasoning.effort is ReasoningEffort.MAX
+    # Only the allowance moved -- and only because the model published more.
+    assert narrow.request.max_tokens == 8_000
+    assert narrow.output_widened_from is None
+    assert wide.request.max_tokens == 131_072
+    assert wide.output_widened_from == 8_000
 
 
 def test_the_answer_floor_travels_with_the_output_limits() -> None:
