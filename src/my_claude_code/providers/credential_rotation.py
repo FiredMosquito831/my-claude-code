@@ -112,23 +112,50 @@ REQUEST_SHAPED_KINDS = frozenset(
     {FailureKind.INVALID_REQUEST, FailureKind.CONTEXT_LENGTH}
 )
 
+#: Failure kinds that describe the *route* -- this model on this provider, at
+#: this moment -- rather than either the request or the credential. A model
+#: that never emits a first token is equally silent on every key in the pool,
+#: so charging the wait to whichever credential happened to carry it walks
+#: each key up the cooldown ladder and trips its breaker at three, emptying a
+#: pool of working credentials over a fault no credential caused.
+#:
+#: Unlike a request-shaped failure these still *rotate*: a different key can
+#: land on a different upstream replica and answer promptly, so trying the
+#: next one is worth the attempt even though the first one is not to blame.
+#: Rotation and health accounting are therefore two independent axes, and a
+#: timeout is the one class that says yes to the first and no to the second.
+#:
+#: Only the canonical ``TIMEOUT`` kind qualifies. A dead socket -- classified
+#: ``UNAVAILABLE`` -- does implicate the connection this credential is using
+#: and keeps charging health exactly as before, as does any timeout that
+#: reaches this layer without a provider classification.
+ROUTE_SHAPED_KINDS = frozenset({FailureKind.TIMEOUT})
+
+#: Every kind that leaves the credential's health record untouched.
+UNCHARGED_KINDS = REQUEST_SHAPED_KINDS | ROUTE_SHAPED_KINDS
+
 
 def failure_implicates_credential(error: BaseException) -> bool:
     """Return whether a failure says anything about the credential that served it.
 
-    Auth rejections, rate limits, upstream 5xx, overload, timeouts and
-    transport faults all do -- they are properties of this key or of its
-    connection, and the health ladders exist to bench a key that keeps
-    producing them. A request-shaped failure does not: the same 400 comes back
-    from every key, so counting it would escalate the whole pool into cooldown
-    over a fault no rotation can fix.
+    Auth rejections, rate limits, upstream 5xx, overload and transport faults
+    all do -- they are properties of this key or of its connection, and the
+    health ladders exist to bench a key that keeps producing them.
 
-    Deliberately narrow: only failures positively identified as request-shaped
-    skip health accounting. Anything unrecognized keeps counting exactly as it
-    did before, so failover for genuinely broken credentials is untouched.
+    A request-shaped failure does not: the same 400 comes back from every key,
+    so counting it would escalate the whole pool into cooldown over a fault no
+    rotation can fix. Neither does a route-shaped one: a first-token timeout is
+    a property of the model and the moment, and counting it drove three live
+    keys to the 120s tier and the request straight into "all API keys for this
+    provider are in cooldown".
+
+    Deliberately narrow: only failures positively identified as request- or
+    route-shaped skip health accounting. Anything unrecognized keeps counting
+    exactly as it did before, so failover for genuinely broken credentials is
+    untouched.
     """
     failure = find_execution_failure(error)
-    if failure is not None and failure.kind in REQUEST_SHAPED_KINDS:
+    if failure is not None and failure.kind in UNCHARGED_KINDS:
         return False
     if _status_from_error(error) != 400:
         return True
@@ -209,18 +236,22 @@ class CredentialRotationState:
 
         Health is only updated for failures that implicate the credential.
         Request-shaped failures -- a malformed body, a prompt past the model's
-        context window -- leave the credential's health record byte-identical:
-        they are a property of the request, so escalating one key's cooldown
-        ladder for them (and, three in a row, its circuit breaker) would empty
-        a pool of perfectly good keys.
+        context window -- and route-shaped ones -- a model that produced no
+        first token in time -- leave the credential's health record
+        byte-identical: they are a property of the request or of the model, so
+        escalating one key's cooldown ladder for them (and, three in a row, its
+        circuit breaker) would empty a pool of perfectly good keys. A timeout
+        still returns ``True`` here: rotating to another key may well be
+        faster, it just must not cost the key it left behind any health.
         """
         rotate = error_justifies_rotation(error)
         status = _status_from_error(error)
         if not failure_implicates_credential(error):
             logger.debug(
-                "Credential %d health unchanged: request-shaped failure "
-                "(status=%s, model=%s) is not attributable to the credential",
+                "Credential %d health unchanged: failure is not attributable "
+                "to the credential (kind=%s, status=%s, model=%s)",
                 index,
+                getattr(find_execution_failure(error), "kind", None),
                 status,
                 model or "unknown",
             )
@@ -244,6 +275,20 @@ class CredentialRotationState:
         """Restore every non-healthy credential to HEALTHY."""
         async with self._lock:
             return self._engine.restore_all()
+
+    def selectable_indexes(self) -> tuple[int, ...]:
+        """Credentials the policy could hand out this instant.
+
+        Synchronous and lock-free on purpose: routing asks this question from
+        ``throttle_remaining()``, which is a plain method on the provider
+        interface. It only reads slot state and expires elapsed benches, the
+        same thing ``get_metrics`` already does outside the lock.
+        """
+        return self._engine.selectable_indexes()
+
+    def bench_remaining_now(self) -> float:
+        """Synchronous view of :meth:`shortest_cooldown_remaining`."""
+        return self._engine.shortest_bench_remaining()
 
     async def shortest_cooldown_remaining(self) -> float:
         """Seconds until the soonest non-healthy credential may serve again."""

@@ -27,6 +27,7 @@ from my_claude_code.core.anthropic.stream_contracts import (
     REASONING_HEARTBEAT,
     sse_carries_content,
 )
+from my_claude_code.core.attempt_budget import set_attempt_deadline
 from my_claude_code.core.credential_attribution import record_credential
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import (
@@ -565,6 +566,12 @@ class ProviderExecutor:
                     if attempt_deadline is None
                     else max(0.0, attempt_deadline - time.monotonic())
                 )
+                # A rotating provider has to subdivide this share across its
+                # credentials, or the first key it tries spends the whole
+                # attempt and the rest of the pool is never reached. The
+                # executor still owns the outer bound; this only tells the
+                # provider what that bound is.
+                set_attempt_deadline(attempt_deadline)
 
                 provider_stream: AsyncIterator[str] | None = None
                 committed = False

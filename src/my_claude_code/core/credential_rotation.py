@@ -222,6 +222,31 @@ class RotationEngine:
             slot.state is PoolHealthState.HALF_OPEN and not slot.is_probing
         )
 
+    def _forced_single(self) -> bool:
+        """Whether the policy serves slot 0 regardless of blocklists and health."""
+        return (self._policy == "single" and self._tuning.single_ignores_blocklist) or (
+            self._count == 1 and self._tuning.single_key_forces_slot_zero
+        )
+
+    def selectable_indexes(self) -> tuple[int, ...]:
+        """Slots :meth:`choose` could hand out right now.
+
+        Answers the same question as ``choose`` without consuming a policy
+        turn, and -- unlike per-slot :meth:`selectable` -- it honors the
+        forced-single overrides. A caller that skipped them would decide a
+        single-key pool could not serve while ``choose`` was still handing out
+        slot 0, and would bench a provider that was in fact working.
+        """
+        self.refresh()
+        if self._forced_single():
+            return (0,)
+        candidates = tuple(
+            index for index in range(self._count) if self.selectable(index)
+        )
+        if self._policy == "single":
+            return (0,) if 0 in candidates else ()
+        return candidates
+
     def choose(self, blocked: frozenset[int] = frozenset()) -> int | None:
         """Pure policy choice among selectable slots, skipping ``blocked``.
 
@@ -229,10 +254,7 @@ class RotationEngine:
         None when nothing qualifies.
         """
         self.refresh()
-        forced_single = (
-            self._policy == "single" and self._tuning.single_ignores_blocklist
-        ) or (self._count == 1 and self._tuning.single_key_forces_slot_zero)
-        if forced_single:
+        if self._forced_single():
             # Still reported like any other policy: usage must be counted, or
             # per-credential analytics stay empty for the default pool.
             return 0
