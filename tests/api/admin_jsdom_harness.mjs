@@ -589,9 +589,13 @@ if (!window.requestAnimationFrame) {
   window.cancelAnimationFrame = (id) => window.clearTimeout(id);
 }
 const fetchCalls = [];
+const fetchUrls = [];
 const fetchBodies = [];
 window.fetch = async (url, options = {}) => {
   fetchCalls.push(String(url).split("?")[0]);
+  // The query string is the whole point for the analytics filters: which
+  // filter went out, and whether the page reset to offset 0.
+  fetchUrls.push(String(url));
   if (options && options.body) {
     try {
       fetchBodies.push({
@@ -1580,6 +1584,93 @@ if (modelsLink) {
   models.viewNodesOneProviderOpen = view.querySelectorAll("*").length;
 }
 
+// ----------------------------------------------------- analytics filters
+/* The filter row has to apply itself: a select on `change`, a text box after a
+   pause, Clear back to defaults -- each producing exactly one reload, at page
+   1, with the filter in the query and in persisted state. */
+const analytics = {};
+{
+  const requestsLink = navLinks.find((link) => link.dataset.view === "requests");
+  requestsLink.click();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const statsCalls = () =>
+    fetchUrls.filter((url) => url.startsWith("/admin/api/requests/stats"));
+  const lastStats = () => statsCalls()[statsCalls().length - 1] || "";
+
+  analytics.defaultLocal = doc.getElementById("reqFilterLocal").value;
+  analytics.loadSendsLocal = lastStats();
+
+  // --- a select applies on change, without touching Apply, from page 2
+  const listCalls = () =>
+    fetchUrls.filter((url) => url.startsWith("/admin/api/requests?"));
+  doc.getElementById("reqNextPage").dispatchEvent(
+    new window.MouseEvent("click", { bubbles: true }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  analytics.pagedUrl = listCalls()[listCalls().length - 1] || "";
+  fetchUrls.length = 0;
+  const status = doc.getElementById("reqFilterStatus");
+  status.value = "error";
+  status.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  analytics.statusChangeLoads = statsCalls().length;
+  analytics.statusChangeUrl = lastStats();
+  analytics.listUrlAfterStatusChange = listCalls()[listCalls().length - 1] || "";
+
+  // --- the Local answers select is wired the same way
+  fetchUrls.length = 0;
+  const localSelect = doc.getElementById("reqFilterLocal");
+  localSelect.value = "only";
+  localSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  analytics.localChangeLoads = statsCalls().length;
+  analytics.localChangeUrl = lastStats();
+
+  // --- typing is debounced into one load, and only after the pause
+  fetchUrls.length = 0;
+  const search = doc.getElementById("reqFilterSearch");
+  for (const text of ["a", "ab", "abc"]) {
+    search.value = text;
+    search.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  }
+  analytics.loadsWhileTyping = statsCalls().length;
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  analytics.loadsAfterTypingPause = statsCalls().length;
+  analytics.typedUrl = lastStats();
+
+  // --- what got remembered
+  analytics.persisted = JSON.parse(
+    window.localStorage.getItem("mcc-dashboard-state") || "{}",
+  ).reqFilters;
+
+  // --- Clear resets to the defaults, including Hide, and reloads once
+  fetchUrls.length = 0;
+  doc.getElementById("reqClearFilters").dispatchEvent(
+    new window.MouseEvent("click", { bubbles: true }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  analytics.clearLoads = statsCalls().length;
+  analytics.clearUrl = lastStats();
+  analytics.localAfterClear = doc.getElementById("reqFilterLocal").value;
+  analytics.searchAfterClear = search.value;
+  analytics.persistedAfterClear = JSON.parse(
+    window.localStorage.getItem("mcc-dashboard-state") || "{}",
+  ).reqFilters;
+
+  // --- Enter still applies immediately rather than waiting out the debounce
+  fetchUrls.length = 0;
+  search.value = "boom";
+  search.dispatchEvent(new window.Event("input", { bubbles: true }));
+  search.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  analytics.loadsRightAfterEnter = statsCalls().length;
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  analytics.loadsAfterEnterAndPause = statsCalls().length;
+}
+
 requestDetail.reasoningRow = window.eval(
   `formatRequestReasoningEmitted({route_attempts:[{outcome:"succeeded",reasoning_emitted:0}]})`,
 );
@@ -1608,6 +1699,7 @@ console.log(
       docs,
       limits,
       models,
+      analytics,
       optimizer: {
         present: Boolean(optimizer),
         kpis: optimizer ? optimizer.querySelectorAll(".opt-kpi").length : 0,

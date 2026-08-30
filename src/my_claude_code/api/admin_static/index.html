@@ -614,6 +614,16 @@
                   <option value="cancelled">cancelled</option>
                 </select>
               </label>
+              <label
+                title="Requests MCC answered itself — title-generation skips, probe replies, suggestion-mode skips — without calling a provider. Hidden by default; the cards, charts and breakdowns follow this filter (All time totals do not)."
+              >
+                Local answers
+                <select id="reqFilterLocal">
+                  <option value="hide" selected>Hide</option>
+                  <option value="all">Show</option>
+                  <option value="only">Only</option>
+                </select>
+              </label>
               <label>
                 Endpoint
                 <input id="reqFilterEndpoint" type="text" placeholder="any" />
@@ -1676,6 +1686,18 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   They are real rows with real token counts, and they filter like any
                   other value &mdash; see
                   <a href="#guide-optimizer">the Token Optimizer page</a>.
+                </p>
+                <p class="guide-note">
+                  <strong>Local answers is set to Hide.</strong> On a busy install those
+                  rows outnumber the upstream ones, so the table, the cards, the charts
+                  and the breakdowns default to real upstream traffic. Switch the
+                  <strong>Local answers</strong> filter to <em>Show</em> for the old
+                  totals, or <em>Only</em> to look at nothing else; the choice is
+                  remembered across refreshes. Rows whose provider is genuinely unknown
+                  stay visible under Hide, and the <strong>All time</strong> rollup
+                  ignores this filter as it ignores every other one. Every filter applies
+                  itself &mdash; selects on change, typing after a short pause &mdash; so
+                  <strong>Apply</strong> is now only there when you want it.
                 </p>
                 <p>Input tokens are reported in parts, because they bill differently:</p>
                 <table class="guide-table">

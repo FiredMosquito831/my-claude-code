@@ -493,3 +493,64 @@ def test_a_legacy_dropped_row_still_reads_back_as_dropped(
 
     assert detail["reasoning_adaptation_kind"] == "dropped"
     assert detail["reasoning_adaptation"] == "the level was dropped."
+
+
+@pytest.fixture
+def local_answer_store(tmp_path):
+    """One upstream row, one locally answered row, one with no provider at all."""
+    store = get_request_log_store(tmp_path / "requests.db")
+    assert store is not None
+    base = time.time()
+
+    def row(request_id, *, provider, optimization=None, offset=0.0):
+        return RequestRecord(
+            id=request_id,
+            endpoint="/v1/messages",
+            protocol="anthropic",
+            resolved_model="m1",
+            status="success",
+            provider=provider,
+            optimization=optimization,
+            ts_epoch=base + offset,
+        )
+
+    store.enqueue(row("upstream", provider="p1"))
+    store.enqueue(
+        row("local", provider=None, optimization="title_generation_skip", offset=1.0)
+    )
+    store.enqueue(row("unknown", provider=None, offset=2.0))
+    store.close()
+    yield store
+
+
+@pytest.mark.parametrize(
+    ("local", "expected"),
+    [(None, 3), ("all", 3), ("hide", 2), ("only", 1)],
+)
+def test_the_three_local_values_and_the_unchanged_default(
+    client, local_answer_store, local, expected
+) -> None:
+    """Absent means "all": no existing caller's numbers move."""
+    params = {} if local is None else {"local": local}
+    listing = client.get("/admin/api/requests", params=params).json()
+    assert listing["total"] == expected
+    stats = client.get("/admin/api/requests/stats", params=params).json()
+    assert stats["total"] == expected
+    pulse = client.get("/admin/api/requests/pulse", params=params).json()
+    assert pulse["total"] == expected
+
+
+def test_hide_keeps_the_row_whose_provider_is_genuinely_unknown(
+    client, local_answer_store
+) -> None:
+    rows = client.get("/admin/api/requests", params={"local": "hide"}).json()["rows"]
+    assert sorted(row["id"] for row in rows) == ["unknown", "upstream"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/admin/api/requests", "/admin/api/requests/stats", "/admin/api/requests/pulse"],
+)
+def test_a_fourth_local_value_is_refused(client, local_answer_store, path) -> None:
+    response = client.get(path, params={"local": "nope"})
+    assert response.status_code == 422

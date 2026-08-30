@@ -665,19 +665,12 @@ def test_stats_cache_evicts_least_recently_used(tmp_path) -> None:
         with store._stats_lock:
             assert len(store._stats_cache) == max_entries
             # The oldest key (provider-0) was evicted; the newest survives.
-            assert ("provider-0", None, None, None, None, None, None, None) not in (
-                store._stats_cache
-            )
-            assert (
-                f"provider-{max_entries}",
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ) in store._stats_cache
+            # The key is the whole filter tuple, so its arity is pinned here on
+            # purpose: a filter added to `stats()` and forgotten in the key
+            # would serve one question's numbers as another's.
+            empty = (None,) * 8
+            assert ("provider-0", *empty) not in store._stats_cache
+            assert (f"provider-{max_entries}", *empty) in store._stats_cache
     finally:
         store.close()
 
@@ -2753,3 +2746,84 @@ def test_export_rollup_keeps_the_root_cause_of_a_request_that_recovered(store) -
         rows[0]["ladder_root_cause"]
         == "2 tries across 2 keys: 1\N{MULTIPLICATION SIGN}429, 1\N{MULTIPLICATION SIGN}502"
     )
+
+
+def _local_answer_fixture(store: RequestLogStore) -> None:
+    """Three shapes the ``local`` filter has to tell apart."""
+    base = time.time()
+    store.enqueue(_record("upstream", provider="p1", ts_epoch=base))
+    store.enqueue(
+        _record(
+            "local",
+            provider=None,
+            optimization="title_generation_skip",
+            ts_epoch=base + 1,
+        )
+    )
+    # provider IS NULL AND optimization IS NULL: the "(unknown)" case. Not a
+    # local answer, and it must survive "hide".
+    store.enqueue(_record("unknown", provider=None, ts_epoch=base + 2))
+    store.close()
+
+
+def test_local_hide_drops_only_locally_answered_rows(store: RequestLogStore) -> None:
+    _local_answer_fixture(store)
+    rows, total = store.list_requests(local="hide")
+    assert total == 2
+    assert sorted(row["id"] for row in rows) == ["unknown", "upstream"]
+
+
+def test_local_only_keeps_exactly_those_rows(store: RequestLogStore) -> None:
+    _local_answer_fixture(store)
+    rows, total = store.list_requests(local="only")
+    assert total == 1
+    assert rows[0]["id"] == "local"
+
+
+def test_local_all_and_absent_are_the_same_unfiltered_query(
+    store: RequestLogStore,
+) -> None:
+    _local_answer_fixture(store)
+    _, total_all = store.list_requests(local="all")
+    _, total_absent = store.list_requests()
+    assert total_all == total_absent == 3
+
+
+def test_stats_cache_does_not_serve_one_local_value_under_another(
+    store: RequestLogStore,
+) -> None:
+    """Two calls inside the 5 s TTL, different ``local``, different totals.
+
+    The cache key is the filter tuple; leaving ``local`` out of it would have
+    made the second call a hit and shown "all" numbers under "hide".
+    """
+    _local_answer_fixture(store)
+    assert store.stats(local="all")["total"] == 3
+    assert store.stats(local="hide")["total"] == 2
+    assert store.stats(local="only")["total"] == 1
+    # And the first answer is still the first answer.
+    assert store.stats(local="all")["total"] == 3
+
+
+def test_pulse_counts_under_the_local_filter(store: RequestLogStore) -> None:
+    _local_answer_fixture(store)
+    assert store.pulse(local="hide")["total"] == 2
+    assert store.pulse(local="only")["total"] == 1
+    assert store.pulse()["total"] == 3
+
+
+def test_local_filter_composes_with_the_synthetic_provider_keys(
+    store: RequestLogStore,
+) -> None:
+    """``provider=local:<rule>`` and ``local=hide`` are contradictory on purpose.
+
+    Both predicates are ANDed, so asking for a rule's rows while hiding local
+    answers returns nothing rather than quietly dropping one of the two.
+    """
+    _local_answer_fixture(store)
+    _, total = store.list_requests(provider="local:title_generation_skip", local="hide")
+    assert total == 0
+    _, total = store.list_requests(provider="local:title_generation_skip", local="only")
+    assert total == 1
+    _, total = store.list_requests(provider="(unknown)", local="hide")
+    assert total == 1

@@ -112,7 +112,11 @@ from my_claude_code.core.optimization_discovery import (
     MAX_SCAN_ROW_LIMIT,
     discover_families,
 )
-from my_claude_code.core.request_log import RequestLogStore, store_from_settings
+from my_claude_code.core.request_log import (
+    LOCAL_FILTER_VALUES,
+    RequestLogStore,
+    store_from_settings,
+)
 from my_claude_code.providers.anthropic_oauth.credentials import (
     OAuthTokens,
     claude_credentials_path,
@@ -1808,6 +1812,17 @@ def _validate_request_log_status(status: str | None) -> None:
         raise HTTPException(status_code=422, detail="Invalid status filter")
 
 
+def _validate_request_log_local(local: str | None) -> None:
+    """Reject an unknown ``local`` value instead of silently showing everything.
+
+    Absent means ``all``: the API default is unchanged, so exports, curl users
+    and the Guide's examples still see every row. Only the dashboard asks for
+    ``hide``.
+    """
+    if local is not None and local not in LOCAL_FILTER_VALUES:
+        raise HTTPException(status_code=422, detail="Invalid local filter")
+
+
 @router.get("/admin/api/requests")
 async def list_request_log(
     request: Request,
@@ -1821,6 +1836,7 @@ async def list_request_log(
     since: float | None = None,
     until: float | None = None,
     q: str | None = None,
+    local: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Page through the persisted request log (newest first)."""
@@ -1835,6 +1851,7 @@ async def list_request_log(
             "offset": offset,
         }
     _validate_request_log_status(status)
+    _validate_request_log_local(local)
     # SQLite work is synchronous; run it off the event loop so analytics
     # queries cannot stall proxy traffic.
     rows, total = await asyncio.to_thread(
@@ -1849,6 +1866,7 @@ async def list_request_log(
         since=since,
         until=until,
         q=q,
+        local=local,
     )
     return {
         "enabled": True,
@@ -1871,6 +1889,7 @@ async def request_log_stats(
     since: float | None = None,
     until: float | None = None,
     q: str | None = None,
+    local: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Aggregate request analytics over an optional epoch-second window."""
@@ -1879,6 +1898,7 @@ async def request_log_stats(
     if store is None:
         return {"enabled": False}
     _validate_request_log_status(status)
+    _validate_request_log_local(local)
     result = await asyncio.to_thread(
         store.stats,
         provider=provider,
@@ -1889,6 +1909,7 @@ async def request_log_stats(
         since=since,
         until=until,
         q=q,
+        local=local,
     )
     result["enabled"] = True
     result["capture_bodies"] = bool(settings.request_log_capture_bodies)
@@ -2055,6 +2076,7 @@ async def request_log_pulse(
     since: float | None = None,
     until: float | None = None,
     q: str | None = None,
+    local: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Cheap heartbeat for auto-refresh: row count and latest timestamp only.
@@ -2068,6 +2090,7 @@ async def request_log_pulse(
     if store is None:
         return {"enabled": False}
     _validate_request_log_status(status)
+    _validate_request_log_local(local)
     result = await asyncio.to_thread(
         store.pulse,
         provider=provider,
@@ -2078,6 +2101,7 @@ async def request_log_pulse(
         since=since,
         until=until,
         q=q,
+        local=local,
     )
     result["enabled"] = True
     return result

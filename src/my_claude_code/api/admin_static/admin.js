@@ -329,6 +329,7 @@ async function loadDashboardState() {
     if (byId("reqFilterSearch")) byId("reqFilterSearch").value = f.search || "";
     if (f.status && byId("reqFilterStatus")) byId("reqFilterStatus").value = f.status;
     if (byId("reqFilterEndpoint")) byId("reqFilterEndpoint").value = f.endpoint || "";
+    if (f.local && byId("reqFilterLocal")) byId("reqFilterLocal").value = f.local;
     if (f.window && byId("reqFilterWindow")) byId("reqFilterWindow").value = f.window;
     if (f.pageSize && byId("reqPageSize")) {
       byId("reqPageSize").value = f.pageSize;
@@ -7504,6 +7505,7 @@ function reqFilters() {
   const status = byId("reqFilterStatus").value;
   const search = byId("reqFilterSearch").value.trim();
   const endpoint = byId("reqFilterEndpoint").value.trim();
+  const local = byId("reqFilterLocal").value;
   const windowSeconds = byId("reqFilterWindow").value;
   if (provider) params.set("provider", provider);
   if (model) params.set("model", model);
@@ -7511,6 +7513,9 @@ function reqFilters() {
   if (status) params.set("status", status);
   if (search) params.set("q", search);
   if (endpoint) params.set("endpoint", endpoint);
+  // Always sent, including "all": the store's default is "all", so an omitted
+  // param and a chosen Show would look the same to the pulse signature.
+  if (local) params.set("local", local);
   if (windowSeconds) {
     params.set("since", (Date.now() / 1000 - Number(windowSeconds)).toFixed(0));
   }
@@ -8319,6 +8324,7 @@ function persistDashboardState() {
         search: byId("reqFilterSearch")?.value?.trim() || undefined,
         status: byId("reqFilterStatus")?.value || undefined,
         endpoint: byId("reqFilterEndpoint")?.value?.trim() || undefined,
+        local: byId("reqFilterLocal")?.value || undefined,
         window: byId("reqFilterWindow")?.value || undefined,
         pageSize: byId("reqPageSize")?.value || undefined,
       },
@@ -9767,11 +9773,42 @@ document.addEventListener("keydown", (event) => {
     closeRequestDetail();
   }
 });
-byId("reqApplyFilters").addEventListener("click", () => {
+/**
+ * Re-run the analytics query from page 1 and remember the filters.
+ *
+ * Every filter control routes through here, so a changed question always
+ * produces a matching answer without a second click. `loadRequestsView`
+ * already discards stale responses by `loadId`, so overlapping loads from
+ * fast typing settle on the last one.
+ */
+function applyReqFilters() {
   reqState.offset = 0;
   persistDashboardState();
   loadRequestsView().catch((error) => showMessage(error.message, "error"));
+}
+
+byId("reqApplyFilters").addEventListener("click", applyReqFilters);
+
+// Selects commit on change; a select has no half-typed state to wait for.
+["reqFilterStatus", "reqFilterWindow", "reqFilterLocal"].forEach((id) => {
+  byId(id).addEventListener("change", applyReqFilters);
 });
+
+// Text inputs wait for a pause instead of querying per keystroke: 400 ms is
+// long enough that a typed provider name is one query, short enough that it
+// still feels like the view is following along.
+let reqFilterTypingTimer = null;
+["reqFilterProvider", "reqFilterModel", "reqFilterKey", "reqFilterSearch", "reqFilterEndpoint"].forEach(
+  (id) => {
+    byId(id).addEventListener("input", () => {
+      if (reqFilterTypingTimer) window.clearTimeout(reqFilterTypingTimer);
+      reqFilterTypingTimer = window.setTimeout(() => {
+        reqFilterTypingTimer = null;
+        applyReqFilters();
+      }, 400);
+    });
+  },
+);
 byId("reqClearFilters").addEventListener("click", () => {
   // Reset every analytics filter to its default and reload, so the view
   // returns to "show everything" without a manual page refresh.
@@ -9781,17 +9818,28 @@ byId("reqClearFilters").addEventListener("click", () => {
   byId("reqFilterSearch").value = "";
   byId("reqFilterStatus").value = "";
   byId("reqFilterEndpoint").value = "";
+  // Back to the dashboard default, not to "show everything": locally answered
+  // rows are hidden unless the reader asked for them.
+  byId("reqFilterLocal").value = "hide";
   byId("reqFilterWindow").value = "";
   byId("reqPageSize").value = "25";
   reqState.limit = 25;
-  reqState.offset = 0;
-  loadRequestsView().catch((error) => showMessage(error.message, "error"));
-  persistDashboardState();
+  // A pending keystroke from the box we just emptied would otherwise fire
+  // straight after this reload and query the same thing again.
+  if (reqFilterTypingTimer) {
+    window.clearTimeout(reqFilterTypingTimer);
+    reqFilterTypingTimer = null;
+  }
+  applyReqFilters();
 });
 byId("reqFilterSearch").addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
-  reqState.offset = 0;
-  loadRequestsView().catch((error) => showMessage(error.message, "error"));
+  // Enter is an explicit commit: don't make it wait out the debounce.
+  if (reqFilterTypingTimer) {
+    window.clearTimeout(reqFilterTypingTimer);
+    reqFilterTypingTimer = null;
+  }
+  applyReqFilters();
 });
 byId("reqPrevPage").addEventListener("click", () => {
   reqState.offset = Math.max(0, reqState.offset - reqState.limit);
@@ -9803,8 +9851,7 @@ byId("reqNextPage").addEventListener("click", () => {
 });
 byId("reqPageSize").addEventListener("change", () => {
   reqState.limit = Number(byId("reqPageSize").value);
-  reqState.offset = 0;
-  loadRequestsView().catch((error) => showMessage(error.message, "error"));
+  applyReqFilters();
 });
 byId("reqRefreshButton").addEventListener("click", () =>
   loadRequestsView().catch((error) => showMessage(error.message, "error")),

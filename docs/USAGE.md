@@ -896,7 +896,9 @@ The detail dialog answers the question "what did MCC actually put on the wire, a
   <img src="../assets/admin-request-detail.png" alt="Request detail dialog showing the per-attempt wire pane" width="860">
 </div>
 
-**1. Open Analytics and find the request.** Filter or search (search reaches the reasoning text and tool arguments too), then press **View** on the row.
+**1. Open Analytics and find the request.** Filter or search (search reaches the reasoning text and tool arguments too), then press **View** on the row. Since 6.13.0 every filter applies itself — the selects the moment you change one, the text boxes a short pause after you stop typing, and **Clear filters** puts everything back including the default below. **Apply** is still there for when you would rather press it.
+
+**Local answers** defaults to **Hide**, so the table, the cards, the charts and the breakdowns show requests that actually went to a provider. Requests MCC answered itself — title-generation skips, probe replies, suggestion-mode skips — are hidden until you switch it to **Show** (everything, as before 6.13.0) or **Only** (nothing else). The choice is remembered across refreshes. Rows whose provider is genuinely unknown are not local answers and stay visible under Hide, and the **All time** rollup and the export window ignore this filter.
 
 **2. Read the chain first.** One entry per attempt: outcome badge, model ref, how long it took, and — this is the 6.4.0 addition — **the credential that served that attempt**. Three things it can say:
 
@@ -949,7 +951,7 @@ An attempt with a single try shows no ladder: nothing was hidden, so nothing is 
 
 **Admin UI → Token Optimizer** answers one question from your own request log: what never reached a provider at all? Nothing on this page is switched on for you.
 
-Some requests are answered inside the proxy by a **local rule** — MCC replies and no provider is ever contacted. Those requests show in the request table as **answered locally · <rule>**, not as provider `(unknown)` the way they read before 5.48.0, and you can filter the table by that value to see only them. Because no provider served them, they record no provider, and the tokens they saved are counted from the real request rather than assumed.
+Some requests are answered inside the proxy by a **local rule** — MCC replies and no provider is ever contacted. Those requests show in the request table as **answered locally · <rule>**, not as provider `(unknown)` the way they read before 5.48.0, and you can filter the table by that value to see only them — or use the **Local answers** filter on Analytics, which hides them all by default and shows only them on **Only**. Because no provider served them, they record no provider, and the tokens they saved are counted from the real request rather than assumed.
 
 The page has four panels:
 

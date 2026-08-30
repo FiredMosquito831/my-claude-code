@@ -60,6 +60,16 @@ _BREAKDOWN_LIMIT = 50
 LOCAL_PROVIDER_PREFIX = "local:"
 UNKNOWN_PROVIDER_KEY = "(unknown)"
 
+#: SQL matching a request MCC answered itself: no provider was called and a
+#: rule named the answer. ``provider IS NULL AND optimization IS NULL`` is the
+#: ``(unknown)`` case instead -- traffic whose provider we genuinely do not
+#: know -- and is deliberately NOT a local answer.
+LOCAL_ANSWER_SQL = "(provider IS NULL AND optimization IS NOT NULL)"
+
+#: Accepted values for the ``local`` read filter. ``all`` is the default
+#: everywhere in the store and the API; only the dashboard prefers ``hide``.
+LOCAL_FILTER_VALUES = frozenset({"all", "hide", "only"})
+
 #: SQL producing the provider grouping key. Kept as one expression so the
 #: breakdown, the export dimension and the filter predicate cannot drift apart.
 PROVIDER_KEY_SQL = (
@@ -2003,9 +2013,17 @@ class RequestLogStore:
         since: float | None = None,
         until: float | None = None,
         q: str | None = None,
+        local: str | None = None,
     ) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         args: list[Any] = []
+        # Locally answered rows are real traffic but they are not upstream
+        # traffic, and on a busy install they outnumber it. "hide" removes
+        # exactly them, leaving "(unknown)" rows -- a different claim -- alone.
+        if local == "hide":
+            clauses.append(f"NOT {LOCAL_ANSWER_SQL}")
+        elif local == "only":
+            clauses.append(LOCAL_ANSWER_SQL)
         if provider:
             # Comma-separated values mean "any of these providers" (multi-select).
             providers = [part for part in provider.split(",") if part]
@@ -2106,6 +2124,7 @@ class RequestLogStore:
         since: float | None = None,
         until: float | None = None,
         q: str | None = None,
+        local: str | None = None,
         body_preview_chars: int | None = LIST_BODY_PREVIEW_CHARS,
     ) -> tuple[list[dict[str, Any]], int]:
         """Return (rows, total) newest-first, with bodies truncated for list views."""
@@ -2118,6 +2137,7 @@ class RequestLogStore:
             since=since,
             until=until,
             q=q,
+            local=local,
         )
         limit = max(1, min(limit, 500))
         offset = max(0, offset)
@@ -2406,8 +2426,12 @@ class RequestLogStore:
         since: float | None = None,
         until: float | None = None,
         q: str | None = None,
+        local: str | None = None,
     ) -> dict[str, Any]:
-        cache_key = (provider, model, status, endpoint, key, since, until, q)
+        # ``local`` belongs in the key: without it a "hide" call inside the TTL
+        # would be served the "all" numbers it just cached, and the cards would
+        # contradict the table.
+        cache_key = (provider, model, status, endpoint, key, since, until, q, local)
         now = time.monotonic()
         with self._stats_lock:
             cached = self._stats_cache.get(cache_key)
@@ -2427,6 +2451,7 @@ class RequestLogStore:
             since=since,
             until=until,
             q=q,
+            local=local,
         )
         with self._connection() as conn:
             totals = conn.execute(
@@ -2797,6 +2822,7 @@ class RequestLogStore:
         since: float | None = None,
         until: float | None = None,
         q: str | None = None,
+        local: str | None = None,
     ) -> dict[str, Any]:
         """Return a cheap heartbeat: row count and latest timestamp for these filters.
 
@@ -2813,6 +2839,7 @@ class RequestLogStore:
             since=since,
             until=until,
             q=q,
+            local=local,
         )
         with self._connection() as conn:
             total, last_ts = conn.execute(

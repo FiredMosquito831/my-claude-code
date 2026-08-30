@@ -1057,3 +1057,53 @@ def test_a_single_try_attempt_renders_no_ladder(rendered) -> None:
     assert detail["ladderSummaries"] == []
     assert detail["ladderRootCauses"] == []
     assert detail["ladderTries"] == []
+
+
+def test_the_local_answers_filter_defaults_to_hide(rendered) -> None:
+    """The store's default is "all"; only the dashboard prefers "hide"."""
+    analytics = rendered["analytics"]
+    assert analytics["defaultLocal"] == "hide"
+    assert "local=hide" in analytics["loadSendsLocal"]
+
+
+def test_a_select_applies_itself_and_returns_to_page_one(rendered) -> None:
+    """One load per change, no Apply click, and the offset reset with it."""
+    analytics = rendered["analytics"]
+    assert "offset=25" in analytics["pagedUrl"]
+    assert analytics["statusChangeLoads"] == 1
+    assert "status=error" in analytics["statusChangeUrl"]
+    assert "offset=0" in analytics["listUrlAfterStatusChange"]
+    assert analytics["localChangeLoads"] == 1
+    assert "local=only" in analytics["localChangeUrl"]
+
+
+def test_typing_reloads_once_after_the_pause_and_not_per_keystroke(rendered) -> None:
+    analytics = rendered["analytics"]
+    assert analytics["loadsWhileTyping"] == 0
+    assert analytics["loadsAfterTypingPause"] == 1
+    assert "q=abc" in analytics["typedUrl"]
+
+
+def test_enter_applies_immediately_and_the_debounce_does_not_fire_again(
+    rendered,
+) -> None:
+    analytics = rendered["analytics"]
+    assert analytics["loadsRightAfterEnter"] == 1
+    assert analytics["loadsAfterEnterAndPause"] == 1
+
+
+def test_clear_filters_restores_hide_and_reloads_once(rendered) -> None:
+    analytics = rendered["analytics"]
+    assert analytics["clearLoads"] == 1
+    assert analytics["localAfterClear"] == "hide"
+    assert analytics["searchAfterClear"] == ""
+    assert "local=hide" in analytics["clearUrl"]
+    assert "q=" not in analytics["clearUrl"]
+
+
+def test_the_filter_choice_round_trips_through_persisted_state(rendered) -> None:
+    analytics = rendered["analytics"]
+    assert analytics["persisted"]["local"] == "only"
+    assert analytics["persisted"]["search"] == "abc"
+    assert analytics["persistedAfterClear"]["local"] == "hide"
+    assert "search" not in analytics["persistedAfterClear"]
