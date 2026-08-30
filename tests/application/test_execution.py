@@ -1,10 +1,12 @@
 """Application-owned provider execution contracts."""
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Mapping
 from unittest.mock import MagicMock
 
 import pytest
+from loguru import logger
 
 from my_claude_code.application.execution import (
     AttemptResultObserver,
@@ -21,6 +23,7 @@ from my_claude_code.application.routing import (
     RoutedMessagesRequest,
 )
 from my_claude_code.config.constants import (
+    FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT,
     FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
     FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
     FALLBACK_STALL_TIMEOUT_DEFAULT,
@@ -488,14 +491,24 @@ def _deadline_executor(
     *,
     first_token_timeout: float = 0.05,
     total_timeout: float = 0.0,
+    attempt_share_floor: float = 0.0,
     health: RouteHealthRegistry | None = None,
 ) -> ProviderExecutor:
+    """An executor for the sub-second deadlines these tests run on.
+
+    The share floor defaults to 0 here, not to the shipped 180s: every budget
+    below is a fraction of a second, so the real default would swallow all of
+    them and every one of these tests would be measuring the floor instead of
+    the thing it names. The floor's own behaviour is asserted explicitly by the
+    tests that pass it.
+    """
     return ProviderExecutor(
         lambda provider_id: providers[provider_id],
         token_counter=lambda _messages, _system, _tools: 17,
         policy=RouteExecutionPolicy(
             first_token_timeout=first_token_timeout,
             total_timeout=total_timeout,
+            attempt_share_floor=attempt_share_floor,
         ),
         health=health or RouteHealthRegistry(eject_after_failures=0),
     )
@@ -1829,7 +1842,120 @@ async def test_a_silent_model_is_still_judged_by_the_first_token_deadline() -> N
 
 def test_the_thinking_allowance_has_a_shipped_default() -> None:
     """A default is a separate contract from the parameter (§173)."""
-    assert RouteExecutionPolicy().reasoning_answer_timeout == 300.0
+    assert RouteExecutionPolicy().reasoning_answer_timeout == 450.0
+
+
+def test_the_shipped_deadlines_are_the_numbers_operators_read() -> None:
+    """The four deadline defaults, pinned as the literals they ship as.
+
+    Raised together in 6.10.0 (120/120/300 -> 180/180/450) once the share floor
+    made the first-token deadline the number that actually fires: before that a
+    long chain cut it down anyway, so its exact value bought little. The floor
+    ships equal to the first-token deadline, which is what makes the pair
+    honour itself out of the box on any chain length.
+    """
+    policy = RouteExecutionPolicy()
+
+    assert policy.first_token_timeout == 180.0
+    assert policy.attempt_share_floor == 180.0
+    assert policy.stall_timeout == 180.0
+    assert policy.reasoning_answer_timeout == 450.0
+    assert policy.total_timeout == 600.0
+    assert policy.attempt_share_floor == policy.first_token_timeout
+
+
+def _share(*, total: float, attempts_remaining: int, floor: float) -> float:
+    """Seconds ``_attempt_deadline`` grants one attempt, as a duration.
+
+    The method answers in monotonic timestamps because that is what the read
+    loop compares against; every assertion here is about the size of the slice,
+    so convert once rather than in each test.
+    """
+    executor = _deadline_executor({}, attempt_share_floor=floor)
+    deadline = time.monotonic() + total
+    granted = executor._attempt_deadline(deadline, attempts_remaining)
+    assert granted is not None
+    return granted - time.monotonic()
+
+
+def test_the_share_floor_raises_a_share_the_chain_had_cut_too_small() -> None:
+    """The live defect: 600s over eight models is 75s, whatever the box said.
+
+    ``MODEL DEADLINE: 'nvidia_nim/moonshotai/kimi-k3' produced no first token
+    after 74.9494s`` was logged with FALLBACK_FIRST_TOKEN_TIMEOUT=120 and
+    nothing anywhere set to 75. The floor is what stops the division from
+    quietly replacing the operator's number.
+    """
+    assert _share(total=600.0, attempts_remaining=8, floor=0.0) == pytest.approx(
+        75.0, abs=0.5
+    )
+    assert _share(total=600.0, attempts_remaining=8, floor=180.0) == pytest.approx(
+        180.0, abs=0.5
+    )
+
+
+def test_the_share_floor_never_hands_out_budget_the_request_has_not_got() -> None:
+    """A floor raises a share; it cannot extend the total.
+
+    Without the clamp a 180s floor on a 60s budget would let one attempt run
+    three times the whole request budget -- an invented limit in the other
+    direction, and the exact shape Part IV rules out.
+    """
+    assert _share(total=60.0, attempts_remaining=8, floor=180.0) == pytest.approx(
+        60.0, abs=0.5
+    )
+
+
+def test_a_zero_share_floor_reproduces_the_pure_equal_share() -> None:
+    """The escape hatch has to be an exact restoration, not an approximation.
+
+    An operator who preferred the old behaviour gets it back byte for byte:
+    every chain length divides the remaining budget as it always did.
+    """
+    for models in (2, 3, 8, 11):
+        assert _share(
+            total=600.0, attempts_remaining=models, floor=0.0
+        ) == pytest.approx(600.0 / models, abs=0.5)
+
+
+def test_the_share_floor_does_not_shorten_a_share_that_was_already_generous() -> None:
+    """A two-model chain already beats the floor, so the floor is inert."""
+    assert _share(total=600.0, attempts_remaining=2, floor=180.0) == pytest.approx(
+        300.0, abs=0.5
+    )
+
+
+def test_the_reported_deadline_names_the_floor_raised_value() -> None:
+    """ "after Ns" has to be the limit that actually fired, floor included.
+
+    The message exists to send the reader to the setting that ended their
+    request. Reporting 75s when the attempt was allowed 180 and cut at the
+    120s first-token deadline sends them to the wrong one -- which is precisely
+    how the original defect stayed unexplained.
+    """
+    executor = _deadline_executor(
+        {}, first_token_timeout=120.0, total_timeout=600.0, attempt_share_floor=180.0
+    )
+    deadline = time.monotonic() + 600.0
+    attempt_deadline = executor._attempt_deadline(deadline, 8)
+    assert attempt_deadline is not None
+    attempt_budget = attempt_deadline - time.monotonic()
+
+    lines: list[str] = []
+    sink = logger.add(lines.append, level="WARNING")
+    try:
+        executor._deadline_reached(
+            "nvidia_nim/moonshotai/kimi-k3",
+            seen_chunk=False,
+            request_id="req_floor",
+            attempt_budget=attempt_budget,
+        )
+    finally:
+        logger.remove(sink)
+
+    reported = "".join(lines)
+    assert "produced no first token after 120s" in reported
+    assert "74.9" not in reported and "75s" not in reported
 
 
 def test_the_heartbeat_is_empty_and_is_not_a_frame() -> None:
@@ -1853,6 +1979,7 @@ def test_route_execution_policy_defaults_match_fallback_constants() -> None:
     assert policy.total_timeout == FALLBACK_TOTAL_TIMEOUT_DEFAULT
     assert policy.stall_timeout == FALLBACK_STALL_TIMEOUT_DEFAULT
     assert policy.reasoning_answer_timeout == FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT
+    assert policy.attempt_share_floor == FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT
 
 
 @pytest.mark.asyncio

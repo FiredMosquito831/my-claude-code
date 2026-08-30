@@ -86,12 +86,27 @@ ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-anthropic-oauth"
 # Settings needs them and the application layer already reads Settings.
 #
 # Measured against a 51,000-request log: first-token latency is 4.5s at p50 and
-# 181.7s at p99.9, so a 120s deadline re-rolls 0.21% of healthy requests onto
-# the next model while ending stalls that otherwise ran for 9 minutes.
-FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT = 120.0
+# 181.7s at p99.9, so a 120s deadline re-rolled 0.21% of healthy requests onto
+# the next model while ending stalls that otherwise ran for 9 minutes. Raised
+# to 180s in 6.10.0: 120 sat just under the p99.9, and now that the share floor
+# means this number is actually the one that fires, cutting off a model that
+# was merely slow costs a real answer rather than a share that had already
+# been shortened anyway.
+FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT = 180.0
 # Whole-request durations on that same log: 7.5s at p50, 255.7s at p99.9. A 600s
 # budget cuts 0.03% of healthy requests short and caps the rest.
 FALLBACK_TOTAL_TIMEOUT_DEFAULT = 600.0
+# Smallest first-token allowance an attempt may be cut down to by sharing the
+# total budget. Without it the share alone decides, and on a long chain it
+# silently replaced the deadline the operator had configured: 600s over an
+# eight-model chain is 75s, so a box reading 120 produced
+# "produced no first token after 74.9494s" in the log. The floor is what makes
+# the box mean what it says. Set equal to the first-token deadline, so the
+# shipped pair honours itself out of the box; 0 restores pure equal-share.
+# The trade, spelled out in RouteExecutionPolicy._attempt_deadline and on the
+# Limits & Resilience page: N silent models can spend up to N x this before
+# the total budget clamps them, leaving later models less than the floor.
+FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT = 180.0
 # Consecutive failures before routing skips a provider/model, and for how long.
 # Failure kinds that end a route instead of moving to the next model.
 #
@@ -112,9 +127,10 @@ FALLBACK_TOTAL_TIMEOUT_DEFAULT = 600.0
 # the answer, which at least covers queueing and cold starts.
 #
 # Measured against 146,857 successful requests, the slowest of them averaged
-# one output token every 2.27 seconds, so this sits about fifty times beyond
-# the worst rate ever observed here. 0 disables it.
-FALLBACK_STALL_TIMEOUT_DEFAULT = 120.0
+# one output token every 2.27 seconds, so this sits far beyond the worst rate
+# ever observed here. Tracks the first-token deadline (180s since 6.10.0)
+# because it answers the same question. 0 disables it.
+FALLBACK_STALL_TIMEOUT_DEFAULT = 180.0
 
 FALLBACK_SKIP_KINDS_DEFAULT = "invalid_request"
 
@@ -173,8 +189,10 @@ FALLBACK_ON_REASONING_ONLY_DEFAULT = True
 # How long a model held at the reasoning boundary may think before the route
 # gives up on it. Measured on 21 days of traffic: every one of the 499 budget
 # exhaustions ran the *full* 600s, while 98% of slow reasoning successes had
-# started answering by 300s -- so this separates the two almost exactly.
-FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT = 300.0
+# started answering by 300s -- so this separates the two almost exactly. Raised
+# to 450s in 6.10.0 with the other deadlines (1.5x), which keeps it clear of
+# that 98% mark and still well inside the 600s budget it has to fit under.
+FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT = 450.0
 STREAM_COMMIT_HOLDBACK_MAX_BYTES_DEFAULT = 65_536
 # Used only when a rate-limited provider sends no Retry-After to obey.
 RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT = 60.0

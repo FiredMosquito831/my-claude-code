@@ -71,6 +71,9 @@ LIMIT_RANGES: dict[str, LimitRange] = {
         0.0, HOUR, "0 waits indefinitely for the first token"
     ),
     "fallback_total_timeout": LimitRange(0.0, DAY, "0 disables the budget"),
+    "fallback_attempt_share_floor": LimitRange(
+        0.0, HOUR, "0 divides the budget equally with no floor"
+    ),
     "fallback_stall_timeout": LimitRange(
         0.0, HOUR, "0 allows an unlimited pause mid-answer"
     ),

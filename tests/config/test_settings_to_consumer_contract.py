@@ -85,6 +85,24 @@ def test_the_step_over_floor_reaches_the_route_policy() -> None:
     assert policy.cooldown_step_over_floor == 12.0
 
 
+def test_the_attempt_share_floor_reaches_the_route_policy() -> None:
+    """The one hop between the operator's number and the code that divides.
+
+    A setting nothing reads looks identical to a setting that works, right up
+    until a silent model is cut at 75s again.
+    """
+    policy = route_execution_policy(_settings(FALLBACK_ATTEMPT_SHARE_FLOOR=210.0))
+    assert policy.attempt_share_floor == 210.0
+
+    assert route_execution_policy(_settings()).attempt_share_floor == 180.0
+    assert (
+        route_execution_policy(
+            _settings(FALLBACK_ATTEMPT_SHARE_FLOOR=0.0)
+        ).attempt_share_floor
+        == 0.0
+    )
+
+
 def test_the_429_bench_is_capped_by_the_same_bound_a_header_is() -> None:
     """A hostile Retry-After cannot bench a key past the one-hour sanity cap.
 

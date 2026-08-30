@@ -20,6 +20,7 @@ from .constants import (
     DESKTOP_WINDOW_HEIGHT_DEFAULT,
     DESKTOP_WINDOW_WIDTH_DEFAULT,
     FAILURE_KIND_NAMES,
+    FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT,
     FALLBACK_BEHAVIOR_DEFAULT,
     FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT,
     FALLBACK_EJECT_AFTER_FAILURES_DEFAULT,
@@ -543,6 +544,16 @@ class Settings(BaseSettings):
     fallback_stall_timeout: float = Field(
         default=FALLBACK_STALL_TIMEOUT_DEFAULT,
         validation_alias="FALLBACK_STALL_TIMEOUT",
+    )
+    # Smallest first-token allowance the equal-share division may produce. The
+    # share is what stops one model draining the budget, but on a long chain it
+    # shrank below the deadline the operator had configured and silently
+    # replaced it: 600s over eight models is 75s, and the log said so. With
+    # this floor the number in the box is the number a silent model gets.
+    # 0 restores pure equal-share.
+    fallback_attempt_share_floor: float = Field(
+        default=FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT,
+        validation_alias="FALLBACK_ATTEMPT_SHARE_FLOOR",
     )
 
     # Comma-separated FailureKind values. Empty means "fall back on every

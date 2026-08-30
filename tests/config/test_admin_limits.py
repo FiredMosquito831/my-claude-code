@@ -51,6 +51,7 @@ SECTION_KEYS: dict[str, tuple[str, ...]] = {
     ),
     "deadlines": (
         "FALLBACK_FIRST_TOKEN_TIMEOUT",
+        "FALLBACK_ATTEMPT_SHARE_FLOOR",
         "FALLBACK_TOTAL_TIMEOUT",
         "FALLBACK_STALL_TIMEOUT",
         "FALLBACK_REASONING_ANSWER_TIMEOUT",

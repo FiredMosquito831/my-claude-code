@@ -736,11 +736,30 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="fallback_first_token_timeout",
-        default="120",
+        default="180",
         description=(
             "Seconds a model may stay silent before the next model on the "
             "chain takes over. Nothing has reached the client yet, so the "
             "handover is invisible. 0 waits indefinitely."
+        ),
+    ),
+    ConfigFieldSpec(
+        "FALLBACK_ATTEMPT_SHARE_FLOOR",
+        "Silent-attempt floor",
+        "deadlines",
+        "number",
+        settings_attr="fallback_attempt_share_floor",
+        default="180",
+        description=(
+            "Smallest slice of the total budget one attempt may be cut to. "
+            "The budget is divided between the models still to try, and on a "
+            "long chain that share used to fall below the first-token "
+            "deadline and quietly replace it -- 600 over eight models is 75 "
+            "seconds, whatever the deadline said. This floor keeps the "
+            "first-token deadline above the number that actually fires. The "
+            "trade: several silent models in a row can spend the floor each "
+            "until the total budget runs out, leaving the models after them "
+            "less. 0 divides the budget equally with no floor."
         ),
     ),
     ConfigFieldSpec(
@@ -754,8 +773,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "Seconds one request may run across every attempt, retry and "
             "recovery. Each attempt gets an equal share of what is left until "
             "it produces output, so a silent model cannot spend the whole "
-            "budget. Once output has started no fallback can replace it, but "
-            "it can still stop. 0 disables the budget."
+            "budget -- but never less than the silent-attempt floor above. "
+            "Once output has started no fallback can replace it, but it can "
+            "still stop. 0 disables the budget."
         ),
     ),
     ConfigFieldSpec(
@@ -764,7 +784,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="fallback_stall_timeout",
-        default="120",
+        default="180",
         description=(
             "Seconds a model that has already produced output may then say "
             "nothing before the request is given up on. Measured from the last "
@@ -779,7 +799,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="fallback_reasoning_answer_timeout",
-        default="300",
+        default="450",
         restart_required=True,
         description=(
             "Seconds a model may think before the route stops waiting for it "

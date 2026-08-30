@@ -472,6 +472,70 @@ def test_the_calculator_recomputes_when_a_deadline_is_edited(rendered) -> None:
     assert "60 s" not in headline
 
 
+def test_the_calculator_names_the_floor_when_the_floor_is_what_decides(
+    rendered,
+) -> None:
+    """The share line has to say which number produced it.
+
+    "600 ÷ 10 = 60 s" alone, on a page where the answer is 180, reads as a
+    typo. Naming the floor beside the division is what turns the calculator
+    back into an explanation of this route.
+    """
+    after = rendered["limits"]["afterFloorRaised"]
+
+    assert "600 ÷ 10 = 60 s" in after["calcFormula"]
+    assert "raised to the 180 s silent-attempt floor" in after["calcFormula"]
+    assert "the first-token deadline (120 s)" in after["calcFormula"]
+
+
+def test_the_floor_lifts_a_short_share_up_to_the_first_token_deadline(
+    rendered,
+) -> None:
+    """min(120, max(600 ÷ 10, 180)) = 120: the box becomes the number you get.
+
+    Without the floor this same payload gives Opus 60 s -- asserted three tests
+    above, on the unraised load. The pair together is the whole point of the
+    setting.
+    """
+    after = rendered["limits"]["afterFloorRaised"]
+    rows = {row[0]: row[2] for row in after["calcRows"][1:]}
+
+    assert rows["Opus"] == "120 s"
+    assert "120 s" in after["calcHeadline"]
+    assert "60 s" not in after["calcHeadline"]
+
+
+def test_the_calculator_warns_that_the_floor_cannot_fit_the_budget(rendered) -> None:
+    """N x floor > total is the cost of the floor, stated rather than hidden.
+
+    Ten models at 180 s want 1,800 s of a 600 s budget, so only the first three
+    silent models can use the whole floor. An operator who raises the floor is
+    entitled to know that before a request proves it.
+    """
+    after = rendered["limits"]["afterFloorRaised"]
+
+    assert after["calcWarningHidden"] is False
+    assert after["calcWarning"].startswith("Warning:")
+    assert "10 models at the 180 s floor add up to 1800 s" in after["calcWarning"]
+    assert "more than the 600 s budget" in after["calcWarning"]
+    assert "first 3 silent models" in after["calcWarning"]
+    assert "then nothing" in after["calcWarning"]
+
+
+def test_a_blank_deadline_is_read_as_its_default_not_as_no_limit(rendered) -> None:
+    """The placeholder is the value the server is using; the box is just empty.
+
+    Every field ships blank until someone saves it, so a calculator that read
+    blank as 0 would tell a fresh install it had no first-token deadline at all
+    -- and would switch the silent-attempt floor off on the page for exactly
+    the installs that have never touched it.
+    """
+    after = rendered["limits"]["afterFirstTokenCleared"]
+
+    assert "the first-token deadline (120 s)" in after["calcFormula"]
+    assert "No first-token deadline is set" not in after["calcHeadline"]
+
+
 def test_the_calculator_never_interpolates_a_model_name_into_markup(rendered) -> None:
     """The vision route's primary model in this payload is an <img> tag.
 

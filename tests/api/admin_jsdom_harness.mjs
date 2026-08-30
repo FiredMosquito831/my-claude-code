@@ -171,6 +171,16 @@ const FIELDS = [
       "120",
       "0 to 3600 (0 waits indefinitely for the first token)",
     ],
+    /* Deliberately 0 in the loaded payload: every arithmetic assertion below
+       was written against the pure equal share, and keeping it that way makes
+       them a live proof that the 0 escape hatch reproduces the pre-6.10.0
+       calculator exactly. The floor's own behaviour is driven at (c). */
+    [
+      "FALLBACK_ATTEMPT_SHARE_FLOOR",
+      "deadlines",
+      "0",
+      "0 to 3600 (0 divides the budget equally with no floor)",
+    ],
     ["FALLBACK_TOTAL_TIMEOUT", "deadlines", "600", "0 to 86400"],
     ["FALLBACK_STALL_TIMEOUT", "deadlines", "120", "0 to 3600"],
     ["FALLBACK_REASONING_ANSWER_TIMEOUT", "deadlines", "300", "0 to 3600"],
@@ -889,7 +899,26 @@ if (benchSelect) {
   limits.afterBenchOff = { benchGroups: benchGroupsNow() };
 }
 
-// (c) raise the total budget: the calculator recomputes without a reload.
+// (c) raise the silent-attempt floor above the equal share. 600 over ten
+// models is 60s, so a 180s floor binds: the share becomes 180, the first-token
+// deadline caps the allowance back to 120, and ten models at 180 want 1,800s
+// of a 600s budget -- which is the trade the warning has to state out loud.
+const floorInput = controlIn("FALLBACK_ATTEMPT_SHARE_FLOOR");
+if (floorInput) {
+  floorInput.value = "180";
+  floorInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+  limits.afterFloorRaised = {
+    calcHeadline: textOf(limitsView, "#calcHeadline"),
+    calcFormula: textOf(limitsView, "#calcFormula"),
+    calcWarning: textOf(limitsView, "#calcWarning"),
+    calcWarningHidden: calcWarningEl ? calcWarningEl.hidden : null,
+    calcRows: calcRowsNow(),
+  };
+  floorInput.value = floorInput.dataset.original;
+  floorInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+}
+
+// (d) raise the total budget: the calculator recomputes without a reload.
 const totalInput = controlIn("FALLBACK_TOTAL_TIMEOUT");
 if (totalInput) {
   totalInput.value = "1200";
@@ -898,9 +927,25 @@ if (totalInput) {
   limits.calcRowsAfterEdit = calcRowsNow();
 }
 
+// (e) clear a deadline entirely. A field nobody has set renders blank with its
+// default in the placeholder, and the server is applying that default -- so a
+// calculator that read the blank as "no limit" would describe a machine that
+// does not exist. This is the state every install starts the share floor in.
+const firstInput = controlIn("FALLBACK_FIRST_TOKEN_TIMEOUT");
+if (firstInput) {
+  firstInput.value = "";
+  firstInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+  limits.afterFirstTokenCleared = {
+    calcHeadline: textOf(limitsView, "#calcHeadline"),
+    calcFormula: textOf(limitsView, "#calcFormula"),
+  };
+  firstInput.value = firstInput.dataset.original;
+  firstInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+}
+
 // Every control the drive touched goes back to what it loaded with: the
 // optimizer's own dirty assertion below counts from zero.
-[modeSelect, benchSelect, totalInput].forEach((control) => {
+[modeSelect, benchSelect, floorInput, totalInput, firstInput].forEach((control) => {
   if (!control) return;
   control.value = control.dataset.original;
   control.dispatchEvent(new window.Event("change", { bubbles: true }));

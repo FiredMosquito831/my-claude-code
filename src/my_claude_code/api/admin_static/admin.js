@@ -1161,6 +1161,7 @@ const CALC_KEYS = new Set([
   "MODEL_VISION_FALLBACKS",
   "FALLBACK_TOTAL_TIMEOUT",
   "FALLBACK_FIRST_TOKEN_TIMEOUT",
+  "FALLBACK_ATTEMPT_SHARE_FLOOR",
   "HTTP_READ_TIMEOUT",
   "SERVER_GRACEFUL_SHUTDOWN_SECONDS",
 ]);
@@ -1184,6 +1185,23 @@ function liveValue(key) {
   return String((state.fields.get(key) || {}).value ?? "");
 }
 
+/** A number the calculator should mirror the *server* with.
+ *
+ * A field nobody has touched renders blank -- its default lives in the
+ * placeholder -- and reading that blank as 0 made the calculator claim a limit
+ * was switched off when the server was applying its default. Harmless while
+ * every deadline shipped pre-set in the managed file; not harmless for a
+ * setting a fresh install has never written, which is every install's state
+ * for the silent-attempt floor. Fall back to what the server says is in
+ * effect, which is what the payload's `effective` field is for.
+ */
+function calcNumber(key) {
+  const typed = liveValue(key).trim();
+  if (typed !== "") return Number(typed) || 0;
+  const field = state.fields.get(key) || {};
+  return Number(field.effective ?? field.default ?? 0) || 0;
+}
+
 /** The control bound to a key, never the .field wrapper that repeats data-key. */
 const CONTROL_FOR_KEY = (key) =>
   `input[data-key="${key}"], select[data-key="${key}"], textarea[data-key="${key}"]`;
@@ -1197,11 +1215,23 @@ function chainLength(modelKey, chainKey) {
   return (primary && primary.toLowerCase() !== "none" ? 1 : 0) + chain.length;
 }
 
-/** Mirror of `_attempt_deadline` + `_chunk_timeout` before the first chunk. */
-function firstTokenShare(total, first, n) {
-  const share = total > 0 ? total / Math.max(1, n) : Infinity;
+/** Mirror of `_attempt_deadline` + `_chunk_timeout` before the first chunk.
+ *
+ *  share = total / models; raised to the floor; never above what is left;
+ *  then capped by the first-token deadline. Same order as the server, so a
+ *  number read here is the number the log will print.
+ */
+function firstTokenShare(total, first, floor, n) {
+  let share = total > 0 ? total / Math.max(1, n) : Infinity;
+  if (total > 0 && floor > 0) share = Math.min(Math.max(share, floor), total);
   const cap = first > 0 ? first : Infinity;
   return Math.min(share, cap);
+}
+
+/** Whether the floor is what decides this route's share, rather than the
+ *  equal division. Only then is it worth naming in the formula. */
+function floorBinds(total, floor, n) {
+  return total > 0 && floor > 0 && total / Math.max(1, n) < floor;
 }
 
 /** Routes with at least one model of their own. A route with none falls back
@@ -1305,13 +1335,14 @@ function updateDeadlineCalculator(root) {
   const warning = scope.querySelector("#calcWarning");
   const table = scope.querySelector("#calcTable");
 
-  const total = Number(liveValue("FALLBACK_TOTAL_TIMEOUT")) || 0;
-  const first = Number(liveValue("FALLBACK_FIRST_TOKEN_TIMEOUT")) || 0;
-  const httpRead = Number(liveValue("HTTP_READ_TIMEOUT")) || 0;
-  const shutdown = Number(liveValue("SERVER_GRACEFUL_SHUTDOWN_SECONDS")) || 0;
+  const total = calcNumber("FALLBACK_TOTAL_TIMEOUT");
+  const first = calcNumber("FALLBACK_FIRST_TOKEN_TIMEOUT");
+  const floor = calcNumber("FALLBACK_ATTEMPT_SHARE_FLOOR");
+  const httpRead = calcNumber("HTTP_READ_TIMEOUT");
+  const shutdown = calcNumber("SERVER_GRACEFUL_SHUTDOWN_SECONDS");
   const routes = calculatorRoutes().map((route) => ({
     ...route,
-    share: firstTokenShare(total, first, route.models),
+    share: firstTokenShare(total, first, floor, route.models),
   }));
 
   table.replaceChildren();
@@ -1355,12 +1386,18 @@ function updateDeadlineCalculator(root) {
     `With your longest chain (${longest.label}, ${longest.models} models), each ` +
     `model gets about ${formatShare(longest.share)} to produce its first token.`;
 
+  const bound = floorBinds(total, floor, longest.models);
   const terms = [];
   if (first > 0) terms.push(`the first-token deadline (${first} s)`);
   if (total > 0) {
+    // Name the floor only where it is doing the deciding, so the line stays
+    // an explanation of this route rather than a tour of the settings.
+    const raw = `${total} ÷ ${longest.models} = ${formatShare(total / longest.models)}`;
     terms.push(
-      `its share of the total budget (${total} ÷ ${longest.models} = ` +
-        `${formatShare(total / longest.models)})`,
+      bound
+        ? `its share of the total budget (${raw}, raised to the ${floor} s ` +
+            "silent-attempt floor)"
+        : `its share of the total budget (${raw})`,
     );
   }
   formula.textContent =
@@ -1369,12 +1406,25 @@ function updateDeadlineCalculator(root) {
   // One warning at a time, most severe first. The word "Warning" carries the
   // meaning; the colour is redundant.
   let text = "";
-  if (first > 0 && total > 0 && total / longest.models < first) {
+  const effective = total > 0 && floor > 0 ? Math.min(Math.max(total / longest.models, floor), total) : total / longest.models;
+  if (first > 0 && total > 0 && effective < first) {
     text =
       "Warning: The first-token deadline never applies on this route -- the " +
       "budget share is smaller. A total budget of " +
       `${Math.ceil(first * longest.models)} s would give every model the ` +
-      `${first} s you asked for.`;
+      `${first} s you asked for` +
+      (floor > 0 ? `, or raise the silent-attempt floor to ${first} s.` : ".");
+  } else if (bound && floor * longest.models > total) {
+    // The trade the floor makes, stated rather than hidden: raising a share
+    // above the equal division has to come out of the models behind it.
+    const covered = Math.floor(total / floor);
+    text =
+      `Warning: ${longest.models} models at the ${floor} s floor add up to ` +
+      `${floor * longest.models} s, more than the ${total} s budget. The ` +
+      `first ${covered} silent ${covered === 1 ? "model" : "models"} can use ` +
+      "the whole floor; the models after them get whatever is left, then " +
+      "nothing. Lower the floor, shorten the chain, or raise the budget to " +
+      `${floor * longest.models} s.`;
   } else if (httpRead > 0 && Number.isFinite(longest.share) && httpRead < longest.share) {
     text =
       `Warning: HTTP read timeout (${httpRead} s) is below the deadline above, ` +

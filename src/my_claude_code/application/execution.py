@@ -10,6 +10,7 @@ from typing import Literal, cast
 from loguru import logger
 
 from my_claude_code.config.constants import (
+    FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT,
     FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT,
     FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
     FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
@@ -111,6 +112,11 @@ class RouteExecutionPolicy:
 
     first_token_timeout: float = FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT
     total_timeout: float = FALLBACK_TOTAL_TIMEOUT_DEFAULT
+    # Smallest value the equal-share division of ``total_timeout`` may hand an
+    # attempt. Without it the share alone decides the first-token allowance,
+    # and on a long chain it silently undercuts ``first_token_timeout``.
+    # 0 restores the pure share.
+    attempt_share_floor: float = FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT
     # How long a stream that has already produced output may then say nothing.
     # The first-token deadline stops applying the moment content appears, so
     # without this the only thing left bounding a stalled stream is the whole
@@ -857,13 +863,33 @@ class ProviderExecutor:
 
         Time an attempt does not use flows forward, so a chain of fast failures
         leaves the last model nearly the whole budget rather than a third of it.
+
+        The share alone, though, decided the first-token allowance outright,
+        and on a long chain it landed below the deadline the operator had
+        configured: 600s over eight models is 75s, so a first-token deadline of
+        120s produced "produced no first token after 74.9494s" -- a number
+        nothing in the configuration contained. ``attempt_share_floor`` is the
+        smallest share this division may return, so the deadline in the box is
+        the one that fires. The floor never exceeds what is actually left, and
+        ``_chunk_timeout`` still takes the smaller of it and the first-token
+        deadline, so raising the floor can only restore the operator's number,
+        never invent a longer one. The cost, which is the operator's to make:
+        N silent models can spend up to N x the floor before the total budget
+        clamps them, and the models after that get less than the floor or
+        nothing. ``attempt_share_floor = 0`` restores the pure share.
         """
         if deadline is None or attempts_remaining <= 1:
             return deadline
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return deadline
-        return time.monotonic() + remaining / attempts_remaining
+        share = remaining / attempts_remaining
+        if self._policy.attempt_share_floor > 0:
+            share = max(share, self._policy.attempt_share_floor)
+        # Never hand out budget the request does not have left: the floor
+        # raises a share, it does not extend the total.
+        share = min(share, remaining)
+        return time.monotonic() + share
 
     def _chunk_timeout(
         self,
@@ -1195,6 +1221,7 @@ def route_execution_policy(settings: Settings) -> RouteExecutionPolicy:
         total_timeout=settings.fallback_total_timeout,
         stall_timeout=settings.fallback_stall_timeout,
         reasoning_answer_timeout=settings.fallback_reasoning_answer_timeout,
+        attempt_share_floor=settings.fallback_attempt_share_floor,
         skip_kinds=parse_failure_kinds(settings.fallback_skip_kinds),
         cooldown_step_over_floor=settings.fallback_cooldown_step_over_floor,
     )
