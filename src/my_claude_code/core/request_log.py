@@ -22,6 +22,7 @@ from typing import Any, Literal
 from loguru import logger
 
 from my_claude_code.core.request_images import CapturedImage
+from my_claude_code.core.upstream_ladder import format_status_census
 
 # ``core`` must not import ``config`` (import-boundary contract), so the
 # ``~/.fcc`` dirname convention from ``config.paths`` is mirrored here.
@@ -314,6 +315,13 @@ CREATE TABLE IF NOT EXISTS request_attempts (
     -- all? ``requests.reasoning_adaptation`` says what gating decided; this
     -- says whether the encoder acted on it. NULL means "not measured".
     reasoning_emitted INTEGER,
+    -- Number of upstream tries this attempt actually made, across every
+    -- credential the pool handed it. 1 on a clean single-try attempt; NULL on
+    -- every row written before the ladder existed, which is "not measured"
+    -- and emphatically not "no retries happened". Denormalised out of
+    -- ``params.ladder`` so the analytics status breakdown can restrict its
+    -- JSON scan to the rows that have a ladder at all.
+    ladder_tries INTEGER,
     PRIMARY KEY (request_id, attempt)
 );
 """
@@ -463,6 +471,7 @@ _ATTEMPT_ADDED_COLUMNS = (
     ),
     ("key_index", "ALTER TABLE request_attempts ADD COLUMN key_index INTEGER"),
     ("key_label", "ALTER TABLE request_attempts ADD COLUMN key_label TEXT"),
+    ("ladder_tries", "ALTER TABLE request_attempts ADD COLUMN ladder_tries INTEGER"),
 )
 
 # Written in this order by ``_store_attempts``; the placeholder count is
@@ -481,7 +490,16 @@ _ATTEMPT_INSERT_COLUMNS = (
     "reasoning_emitted",
     "key_index",
     "key_label",
+    "ladder_tries",
 )
+
+# Blank, not zero: a request whose attempts predate the ladder measured
+# nothing, and "0 tries" would be a claim the database cannot support.
+_EMPTY_LADDER_ROLLUP: dict[str, Any] = {
+    "ladder_tries": None,
+    "ladder_statuses": "",
+    "ladder_root_cause": "",
+}
 
 _ADDED_INDEXES = ("CREATE INDEX IF NOT EXISTS idx_requests_key ON requests(key_label)",)
 
@@ -612,6 +630,10 @@ class RouteAttempt:
     # available and the attempt never reached a key.
     key_index: int | None = None
     key_label: str | None = None
+    # How many upstream tries this attempt made, counting every credential the
+    # pool handed it. None on every attempt written before the ladder existed,
+    # which is "not measured" -- not "it went through on the first try".
+    ladder_tries: int | None = None
 
 
 # ---------------------------------------------------- recovery observability --
@@ -1163,6 +1185,7 @@ class RequestLogStore:
           captured at the attempt boundary instead of at the end of the
           request. Index -1 with the sentinel label means the pool was
           fully benched and the attempt never reached a key.
+        * ``ladder_tries`` -- how many upstream tries hid behind this one row.
         """
         for column, ddl in _ATTEMPT_ADDED_COLUMNS:
             columns = {
@@ -1622,6 +1645,7 @@ class RequestLogStore:
                 else int(attempt.reasoning_emitted),
                 attempt.key_index,
                 attempt.key_label,
+                attempt.ladder_tries,
             )
             for record in batch
             for attempt in record.attempts
@@ -1652,7 +1676,7 @@ class RequestLogStore:
         rows = conn.execute(
             "SELECT attempt, provider, model_ref, outcome, error_kind,"
             " error_message, duration_ms, params, wire_body, reasoning_emitted,"
-            " key_index, key_label"
+            " key_index, key_label, ladder_tries"
             " FROM request_attempts"
             " WHERE request_id = ? ORDER BY attempt",
             (request_id,),
@@ -1678,9 +1702,74 @@ class RequestLogStore:
                 # a keyless request.
                 "key_index": row["key_index"],
                 "key_label": row["key_label"],
+                "ladder_tries": row["ladder_tries"],
             }
             for row in rows
         ]
+
+    @staticmethod
+    def _fetch_ladder_rollup(
+        conn: sqlite3.Connection, request_ids: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Roll one request's attempt ladders up into three export columns.
+
+        ``ladder_tries`` sums the tries across every attempt the chain made;
+        ``ladder_statuses`` merges their status censuses; ``ladder_root_cause``
+        is the stored sentence of the first *failed* attempt -- the one that
+        explains why there was a fallback at all. Rows written before the
+        ladder existed contribute nothing and are left blank rather than zero.
+        """
+        if not request_ids:
+            return {}
+        markers = ", ".join("?" * len(request_ids))
+        rows = conn.execute(
+            "SELECT request_id, attempt, outcome, params, ladder_tries"
+            " FROM request_attempts"
+            f" WHERE request_id IN ({markers}) ORDER BY request_id, attempt",
+            request_ids,
+        ).fetchall()
+        out: dict[str, dict[str, Any]] = {}
+        census: dict[str, dict[str, int]] = {}
+        for row in rows:
+            tries = row["ladder_tries"]
+            if tries is None:
+                continue
+            request_id = str(row["request_id"])
+            entry = out.setdefault(
+                request_id, {**_EMPTY_LADDER_ROLLUP, "_failed_root_cause": ""}
+            )
+            entry["ladder_tries"] = int(entry["ladder_tries"] or 0) + int(tries)
+            params = _loads_or_none(row["params"])
+            ladder = params.get("ladder") if isinstance(params, dict) else None
+            if not isinstance(ladder, dict):
+                continue
+            summary = ladder.get("summary")
+            if isinstance(summary, dict):
+                counts = summary.get("statuses_by_code")
+                if isinstance(counts, dict):
+                    bucket = census.setdefault(request_id, {})
+                    for code, count in counts.items():
+                        bucket[str(code)] = bucket.get(str(code), 0) + int(count)
+            root_cause = str(ladder.get("root_cause") or "")
+            if not root_cause:
+                continue
+            # The first *failed* attempt is the one that explains the fallback,
+            # so it wins outright. A chain that retried its way to a success
+            # still has a story, though -- "a fallback that quietly works" is
+            # the blind spot this whole surface exists for -- so the first
+            # attempt with anything to say is kept when nothing failed.
+            if str(row["outcome"]) == "failed":
+                if not entry["_failed_root_cause"]:
+                    entry["_failed_root_cause"] = root_cause
+            elif not entry["ladder_root_cause"]:
+                entry["ladder_root_cause"] = root_cause
+        for request_id, bucket in census.items():
+            out[request_id]["ladder_statuses"] = format_status_census(bucket)
+        for entry in out.values():
+            failed = entry.pop("_failed_root_cause")
+            if failed:
+                entry["ladder_root_cause"] = failed
+        return out
 
     @staticmethod
     def _fetch_images(
@@ -2087,6 +2176,7 @@ class RequestLogStore:
         *,
         columns: list[str],
         need_bodies: bool,
+        need_ladder: bool = False,
         provider: str | None = None,
         model: str | None = None,
         status: str | None = None,
@@ -2141,12 +2231,20 @@ class RequestLogStore:
                     return
                 ids = [str(row["id"]) for row in rows]
                 bodies = self._fetch_bodies(conn, ids) if need_bodies else {}
+                # One batched read of the attempt side per page, not per row:
+                # ``request_attempts`` is joined by no export path, so the
+                # ladder columns would otherwise be unexportable entirely.
+                ladders = self._fetch_ladder_rollup(conn, ids) if need_ladder else {}
                 for row in rows:
-                    yield self._row_to_dict(
+                    data = self._row_to_dict(
                         row,
                         body_preview_chars=None,
                         bodies=bodies.get(str(row["id"])),
                     )
+                    if need_ladder:
+                        data.update(_EMPTY_LADDER_ROLLUP)
+                        data.update(ladders.get(str(row["id"]), {}))
+                    yield data
                 cursor = (rows[-1]["ts_epoch"], rows[-1]["id"])
         finally:
             conn.close()
@@ -2434,6 +2532,36 @@ class RequestLogStore:
                 # page down; report nothing measured instead.
                 logger.warning("Request log recovery aggregate skipped: {}", exc)
                 recovery = (0, 0, 0)
+            try:
+                # Count by the status the upstream actually returned, not by
+                # the one mapped kind that survived the ladder: a request that
+                # saw twelve 429s before a 502 used to be counted once, as
+                # ``upstream``. ``ladder_tries > 1`` is what the denormalised
+                # column exists for -- it keeps the JSON scan off the ~95% of
+                # attempt rows that never retried.
+                upstream_statuses = [
+                    {
+                        "status": int(row[0]),
+                        "count": int(row[1]),
+                        "requests": int(row[2]),
+                    }
+                    for row in conn.execute(
+                        "SELECT json_extract(t.value, '$.status'), COUNT(*),"
+                        " COUNT(DISTINCT a.request_id)"
+                        " FROM request_attempts AS a,"
+                        " json_each(json_extract(a.params, '$.ladder.tries'))"
+                        " AS t"
+                        " WHERE a.ladder_tries > 1"
+                        " AND a.request_id IN (SELECT id FROM requests"
+                        f"{where})"
+                        " AND json_extract(t.value, '$.status') IS NOT NULL"
+                        " GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
+                        args,
+                    ).fetchall()
+                ]
+            except sqlite3.Error as exc:
+                logger.warning("Request log upstream status breakdown skipped: {}", exc)
+                upstream_statuses = []
             series = self._series(conn, where, args, since=since, until=until)
 
         total = totals["total"] or 0
@@ -2489,6 +2617,10 @@ class RequestLogStore:
             "by_key_truncated": by_key_truncated,
             "series": series,
             "top_errors": top_errors,
+            # Every upstream status behind the recorded attempts, not just the
+            # one that ended each of them. Empty on a database whose rows all
+            # predate the ladder: nothing was measured, so nothing is claimed.
+            "upstream_statuses": upstream_statuses,
         }
         with self._stats_lock:
             self._stats_cache[cache_key] = (now, payload)

@@ -63,6 +63,7 @@ from my_claude_code.core.credential_rotation import (
     RotationEngine,
 )
 from my_claude_code.core.failures import FailureKind, find_execution_failure
+from my_claude_code.core.upstream_ladder import record_credential_decision
 from my_claude_code.providers.failure_policy import (
     retryable_upstream_transport_error,
 )
@@ -99,6 +100,32 @@ def _status_from_error(error: BaseException) -> int | None:
         return error.status_code
     status = getattr(error, "status_code", None)
     return status if isinstance(status, int) else None
+
+
+def _uncharged_reason(status: int | None, failure: BaseException | None) -> str:
+    """Why this failure left the credential's health record untouched."""
+    if status is not None:
+        return f"{status} is not credential-shaped"
+    kind = getattr(failure, "kind", None)
+    if kind is not None:
+        return f"{kind} is not credential-shaped"
+    return "the failure is not credential-shaped"
+
+
+def _charged_reason(
+    failure_class: str,
+    status: int | None,
+    retry_after: float | None,
+    benched_for: float,
+    auth_failures: int,
+) -> str:
+    """What the pool did to this credential, in the pool's own numbers."""
+    named = str(status) if status is not None else failure_class
+    if failure_class == "rate_limit":
+        if retry_after is not None:
+            return f"{named} with Retry-After {retry_after:g}s"
+        return f"{named}, no Retry-After -- operator cooldown {benched_for:.0f}s"
+    return f"{named} -- lockout tier {auth_failures}"
 
 
 def credential_failure_class(error: BaseException) -> str | None:
@@ -180,6 +207,9 @@ class CredentialRotationState:
         self._engine = RotationEngine(
             key_count, policy=canonical, tuning=tuning, clock=clock
         )
+        # Kept so a bench the engine just installed can be read back as a
+        # duration for the request log, on the engine's own clock.
+        self._clock = clock
         self._lock = asyncio.Lock()
 
     @property
@@ -224,6 +254,9 @@ class CredentialRotationState:
         rotate = error_justifies_rotation(error)
         failure_class = credential_failure_class(error)
         failure = find_execution_failure(error)
+        status = (
+            failure.status_code if failure is not None else _status_from_error(error)
+        )
         if failure_class is None:
             logger.debug(
                 "Credential %d health unchanged: failure is not credential-shaped "
@@ -233,6 +266,16 @@ class CredentialRotationState:
                 _status_from_error(error),
                 model or "unknown",
                 rotate,
+            )
+            # "Health unchanged" was a DEBUG line and nothing else, so a key
+            # the pool deliberately did not charge looked identical to one it
+            # never saw. Recorded as a decision with a null class: the absence
+            # of a bench is the finding.
+            record_credential_decision(
+                key_index=index,
+                cls=None,
+                status=status,
+                reason=_uncharged_reason(status, failure),
             )
             return rotate
         # ``None`` means the provider published no Retry-After, which the
@@ -245,6 +288,23 @@ class CredentialRotationState:
         )
         async with self._lock:
             self._engine.fail(index, failure_class, retry_after=retry_after)
+            # Read the bench back out of the engine that just decided it. The
+            # number is never recomputed from tuning here: an operator cooldown,
+            # a published Retry-After and a lockout tier all land in the same
+            # two deadlines, and only the engine knows which one applied.
+            slot = self._engine.slot(index)
+            now = self._clock()
+            benched_for = max(slot.cooldown_until, slot.lockout_until) - now
+        record_credential_decision(
+            key_index=index,
+            cls=failure_class,
+            benched_for_s=benched_for if benched_for > 0 else None,
+            status=status,
+            retry_after=retry_after,
+            reason=_charged_reason(
+                failure_class, status, retry_after, benched_for, slot.auth_failures
+            ),
+        )
         return rotate
 
     async def reset_key(self, index: int) -> bool:

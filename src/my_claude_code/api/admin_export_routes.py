@@ -241,6 +241,9 @@ def _request_export(
     iterator = store.iter_export_rows(
         columns=sql_columns,
         need_bodies=need_bodies,
+        # The ladder columns come from ``request_attempts``, which no export
+        # SQL joins; the store fills them per page when they were asked for.
+        need_ladder="ladder" in selected,
         provider=provider,
         model=model,
         status=status,

@@ -47,6 +47,12 @@ from my_claude_code.core.request_log import (
     install_recovery_trace,
     store_from_settings,
 )
+from my_claude_code.core.upstream_ladder import (
+    DEFAULT_LADDER_BODY_MAX_CHARS,
+    install_ladder_trace,
+    ladder_payload,
+    ladder_root_cause,
+)
 from my_claude_code.core.wire_capture import (
     DEFAULT_WIRE_BODY_MAX_CHARS,
     WireRequest,
@@ -74,6 +80,7 @@ class RequestCapture:
         images: tuple[ImageInput, ...] = (),
         capture_images_pixels: int = 0,
         wire_body_max_chars: int = DEFAULT_WIRE_BODY_MAX_CHARS,
+        ladder_body_max_chars: int = DEFAULT_LADDER_BODY_MAX_CHARS,
         headers: dict[str, str] | None = None,
     ) -> None:
         self._store = store
@@ -127,6 +134,12 @@ class RequestCapture:
         # ``params`` below still does, deliberately, as the client's ask --
         # reported the client's numbers as if they were the wire's.
         self._wire = install_wire_trace(wire_body_max_chars) if self.enabled else None
+        # Every upstream try behind each attempt arrives the same way, from the
+        # one retry frame every provider commits through. Without it an attempt
+        # row carried one status however many the provider had actually seen.
+        self._ladder = (
+            install_ladder_trace(ladder_body_max_chars) if self.enabled else None
+        )
         # Routing's own verdict, kept so a provider-level adaptation recorded
         # after the request left can be merged with it at commit time rather
         # than overwriting it.
@@ -162,6 +175,8 @@ class RequestCapture:
         if not self.enabled:
             return
         wire = None if self._wire is None else self._wire.requests.get(attempt.attempt)
+        ladder = self._ladder_payload(attempt)
+        key_index, key_label = self._attempt_credential(ladder)
         self._attempts.append(
             RouteAttempt(
                 attempt=attempt.attempt,
@@ -171,19 +186,59 @@ class RequestCapture:
                 error_kind=attempt.error_kind,
                 error_message=attempt.error_message,
                 duration_ms=attempt.duration_ms,
-                params=self._attempt_params(attempt.attempt, wire),
+                params=self._attempt_params(attempt.attempt, wire, ladder),
                 wire_body=None if wire is None else wire.body_json,
                 reasoning_emitted=None if wire is None else wire.reasoning_emitted,
-                # Captured at the attempt boundary, not at the end of the
-                # request: a route that rotates keys or crosses providers
-                # used to be attributed entirely to its last credential.
-                key_index=self._credential.index,
-                key_label=self._credential.label,
+                key_index=key_index,
+                key_label=key_label,
+                ladder_tries=None if ladder is None else len(ladder["tries"]),
             )
         )
 
+    def _ladder_payload(self, attempt: RouteAttemptRecord) -> dict[str, Any] | None:
+        """Render this attempt's upstream ladder, root-cause line included.
+
+        The sentence is stored rather than recomputed in the dashboard, so the
+        modal, all four exports and a test all read the same string.
+        """
+        if self._ladder is None:
+            return None
+        ladder = self._ladder.ladders.get(attempt.attempt)
+        if ladder is None or not ladder.tries:
+            return None
+        payload = ladder_payload(ladder)
+        payload["root_cause"] = ladder_root_cause(
+            payload,
+            attempt_error_kind=attempt.error_kind,
+            attempt_duration_ms=attempt.duration_ms,
+        )
+        return payload
+
+    def _attempt_credential(
+        self, ladder: dict[str, Any] | None
+    ) -> tuple[int | None, str | None]:
+        """The credential *this* attempt used, not the chain's last one.
+
+        The observer that writes these rows fires once, at the end of the
+        chain, for every attempt in one loop -- so reading the shared
+        attribution slot here stamped the last key of the whole request onto
+        every row, including skipped attempts and attempts against a different
+        provider's pool entirely. The ladder knows which key each try actually
+        held; the slot is the fallback for an attempt that recorded no try.
+        """
+        if ladder is not None:
+            for row in reversed(ladder["tries"]):
+                if row.get("source") != "upstream":
+                    continue
+                if "key_index" in row:
+                    return row["key_index"], row.get("key_label")
+        return self._credential.index, self._credential.label
+
     def _attempt_params(
-        self, attempt_index: int, wire: WireRequest | None
+        self,
+        attempt_index: int,
+        wire: WireRequest | None,
+        ladder: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Merge what the provider survived with what it actually sent.
 
@@ -200,6 +255,11 @@ class RequestCapture:
         widened = self._output_widened_from.get(attempt_index)
         if widened is not None:
             params["output_widened_from"] = widened
+        # Nested beside ``wire`` for the same reason: it is a list of facts of
+        # variable shape about one attempt, and the flat counters above must
+        # keep theirs.
+        if ladder is not None:
+            params["ladder"] = ladder
         return params or None
 
     def _recovery_events_for(self, attempt_index: int) -> dict[str, Any] | None:
@@ -243,6 +303,8 @@ class RequestCapture:
             self._recovery.current_attempt = attempt
         if self._wire is not None:
             self._wire.current_attempt = attempt
+        if self._ladder is not None:
+            self._ladder.current_attempt = attempt
         if attempt == 0:
             self._primary_model_ref = routed.resolved.provider_model_ref
         self._record.route_attempt = attempt
@@ -611,6 +673,13 @@ def build_capture(
                 settings,
                 "request_log_wire_body_max_chars",
                 DEFAULT_WIRE_BODY_MAX_CHARS,
+            )
+        ),
+        ladder_body_max_chars=int(
+            getattr(
+                settings,
+                "request_log_ladder_body_max_chars",
+                DEFAULT_LADDER_BODY_MAX_CHARS,
             )
         ),
         headers=capture_headers(headers),

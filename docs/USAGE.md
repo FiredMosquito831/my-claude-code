@@ -905,22 +905,43 @@ The detail dialog answers the question "what did MCC actually put on the wire, a
 | a key label (`nvap…8f21`) | that attempt used that key. Attempts in one request can name different keys |
 | **`no key available`** | every credential in the pool was benched; the attempt never reached a key at all |
 | a dash | no credential was recorded — not measured, not "keyless" |
+| a **ladder headline** (`15 tries · 12×429, 3×502 · 3 keys · 96s sleeping`) | 6.12.0: how many times that attempt actually knocked, and what it met |
 
-**3. Expand an attempt's wire pane.** The headline line is the numbers people open this dialog to check, e.g. `max_tokens 131,072 · raised from 64,000 for reasoning · 59 tools · temp 0.7`. That second term appears only when the allowance was widened because the attempt was going to think; the full modal line reads *max_tokens raised from 64,000 to 131,072 for reasoning*, and it is backed by a per-attempt `params.output_widened_from`.
+**3. Read the ladder.** An attempt is not one request to the upstream. It is up to five tries per credential, across every credential the pool hands it, with MCC's own exponential backoff between them — and before 6.12.0 the database recorded exactly one status for the whole thing. Under a failed attempt you now get four things:
 
-**4. Then the parameter block, which is the important one.** Every parameter MCC sent is listed there — top-level keys, and each provider-specific `extra_body` key under an `extra_body.<name>` row — **above** the message structure, and **never truncated**. A knob MCC learned to send but this pane had never heard of (`min_p`, `tool_choice`, `response_format`) shows up whole rather than falling off the end. A parameter that was not sent has no row: absence is the finding, so it is shown as absence and not as a dash. Anything that looks like a credential by name or shape reads `<redacted>`.
+- **The headline**, beside the duration: `15 tries · 12×429, 3×502 · 3 keys · 96s sleeping`. If the sleeping figure is most of the duration, the model was never the slow part.
+- **The root-cause line**, stored with the row rather than composed in the browser, so the modal and all four export formats say the same sentence:
 
-**5. Below it, the stored body — and why it may be shorter than you sent.** The body is stored content-first: the knobs are written whole first, and only `messages` and `tools` degrade, to counts and names, under `REQUEST_LOG_WIRE_BODY_MAX_CHARS` (8,000 by default). The note says exactly that: *Message and tool structure reduced to counts at 8,000 of 214,317 characters. Every parameter is stored whole and shown above.* The stored body always parses as JSON. Before 6.4.0 the cap cut the body alphabetically, so a Claude Code request with ~59 tools spent its whole budget inside `tools` and `temperature`, `top_p` and `reasoning_effort` survived in **0 of 212** truncated bodies measured in one day.
+  > `3 keys × 5 tries: 12×429, 3×502 — 96s of the 107s were MCC backoff sleeps; keys 0 and 1 benched 60s on 429 (no Retry-After); key 2 not charged (502 is not credential-shaped)`
 
-**6. Read the reasoning state on the same summary line.** Three honest states, and none of them is a hidden pane:
+  That is the real `req_f3b018…`, which the database had recorded as a single `upstream` failure with `HTTP 502` on key 0. The 502 was the last thing that happened, not the thing that went wrong.
+- **Show N upstream tries** — one row per try: `#7 · key 1 nvap…8f21 · 429 · 410ms · waited 4900ms · retry-after 12s`. A term that was not measured is omitted, never printed as `0`; a redacted excerpt of the upstream's own body sits under each try that had one, capped by `REQUEST_LOG_LADDER_BODY_MAX_CHARS` (800).
+- **The credential decisions** — one line per key the attempt touched, saying whether the pool charged it and why: `key 0 nvap…8f21 — benched 60s (rate_limit): 429, no Retry-After -- operator cooldown 60s`, or `key 2 nvap…c4d0 — health unchanged: 502 is not credential-shaped`. The bench duration is read back out of the rotation engine that set it, never recomputed.
+
+A **timeout** attempt gets a different sentence when most of its duration was spent waiting:
+
+> `deadline reached after 148s of backoff — the model never received an accepted request: 4×429, 1×502`
+
+That is the case the old row got actively wrong. It said *"Provider 'x' produced no output within 120s"*, which sends you to look at the model — when the model was never handed an accepted request at all.
+
+An attempt with a single try shows no ladder: nothing was hidden, so nothing is added. **Rows written before 6.12.0 show no ladder either — that is "not measured", not "there were no retries".**
+
+
+**4. Expand an attempt's wire pane.** The headline line is the numbers people open this dialog to check, e.g. `max_tokens 131,072 · raised from 64,000 for reasoning · 59 tools · temp 0.7`. That second term appears only when the allowance was widened because the attempt was going to think; the full modal line reads *max_tokens raised from 64,000 to 131,072 for reasoning*, and it is backed by a per-attempt `params.output_widened_from`.
+
+**5. Then the parameter block, which is the important one.** Every parameter MCC sent is listed there — top-level keys, and each provider-specific `extra_body` key under an `extra_body.<name>` row — **above** the message structure, and **never truncated**. A knob MCC learned to send but this pane had never heard of (`min_p`, `tool_choice`, `response_format`) shows up whole rather than falling off the end. A parameter that was not sent has no row: absence is the finding, so it is shown as absence and not as a dash. Anything that looks like a credential by name or shape reads `<redacted>`.
+
+**6. Below it, the stored body — and why it may be shorter than you sent.** The body is stored content-first: the knobs are written whole first, and only `messages` and `tools` degrade, to counts and names, under `REQUEST_LOG_WIRE_BODY_MAX_CHARS` (8,000 by default). The note says exactly that: *Message and tool structure reduced to counts at 8,000 of 214,317 characters. Every parameter is stored whole and shown above.* The stored body always parses as JSON. Before 6.4.0 the cap cut the body alphabetically, so a Claude Code request with ~59 tools spent its whole budget inside `tools` and `temperature`, `top_p` and `reasoning_effort` survived in **0 of 212** truncated bodies measured in one day.
+
+**7. Read the reasoning state on the same summary line.** Three honest states, and none of them is a hidden pane:
 
 - **`reasoning sent: high`** — a reasoning instruction went on the wire, with the value it carried.
 - **`no reasoning instruction sent (model default applies)`** — nothing was sent, and that is a correct outcome, not a fault: the host has no field this model's capability could be expressed through, so the model's own default stands.
 - **`reasoning not measured`** — this provider has no instrumented commit boundary (Vertex, permanently), or the attempt was never sent.
 
-**7. Take the contradiction badge seriously, and only when it appears.** *gating asked for reasoning; nothing was sent* means the resolved policy chose a value and the body carried none — a real gap between policy and encoder. It is keyed on the stored `reasoning_adaptation_kind` column, never on message text, and it fires for exactly two kinds: **`clamped`** (your rung was moved to the nearest one the host can spell) and **`substituted`** (a different expression of the same intent went instead). **`dropped` stopped badging at 6.6.0** — it had covered two opposite situations and was flagging correct behaviour as a defect — and `nothing_sent` never badges. Rows written **before 6.4.0** badge nothing, because the column did not exist: not measured is not a finding.
+**8. Take the contradiction badge seriously, and only when it appears.** *gating asked for reasoning; nothing was sent* means the resolved policy chose a value and the body carried none — a real gap between policy and encoder. It is keyed on the stored `reasoning_adaptation_kind` column, never on message text, and it fires for exactly two kinds: **`clamped`** (your rung was moved to the nearest one the host can spell) and **`substituted`** (a different expression of the same intent went instead). **`dropped` stopped badging at 6.6.0** — it had covered two opposite situations and was flagging correct behaviour as a defect — and `nothing_sent` never badges. Rows written **before 6.4.0** badge nothing, because the column did not exist: not measured is not a finding.
 
-**8. Finally, the thinking pane.** `thinking_chars` follows one convention across the whole surface: **`0` is a measurement** — a completed stream that returned no reasoning — and **NULL renders as "Not measured"**. Before 6.8.0 the two were folded together, so "the model thought about nothing" and "nobody was counting" looked identical.
+**9. Finally, the thinking pane.** `thinking_chars` follows one convention across the whole surface: **`0` is a measurement** — a completed stream that returned no reasoning — and **NULL renders as "Not measured"**. Before 6.8.0 the two were folded together, so "the model thought about nothing" and "nobody was counting" looked identical.
 
 > **One gotcha worth knowing.** `output_widened_from` is deliberately a plain per-attempt parameter and *not* a reasoning adaptation kind, so widening never badges and never appears in the adaptation severity table. Relatedly, the request-level adaptation line can still name one model while a fallback actually answered — read the per-attempt panes when the chain has more than one entry.
 
@@ -1026,7 +1047,9 @@ A key that is out of rotation and a model that is failing look the same from you
 
 **2. Confirm it against a real request.** Analytics → **View** on a failing request → the chain panel names the key per attempt (see [the previous tutorial](#tutorial-read-the-request-detail)). If every entry reads **`no key available`**, the whole pool was benched and nothing was even attempted upstream — which is a credential problem. If the attempts name keys and still fail, it is a *model* problem and no key is at fault.
 
-**3. Match the failure to what it costs.** Exactly two signals charge a key. Everything else is free:
+**3. Read the ladder under the attempt.** Since 6.12.0 the chain panel names every upstream try, and one line per credential saying whether the pool charged it. If the ladder shows `12×429` before a `502`, the 502 is not the story — the pool was throttled and the last key simply happened to fail differently.
+
+**4. Match the failure to what it costs.** Exactly two signals charge a key. Everything else is free:
 
 | What the provider returned | The key | The request |
 | --- | --- | --- |
@@ -1037,7 +1060,7 @@ A key that is out of rotation and a model that is failing look the same from you
 
 The rule behind the table is "judge a key only on signals about the key". The same keys serve every model in your chain, so a model that is gone, overloaded, or slow says nothing about the credential holding the request.
 
-**4. Act on what you found.**
+**5. Act on what you found.**
 
 - **`LOCKED_OUT`, one key, others healthy** — that key is wrong, expired or revoked. Remove it from the pool; the ladder is not going to heal a dead key, and by the third rejection it is out for a day.
 - **`LOCKED_OUT`, every key** — it is not the keys. Check that the provider is the one the key belongs to, and that your account still has API access.

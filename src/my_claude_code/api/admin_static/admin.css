@@ -6433,3 +6433,78 @@ details.turn-pane > summary:focus-visible {
   max-height: 340px;
   overflow: auto;
 }
+
+/* --------------------------------------------------------- retry ladder --
+   Every upstream try behind one route attempt, under the attempt's own reason
+   line. Sits inside .req-chain-item and borrows its spacing scale. */
+.req-chain-summary {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.req-chain-rootcause {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.req-chain-ladder {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.req-chain-ladder > summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.req-chain-tries {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.req-chain-try {
+  font-family: var(--font-mono);
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.req-chain-try.is-429,
+.req-chain-try.is-502,
+.req-chain-try.is-503,
+.req-chain-try.is-500 {
+  color: var(--error);
+}
+
+.req-chain-try.is-backoff,
+.req-chain-try.is-limiter_wait,
+.req-chain-try.is-bench {
+  opacity: 0.75;
+}
+
+.req-chain-try-body > pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--input);
+  border-radius: 4px;
+}
+
+.req-chain-decisions {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}

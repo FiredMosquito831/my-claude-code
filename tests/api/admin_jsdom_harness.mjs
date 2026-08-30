@@ -989,6 +989,22 @@ function driveDetail(row) {
     chainKeys: Array.from(chain.querySelectorAll(".req-chain-key")).map(
       (el) => el.textContent,
     ),
+    chainHidden: chain.hidden,
+    ladderSummaries: Array.from(chain.querySelectorAll(".req-chain-summary")).map(
+      (el) => el.textContent,
+    ),
+    ladderRootCauses: Array.from(chain.querySelectorAll(".req-chain-rootcause")).map(
+      (el) => el.textContent,
+    ),
+    ladderTries: Array.from(chain.querySelectorAll(".req-chain-try")).map((el) =>
+      (el.textContent || "").replace(/\s+/g, " ").trim(),
+    ),
+    ladderDecisions: Array.from(chain.querySelectorAll(".req-chain-decisions li")).map(
+      (el) => el.textContent,
+    ),
+    ladderBodies: Array.from(chain.querySelectorAll(".req-chain-try-body pre")).map(
+      (el) => el.textContent,
+    ),
   };
 }
 
@@ -1135,6 +1151,102 @@ const requestDetail = {
           _limit: 8000,
           _original_chars: 41000,
           _preview: '{"messages": [{"role": "us',
+        },
+      }),
+    ],
+  }),
+  /* The defect this whole panel exists for: one attempt, fifteen upstream
+     tries, and a database row that recorded one status on one key. */
+  ladder: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        outcome: "failed",
+        error_kind: "upstream",
+        error_message: "Upstream provider NIM returned HTTP 502.",
+        duration_ms: 107534.16,
+        key_index: 2,
+        key_label: "cc...dd",
+        params: {
+          ladder: {
+            tries: [
+              {
+                source: "upstream",
+                key_index: 0,
+                key_label: "aa...bb",
+                status: 429,
+                upstream_ms: 410,
+                waited_ms: 2700,
+                body: '{"detail":"Too many requests"}',
+              },
+              {
+                source: "upstream",
+                key_index: 2,
+                key_label: "cc...dd",
+                status: 502,
+                upstream_ms: 830,
+                retry_after: 12,
+              },
+              { source: "limiter_wait", waited_ms: 51900 },
+            ],
+            summary: {
+              tries: 2,
+              statuses_by_code: { 429: 1, 502: 1 },
+              keys: 2,
+              time_upstream_ms: 1240,
+              time_sleeping_ms: 2700,
+              time_limiter_ms: 51900,
+              tries_dropped: 0,
+            },
+            credentials: [
+              {
+                key_index: 0,
+                key_label: "aa...bb",
+                class: "rate_limit",
+                benched_for_s: 60,
+                status: 429,
+                retry_after: null,
+                reason: "429, no Retry-After -- operator cooldown 60s",
+              },
+              {
+                key_index: 2,
+                key_label: "cc...dd",
+                class: null,
+                benched_for_s: null,
+                status: 502,
+                retry_after: null,
+                reason: "502 is not credential-shaped",
+              },
+            ],
+            root_cause:
+              "2 tries across 2 keys: 1×429, 1×502 — 2s of the 107s were MCC backoff sleeps",
+          },
+        },
+      }),
+    ],
+  }),
+  /* One try, nothing hidden: no headline, no root cause, no try list -- and
+     with a single attempt the whole panel stays hidden, as before. */
+  singleTry: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        params: {
+          ladder: {
+            tries: [{ source: "upstream", key_index: 0, status: 200 }],
+            summary: {
+              tries: 1,
+              statuses_by_code: {},
+              keys: 1,
+              time_sleeping_ms: 0,
+              time_limiter_ms: 0,
+              tries_dropped: 0,
+            },
+            credentials: [],
+            root_cause: "",
+          },
         },
       }),
     ],

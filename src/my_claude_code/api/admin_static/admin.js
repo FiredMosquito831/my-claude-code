@@ -7569,6 +7569,7 @@ async function loadRequestsView() {
   renderRequestProviderBreakdown(stats.by_provider || []);
   renderRequestKeyBreakdown(stats.by_key || []);
   renderRequestTopErrors(stats.top_errors || []);
+  renderRequestUpstreamStatuses(stats.upstream_statuses || []);
   renderRequestFallbackRoutes(stats.fallback_routes || []);
   renderRequestDivertedRoutes(stats.diverted_routes || []);
   renderReqBreakdownTruncatedNote(stats);
@@ -8102,6 +8103,31 @@ function renderRequestTopErrors(rows) {
   );
 }
 
+/**
+ * Count by the status the upstream actually returned.
+ *
+ * "Top errors" groups by the one message that survived a whole retry ladder,
+ * so a request that met twelve 429s before a 502 is counted once, as the 502.
+ * This block counts every try. It is empty on a database whose rows all
+ * predate the ladder -- nothing was measured, so nothing is claimed.
+ */
+function renderRequestUpstreamStatuses(rows) {
+  const container = byId("reqUpstreamStatuses");
+  if (!container) return;
+  container.innerHTML = "";
+  container.appendChild(
+    analyticsTable(
+      ["Status", "Count", "Requests"],
+      rows.map((row) => [
+        String(row.status),
+        formatAnalyticsNumber(row.count || 0),
+        formatAnalyticsNumber(row.requests || 0),
+      ]),
+      "No upstream retries recorded in this range.",
+    ),
+  );
+}
+
 /** The model that answered, flagged when it was not the one the route picked.
  *
  * A fallback that quietly works still changes what answered the request, so a
@@ -8627,6 +8653,150 @@ function formatVisionModel(row) {
  * looked exactly like a one-model route, which is the difference between "the
  * fallback did not help" and "the fallback was never asked".
  */
+/** The stored ladder for one attempt, or null when nothing was measured. */
+function ladderOf(attempt) {
+  const ladder = attempt && attempt.params && attempt.params.ladder;
+  return ladder && typeof ladder === "object" ? ladder : null;
+}
+
+function hasLadder(attempt) {
+  const ladder = ladderOf(attempt);
+  return !!(ladder && ladder.summary && Number(ladder.summary.tries || 0) > 1);
+}
+
+/** Render a number of milliseconds as seconds, or nothing when unmeasured. */
+function ladderSeconds(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  return `${Math.round(value / 1000)}s`;
+}
+
+/** "15 tries · 12x429, 3x502 · 3 keys · 96s sleeping". */
+function ladderHeadline(attempt) {
+  const ladder = ladderOf(attempt);
+  const summary = ladder && ladder.summary;
+  if (!summary || Number(summary.tries || 0) <= 1) return "";
+  const parts = [`${summary.tries} tries`];
+  const census = summary.statuses_by_code || {};
+  const codes = Object.keys(census);
+  if (codes.length) {
+    parts.push(codes.map((code) => `${census[code]}×${code}`).join(", "));
+  }
+  if (Number(summary.keys || 0) > 0) {
+    parts.push(`${summary.keys} keys`);
+  }
+  const sleeping = ladderSeconds(summary.time_sleeping_ms);
+  if (sleeping) parts.push(`${sleeping} sleeping`);
+  const limiter = ladderSeconds(summary.time_limiter_ms);
+  if (limiter) parts.push(`${limiter} on the provider block`);
+  if (Number(summary.tries_dropped || 0) > 0) {
+    parts.push(`${summary.tries_dropped} tries not stored`);
+  }
+  return parts.join(" · ");
+}
+
+/** One line per try: what it met, on which key, and what it cost. */
+function ladderTryText(entry, position) {
+  const parts = [`#${position}`];
+  if (entry.key_index === -1) {
+    parts.push("no key available");
+  } else if (entry.key_index != null) {
+    parts.push(entry.key_label ? `key ${entry.key_index} ${entry.key_label}` : `key ${entry.key_index}`);
+  }
+  const what = entry.status != null ? String(entry.status) : entry.kind || entry.error_kind;
+  // A try with no status and no exception name is a wait, not a knock.
+  parts.push(what || entry.source);
+  if (entry.upstream_ms != null) parts.push(`${Math.round(entry.upstream_ms)}ms`);
+  // Missing terms are omitted rather than rendered as 0: the project's
+  // not-measured convention, and a zero wait is a claim we cannot make.
+  if (entry.waited_ms != null) parts.push(`waited ${Math.round(entry.waited_ms)}ms`);
+  if (entry.retry_after != null) parts.push(`retry-after ${entry.retry_after}s`);
+  return parts.join(" · ");
+}
+
+/** "key 0 ab...cd - benched 60s (rate_limit): 429 with no Retry-After". */
+function ladderDecisionText(decision) {
+  const who =
+    decision.key_index === -1
+      ? "no key available"
+      : decision.key_label
+        ? `key ${decision.key_index} ${decision.key_label}`
+        : `key ${decision.key_index}`;
+  const verdict =
+    decision["class"] == null
+      ? "health unchanged"
+      : decision.benched_for_s != null
+        ? `benched ${Math.round(decision.benched_for_s)}s (${decision["class"]})`
+        : `charged (${decision["class"]})`;
+  const reason = decision.reason ? `: ${decision.reason}` : "";
+  return `${who} — ${verdict}${reason}`;
+}
+
+/**
+ * Draw one attempt's retry ladder under its reason line.
+ *
+ * The root-cause sentence is *stored*, not composed here, so the modal and all
+ * four export formats say the same thing and a test can pin the string.
+ */
+function appendLadder(item, ladder) {
+  if (!ladder) return;
+  const summary = ladder.summary || {};
+  if (Number(summary.tries || 0) <= 1) return;
+
+  if (ladder.root_cause) {
+    const why = document.createElement("p");
+    why.className = "req-chain-rootcause";
+    why.textContent = ladder.root_cause;
+    item.appendChild(why);
+  }
+
+  const tries = Array.isArray(ladder.tries) ? ladder.tries : [];
+  if (tries.length) {
+    const details = document.createElement("details");
+    details.className = "req-chain-ladder";
+    const label = document.createElement("summary");
+    label.textContent = `Show ${tries.length} upstream tries`;
+    details.appendChild(label);
+    const rows = document.createElement("ol");
+    rows.className = "req-chain-tries";
+    let position = 0;
+    tries.forEach((entry) => {
+      position += 1;
+      const row = document.createElement("li");
+      const state = entry.status != null ? entry.status : entry.source;
+      row.className = `req-chain-try is-${state}`;
+      row.appendChild(document.createTextNode(ladderTryText(entry, position)));
+      if (entry.body) {
+        const bodyBox = document.createElement("details");
+        bodyBox.className = "req-chain-try-body";
+        const bodyLabel = document.createElement("summary");
+        bodyLabel.textContent = entry.body_truncated ? "Body (truncated)" : "Body";
+        bodyBox.appendChild(bodyLabel);
+        const pre = document.createElement("pre");
+        pre.textContent = entry.body;
+        bodyBox.appendChild(pre);
+        row.appendChild(bodyBox);
+      }
+      rows.appendChild(row);
+    });
+    details.appendChild(rows);
+    item.appendChild(details);
+  }
+
+  const decisions = Array.isArray(ladder.credentials) ? ladder.credentials : [];
+  if (decisions.length) {
+    const list = document.createElement("ul");
+    list.className = "req-chain-decisions";
+    decisions.forEach((decision) => {
+      const row = document.createElement("li");
+      if (decision.key_index === -1) row.className = "req-chain-nokey";
+      row.textContent = ladderDecisionText(decision);
+      list.appendChild(row);
+    });
+    item.appendChild(list);
+  }
+}
+
 function renderRequestChain(row) {
   const container = byId("reqDetailChain");
   if (!container) return;
@@ -8634,8 +8804,10 @@ function renderRequestChain(row) {
   const attempts = row.route_attempts || [];
   // One attempt that succeeded is just "the model answered" -- the route
   // summary above already says that, and repeating it as a timeline implies a
-  // chain did something when it did not.
-  if (attempts.length < 2) {
+  // chain did something when it did not. One attempt that knocked fifteen
+  // times is a different matter: the ladder is the only place that shows it,
+  // so a single attempt with a ladder still gets the panel.
+  if (attempts.length < 2 && !attempts.some(hasLadder)) {
     container.hidden = true;
     return;
   }
@@ -8673,6 +8845,17 @@ function renderRequestChain(row) {
       head.appendChild(took);
     }
 
+    // What the one recorded status used to hide: how many times this attempt
+    // actually knocked, what it met, across how many keys, and how much of its
+    // duration was MCC waiting rather than the model thinking.
+    const summaryText = ladderHeadline(attempt);
+    if (summaryText) {
+      const summary = document.createElement("span");
+      summary.className = "req-chain-summary";
+      summary.textContent = summaryText;
+      head.appendChild(summary);
+    }
+
     // Which credential served this attempt. The request row names only the
     // last one, so a route that rotated keys used to be attributed whole to
     // whichever key happened to finish it.
@@ -8705,6 +8888,8 @@ function renderRequestChain(row) {
       why.appendChild(document.createTextNode(reason));
       item.appendChild(why);
     }
+
+    appendLadder(item, ladderOf(attempt));
     list.appendChild(item);
   });
   container.appendChild(list);
@@ -9266,6 +9451,7 @@ const EXPORT_FIELDS = {
     { id: "input_uncached", label: "Input uncached" },
     { id: "tokens_out", label: "Tokens out" },
     { id: "turns_with_tools", label: "Turns with tools" },
+    { id: "ladder", label: "Upstream retry ladder" },
   ],
   websearch: [
     { id: "provider", label: "Provider" },

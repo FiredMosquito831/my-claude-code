@@ -58,3 +58,16 @@ def record_credential(index: int, label: str | None) -> None:
     if slot is not None:
         slot.index = index
         slot.label = label
+
+
+def current_credential() -> tuple[int | None, str | None]:
+    """The credential in flight right now, as ``(index, label)``.
+
+    Read-only: the retry ladder records which key each individual upstream try
+    used, and the rotating loop is the only writer. ``(None, None)`` outside a
+    tracked request, which reads downstream as "not measured".
+    """
+    slot = _CURRENT.get()
+    if slot is None:
+        return None, None
+    return slot.index, slot.label

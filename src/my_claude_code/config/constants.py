@@ -249,6 +249,11 @@ REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT = 50_000
 # list is not. Mirrors ``core.wire_capture.DEFAULT_WIRE_BODY_MAX_CHARS``,
 # which cannot be imported here because ``core`` may not import ``config``.
 REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT = 8_000
+# How much of each upstream error body the retry ladder keeps, per try. Small
+# on purpose: a ladder is bounded evidence, not a log. Mirrors
+# ``core.upstream_ladder.DEFAULT_LADDER_BODY_MAX_CHARS``, which cannot be
+# imported here because ``core`` may not import ``config``.
+REQUEST_LOG_LADDER_BODY_MAX_CHARS_DEFAULT = 800
 REQUEST_LOG_COMPRESSION_LEVEL_DEFAULT = 9
 REQUEST_LOG_QUEUE_MAX_SIZE_DEFAULT = 10_000
 # Longest edge of the thumbnail kept for an image a request carried. A pasted

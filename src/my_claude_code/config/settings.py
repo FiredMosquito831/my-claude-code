@@ -50,6 +50,7 @@ from .constants import (
     REASONING_ANSWER_FLOOR_MAX,
     REQUEST_LOG_COMPRESSION_LEVEL_DEFAULT,
     REQUEST_LOG_IMAGE_MAX_PIXELS_DEFAULT,
+    REQUEST_LOG_LADDER_BODY_MAX_CHARS_DEFAULT,
     REQUEST_LOG_QUEUE_MAX_SIZE_DEFAULT,
     REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT,
     REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT,
@@ -1042,6 +1043,13 @@ class Settings(BaseSettings):
     request_log_wire_body_max_chars: int = Field(
         default=REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT,
         validation_alias="REQUEST_LOG_WIRE_BODY_MAX_CHARS",
+    )
+    # Bounds each upstream error body stored per try in the retry ladder.
+    # 60 tries at the default is 48 KB worst case, against the 8,000-char wire
+    # body already stored once per attempt.
+    request_log_ladder_body_max_chars: int = Field(
+        default=REQUEST_LOG_LADDER_BODY_MAX_CHARS_DEFAULT,
+        validation_alias="REQUEST_LOG_LADDER_BODY_MAX_CHARS",
     )
 
     # ==================== NIM Settings ====================

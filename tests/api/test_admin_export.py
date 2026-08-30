@@ -13,7 +13,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from my_claude_code.core.request_log import RequestRecord, get_request_log_store
+from my_claude_code.core.request_log import (
+    RequestRecord,
+    RouteAttempt,
+    RouteAttemptOutcome,
+    get_request_log_store,
+)
 from tests.api.support import create_test_app
 
 
@@ -576,3 +581,125 @@ class TestWebSearchScope:
         assert {row["provider"] for row in rows} == {"exa", "brave"}
         app.dependency_overrides.clear()
         store.close()
+
+
+class TestLadderColumns:
+    """``request_attempts`` is joined by no export SQL; these are the bridge."""
+
+    @pytest.fixture
+    def ladder_store(self, tmp_path):
+        store = get_request_log_store(tmp_path / "requests.db")
+        assert store is not None
+        store.enqueue(
+            RequestRecord(
+                id="req_ladder",
+                endpoint="/v1/messages",
+                protocol="anthropic",
+                provider="nvidia_nim",
+                resolved_model="kimi-k3",
+                ts_epoch=time.time(),
+                status="error",
+                error_message="Upstream provider NIM returned HTTP 502.",
+                attempts=(
+                    RouteAttempt(
+                        attempt=0,
+                        provider="nvidia_nim",
+                        model_ref="nvidia_nim/kimi-k3",
+                        outcome=RouteAttemptOutcome.FAILED,
+                        error_kind="upstream",
+                        error_message="HTTP 502",
+                        duration_ms=107_534.16,
+                        ladder_tries=3,
+                        params={
+                            "ladder": {
+                                "tries": [
+                                    {"source": "upstream", "status": 429},
+                                    {"source": "upstream", "status": 429},
+                                    {"source": "upstream", "status": 502},
+                                ],
+                                "summary": {
+                                    "tries": 3,
+                                    "statuses_by_code": {"429": 2, "502": 1},
+                                    "keys": 1,
+                                    "time_sleeping_ms": 6000.0,
+                                    "time_limiter_ms": 0.0,
+                                    "tries_dropped": 0,
+                                },
+                                "credentials": [],
+                                "root_cause": "1 keys \N{MULTIPLICATION SIGN} 3 tries: 2\N{MULTIPLICATION SIGN}429, 1\N{MULTIPLICATION SIGN}502",
+                            }
+                        },
+                    ),
+                ),
+            )
+        )
+        store.close()
+        yield store
+
+    def test_ladder_columns_are_declared_derived(self) -> None:
+        """Guards ``tests/api/test_reasoning_recording.py``'s schema assertion.
+
+        They come from a join, not from a ``requests`` column, so naming them
+        to the SELECT would break every detail export.
+        """
+        from my_claude_code.core import export as export_engine
+
+        assert export_engine.request_detail_columns(["ladder"]) == (
+            export_engine.request_detail_columns([])
+        )
+        assert export_engine.request_detail_derived_columns(["ladder"]) == [
+            "ladder_tries",
+            "ladder_statuses",
+            "ladder_root_cause",
+        ]
+
+    def test_ladder_columns_are_selectable_and_reach_all_four_formats(
+        self, client, ladder_store
+    ) -> None:
+        expected = (
+            "3",
+            "429\N{MULTIPLICATION SIGN}2, 502\N{MULTIPLICATION SIGN}1",
+            "1 keys \N{MULTIPLICATION SIGN} 3 tries: 2\N{MULTIPLICATION SIGN}429, 1\N{MULTIPLICATION SIGN}502",
+        )
+
+        rows = _export(client, format="json", scope="requests", fields="ladder").json()
+        assert rows[0]["ladder_tries"] == 3
+        assert rows[0]["ladder_statuses"] == expected[1]
+        assert rows[0]["ladder_root_cause"] == expected[2]
+
+        csv_text = _export(
+            client, format="csv", scope="requests", fields="ladder"
+        ).content.decode("utf-8-sig")
+        assert "Upstream tries" in csv_text
+        assert expected[1] in csv_text
+        assert expected[2] in csv_text
+
+        txt = _export(
+            client, format="txt", scope="requests", fields="ladder"
+        ).content.decode("utf-8")
+        assert expected[1] in txt
+        assert expected[2] in txt
+
+        pytest.importorskip("openpyxl")
+        import io as _io
+
+        import openpyxl
+
+        workbook = openpyxl.load_workbook(
+            _io.BytesIO(
+                _export(
+                    client, format="xlsx", scope="requests", fields="ladder"
+                ).content
+            )
+        )
+        sheet = workbook.active
+        header = [sheet.cell(1, col).value for col in range(1, sheet.max_column + 1)]
+        assert "Upstream statuses" in header
+        cell = sheet.cell(2, header.index("Upstream statuses") + 1).value
+        assert cell == expected[1]
+
+    def test_ladder_columns_are_absent_when_the_field_is_not_selected(
+        self, client, ladder_store
+    ) -> None:
+        rows = _export(client, format="json", scope="requests", fields="models").json()
+        assert all("ladder_tries" not in row for row in rows)

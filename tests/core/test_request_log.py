@@ -2541,3 +2541,215 @@ def test_migrates_a_database_created_before_the_wire_columns(tmp_path) -> None:
         assert new_attempt["reasoning_emitted"] is True
     finally:
         again.close()
+
+
+# --------------------------------------------------------- the retry ladder --
+
+
+_LADDER_PARAMS = {
+    "ladder": {
+        "tries": [
+            {"source": "upstream", "key_index": 0, "status": 429, "waited_ms": 2700.0},
+            {"source": "upstream", "key_index": 1, "status": 502, "upstream_ms": 830.0},
+        ],
+        "summary": {
+            "tries": 2,
+            "statuses_by_code": {"429": 1, "502": 1},
+            "keys": 2,
+            "time_upstream_ms": 830.0,
+            "time_sleeping_ms": 2700.0,
+            "time_limiter_ms": 0.0,
+            "tries_dropped": 0,
+        },
+        "credentials": [
+            {
+                "key_index": 0,
+                "key_label": "ab...cd",
+                "class": "rate_limit",
+                "benched_for_s": 60.0,
+                "status": 429,
+                "retry_after": None,
+                "reason": "429, no Retry-After -- operator cooldown 60s",
+            }
+        ],
+        "root_cause": "2 tries across 2 keys: 1\N{MULTIPLICATION SIGN}429, 1\N{MULTIPLICATION SIGN}502",
+    }
+}
+
+
+def _ladder_attempt(**overrides) -> RouteAttempt:
+    defaults: dict[str, Any] = {
+        "attempt": 0,
+        "provider": "nvidia_nim",
+        "model_ref": "nvidia_nim/moonshotai/kimi-k3",
+        "outcome": RouteAttemptOutcome.FAILED,
+        "error_kind": "upstream",
+        "error_message": "Upstream provider NIM returned HTTP 502.",
+        "duration_ms": 107_534.16,
+        "params": dict(_LADDER_PARAMS),
+        "key_index": 1,
+        "key_label": "ef...gh",
+        "ladder_tries": 2,
+    }
+    defaults.update(overrides)
+    return RouteAttempt(**defaults)
+
+
+def test_attempt_rows_carry_every_insert_column(store) -> None:
+    """The 42-vs-43 lesson, as a test rather than as an outage.
+
+    A column added to the INSERT tuple without its name in
+    ``_ATTEMPT_INSERT_COLUMNS`` -- or the reverse -- once broke every
+    request-log write. The width is asserted at write time; this asserts that
+    every named column also survives the round trip back out.
+    """
+    from my_claude_code.core.request_log import _ATTEMPT_INSERT_COLUMNS
+
+    store.enqueue(_record("req_ladder", attempts=(_ladder_attempt(),)))
+    store.close()
+
+    stored = store.get_request("req_ladder")["route_attempts"][0]
+    # ``request_id`` identifies the row rather than appearing in it.
+    for column in _ATTEMPT_INSERT_COLUMNS:
+        if column == "request_id":
+            continue
+        assert column in stored, f"{column} never comes back out of _fetch_attempts"
+    assert stored["ladder_tries"] == 2
+
+
+def test_ladder_survives_a_round_trip_through_params(store) -> None:
+    store.enqueue(_record("req_ladder", attempts=(_ladder_attempt(),)))
+    store.close()
+
+    ladder = store.get_request("req_ladder")["route_attempts"][0]["params"]["ladder"]
+    assert ladder["summary"]["statuses_by_code"] == {"429": 1, "502": 1}
+    assert (
+        ladder["root_cause"]
+        == "2 tries across 2 keys: 1\N{MULTIPLICATION SIGN}429, 1\N{MULTIPLICATION SIGN}502"
+    )
+    assert ladder["credentials"][0]["benched_for_s"] == 60.0
+
+
+def test_ladder_tries_column_is_added_to_a_pre_ladder_database(tmp_path) -> None:
+    """``CREATE TABLE IF NOT EXISTS`` is a no-op, so the ALTER must be guarded.
+
+    Rows written before the column existed read ``None``: not measured, which
+    is emphatically not "this attempt went through on its first try".
+    """
+    path = tmp_path / "requests.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE request_attempts ("
+        " request_id TEXT NOT NULL, attempt INTEGER NOT NULL, provider TEXT,"
+        " model_ref TEXT, outcome TEXT NOT NULL, error_kind TEXT,"
+        " error_message TEXT, duration_ms REAL,"
+        " PRIMARY KEY (request_id, attempt))"
+    )
+    conn.execute(
+        "INSERT INTO request_attempts (request_id, attempt, outcome)"
+        " VALUES ('req_old', 0, 'failed')"
+    )
+    conn.commit()
+    conn.close()
+
+    store = RequestLogStore(path, max_rows=100)
+    try:
+        columns = set()
+        with sqlite3.connect(path) as probe:
+            columns = {
+                str(row[1])
+                for row in probe.execute("PRAGMA table_info(request_attempts)")
+            }
+        assert "ladder_tries" in columns
+        store.enqueue(_record("req_new", attempts=(_ladder_attempt(),)))
+        store.close()
+        stored = store.get_request("req_new")
+        assert stored is not None
+        assert stored["route_attempts"][0]["ladder_tries"] == 2
+        with sqlite3.connect(path) as probe:
+            old = probe.execute(
+                "SELECT ladder_tries FROM request_attempts WHERE request_id='req_old'"
+            ).fetchone()
+        assert old[0] is None
+    finally:
+        store.close()
+
+
+def test_stats_counts_every_upstream_status_not_just_the_last_one(store) -> None:
+    """The whole point: a request that met a 429 and a 502 reports both."""
+    store.enqueue(_record("req_ladder", status="error", attempts=(_ladder_attempt(),)))
+    store.close()
+
+    rows = {row["status"]: row for row in store.stats()["upstream_statuses"]}
+    assert rows[429]["count"] == 1
+    assert rows[502]["count"] == 1
+    assert rows[429]["requests"] == 1
+
+
+def test_stats_reports_no_upstream_statuses_for_pre_ladder_rows(store) -> None:
+    """An empty block is "not measured", never "there were no retries"."""
+    store.enqueue(_record("req_plain"))
+    store.close()
+
+    assert store.stats()["upstream_statuses"] == []
+
+
+def test_export_rows_roll_the_ladder_up_per_request(store) -> None:
+    store.enqueue(_record("req_ladder", status="error", attempts=(_ladder_attempt(),)))
+    store.close()
+
+    rows = list(
+        store.iter_export_rows(
+            columns=["id", "ts_epoch", "stream"], need_bodies=False, need_ladder=True
+        )
+    )
+    assert rows[0]["ladder_tries"] == 2
+    assert (
+        rows[0]["ladder_statuses"]
+        == "429\N{MULTIPLICATION SIGN}1, 502\N{MULTIPLICATION SIGN}1"
+    )
+    assert (
+        rows[0]["ladder_root_cause"]
+        == "2 tries across 2 keys: 1\N{MULTIPLICATION SIGN}429, 1\N{MULTIPLICATION SIGN}502"
+    )
+
+
+def test_export_rows_leave_a_pre_ladder_request_blank_not_zero(store) -> None:
+    store.enqueue(_record("req_plain"))
+    store.close()
+
+    rows = list(
+        store.iter_export_rows(
+            columns=["id", "ts_epoch", "stream"], need_bodies=False, need_ladder=True
+        )
+    )
+    assert rows[0]["ladder_tries"] is None
+    assert rows[0]["ladder_statuses"] == ""
+    assert rows[0]["ladder_root_cause"] == ""
+
+
+def test_export_rollup_keeps_the_root_cause_of_a_request_that_recovered(store) -> None:
+    """A chain that retried its way to a success still has a story to tell."""
+    store.enqueue(
+        _record(
+            "req_recovered",
+            attempts=(
+                _ladder_attempt(
+                    outcome=RouteAttemptOutcome.SUCCEEDED,
+                    error_kind=None,
+                    error_message=None,
+                ),
+            ),
+        )
+    )
+    store.close()
+
+    rows = list(
+        store.iter_export_rows(
+            columns=["id", "ts_epoch", "stream"], need_bodies=False, need_ladder=True
+        )
+    )
+    assert (
+        rows[0]["ladder_root_cause"]
+        == "2 tries across 2 keys: 1\N{MULTIPLICATION SIGN}429, 1\N{MULTIPLICATION SIGN}502"
+    )

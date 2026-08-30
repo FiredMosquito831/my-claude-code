@@ -1,0 +1,172 @@
+{
+  "_source": "Replayed from ~/.fcc/logs/server.log for request req_f3b018692ac14fb5b7c4562aa318472c (2026-08-30 09:12:18Z), read read-only. Request id and key labels are anonymised; the tries, the statuses, the twelve measured backoff sleeps and the three health decisions are exactly what the log recorded. The database held ONE row for all of it: outcome=failed, error_kind=upstream, key_index=0.",
+  "attempt": {
+    "error_kind": "upstream",
+    "duration_ms": 107534.16,
+    "error_message": "Upstream provider NIM returned HTTP 502."
+  },
+  "tries": [
+    {
+      "source": "upstream",
+      "key_index": 0,
+      "key_label": "user...ubCk",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0,
+      "waited_ms": 2700.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 0,
+      "key_label": "user...ubCk",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0,
+      "waited_ms": 4000.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 0,
+      "key_label": "user...ubCk",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0,
+      "waited_ms": 9000.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 0,
+      "key_label": "user...ubCk",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0,
+      "waited_ms": 16100.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 0,
+      "key_label": "user...ubCk",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 1,
+      "key_label": "user...9fQt",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0,
+      "waited_ms": 2200.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 1,
+      "key_label": "user...9fQt",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0,
+      "waited_ms": 4900.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 1,
+      "key_label": "user...9fQt",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0,
+      "waited_ms": 8500.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 1,
+      "key_label": "user...9fQt",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0,
+      "waited_ms": 16700.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 1,
+      "key_label": "user...9fQt",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 2,
+      "key_label": "user...2vLm",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0,
+      "waited_ms": 2200.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 2,
+      "key_label": "user...2vLm",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 608.0,
+      "waited_ms": 4900.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 2,
+      "key_label": "user...2vLm",
+      "status": 502,
+      "error_kind": "upstream",
+      "upstream_ms": 608.0,
+      "waited_ms": 8400.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 2,
+      "key_label": "user...2vLm",
+      "status": 502,
+      "error_kind": "upstream",
+      "upstream_ms": 608.0,
+      "waited_ms": 16500.0
+    },
+    {
+      "source": "upstream",
+      "key_index": 2,
+      "key_label": "user...2vLm",
+      "status": 502,
+      "error_kind": "upstream",
+      "upstream_ms": 608.0
+    }
+  ],
+  "decisions": [
+    {
+      "key_index": 0,
+      "key_label": "user...ubCk",
+      "cls": "rate_limit",
+      "benched_for_s": 60.0,
+      "status": 429,
+      "retry_after": null,
+      "reason": "429, no Retry-After -- operator cooldown 60s"
+    },
+    {
+      "key_index": 1,
+      "key_label": "user...9fQt",
+      "cls": "rate_limit",
+      "benched_for_s": 60.0,
+      "status": 429,
+      "retry_after": null,
+      "reason": "429, no Retry-After -- operator cooldown 60s"
+    },
+    {
+      "key_index": 2,
+      "key_label": "user...2vLm",
+      "cls": null,
+      "benched_for_s": null,
+      "status": 502,
+      "retry_after": null,
+      "reason": "502 is not credential-shaped"
+    }
+  ],
+  "time_limiter_ms": 0.0
+}

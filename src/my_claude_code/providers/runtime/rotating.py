@@ -16,6 +16,7 @@ from my_claude_code.core.reasoning import (
     ReasoningDialect,
     ReasoningPolicy,
 )
+from my_claude_code.core.upstream_ladder import record_upstream_try
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.http import maybe_await_aclose
@@ -200,6 +201,17 @@ class RotatingProvider(BaseProvider):
                 # which renders as an ordinary keyless request. Say what
                 # actually happened instead.
                 record_credential(NO_CREDENTIAL_INDEX, NO_CREDENTIAL_LABEL)
+                # A ladder row too, so the modal's try list ends with the
+                # reason there was no try: the pool published a wait and this
+                # attempt never reached a key.
+                record_upstream_try(
+                    key_index=NO_CREDENTIAL_INDEX,
+                    key_label=NO_CREDENTIAL_LABEL,
+                    kind="pool_benched",
+                    error_kind="unavailable",
+                    retry_after=wait,
+                    source="bench",
+                )
                 raise ApplicationUnavailableError(
                     "All API keys for this provider are in cooldown. "
                     f"Retry in {max(1, int(wait))}s."

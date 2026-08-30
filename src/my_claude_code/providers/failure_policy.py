@@ -15,7 +15,11 @@ from my_claude_code.core.diagnostics import (
     format_execution_failure_message,
     safe_exception_message,
 )
-from my_claude_code.core.failures import ExecutionFailure, FailureKind
+from my_claude_code.core.failures import (
+    ExecutionFailure,
+    FailureKind,
+    find_execution_failure,
+)
 from my_claude_code.core.rate_limit import (
     DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
     MAX_RATE_LIMIT_COOLDOWN_SECONDS,
@@ -185,6 +189,28 @@ def retryable_upstream_status(exc: BaseException) -> int | None:
     """Return a status eligible for provider-opening backoff."""
     status = retryable_transient_status(exc)
     return status if status is not None and _is_retryable_status(status) else None
+
+
+def upstream_status(exc: BaseException) -> int | None:
+    """The status the upstream actually returned, retryable or not.
+
+    :func:`retryable_upstream_status` deliberately answers ``None`` for a 400
+    or a 401 -- it is a retry gate, not an observation. The retry ladder
+    records what happened rather than what to do about it, so it asks this.
+    """
+    failure = find_execution_failure(exc)
+    if failure is not None and failure.status_code:
+        return failure.status_code
+    status = _status_from_exception(exc)
+    if status is not None:
+        return status
+    response = getattr(exc, "response", None)
+    response_status = (
+        getattr(response, "status_code", None) if response is not None else None
+    )
+    if isinstance(response_status, int):
+        return response_status
+    return _status_from_body(getattr(exc, "body", None))
 
 
 def retryable_upstream_transport_error(exc: BaseException) -> bool:

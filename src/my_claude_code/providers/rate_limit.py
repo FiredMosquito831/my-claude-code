@@ -14,18 +14,75 @@ from my_claude_code.config.constants import (
     PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
 )
+from my_claude_code.core.credential_attribution import current_credential
+from my_claude_code.core.failures import failure_kind_name, find_execution_failure
 from my_claude_code.core.rate_limit import StrictSlidingWindowLimiter
 from my_claude_code.core.trace import trace_event
+from my_claude_code.core.upstream_ladder import (
+    record_limiter_wait,
+    record_upstream_try,
+    record_upstream_wait,
+)
 from my_claude_code.providers.failure_policy import (
     ProviderFailureOverride,
     retryable_upstream_status,
     retryable_upstream_transport_error,
+    upstream_status,
 )
 
 T = TypeVar("T")
 
 UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS = 5
 DEFAULT_UPSTREAM_MAX_RETRIES = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS - 1
+
+
+def _upstream_body(error: BaseException) -> Any:
+    """The upstream's own answer, as it is already materialised on the error.
+
+    Never a fresh read of a stream: by the time an exception reaches the retry
+    frame the SDK has parsed its body (``openai`` puts it on ``.body``) or
+    ``httpx`` has buffered the response text. Reading either is free.
+    """
+    body = getattr(error, "body", None)
+    if body is not None:
+        return body
+    response = getattr(error, "response", None)
+    return getattr(response, "text", None) if response is not None else None
+
+
+def _record_ladder_try(
+    *,
+    error: BaseException,
+    effective_error: BaseException,
+    status: int | None,
+    upstream_ms: float,
+) -> None:
+    """Write one failed upstream try into the request's ladder.
+
+    Providers classify their own failures, so the status, the canonical kind
+    and the published ``Retry-After`` are all extracted here and handed to
+    ``core`` as primitives. A no-op outside a logged request.
+    """
+    failure = find_execution_failure(effective_error)
+    index, label = current_credential()
+    # The observed status, not the retry gate's answer: a 400 or a 401 is a
+    # real thing the upstream said, and the ladder's job is to say what
+    # happened rather than what to do about it.
+    observed = upstream_status(effective_error)
+    if observed is None:
+        observed = status
+    record_upstream_try(
+        key_index=index,
+        key_label=label,
+        status=observed,
+        kind=type(error).__name__ if observed is None else None,
+        error_kind=failure_kind_name(effective_error),
+        # What the provider PUBLISHED. ``None`` means it published none; the
+        # operator's cooldown is never substituted in here.
+        retry_after=None if failure is None else failure.retry_after_seconds,
+        upstream_ms=upstream_ms,
+        body=_upstream_body(error),
+    )
 
 
 class ProviderRateLimiter:
@@ -106,6 +163,10 @@ class ProviderRateLimiter:
                 wait_time,
             )
             await asyncio.sleep(wait_time)
+            # Recorded after the fact, where the seconds were actually spent.
+            # This is the wait that made a 120s deadline expire without the
+            # model ever being handed an accepted request.
+            record_limiter_wait(wait_time)
             waited = True
         return waited
 
@@ -195,9 +256,11 @@ class ProviderRateLimiter:
         for attempt in range(total_attempts):
             await self.wait_if_blocked()
 
+            started = time.monotonic()
             try:
-                return await fn(*args, **kwargs)
+                result = await fn(*args, **kwargs)
             except Exception as e:
+                upstream_ms = (time.monotonic() - started) * 1000.0
                 effective_error = (
                     provider_failure_override(e)
                     if provider_failure_override is not None
@@ -208,6 +271,17 @@ class ProviderRateLimiter:
                 status = retryable_upstream_status(effective_error)
                 transport_error = status is None and retryable_upstream_transport_error(
                     effective_error
+                )
+                # The ladder is written here because this is the only frame
+                # that sees every try: the status, the credential in flight,
+                # and the body the upstream sent back. Recording precedes no
+                # decision -- the classification above and the control flow
+                # below are byte-identical to what they were.
+                _record_ladder_try(
+                    error=e,
+                    effective_error=effective_error,
+                    status=status,
+                    upstream_ms=upstream_ms,
                 )
                 if status is None and not transport_error:
                     raise
@@ -253,6 +327,19 @@ class ProviderRateLimiter:
                 if status is not None:
                     self.extend_reactive_block(delay)
                 await asyncio.sleep(delay)
+                # Back-fills the try just recorded, so one ladder row carries
+                # both the status and the sleep it bought.
+                record_upstream_wait(delay)
+            else:
+                # The try that worked is a fact too: without it a ladder that
+                # ends in a success reads as if the last 429 were the outcome.
+                index, label = current_credential()
+                record_upstream_try(
+                    key_index=index,
+                    key_label=label,
+                    upstream_ms=(time.monotonic() - started) * 1000.0,
+                )
+                return result
 
         assert last_exc is not None
         raise last_exc

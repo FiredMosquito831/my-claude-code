@@ -59,6 +59,7 @@ REQUEST_FIELD_IDS: tuple[str, ...] = (
     "input_uncached",
     "tokens_out",
     "turns_with_tools",
+    "ladder",
 )
 REQUEST_FIELD_LABELS: dict[str, str] = {
     "input": "Input",
@@ -74,6 +75,7 @@ REQUEST_FIELD_LABELS: dict[str, str] = {
     "input_uncached": "Input uncached",
     "tokens_out": "Tokens out",
     "turns_with_tools": "Turns with tools",
+    "ladder": "Upstream retry ladder",
 }
 
 # Selectable fields for the web-search scope.
@@ -250,11 +252,20 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
         "requested_reasoning",
         "reasoning_adaptation",
     ),
+    # Every column here is derived from ``request_attempts``, which no export
+    # path joins; they are filled per row by the export route. The field id
+    # exists so the three names are reachable at all -- five names already sit
+    # in the display order unreachable because they belong to no field group.
+    "ladder": (),
 }
 
 # Derived detail columns computed per row (not raw SQL columns).
 _REQUEST_DETAIL_DERIVED: dict[str, tuple[str, ...]] = {
     "cache_hit": ("cache_hit_rate",),
+    # Derived, not SQL: they come from a per-request rollup of
+    # ``request_attempts``, so ``request_detail_columns()`` must not name them
+    # to the ``requests`` SELECT.
+    "ladder": ("ladder_tries", "ladder_statuses", "ladder_root_cause"),
 }
 
 # Reverse map: column -> gating field id.
@@ -305,6 +316,9 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "input_sha256",
     "output_sha256",
     "cache_hit_rate",
+    "ladder_tries",
+    "ladder_statuses",
+    "ladder_root_cause",
 )
 
 _REQUEST_COLUMN_LABELS: dict[str, str] = {
@@ -349,6 +363,9 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "input_sha256": "Input SHA-256",
     "output_sha256": "Output SHA-256",
     "cache_hit_rate": "Cache hit rate",
+    "ladder_tries": "Upstream tries",
+    "ladder_statuses": "Upstream statuses",
+    "ladder_root_cause": "Root cause",
 }
 
 

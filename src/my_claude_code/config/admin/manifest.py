@@ -1225,6 +1225,21 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "REQUEST_LOG_LADDER_BODY_MAX_CHARS",
+        "Upstream error detail per try",
+        "request_log",
+        "number",
+        settings_attr="request_log_ladder_body_max_chars",
+        default="800",
+        restart_required=True,
+        description=(
+            "How much of each upstream error body the retry ladder keeps, for "
+            "every try behind an attempt. The ladder records the status, the "
+            "credential and the wait for each try regardless; this only bounds "
+            "the body stored beside them."
+        ),
+    ),
+    ConfigFieldSpec(
         "REQUEST_LOG_COMPRESS_BODIES",
         "Compress stored text",
         "request_log",

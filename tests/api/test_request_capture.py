@@ -21,6 +21,7 @@ from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import request_image_inputs
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.async_iterators import AsyncCloseable
+from my_claude_code.core.credential_attribution import record_credential
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.request_log import (
     _RECOVERY_TRACE,
@@ -28,6 +29,13 @@ from my_claude_code.core.request_log import (
     RequestRecord,
     get_request_log_store,
     record_recovery_event,
+)
+from my_claude_code.core.upstream_ladder import (
+    _LADDER,
+    current_ladder,
+    record_credential_decision,
+    record_upstream_try,
+    record_upstream_wait,
 )
 from my_claude_code.core.wire_capture import _WIRE_TRACE, record_wire_request
 
@@ -1028,3 +1036,133 @@ def test_an_untracked_capture_installs_no_wire_trace(store: RequestLogStore) -> 
     assert capture.enabled is False
     record_wire_request({"model": "m", "max_tokens": 1})
     assert _WIRE_TRACE.get() is None
+
+
+# --------------------------------------------------------- the retry ladder --
+
+
+def test_attempt_params_nests_ladder_beside_wire(store) -> None:
+    """Both are per-attempt facts of variable shape; ``params`` holds both."""
+    capture = _make_capture(store, request_id="req_ladder")
+    record_wire_request({"model": "m", "max_tokens": 100})
+    record_recovery_event("early_retries")
+    record_upstream_try(key_index=0, key_label="ab...cd", status=429)
+    record_upstream_wait(2.7)
+    record_upstream_try(key_index=0, key_label="ab...cd", status=502)
+    record_credential_decision(
+        key_index=0, cls="rate_limit", benched_for_s=60.0, status=429
+    )
+
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/kimi",
+            outcome="failed",
+            error_kind="upstream",
+            duration_ms=9_000.0,
+        )
+    )
+    capture.finish_error(RuntimeError("boom"))
+    store.close()
+    _RECOVERY_TRACE.set(None)
+    _WIRE_TRACE.set(None)
+    _LADDER.set(None)
+
+    attempt = store.get_request("req_ladder")["route_attempts"][0]
+    params = attempt["params"]
+    assert params["early_retries"] == 1
+    assert params["wire"]["model"] == "m"
+    assert params["ladder"]["summary"]["statuses_by_code"] == {"429": 1, "502": 1}
+    assert params["ladder"]["tries"][0]["waited_ms"] == 2700.0
+    assert "key 0 benched 60s on 429" in params["ladder"]["root_cause"]
+    assert attempt["ladder_tries"] == 2
+
+
+def test_a_single_try_attempt_stores_no_root_cause_sentence(store) -> None:
+    """Nothing was hidden, so nothing is added to the reason already there."""
+    capture = _make_capture(store, request_id="req_one")
+    record_upstream_try(key_index=0, status=400)
+
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/kimi",
+            outcome="failed",
+            error_kind="invalid_request",
+        )
+    )
+    capture.finish_error(RuntimeError("boom"))
+    store.close()
+    _LADDER.set(None)
+
+    attempt = store.get_request("req_one")["route_attempts"][0]
+    assert attempt["params"]["ladder"]["root_cause"] == ""
+    assert attempt["ladder_tries"] == 1
+
+
+def test_attempt_key_index_is_the_key_that_attempt_used(store) -> None:
+    """The credential regression: every row used to carry the chain's LAST key.
+
+    ``record_attempt_result`` fires once per attempt, but the ledger publishes
+    every record in one loop at the end of the chain -- so reading the shared
+    attribution slot stamped whichever key finished the request onto all of
+    them, including attempts against a different provider's pool. The ladder
+    knows which key each try actually held.
+    """
+    capture = _make_capture(store, request_id="req_keys")
+    ladder = current_ladder()
+    assert ladder is not None
+    record_upstream_try(key_index=0, key_label="aa...aa", status=429)
+    record_upstream_try(key_index=0, key_label="aa...aa", status=502)
+    ladder.current_attempt = 1
+    record_upstream_try(key_index=3, key_label="zz...zz", status=200)
+
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/kimi",
+            outcome="failed",
+            error_kind="upstream",
+        )
+    )
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=1,
+            provider_id="groq",
+            model_ref="groq/llama",
+            outcome="succeeded",
+        )
+    )
+    capture.finish_success("ok")
+    store.close()
+    _LADDER.set(None)
+
+    first, second = store.get_request("req_keys")["route_attempts"]
+    assert (first["key_index"], first["key_label"]) == (0, "aa...aa")
+    assert (second["key_index"], second["key_label"]) == (3, "zz...zz")
+
+
+def test_an_attempt_with_no_ladder_falls_back_to_the_attribution_slot(store) -> None:
+    """A skipped attempt records no try, and the old behaviour still applies."""
+    capture = _make_capture(store, request_id="req_skip")
+    record_credential(2, "cc...cc")
+
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="groq",
+            model_ref="groq/llama",
+            outcome="skipped",
+            error_message="never reached",
+        )
+    )
+    capture.finish_success("ok")
+    store.close()
+    _LADDER.set(None)
+
+    attempt = store.get_request("req_skip")["route_attempts"][0]
+    assert attempt["key_index"] == 2
+    assert attempt["ladder_tries"] is None

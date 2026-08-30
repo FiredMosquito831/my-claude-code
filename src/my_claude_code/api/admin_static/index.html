@@ -706,6 +706,10 @@
                 <div id="reqTopErrors"></div>
               </section>
               <section class="analytics-panel">
+                <h4>Upstream statuses</h4>
+                <div id="reqUpstreamStatuses"></div>
+              </section>
+              <section class="analytics-panel">
                 <h4>Failover</h4>
                 <div id="reqFallbackRoutes"></div>
               </section>
@@ -1757,6 +1761,22 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   fact. The Models page adds a measured chip per model &mdash; how often
                   reasoning was requested over the last 7 days, and how often it came
                   back &mdash; two independent facts.
+                </p>
+                <p class="guide-note">
+                  <strong>The retry ladder.</strong> An attempt is not one request
+                  upstream: it is up to five tries per credential, across every
+                  credential the pool hands it, with backoff in between. Under each
+                  failed attempt the chain now lists every one of those tries &mdash;
+                  its status, its key, how long it took, how long MCC then slept, and a
+                  redacted excerpt of the upstream&rsquo;s own reply &mdash; plus one
+                  line per credential saying whether the pool charged it and why. The
+                  root-cause sentence above them is stored with the row, so the modal
+                  and every export say the same thing. <strong>Analytics &rarr;
+                  Upstream statuses</strong> counts the same tries across the window,
+                  which is why it can disagree with Top errors: that groups by the one
+                  message that survived a whole ladder. Attempts recorded before
+                  6.12.0 show no ladder &mdash; not measured, not &ldquo;there were no
+                  retries&rdquo;.
                 </p>
                 <h4>When the numbers stop moving</h4>
                 <p>

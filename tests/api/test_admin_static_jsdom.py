@@ -993,3 +993,67 @@ def test_the_provider_header_is_the_pages_one_sticky_element(rendered) -> None:
     """One per rendered provider, where there were none at all."""
 
     assert rendered["models"]["stickyHeads"] == 3
+
+
+# --------------------------------------------------------- the retry ladder --
+
+
+def test_ladder_headline_and_root_cause_render_in_the_chain(rendered) -> None:
+    """The row said one status; the panel now says every one of them."""
+    detail = rendered["requestDetail"]["ladder"]
+
+    assert detail["chainHidden"] is False
+    assert detail["ladderSummaries"] == [
+        "2 tries · 1\N{MULTIPLICATION SIGN}429, 1\N{MULTIPLICATION SIGN}502 · 2 keys · 3s sleeping · 52s on the provider block"
+    ]
+    assert detail["ladderRootCauses"] == [
+        "2 tries across 2 keys: 1\N{MULTIPLICATION SIGN}429, 1\N{MULTIPLICATION SIGN}502 — 2s of the 107s were MCC backoff sleeps"
+    ]
+
+
+def test_ladder_try_rows_render_one_per_try_with_status_and_wait(rendered) -> None:
+    tries = rendered["requestDetail"]["ladder"]["ladderTries"]
+
+    assert len(tries) == 3
+    assert tries[0].startswith("#1 · key 0 aa...bb · 429 · 410ms · waited 2700ms")
+    assert "retry-after 12s" in tries[1]
+    # The wait rows keep their place in the sequence rather than vanishing.
+    assert tries[2] == "#3 · limiter_wait · waited 51900ms"
+
+
+def test_missing_ladder_numbers_render_as_a_dash_not_zero(rendered) -> None:
+    """A term nobody measured is omitted, never printed as ``0``."""
+    tries = rendered["requestDetail"]["ladder"]["ladderTries"]
+
+    # The 502 try had no recorded wait; it must not claim "waited 0ms".
+    assert "waited" not in tries[1]
+    # The 429 try published no Retry-After; it must not claim "retry-after 0s".
+    assert "retry-after" not in tries[0]
+
+
+def test_ladder_credential_decisions_name_the_bench_and_the_non_bench(
+    rendered,
+) -> None:
+    decisions = rendered["requestDetail"]["ladder"]["ladderDecisions"]
+
+    assert decisions == [
+        "key 0 aa...bb — benched 60s (rate_limit): 429, no Retry-After -- "
+        "operator cooldown 60s",
+        "key 2 cc...dd — health unchanged: 502 is not credential-shaped",
+    ]
+
+
+def test_the_redacted_upstream_body_is_shown_per_try(rendered) -> None:
+    assert rendered["requestDetail"]["ladder"]["ladderBodies"] == [
+        '{"detail":"Too many requests"}'
+    ]
+
+
+def test_a_single_try_attempt_renders_no_ladder(rendered) -> None:
+    """Nothing was hidden, so the panel adds nothing -- and stays hidden."""
+    detail = rendered["requestDetail"]["singleTry"]
+
+    assert detail["chainHidden"] is True
+    assert detail["ladderSummaries"] == []
+    assert detail["ladderRootCauses"] == []
+    assert detail["ladderTries"] == []

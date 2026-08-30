@@ -14,6 +14,11 @@ from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.credential_rotation import PoolHealthState
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.upstream_ladder import (
+    _LADDER,
+    install_ladder_trace,
+    ladder_payload,
+)
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.credential_rotation import (
     CredentialRotationState,
@@ -1016,3 +1021,76 @@ async def test_a_five_hundred_walks_the_chain_not_the_pool():
             [c async for c in rotating.stream_response(_request())]
 
     assert [entry["state"] for entry in rotating.key_health()] == ["HEALTHY"] * 3
+
+
+# --------------------------------------------------------- the retry ladder --
+
+
+@pytest.mark.asyncio
+async def test_bench_decision_records_class_retry_after_and_cooldown() -> None:
+    """The bench duration is read back out of the engine that decided it."""
+    trace = install_ladder_trace()
+    state = rotation_state(2, "failover")
+
+    await state.report_failure(0, _rate_limited(retry_after=None))
+    await state.report_failure(1, _rate_limited(retry_after=12.0))
+
+    decisions = ladder_payload(trace.slot())["credentials"]
+    assert [entry["key_index"] for entry in decisions] == [0, 1]
+    assert decisions[0]["class"] == "rate_limit"
+    assert decisions[0]["status"] == 429
+    assert decisions[0]["retry_after"] is None
+    # The operator's cooldown, not a number invented in the ladder.
+    assert decisions[0]["benched_for_s"] == pytest.approx(60.0, abs=1.0)
+    assert "no Retry-After" in decisions[0]["reason"]
+    assert decisions[1]["retry_after"] == 12.0
+    assert decisions[1]["benched_for_s"] == pytest.approx(12.0, abs=1.0)
+    assert "Retry-After 12s" in decisions[1]["reason"]
+    _LADDER.set(None)
+
+
+@pytest.mark.asyncio
+async def test_uncharged_failure_records_a_null_class_with_its_reason() -> None:
+    """ "Health unchanged" was a DEBUG line and nothing else, before this."""
+    trace = install_ladder_trace()
+    state = rotation_state(2, "failover")
+
+    await state.report_failure(0, _InvalidRequestError())
+
+    decision = ladder_payload(trace.slot())["credentials"][0]
+    assert decision["class"] is None
+    assert decision["benched_for_s"] is None
+    assert decision["status"] == 400
+    assert decision["reason"] == "400 is not credential-shaped"
+    _LADDER.set(None)
+
+
+@pytest.mark.asyncio
+async def test_an_auth_failure_records_its_lockout_tier() -> None:
+    class _AuthError(Exception):
+        status_code = 401
+
+    trace = install_ladder_trace()
+    state = rotation_state(2, "failover")
+
+    await state.report_failure(0, _AuthError())
+
+    decision = ladder_payload(trace.slot())["credentials"][0]
+    assert decision["class"] == "auth"
+    assert decision["status"] == 401
+    assert "lockout tier" in decision["reason"]
+    assert decision["benched_for_s"] is not None
+    _LADDER.set(None)
+
+
+@pytest.mark.asyncio
+async def test_recording_a_decision_does_not_change_the_health_verdict() -> None:
+    """Behaviour is identical with the ladder switched off."""
+    _LADDER.set(None)
+    state = rotation_state(2, "failover")
+
+    assert await state.report_failure(0, _rate_limited(retry_after=None)) is True
+    assert await state.report_failure(1, _InvalidRequestError()) is False
+    metrics = state.get_metrics()
+    assert metrics[0]["state"] != "HEALTHY"
+    assert metrics[1]["state"] == "HEALTHY"

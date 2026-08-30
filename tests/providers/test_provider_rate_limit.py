@@ -8,6 +8,15 @@ import pytest
 from httpx import Request
 
 import my_claude_code.providers.rate_limit as rate_limit_module
+from my_claude_code.core.credential_attribution import (
+    install_attribution,
+    record_credential,
+)
+from my_claude_code.core.upstream_ladder import (
+    _LADDER,
+    install_ladder_trace,
+    ladder_payload,
+)
 from my_claude_code.providers.failure_policy import (
     retryable_upstream_status,
     retryable_upstream_transport_error,
@@ -751,3 +760,118 @@ class TestProviderRateLimiter:
 
         assert nim.is_blocked() is True
         assert openrouter.is_blocked() is False
+
+
+# --------------------------------------------------------- the retry ladder --
+
+
+@pytest.mark.asyncio
+async def test_every_try_and_every_sleep_is_recorded_in_the_ladder() -> None:
+    """One row per try, each carrying the sleep it bought.
+
+    The retry loop is the only frame that sees all of this. Before it recorded
+    anything, an attempt that knocked five times stored one status.
+    """
+    trace = install_ladder_trace()
+    install_attribution()
+    record_credential(0, "ab...cd")
+    limiter = ProviderRateLimiter(rate_limit=100, max_retries=2)
+    calls = {"n": 0}
+
+    async def flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise openai.RateLimitError(
+                "429", response=_response(429), body={"detail": "Too many requests"}
+            )
+        return "ok"
+
+    with patch("asyncio.sleep", new=_sleep_clears(limiter)):
+        assert await limiter.execute_with_retry(flaky) == "ok"
+
+    payload = ladder_payload(trace.slot())
+    assert payload["summary"]["tries"] == 3
+    assert payload["summary"]["statuses_by_code"] == {"429": 2}
+    assert payload["summary"]["keys"] == 1
+    assert payload["tries"][0]["key_label"] == "ab...cd"
+    # The retry frame sees the raw SDK error: providers classify *after* the
+    # ladder is exhausted, so an unclassified failure is named by its class.
+    assert payload["tries"][0]["error_kind"] == "RateLimitError"
+    assert "Too many requests" in payload["tries"][0]["body"]
+    # Two sleeps, one per failed try, back-filled onto the try they followed.
+    assert payload["summary"]["time_sleeping_ms"] > 0
+    # The try that worked carries no status and no body: it is the ladder's
+    # last row, and without it a ladder ending in success reads as a failure.
+    assert "status" not in payload["tries"][-1]
+    _LADDER.set(None)
+
+
+@pytest.mark.asyncio
+async def test_a_non_retryable_failure_still_records_its_one_try() -> None:
+    """A single try is still a measurement; it just hides nothing."""
+    trace = install_ladder_trace()
+    limiter = ProviderRateLimiter(rate_limit=100, max_retries=2)
+
+    async def rejected() -> str:
+        raise openai.BadRequestError("400", response=_response(400), body=None)
+
+    with pytest.raises(openai.BadRequestError):
+        await limiter.execute_with_retry(rejected)
+
+    payload = ladder_payload(trace.slot())
+    assert payload["summary"]["tries"] == 1
+    assert payload["tries"][0]["status"] == 400
+    _LADDER.set(None)
+
+
+@pytest.mark.asyncio
+async def test_limiter_reactive_wait_is_recorded_as_limiter_wait() -> None:
+    """The 51.9s that made a 120s deadline expire with no accepted request."""
+    trace = install_ladder_trace()
+    limiter = ProviderRateLimiter(rate_limit=100)
+    limiter.extend_reactive_block(30.0)
+
+    with patch("asyncio.sleep", new=_sleep_clears(limiter)):
+        await limiter.wait_if_blocked()
+
+    payload = ladder_payload(trace.slot())
+    assert payload["summary"]["time_limiter_ms"] > 0
+    assert payload["summary"]["time_sleeping_ms"] == 0.0
+    assert payload["tries"][0]["source"] == "limiter_wait"
+    _LADDER.set(None)
+
+
+@pytest.mark.asyncio
+async def test_the_ladder_records_nothing_when_no_request_is_tracked() -> None:
+    """The retry behaviour is identical with recording switched off."""
+    _LADDER.set(None)
+    limiter = ProviderRateLimiter(rate_limit=100, max_retries=1)
+    calls = {"n": 0}
+
+    async def flaky() -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise openai.RateLimitError("429", response=_response(429), body=None)
+        return "ok"
+
+    with patch("asyncio.sleep", new=_sleep_clears(limiter)):
+        assert await limiter.execute_with_retry(flaky) == "ok"
+    assert calls["n"] == 2
+
+
+def _response(status: int) -> httpx.Response:
+    return httpx.Response(status, request=Request("POST", "http://x"))
+
+
+def _sleep_clears(limiter: ProviderRateLimiter):
+    """A stand-in for ``asyncio.sleep`` that models the time actually passing.
+
+    A bare ``AsyncMock`` leaves ``_blocked_until`` in the future forever, so
+    ``_wait_for_reactive_block`` spins: real code waits the block out exactly
+    once. Clearing the deadline is what a real sleep of that length does.
+    """
+
+    async def _sleep(_seconds: float) -> None:
+        limiter._blocked_until = 0.0
+
+    return _sleep
