@@ -820,6 +820,11 @@ class Settings(BaseSettings):
     # ==================== Optimizations ====================
     enable_title_generation_skip: bool = True
     enable_suggestion_mode_skip: bool = True
+    # Answer a client harness's tiny startup "Say OK" reachability probe
+    # locally instead of spending a real upstream call. The reply echoes the
+    # routed model, so a routing substitution is still detected; upstream
+    # liveness is proven by the run's first real request.
+    enable_probe_auto_response: bool = True
 
     # ==================== Tool-Result Trimming (Read / Grep / Glob) ==========
     # Off by default, and deliberately so: this layer is the only thing in the

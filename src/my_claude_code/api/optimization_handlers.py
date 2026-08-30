@@ -23,6 +23,7 @@ from my_claude_code.core.anthropic import (
 )
 
 from .detection import (
+    is_model_routing_probe_request,
     is_suggestion_mode_request,
     is_title_generation_request,
 )
@@ -79,9 +80,23 @@ SUGGESTION_MODE_SKIP = OptimizationRuleSpec(
     settings_attr="enable_suggestion_mode_skip",
 )
 
+PROBE_AUTO_RESPONSE = OptimizationRuleSpec(
+    rule="probe_auto_response",
+    label="Model routing probe",
+    description=(
+        "A client harness's startup reachability check asking the endpoint to "
+        "say OK. Answered locally instead of spending an upstream call; the "
+        "reply echoes the routed model so a substitution is still detected."
+    ),
+    answer="OK",
+    env_key="ENABLE_PROBE_AUTO_RESPONSE",
+    settings_attr="enable_probe_auto_response",
+)
+
 OPTIMIZATION_RULE_SPECS: tuple[OptimizationRuleSpec, ...] = (
     TITLE_GENERATION_SKIP,
     SUGGESTION_MODE_SKIP,
+    PROBE_AUTO_RESPONSE,
 )
 
 
@@ -152,6 +167,30 @@ def try_suggestion_skip(
     )
 
 
+def try_probe_auto_response(
+    request_data: MessagesRequest, settings: Settings, token_counter: TokenCounter
+) -> LocalOptimization | None:
+    """Answer a client's model-routing probe locally.
+
+    The reply carries the RESOLVED model id -- routing has already run by the
+    time this intercept fires -- so the probe still detects a routing
+    substitution truthfully, which is the check's real purpose. What it no
+    longer proves is upstream liveness; the run's first real request proves
+    that anyway, and fails visibly where a synthetic OK would not.
+    """
+    if not settings.enable_probe_auto_response:
+        return None
+    if not is_model_routing_probe_request(request_data):
+        return None
+
+    return _answer(
+        request_data,
+        PROBE_AUTO_RESPONSE.answer,
+        rule=PROBE_AUTO_RESPONSE.rule,
+        token_counter=token_counter,
+    )
+
+
 OptimizationHandler = Callable[
     [MessagesRequest, Settings, TokenCounter], LocalOptimization | None
 ]
@@ -160,6 +199,7 @@ OptimizationHandler = Callable[
 OPTIMIZATION_HANDLERS: list[OptimizationHandler] = [
     try_title_skip,
     try_suggestion_skip,
+    try_probe_auto_response,
 ]
 
 # Every rule name this module can record, so a consumer can enumerate them

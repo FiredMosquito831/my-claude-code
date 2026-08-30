@@ -426,6 +426,24 @@ class ProviderExecutor:
         self._retry_once_kinds = retry_once_kinds
         self._provider_lookup = provider_lookup
 
+    def first_usable_attempt(self, plan: RoutedMessagesPlan) -> RoutedMessagesRequest:
+        """The attempt :meth:`stream` would actually reach first.
+
+        Exposed because a locally answered request still has to name the model
+        that *would* have served it: a client probing for a silent model
+        substitution learns nothing if the answer names a primary that recent
+        failures have benched out of the chain. Uses the same ordering and the
+        same provider lookup the executor uses, so the two cannot drift.
+
+        ``usable_indexes`` returns the whole chain when every candidate is
+        benched -- a degraded route is still a route -- so an empty order is
+        not reachable; index 0 is the honest answer if it ever were.
+        """
+        order = self._health.usable_indexes(
+            plan.model_refs(), provider_lookup=self._provider_lookup
+        )
+        return plan.attempts[order[0] if order else 0]
+
     def stream(
         self,
         plan: RoutedMessagesPlan,

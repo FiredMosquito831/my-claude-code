@@ -13,8 +13,10 @@ from my_claude_code.api.handlers import (
 )
 from my_claude_code.api.optimization_handlers import LocalOptimization
 from my_claude_code.application.errors import InvalidRequestError
+from my_claude_code.application.route_health import RouteHealthRegistry
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import (
+    ContentBlockText,
     Message,
     MessagesRequest,
     MessagesResponse,
@@ -510,6 +512,128 @@ async def test_messages_handler_optimization_intercepts_before_provider_executio
         assert await handler.create(request) is optimized.response
 
     provider_resolver.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_messages_handler_answers_model_routing_probe_without_a_provider() -> (
+    None
+):
+    """The harness probe is answered locally end to end.
+
+    The provider_resolver is a MagicMock: the route's health check may ask it
+    for a throttle reading, but nothing may ask it for an answer, so the
+    assertion is on the request-shaped calls rather than on the resolver
+    itself. The response is the Message the harness parses, and its model id is
+    the RESOLVED one ("test-model" stripped from "nvidia_nim/test-model" by
+    routing), which is the honest echo: a proxy silently substituting a
+    different model is still detected by the check.
+    """
+    provider_resolver = MagicMock()
+    handler = MessagesHandler(Settings(), provider_resolver=provider_resolver)
+    request = MessagesRequest(
+        model="nvidia_nim/test-model",
+        max_tokens=16,
+        messages=[Message(role="user", content="Say OK")],
+    )
+
+    response = await handler.create(request)
+
+    provider = provider_resolver.return_value
+    provider.preflight_stream.assert_not_called()
+    provider.stream_response.assert_not_called()
+    assert isinstance(response, MessagesResponse)
+    assert response.id.startswith("msg_")
+    assert response.model == "test-model"
+    block = response.content[0]
+    assert isinstance(block, ContentBlockText)
+    assert block.text == "OK"
+    assert response.stop_reason == "end_turn"
+    assert response.usage.input_tokens > 0
+    assert response.usage.output_tokens == 1
+
+
+def _probe_route_settings() -> Settings:
+    """A two-model sonnet route, so "which model answers" has a real answer."""
+    settings = Settings()
+    settings.model_sonnet = "nvidia_nim/primary-model"
+    settings.model_sonnet_fallbacks = "groq/fallback-model"
+    return settings
+
+
+def _probe_request() -> MessagesRequest:
+    return MessagesRequest(
+        model="sonnet",
+        max_tokens=16,
+        messages=[Message(role="user", content="Say OK")],
+    )
+
+
+@pytest.mark.asyncio
+async def test_probe_reply_names_the_primary_when_nothing_is_benched() -> None:
+    provider_resolver = MagicMock()
+    handler = MessagesHandler(
+        _probe_route_settings(), provider_resolver=provider_resolver
+    )
+    handler._provider_executor._health = RouteHealthRegistry(
+        mode="consecutive", eject_after_failures=1, eject_seconds=60.0
+    )
+
+    response = await handler.create(_probe_request())
+
+    provider_resolver.assert_not_called()
+    assert isinstance(response, MessagesResponse)
+    assert response.model == "primary-model"
+
+
+@pytest.mark.asyncio
+async def test_probe_reply_names_the_fallback_when_the_primary_is_benched() -> None:
+    """The whole point of the probe: name the model that would really answer.
+
+    With the primary benched, real traffic goes to the fallback. A reply that
+    still named the primary would report exactly the substitution the harness
+    exists to detect -- as a clean bill of health.
+    """
+    provider_resolver = MagicMock()
+    handler = MessagesHandler(
+        _probe_route_settings(), provider_resolver=provider_resolver
+    )
+    health = RouteHealthRegistry(
+        mode="consecutive", eject_after_failures=1, eject_seconds=60.0
+    )
+    health.record_failure("nvidia_nim/primary-model")
+    assert health.is_ejected("nvidia_nim/primary-model") is True
+    handler._provider_executor._health = health
+
+    response = await handler.create(_probe_request())
+
+    provider_resolver.assert_not_called()
+    assert isinstance(response, MessagesResponse)
+    assert response.model == "fallback-model"
+
+
+@pytest.mark.asyncio
+async def test_messages_handler_probe_disabled_goes_upstream_normally() -> None:
+    """The kill-switch restores the pre-feature behaviour exactly."""
+    provider = FakeProvider()
+    handler = MessagesHandler(
+        Settings(),
+        provider_resolver=lambda _: provider,
+    )
+    request = MessagesRequest(
+        model="nvidia_nim/test-model",
+        max_tokens=16,
+        stream=True,
+        messages=[Message(role="user", content="Say OK")],
+    )
+    settings = Settings()
+    settings.enable_probe_auto_response = False
+    handler._settings = settings
+
+    response = await handler.create(request)
+    assert isinstance(response, StreamingResponse)
+    await _streaming_body_text(response)
+
+    assert len(provider.preflight_calls) == 1
 
 
 @pytest.mark.asyncio

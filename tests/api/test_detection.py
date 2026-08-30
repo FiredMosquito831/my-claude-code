@@ -3,11 +3,12 @@
 from typing import Literal
 
 from my_claude_code.api.detection import (
+    is_model_routing_probe_request,
     is_safety_classifier_request,
     is_suggestion_mode_request,
     is_title_generation_request,
 )
-from my_claude_code.core.anthropic.models import Message, MessagesRequest
+from my_claude_code.core.anthropic.models import Message, MessagesRequest, Tool
 
 
 def _make_request(
@@ -35,6 +36,115 @@ def test_title_detection_reads_inline_system_context() -> None:
     )
 
     assert is_title_generation_request(request) is True
+
+
+class TestIsModelRoutingProbeRequest:
+    def test_the_observed_probe_shape_matches(self):
+        """The exact shape measured in the live log: one user turn, 16 tokens."""
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=16,
+            messages=[Message(role="user", content="Say OK")],
+        )
+        assert is_model_routing_probe_request(request) is True
+
+    def test_period_after_the_prompt_still_matches(self):
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=16,
+            messages=[Message(role="user", content="Say OK.")],
+        )
+        assert is_model_routing_probe_request(request) is True
+
+    def test_case_and_surrounding_whitespace_do_not_block(self):
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=16,
+            messages=[Message(role="user", content="  say OK ")],
+        )
+        assert is_model_routing_probe_request(request) is True
+
+    def test_any_other_prompt_is_not_a_probe(self):
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=16,
+            messages=[Message(role="user", content="Say OK please")],
+        )
+        assert is_model_routing_probe_request(request) is False
+
+    def test_a_real_conversation_never_matches(self):
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=64000,
+            messages=[
+                Message(role="user", content="Say OK"),
+                Message(role="assistant", content="OK"),
+                Message(role="user", content="now do the real task"),
+            ],
+        )
+        assert is_model_routing_probe_request(request) is False
+
+    def test_missing_max_tokens_is_not_a_probe(self):
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=None,
+            messages=[Message(role="user", content="Say OK")],
+        )
+        assert is_model_routing_probe_request(request) is False
+
+    def test_a_normal_output_budget_is_not_a_probe(self):
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=100,
+            messages=[Message(role="user", content="Say OK")],
+        )
+        assert is_model_routing_probe_request(request) is False
+
+    def test_streaming_is_not_a_probe(self):
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=16,
+            stream=True,
+            messages=[Message(role="user", content="Say OK")],
+        )
+        assert is_model_routing_probe_request(request) is False
+
+    def test_system_text_is_not_a_probe(self):
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=16,
+            system="You are a helpful assistant.",
+            messages=[Message(role="user", content="Say OK")],
+        )
+        assert is_model_routing_probe_request(request) is False
+
+    def test_tools_are_not_a_probe(self):
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=16,
+            tools=[Tool(name="read", type="custom", input_schema={})],
+            messages=[Message(role="user", content="Say OK")],
+        )
+        assert is_model_routing_probe_request(request) is False
+
+    def test_inline_system_message_is_not_a_probe(self):
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=16,
+            messages=[
+                Message(role="system", content="be brief"),
+                Message(role="user", content="Say OK"),
+            ],
+        )
+        assert is_model_routing_probe_request(request) is False
+
+    def test_assistant_first_turn_is_not_a_probe(self):
+        request = MessagesRequest(
+            model="test-model",
+            max_tokens=16,
+            messages=[Message(role="assistant", content="Say OK")],
+        )
+        assert is_model_routing_probe_request(request) is False
 
 
 class TestIsSafetyClassifierRequest:

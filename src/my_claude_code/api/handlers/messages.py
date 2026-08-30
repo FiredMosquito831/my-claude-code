@@ -8,7 +8,11 @@ from fastapi.responses import JSONResponse, Response
 from loguru import logger
 
 from my_claude_code.api.detection import is_safety_classifier_request
-from my_claude_code.api.optimization_handlers import try_optimizations
+from my_claude_code.api.optimization_handlers import (
+    PROBE_AUTO_RESPONSE,
+    LocalOptimization,
+    try_optimizations,
+)
 from my_claude_code.api.request_capture import (
     build_capture,
 )
@@ -50,6 +54,7 @@ from my_claude_code.application.routing import (
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import (
     MessagesRequest,
+    MessagesResponse,
     ToolResultTrimPolicy,
     ToolResultTrimReport,
     TrimMode,
@@ -83,7 +88,7 @@ class _MessagesCompleteResult:
 
 
 _MessagesResult = _MessagesStreamResult | _MessagesCompleteResult
-MessageIntercept = Callable[[RoutedMessagesRequest], _MessagesResult | None]
+MessageIntercept = Callable[[RoutedMessagesPlan], _MessagesResult | None]
 
 
 class MessagesHandler:
@@ -163,7 +168,7 @@ class MessagesHandler:
             self._reject_unsupported_server_tools(routed)
             capture.set_routing(routed)
 
-            result = self._run_message_intercepts(routed)
+            result = self._run_message_intercepts(plan)
             if result is None:
                 logger.debug("No optimization matched, routing to provider")
                 result = _MessagesStreamResult(
@@ -407,17 +412,25 @@ class MessagesHandler:
         )
 
     def _run_message_intercepts(
-        self, routed: RoutedMessagesRequest
+        self, plan: RoutedMessagesPlan
     ) -> _MessagesResult | None:
+        """Try each local answer in turn.
+
+        The whole plan is passed, not just its head: an intercept that answers
+        without a provider still has to say which model would have answered,
+        and that is a property of the chain plus current route health, not of
+        the primary alone.
+        """
         for intercept in self._message_intercepts:
-            result = intercept(routed)
+            result = intercept(plan)
             if result is not None:
                 return result
         return None
 
     def _intercept_web_server_tool(
-        self, routed: RoutedMessagesRequest
+        self, plan: RoutedMessagesPlan
     ) -> _MessagesResult | None:
+        routed = plan.primary
         if not self._settings.enable_web_server_tools:
             return None
         if not is_web_server_tool_request(routed.request):
@@ -448,13 +461,15 @@ class MessagesHandler:
         )
 
     def _intercept_local_optimization(
-        self, routed: RoutedMessagesRequest
+        self, plan: RoutedMessagesPlan
     ) -> _MessagesResult | None:
+        routed = plan.primary
         optimized = try_optimizations(
             routed.request, self._settings, self._token_counter
         )
         if optimized is None:
             return None
+        response = self._answering_model_echo(optimized, plan)
         trace_event(
             stage="routing",
             event="my_claude_code.api.optimization.short_circuit",
@@ -464,9 +479,39 @@ class MessagesHandler:
             tokens_saved=optimized.tokens_saved,
         )
         return _MessagesCompleteResult(
-            optimized.response,
+            response,
             optimization=optimized.rule,
             tokens_saved=optimized.tokens_saved,
+        )
+
+    def _answering_model_echo(
+        self, optimized: LocalOptimization, plan: RoutedMessagesPlan
+    ) -> MessagesResponse:
+        """Stamp a probe's reply with the model that would really have answered.
+
+        A model-routing probe exists to catch a proxy quietly serving a
+        different model than the one asked for, so its reply has to name the
+        model this request would have reached -- not the head of the chain.
+        Those differ whenever recent failures have benched the primary, which
+        is precisely the case the harness is looking for. The executor is asked
+        rather than the health registry directly, so the answer cannot drift
+        from the order execution really uses.
+
+        The id stamped is ``provider_model``, the bare upstream id, because
+        that is what a normal streamed reply echoes in ``message_start``
+        (routing rewrites ``request.model`` to it at
+        ``application/routing.py`` before the provider builds its ledger). A
+        probe answered with a ``provider/model`` ref would read as a
+        substitution against a real reply that carries neither.
+
+        Every other rule answers a request whose model was never in question,
+        so they keep the response they built.
+        """
+        if optimized.rule != PROBE_AUTO_RESPONSE.rule:
+            return optimized.response
+        answering = self._provider_executor.first_usable_attempt(plan)
+        return optimized.response.model_copy(
+            update={"model": answering.resolved.provider_model}
         )
 
 

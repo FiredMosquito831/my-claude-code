@@ -937,6 +937,12 @@ The page has four panels:
 - **Candidates** — recurring request shapes that no rule covers yet, ranked by the tokens they really cost. Press **Scan the log** to produce them. The scan is on demand only: it never runs on a schedule or when the page loads, it reads nothing until you ask, and it changes nothing about how any request is answered. Ask it for more rows than it will scan and it refuses outright instead of quietly sampling and presenting the sample as the whole picture.
 - **Cache effectiveness** — prompt-cache hit rate per provider. This is the biggest lever on the page and the optimizer does not control it. A dash means the provider never reported the figure, which is not the same as reporting zero.
 
+Three local rules ship today, each with its own kill switch:
+
+- **Title generation** (`ENABLE_TITLE_GENERATION_SKIP`) — Claude Code's request for a short conversation title.
+- **Suggestion mode** (`ENABLE_SUGGESTION_MODE_SKIP`) — a `[SUGGESTION MODE:` turn, which expects no model output at all.
+- **Model routing probe** (`ENABLE_PROBE_AUTO_RESPONSE`) — an agent harness's startup reachability check, sent before a run to catch a proxy quietly serving a different model than the one asked for. It is unmistakable: a single `Say OK` user turn, no system text, no tools, not streaming, and `max_tokens` of 16. MCC answers it in milliseconds instead of spending a real upstream call, and the reply names the model that *would* have answered — the first model on the route your fallback health registry has not benched, which is not always the primary — so the probe still detects a substitution truthfully. Set it to `false` if you would rather the probe reach your provider.
+
 The page also shows RTK's measured savings and warns you if the RTK binary installed on your machine has drifted from the version MCC pins.
 
 #### Tool-result trimming (off, and worth leaving off)

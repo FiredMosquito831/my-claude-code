@@ -527,6 +527,15 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         advanced=True,
     ),
     ConfigFieldSpec(
+        "ENABLE_PROBE_AUTO_RESPONSE",
+        "Probe Auto Response",
+        "optimizer",
+        "boolean",
+        settings_attr="enable_probe_auto_response",
+        default="true",
+        advanced=True,
+    ),
+    ConfigFieldSpec(
         "ENABLE_WEB_SERVER_TOOLS",
         "Web Server Tools",
         "web_tools",

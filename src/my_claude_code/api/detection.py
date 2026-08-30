@@ -1,7 +1,7 @@
 """Request detection utilities for API optimizations.
 
-Detects title generation, safety classifier, and suggestion mode requests to
-enable targeted handling.
+Detects title generation, safety classifier, suggestion mode, and model-routing
+probe requests to enable targeted handling.
 """
 
 from my_claude_code.core.anthropic import (
@@ -86,3 +86,36 @@ def is_suggestion_mode_request(request_data: MessagesRequest) -> bool:
     if last_user_turn is None:
         return False
     return "[SUGGESTION MODE:" in extract_text_from_content(last_user_turn.content)
+
+
+# Upper bound on max_tokens for a reachability probe. The harnesses observed in
+# the live log send 16; 32 leaves headroom for other probes without ever
+# reaching a real conversation, where output budgets are in the thousands.
+_PROBE_MAX_TOKENS = 32
+
+
+def is_model_routing_probe_request(request_data: MessagesRequest) -> bool:
+    """Return whether this is a client's model-routing reachability probe.
+
+    Agent harnesses verify the configured endpoint with one tiny non-streaming
+    request -- literally "Say OK" -- before a run, so a routing substitution is
+    caught cheaply instead of being diagnosed from degraded behaviour. Measured
+    in the live log (1,563 requests over four days): a single user turn, no
+    system text, no tools, a 6-7 character exact prompt, max_tokens 16,
+    stream false.
+
+    The gate is deliberately narrow in every dimension a real conversation
+    differs in: any system text, any tool, a second turn, a longer prompt, an
+    absent or normal output budget, or streaming all route upstream untouched.
+    A user who types "Say OK" into a chat is never caught, because their
+    request carries a real max_tokens and usually history.
+    """
+    if request_data.tools or request_data.system or request_data.stream:
+        return False
+    if request_data.max_tokens is None or request_data.max_tokens > _PROBE_MAX_TOKENS:
+        return False
+    messages = request_data.messages
+    if len(messages) != 1 or messages[0].role != "user":
+        return False
+    text = extract_text_from_content(messages[0].content).strip().lower()
+    return text in ("say ok", "say ok.")

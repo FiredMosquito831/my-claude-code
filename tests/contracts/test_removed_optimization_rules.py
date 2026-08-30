@@ -34,7 +34,11 @@ REMOVED_CALLABLES = (
     ("is_filepath_extraction_request", detection),
 )
 
-SURVIVING_RULES = ("title_generation_skip", "suggestion_mode_skip")
+SURVIVING_RULES = (
+    "title_generation_skip",
+    "suggestion_mode_skip",
+    "probe_auto_response",
+)
 
 
 def _repo_root() -> Path:
