@@ -580,7 +580,7 @@ The card keeps the *unselected* mode's fields visible but disabled, each carryin
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `PROVIDER_RETRY_BACKOFF_BASE_SECONDS` | `2` | How long a provider waits before its first retry of a 429 or 5xx. Each further retry doubles it. |
-| `PROVIDER_RETRY_BACKOFF_MAX_SECONDS` | `60` | Ceiling the doubling backoff stops growing past. |
+| `PROVIDER_RETRY_BACKOFF_MAX_SECONDS` | `10` | The longest single wait — the ceiling the doubling backoff stops growing past. The chain is not consulted until the ladder is spent, so this is added to how long a request waits before another model is tried. |
 | `PROVIDER_RETRY_BACKOFF_JITTER_SECONDS` | `1` | Random spread added to each wait, so several clients hitting the same limit do not retry in lockstep. |
 
 **A context overflow is not a malformed request.** Both usually arrive as HTTP `400`, and until 5.43.0 MCC treated every `400` the same way — as a client error that would fail identically everywhere, so the whole chain was abandoned. That is right for a malformed body and wrong for a conversation that outgrew the model's window, which is exactly the case a larger-window fallback exists to cover. Context-length failures are now classified as their own kind and fall through to the next model.
@@ -846,6 +846,8 @@ WEBSEARCH_DIGEST_CHARS=600           # per-result snippet cap
 WEBSEARCH_DIGEST_CONTENT_CHARS=2000  # per-result cap for extracted page text
 WEBSEARCH_DIGEST_ANSWER=true         # include the provider answer lead
 ```
+
+All three are settable on the **Web Search** page in the dashboard (Result Snippet Cap, Extracted Page Text Cap, Lead With The Provider Answer) and take effect on the next search — no restart.
 
 ### Giving the model full page text, not just snippets
 
@@ -1202,7 +1204,7 @@ There is **no "inside Claude Code" exemption**. Once MCC is interposed, Claude C
 x-anthropic-billing-header: cc_version=2.1.235.2db; cc_entrypoint=cli;
 ```
 
-The terminal CLI reports `cc_entrypoint=cli`; the Python Agent SDK reports `sdk-py`. Because the marker travels in the body, a proxy can neither forge it nor strip it. **By default this provider refuses any request that does not report `cli`**, and points it at the `anthropic` provider instead — so the Agent SDK, other harnesses, and bare API calls never touch the subscription credential. Set `ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE=false` to remove that protection.
+The terminal CLI reports `cc_entrypoint=cli`; the Python Agent SDK reports `sdk-py`. Because the marker travels in the body, a proxy can neither forge it nor strip it. **By default this provider refuses any request that does not report `cli`**, and points it at the `anthropic` provider instead — so the Agent SDK, other harnesses, and bare API calls never touch the subscription credential. Set `ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE=false` to remove that protection — also settable as **Only Serve The Claude Code CLI** on the Claude subscription card of the **Providers** page (restart required).
 
 MCC's own credential lives at `~/.fcc/anthropic_oauth.json` (mode `0600`). Claude Code's file is read-only to MCC and is never refreshed in place — rotating it would log out your real client. A raw `ANTHROPIC_OAUTH_ACCESS_TOKEN` works as an override but cannot be refreshed.
 

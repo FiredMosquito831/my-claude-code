@@ -1252,7 +1252,7 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `RATE_LIMIT_COOLDOWN_SECONDS` | `60` | Only used when a 429 arrives with no `Retry-After` and no equivalent header. When one does arrive, the provider's own number wins. Capped at one hour either way. |
 | `FALLBACK_COOLDOWN_STEP_OVER_FLOOR` | `5.0` | The shortest remaining rate-limit cooldown that makes stepping over a model worth the chain slot it costs. |
 | `PROVIDER_RETRY_BACKOFF_BASE_SECONDS` | `2` | First wait between retries of one model. |
-| `PROVIDER_RETRY_BACKOFF_MAX_SECONDS` | `60` | Ceiling on that wait. |
+| `PROVIDER_RETRY_BACKOFF_MAX_SECONDS` | `10` | The longest single wait. The chain is not tried until the ladder is spent. |
 | `PROVIDER_RETRY_BACKOFF_JITTER_SECONDS` | `1` | Random spread added to it, so several clients do not retry in lockstep. |
 | `REQUEST_LOG_WIRE_BODY_MAX_CHARS` | `8000` | Bounds the stored **message and tool structure** only. Parameters are stored whole at any size. |
 | `MAX_OUTPUT_TOKENS_CEILING` | **`131072`** | The hard ceiling on `max_tokens`. **`0` means no ceiling**; a blank field means "use the default", not "off". Range `0`–`1048576`. |

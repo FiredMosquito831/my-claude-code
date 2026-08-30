@@ -189,3 +189,21 @@ def test_blank_cooldown_falls_back_to_the_shipped_default() -> None:
     assert Settings.model_fields["rate_limit_cooldown_seconds"].default == 60.0
     resolved = _with("rate_limit_cooldown_seconds", "")
     assert resolved.rate_limit_cooldown_seconds == 60.0
+
+
+def test_the_longest_retry_wait_ships_at_ten_seconds() -> None:
+    """Pinned by name because it is a latency budget, not a tuning knob.
+
+    Every wait on the doubling ladder is spent against the same model before
+    the fallback chain is consulted at all, so the ceiling bounds how long a
+    request sits on one credential. At 60 the ladder ran 2/4/8/16 per key --
+    ~32 s each, ~100 s across a three-key pool -- while the first-token
+    deadline kept ticking. At 10 it runs 2/4/8/10.
+    """
+    assert Settings.model_fields["provider_retry_backoff_max_seconds"].default == 10.0
+    assert (
+        _with(
+            "provider_retry_backoff_max_seconds", ""
+        ).provider_retry_backoff_max_seconds
+        == 10.0
+    )

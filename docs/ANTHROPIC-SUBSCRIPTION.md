@@ -83,7 +83,9 @@ explicitly. Without the gate, pointing any SDK script at your proxy would
 silently bill it to your subscription.
 
 The gate is controlled by `ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE` (default
-`true`). Turning it off removes the only structural protection here.
+`true`), settable as **Only Serve The Claude Code CLI** on the Claude
+subscription card of the dashboard's Providers page. Turning it off removes
+the only structural protection here, and takes effect after a restart.
 
 ## What it does not do
 

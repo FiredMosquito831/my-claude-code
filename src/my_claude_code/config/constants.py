@@ -205,9 +205,14 @@ CREDENTIAL_LOCKOUT_TIERS_DEFAULT = "300,3600,86400"
 FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT = 5.0
 # Exponential backoff between one provider's own retries of a 429 or 5xx:
 # first wait, ceiling, and the random spread added to each so a pool of
-# clients does not retry in lockstep.
+# clients does not retry in lockstep. The ceiling is the longest SINGLE wait,
+# and every one of those waits is spent before the fallback chain is consulted
+# at all, so it is bounded by what a caller will wait rather than by what an
+# upstream limit takes to clear: at 60 the ladder ran 2/4/8/16 per key, which
+# measured ~100s across a three-key pool while the first-token deadline kept
+# ticking.
 PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT = 2.0
-PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT = 60.0
+PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT = 10.0
 PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT = 1.0
 
 # Graceful shutdown budget (seconds) handed to the supervisor for each server

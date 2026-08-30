@@ -90,6 +90,49 @@ def _analytics_field_specs() -> tuple[dict[str, Any], ...]:
             "restart_required": True,
             "description": "Maximum retained provider-attempt and route rows.",
         },
+        {
+            "key": "WEBSEARCH_DIGEST_CHARS",
+            "label": "Result Snippet Cap",
+            "section_id": "websearch",
+            "field_type": "number",
+            "settings_attr": "websearch_digest_chars",
+            "default": "600",
+            "description": (
+                "Characters kept from each result's snippet in the digest "
+                "handed to the model. Raising it costs prompt tokens on every "
+                "search; some providers return snippets longer than this and "
+                "the remainder is discarded."
+            ),
+        },
+        {
+            "key": "WEBSEARCH_DIGEST_CONTENT_CHARS",
+            "label": "Extracted Page Text Cap",
+            "section_id": "websearch",
+            "field_type": "number",
+            "settings_attr": "websearch_digest_content_chars",
+            "default": "2000",
+            "description": (
+                "Separate, larger cap for the full page text a provider "
+                "extracted, which only arrives when you opted into it "
+                "(EXA_CONTENTS, TAVILY_INCLUDE_RAW_CONTENT, "
+                "FIRECRAWL_SCRAPE_FORMAT). It has its own cap so turning "
+                "content on is not trimmed back to snippet size; 0 keeps "
+                "snippets only."
+            ),
+        },
+        {
+            "key": "WEBSEARCH_DIGEST_ANSWER",
+            "label": "Lead With The Provider Answer",
+            "section_id": "websearch",
+            "field_type": "boolean",
+            "settings_attr": "websearch_digest_answer",
+            "default": "true",
+            "description": (
+                "Put the provider's own direct answer, when it returns one, "
+                "above the numbered results. Turn it off to send only the "
+                "results the model can cite."
+            ),
+        },
     )
 
 

@@ -1082,10 +1082,16 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "provider_retries",
         "number",
         settings_attr="provider_retry_backoff_max_seconds",
-        default="60",
+        default="10",
         restart_required=True,
         advanced=True,
-        description="Ceiling the doubling retry backoff stops growing past.",
+        description=(
+            "The longest single wait between one model's own retries -- the "
+            "ceiling the doubling backoff stops growing past. The fallback "
+            "chain is not consulted until that ladder is spent, so every "
+            "second here is added to how long a request waits before another "
+            "model is tried."
+        ),
     ),
     ConfigFieldSpec(
         "PROVIDER_RETRY_BACKOFF_JITTER_SECONDS",

@@ -166,6 +166,9 @@ def test_websearch_field_specs_cover_section_fields() -> None:
         "WEBSEARCH_LOG_CAPTURE_CONTENT",
         "WEBSEARCH_LOG_CONTENT_MAX_CHARS",
         "WEBSEARCH_LOG_MAX_ROWS",
+        "WEBSEARCH_DIGEST_CHARS",
+        "WEBSEARCH_DIGEST_CONTENT_CHARS",
+        "WEBSEARCH_DIGEST_ANSWER",
         "SEARXNG_BASE_URL",
         *(
             descriptor.credential_env
