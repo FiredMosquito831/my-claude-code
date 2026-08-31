@@ -131,6 +131,7 @@ def build_provider_config(
         retry_backoff_jitter_seconds=settings.provider_retry_backoff_jitter_seconds,
         lockout_tiers=parse_lockout_tiers(settings.credential_lockout_tiers),
         credential_model_bench_escalation=settings.credential_model_bench_escalation,
+        routes_around_model=settings.rate_limit_routes_around_model,
     )
 
 
@@ -172,5 +173,6 @@ def _build_dynamic_provider_config(
         retry_backoff_jitter_seconds=settings.provider_retry_backoff_jitter_seconds,
         lockout_tiers=parse_lockout_tiers(settings.credential_lockout_tiers),
         credential_model_bench_escalation=settings.credential_model_bench_escalation,
+        routes_around_model=settings.rate_limit_routes_around_model,
         credential_rotation=rotation,
     )

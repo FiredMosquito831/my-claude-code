@@ -388,12 +388,20 @@ class TestProviderRateLimiter:
             ProviderRateLimiter(rate_limit=10, rate_window=0)
 
     @pytest.mark.asyncio
-    async def test_execute_with_retry_exhaust_retries_raises(self):
-        """When all 429 retries exhausted, last exception is raised."""
+    @pytest.mark.parametrize("routes_around_model", [False, True])
+    async def test_execute_with_retry_exhaust_retries_raises(self, routes_around_model):
+        """When all 429 retries exhausted, last exception is raised.
+
+        With routing on there is nothing to exhaust: the first 429 raises, and
+        the caller -- the credential pool -- benches the (key, model) pair and
+        hands the executor another model.
+        """
         import openai
         from httpx import Request, Response
 
-        limiter = ProviderRateLimiter(rate_limit=100, rate_window=60)
+        limiter = ProviderRateLimiter(
+            rate_limit=100, rate_window=60, routes_around_model=routes_around_model
+        )
 
         def make_429():
             return openai.RateLimitError(
@@ -402,21 +410,29 @@ class TestProviderRateLimiter:
                 body={},
             )
 
+        calls = 0
+
         async def fail():
+            nonlocal calls
+            calls += 1
             raise make_429()
 
         with pytest.raises(openai.RateLimitError):
             await limiter.execute_with_retry(
                 fail, max_retries=2, base_delay=0.01, max_delay=0.1, jitter=0
             )
+        assert calls == (1 if routes_around_model else 3)
 
     @pytest.mark.asyncio
-    async def test_execute_with_retry_succeeds_on_retry(self):
-        """429 then success returns result."""
+    @pytest.mark.parametrize("routes_around_model", [False, True])
+    async def test_execute_with_retry_succeeds_on_retry(self, routes_around_model):
+        """429 then success returns result -- unless the 429 is routed around."""
         import openai
         from httpx import Request, Response
 
-        limiter = ProviderRateLimiter(rate_limit=100, rate_window=60)
+        limiter = ProviderRateLimiter(
+            rate_limit=100, rate_window=60, routes_around_model=routes_around_model
+        )
 
         def make_429():
             return openai.RateLimitError(
@@ -434,6 +450,17 @@ class TestProviderRateLimiter:
                 raise make_429()
             return "ok"
 
+        if routes_around_model:
+            with pytest.raises(openai.RateLimitError):
+                await limiter.execute_with_retry(
+                    fail_then_ok,
+                    max_retries=2,
+                    base_delay=0.01,
+                    max_delay=0.1,
+                    jitter=0,
+                )
+            assert call_count == 1
+            return
         result = await limiter.execute_with_retry(
             fail_then_ok, max_retries=2, base_delay=0.01, max_delay=0.1, jitter=0
         )
@@ -441,12 +468,15 @@ class TestProviderRateLimiter:
         assert call_count == 2
 
     @pytest.mark.asyncio
-    async def test_execute_with_retry_succeeds_on_httpx_429(self):
+    @pytest.mark.parametrize("routes_around_model", [False, True])
+    async def test_execute_with_retry_succeeds_on_httpx_429(self, routes_around_model):
         """HTTP 429 as httpx.HTTPStatusError then success returns result."""
         import httpx
         from httpx import Request, Response
 
-        limiter = ProviderRateLimiter(rate_limit=100, rate_window=60)
+        limiter = ProviderRateLimiter(
+            rate_limit=100, rate_window=60, routes_around_model=routes_around_model
+        )
 
         call_count = 0
 
@@ -460,6 +490,17 @@ class TestProviderRateLimiter:
                 )
             return "ok"
 
+        if routes_around_model:
+            with pytest.raises(httpx.HTTPStatusError):
+                await limiter.execute_with_retry(
+                    fail_then_ok,
+                    max_retries=2,
+                    base_delay=0.01,
+                    max_delay=0.1,
+                    jitter=0,
+                )
+            assert call_count == 1
+            return
         result = await limiter.execute_with_retry(
             fail_then_ok, max_retries=2, base_delay=0.01, max_delay=0.1, jitter=0
         )
@@ -875,3 +916,128 @@ def _sleep_clears(limiter: ProviderRateLimiter):
         limiter._blocked_until = 0.0
 
     return _sleep
+
+
+# --------------------------------------------------------------------------
+# 6.20.0: what a failure costs, and who it blocks.
+#
+# Nothing asserted that ``extend_reactive_block`` IS called on a 429 or a 5xx,
+# only that it is not called on a transport fault -- so "a 5xx never sets a
+# reactive block" would have been untestable in either direction.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+async def test_a_5xx_never_sets_the_reactive_block(status: int) -> None:
+    """One bad gateway response must not throttle the whole credential.
+
+    The retry ladder still runs -- a transient gateway fault is exactly what a
+    second knock on the same key can fix -- but blocking every other request
+    on this provider for it spends a cooldown the upstream never asked for.
+    """
+    limiter = ProviderRateLimiter(rate_limit=100, rate_window=60)
+
+    async def fail() -> str:
+        raise openai.InternalServerError("boom", response=_response(status), body=None)
+
+    with (
+        patch.object(limiter, "extend_reactive_block") as extend_block,
+        patch("asyncio.sleep", new=AsyncMock()),
+        pytest.raises(openai.InternalServerError),
+    ):
+        await limiter.execute_with_retry(
+            fail, max_retries=2, base_delay=0.01, max_delay=0.1, jitter=0
+        )
+    extend_block.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("routes_around_model", [False, True])
+async def test_a_429_sets_the_reactive_block_only_with_routing_off(
+    routes_around_model: bool,
+) -> None:
+    """The block is 6.19.0's answer to a 429 and is kept only as the off-switch.
+
+    With routing on the pool's (key, model) bench is the single record of the
+    cooldown; installing a provider-wide block as well would spend the same
+    sixty seconds twice, once where a router can see them and once where it
+    cannot.
+    """
+    limiter = ProviderRateLimiter(
+        rate_limit=100, rate_window=60, routes_around_model=routes_around_model
+    )
+
+    async def fail() -> str:
+        raise openai.RateLimitError("429", response=_response(429), body=None)
+
+    with (
+        patch.object(limiter, "extend_reactive_block") as extend_block,
+        patch("asyncio.sleep", new=AsyncMock()),
+        pytest.raises(openai.RateLimitError),
+    ):
+        await limiter.execute_with_retry(
+            fail, max_retries=2, base_delay=0.01, max_delay=0.1, jitter=0
+        )
+    assert extend_block.call_count == (0 if routes_around_model else 2)
+
+
+@pytest.mark.asyncio
+async def test_a_429_is_not_retried_when_routing_around_the_model() -> None:
+    """One try, no sleep, and the try is still on the ladder.
+
+    This is the PR in one test: the measured incident spent 51 of its 57
+    seconds in the sleep this removes.
+    """
+    limiter = ProviderRateLimiter(
+        rate_limit=100, rate_window=60, routes_around_model=True
+    )
+    calls = 0
+
+    async def fail() -> str:
+        nonlocal calls
+        calls += 1
+        raise openai.RateLimitError("429", response=_response(429), body=None)
+
+    install_attribution()
+    record_credential(0, "aa...bb")
+    ladder = install_ladder_trace()
+    try:
+        with (
+            patch("asyncio.sleep", new=AsyncMock()) as sleep,
+            pytest.raises(openai.RateLimitError),
+        ):
+            await limiter.execute_with_retry(fail, max_retries=4)
+        sleep.assert_not_awaited()
+    finally:
+        _LADDER.set(None)
+
+    assert calls == 1
+    payload = ladder_payload(ladder.slot())
+    assert payload["summary"]["tries"] == 1
+    assert payload["summary"]["statuses_by_code"] == {"429": 1}
+    assert payload["summary"]["time_sleeping_ms"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_5xx_is_still_retried_when_routing_around_the_model() -> None:
+    """Routing is a statement about 429s only.
+
+    A 5xx is the gateway failing, not this model being throttled, and the same
+    key on the same model is the only place it can be waited out.
+    """
+    limiter = ProviderRateLimiter(
+        rate_limit=100, rate_window=60, routes_around_model=True
+    )
+    calls = 0
+
+    async def flaky() -> str:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise openai.InternalServerError("boom", response=_response(502), body=None)
+        return "ok"
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        assert await limiter.execute_with_retry(flaky, max_retries=4) == "ok"
+    assert calls == 3

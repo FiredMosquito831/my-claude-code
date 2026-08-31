@@ -354,6 +354,41 @@ class CredentialRotationState:
         )
         return rotate
 
+    async def escalate_to_key_bench(
+        self,
+        index: int,
+        model: str,
+        retry_after: float | None,
+        *,
+        key_label: str | None = None,
+    ) -> float:
+        """Bench the whole credential after a second model refused on it.
+
+        The (key, model) bench is a statement about one model. When a probe
+        on a *different* model on the same key also comes back 429, the limit
+        is the key's after all, and the pool has to stop offering it -- which
+        is exactly what ``model_bench_escalation`` does when the second bench
+        arrives through the ordinary path. This is that same escalation,
+        reached from the executor's probe rather than from a second request.
+
+        Returns the seconds the credential is now benched for, read back out
+        of the engine that decided it.
+        """
+        async with self._lock:
+            self._engine.note_rate_limit(index, retry_after=retry_after)
+            slot = self._engine.slot(index)
+            benched_for = max(slot.cooldown_until, slot.lockout_until) - self._clock()
+        record_credential_decision(
+            key_index=index,
+            key_label=key_label,
+            cls="rate_limit",
+            benched_for_s=benched_for if benched_for > 0 else None,
+            status=429,
+            retry_after=retry_after,
+            reason=(f"probe on {model} also 429 -- the key is limited, not the model"),
+        )
+        return benched_for
+
     async def reset_key(self, index: int) -> bool:
         """Manually restore one credential to HEALTHY."""
         async with self._lock:

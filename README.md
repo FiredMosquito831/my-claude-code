@@ -586,12 +586,15 @@ Ejection can never empty a chain: if every model on a route is benched, they are
 
 The card keeps the *unselected* mode's fields visible but disabled, each carrying its own note — "Not used while eject mode is `legacy`", "Not used while benching is off" — rather than dimming them and leaving you to infer why. Disabled fields are skipped by the change tracker, so switching modes cannot save the other mode's values by accident.
 
-**One model is retried before the chain is used at all.** A 429 or 5xx is retried against the same model on an exponential backoff, and three settings shape that wait:
+**A rate-limited model is routed around, not waited on.** Since 6.20.0 a `429` never sleeps and never spends a retry: the (key, model) pair is benched and the request moves to the next model on the **same provider**, because a gateway that limits one model usually still answers another on the same key in the same second. One measured request spent 51 of its 57 seconds asleep between retries of a model that was refusing in 0.2 s, with a healthy sibling one chain slot away. `RATE_LIMIT_ROUTES_AROUND_MODEL=false` restores retry-then-rotate.
+
+**One model is still retried on a 5xx before the chain is used.** An upstream `5xx` or a dropped connection is retried against the same model on an exponential backoff — that is the one failure a second knock on the same key can fix — and four settings shape it:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `PROVIDER_RETRY_BACKOFF_BASE_SECONDS` | `2` | How long a provider waits before its first retry of a 429 or 5xx. Each further retry doubles it. |
-| `PROVIDER_RETRY_BACKOFF_MAX_SECONDS` | `10` | The longest single wait — the ceiling the doubling backoff stops growing past. The chain is not consulted until the ladder is spent, so this is added to how long a request waits before another model is tried. |
+| `PROVIDER_RETRY_ATTEMPTS` | `3` | **Changed in 6.20.0** — was `5`. Tries one model gets on the same key after a 5xx or a dropped connection. A 429 uses none of them. |
+| `PROVIDER_RETRY_BACKOFF_BASE_SECONDS` | `2` | How long a provider waits before its first retry of a 5xx. Each further retry doubles it. |
+| `PROVIDER_RETRY_BACKOFF_MAX_SECONDS` | `10` | The longest single wait — the ceiling the doubling backoff stops growing past. The chain is not consulted until the ladder is spent, so this is added to how long a request waits before another model is tried. A 429 walks no ladder at all. |
 | `PROVIDER_RETRY_BACKOFF_JITTER_SECONDS` | `1` | Random spread added to each wait, so several clients hitting the same limit do not retry in lockstep. |
 
 **A context overflow is not a malformed request.** Both usually arrive as HTTP `400`, and until 5.43.0 MCC treated every `400` the same way — as a client error that would fail identically everywhere, so the whole chain was abandoned. That is right for a malformed body and wrong for a conversation that outgrew the model's window, which is exactly the case a larger-window fallback exists to cover. Context-length failures are now classified as their own kind and fall through to the next model.

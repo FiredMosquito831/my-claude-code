@@ -51,6 +51,7 @@ from .constants import (
     PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
+    RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
     REASONING_ANSWER_FLOOR_MAX,
     REQUEST_LOG_COMPRESSION_LEVEL_DEFAULT,
     REQUEST_LOG_IMAGE_MAX_PIXELS_DEFAULT,
@@ -715,6 +716,14 @@ class Settings(BaseSettings):
     credential_lockout_tiers: str = Field(
         default=CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
         validation_alias="CREDENTIAL_LOCKOUT_TIERS",
+    )
+    # What a 429 means for the key that met it. True routes around the model:
+    # the (key, model) pair is benched, the executor prefers another model on
+    # the same provider, and nothing sleeps or rotates. False is 6.19.0 --
+    # retry the same model on the same key, then bench the key and rotate.
+    rate_limit_routes_around_model: bool = Field(
+        default=RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
+        validation_alias="RATE_LIMIT_ROUTES_AROUND_MODEL",
     )
     # A 429 benches the (key, model) pair, not the key. This many distinct
     # models rate-limited on one key at once means the limit is the key's

@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from my_claude_code.config.constants import (
     REQUEST_LOG_LADDER_BODY_MAX_CHARS_DEFAULT,
 )
@@ -11,6 +13,7 @@ from my_claude_code.core.upstream_ladder import (
     AttemptLadder,
     CredentialDecision,
     LadderTry,
+    current_ladder,
     format_status_census,
     install_ladder_trace,
     ladder_payload,
@@ -264,3 +267,63 @@ def test_export_census_renders_code_first() -> None:
         format_status_census({"429": 12, "502": 3})
         == "429\N{MULTIPLICATION SIGN}12, 502\N{MULTIPLICATION SIGN}3"
     )
+
+
+def test_a_probe_is_recorded_without_inflating_the_try_count() -> None:
+    """The probe is evidence about the attempt, not a try the client asked for.
+
+    Counting it in ``summary.tries`` would make a routed-around 429 read as
+    two knocks on the same model, and the root-cause sentence keys off that
+    number. It is published separately so the dashboard can still show the
+    ladder -- one try plus a probe is exactly the case an operator asks about.
+    """
+    ladder = AttemptLadder(
+        tries=[
+            LadderTry(key_index=0, key_label="aa...bb", status=429, upstream_ms=210.0),
+            LadderTry(
+                key_index=0,
+                key_label="aa...bb",
+                status=200,
+                upstream_ms=240.0,
+                source="probe",
+            ),
+        ]
+    )
+
+    payload = ladder_payload(ladder)
+
+    assert payload["summary"]["tries"] == 1
+    assert payload["summary"]["probes"] == 1
+    assert payload["summary"]["statuses_by_code"] == {"429": 1}
+    assert payload["summary"]["keys"] == 1
+    # Time spent upstream is time spent upstream, whoever asked the question.
+    assert payload["summary"]["time_upstream_ms"] == pytest.approx(450.0)
+    assert [row["source"] for row in payload["tries"]] == ["upstream", "probe"]
+
+
+def test_a_paused_ladder_records_nothing_and_resumes_afterwards() -> None:
+    """The probe's own trip through the provider stack must leave no row.
+
+    A probe is issued through the ordinary provider stack, whose retry frame
+    records an ``upstream`` try for every call it makes. Recording that would
+    put a try in the ladder that no client asked for and inflate the count the
+    root-cause sentence is built from.
+    """
+    from my_claude_code.core.upstream_ladder import _LADDER, paused_ladder
+
+    trace = install_ladder_trace()
+    try:
+        record_upstream_try(key_index=0, status=429)
+        with paused_ladder():
+            assert current_ladder() is None
+            record_upstream_try(key_index=0, status=200)
+            record_upstream_wait(5.0)
+        record_upstream_try(key_index=0, status=200, source="probe")
+    finally:
+        _LADDER.set(None)
+
+    payload = ladder_payload(trace.slot())
+    assert payload["summary"]["tries"] == 1
+    assert payload["summary"]["probes"] == 1
+    assert payload["summary"]["time_sleeping_ms"] == 0.0
+    assert [row["source"] for row in payload["tries"]] == ["upstream", "probe"]

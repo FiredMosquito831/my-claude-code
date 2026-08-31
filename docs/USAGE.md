@@ -1173,11 +1173,17 @@ Benching never empties a chain: if every model on a route is benched they are tr
 
 ### Retries & throughput
 
-How hard one model is tried before the chain is used at all: the retries on a 429 or 5xx, the attempts a provider makes on its own before routing ever sees the failure, the recovery attempts after output has started and the connection dropped, and the exponential backoff between them — first wait, ceiling, and the random jitter that stops several clients retrying in lockstep. The same card carries the client-side pace: requests per window, the window, and how many streams one provider may have open at once.
+How hard one model is tried before the chain is used at all: the retries on a 5xx or a dropped connection (a 429 is routed around instead — see **Credential health**), the attempts a provider makes on its own before routing ever sees the failure, the recovery attempts after output has started and the connection dropped, and the exponential backoff between them — first wait, ceiling, and the random jitter that stops several clients retrying in lockstep. The same card carries the client-side pace: requests per window, the window, and how many streams one provider may have open at once.
 
 ### Credential health
 
 What one key's failures cost it, and it is a short list. A **401 or 403** walks the lockout ladder — `CREDENTIAL_LOCKOUT_TIERS`, five minutes then an hour then a day by default, one step per consecutive rejection and staying at the last entry. A **429** benches the key for exactly as long as the provider asked in its `Retry-After`, or for `RATE_LIMIT_COOLDOWN_SECONDS` when it sends no header — and only for the model it happened on, until `CREDENTIAL_MODEL_BENCH_ESCALATION` (default 2) different models are limited on that key at the same time, which is when the limit is the key's rather than the model's. A **timeout or a 5xx costs a key nothing at all**, because the same keys serve every model in your chain and neither failure is the key's doing.
+
+Since 6.20.0 that 429 also stops costing the *request* anything. `RATE_LIMIT_ROUTES_AROUND_MODEL` (default on) means the pair is benched and the request goes straight to the next model on the **same provider** — same pool, same key — because that is where the evidence points. Nothing sleeps between the two, no provider-wide block is installed, and no key is rotated. When your chain holds no other model on that provider, MCC asks one 16-token question of a model you already configured there: a `200` says the key is fine and only the model is limited, a `429` says the limit is the key's after all and it is benched and rotated exactly as before. That probe appears in the request-detail ladder as its own row, tagged `probe`, and never as a request in your analytics. Turn the setting off to get the old behaviour back, sleeps and all.
+
+### Tutorial: why my request took 57 seconds
+
+Open the request in **Analytics → Requests** and expand the attempt. The ladder under it is the whole story: how many times MCC knocked, what each knock met, which key carried it, and — the number that matters here — how much of the attempt was MCC asleep rather than waiting on the model. A real one read *"3 keys × 5 tries: 14×429, 1×502 — 50s of the 57s were MCC backoff sleeps; keys 0, 1 and 2 benched 60s for moonshotai/kimi-k3"*. Fifteen knocks, six seconds of actual upstream time, and a healthy model on the same three keys sitting one chain slot away that was never asked. If you see a line like that on an install running 6.20.0 or later, check that **Credential health → Route around a rate-limited model** is on, and that the model that refused actually has a sibling configured on the same provider.
 
 ### Diagnostics
 
@@ -1311,7 +1317,9 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `FALLBACK_REASONING_ANSWER_TIMEOUT` | `0` (no limit) | **Changed in 6.16.0** — was `450`. Thinking that never becomes an answer. |
 | `FALLBACK_COOLDOWN_STEP_OVER_FLOOR` | `5.0` | The shortest remaining rate-limit cooldown that makes stepping over a model worth the chain slot it costs. |
 | `PROVIDER_RETRY_BACKOFF_BASE_SECONDS` | `2` | First wait between retries of one model. |
-| `PROVIDER_RETRY_BACKOFF_MAX_SECONDS` | `10` | The longest single wait. The chain is not tried until the ladder is spent. |
+| `PROVIDER_RETRY_BACKOFF_MAX_SECONDS` | `10` | The longest single wait. The chain is not tried until the ladder is spent, and since 6.20.0 only a 5xx or a dropped connection walks it. |
+| `PROVIDER_RETRY_ATTEMPTS` | `3` | **Changed in 6.20.0** — was `5`. Tries one model gets on the same key after a 5xx or a dropped connection. A 429 uses none of them. |
+| `RATE_LIMIT_ROUTES_AROUND_MODEL` | `true` | **New in 6.20.0.** A 429 benches the (key, model) pair and the request moves to the next model on the same provider instead of retrying and then spending the rest of the key pool. `false` restores retry-then-rotate. |
 | `PROVIDER_RETRY_BACKOFF_JITTER_SECONDS` | `1` | Random spread added to it, so several clients do not retry in lockstep. |
 | `REQUEST_LOG_WIRE_BODY_MAX_CHARS` | `8000` | Bounds the stored **message and tool structure** only. Parameters are stored whole at any size. |
 | `MAX_OUTPUT_TOKENS_CEILING` | **`131072`** | The hard ceiling on `max_tokens`. **`0` means no ceiling**; a blank field means "use the default", not "off". Range `0`–`1048576`. |

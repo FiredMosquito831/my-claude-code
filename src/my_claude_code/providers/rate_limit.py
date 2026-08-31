@@ -23,6 +23,7 @@ from my_claude_code.core.upstream_ladder import (
     record_upstream_try,
     record_upstream_wait,
 )
+from my_claude_code.core.waiting_clock import credit_waiting
 from my_claude_code.providers.failure_policy import (
     ProviderFailureOverride,
     retryable_upstream_status,
@@ -97,8 +98,17 @@ class ProviderRateLimiter:
     may be open simultaneously, independent of the sliding window.
 
     Proactive limits - throttles requests to stay within API limits.
-    Reactive limits - pauses all requests when a 429 or 5xx retry backoff is active.
+    Reactive limits - pauses all requests while a retry backoff is active.
     Concurrency limit - caps simultaneously open streams.
+
+    Which failures earn a backoff changed in 6.20.0. A 5xx or a transport
+    fault still walks the retry ladder, because the same key on the same
+    model is the only place a transient gateway blip can be waited out. A
+    429 does not, when ``routes_around_model`` is on: it is answered by the
+    pool benching the (key, model) pair and the executor moving to another
+    model, and the reactive block -- which no router can see -- is not set at
+    all. A 5xx never sets one either; one bad gateway response used to
+    throttle the credential provider-wide.
     """
 
     def __init__(
@@ -110,6 +120,7 @@ class ProviderRateLimiter:
         backoff_base_seconds: float = PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
         backoff_max_seconds: float = PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
         backoff_jitter_seconds: float = PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
+        routes_around_model: bool = False,
     ):
         if rate_limit <= 0:
             raise ValueError("rate_limit must be > 0")
@@ -130,6 +141,10 @@ class ProviderRateLimiter:
         self._backoff_base_seconds = backoff_base_seconds
         self._backoff_max_seconds = backoff_max_seconds
         self._backoff_jitter_seconds = backoff_jitter_seconds
+        # False by default so a limiter constructed directly -- in a test, or
+        # by a caller that has no settings in hand -- keeps 6.19.0 behaviour.
+        # ``factory.py`` injects the operator's real value.
+        self._routes_around_model = routes_around_model
         self._blocked_until: float = 0
         self._concurrency_sem = asyncio.Semaphore(max_concurrency)
         logger.info(
@@ -167,6 +182,10 @@ class ProviderRateLimiter:
             # This is the wait that made a 120s deadline expire without the
             # model ever being handed an accepted request.
             record_limiter_wait(wait_time)
+            # Credited after the fact for the same reason it is recorded after
+            # the fact: the executor re-arms its first-token wait by exactly
+            # the seconds that were provably spent with no upstream listening.
+            credit_waiting(wait_time)
             waited = True
         return waited
 
@@ -219,11 +238,21 @@ class ProviderRateLimiter:
     ) -> Any:
         """Execute an async callable with rate limiting and retry on transient limits.
 
-        Waits for the proactive limiter before each attempt. On ``429`` (rate limit)
-        or upstream ``5xx`` server errors, applies exponential backoff with jitter
-        and sets the reactive block before retrying. Pre-response transport errors
-        use the same attempt budget and backoff schedule without setting the
-        reactive provider block.
+        Waits for the proactive limiter before each attempt.
+
+        An upstream ``5xx`` and a pre-response transport error walk the retry
+        ladder: exponential backoff with jitter, on the same key, because a
+        transient gateway fault is the one thing a second knock can fix. The
+        reactive block is never set for either -- one 502 used to throttle the
+        whole credential.
+
+        A ``429`` walks nothing when ``routes_around_model`` is on. It is
+        re-raised on the first try so the pool can bench the (key, model)
+        pair and the executor can move to another model: 51 of one measured
+        request's 57 seconds were spent asleep between retries of a model
+        whose 429 arrived in 0.2s, with a healthy fallback one chain slot
+        away. With the setting off it retries and blocks exactly as 6.19.0
+        did.
 
         Args:
             fn: Async callable to execute.
@@ -285,6 +314,14 @@ class ProviderRateLimiter:
                 )
                 if status is None and not transport_error:
                     raise
+                if status == 429 and self._routes_around_model:
+                    # A 429 on a pooled credential is answered by routing, not
+                    # by waiting: the pool benches the (key, model) pair and
+                    # the executor moves to another model. Sleeping here spent
+                    # 51 of one measured request's 57 seconds on a model whose
+                    # 429 arrives in 0.2s, with a healthy fallback one chain
+                    # slot away. The try is already recorded above.
+                    raise
 
                 if status is None:
                     label = f"Provider transport error ({type(e).__name__})"
@@ -324,12 +361,22 @@ class ProviderRateLimiter:
                     max_attempts=total_attempts,
                     delay_s=round(delay, 3),
                 )
-                if status is not None:
+                if status == 429 and not self._routes_around_model:
+                    # Only a rate limit, and only when this limiter is the
+                    # thing that answers one. A 5xx is the gateway failing,
+                    # not the credential being throttled, and blocking every
+                    # request on this provider for it spends a cooldown
+                    # nobody asked for; a routed-around 429 has already been
+                    # spent once, as the pool's (key, model) bench, and
+                    # installing it again here would charge the same seconds
+                    # twice -- once where a router can see them, once where
+                    # it cannot.
                     self.extend_reactive_block(delay)
                 await asyncio.sleep(delay)
                 # Back-fills the try just recorded, so one ladder row carries
                 # both the status and the sleep it bought.
                 record_upstream_wait(delay)
+                credit_waiting(delay)
             else:
                 # The try that worked is a fact too: without it a ladder that
                 # ends in a success reads as if the last 429 were the outcome.

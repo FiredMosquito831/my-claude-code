@@ -53,6 +53,7 @@ from my_claude_code.core.upstream_ladder import (
     ladder_payload,
     ladder_root_cause,
 )
+from my_claude_code.core.waiting_clock import install_waiting_clock
 from my_claude_code.core.wire_capture import (
     DEFAULT_WIRE_BODY_MAX_CHARS,
     WireRequest,
@@ -140,6 +141,11 @@ class RequestCapture:
         self._ladder = (
             install_ladder_trace(ladder_body_max_chars) if self.enabled else None
         )
+        # Unconditionally, unlike every trace above it: what a first-token
+        # deadline measures must not depend on whether the request log is on.
+        # Providers credit the seconds they spend asleep here, and the
+        # executor's chunk wait re-arms for exactly those seconds.
+        install_waiting_clock()
         # Routing's own verdict, kept so a provider-level adaptation recorded
         # after the request left can be merged with it at commit time rather
         # than overwriting it.

@@ -1114,12 +1114,15 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "provider_retries",
         "number",
         settings_attr="provider_retry_attempts",
-        default="5",
+        default="3",
         restart_required=True,
         description=(
-            "How many times one model is retried on a 429 or 5xx before the "
-            "next model is tried. Each retry waits longer than the last, so "
-            "5 attempts spend about 30s before a healthy fallback is used."
+            "How many times one model is retried on the same key after an "
+            "upstream 5xx or a dropped connection, before the next model is "
+            "tried. A 429 uses none of these: it routes around the model "
+            'instead, unless "Route around a rate-limited model" is off. '
+            "Each retry waits longer than the last, so 3 attempts spend "
+            "about 6s before a healthy fallback is used."
         ),
     ),
     ConfigFieldSpec(
@@ -1175,10 +1178,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         advanced=True,
         description=(
             "The longest single wait between one model's own retries -- the "
-            "ceiling the doubling backoff stops growing past. The fallback "
-            "chain is not consulted until that ladder is spent, so every "
+            "ceiling the doubling backoff stops growing past. That ladder now "
+            "runs only for an upstream 5xx or a dropped connection, and the "
+            "fallback chain is not consulted until it is spent, so every "
             "second here is added to how long a request waits before another "
-            "model is tried."
+            "model is tried. A 429 walks no ladder at all."
         ),
     ),
     ConfigFieldSpec(
@@ -1274,6 +1278,22 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "happened on. Once this many different models are rate-limited "
             "on the same key at once, the key itself is benched instead. "
             "1 benches the whole key on every 429; 0 never does."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RATE_LIMIT_ROUTES_AROUND_MODEL",
+        "Route around a rate-limited model",
+        "credential_health",
+        "boolean",
+        settings_attr="rate_limit_routes_around_model",
+        default="true",
+        restart_required=True,
+        description=(
+            "On a 429, try another model on the same provider instead of "
+            "retrying the same one and then spending the rest of the key "
+            "pool on it. One measured request spent 51 of its 57 seconds "
+            "asleep between retries of a model that was refusing in 0.2s. "
+            "Off restores retry-then-rotate."
         ),
     ),
     # ---- Request log: what to keep ---------------------------------------

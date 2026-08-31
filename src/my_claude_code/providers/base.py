@@ -17,6 +17,7 @@ from my_claude_code.config.constants import (
     PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
+    RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
     STREAM_COMMIT_HOLDBACK_CHARS_DEFAULT,
     STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
     STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT,
@@ -84,6 +85,9 @@ class ProviderConfig:
     # Distinct models that must be rate-limited on one key at once before the
     # key itself is benched instead of just the (key, model) pair.
     credential_model_bench_escalation: int = CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT
+    # Whether a 429 is answered by routing to another model instead of by
+    # retrying this one and then spending the rest of the key pool on it.
+    routes_around_model: bool = RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT
 
 
 class BaseProvider(ABC):

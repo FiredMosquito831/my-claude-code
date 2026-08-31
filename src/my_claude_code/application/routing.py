@@ -1,7 +1,7 @@
 """Model routing for Claude-compatible requests."""
 
-from collections.abc import Callable
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from loguru import logger
@@ -132,11 +132,20 @@ class RoutedMessagesPlan:
     of the chain -- today only the vision adapter. Without them a diverted
     request is indistinguishable in the log from a route that simply points at
     that model, so nobody can tell the adapter is doing anything.
+
+    ``probe_candidates`` maps a provider id to one model the operator has
+    already configured on it. It is the executor's answer to "is this 429
+    about the model or about the key?" when the chain holds no second model
+    on the rate-limited provider: one 16-token question to a model already
+    paid for settles it. Resolved here, where routes live, so the executor
+    needs no router of its own -- and a provider with no configured route
+    simply gets no entry, which is how "skip the probe" is expressed.
     """
 
     attempts: tuple[RoutedMessagesRequest, ...]
     diverted_from: str | None = None
     diversion: RouteDiversion | None = None
+    probe_candidates: Mapping[str, ResolvedModel] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.attempts:
@@ -290,6 +299,10 @@ class ModelRouter:
         self._reasoning_dialect_lookup = reasoning_dialect_lookup
         self._output_limit_lookup = output_limit_lookup
         self._context_length_lookup = context_length_lookup
+        # Resolved once per router: the routes it reads are fixed for the
+        # life of one settings generation, and a request should not re-walk
+        # five chains to answer a question it may never ask.
+        self._probe_candidate_cache: dict[str, ResolvedModel] | None = None
 
     def resolve(self, claude_model_name: str) -> ResolvedModel:
         (
@@ -468,6 +481,7 @@ class ModelRouter:
             tuple(self._route_for(request, resolved) for resolved in chain),
             diverted_from=(route_chain[0].provider_model_ref if diverted else None),
             diversion=diversion,
+            probe_candidates=self._probe_candidates(),
         )
         if plan.has_fallbacks or diverted:
             logger.debug(
@@ -476,6 +490,38 @@ class ModelRouter:
                 " -> ".join(plan.model_refs()),
             )
         return plan
+
+    #: The order the probe walks the operator's own routes in. Haiku first
+    #: because it is the declared small/cheap model; the provider's ``/models``
+    #: catalogue is never consulted, because that is where hidden models and
+    #: paid-tier surprises live.
+    _PROBE_ROUTE_ORDER = ("haiku", "sonnet", "default", "fable", "opus")
+
+    def _probe_candidates(self) -> dict[str, ResolvedModel]:
+        """One configured model per provider, for the diagnostic probe.
+
+        Every entry comes from a route the operator wrote down -- the five
+        model settings and their fallback lists -- resolved through the same
+        ``resolve_chain`` the request itself uses. The first model that lands
+        on a provider wins; a provider named by no route gets no entry at all,
+        and the executor answers that by skipping the probe and doing exactly
+        what 6.19.0 did.
+        """
+        if self._probe_candidate_cache is not None:
+            return self._probe_candidate_cache
+        candidates: dict[str, ResolvedModel] = {}
+        for route_name in self._PROBE_ROUTE_ORDER:
+            try:
+                chain = self.resolve_chain(route_name)
+            except Exception:
+                # A route naming an unknown provider must not take down the
+                # probe for every other route, exactly as one bad fallback
+                # entry does not take down a chain.
+                continue
+            for resolved in chain:
+                candidates.setdefault(resolved.provider_id, resolved)
+        self._probe_candidate_cache = candidates
+        return candidates
 
     def _apply_vision_policy(
         self, request: MessagesRequest, chain: tuple[ResolvedModel, ...]

@@ -266,6 +266,7 @@ def _create_single_provider(
         backoff_base_seconds=config.retry_backoff_base_seconds,
         backoff_max_seconds=config.retry_backoff_max_seconds,
         backoff_jitter_seconds=config.retry_backoff_jitter_seconds,
+        routes_around_model=config.routes_around_model,
     )
     factory = _SPECIAL_PROVIDER_FACTORIES.get(descriptor.provider_id)
     if factory is not None:
@@ -318,4 +319,11 @@ def create_provider(provider_id: str, settings: Settings) -> BaseProvider:
         model_bench_escalation=config.credential_model_bench_escalation,
     )
     labels = tuple(mask_key_label(key) for key in keys)
-    return RotatingProvider(config, providers, state, key_labels=labels)
+    return RotatingProvider(
+        config,
+        providers,
+        state,
+        key_labels=labels,
+        provider_id=descriptor.provider_id,
+        routes_around_model=config.routes_around_model,
+    )

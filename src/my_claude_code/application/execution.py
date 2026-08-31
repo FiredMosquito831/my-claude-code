@@ -1,15 +1,18 @@
 """Provider execution shared by inbound API adapters."""
 
 import asyncio
+import contextlib
 import sys
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Literal, cast
 
 from loguru import logger
 
 from my_claude_code.config.constants import (
+    CREDENTIAL_PROBE_MAX_TOKENS,
+    CREDENTIAL_PROBE_TIMEOUT_SECONDS_DEFAULT,
     FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT,
     FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT,
     FALLBACK_END_CLEANLY_AFTER_COMMIT_DEFAULT,
@@ -18,11 +21,13 @@ from my_claude_code.config.constants import (
     FALLBACK_RESUME_AFTER_COMMIT_DEFAULT,
     FALLBACK_STALL_TIMEOUT_DEFAULT,
     FALLBACK_TOTAL_TIMEOUT_DEFAULT,
+    PROVIDER_RETRY_ATTEMPTS_DEFAULT,
 )
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import (
     ContentBlockText,
     Message,
+    MessagesRequest,
     SystemContent,
     Tool,
     anthropic_request_snapshot,
@@ -44,7 +49,10 @@ from my_claude_code.core.anthropic.streaming.truncation import (
     CommittedStreamTracker,
     StreamTruncation,
 )
-from my_claude_code.core.credential_attribution import record_credential
+from my_claude_code.core.credential_attribution import (
+    current_credential,
+    record_credential,
+)
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import (
     ExecutionFailure,
@@ -59,11 +67,19 @@ from my_claude_code.core.trace import (
     trace_event,
     traced_async_stream,
 )
+from my_claude_code.core.upstream_ladder import (
+    paused_ladder,
+    record_credential_decision,
+    record_upstream_try,
+)
+from my_claude_code.core.waiting_clock import waited_seconds
 
 from .deadline_hints import limit_hint
-from .ports import ProviderPort, ProviderResolver
+from .errors import ModelRateLimited
+from .ports import PooledCredentialPort, ProviderPort, ProviderResolver
 from .route_health import BenchReason, RouteHealthRegistry
 from .routing import (
+    ResolvedModel,
     RoutedMessagesPlan,
     RoutedMessagesRequest,
     apply_output_token_budget,
@@ -195,6 +211,15 @@ class RouteExecutionPolicy:
     # failure. The one state it does not attempt is a half-written tool call,
     # which cannot be handed to another model honestly.
     resume_after_commit: bool = FALLBACK_RESUME_AFTER_COMMIT_DEFAULT
+    # Tries a rate-limited model still gets when there is nowhere to route it.
+    # ``PROVIDER_RETRY_ATTEMPTS``, read here rather than in the limiter,
+    # because only the executor knows whether the chain holds an alternative.
+    # With one key and one configured model a 429 has nothing to route around,
+    # so the ladder is still the only thing that can serve the request -- and
+    # that is the case this design must not break. It is spent only after the
+    # chain, the same-provider preference and the probe have all come up
+    # empty, which on a real chain is never.
+    rate_limit_attempts: int = PROVIDER_RETRY_ATTEMPTS_DEFAULT
 
 
 # The wait is scheduled for exactly the remaining stall budget, so by the time
@@ -207,7 +232,25 @@ class _DeadlineExceeded(Exception):
     """Internal marker: our own wait elapsed, not an upstream timeout."""
 
 
-async def _next_chunk(chunks: AsyncIterator[str], timeout: float | None) -> str:
+@dataclass(frozen=True, slots=True)
+class _RateLimitRoute:
+    """Where a routed-around 429 sends the request next.
+
+    Exactly one of the two is ever set. ``prefer_provider`` moves the other
+    models on the rate-limited provider to the front of what is left;
+    ``retry_same_position`` re-enters the pool for the same model, which now
+    picks a different key because the probe proved the first one was the
+    problem. Neither set is "carry on down the chain in order", which is also
+    what an inconclusive probe means.
+    """
+
+    prefer_provider: str | None = None
+    retry_same_position: bool = False
+
+
+async def _next_chunk(
+    chunks: AsyncIterator[str], timeout: float | None, deadline: float | None = None
+) -> str:
     """Return the next chunk, or raise ``_DeadlineExceeded`` if ``timeout`` elapses.
 
     ``asyncio.wait`` rather than ``wait_for`` so a ``TimeoutError`` raised *by
@@ -215,18 +258,45 @@ async def _next_chunk(chunks: AsyncIterator[str], timeout: float | None) -> str:
     mean different things -- one is the upstream giving up, the other is us
     deciding not to keep waiting -- and only the second should be reported as a
     routing deadline.
+
+    The wait re-arms for any seconds the provider spent asleep in its own
+    backoff or behind its limiter. Those are MCC's seconds, not the model's,
+    and a first-token deadline that expires during them reports a model that
+    never had the time it was given: one measured request spent 51 of its 57
+    seconds asleep between retries. The extension is bounded by real elapsed
+    sleep -- it can only ever hand back time that provably passed with no
+    upstream listening -- so it cannot lengthen a wait on a silent model.
+
+    ``deadline`` is the whole request's budget, and it clamps the re-arm:
+    a sleep may move the first-token or stall limit, never
+    ``FALLBACK_TOTAL_TIMEOUT``.
     """
     if timeout is None:
         return await anext(chunks)
     pending = asyncio.ensure_future(anext(chunks))
-    done, _still_running = await asyncio.wait({pending}, timeout=timeout)
-    if not done:
+    deadline_at = time.monotonic() + timeout
+    if deadline is not None:
+        deadline_at = min(deadline_at, deadline)
+    credited = waited_seconds()
+    while True:
+        done, _still_running = await asyncio.wait(
+            {pending}, timeout=max(0.0, deadline_at - time.monotonic())
+        )
+        if done:
+            return pending.result()
+        spent = waited_seconds()
+        if spent > credited:
+            deadline_at += spent - credited
+            credited = spent
+            if deadline is not None:
+                deadline_at = min(deadline_at, deadline)
+            if deadline_at > time.monotonic():
+                continue
         pending.cancel()
         # Let the cancellation land before the caller closes the stream, so a
         # half-cancelled task cannot outlive the attempt that owns it.
         await asyncio.gather(pending, return_exceptions=True)
         raise _DeadlineExceeded
-    return pending.result()
 
 
 def _timeout_env_var(
@@ -729,6 +799,13 @@ class ProviderExecutor:
         # the retry-once budget for the whole process lifetime and no later
         # request ever retried its primary again.
         retried_positions: set[int] = set()
+        # One diagnostic probe per chain position per request. A verdict is a
+        # fact about one instant and is never cached across requests, but a
+        # position that keeps meeting 429s must not keep asking: with three
+        # keys that would be three probes for one answer.
+        probed_positions: set[int] = set()
+        # Tries already spent on a rate-limited model that had nowhere to go.
+        rate_limit_attempts: dict[int, int] = {}
 
         async def provider_body() -> AsyncIterator[str]:
             position, provider = prepared
@@ -814,6 +891,7 @@ class ProviderExecutor:
                                     last_progress,
                                     reasoning_since,
                                 ),
+                                deadline,
                             )
                         except StopAsyncIteration:
                             break
@@ -997,6 +1075,18 @@ class ProviderExecutor:
                     ledger.publish()
                     return
 
+                # A routed-around 429 arrives wrapped, because the pool has to
+                # say two things at once: what happened, and that it chose not
+                # to rotate. Only the routing decision reads the wrapper --
+                # everything that records, charges or raises sees the
+                # provider's own ``rate_limit`` failure, exactly as before, so
+                # the request log, ``FALLBACK_SKIP_KINDS`` and the ejection
+                # registry are untouched by the new class.
+                routed_around: ModelRateLimited | None = None
+                if isinstance(uncommitted_failure, ModelRateLimited):
+                    routed_around = uncommitted_failure
+                    uncommitted_failure = routed_around.failure
+
                 # The failed stream is closed by now, so the next attempt never
                 # runs alongside a half-open connection to the previous one.
                 failures.append(uncommitted_failure)
@@ -1024,6 +1114,7 @@ class ProviderExecutor:
                 # cannot change on a second attempt.
                 if (
                     self._retry_first == "retry_once"
+                    and routed_around is None
                     and position == 0
                     and index not in retried_positions
                     and self._error_is_retryable(uncommitted_failure)
@@ -1053,16 +1144,66 @@ class ProviderExecutor:
                 self._trace_fallback(
                     routed, uncommitted_failure, request_id=request_id, attempt=index
                 )
+                route = _RateLimitRoute()
+                if routed_around is not None and position not in probed_positions:
+                    probed_positions.add(position)
+                    route = await self._route_around_rate_limit(
+                        routed_around,
+                        provider,
+                        plan.probe_candidates,
+                        request_id=request_id,
+                        has_same_provider_candidate=any(
+                            attempts[order[later]].resolved.provider_id
+                            == routed_around.provider_id
+                            for later in range(position + 1, len(order))
+                        ),
+                    )
                 following = self._prepare_from(
                     attempts,
                     order,
-                    position + 1,
+                    position if route.retry_same_position else position + 1,
                     failures,
                     request_id=request_id,
                     on_attempt=on_attempt,
                     deadline=deadline,
                     ledger=ledger,
+                    prefer_provider=route.prefer_provider,
                 )
+                if following is None and (
+                    routed_around is not None
+                    or failure_kind(uncommitted_failure) is FailureKind.RATE_LIMIT
+                ):
+                    # Nowhere to route: one key, one configured model, and a
+                    # probe that had nothing to ask. The retry ladder is then
+                    # the only thing that can still serve this request, so the
+                    # operator's PROVIDER_RETRY_ATTEMPTS is spent here rather
+                    # than inside the limiter -- which cannot see a chain and
+                    # would have spent it on every 429 on every route. A
+                    # single-credential provider never wraps in a pool, so it
+                    # raises an ordinary rate_limit failure rather than
+                    # ``ModelRateLimited``, and both shapes land here.
+                    # ``rate_limit_attempts`` is 1 when the toggle is off,
+                    # where the limiter has already spent the same ladder.
+                    spent = rate_limit_attempts.get(position, 1)
+                    if spent < max(1, self._policy.rate_limit_attempts):
+                        rate_limit_attempts[position] = spent + 1
+                        logger.info(
+                            "MODEL RATE LIMITED: '{}' has nowhere to route;"
+                            " try {} of {}",
+                            model_ref,
+                            spent + 1,
+                            self._policy.rate_limit_attempts,
+                        )
+                        following = self._prepare_from(
+                            attempts,
+                            order,
+                            position,
+                            failures,
+                            request_id=request_id,
+                            on_attempt=on_attempt,
+                            deadline=deadline,
+                            ledger=ledger,
+                        )
                 if following is None:
                     ledger.publish()
                     raise uncommitted_failure
@@ -1432,6 +1573,138 @@ class ProviderExecutor:
             return True
         return kind in self._retry_once_kinds
 
+    async def _probe_credential_health(
+        self,
+        provider: ProviderPort,
+        candidate: ResolvedModel,
+        key_index: int,
+        request_id: str,
+    ) -> int | None:
+        """Ask one cheap question to decide whether a 429 was about the model.
+
+        A 429 on a pooled credential is ambiguous: NVIDIA NIM limits
+        ``moonshotai/kimi-k3`` per model and answers ``nemotron`` on the same
+        key in the same second, while a free-tier gateway limits the key. The
+        pool cannot tell them apart from one response, so when the chain has
+        no other model on this provider, one 16-token request to a model the
+        operator has already configured on it settles the question.
+
+        Returns the upstream status, or ``None`` if the probe was
+        inconclusive -- which is answered by doing exactly what 6.19.0 did.
+
+        Bounded by its own 5s timeout. This clock belongs to the executor,
+        which already owns every other deadline in the request; the pool
+        still holds none of its own.
+        """
+        if not isinstance(provider, PooledCredentialPort):
+            return None
+        request = MessagesRequest(
+            model=candidate.provider_model,
+            max_tokens=CREDENTIAL_PROBE_MAX_TOKENS,
+            messages=[Message(role="user", content="Say OK")],
+            stream=True,
+        )
+        _index, key_label = current_credential()
+        started = time.monotonic()
+        status: int | None = None
+        stream: AsyncIterator[str] | None = None
+        try:
+            # The probe travels the ordinary provider stack, whose retry
+            # frame would record an ``upstream`` try for it. One question
+            # deserves one row, and it is the ``probe`` row written below.
+            with paused_ladder():
+                async with asyncio.timeout(CREDENTIAL_PROBE_TIMEOUT_SECONDS_DEFAULT):
+                    stream = provider.stream_on_credential(
+                        key_index, request, request_id=request_id
+                    )
+                    with contextlib.suppress(StopAsyncIteration):
+                        # An empty stream still proves the credential accepted
+                        # the request, which is the whole question.
+                        await anext(stream)
+            # A stream that opened at all is the answer: the credential is
+            # serving this model, so the 429 was about the other one.
+            status = 200
+        except Exception as exc:
+            failure = find_execution_failure(exc)
+            status = failure.status_code if failure is not None else None
+            if status is None:
+                raw = getattr(exc, "status_code", None)
+                status = raw if isinstance(raw, int) else None
+        finally:
+            if stream is not None:
+                await close_stream_input(
+                    stream,
+                    owner="credential_probe",
+                    source="api",
+                    preserved_error=sys.exception(),
+                )
+        record_upstream_try(
+            key_index=key_index,
+            key_label=key_label,
+            status=status,
+            kind=None if status is not None else "probe_inconclusive",
+            upstream_ms=(time.monotonic() - started) * 1000.0,
+            source="probe",
+        )
+        logger.info(
+            "CREDENTIAL PROBE: '{}' on key {} answered {}",
+            candidate.provider_model_ref,
+            key_index,
+            status if status is not None else "nothing conclusive",
+        )
+        return status
+
+    async def _route_around_rate_limit(
+        self,
+        exc: ModelRateLimited,
+        provider: ProviderPort,
+        probe_candidates: Mapping[str, ResolvedModel],
+        *,
+        request_id: str,
+        has_same_provider_candidate: bool,
+    ) -> _RateLimitRoute:
+        """Decide where a routed-around 429 sends this request next.
+
+        Three answers, and only the first costs nothing. Another model on the
+        same provider is the move with evidence behind it, so it is taken
+        without asking anything. With no such model the probe decides: a 200
+        says the key is fine and only the model is limited, a 429 says the
+        limit is the key's after all and the pool should stop offering it,
+        and anything else -- an error, the 5s timeout, or no configured model
+        on this provider at all -- is inconclusive and answered by doing
+        exactly what 6.19.0 did.
+        """
+        if has_same_provider_candidate:
+            return _RateLimitRoute(prefer_provider=exc.provider_id)
+        candidate = probe_candidates.get(exc.provider_id)
+        if candidate is None or candidate.provider_model == exc.model:
+            # Nothing the operator configured on this provider that is not
+            # the model that just refused: there is no question to ask.
+            return _RateLimitRoute()
+        status = await self._probe_credential_health(
+            provider, candidate, exc.key_index, request_id
+        )
+        if status == 429 and isinstance(provider, PooledCredentialPort):
+            await provider.escalate_model_bench_to_key(
+                exc.key_index, candidate.provider_model_ref, exc.retry_after
+            )
+            # The key is benched now, so re-entering the pool for the same
+            # model picks the next credential instead -- the 6.19.0 outcome,
+            # reached only once there was evidence for it.
+            return _RateLimitRoute(retry_same_position=True)
+        if status is not None and 200 <= status < 400:
+            record_credential_decision(
+                key_index=exc.key_index,
+                key_label=current_credential()[1],
+                cls=None,
+                status=status,
+                reason=(
+                    f"probe on {candidate.provider_model_ref} answered {status}"
+                    f" -- the key is healthy, only {exc.model} is limited"
+                ),
+            )
+        return _RateLimitRoute()
+
     def _prepare_from(
         self,
         attempts: tuple[RoutedMessagesRequest, ...],
@@ -1443,6 +1716,7 @@ class ProviderExecutor:
         on_attempt: AttemptObserver | None = None,
         deadline: float | None = None,
         ledger: _AttemptLedger | None = None,
+        prefer_provider: str | None = None,
     ) -> tuple[int, ProviderPort] | None:
         """Return the first attempt at or after ``start`` that resolves and preflights.
 
@@ -1460,8 +1734,17 @@ class ProviderExecutor:
         A candidate whose provider is serving a rate-limit cooldown is stepped
         over while anything remains behind it, because trying it buys a sleep
         rather than an answer.
+
+        ``prefer_provider`` moves the candidates on one provider to the front
+        of what is left, keeping their relative order and every other rule
+        untouched. It is set only after a 429, and only because a 429 is the
+        one failure with evidence of being per-model: NVIDIA NIM refuses
+        ``kimi-k3`` on a key while answering ``nemotron`` on that same key in
+        the same second. A 5xx never sets it -- that is the gateway failing,
+        and preferring another model behind the same failing gateway is the
+        wrong bet.
         """
-        for position in range(start, len(order)):
+        for position in self._candidate_order(attempts, order, start, prefer_provider):
             index = order[position]
             routed = attempts[index]
             model_ref = routed.resolved.provider_model_ref
@@ -1542,6 +1825,33 @@ class ProviderExecutor:
                 continue
             return position, provider
         return None
+
+    @staticmethod
+    def _candidate_order(
+        attempts: tuple[RoutedMessagesRequest, ...],
+        order: tuple[int, ...],
+        start: int,
+        prefer_provider: str | None,
+    ) -> tuple[int, ...]:
+        """Positions to consider, same-provider first when one is preferred.
+
+        A reordering of the positions the loop already walks, never a second
+        code path: the provider resolution, the cooldown step-over, the
+        announcement and the preflight all still happen exactly once per
+        candidate, in the body they always ran in.
+        """
+        remaining = tuple(range(start, len(order)))
+        if prefer_provider is None:
+            return remaining
+        preferred = tuple(
+            position
+            for position in remaining
+            if attempts[order[position]].resolved.provider_id == prefer_provider
+        )
+        if not preferred:
+            return remaining
+        rest = tuple(position for position in remaining if position not in preferred)
+        return preferred + rest
 
     def _prepare_failed(
         self,
@@ -1654,6 +1964,13 @@ def route_execution_policy(settings: Settings) -> RouteExecutionPolicy:
         cooldown_step_over_floor=settings.fallback_cooldown_step_over_floor,
         end_cleanly_after_commit=settings.fallback_end_cleanly_after_commit,
         resume_after_commit=settings.fallback_resume_after_commit,
+        rate_limit_attempts=(
+            settings.provider_retry_attempts
+            if settings.rate_limit_routes_around_model
+            # With routing off the limiter already spent this ladder on the
+            # same key; spending it again here would square it.
+            else 1
+        ),
     )
 
 

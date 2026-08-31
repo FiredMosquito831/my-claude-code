@@ -60,3 +60,47 @@ def test_pyproject_first_party_packages_match_packaged_roots() -> None:
     }
     expected = {"my_claude_code", "smoke"}
     assert configured == expected
+
+
+def test_the_shipped_template_agrees_with_the_retry_backoff_ceiling() -> None:
+    """``.env.example`` is what an operator copies; it must not ship a longer ladder.
+
+    ``constants.py``, the manifest, the README, ``docs/USAGE.md`` and
+    ``tests/config/test_limit_bounds.py`` all said 10 while the template
+    shipped 60 -- a six-times-longer ladder for anyone who started from the
+    file the install instructions hand them. Nothing pinned the two together.
+    """
+    from my_claude_code.config.constants import (
+        PROVIDER_RETRY_ATTEMPTS_DEFAULT,
+        PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
+        PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
+        PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
+        RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
+    )
+
+    repo_root = Path(__file__).resolve().parents[2]
+    template = (repo_root / ".env.example").read_text(encoding="utf-8")
+    shipped = dict(
+        line.split("=", 1)
+        for line in template.splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    )
+
+    expected = {
+        "PROVIDER_RETRY_BACKOFF_MAX_SECONDS": PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
+        "PROVIDER_RETRY_BACKOFF_BASE_SECONDS": (
+            PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT
+        ),
+        "PROVIDER_RETRY_BACKOFF_JITTER_SECONDS": (
+            PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT
+        ),
+        "PROVIDER_RETRY_ATTEMPTS": PROVIDER_RETRY_ATTEMPTS_DEFAULT,
+    }
+    for key, default in expected.items():
+        assert key in shipped, f"{key} is missing from .env.example"
+        assert float(shipped[key]) == float(default), (
+            f"{key} ships {shipped[key]} in .env.example but the code uses {default}"
+        )
+    assert shipped["RATE_LIMIT_ROUTES_AROUND_MODEL"].strip().lower() == (
+        "true" if RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT else "false"
+    )

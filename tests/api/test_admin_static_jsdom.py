@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from my_claude_code.core.upstream_ladder import _TIMES
+
 HARNESS = Path(__file__).with_name("admin_jsdom_harness.mjs")
 STATIC_DIR = (
     Path(__file__).resolve().parents[2]
@@ -1226,6 +1228,30 @@ def test_a_single_try_attempt_renders_no_ladder(rendered) -> None:
     assert detail["ladderSummaries"] == []
     assert detail["ladderRootCauses"] == []
     assert detail["ladderTries"] == []
+
+
+def test_a_single_try_with_a_probe_still_shows_its_ladder(rendered) -> None:
+    """The routed-around 429 is the case the operator most needs to see.
+
+    One upstream try hides nothing, so the panel stays shut -- but one try
+    plus a diagnostic probe is the whole story of why the request went
+    somewhere else, and the gate read only summary.tries.
+    """
+    detail = rendered["requestDetail"]["singleTryWithProbe"]
+
+    assert detail["chainHidden"] is False
+    # The census renders the real multiplication sign; imported rather than
+    # spelled, so the linter's confusable check stays on for this file.
+    assert detail["ladderSummaries"] == [f"1 try · 1 probe · 1{_TIMES}429 · 1 keys"]
+    assert len(detail["ladderTries"]) == 2
+    assert "429" in detail["ladderTries"][0]
+    assert (
+        "probe — the key is healthy, the model is limited" in detail["ladderTries"][1]
+    )
+    assert detail["ladderDecisions"] == [
+        "key 0 aa...bb — moonshotai/kimi-k3 benched 60s (rate_limit):"
+        " 429, no Retry-After -- moonshotai/kimi-k3 benched 60s on this key"
+    ]
 
 
 def test_the_local_answers_filter_defaults_to_hide(rendered) -> None:

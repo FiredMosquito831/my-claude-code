@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from loguru import logger
 
+from my_claude_code.application.errors import ModelRateLimited
 from my_claude_code.application.execution import (
     AttemptResultObserver,
     ProviderExecutor,
@@ -52,6 +53,7 @@ from my_claude_code.core.anthropic.stream_contracts import (
 from my_claude_code.core.anthropic.streaming.ledger import AnthropicStreamLedger
 from my_claude_code.core.anthropic.streaming.recovery import CONTINUATION_NUDGE
 from my_claude_code.core.async_iterators import AsyncCloseable
+from my_claude_code.core.credential_attribution import install_attribution
 from my_claude_code.core.failures import (
     ExecutionFailure,
     FailureKind,
@@ -61,6 +63,16 @@ from my_claude_code.core.reasoning import (
     ReasoningAdaptation,
     ReasoningAdaptationKind,
     ReasoningPolicy,
+)
+from my_claude_code.core.upstream_ladder import (
+    _LADDER,
+    install_ladder_trace,
+    ladder_payload,
+)
+from my_claude_code.core.waiting_clock import (
+    credit_waiting,
+    install_waiting_clock,
+    waited_seconds,
 )
 from my_claude_code.providers.openai_chat.tool_calls import OpenAIToolCallAssembler
 
@@ -3727,3 +3739,552 @@ async def test_a_continuation_that_dies_before_it_is_judged_shows_nothing() -> N
     assert third_request.messages[1].content == [
         ContentBlockText(type="text", text="half an answer")
     ]
+
+
+# ===========================================================================
+# 6.20.0 -- a 429 is answered by routing, not by waiting.
+#
+# The measured incident (req_cf646ee, 14:10:35Z): fifteen tries across three
+# keys on one model, 51 of 57 seconds asleep in MCC's own backoff, and a
+# healthy model on the same provider one chain slot away that was never asked.
+# ===========================================================================
+
+
+class _PooledProvider(FakeProvider):
+    """A rotating provider double: one pool, several models, named keys."""
+
+    def __init__(
+        self,
+        provider_id: str,
+        *,
+        limited_models: frozenset[str] = frozenset(),
+        probe_status: int | None = 200,
+    ) -> None:
+        super().__init__()
+        self.provider_id = provider_id
+        self.limited_models = limited_models
+        self.probe_status = probe_status
+        self.probe_calls: list[tuple[int, str]] = []
+        self.escalations: list[tuple[int, str, float | None]] = []
+        self.served: list[str] = []
+
+    async def stream_response(
+        self,
+        request: MessagesRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        self.stream_calls.append({"request": request, "request_id": request_id})
+        if request.model in self.limited_models:
+            raise ModelRateLimited(
+                provider_id=self.provider_id,
+                model=request.model,
+                key_index=0,
+                retry_after=None,
+                failure=ExecutionFailure(
+                    kind=FailureKind.RATE_LIMIT,
+                    status_code=429,
+                    message="Rate limited.",
+                    retryable=True,
+                ),
+            )
+        self.served.append(request.model)
+        yield "event: message_stop\ndata: {}\n\n"
+
+    def stream_on_credential(
+        self,
+        key_index: int,
+        request: MessagesRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy = ReasoningPolicy.provider_default(),
+    ) -> AsyncIterator[str]:
+        self.probe_calls.append((key_index, request.model))
+        status = self.probe_status
+
+        async def _probe() -> AsyncIterator[str]:
+            if status == 429:
+                raise ExecutionFailure(
+                    kind=FailureKind.RATE_LIMIT,
+                    status_code=429,
+                    message="Rate limited.",
+                    retryable=True,
+                )
+            if status is None:
+                raise RuntimeError("nothing conclusive")
+            yield "event: message_start\ndata: {}\n\n"
+
+        return _probe()
+
+    async def escalate_model_bench_to_key(
+        self, key_index: int, model: str, retry_after: float | None
+    ) -> bool:
+        self.escalations.append((key_index, model, retry_after))
+        # The pool now offers a different key, which is not benched for the
+        # original model -- so re-entering it succeeds.
+        self.limited_models = frozenset()
+        return True
+
+
+_PROBE_HAIKU = ResolvedModel(
+    original_model="haiku",
+    provider_id="nim",
+    provider_model="nim-haiku",
+    provider_model_ref="nim/nim-haiku",
+    reasoning_preference=ReasoningPreference.CLIENT,
+)
+
+
+@pytest.fixture
+def recording_ladder():
+    install_attribution()
+    ladder = install_ladder_trace()
+    try:
+        yield ladder
+    finally:
+        _LADDER.set(None)
+
+
+async def _run_plan(executor, plan, request_id):
+    stream = executor.stream(
+        plan,
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id=request_id,
+    )
+    return [chunk async for chunk in stream]
+
+
+def _probe_plan(
+    *routed: RoutedMessagesRequest, candidates: Mapping[str, ResolvedModel]
+) -> RoutedMessagesPlan:
+    return RoutedMessagesPlan(routed, probe_candidates=candidates)
+
+
+@pytest.mark.asyncio
+async def test_a_rate_limited_model_jumps_to_the_next_model_on_the_same_provider() -> (
+    None
+):
+    """The incident, as routing: the healthy sibling is asked first.
+
+    The chain is limited -> other-provider -> sibling-on-the-same-provider.
+    Chain order would reach the sibling third; the 429's evidence is that it
+    is the one worth trying now, so it is promoted exactly one hop.
+    """
+    nim = _PooledProvider("nim", limited_models=frozenset({"kimi"}))
+    other = FakeProvider()
+    executor = _executor({"nim": nim, "other": other})
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("nim", "kimi"),
+            _routed_request("other", "glm"),
+            _routed_request("nim", "nemotron"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_route_around",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    # The sibling on the rate-limited provider served it; the other provider
+    # was never opened at all.
+    assert nim.served == ["nemotron"]
+    assert other.stream_calls == []
+    # No probe: the chain already held the answer.
+    assert nim.probe_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_5xx_takes_the_next_model_in_chain_order_not_the_same_provider() -> (
+    None
+):
+    """A 5xx is the gateway failing, so preferring its other models is wrong."""
+    nim = _PooledProvider("nim")
+    broken = ScriptedProvider(chunks=(), error=RuntimeError("upstream 502"))
+    executor = _executor({"nim": nim, "broken": broken})
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("broken", "gpt"),
+            _routed_request("nim", "glm"),
+            _routed_request("broken", "gpt-mini"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_5xx_chain_order",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert nim.served == ["glm"]
+
+
+@pytest.mark.asyncio
+async def test_a_probe_that_answers_keeps_the_key_and_continues_the_chain() -> None:
+    """No sibling in the chain, so one 16-token question decides.
+
+    A 200 says the credential is serving: the (key, model) bench stands, the
+    key keeps its health, and the chain carries on in order.
+    """
+    nim = _PooledProvider("nim", limited_models=frozenset({"kimi"}), probe_status=200)
+    other = FakeProvider()
+    executor = _executor({"nim": nim, "other": other})
+
+    stream = executor.stream(
+        _probe_plan(
+            _routed_request("nim", "kimi"),
+            _routed_request("other", "glm"),
+            candidates={"nim": _PROBE_HAIKU},
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_probe_200",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert nim.probe_calls == [(0, "nim-haiku")]
+    assert nim.escalations == []
+    assert other.stream_calls != []
+
+
+@pytest.mark.asyncio
+async def test_a_probe_is_recorded_once_and_never_as_a_try(recording_ladder) -> None:
+    """The probe travels the ordinary provider stack, which records tries.
+
+    Without pausing the recorder a probe that answers appears twice -- as an
+    upstream try nobody asked for, and as the probe row describing it -- and
+    summary.tries is the number the root-cause sentence is built from.
+    """
+    nim = _PooledProvider("nim", limited_models=frozenset({"kimi"}), probe_status=200)
+    other = FakeProvider()
+    executor = _executor({"nim": nim, "other": other})
+
+    await _run_plan(
+        executor,
+        _probe_plan(
+            _routed_request("nim", "kimi"),
+            _routed_request("other", "glm"),
+            candidates={"nim": _PROBE_HAIKU},
+        ),
+        "req_probe_one_row",
+    )
+
+    payload = ladder_payload(recording_ladder.slot())
+    # Exactly one row for one question. The double records no try of its own,
+    # so anything the probe added would show up here -- and with the real
+    # retry frame in the stack it did, until ``paused_ladder`` was added.
+    assert payload["summary"]["probes"] == 1
+    assert [row["source"] for row in payload["tries"]] == ["probe"]
+    assert payload["tries"][0]["status"] == 200
+
+
+@pytest.mark.asyncio
+async def test_a_probe_that_429s_benches_the_key_and_rotates() -> None:
+    """Two models refused on one key: the limit is the key's after all.
+
+    The whole credential is benched and the same model is re-entered into the
+    pool, which now hands it a different key -- the 6.19.0 outcome, reached
+    only once there was evidence for it.
+    """
+    nim = _PooledProvider("nim", limited_models=frozenset({"kimi"}), probe_status=429)
+    other = FakeProvider()
+    executor = _executor({"nim": nim, "other": other})
+
+    stream = executor.stream(
+        _probe_plan(
+            _routed_request("nim", "kimi"),
+            _routed_request("other", "glm"),
+            candidates={"nim": _PROBE_HAIKU},
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_probe_429",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert nim.probe_calls == [(0, "nim-haiku")]
+    assert nim.escalations == [(0, "nim/nim-haiku", None)]
+    # Re-entered for the SAME model on the next key, not stepped over.
+    assert nim.served == ["kimi"]
+    assert other.stream_calls == []
+
+
+@pytest.mark.asyncio
+async def test_no_configured_model_on_the_provider_skips_the_probe() -> None:
+    """Never the provider's ``/models`` catalogue; only routes the operator wrote.
+
+    With nothing configured on this provider there is no question to ask, so
+    the chain simply carries on -- exactly what 6.19.0 did.
+    """
+    nim = _PooledProvider("nim", limited_models=frozenset({"kimi"}))
+    other = FakeProvider()
+    executor = _executor({"nim": nim, "other": other})
+
+    stream = executor.stream(
+        _probe_plan(
+            _routed_request("nim", "kimi"),
+            _routed_request("other", "glm"),
+            candidates={},
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_no_probe",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert nim.probe_calls == []
+    assert other.stream_calls != []
+
+
+@pytest.mark.asyncio
+async def test_an_inconclusive_probe_falls_back_to_the_old_behaviour() -> None:
+    """An error or a timeout is not evidence, so nothing is escalated."""
+    nim = _PooledProvider("nim", limited_models=frozenset({"kimi"}), probe_status=None)
+    other = FakeProvider()
+    executor = _executor({"nim": nim, "other": other})
+
+    stream = executor.stream(
+        _probe_plan(
+            _routed_request("nim", "kimi"),
+            _routed_request("other", "glm"),
+            candidates={"nim": _PROBE_HAIKU},
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_probe_inconclusive",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert nim.probe_calls == [(0, "nim-haiku")]
+    assert nim.escalations == []
+    assert other.stream_calls != []
+
+
+@pytest.mark.asyncio
+async def test_the_rate_limit_failure_reaching_the_client_is_still_a_rate_limit() -> (
+    None
+):
+    """``ModelRateLimited`` is a routing signal and must never leave the executor.
+
+    With nothing left on the chain the client gets the provider's own
+    classified failure, so the request log's ``error_kind``, the wire
+    adapters and ``FALLBACK_SKIP_KINDS`` all keep reading ``rate_limit``.
+    """
+    nim = _PooledProvider("nim", limited_models=frozenset({"kimi"}))
+    executor = _executor({"nim": nim})
+
+    stream = executor.stream(
+        _plan(_routed_request("nim", "kimi")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_rate_limit_surface",
+    )
+
+    with pytest.raises(ExecutionFailure) as excinfo:
+        [chunk async for chunk in stream]
+    assert excinfo.value.kind is FailureKind.RATE_LIMIT
+
+
+# ===========================================================================
+# 6.20.0 -- a deadline measures time an upstream was actually listening.
+#
+# A backoff sleep and a limiter block are MCC's own seconds. The first-token
+# and stall deadlines ask "is this model working?", and one that expires while
+# MCC is asleep answers a different question: the measured incident spent 51
+# of its 57 seconds asleep, and the model was never handed an accepted request
+# at all. The whole-request budget is deliberately NOT re-armed -- from the
+# caller's chair a sleep is time spent.
+# ===========================================================================
+
+
+class _SleepingProvider(FakeProvider):
+    """A provider that spends real seconds asleep and says so.
+
+    Exactly what ``ProviderRateLimiter.execute_with_retry`` does: sleep, then
+    credit what was actually spent. ``credits`` bounds how many sleeps are
+    ever announced, so a test can make the accumulator stop growing and watch
+    the deadline fire on its own terms.
+    """
+
+    def __init__(
+        self, *, nap: float, naps: int, credits: int | None = None, answer: bool = True
+    ) -> None:
+        super().__init__()
+        self._nap = nap
+        self._naps = naps
+        self._credits = naps if credits is None else credits
+        self._answer = answer
+        self.slept = 0.0
+
+    async def stream_response(
+        self,
+        request: MessagesRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        self.stream_calls.append({"request": request, "request_id": request_id})
+        for index in range(self._naps):
+            await asyncio.sleep(self._nap)
+            self.slept += self._nap
+            if index < self._credits:
+                credit_waiting(self._nap)
+        if not self._answer:
+            await asyncio.sleep(10.0)
+        yield "event: message_stop\ndata: {}\n\n"
+
+
+def _sleeping_executor(
+    provider: ProviderPort, *, first_token: float, total: float = 0.0
+) -> ProviderExecutor:
+    return ProviderExecutor(
+        lambda _provider_id: provider,
+        token_counter=lambda _messages, _system, _tools: 17,
+        policy=RouteExecutionPolicy(
+            first_token_timeout=first_token,
+            total_timeout=total,
+            stall_timeout=0.0,
+            reasoning_answer_timeout=0.0,
+            attempt_share_floor=0.0,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_backoff_sleep_does_not_consume_the_first_token_deadline() -> None:
+    """0.4s of announced sleep against a 0.25s first-token deadline, and it lives.
+
+    Without the re-arm this attempt dies at 0.25s having never been refused by
+    anything: the provider was between retries, not silent.
+    """
+    install_waiting_clock()
+    provider = _SleepingProvider(nap=0.1, naps=4)
+    executor = _sleeping_executor(provider, first_token=0.25)
+
+    stream = executor.stream(
+        _plan(_routed_request("nim", "kimi")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_sleep_excluded",
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert provider.slept == pytest.approx(0.4)
+
+
+@pytest.mark.asyncio
+async def test_a_limiter_wait_does_not_consume_the_first_token_deadline() -> None:
+    """The provider's own reactive block credits the same accumulator.
+
+    Driven through the real limiter rather than a double, because the point is
+    that ``_wait_for_reactive_block`` credits *after* the sleep -- the
+    accumulator describes seconds that provably passed, never seconds that
+    were merely scheduled.
+    """
+    from my_claude_code.providers.rate_limit import ProviderRateLimiter
+
+    install_waiting_clock()
+    limiter = ProviderRateLimiter(rate_limit=100, rate_window=60)
+    assert waited_seconds() == 0.0
+
+    limiter.extend_reactive_block(0.05)
+    await limiter.wait_if_blocked()
+
+    assert waited_seconds() > 0.0
+    assert waited_seconds() <= 0.06
+
+
+@pytest.mark.asyncio
+async def test_a_sleep_can_never_push_an_attempt_past_the_total_budget() -> None:
+    """Q11 and the clamp: the budget asks a different question.
+
+    "Is this model working?" may forgive a sleep; "has this request run too
+    long?" may not, or a request could outlive the number the operator set.
+    """
+    install_waiting_clock()
+    provider = _SleepingProvider(nap=0.05, naps=100)
+    executor = _sleeping_executor(provider, first_token=0.1, total=0.3)
+
+    stream = executor.stream(
+        _plan(_routed_request("nim", "kimi")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_budget_clamp",
+    )
+
+    started = time.monotonic()
+    with pytest.raises(ExecutionFailure) as excinfo:
+        [chunk async for chunk in stream]
+    elapsed = time.monotonic() - started
+
+    assert excinfo.value.kind is FailureKind.TIMEOUT
+    # The budget is 0.3s; a generous ceiling still proves the sleeps did not
+    # extend it indefinitely, which is what removing the clamp would do.
+    assert elapsed < 2.0
+
+
+@pytest.mark.asyncio
+async def test_the_deadline_message_still_names_the_operators_number_after_a_sleep() -> (
+    None
+):
+    """The reader is sent to the knob that actually ended the attempt.
+
+    The accumulator moves *when* the deadline fires, never *what* it is
+    called: a message reading "no first token after 0.65s" would name a number
+    nothing in the configuration contains.
+    """
+    install_waiting_clock()
+    provider = _SleepingProvider(nap=0.05, naps=2, answer=False)
+    executor = _sleeping_executor(provider, first_token=0.25)
+
+    stream = executor.stream(
+        _plan(_routed_request("nim", "kimi")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_deadline_message",
+    )
+
+    with pytest.raises(ExecutionFailure) as excinfo:
+        [chunk async for chunk in stream]
+
+    assert excinfo.value.kind is FailureKind.TIMEOUT
+    assert "0.25s" in excinfo.value.message
+    assert "FALLBACK_FIRST_TOKEN_TIMEOUT" in excinfo.value.message
+
+
+def test_the_waiting_clock_is_not_the_module_that_was_removed() -> None:
+    """``core.attempt_budget`` told a pool how long it had; this is the reverse.
+
+    Direction is the whole distinction: providers report seconds they already
+    spent, and nothing here can tell a credential how long its turn may be.
+    """
+    import importlib
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("my_claude_code.core.attempt_budget")
+
+    install_waiting_clock()
+    assert waited_seconds() == 0.0
+    credit_waiting(1.5)
+    assert waited_seconds() == pytest.approx(1.5)
+    # Never negative, never a countdown: a non-positive credit is ignored.
+    credit_waiting(-5.0)
+    credit_waiting(0.0)
+    assert waited_seconds() == pytest.approx(1.5)
+    install_waiting_clock()
+    assert waited_seconds() == 0.0

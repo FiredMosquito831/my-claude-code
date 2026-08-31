@@ -4,7 +4,10 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from my_claude_code.application.deadline_hints import limit_hint
-from my_claude_code.application.errors import ApplicationUnavailableError
+from my_claude_code.application.errors import (
+    ApplicationUnavailableError,
+    ModelRateLimited,
+)
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.credential_attribution import (
@@ -12,6 +15,7 @@ from my_claude_code.core.credential_attribution import (
     NO_CREDENTIAL_LABEL,
     record_credential,
 )
+from my_claude_code.core.failures import find_execution_failure
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningDialect,
@@ -19,7 +23,10 @@ from my_claude_code.core.reasoning import (
 )
 from my_claude_code.core.upstream_ladder import record_upstream_try
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
-from my_claude_code.providers.credential_rotation import CredentialRotationState
+from my_claude_code.providers.credential_rotation import (
+    CredentialRotationState,
+    credential_failure_class,
+)
 from my_claude_code.providers.http import maybe_await_aclose
 
 
@@ -32,6 +39,15 @@ class RotatingProvider(BaseProvider):
     or not at all, a 5xx, a 410 or any other 4xx is not the credential's fault
     and would meet the same answer on every key in the pool, so it is raised
     and the executor's fallback chain tries the next *model* instead.
+
+    A 429 is the one signal that stopped rotating in 6.20.0, when
+    ``routes_around_model`` is on. The pool benches the (key, model) pair and
+    raises :class:`~my_claude_code.application.errors.ModelRateLimited`
+    without touching another key, because spending the pool on a limit that
+    is about the *model* is what the measured incident did: all three keys
+    429'd on ``moonshotai/kimi-k3`` inside 0.2s each while ``nemotron``
+    answered on key 0 in the same second. ``report_failure`` still runs first
+    and still decides health; only what happens after it changed.
 
     No clock of this wrapper's own bounds a credential's turn. An earlier
     version divided the executor's per-attempt share by the untried keys and
@@ -51,6 +67,8 @@ class RotatingProvider(BaseProvider):
         providers: Sequence[BaseProvider],
         state: CredentialRotationState,
         key_labels: Sequence[str] = (),
+        provider_id: str = "",
+        routes_around_model: bool = False,
     ) -> None:
         super().__init__(config)
         if not providers:
@@ -61,6 +79,12 @@ class RotatingProvider(BaseProvider):
         # only to identify a credential in analytics and admin views; the raw
         # key values stay inside the sub-providers.
         self._key_labels = tuple(key_labels)
+        # The registry id this pool serves. Carried only so a routed-around
+        # 429 can name the provider the executor should look for another
+        # model on; nothing else in the wrapper reads it.
+        self._provider_id = provider_id
+        # False by default so a pool built directly in a test keeps 6.19.0.
+        self._routes_around_model = routes_around_model
 
     @property
     def credential_label(self) -> str | None:
@@ -278,6 +302,27 @@ class RotatingProvider(BaseProvider):
                 rotate = await self._state.report_failure(
                     index, error, model=request.model
                 )
+                if (
+                    self._routes_around_model
+                    and credential_failure_class(error) == "rate_limit"
+                ):
+                    # The pool benched (this key, this model) and stops here
+                    # on purpose. Rotating would spend the rest of the pool on
+                    # a limit that is about the model: all three keys 429'd on
+                    # kimi-k3 inside 0.2s each while nemotron answered on key 0
+                    # in the same second. The executor is told which provider
+                    # and which model, and goes looking for another model
+                    # behind the same key.
+                    failure = find_execution_failure(error)
+                    raise ModelRateLimited(
+                        provider_id=self._provider_id,
+                        model=request.model,
+                        key_index=index,
+                        retry_after=(
+                            None if failure is None else failure.retry_after_seconds
+                        ),
+                        failure=error,
+                    ) from error
                 if not rotate:
                     raise
                 continue
@@ -306,6 +351,56 @@ class RotatingProvider(BaseProvider):
 
         if last_error is not None:
             raise last_error
+
+    def stream_on_credential(
+        self,
+        key_index: int,
+        request: MessagesRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+    ) -> AsyncIterator[str]:
+        """Stream one request on one named credential, bypassing selection.
+
+        The executor's diagnostic probe has to ask its question of the key
+        that just met the 429 -- an answer from a different key says nothing
+        about this one. Selection, health accounting and rotation are all
+        deliberately skipped: this is a measurement, and the executor decides
+        what it means. Nothing else calls it, and no clock lives here; the
+        probe's own bound is the executor's, where every deadline already is.
+        """
+        if not 0 <= key_index < len(self._providers):
+            raise IndexError(f"no credential at index {key_index}")
+        # Deliberately no ``record_credential``: the request's attribution
+        # still belongs to the attempt that failed, and a measurement must
+        # not rewrite whose key answered it.
+        return self._providers[key_index].stream_response(
+            request,
+            input_tokens,
+            request_id=request_id,
+            reasoning=reasoning,
+        )
+
+    async def escalate_model_bench_to_key(
+        self, key_index: int, model: str, retry_after: float | None
+    ) -> bool:
+        """Promote a (key, model) bench to a whole-key cooldown.
+
+        Called only when the executor's probe met a 429 on a *different*
+        model on this same credential: two models refused at once is the
+        evidence that the limit is the key's, and the pool should stop
+        offering it. Returns whether the pool holds this index at all.
+        """
+        if not 0 <= key_index < len(self._providers):
+            return False
+        await self._state.escalate_to_key_bench(
+            key_index,
+            model,
+            retry_after,
+            key_label=self._key_label(key_index),
+        )
+        return True
 
     def key_health(self) -> list[dict[str, Any]]:
         """Per-credential health snapshots (index-aligned with api_keys)."""

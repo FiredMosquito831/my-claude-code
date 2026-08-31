@@ -6,13 +6,19 @@ import httpx
 import openai
 import pytest
 
+from my_claude_code.application.errors import ModelRateLimited
 from my_claude_code.config.admin.manifest import FIELD_BY_KEY
 from my_claude_code.config.credentials import parse_credential_keys
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.credential_rotation import PoolHealthState
-from my_claude_code.core.failures import ExecutionFailure, FailureKind
+from my_claude_code.core.failures import (
+    ExecutionFailure,
+    FailureKind,
+    failure_kind,
+    find_execution_failure,
+)
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.core.upstream_ladder import (
     _LADDER,
@@ -1239,3 +1245,115 @@ async def test_a_healthy_key_with_no_model_benches_reports_an_empty_list() -> No
     state = rotation_state(1, "single")
 
     assert state.get_metrics()[0]["model_benches"] == []
+
+
+# --------------------------------------------------------------------------
+# 6.20.0: a 429 stops spending the pool.
+# --------------------------------------------------------------------------
+
+
+def _routing_pool(providers: list[_FakeProvider], policy: str) -> RotatingProvider:
+    config = ProviderConfig(
+        api_key="k1",
+        base_url="http://x",
+        api_keys=tuple(f"k{i + 1}" for i in range(len(providers))),
+        credential_rotation=policy,
+    )
+    return RotatingProvider(
+        config,
+        providers,
+        # The runtime default: a 429 is scoped to the (key, model) pair.
+        rotation_state(len(providers), policy, model_bench_escalation=2),
+        key_labels=tuple(f"k{i}...end" for i in range(len(providers))),
+        provider_id="nvidia_nim",
+        routes_around_model=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_429_raises_model_rate_limited_instead_of_rotating() -> None:
+    """The measured incident, as pool behaviour.
+
+    All three keys 429'd on one model inside 0.2s each while another model
+    answered on key 0 in the same second. Spending the pool on that is what
+    this stops: one key is tried, the pair is benched, and the executor is
+    told which provider still has models worth asking.
+    """
+    first = _FakeProvider(fail_before_first=_rate_limited(retry_after=None))
+    second = _FakeProvider(chunks=("never",))
+    third = _FakeProvider(chunks=("never",))
+    provider = _routing_pool([first, second, third], "round_robin")
+
+    with pytest.raises(ModelRateLimited) as excinfo:
+        [chunk async for chunk in provider.stream_response(_request())]
+
+    assert [first.calls, second.calls, third.calls] == [1, 0, 0]
+    assert excinfo.value.provider_id == "nvidia_nim"
+    assert excinfo.value.model == "test-model"
+    assert excinfo.value.key_index == 0
+    # The pool benched the pair and nothing else: the credential is healthy.
+    metrics = provider.key_health()
+    assert metrics[0]["state"] == "HEALTHY"
+    assert [entry["model"] for entry in metrics[0]["model_benches"]] == ["test-model"]
+    # And the canonical failure rides along, so nothing downstream has to
+    # learn a new exception class to keep calling this a rate limit.
+    assert find_execution_failure(excinfo.value.failure) is not None
+    assert failure_kind(excinfo.value) is FailureKind.RATE_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_an_auth_failure_still_rotates_with_routing_on() -> None:
+    """Routing around a model says nothing about a rejected credential."""
+    rejected = _FakeProvider(
+        fail_before_first=openai.AuthenticationError(
+            "bad key",
+            response=httpx.Response(401, request=httpx.Request("POST", "http://x")),
+            body=None,
+        )
+    )
+    healthy = _FakeProvider(chunks=("ok",))
+    provider = _routing_pool([rejected, healthy], "round_robin")
+
+    assert [c async for c in provider.stream_response(_request())] == ["ok"]
+    assert [rejected.calls, healthy.calls] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_a_transport_fault_still_rotates_with_routing_on() -> None:
+    """A different key means a different connection, and always did."""
+    broken = _FakeProvider(fail_before_first=_classified_unavailable())
+    healthy = _FakeProvider(chunks=("ok",))
+    provider = _routing_pool([broken, healthy], "round_robin")
+
+    assert [c async for c in provider.stream_response(_request())] == ["ok"]
+    assert [broken.calls, healthy.calls] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_a_429_still_rotates_with_routing_off() -> None:
+    """The documented off-switch is 6.19.0, byte for byte."""
+    limited = _FakeProvider(fail_before_first=_rate_limited(retry_after=None))
+    healthy = _FakeProvider(chunks=("ok",))
+    provider = _rotating([limited, healthy], "round_robin")
+
+    assert [c async for c in provider.stream_response(_request())] == ["ok"]
+    assert [limited.calls, healthy.calls] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_a_probe_that_429s_promotes_the_pair_bench_to_the_whole_key() -> None:
+    """Two models refused on one key is the evidence the key is the limit."""
+    providers = [_FakeProvider(chunks=("a",)), _FakeProvider(chunks=("b",))]
+    provider = _routing_pool(providers, "round_robin")
+    await provider._state.report_failure(
+        0, _rate_limited(retry_after=None), model="test-model"
+    )
+    assert provider.key_health()[0]["state"] == "HEALTHY"
+
+    assert await provider.escalate_model_bench_to_key(0, "other-model", None) is True
+
+    health = provider.key_health()[0]
+    assert health["state"] == "COOLDOWN"
+    assert health["cooldown_remaining"] > 0
+    # An index the pool does not hold is answered, not raised on.
+    assert await provider.escalate_model_bench_to_key(9, "other-model", None) is False

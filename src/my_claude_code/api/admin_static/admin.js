@@ -8850,9 +8850,18 @@ function ladderOf(attempt) {
   return ladder && typeof ladder === "object" ? ladder : null;
 }
 
+/* One upstream try plus a diagnostic probe is exactly the case the operator
+   most needs to see -- "why did my 429 go somewhere else?" -- so the probe
+   counts toward "was anything hidden", even though it is deliberately not a
+   try. */
+function ladderRows(ladder) {
+  const summary = (ladder && ladder.summary) || {};
+  return Number(summary.tries || 0) + Number(summary.probes || 0);
+}
+
 function hasLadder(attempt) {
   const ladder = ladderOf(attempt);
-  return !!(ladder && ladder.summary && Number(ladder.summary.tries || 0) > 1);
+  return !!(ladder && ladder.summary && ladderRows(ladder) > 1);
 }
 
 /** Render a number of milliseconds as seconds, or nothing when unmeasured. */
@@ -8866,8 +8875,11 @@ function ladderSeconds(ms) {
 function ladderHeadline(attempt) {
   const ladder = ladderOf(attempt);
   const summary = ladder && ladder.summary;
-  if (!summary || Number(summary.tries || 0) <= 1) return "";
-  const parts = [`${summary.tries} tries`];
+  if (!summary || ladderRows(ladder) <= 1) return "";
+  const parts = [`${summary.tries} ${Number(summary.tries) === 1 ? "try" : "tries"}`];
+  if (Number(summary.probes || 0) > 0) {
+    parts.push(`${summary.probes} probe${Number(summary.probes) > 1 ? "s" : ""}`);
+  }
   const census = summary.statuses_by_code || {};
   const codes = Object.keys(census);
   if (codes.length) {
@@ -8897,6 +8909,15 @@ function ladderTryText(entry, position) {
   const what = entry.status != null ? String(entry.status) : entry.kind || entry.error_kind;
   // A try with no status and no exception name is a wait, not a knock.
   parts.push(what || entry.source);
+  // A probe is not a try the client asked for, and reading it as one would
+  // make a routed-around 429 look like two knocks on the same model.
+  if (entry.source === "probe") {
+    parts.push(
+      entry.status === 429
+        ? "probe — the key is limited, not just the model"
+        : "probe — the key is healthy, the model is limited",
+    );
+  }
   if (entry.upstream_ms != null) parts.push(`${Math.round(entry.upstream_ms)}ms`);
   // Missing terms are omitted rather than rendered as 0: the project's
   // not-measured convention, and a zero wait is a claim we cannot make.
@@ -8935,8 +8956,7 @@ function ladderDecisionText(decision) {
  */
 function appendLadder(item, ladder) {
   if (!ladder) return;
-  const summary = ladder.summary || {};
-  if (Number(summary.tries || 0) <= 1) return;
+  if (ladderRows(ladder) <= 1) return;
 
   if (ladder.root_cause) {
     const why = document.createElement("p");

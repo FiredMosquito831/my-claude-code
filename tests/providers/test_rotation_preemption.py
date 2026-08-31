@@ -220,6 +220,8 @@ async def test_the_pool_holds_no_clock_of_its_own() -> None:
     timer no operator configured, and every expiry was reported as a timeout
     on a key that was only connecting slowly.
     """
+    import inspect
+
     from my_claude_code.providers.runtime import rotating as rotating_module
 
     assert not hasattr(rotating_module, "MIN_CREDENTIAL_FIRST_TOKEN_SECONDS")
@@ -229,6 +231,26 @@ async def test_the_pool_holds_no_clock_of_its_own() -> None:
     # downstream of routing is told when the attempt's share runs out.
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("my_claude_code.core.attempt_budget")
+
+    # 6.20.0 added two clocks to the request and neither of them is here.
+    #
+    # ``core.waiting_clock`` flows the other way -- providers telling the
+    # executor what they already spent, never the executor telling a pool how
+    # long it may take -- so the pool has no reason to import it, and a pool
+    # that did would be one refactor away from reading a budget again.
+    assert not hasattr(rotating_module, "waiting_clock")
+    assert not hasattr(rotating_module, "waited_seconds")
+    assert not hasattr(rotating_module, "credit_waiting")
+
+    # The diagnostic probe's 5s bound lives in the executor, which already
+    # owns every deadline in the request. The wrapper may hand a probe a
+    # credential; it may not time one.
+    assert not any(
+        name.startswith("_probe") for name in vars(rotating_module.RotatingProvider)
+    )
+    source = inspect.getsource(rotating_module)
+    for banned in ("asyncio.timeout", "wait_for", "time.monotonic"):
+        assert banned not in source, f"{banned} is a clock, and the pool holds none"
 
 
 @pytest.mark.asyncio

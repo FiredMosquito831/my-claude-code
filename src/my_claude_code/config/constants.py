@@ -195,7 +195,12 @@ FALLBACK_EJECT_MIN_SAMPLES_DEFAULT = 8
 # Resilience knobs that used to be module constants. Each one decides how long a
 # failing model is allowed to hold a request, which is a deployment question,
 # not a protocol fact.
-PROVIDER_RETRY_ATTEMPTS_DEFAULT = 5
+# Tries one model gets on ONE key before the failure is handed to the chain.
+# Since 6.20.0 this ladder covers only 5xx and transport faults: a 429 is
+# answered by routing to another model, not by waiting, so it consumes none of
+# these. 3 at 2s/4s covers a transient gateway blip; the 5 this shipped as
+# spent ~24s per key on failures the chain could have stepped over.
+PROVIDER_RETRY_ATTEMPTS_DEFAULT = 3
 STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT = 5
 STREAM_MIDSTREAM_RECOVERY_ATTEMPTS_DEFAULT = 5
 # Output is held this long before it commits. While held, a failure can still
@@ -246,6 +251,20 @@ CREDENTIAL_LOCKOUT_TIERS_DEFAULT = "300,3600,86400"
 # and 6.18.0 removed every NIM model from the route for 60s as a result.
 # 1 restores that behaviour (never scope); 0 never escalates to the whole key.
 CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT = 2
+# What a 429 on a pooled credential means. True: it benches the (key, model)
+# pair and the executor moves to another model on the SAME provider first,
+# because a gateway that limits one model usually still answers another on the
+# same key in the same second. Nothing sleeps, no reactive block is installed
+# and no key is rotated for that 429. False restores 6.19.0 exactly --
+# retry-then-rotate, whole-key bench, and the backoff ladder in between, which
+# on one measured request spent 51 of its 57 seconds asleep.
+RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT = True
+# When the chain holds no other model on the rate-limited provider, one cheap
+# question decides whether the 429 was about the model or about the key. It is
+# bounded by its own clock, in the executor, and expiry means "inconclusive".
+CREDENTIAL_PROBE_TIMEOUT_SECONDS_DEFAULT = 5.0
+# The probe asks for nothing worth paying for: enough to see a status.
+CREDENTIAL_PROBE_MAX_TOKENS = 16
 # Stepping a cooled-down model over costs the chain a slot, so the wait has to
 # outlive the hop it saves before routing is worth doing.
 FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT = 5.0
@@ -256,7 +275,7 @@ FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT = 5.0
 # at all, so it is bounded by what a caller will wait rather than by what an
 # upstream limit takes to clear: at 60 the ladder ran 2/4/8/16 per key, which
 # measured ~100s across a three-key pool while the first-token deadline kept
-# ticking.
+# ticking. Since 6.20.0 only a 5xx or a transport fault ever walks it.
 PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT = 2.0
 PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT = 10.0
 PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT = 1.0

@@ -1406,6 +1406,67 @@ const requestDetail = {
       }),
     ],
   }),
+  /* One upstream try and one diagnostic probe: the routed-around 429. The
+     gate used to read summary.tries alone, so precisely the case an operator
+     asks about -- "why did my request go somewhere else?" -- showed no
+     ladder at all. */
+  singleTryWithProbe: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        outcome: "failed",
+        error_kind: "rate_limit",
+        error_message: "Rate limited.",
+        key_index: 0,
+        key_label: "aa...bb",
+        params: {
+          ladder: {
+            tries: [
+              {
+                source: "upstream",
+                key_index: 0,
+                key_label: "aa...bb",
+                status: 429,
+                upstream_ms: 210,
+              },
+              {
+                source: "probe",
+                key_index: 0,
+                key_label: "aa...bb",
+                status: 200,
+                upstream_ms: 240,
+              },
+            ],
+            summary: {
+              tries: 1,
+              probes: 1,
+              statuses_by_code: { 429: 1 },
+              keys: 1,
+              time_upstream_ms: 450,
+              time_sleeping_ms: 0,
+              time_limiter_ms: 0,
+              tries_dropped: 0,
+            },
+            credentials: [
+              {
+                key_index: 0,
+                key_label: "aa...bb",
+                class: "rate_limit",
+                benched_for_s: null,
+                model: "moonshotai/kimi-k3",
+                model_benched_for_s: 60,
+                status: 429,
+                retry_after: null,
+                reason: "429, no Retry-After -- moonshotai/kimi-k3 benched 60s on this key",
+              },
+            ],
+            root_cause: "",
+          },
+        },
+      }),
+    ],
+  }),
   /* A stream that had already reached the client and then stalled. One
      attempt, no ladder: the panel used to hide itself in exactly this shape,
      which is the only place the truncation is ever said. */

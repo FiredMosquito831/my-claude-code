@@ -2175,8 +2175,12 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   </li>
                   <li>
                     <strong>Retries before the chain</strong> — attempts against
-                    one model on a 429 or 5xx before the next model is tried.
-                    Each retry waits longer than the last.
+                    one model on the same key after an upstream 5xx or a
+                    dropped connection, before the next model is tried. Each
+                    retry waits longer than the last. A 429 uses none of them:
+                    it routes around the model instead, unless you turn
+                    <strong>Route around a rate-limited model</strong> off on
+                    the Credential health card.
                   </li>
                 </ul>
                 <p>
@@ -2280,7 +2284,15 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   happened on;
                   <code>CREDENTIAL_MODEL_BENCH_ESCALATION</code> is how many
                   different models have to be rate-limited on the same key at
-                  once before the key itself is benched. Nothing else on this page benches a key; see
+                  once before the key itself is benched.
+                  <code>RATE_LIMIT_ROUTES_AROUND_MODEL</code> decides what
+                  happens next: on (the default) the request goes straight to
+                  the next model on the <em>same</em> provider rather than
+                  retrying the one that refused and then spending the rest of
+                  the pool on it &mdash; one measured request spent 51 of its 57
+                  seconds asleep between those retries. Off restores
+                  retry-then-rotate.
+                  Nothing else on this page benches a key; see
                   <a href="#guide-rotation">Use more than one key safely</a>.
                 </p>
                 <p class="guide-note">

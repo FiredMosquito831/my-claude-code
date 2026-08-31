@@ -76,8 +76,17 @@ def classify_provider_failure(
     mark_rate_limited: MarkRateLimited,
     provider_failure_override: ProviderFailureOverride | None = None,
     cooldown_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
+    mark_rate_limited_enabled: bool = True,
 ) -> ExecutionFailure:
-    """Return one detailed canonical failure after provider retries are exhausted."""
+    """Return one detailed canonical failure after provider retries are exhausted.
+
+    ``mark_rate_limited_enabled`` is False when the pool routes around a
+    rate-limited model. The rotation engine's (key, model) bench is then the
+    single record of that cooldown; installing a provider-wide reactive block
+    as well spends the same sixty seconds twice -- once as a bench the router
+    can step over, once as a sleep inside the credential that no router can
+    see. Defaults True, so a caller that has no opinion keeps 6.19.0.
+    """
     if isinstance(exc, ExecutionFailure):
         failure = exc
         message = failure.message
@@ -97,6 +106,7 @@ def classify_provider_failure(
             read_timeout_s=read_timeout_s,
             mark_rate_limited=mark_rate_limited,
             cooldown_seconds=cooldown_seconds,
+            mark_rate_limited_enabled=mark_rate_limited_enabled,
         )
     message = format_execution_failure_message(
         failure,
@@ -344,13 +354,15 @@ def _classify_provider_failure(
     read_timeout_s: float | None,
     mark_rate_limited: MarkRateLimited,
     cooldown_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
+    mark_rate_limited_enabled: bool = True,
 ) -> ExecutionFailure:
     if isinstance(exc, ExecutionFailure):
         if exc.kind == FailureKind.RATE_LIMIT:
-            _mark_rate_limited_when_positive(
-                mark_rate_limited,
-                rate_limit_cooldown_seconds(exc, cooldown_seconds),
-            )
+            if mark_rate_limited_enabled:
+                _mark_rate_limited_when_positive(
+                    mark_rate_limited,
+                    rate_limit_cooldown_seconds(exc, cooldown_seconds),
+                )
             published = retry_after_from_error(exc)
             if exc.retry_after_seconds is None and published is not None:
                 # ExecutionFailure is frozen by design, so carry the header
@@ -363,10 +375,11 @@ def _classify_provider_failure(
     if isinstance(exc, openai.AuthenticationError):
         return _failure(FailureKind.AUTHENTICATION, 401, _AUTHENTICATION_MESSAGE, False)
     if isinstance(exc, openai.RateLimitError):
-        _mark_rate_limited_when_positive(
-            mark_rate_limited,
-            rate_limit_cooldown_seconds(exc, cooldown_seconds),
-        )
+        if mark_rate_limited_enabled:
+            _mark_rate_limited_when_positive(
+                mark_rate_limited,
+                rate_limit_cooldown_seconds(exc, cooldown_seconds),
+            )
         return _failure(
             FailureKind.RATE_LIMIT,
             429,

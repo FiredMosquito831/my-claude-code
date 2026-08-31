@@ -31,7 +31,8 @@ is actually spent -- the backoff sleep and the limiter's own wait.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
@@ -62,7 +63,10 @@ _TIMES = "\N{MULTIPLICATION SIGN}"
 #: ``backoff``      -- MCC's own exponential sleep between two tries.
 #: ``limiter_wait`` -- the provider-wide reactive block making this task wait.
 #: ``bench``        -- the credential pool had nothing left to hand out.
-type TrySource = Literal["upstream", "backoff", "limiter_wait", "bench"]
+#: ``probe``        -- a <=16-token diagnostic request to another model on the
+#:                    same credential, asked only to decide whether a 429 was
+#:                    about the model or about the key.
+type TrySource = Literal["upstream", "backoff", "limiter_wait", "bench", "probe"]
 
 # ``waited_ms`` on any other row is MCC's own backoff -- a sleep is normally
 # back-filled onto the ``upstream`` try it followed, so keying the total on
@@ -209,6 +213,23 @@ def install_ladder_trace(
     slot = LadderTrace(body_limit=body_limit)
     _LADDER.set(slot)
     return slot
+
+
+@contextmanager
+def paused_ladder() -> Iterator[None]:
+    """Stop recording for the duration of a diagnostic probe.
+
+    A probe goes through the same provider stack as a request, so the retry
+    frame records its own ``upstream`` row for it -- and a probe that answers
+    would then appear twice: once as a try the client never asked for, and
+    once as the ``probe`` row that describes it. The caller records the single
+    honest row itself, once it knows the verdict.
+    """
+    token = _LADDER.set(None)
+    try:
+        yield
+    finally:
+        _LADDER.reset(token)
 
 
 def current_ladder() -> LadderTrace | None:
@@ -418,12 +439,18 @@ def ladder_payload(ladder: AttemptLadder) -> dict[str, Any]:
     ]
 
     keys = {entry.key_index for entry in upstream if entry.key_index is not None}
+    # A probe is not a try the client asked for, so it stays out of ``tries``
+    # -- but it is the whole reason a one-try ladder is worth showing, so the
+    # count is published beside it and the dashboard's "nothing was hidden"
+    # gate reads both.
+    probes = sum(1 for entry in ladder.tries if entry.source == "probe")
     return {
         "tries": tries,
         "summary": {
             # Upstream tries only. A backoff sleep and a limiter wait get their
             # own rows so the ordering survives, but neither is a try.
             "tries": len(upstream),
+            "probes": probes,
             "statuses_by_code": dict(sorted(census.items(), key=_census_order)),
             "keys": len(keys),
             "time_upstream_ms": _rounded(

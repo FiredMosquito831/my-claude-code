@@ -117,7 +117,10 @@ async def test_degraded_function_retries_unchanged_request_then_succeeds() -> No
 
     assert create.await_count == 2
     assert create.call_args_list[0].kwargs == create.call_args_list[1].kwargs
-    extend_block.assert_called_once()
+    # A 529 is an upstream 5xx: since 6.20.0 it walks the retry ladder but
+    # never installs the provider-wide reactive block, so one bad gateway
+    # response no longer throttles every request on the credential.
+    extend_block.assert_not_called()
     sleep.assert_awaited_once()
     event_text = "".join(events)
     assert "Recovered" in event_text
@@ -159,7 +162,9 @@ async def test_degraded_function_exhaustion_is_detailed_redacted_overload() -> N
         ]
 
     assert create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
-    assert extend_block.call_count == DEFAULT_UPSTREAM_MAX_RETRIES
+    # Same rule at exhaustion: every retry slept, none of them blocked the
+    # provider.
+    assert extend_block.call_count == 0
     assert sleep.await_count == DEFAULT_UPSTREAM_MAX_RETRIES
 
     failure = exc_info.value

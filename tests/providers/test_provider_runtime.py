@@ -61,6 +61,7 @@ def _make_settings(**overrides):
     mock.provider_retry_backoff_base_seconds = 2.0
     mock.provider_retry_backoff_max_seconds = 60.0
     mock.provider_retry_backoff_jitter_seconds = 1.0
+    mock.rate_limit_routes_around_model = True
     mock.model = "nvidia_nim/meta/llama3"
     mock.model_fable = None
     mock.model_opus = None
@@ -548,6 +549,8 @@ def test_create_provider_instantiates_each_builtin():
                 backoff_base_seconds=2.0,
                 backoff_max_seconds=60.0,
                 backoff_jitter_seconds=1.0,
+                # A 429 is answered by routing, not by this limiter's ladder.
+                routes_around_model=True,
             )
             limiter_factory.reset_mock()
 

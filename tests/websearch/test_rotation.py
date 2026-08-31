@@ -243,3 +243,28 @@ class TestSnapshot:
         rendered = str(pool.snapshot())
         assert "super-secret-key-material" not in rendered
         assert "supe…rial" in rendered
+
+
+def test_the_websearch_pool_never_reads_the_routing_toggle() -> None:
+    """``RATE_LIMIT_ROUTES_AROUND_MODEL`` is a statement about models.
+
+    A web search API has one endpoint, so there is no "another model on the
+    same provider" to route to and the setting has no meaning here. It is
+    deliberately not plumbed into ``WEBSEARCH_TUNING`` or the websearch
+    manifest, and neither is ``PROVIDER_RETRY_ATTEMPTS``: the search path has
+    its own retry policy and reaches the shared engine only through
+    ``KeyPool.report_rate_limit`` -> ``note_rate_limit()``.
+    """
+    import inspect
+    from pathlib import Path
+
+    from my_claude_code.websearch import rotation as rotation_module
+
+    banned = ("RATE_LIMIT_ROUTES_AROUND_MODEL", "routes_around_model")
+    assert not any(name in inspect.getsource(rotation_module) for name in banned)
+
+    websearch_root = Path(rotation_module.__file__).resolve().parent
+    for path in websearch_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for name in (*banned, "provider_retry_attempts"):
+            assert name not in text, f"{path.name} reads {name}"

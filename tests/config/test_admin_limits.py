@@ -91,6 +91,7 @@ SECTION_KEYS: dict[str, tuple[str, ...]] = {
         "RATE_LIMIT_COOLDOWN_SECONDS",
         "CREDENTIAL_LOCKOUT_TIERS",
         "CREDENTIAL_MODEL_BENCH_ESCALATION",
+        "RATE_LIMIT_ROUTES_AROUND_MODEL",
     ),
     "request_log": (
         "REQUEST_LOG_ENABLED",

@@ -616,7 +616,22 @@ because a gateway that limits one model has made no statement about the key's
 others. The credential itself is benched only once
 `CREDENTIAL_MODEL_BENCH_ESCALATION` distinct models hold a live bench on it at
 the same time, for the longest window already published and never less than the
-triggering 429 asked for. The deliberate cost is that a key
+triggering 429 asked for.
+
+*Rotate the pool?* Not for a 429, when `RATE_LIMIT_ROUTES_AROUND_MODEL` is on.
+`report_failure` still runs first and still decides health; what changed is
+what happens after it. The pool raises `ModelRateLimited` -- carrying the
+provider, the model, the key and the provider's own `rate_limit`
+`ExecutionFailure` -- and the executor moves to the next chain model on that
+same provider, because that is where the evidence points: on one measured
+request all three keys refused `moonshotai/kimi-k3` inside 0.2s each while
+`nemotron` answered on key 0 in the same second. With no such model on the
+chain, one bounded diagnostic probe on a model the operator already configured
+there decides whether to keep the scoped bench or promote it to the whole key.
+The probe's clock is the executor's; the pool still holds none of its own, and
+`core/waiting_clock.py` only ever flows the other way -- providers reporting
+seconds they already spent asleep, so a first-token deadline measures time an
+upstream was actually listening. The deliberate cost is that a key
 failing 5xx or transport on every request is retried once per request rather
 than benched: the failure classes able to identify a dead key were the same
 ones emptying healthy pools.
