@@ -1892,7 +1892,15 @@ async def request_log_stats(
     local: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
-    """Aggregate request analytics over an optional epoch-second window."""
+    """Aggregate request analytics over an optional epoch-second window.
+
+    The payload carries ``served_from``: ``"rollup"`` when it came from the
+    pre-aggregated stats tables, ``"rows"`` when it was computed by scanning
+    the request log -- which a free-text ``q`` always forces, and which is
+    also the answer until the one-time rollup backfill has finished. A
+    rollup-served window is snapped outward to whole UTC hours, reported as
+    ``window.snapped_since`` / ``window.snapped_until``.
+    """
     require_loopback_admin(request)
     store = _request_log_store_or_none(settings)
     if store is None:

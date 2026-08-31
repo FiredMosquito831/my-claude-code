@@ -103,15 +103,23 @@ def test_stats_endpoint(client, seeded_store) -> None:
     assert stats["error_rate"] == pytest.approx(0.2)
     assert stats["tokens_in"] == 100
     assert stats["tokens_out"] == 10
-    assert stats["p50_duration_ms"] == pytest.approx(300.0)
+    # Interpolated from the 64-bucket log histogram, so it lands inside the
+    # bucket holding the exact value rather than on it. One bucket is
+    # e**_LATENCY_STEP - 1 = 26.2% wide, which bounds the difference.
+    assert stats["p50_duration_ms"] == pytest.approx(300.0, rel=0.262)
+    assert stats["served_from"] == "rollup"
     assert {entry["key"] for entry in stats["by_provider"]} == {"p1", "p2"}
     assert stats["top_errors"] == [{"message": "boom", "count": 1}]
     assert len(stats["series"]) >= 1
 
+    # Past the data, and past the UTC hour holding it: the rollup snaps a
+    # window outward to whole hours, so a "since" inside the current hour
+    # still sees that hour's rows. ``window`` reports both bounds.
     windowed = client.get(
-        "/admin/api/requests/stats", params={"since": time.time() + 1000}
+        "/admin/api/requests/stats", params={"since": time.time() + 7200}
     ).json()
     assert windowed["total"] == 0
+    assert windowed["window"]["snapped_since"] <= windowed["window"]["since"]
 
 
 @pytest.mark.parametrize(
@@ -320,7 +328,11 @@ def test_lifetime_outlives_the_retention_cap(client, seeded_store) -> None:
     windowed = client.get("/admin/api/requests/stats").json()
     lifetime = client.get("/admin/api/requests/lifetime").json()
 
-    assert windowed["total"] == 2
+    # The stats rollup is exempt from retention for the same reason
+    # ``request_totals`` is, so the window keeps its pre-prune figure instead
+    # of collapsing onto whatever rows happen to survive.
+    assert windowed["served_from"] == "rollup"
+    assert windowed["total"] == 5
     assert lifetime["requests"] == 5
 
 
@@ -554,3 +566,14 @@ def test_hide_keeps_the_row_whose_provider_is_genuinely_unknown(
 def test_a_fourth_local_value_is_refused(client, local_answer_store, path) -> None:
     response = client.get(path, params={"local": "nope"})
     assert response.status_code == 422
+
+
+def test_stats_endpoint_reports_how_it_was_served(client, seeded_store) -> None:
+    """The API contract for the new ``served_from`` field."""
+    rolled_up = client.get("/admin/api/requests/stats").json()
+    assert rolled_up["served_from"] == "rollup"
+
+    # Free-text search is a correlated EXISTS over compressed bodies, which is
+    # not a rollup dimension and never will be, so it falls back to raw rows.
+    searched = client.get("/admin/api/requests/stats", params={"q": "inin"}).json()
+    assert searched["served_from"] == "rows"

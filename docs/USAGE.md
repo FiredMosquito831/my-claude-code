@@ -762,7 +762,7 @@ Two separate local SQLite stores under `~/.fcc/logs/`, both written by a backgro
   <img src="../assets/admin-analytics.png" alt="Model request analytics" width="860">
 </div>
 
-Summary cards cover volume, success and error rate, latency percentiles, time-to-first-token and token usage. Below: requests over time, tokens by model, and per-provider and per-key tables.
+Summary cards cover volume, success and error rate, latency percentiles, time-to-first-token and token usage. Below: requests over time, tokens by model, and per-provider and per-key tables. Counts, sums and averages are exact; the p50 and p95 latency cards are interpolated from a 64-bucket log-spaced histogram (measured at or under 2.3% error on a 244k-request log), which is what lets an all-time view load in a fraction of a second. A time range that does not start and end on a whole UTC hour is widened outward to one.
 
 <div align="center">
   <img src="../assets/admin-key-performance.png" alt="Per-key performance breakdown" width="860">

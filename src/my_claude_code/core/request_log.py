@@ -4,6 +4,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import math
 import os
 import queue
 import sqlite3
@@ -51,6 +52,46 @@ _STATS_CACHE_MAX_ENTRIES = 64
 # distinct models does not return hundreds of rows on every poll.
 _BREAKDOWN_LIMIT = 50
 
+# ------------------------------------------------------------ stats rollup --
+#
+# ``stats()`` used to scan ``requests`` (and ``request_attempts``) once per
+# aggregate. On a 244k-row / 766k-attempt database that measured 31.0 seconds
+# for an all-time call under ``local=hide``. The three ``request_stats_*``
+# tables below are a pre-aggregated mirror of exactly those aggregates, keyed
+# on one UTC hour plus every dimension ``_where`` can filter on, maintained on
+# insert inside the writer's existing transaction. The same call measures
+# ~0.1 s against them.
+#
+# These are schema constants, not settings. Changing a bucket edge or a
+# dimension invalidates every stored row, so they are deliberately not
+# configurable: a knob here would silently corrupt history.
+
+# Log-spaced latency histogram. 64 buckets from 1 ms to 30 minutes was picked
+# by measurement: it holds all-time p50/p95/p99 error to <= 2.3% on the real
+# log at 26k stored rows, against 1.9-2.6% for 48 buckets and 0.15-0.96% for
+# 80. Bucket 0 is "under a millisecond"; bucket 63 is the open-ended tail.
+_LATENCY_BUCKETS = 64
+_LATENCY_FLOOR_MS = 1.0
+_LATENCY_CEILING_MS = 1_800_000.0
+_LATENCY_STEP = math.log(_LATENCY_CEILING_MS / _LATENCY_FLOOR_MS) / (
+    _LATENCY_BUCKETS - 2
+)
+
+# Backfill markers in ``request_log_meta``. ``_ROLLUP_BACKFILL_THROUGH_KEY``
+# carries the exclusive upper hour of the last committed chunk so a restart
+# resumes rather than restarting; ``_ROLLUP_BACKFILL_KEY`` is written only when
+# the walk reaches the end and is what ``stats()`` checks before serving from
+# the rollup at all.
+_IS_LOCAL_BACKFILL_KEY = "is_local_backfilled_at"
+_ROLLUP_BACKFILL_KEY = "rollup_backfilled_at"
+_ROLLUP_BACKFILL_THROUGH_KEY = "rollup_backfilled_through"
+# Hours folded per committed transaction. One 14-second transaction would push
+# the whole rollup into the WAL before any checkpoint could run.
+_ROLLUP_CHUNK_HOURS = 24
+# Rows updated per committed chunk of the ``is_local`` backfill.
+_IS_LOCAL_CHUNK_ROWS = 5_000
+_HOUR_SECONDS = 3_600
+
 # A request answered by a local optimization rule never reached a provider, so
 # its ``provider`` column is NULL by design. Grouping it under "(unknown)" was
 # accurate about the column and wrong about the fact: we know exactly what
@@ -66,6 +107,16 @@ UNKNOWN_PROVIDER_KEY = "(unknown)"
 #: know -- and is deliberately NOT a local answer.
 LOCAL_ANSWER_SQL = "(provider IS NULL AND optimization IS NOT NULL)"
 
+#: The same fact as a stored column. ``LOCAL_ANSWER_SQL`` remains the single
+#: definition of the *rule* -- it is what computes this column on insert and
+#: what the backfill matches -- but reading it back through a predicate over
+#: ``optimization`` cost the covering index: SQLite abandoned
+#: ``idx_requests_stats_v3`` (which does not carry ``optimization``) and read
+#: the base table, making ``local=hide`` slower than ``local=all`` on every
+#: scan. Indexed as the leading column of ``idx_requests_stats_v4``, the same
+#: filter is an equality seek.
+LOCAL_ANSWER_COLUMN_SQL = "is_local"
+
 #: Accepted values for the ``local`` read filter. ``all`` is the default
 #: everywhere in the store and the API; only the dashboard prefers ``hide``.
 LOCAL_FILTER_VALUES = frozenset({"all", "hide", "only"})
@@ -76,6 +127,23 @@ PROVIDER_KEY_SQL = (
     "CASE WHEN provider IS NOT NULL THEN provider"
     f" WHEN optimization IS NOT NULL THEN '{LOCAL_PROVIDER_PREFIX}' || optimization"
     f" ELSE '{UNKNOWN_PROVIDER_KEY}' END"
+)
+
+#: ``PROVIDER_KEY_SQL`` against the rollup, whose dimension columns store the
+#: empty string where ``requests`` stores SQL NULL. Kept beside the original so
+#: the two groupings cannot drift; both produce the same keys on the same data.
+ROLLUP_PROVIDER_KEY_SQL = (
+    "CASE WHEN provider <> '' THEN provider"
+    f" WHEN optimization <> '' THEN '{LOCAL_PROVIDER_PREFIX}' || optimization"
+    f" ELSE '{UNKNOWN_PROVIDER_KEY}' END"
+)
+
+#: "provider/model" as the fallback and diversion lists render it. One
+#: constant so the raw query, the rollup writer and the rollup reader cannot
+#: disagree about how a served-by string is spelled.
+SERVED_BY_KEY_SQL = (
+    f"COALESCE(provider, '{UNKNOWN_PROVIDER_KEY}') || '/' ||"
+    f" COALESCE(resolved_model, '{UNKNOWN_PROVIDER_KEY}')"
 )
 
 # Days of per-rule history the optimizer page plots. Fourteen daily buckets is
@@ -231,6 +299,257 @@ CREATE TABLE IF NOT EXISTS request_log_meta (
     value TEXT NOT NULL
 );
 """
+
+# Dimensions every rollup row is keyed on, in the order the primary key
+# declares them. Nine columns, one UTC hour of grain.
+#
+# ``requested_model`` and ``optimization`` are dimensions even though no card
+# groups by them, because ``_where`` filters on both: a model filter matches
+# ``resolved_model`` OR ``requested_model``, and a ``local:<rule>`` provider
+# key resolves to ``provider IS NULL AND optimization = ?``. Without them a
+# filter the dashboard itself can produce would be unservable.
+#
+# Hour and not day: ``_series`` switches to hourly buckets for windows under
+# 48 hours. Hour grain costs 4.6x the rows of day grain (4 626 against 993 on
+# the measured log) and is what makes that switch possible.
+_ROLLUP_DIMENSIONS = (
+    "hour_epoch",
+    "is_local",
+    "provider",
+    "resolved_model",
+    "requested_model",
+    "status",
+    "endpoint",
+    "key_label",
+    "optimization",
+)
+
+# NULL is stored as the empty string, not as a sentinel word, so the reverse
+# mapping is one ``CASE WHEN x <> ''`` and no sentinel can collide with a real
+# value. Measured on the real log: no empty-string provider, model, key or
+# optimization exists in 244 425 rows.
+_ROLLUP_DIMENSION_DDL = "\n".join(
+    f"    {name} {'INTEGER' if name in {'hour_epoch', 'is_local'} else 'TEXT'}"
+    " NOT NULL,"
+    for name in _ROLLUP_DIMENSIONS
+)
+
+# (column, DDL type, expression that produces it from a ``requests`` scan).
+#
+# Every entry maps 1:1 onto a ``CASE WHEN`` in the ``totals`` query of
+# ``stats()``. Keeping the three uses -- DDL, backfill SQL and the insert-time
+# accumulator -- generated from this one tuple is what stops them drifting.
+#
+# Averages are not stored, because averages are not additive: the sum and the
+# non-NULL count are, and ``sum / count`` reproduces SQLite's ``AVG`` exactly.
+_ROLLUP_COUNTERS: tuple[tuple[str, str, str], ...] = (
+    ("requests", "INTEGER", "COUNT(*)"),
+    ("tokens_in", "INTEGER", "COALESCE(SUM(tokens_in), 0)"),
+    ("tokens_out", "INTEGER", "COALESCE(SUM(tokens_out), 0)"),
+    ("cache_read_tokens", "INTEGER", "COALESCE(SUM(cache_read_tokens), 0)"),
+    ("cache_write_tokens", "INTEGER", "COALESCE(SUM(cache_write_tokens), 0)"),
+    (
+        "cache_reported",
+        "INTEGER",
+        "SUM(CASE WHEN cache_read_tokens IS NOT NULL THEN 1 ELSE 0 END)",
+    ),
+    ("tool_calls", "INTEGER", "COALESCE(SUM(tool_call_count), 0)"),
+    (
+        "turns_with_tools",
+        "INTEGER",
+        "SUM(CASE WHEN tool_call_count > 0 THEN 1 ELSE 0 END)",
+    ),
+    (
+        "turns_with_reasoning",
+        "INTEGER",
+        "SUM(CASE WHEN thinking_chars > 0 THEN 1 ELSE 0 END)",
+    ),
+    (
+        "served_by_fallback",
+        "INTEGER",
+        "SUM(CASE WHEN route_attempt > 0 THEN 1 ELSE 0 END)",
+    ),
+    (
+        "route_reported",
+        "INTEGER",
+        "SUM(CASE WHEN route_attempt IS NOT NULL THEN 1 ELSE 0 END)",
+    ),
+    (
+        "diverted",
+        "INTEGER",
+        "SUM(CASE WHEN route_diverted_from IS NOT NULL THEN 1 ELSE 0 END)",
+    ),
+    (
+        "vision_unavailable",
+        "INTEGER",
+        "SUM(CASE WHEN route_diversion = 'vision_unavailable' THEN 1 ELSE 0 END)",
+    ),
+    (
+        "with_images",
+        "INTEGER",
+        "SUM(CASE WHEN input_image_count > 0 THEN 1 ELSE 0 END)",
+    ),
+    ("duration_sum", "REAL", "COALESCE(SUM(duration_ms), 0)"),
+    (
+        "duration_count",
+        "INTEGER",
+        "SUM(CASE WHEN duration_ms IS NOT NULL THEN 1 ELSE 0 END)",
+    ),
+    ("ttft_sum", "REAL", "COALESCE(SUM(ttft_ms), 0)"),
+    (
+        "ttft_count",
+        "INTEGER",
+        "SUM(CASE WHEN ttft_ms IS NOT NULL THEN 1 ELSE 0 END)",
+    ),
+    # Attempt-derived, so the ``requests`` pass leaves them at zero and a
+    # second pass over ``request_attempts`` adds them in the same transaction.
+    ("early_retries", "INTEGER", "0"),
+    ("midstream_recoveries", "INTEGER", "0"),
+    ("salvages", "INTEGER", "0"),
+)
+
+_ROLLUP_COUNTER_NAMES = tuple(name for name, _type, _sql in _ROLLUP_COUNTERS)
+
+# Dimensions of the "grouped list, LIMIT 10" facts. Same as the main rollup:
+# ``status`` stays a dimension because a status filter genuinely restricts the
+# fallback, diversion and upstream lists (only the error list implies its own
+# status), and dropping it would make those three wrong under a status filter.
+_DETAIL_DIMENSIONS = _ROLLUP_DIMENSIONS
+
+#: The four grouped lists, distinguished by ``kind`` and carrying up to three
+#: extra grouping values in ``a``/``b``/``c``.
+_DETAIL_ERROR = "error"
+_DETAIL_FALLBACK = "fallback"
+_DETAIL_DIVERTED = "diverted"
+_DETAIL_UPSTREAM = "upstream"
+
+_ROLLUP_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS request_stats_rollup (
+{_ROLLUP_DIMENSION_DDL}
+{
+    chr(10).join(
+        f"    {name} {ddl} NOT NULL DEFAULT 0," for name, ddl, _sql in _ROLLUP_COUNTERS
+    )
+}
+    PRIMARY KEY ({", ".join(_ROLLUP_DIMENSIONS)})
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS request_stats_latency (
+{_ROLLUP_DIMENSION_DDL}
+    bucket INTEGER NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY ({", ".join(_ROLLUP_DIMENSIONS)}, bucket)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS request_stats_detail (
+{_ROLLUP_DIMENSION_DDL}
+    kind TEXT NOT NULL,
+    a TEXT NOT NULL DEFAULT '',
+    b TEXT NOT NULL DEFAULT '',
+    c TEXT NOT NULL DEFAULT '',
+    count INTEGER NOT NULL DEFAULT 0,
+    requests INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY ({", ".join(_DETAIL_DIMENSIONS)}, kind, a, b, c)
+) WITHOUT ROWID;
+"""
+
+# Names of the three tables, for the places that treat them as one unit
+# (``clear``, and the test that asserts ``prune`` leaves them alone).
+_ROLLUP_TABLES = (
+    "request_stats_rollup",
+    "request_stats_latency",
+    "request_stats_detail",
+)
+
+
+def _upsert_sql(table: str, keys: tuple[str, ...], counters: tuple[str, ...]) -> str:
+    """Build an additive upsert from one column tuple.
+
+    The column list, the placeholder list and the ``DO UPDATE SET`` clause are
+    all generated from the same tuple, so a column can never be added without
+    its marker -- the failure mode that once shipped a 43-column INSERT with 42
+    markers and broke every write.
+    """
+    columns = (*keys, *counters)
+    return (
+        f"INSERT INTO {table} ({', '.join(columns)})"
+        f" VALUES ({', '.join('?' * len(columns))})"
+        f" ON CONFLICT({', '.join(keys)}) DO UPDATE SET "
+        + ", ".join(f"{name} = {name} + excluded.{name}" for name in counters)
+    )
+
+
+def _is_local_value(record: RequestRecord) -> int:
+    """``LOCAL_ANSWER_SQL`` applied to a record about to be written.
+
+    One definition, three users: the stored column, the chunked backfill's
+    predicate and the rollup dimension all come from this rule.
+    """
+    return int(record.provider is None and record.optimization is not None)
+
+
+def _floor_hour(ts_epoch: float) -> int:
+    """Return the start of the UTC hour containing ``ts_epoch``."""
+    return int(ts_epoch // _HOUR_SECONDS) * _HOUR_SECONDS
+
+
+def _latency_bucket(duration_ms: float) -> int:
+    """Return the histogram bucket one duration falls in."""
+    if duration_ms < _LATENCY_FLOOR_MS:
+        return 0
+    index = 1 + int(math.log(duration_ms / _LATENCY_FLOOR_MS) / _LATENCY_STEP)
+    return min(_LATENCY_BUCKETS - 1, max(0, index))
+
+
+def _latency_bucket_edges(bucket: int) -> tuple[float, float]:
+    """Return the [low, high) millisecond edges of one bucket."""
+    if bucket <= 0:
+        return (0.0, _LATENCY_FLOOR_MS)
+    return (
+        _LATENCY_FLOOR_MS * math.exp((bucket - 1) * _LATENCY_STEP),
+        _LATENCY_FLOOR_MS * math.exp(bucket * _LATENCY_STEP),
+    )
+
+
+# The same assignment in SQL, for the backfill's ``GROUP BY``.
+#
+# ``LN`` and not ``LOG``: SQLite's ``LOG(X)`` is base 10, and using it against a
+# natural-log step is exactly the bug that produced 94-99% percentile error in
+# the first measurement pass of this design. The step is emitted at full
+# precision from the Python constant rather than rounded into the string, so
+# the two implementations cannot disagree at a bucket edge.
+_LATENCY_BUCKET_SQL = (
+    f"MIN({_LATENCY_BUCKETS - 1}, MAX(0,"
+    f" CASE WHEN duration_ms < {_LATENCY_FLOOR_MS!r} THEN 0"
+    f" ELSE 1 + CAST(LN(duration_ms / {_LATENCY_FLOOR_MS!r})"
+    f" / {_LATENCY_STEP!r} AS INTEGER) END))"
+)
+
+
+def _rollup_dimension_select(prefix: str = "") -> tuple[str, ...]:
+    """Return the nine dimension expressions read off a ``requests`` row."""
+    return (
+        f"CAST({prefix}ts_epoch / {_HOUR_SECONDS} AS INTEGER) * {_HOUR_SECONDS}",
+        f"{prefix}is_local",
+        f"COALESCE({prefix}provider, '')",
+        f"COALESCE({prefix}resolved_model, '')",
+        f"COALESCE({prefix}requested_model, '')",
+        f"{prefix}status",
+        f"{prefix}endpoint",
+        f"COALESCE({prefix}key_label, '')",
+        f"COALESCE({prefix}optimization, '')",
+    )
+
+
+_ROLLUP_UPSERT_SQL = _upsert_sql(
+    "request_stats_rollup", _ROLLUP_DIMENSIONS, _ROLLUP_COUNTER_NAMES
+)
+_LATENCY_UPSERT_SQL = _upsert_sql(
+    "request_stats_latency", (*_ROLLUP_DIMENSIONS, "bucket"), ("count",)
+)
+_DETAIL_UPSERT_SQL = _upsert_sql(
+    "request_stats_detail",
+    (*_DETAIL_DIMENSIONS, "kind", "a", "b", "c"),
+    ("count", "requests"),
+)
 
 # Request and response text, moved out of ``requests`` and compressed.
 #
@@ -463,6 +782,14 @@ _ADDED_COLUMNS = (
         "optimization_tokens_saved",
         "ALTER TABLE requests ADD COLUMN optimization_tokens_saved INTEGER",
     ),
+    # "This request never reached a provider", stored rather than re-derived.
+    # ``DEFAULT 0`` makes an un-backfilled database wrong but safe: until
+    # ``_ensure_is_local_backfill`` runs, ``local=hide`` shows the local rows
+    # it should be hiding rather than hiding rows it should be showing.
+    (
+        "is_local",
+        "ALTER TABLE requests ADD COLUMN is_local INTEGER NOT NULL DEFAULT 0",
+    ),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -483,6 +810,75 @@ _ATTEMPT_ADDED_COLUMNS = (
     ("key_label", "ALTER TABLE request_attempts ADD COLUMN key_label TEXT"),
     ("ladder_tries", "ALTER TABLE request_attempts ADD COLUMN ladder_tries INTEGER"),
 )
+
+# Written in this order by ``_record_to_row``. The INSERT's column list, its
+# placeholder list and the runtime width assertion are all generated from this
+# tuple for the same reason ``_ATTEMPT_INSERT_COLUMNS`` exists: a hand-written
+# 43-column INSERT with 42 markers once shipped and broke every write, and the
+# ``requests`` INSERT was the one site that still had no guard.
+_REQUEST_INSERT_COLUMNS = (
+    "id",
+    "ts_epoch",
+    "ts_iso",
+    "endpoint",
+    "protocol",
+    "requested_model",
+    "provider",
+    "resolved_model",
+    "stream",
+    "input_text",
+    "output_text",
+    "input_sha256",
+    "output_sha256",
+    "input_chars",
+    "output_chars",
+    "reasoning",
+    "requested_reasoning",
+    "reasoning_adaptation",
+    "reasoning_adaptation_kind",
+    "params",
+    "tokens_in",
+    "tokens_out",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "ttft_ms",
+    "duration_ms",
+    "status",
+    "error_kind",
+    "error_message",
+    "headers",
+    "key_index",
+    "key_label",
+    "thinking_text",
+    "thinking_chars",
+    "tool_calls",
+    "tool_call_count",
+    "route_attempt",
+    "route_primary_model",
+    "route_chain",
+    "route_diverted_from",
+    "route_diversion",
+    "input_image_count",
+    "optimization",
+    "optimization_tokens_saved",
+    "is_local",
+)
+
+_REQUEST_INSERT_SQL = (
+    "INSERT OR REPLACE INTO requests"
+    f" ({', '.join(_REQUEST_INSERT_COLUMNS)})"
+    f" VALUES ({', '.join('?' * len(_REQUEST_INSERT_COLUMNS))})"
+)
+
+# Every column of ``requests`` this rollup was designed against.
+#
+# A future column that carries a new fact -- a new ``CASE WHEN`` in the totals
+# query, a new grouping -- would otherwise land silently, and the rollup would
+# report a confident zero for it forever. The contract test compares this set
+# against ``PRAGMA table_info(requests)`` so adding a column fails the suite
+# until its author has decided, explicitly, whether it is a rollup dimension, a
+# rollup counter, or neither.
+_ROLLUP_ACKNOWLEDGED_COLUMNS = frozenset(_REQUEST_INSERT_COLUMNS)
 
 # Written in this order by ``_store_attempts``; the placeholder count is
 # asserted against it so a column can never be added without its marker.
@@ -666,6 +1062,17 @@ class RouteAttempt:
 RECOVERY_EARLY_RETRIES = "early_retries"
 RECOVERY_MIDSTREAM_RECOVERIES = "midstream_recoveries"
 RECOVERY_SALVAGES = "salvages"
+
+# The three recovery counters, in the order ``_ROLLUP_COUNTERS`` declares them.
+# They are attempt-derived, so the rollup's ``requests`` pass leaves them at
+# zero and a second pass over ``request_attempts`` adds them; the names are the
+# JSON keys ``_store_attempts`` writes into ``request_attempts.params``, which
+# is why they are shared rather than repeated.
+_ROLLUP_RECOVERY_COUNTERS = (
+    RECOVERY_EARLY_RETRIES,
+    RECOVERY_MIDSTREAM_RECOVERIES,
+    RECOVERY_SALVAGES,
+)
 
 
 @dataclass(slots=True)
@@ -1009,6 +1416,10 @@ class RequestLogStore:
             with conn:
                 conn.executescript(_SCHEMA)
                 conn.executescript(_TOTALS_SCHEMA)
+                # Deliberately not part of ``_SCHEMA``: that script runs before
+                # the ALTER TABLE migration, and these tables are independent of
+                # ``requests`` anyway.
+                conn.executescript(_ROLLUP_SCHEMA)
                 conn.executescript(_BODIES_SCHEMA)
                 self._ensure_added_columns(conn)
                 self._ensure_input_sha_column(conn)
@@ -1075,11 +1486,25 @@ class RequestLogStore:
             # leaving the per-key aggregate without index-only coverage.
             conn.execute("DROP INDEX IF EXISTS idx_requests_stats")
             conn.execute("DROP INDEX IF EXISTS idx_requests_stats_v2")
+            conn.execute("DROP INDEX IF EXISTS idx_requests_stats_v3")
+            # ``is_local`` leads so ``local=hide``/``only`` is an equality seek
+            # rather than a predicate that abandons the index; ``optimization``
+            # joins the column list so the ``local:<rule>`` and ``(unknown)``
+            # provider predicates stay index-only.
+            #
+            # Deliberately NOT widened with the route columns. The docstring on
+            # ``_percentiles`` records that an index leading on ``duration_ms``
+            # made ``stats()`` 2.2x slower by confusing a planner with no
+            # ``ANALYZE``, and every added column is another chance of that.
+            # The measured cost is one query: ``fallback_routes`` on raw rows
+            # went 867 -> 1047 ms because ``route_primary_model`` is uncovered,
+            # and that list is served from the rollup now.
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_requests_stats_v3 ON requests("
-                " ts_epoch, status, provider, resolved_model, endpoint,"
+                "CREATE INDEX IF NOT EXISTS idx_requests_stats_v4 ON requests("
+                " is_local, ts_epoch, status, provider, resolved_model, endpoint,"
                 " requested_model, key_label, duration_ms, ttft_ms,"
-                " tokens_in, tokens_out, cache_read_tokens, cache_write_tokens)"
+                " tokens_in, tokens_out, cache_read_tokens, cache_write_tokens,"
+                " optimization)"
             )
 
     @staticmethod
@@ -1160,6 +1585,282 @@ class RequestLogStore:
             return
         logger.info(
             "Request log lifetime totals seeded from existing rows in {:.1f}s",
+            time.monotonic() - started,
+        )
+
+    @staticmethod
+    def _meta_get(conn: sqlite3.Connection, key: str) -> str | None:
+        """Read one ``request_log_meta`` value, or None if it was never set."""
+        row = conn.execute(
+            "SELECT value FROM request_log_meta WHERE key = ?", (key,)
+        ).fetchone()
+        return None if row is None else str(row[0])
+
+    @staticmethod
+    def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
+        conn.execute(
+            "INSERT OR REPLACE INTO request_log_meta (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+
+    @classmethod
+    def _ensure_is_local_backfill(cls, conn: sqlite3.Connection) -> None:
+        """Compute the stored ``is_local`` column for rows written before it.
+
+        Chunked and committed per chunk: a single UPDATE over every local
+        answer on a large log would hold one long write transaction and push
+        the whole change into the WAL before any checkpoint could run.
+
+        ``DEFAULT 0`` means an un-backfilled row reads as upstream traffic, so
+        ``local=hide`` shows a few rows it should hide until this finishes.
+        That window is sub-second on the measured log (3 561 rows in 0.7 s) but
+        it scales with the local-answer count, which is why this runs before
+        the rollup backfill rather than beside it.
+        """
+        if cls._meta_get(conn, _IS_LOCAL_BACKFILL_KEY) is not None:
+            return
+        started = time.monotonic()
+        updated = 0
+        try:
+            while True:
+                with conn:
+                    cursor = conn.execute(
+                        "UPDATE requests SET is_local = 1 WHERE id IN ("
+                        " SELECT id FROM requests WHERE is_local = 0"
+                        f" AND {LOCAL_ANSWER_SQL} LIMIT ?)",
+                        (_IS_LOCAL_CHUNK_ROWS,),
+                    )
+                    changed = cursor.rowcount
+                if changed <= 0:
+                    break
+                updated += changed
+            with conn:
+                cls._meta_set(conn, _IS_LOCAL_BACKFILL_KEY, str(time.time()))
+        except sqlite3.Error as exc:
+            # A concurrent store on the same file may have won the race. Its
+            # marker means "already done", not "corrupt"; the next start finds
+            # the marker and skips.
+            logger.warning("Request log is_local backfill skipped: {}", exc)
+            return
+        if updated:
+            logger.info(
+                "Request log marked {} locally answered rows in {:.1f}s",
+                updated,
+                time.monotonic() - started,
+            )
+
+    @staticmethod
+    def _has_ln_function(conn: sqlite3.Connection) -> bool:
+        """Whether this SQLite was built with ``SQLITE_ENABLE_MATH_FUNCTIONS``.
+
+        Without ``LN`` the histogram cannot be bucketed in SQL. Falling back to
+        a Python pass is slower; silently mis-bucketing is not an option, and
+        using the built-in ``LOG`` instead would do exactly that -- it is base
+        10, and against a natural-log step it produces 94-99% percentile error.
+        """
+        try:
+            conn.execute("SELECT LN(2.0)").fetchone()
+        except sqlite3.Error:
+            return False
+        return True
+
+    @classmethod
+    def _backfill_rollup_chunk(
+        cls, conn: sqlite3.Connection, low: int, high: int, *, has_ln: bool
+    ) -> None:
+        """Fold ``[low, high)`` seconds of ``requests`` into the three tables.
+
+        Called inside one transaction per chunk. Every statement is a plain
+        INSERT except the attempt passes, which must add onto the bucket the
+        ``requests`` pass just created; resumability comes from the stored
+        marker alone, so a chunk is either wholly committed or wholly absent.
+        """
+        dims = _rollup_dimension_select()
+        joined = ", ".join(dims)
+        group = ", ".join(str(index) for index in range(1, len(dims) + 1))
+        window = "ts_epoch >= ? AND ts_epoch < ?"
+        bounds = (low, high)
+
+        conn.execute(
+            f"INSERT INTO request_stats_rollup ({', '.join(_ROLLUP_DIMENSIONS)},"
+            f" {', '.join(_ROLLUP_COUNTER_NAMES)})"
+            f" SELECT {joined},"
+            f" {', '.join(sql for _name, _ddl, sql in _ROLLUP_COUNTERS)}"
+            f" FROM requests WHERE {window} GROUP BY {group}",
+            bounds,
+        )
+
+        # Recovery counters live on ``request_attempts.params``. The comma join
+        # (rather than JOIN ... ON) keeps the upsert clause unambiguous to the
+        # parser, and the WHERE window keeps the id list to one chunk instead
+        # of the quarter-million-row LIST SUBQUERY the live query built.
+        attempt_dims = ", ".join(_rollup_dimension_select("r."))
+        recovery_columns = (*_ROLLUP_DIMENSIONS, *_ROLLUP_RECOVERY_COUNTERS)
+        conn.execute(
+            f"INSERT INTO request_stats_rollup ({', '.join(recovery_columns)})"
+            f" SELECT {attempt_dims},"
+            + ", ".join(
+                f"COALESCE(SUM(json_extract(a.params, '$.{name}')), 0)"
+                for name in _ROLLUP_RECOVERY_COUNTERS
+            )
+            + " FROM request_attempts AS a, requests AS r"
+            f" WHERE r.id = a.request_id AND r.{window}"
+            f" GROUP BY {group}"
+            f" ON CONFLICT({', '.join(_ROLLUP_DIMENSIONS)}) DO UPDATE SET "
+            + ", ".join(
+                f"{name} = {name} + excluded.{name}"
+                for name in _ROLLUP_RECOVERY_COUNTERS
+            ),
+            bounds,
+        )
+
+        if has_ln:
+            conn.execute(
+                f"INSERT INTO request_stats_latency"
+                f" ({', '.join(_ROLLUP_DIMENSIONS)}, bucket, count)"
+                f" SELECT {joined}, {_LATENCY_BUCKET_SQL}, COUNT(*)"
+                f" FROM requests WHERE {window} AND duration_ms IS NOT NULL"
+                f" GROUP BY {group}, {len(dims) + 1}",
+                bounds,
+            )
+        else:
+            cls._backfill_latency_chunk_in_python(conn, dims, window, bounds)
+
+        detail_columns = (
+            f"{', '.join(_DETAIL_DIMENSIONS)}, kind, a, b, c, count, requests"
+        )
+        detail_group = f"{group}, {len(dims) + 2}, {len(dims) + 3}, {len(dims) + 4}"
+        for kind, a_sql, b_sql, c_sql, predicate in (
+            (
+                _DETAIL_ERROR,
+                "error_message",
+                "''",
+                "''",
+                "status = 'error' AND error_message IS NOT NULL",
+            ),
+            (
+                _DETAIL_FALLBACK,
+                "route_primary_model",
+                SERVED_BY_KEY_SQL,
+                "''",
+                "route_attempt > 0 AND route_primary_model IS NOT NULL",
+            ),
+            (
+                _DETAIL_DIVERTED,
+                "route_diverted_from",
+                "route_diversion",
+                SERVED_BY_KEY_SQL,
+                "route_diversion IS NOT NULL AND route_diverted_from IS NOT NULL",
+            ),
+        ):
+            conn.execute(
+                f"INSERT INTO request_stats_detail ({detail_columns})"
+                f" SELECT {joined}, '{kind}', {a_sql}, {b_sql}, {c_sql},"
+                " COUNT(*), COUNT(*)"
+                f" FROM requests WHERE {window} AND {predicate}"
+                f" GROUP BY {detail_group}",
+                bounds,
+            )
+
+        # ``requests`` here is a distinct-request count, and it stays exact
+        # under SUM without a DISTINCT: a request lives in exactly one
+        # dimension bucket, so it contributes 1 per distinct upstream status it
+        # saw, and summing that over buckets reproduces
+        # ``COUNT(DISTINCT request_id)`` grouped by status. This is the only
+        # non-obvious additivity claim in the design.
+        conn.execute(
+            f"INSERT INTO request_stats_detail ({detail_columns})"
+            f" SELECT {attempt_dims}, '{_DETAIL_UPSTREAM}',"
+            " CAST(json_extract(t.value, '$.status') AS TEXT), '', '',"
+            " COUNT(*), COUNT(DISTINCT a.request_id)"
+            " FROM request_attempts AS a,"
+            " json_each(json_extract(a.params, '$.ladder.tries')) AS t,"
+            " requests AS r"
+            f" WHERE r.id = a.request_id AND r.{window}"
+            " AND a.ladder_tries > 1"
+            " AND json_extract(t.value, '$.status') IS NOT NULL"
+            f" GROUP BY {detail_group}",
+            bounds,
+        )
+
+    @staticmethod
+    def _backfill_latency_chunk_in_python(
+        conn: sqlite3.Connection,
+        dims: tuple[str, ...],
+        window: str,
+        bounds: tuple[int, int],
+    ) -> None:
+        """Bucket one chunk's durations without SQL math functions."""
+        counts: dict[tuple[Any, ...], int] = {}
+        for row in conn.execute(
+            f"SELECT {', '.join(dims)}, duration_ms FROM requests"
+            f" WHERE {window} AND duration_ms IS NOT NULL",
+            bounds,
+        ):
+            key = (*row[:-1], _latency_bucket(float(row[-1])))
+            counts[key] = counts.get(key, 0) + 1
+        if counts:
+            conn.executemany(
+                f"INSERT INTO request_stats_latency"
+                f" ({', '.join(_ROLLUP_DIMENSIONS)}, bucket, count)"
+                f" VALUES ({', '.join('?' * (len(_ROLLUP_DIMENSIONS) + 2))})",
+                [(*key, count) for key, count in counts.items()],
+            )
+
+    @classmethod
+    def _ensure_rollup_backfill(cls, conn: sqlite3.Connection) -> None:
+        """Seed the stats rollup from rows already in the table.
+
+        Runs on the writer thread before the first flush, so no request is
+        counted twice -- once here and again by ``_accumulate_rollup``. Walks
+        UTC hours in ascending order, commits every ``_ROLLUP_CHUNK_HOURS``,
+        and records the hour it reached in ``request_log_meta``. A restart
+        resumes there, which is the whole idempotence mechanism: a chunk is
+        either fully committed or not written, and the marker only ever
+        advances past a committed chunk.
+
+        ``stats()`` serves from raw rows until the completion marker lands, so
+        a partially built rollup is never read.
+        """
+        if cls._meta_get(conn, _ROLLUP_BACKFILL_KEY) is not None:
+            return
+        started = time.monotonic()
+        try:
+            bounds = conn.execute(
+                "SELECT MIN(ts_epoch), MAX(ts_epoch) FROM requests"
+            ).fetchone()
+            if bounds is None or bounds[0] is None:
+                with conn:
+                    cls._meta_set(conn, _ROLLUP_BACKFILL_KEY, str(time.time()))
+                return
+            first = _floor_hour(float(bounds[0]))
+            end = _floor_hour(float(bounds[1])) + _HOUR_SECONDS
+            resumed = cls._meta_get(conn, _ROLLUP_BACKFILL_THROUGH_KEY)
+            cursor_hour = max(first, int(resumed)) if resumed else first
+            has_ln = cls._has_ln_function(conn)
+            if not has_ln:
+                logger.warning(
+                    "SQLite has no LN(); bucketing request latencies in Python"
+                )
+            chunk = _ROLLUP_CHUNK_HOURS * _HOUR_SECONDS
+            while cursor_hour < end:
+                chunk_end = min(cursor_hour + chunk, end)
+                with conn:
+                    cls._backfill_rollup_chunk(
+                        conn, cursor_hour, chunk_end, has_ln=has_ln
+                    )
+                    cls._meta_set(conn, _ROLLUP_BACKFILL_THROUGH_KEY, str(chunk_end))
+                cursor_hour = chunk_end
+            with conn:
+                cls._meta_set(conn, _ROLLUP_BACKFILL_KEY, str(time.time()))
+        except sqlite3.Error as exc:
+            # Same rule as the totals backfill: a second process's marker means
+            # "already done", not "corrupt". Whatever chunks committed stay,
+            # and the next start resumes from the recorded hour.
+            logger.warning("Request log stats rollup backfill skipped: {}", exc)
+            return
+        logger.info(
+            "Request log stats rollup seeded from existing rows in {:.1f}s",
             time.monotonic() - started,
         )
 
@@ -1468,8 +2169,13 @@ class RequestLogStore:
             # large existing database, so they belong here and never on a
             # request path.
             self._ensure_stats_index(conn)
-            # Must precede the first flush: the rollup and this aggregate would
-            # otherwise both count any request written in between.
+            # Before the rollup backfill, which keys every bucket on the stored
+            # column this fills in.
+            self._ensure_is_local_backfill(conn)
+            # Must precede the first flush: these aggregates and the live
+            # accumulator would otherwise both count any request written in
+            # between.
+            self._ensure_rollup_backfill(conn)
             self._ensure_totals_backfill(conn)
             self._ensure_auto_vacuum(conn)
             # Before any write, or a flush would insert into a table shape that
@@ -1567,6 +2273,211 @@ class RequestLogStore:
             _TOTALS_UPSERT_SQL,
             [(*key, *counters) for key, counters in buckets.items()],
         )
+
+    @staticmethod
+    def _rollup_key(record: RequestRecord) -> tuple[Any, ...]:
+        """The nine dimension values of one record, as the rollup stores them.
+
+        SQL NULL is stored as the empty string, matching the ``COALESCE(x, '')``
+        the backfill uses, so a row written live and the same row rebuilt by the
+        backfill land in the same bucket.
+        """
+        return (
+            _floor_hour(record.ts_epoch),
+            _is_local_value(record),
+            record.provider or "",
+            record.resolved_model or "",
+            record.requested_model or "",
+            record.status,
+            record.endpoint,
+            record.key_label or "",
+            record.optimization or "",
+        )
+
+    @staticmethod
+    def _rollup_counter_values(record: RequestRecord) -> dict[str, float]:
+        """One record's contribution to each rollup counter.
+
+        Every entry is the Python twin of the SQL expression in
+        ``_ROLLUP_COUNTERS``; the two are asserted to cover the same names
+        below, so a counter cannot be declared and left unfilled.
+        """
+        duration = record.duration_ms
+        ttft = record.ttft_ms
+        tool_calls = record.tool_call_count or 0
+        values: dict[str, float] = {
+            "requests": 1,
+            "tokens_in": record.tokens_in or 0,
+            "tokens_out": record.tokens_out or 0,
+            "cache_read_tokens": record.cache_read_tokens or 0,
+            "cache_write_tokens": record.cache_write_tokens or 0,
+            "cache_reported": int(record.cache_read_tokens is not None),
+            "tool_calls": tool_calls,
+            "turns_with_tools": int(tool_calls > 0),
+            "turns_with_reasoning": int((record.thinking_chars or 0) > 0),
+            "served_by_fallback": int((record.route_attempt or 0) > 0),
+            "route_reported": int(record.route_attempt is not None),
+            "diverted": int(record.route_diverted_from is not None),
+            "vision_unavailable": int(record.route_diversion == "vision_unavailable"),
+            "with_images": int((record.input_image_count or 0) > 0),
+            "duration_sum": duration if duration is not None else 0.0,
+            "duration_count": int(duration is not None),
+            "ttft_sum": ttft if ttft is not None else 0.0,
+            "ttft_count": int(ttft is not None),
+        }
+        for name in _ROLLUP_RECOVERY_COUNTERS:
+            values[name] = 0
+        for attempt in record.attempts:
+            params = attempt.params
+            if not isinstance(params, dict):
+                continue
+            for name in _ROLLUP_RECOVERY_COUNTERS:
+                values[name] += int(params.get(name) or 0)
+        if set(values) != set(_ROLLUP_COUNTER_NAMES):
+            raise RuntimeError(
+                "request_stats_rollup counters"
+                f" {sorted(set(_ROLLUP_COUNTER_NAMES) ^ set(values))}"
+                " are declared but not accumulated"
+            )
+        return values
+
+    @staticmethod
+    def _upstream_status_counts(record: RequestRecord) -> dict[str, int]:
+        """Tries per upstream status across this record's retried attempts.
+
+        Mirrors the SQL pass exactly, ``a.ladder_tries > 1`` included: the
+        denormalised column is what keeps the JSON walk off the ~95% of
+        attempts that never retried.
+        """
+        counts: dict[str, int] = {}
+        for attempt in record.attempts:
+            if (attempt.ladder_tries or 0) <= 1:
+                continue
+            params = attempt.params
+            ladder = params.get("ladder") if isinstance(params, dict) else None
+            tries = ladder.get("tries") if isinstance(ladder, dict) else None
+            if not isinstance(tries, list):
+                continue
+            for entry in tries:
+                if not isinstance(entry, dict):
+                    continue
+                status = entry.get("status")
+                if status is None:
+                    continue
+                key = str(status)
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    @classmethod
+    def _accumulate_rollup(
+        cls, conn: sqlite3.Connection, records: list[RequestRecord]
+    ) -> None:
+        """Fold newly stored records into the three stats rollup tables.
+
+        Written from the in-memory batch, in the writer's existing transaction,
+        on the same filtered record list the permanent totals use -- so a
+        re-flushed record that ``INSERT OR REPLACE`` rewrites rather than adds
+        is not counted twice here either.
+
+        The attempt-derived counters come from the record's own attempt list,
+        never from a re-read of ``request_attempts``: ``_store_attempts`` is
+        writing that table from the same objects in the same transaction.
+        """
+        if not records:
+            return
+        rollup: dict[tuple[Any, ...], dict[str, float]] = {}
+        latency: dict[tuple[Any, ...], int] = {}
+        detail: dict[tuple[Any, ...], list[int]] = {}
+        for record in records:
+            key = cls._rollup_key(record)
+            bucket = rollup.get(key)
+            if bucket is None:
+                bucket = dict.fromkeys(_ROLLUP_COUNTER_NAMES, 0.0)
+                rollup[key] = bucket
+            for name, value in cls._rollup_counter_values(record).items():
+                bucket[name] += value
+
+            if record.duration_ms is not None:
+                latency_key = (*key, _latency_bucket(float(record.duration_ms)))
+                latency[latency_key] = latency.get(latency_key, 0) + 1
+
+            for detail_key, count in cls._detail_rows(record, key):
+                totals = detail.get(detail_key)
+                if totals is None:
+                    totals = [0, 0]
+                    detail[detail_key] = totals
+                totals[0] += count
+                totals[1] += 1
+
+        conn.executemany(
+            _ROLLUP_UPSERT_SQL,
+            [
+                (*key, *(bucket[name] for name in _ROLLUP_COUNTER_NAMES))
+                for key, bucket in rollup.items()
+            ],
+        )
+        if latency:
+            conn.executemany(
+                _LATENCY_UPSERT_SQL,
+                [(*key, count) for key, count in latency.items()],
+            )
+        if detail:
+            conn.executemany(
+                _DETAIL_UPSERT_SQL,
+                [(*key, *totals) for key, totals in detail.items()],
+            )
+
+    @classmethod
+    def _detail_rows(
+        cls, record: RequestRecord, key: tuple[Any, ...]
+    ) -> Iterator[tuple[tuple[Any, ...], int]]:
+        """Yield ((dimensions, kind, a, b, c), count) for one record.
+
+        The caller adds 1 to ``requests`` per yielded row, which is what makes
+        the upstream count exact under SUM: one request contributes one to each
+        distinct status it saw and lives in exactly one dimension bucket, so
+        summing reproduces ``COUNT(DISTINCT request_id)`` without a DISTINCT.
+        """
+        message = cap_text(record.error_message, MAX_ERROR_CHARS)
+        if record.status == "error" and message is not None:
+            yield (*key, _DETAIL_ERROR, message, "", ""), 1
+        # ``COALESCE``, not ``or``: an empty-string provider is a different
+        # fact from a NULL one, and only NULL becomes "(unknown)" in the SQL
+        # this mirrors.
+        provider = UNKNOWN_PROVIDER_KEY if record.provider is None else record.provider
+        model = (
+            UNKNOWN_PROVIDER_KEY
+            if record.resolved_model is None
+            else record.resolved_model
+        )
+        served_by = f"{provider}/{model}"
+        if (record.route_attempt or 0) > 0 and record.route_primary_model is not None:
+            yield (
+                (
+                    *key,
+                    _DETAIL_FALLBACK,
+                    record.route_primary_model,
+                    served_by,
+                    "",
+                ),
+                1,
+            )
+        if (
+            record.route_diversion is not None
+            and record.route_diverted_from is not None
+        ):
+            yield (
+                (
+                    *key,
+                    _DETAIL_DIVERTED,
+                    record.route_diverted_from,
+                    record.route_diversion,
+                    served_by,
+                ),
+                1,
+            )
+        for status, count in cls._upstream_status_counts(record).items():
+            yield (*key, _DETAIL_UPSTREAM, status, "", ""), count
 
     def _pack_record(self, record: RequestRecord) -> tuple[bytes | None, bytes | None]:
         """Return this record's (prompt, everything-else) blobs."""
@@ -1876,33 +2787,18 @@ class RequestLogStore:
                 already_stored = self._existing_ids(
                     conn, [record.id for record in batch]
                 )
-                conn.executemany(
-                    """
-                    INSERT OR REPLACE INTO requests (
-                        id, ts_epoch, ts_iso, endpoint, protocol, requested_model,
-                        provider, resolved_model, stream, input_text, output_text,
-                        input_sha256, output_sha256, input_chars, output_chars,
-                        reasoning, requested_reasoning, reasoning_adaptation,
-                        reasoning_adaptation_kind, params,
-                        tokens_in, tokens_out,
-                        cache_read_tokens, cache_write_tokens, ttft_ms,
-                        duration_ms, status, error_kind, error_message, headers,
-                        key_index, key_label, thinking_text, thinking_chars,
-                        tool_calls, tool_call_count, route_attempt,
-                        route_primary_model, route_chain, route_diverted_from,
-                        route_diversion, input_image_count,
-                        optimization, optimization_tokens_saved
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    rows,
-                )
+                conn.executemany(_REQUEST_INSERT_SQL, rows)
                 self._store_bodies(conn, packed)
                 self._store_images(conn, batch)
                 self._store_attempts(conn, batch)
-                self._accumulate_totals(
-                    conn,
-                    [record for record in batch if record.id not in already_stored],
-                )
+                # One list, computed once and shared, so the two aggregates
+                # provably fold in the same set of records.
+                fresh = [record for record in batch if record.id not in already_stored]
+                self._accumulate_totals(conn, fresh)
+                # Inside the same ``with conn:`` as the rows themselves, so a
+                # failed batch rolls the rollup back with it and the aggregate
+                # can never drift ahead of the table it summarises.
+                self._accumulate_rollup(conn, fresh)
         except sqlite3.Error as exc:
             logger.warning("Request log write failed: {}", exc)
             return
@@ -1923,7 +2819,7 @@ class RequestLogStore:
         def body(text: str | None) -> str | None:
             return cap_text(text, self._text_max_chars) if inline else None
 
-        return (
+        row = (
             record.id,
             record.ts_epoch,
             record.ts_iso,
@@ -1968,7 +2864,17 @@ class RequestLogStore:
             record.input_image_count,
             record.optimization,
             record.optimization_tokens_saved,
+            _is_local_value(record),
         )
+        # Placeholders are counted against the column list mechanically, the
+        # same guard ``_store_attempts`` carries: a hand-written INSERT whose
+        # marker count drifted from its column list once broke every write.
+        if len(row) != len(_REQUEST_INSERT_COLUMNS):
+            raise RuntimeError(
+                f"requests row width {len(row)} !="
+                f" {len(_REQUEST_INSERT_COLUMNS)} columns"
+            )
+        return row
 
     def close(self, *, timeout: float = _CLOSE_TIMEOUT_SECONDS) -> None:
         """Stop the writer thread after flushing queued records.
@@ -2020,10 +2926,15 @@ class RequestLogStore:
         # Locally answered rows are real traffic but they are not upstream
         # traffic, and on a busy install they outnumber it. "hide" removes
         # exactly them, leaving "(unknown)" rows -- a different claim -- alone.
+        #
+        # Read off the stored column rather than re-derived from ``provider``
+        # and ``optimization``: the predicate form referenced a column the
+        # covering index did not carry, so ``hide`` fell back to a base-table
+        # scan and was slower than ``all`` on every aggregate.
         if local == "hide":
-            clauses.append(f"NOT {LOCAL_ANSWER_SQL}")
+            clauses.append(f"{LOCAL_ANSWER_COLUMN_SQL} = 0")
         elif local == "only":
-            clauses.append(LOCAL_ANSWER_SQL)
+            clauses.append(f"{LOCAL_ANSWER_COLUMN_SQL} = 1")
         if provider:
             # Comma-separated values mean "any of these providers" (multi-select).
             providers = [part for part in provider.split(",") if part]
@@ -2428,6 +3339,15 @@ class RequestLogStore:
         q: str | None = None,
         local: str | None = None,
     ) -> dict[str, Any]:
+        """Aggregate analytics, served from the rollup where it can be.
+
+        The payload carries ``served_from``: ``"rollup"`` when the whole answer
+        came from the pre-aggregated tables, ``"rows"`` when it was computed by
+        scanning ``requests``. Free-text search is the only filter that forces
+        the scan today -- it is a correlated EXISTS over compressed bodies and
+        is not a rollup dimension -- along with the window before the one-time
+        backfill has finished.
+        """
         # ``local`` belongs in the key: without it a "hide" call inside the TTL
         # would be served the "all" numbers it just cached, and the cards would
         # contradict the table.
@@ -2442,6 +3362,58 @@ class RequestLogStore:
                 # Expired: drop it now rather than waiting for LRU eviction to
                 # get around to it.
                 del self._stats_cache[cache_key]
+        payload: dict[str, Any] | None = None
+        if not q:
+            payload = self._stats_from_rollup(
+                provider=provider,
+                model=model,
+                status=status,
+                endpoint=endpoint,
+                key=key,
+                since=since,
+                until=until,
+                local=local,
+            )
+        if payload is None:
+            payload = self._stats_from_rows(
+                provider=provider,
+                model=model,
+                status=status,
+                endpoint=endpoint,
+                key=key,
+                since=since,
+                until=until,
+                q=q,
+                local=local,
+            )
+        with self._stats_lock:
+            self._stats_cache[cache_key] = (now, payload)
+            self._stats_cache.move_to_end(cache_key)
+            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
+                self._stats_cache.popitem(last=False)
+        return dict(payload)
+
+    def _stats_from_rows(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        q: str | None = None,
+        local: str | None = None,
+    ) -> dict[str, Any]:
+        """Compute the whole payload by scanning ``requests``.
+
+        This is not test-only scaffolding and must not be deleted. It is the
+        live path for a free-text search, the live path until the one-time
+        rollup backfill finishes, and the oracle the rollup's equality contract
+        test is asserted against. It is also the only path that computes exact
+        percentiles rather than interpolating a histogram.
+        """
         where, args = self._where(
             provider=provider,
             model=model,
@@ -2591,7 +3563,14 @@ class RequestLogStore:
 
         total = totals["total"] or 0
         payload = {
-            "window": {"since": since, "until": until},
+            # A raw scan honours the window exactly, so the snapped bounds it
+            # reports are the requested ones. Only the rollup rounds outward.
+            "window": {
+                "since": since,
+                "until": until,
+                "snapped_since": since,
+                "snapped_until": until,
+            },
             "total": total,
             "success": totals["success"] or 0,
             "error": totals["error"] or 0,
@@ -2646,13 +3625,395 @@ class RequestLogStore:
             # one that ended each of them. Empty on a database whose rows all
             # predate the ladder: nothing was measured, so nothing is claimed.
             "upstream_statuses": upstream_statuses,
+            "served_from": "rows",
         }
-        with self._stats_lock:
-            self._stats_cache[cache_key] = (now, payload)
-            self._stats_cache.move_to_end(cache_key)
-            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
-                self._stats_cache.popitem(last=False)
-        return dict(payload)
+        return payload
+
+    @staticmethod
+    def _rollup_where(
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        local: str | None = None,
+    ) -> tuple[str, list[Any]]:
+        """``_where`` translated onto the rollup's dimension columns.
+
+        Clause for clause the same predicate, with two differences forced by
+        the storage: SQL NULL is the empty string here, and the time bounds are
+        snapped outward to the UTC hour because one hour is the finest grain
+        the rollup has. ``q`` has no translation at all -- it is why the caller
+        falls back to a raw scan.
+        """
+        clauses: list[str] = []
+        args: list[Any] = []
+        if local == "hide":
+            clauses.append("is_local = 0")
+        elif local == "only":
+            clauses.append("is_local = 1")
+        if provider:
+            providers = [part for part in provider.split(",") if part]
+            if providers:
+                named = [
+                    part
+                    for part in providers
+                    if not part.startswith(LOCAL_PROVIDER_PREFIX)
+                    and part != UNKNOWN_PROVIDER_KEY
+                ]
+                alternatives: list[str] = []
+                named_args: list[Any] = []
+                local_args: list[Any] = []
+                if named:
+                    placeholders = ",".join("?" * len(named))
+                    alternatives.append(f"provider IN ({placeholders})")
+                    named_args.extend(named)
+                for part in providers:
+                    if part.startswith(LOCAL_PROVIDER_PREFIX):
+                        alternatives.append("(provider = '' AND optimization = ?)")
+                        local_args.append(part[len(LOCAL_PROVIDER_PREFIX) :])
+                    elif part == UNKNOWN_PROVIDER_KEY:
+                        alternatives.append("(provider = '' AND optimization = '')")
+                clauses.append(f"({' OR '.join(alternatives)})")
+                args.extend(named_args)
+                args.extend(local_args)
+        if key:
+            clauses.append("key_label = ?")
+            args.append(key)
+        if model:
+            models = [part for part in model.split(",") if part]
+            if models:
+                placeholders = ",".join("?" * len(models))
+                clauses.append(
+                    f"(resolved_model IN ({placeholders})"
+                    f" OR requested_model IN ({placeholders}))"
+                )
+                args.extend(models)
+                args.extend(models)
+        if status:
+            clauses.append("status = ?")
+            args.append(status)
+        if endpoint:
+            clauses.append("endpoint = ?")
+            args.append(endpoint)
+        if since is not None:
+            clauses.append("hour_epoch >= ?")
+            args.append(_floor_hour(since))
+        if until is not None:
+            # ``<=`` against the floored hour keeps the whole hour containing
+            # ``until``, which is the outward half of the snap.
+            clauses.append("hour_epoch <= ?")
+            args.append(_floor_hour(until))
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        return where, args
+
+    def _stats_from_rollup(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        local: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Compute the whole payload from the rollup, or None if it cannot.
+
+        Returns None -- rather than a partial answer -- when the one-time
+        backfill has not finished, so a half-built rollup is never read.
+        """
+        where, args = self._rollup_where(
+            provider=provider,
+            model=model,
+            status=status,
+            endpoint=endpoint,
+            key=key,
+            since=since,
+            until=until,
+            local=local,
+        )
+        sums = ", ".join(f"COALESCE(SUM({name}), 0)" for name in _ROLLUP_COUNTER_NAMES)
+        with self._connection() as conn:
+            if self._meta_get(conn, _ROLLUP_BACKFILL_KEY) is None:
+                return None
+            row = conn.execute(
+                "SELECT"
+                " SUM(CASE WHEN status = 'success' THEN requests ELSE 0 END),"
+                " SUM(CASE WHEN status = 'error' THEN requests ELSE 0 END),"
+                " SUM(CASE WHEN status = 'cancelled' THEN requests ELSE 0 END),"
+                f" {sums}"
+                f" FROM request_stats_rollup{where}",
+                args,
+            ).fetchone()
+            counters = dict(zip(_ROLLUP_COUNTER_NAMES, list(row)[3:], strict=True))
+            percentiles = self._percentiles_from_histogram(
+                conn, where, args, (0.50, 0.95)
+            )
+            by_provider, by_provider_truncated = self._rollup_breakdown(
+                conn, ROLLUP_PROVIDER_KEY_SQL, where, args
+            )
+            by_model, by_model_truncated = self._rollup_breakdown(
+                conn, self._rollup_key_sql("resolved_model"), where, args
+            )
+            by_key, by_key_truncated = self._rollup_breakdown(
+                conn, self._rollup_key_sql("key_label"), where, args
+            )
+            connector = " AND" if where else " WHERE"
+            top_errors = [
+                {"message": detail[0], "count": detail[1]}
+                for detail in conn.execute(
+                    "SELECT a, SUM(count) FROM request_stats_detail"
+                    f"{where}{connector} kind = '{_DETAIL_ERROR}'"
+                    " GROUP BY a ORDER BY 2 DESC LIMIT 10",
+                    args,
+                ).fetchall()
+            ]
+            fallback_routes = [
+                {
+                    "primary": detail[0],
+                    "served_by": detail[1],
+                    "count": detail[2],
+                }
+                for detail in conn.execute(
+                    "SELECT a, b, SUM(count) FROM request_stats_detail"
+                    f"{where}{connector} kind = '{_DETAIL_FALLBACK}'"
+                    " GROUP BY a, b ORDER BY 3 DESC LIMIT 10",
+                    args,
+                ).fetchall()
+            ]
+            diverted_routes = [
+                {
+                    "diverted_from": detail[0],
+                    "reason": detail[1],
+                    "served_by": detail[2],
+                    "count": detail[3],
+                }
+                for detail in conn.execute(
+                    "SELECT a, b, c, SUM(count) FROM request_stats_detail"
+                    f"{where}{connector} kind = '{_DETAIL_DIVERTED}'"
+                    " GROUP BY a, b, c ORDER BY 4 DESC LIMIT 10",
+                    args,
+                ).fetchall()
+            ]
+            upstream_statuses = [
+                {
+                    "status": int(detail[0]),
+                    "count": int(detail[1]),
+                    "requests": int(detail[2]),
+                }
+                for detail in conn.execute(
+                    "SELECT a, SUM(count), SUM(requests)"
+                    " FROM request_stats_detail"
+                    f"{where}{connector} kind = '{_DETAIL_UPSTREAM}'"
+                    " GROUP BY a ORDER BY 2 DESC LIMIT 12",
+                    args,
+                ).fetchall()
+            ]
+            series = self._series_from_rollup(
+                conn, where, args, since=since, until=until
+            )
+
+        total = int(counters["requests"])
+        errors = int(row[1] or 0)
+        return {
+            # Both bounds are reported: what was asked for, and the UTC-hour
+            # window actually summed. They differ only when the request was not
+            # hour-aligned, and that difference is real -- on the measured log a
+            # 24 h p95 moves 20% between the two -- so it is stated rather than
+            # smoothed over.
+            "window": {
+                "since": since,
+                "until": until,
+                "snapped_since": None if since is None else _floor_hour(since),
+                "snapped_until": (
+                    None if until is None else _floor_hour(until) + _HOUR_SECONDS - 1
+                ),
+            },
+            "total": total,
+            "success": int(row[0] or 0),
+            "error": errors,
+            "cancelled": int(row[2] or 0),
+            "error_rate": errors / total if total else 0.0,
+            "tokens_in": int(counters["tokens_in"]),
+            "tokens_out": int(counters["tokens_out"]),
+            "cache_read_tokens": int(counters["cache_read_tokens"]),
+            "cache_write_tokens": int(counters["cache_write_tokens"]),
+            "cache_reported": int(counters["cache_reported"]),
+            "tool_calls": int(counters["tool_calls"]),
+            "turns_with_tools": int(counters["turns_with_tools"]),
+            "turns_with_reasoning": int(counters["turns_with_reasoning"]),
+            "served_by_fallback": int(counters["served_by_fallback"]),
+            "route_reported": int(counters["route_reported"]),
+            "fallback_routes": fallback_routes,
+            "diverted": int(counters["diverted"]),
+            "diverted_routes": diverted_routes,
+            "recovery": {
+                name: int(counters[name]) for name in _ROLLUP_RECOVERY_COUNTERS
+            },
+            "with_images": int(counters["with_images"]),
+            "vision_unavailable": int(counters["vision_unavailable"]),
+            "avg_duration_ms": _rounded(
+                _mean(counters["duration_sum"], counters["duration_count"])
+            ),
+            "p50_duration_ms": _rounded(percentiles[0.50]),
+            "p95_duration_ms": _rounded(percentiles[0.95]),
+            "avg_ttft_ms": _rounded(
+                _mean(counters["ttft_sum"], counters["ttft_count"])
+            ),
+            "by_provider": by_provider,
+            "by_provider_truncated": by_provider_truncated,
+            "by_model": by_model,
+            "by_model_truncated": by_model_truncated,
+            "by_key": by_key,
+            "by_key_truncated": by_key_truncated,
+            "series": series,
+            "top_errors": top_errors,
+            "upstream_statuses": upstream_statuses,
+            "served_from": "rollup",
+        }
+
+    @staticmethod
+    def _rollup_key_sql(column: str) -> str:
+        """Rollup mirror of ``_breakdown``'s ``COALESCE(column, '(unknown)')``."""
+        return (
+            f"CASE WHEN {column} <> '' THEN {column} ELSE '{UNKNOWN_PROVIDER_KEY}' END"
+        )
+
+    @staticmethod
+    def _rollup_breakdown(
+        conn: sqlite3.Connection,
+        key_sql: str,
+        where: str,
+        args: list[Any],
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """``_breakdown`` against the rollup, same shape and same cap.
+
+        The fetch-one-past-the-cap trick is kept verbatim so
+        ``by_*_truncated`` keeps meaning exactly what it meant before.
+        """
+        rows = conn.execute(
+            f"SELECT {key_sql} AS key, SUM(requests) AS requests,"
+            " SUM(tokens_in), SUM(tokens_out),"
+            " SUM(cache_read_tokens), SUM(cache_write_tokens),"
+            " SUM(cache_reported),"
+            " SUM(CASE WHEN status = 'error' THEN requests ELSE 0 END),"
+            " SUM(duration_sum), SUM(duration_count)"
+            f" FROM request_stats_rollup{where}"
+            " GROUP BY key ORDER BY requests DESC LIMIT ?",
+            [*args, _BREAKDOWN_LIMIT + 1],
+        ).fetchall()
+        truncated = len(rows) > _BREAKDOWN_LIMIT
+        rows = rows[:_BREAKDOWN_LIMIT]
+        return [
+            {
+                "key": row[0],
+                "requests": int(row[1] or 0),
+                "tokens_in": int(row[2] or 0),
+                "tokens_out": int(row[3] or 0),
+                "cache_read_tokens": int(row[4] or 0),
+                "cache_write_tokens": int(row[5] or 0),
+                "cache_reported": int(row[6] or 0),
+                "errors": int(row[7] or 0),
+                "avg_duration_ms": _rounded(_mean(row[8], row[9])),
+            }
+            for row in rows
+        ], truncated
+
+    @staticmethod
+    def _percentiles_from_histogram(
+        conn: sqlite3.Connection,
+        where: str,
+        args: list[Any],
+        fractions: tuple[float, ...],
+    ) -> dict[float, float | None]:
+        """Interpolate percentiles out of the stored latency histogram.
+
+        At most 64 rows are read however large the window, against the
+        quarter-million floats ``_percentiles`` pulls into Python on an
+        all-time call. The rank formula is the one ``_percentiles`` uses, so
+        the two agree in shape; the difference is that the position inside the
+        chosen bucket is interpolated across the bucket's edges rather than
+        between two real observations. Measured error against the exact value
+        on the real log: <= 2.3% on every all-time percentile.
+        """
+        buckets = [
+            (int(row[0]), int(row[1] or 0))
+            for row in conn.execute(
+                "SELECT bucket, SUM(count) FROM request_stats_latency"
+                f"{where} GROUP BY bucket ORDER BY bucket",
+                args,
+            ).fetchall()
+        ]
+        total = sum(count for _bucket, count in buckets)
+        if not total:
+            return dict.fromkeys(fractions)
+        results: dict[float, float | None] = {}
+        for fraction in fractions:
+            target = min(float(total - 1), max(0.0, fraction * (total - 1)))
+            seen = 0
+            value: float | None = None
+            for bucket, count in buckets:
+                if seen + count > target:
+                    low, high = _latency_bucket_edges(bucket)
+                    value = low + (high - low) * ((target - seen) / count)
+                    break
+                seen += count
+            if value is None:
+                value = _latency_bucket_edges(buckets[-1][0])[1]
+            results[fraction] = value
+        return results
+
+    @staticmethod
+    def _series_from_rollup(
+        conn: sqlite3.Connection,
+        where: str,
+        args: list[Any],
+        *,
+        since: float | None,
+        until: float | None,
+    ) -> list[dict[str, Any]]:
+        """``_series`` against the rollup.
+
+        Hour grain is exact for both formats the series uses: an hourly bucket
+        is one rollup row's key, and a UTC day is a whole number of UTC hours.
+        The bounds probe reads thousands of rows instead of hundreds of
+        thousands.
+        """
+        bounds = conn.execute(
+            f"SELECT MIN(hour_epoch), MAX(hour_epoch) FROM request_stats_rollup{where}",
+            args,
+        ).fetchone()
+        low = since if since is not None else bounds[0]
+        # The last bucket covers a whole hour, so the span the rollup can see
+        # ends at that hour's end -- the same outward rounding the window uses.
+        high = until
+        if high is None and bounds[1] is not None:
+            high = bounds[1] + _HOUR_SECONDS - 1
+        hourly = low is not None and high is not None and (high - low) < 48 * 3600
+        fmt = "%Y-%m-%dT%H:00" if hourly else "%Y-%m-%d"
+        cursor = conn.execute(
+            "SELECT strftime(?, hour_epoch, 'unixepoch') AS bucket,"
+            " SUM(requests),"
+            " COALESCE(SUM(tokens_in), 0) + COALESCE(SUM(tokens_out), 0),"
+            " SUM(CASE WHEN status = 'error' THEN requests ELSE 0 END)"
+            f" FROM request_stats_rollup{where} GROUP BY bucket ORDER BY bucket",
+            [fmt, *args],
+        )
+        return [
+            {
+                "bucket": row[0],
+                "requests": int(row[1] or 0),
+                "tokens": int(row[2] or 0),
+                "errors": int(row[3] or 0),
+            }
+            for row in cursor.fetchall()
+            if row[0] is not None
+        ]
 
     def reasoning_by_model(
         self, *, since: float | None = None, limit: int = _BREAKDOWN_LIMIT
@@ -2989,9 +4350,12 @@ class RequestLogStore:
     def prune(self) -> int:
         """Delete oldest rows beyond the configured retention cap.
 
-        Only ``requests`` is capped. ``request_totals`` and ``server_sessions``
-        are deliberately left alone -- they exist precisely to outlive the rows
-        this deletes.
+        Only ``requests`` is capped. ``request_totals``, ``server_sessions``
+        and the three ``request_stats_*`` rollup tables are deliberately left
+        alone -- they exist precisely to outlive the rows this deletes. That is
+        what lets the analytics page answer "all time" honestly on a capped
+        table, and it is also why the rollup and a raw scan legitimately
+        disagree once retention has bitten.
         """
         if self._max_rows <= 0:
             return 0
@@ -3063,6 +4427,11 @@ class RequestLogStore:
         with self._connection() as conn:
             cursor = conn.execute("DELETE FROM requests")
             conn.execute("DELETE FROM request_totals")
+            # The stats rollup survives retention, but not an explicit erase --
+            # same rule as ``request_totals``, and for the same reason: an
+            # empty table reporting millions of requests reads as a bug.
+            for table in _ROLLUP_TABLES:
+                conn.execute(f"DELETE FROM {table}")
             conn.execute("DELETE FROM request_bodies")
             conn.execute("DELETE FROM body_blobs")
             conn.execute("DELETE FROM request_images")
@@ -3178,6 +4547,18 @@ class RequestLogStore:
 
 def _rounded(value: float | None) -> float | None:
     return round(value, 2) if value is not None else None
+
+
+def _mean(total: float | None, count: float | None) -> float | None:
+    """Rebuild an average from a stored sum and a stored non-NULL count.
+
+    Averages are not additive, which is why the rollup stores the two
+    components instead. A zero count is SQLite's ``AVG`` over no non-NULL rows,
+    which is NULL -- not zero.
+    """
+    if not count:
+        return None
+    return float(total or 0.0) / float(count)
 
 
 # --------------------------------------------------------------------- registry

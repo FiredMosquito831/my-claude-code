@@ -1710,6 +1710,15 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   </tbody>
                 </table>
                 <p class="guide-note">
+                  <strong>p50 and p95 latency are approximate.</strong> They are read
+                  from a 64-bucket histogram rather than by sorting every stored
+                  duration, which is what makes an all-time view load in a fraction of a
+                  second instead of half a minute. On a real log the error measured at
+                  or under 2.3%; on a filter matching only a handful of requests it can
+                  be larger, because there is nothing inside the bucket to interpolate
+                  against. The average, and every count, stay exact.
+                </p>
+                <p class="guide-note">
                   A hit rate of <strong>&mdash;</strong> means that provider never reported
                   caching, which is different from a measured <strong>0.0%</strong>.
                   OpenRouter, OpenAI (prefixes of 1,024+ tokens) and DeepSeek report it.

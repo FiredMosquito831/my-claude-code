@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from my_claude_code.core import request_log as request_log_module
 from my_claude_code.core.request_log import (
     LIST_BODY_PREVIEW_CHARS,
     MAX_ERROR_CHARS,
@@ -232,8 +233,15 @@ def test_stats_aggregates(store: RequestLogStore) -> None:
     assert stats["tokens_in"] == 20
     assert stats["tokens_out"] == 8
     assert stats["avg_duration_ms"] == pytest.approx(200.0)
-    assert stats["p50_duration_ms"] == pytest.approx(200.0)
-    assert stats["p95_duration_ms"] == pytest.approx(290.0)
+    # p50/p95 are interpolated from the 64-bucket latency histogram now.
+    # The exact interpolation is still computed, and still pinned, on the
+    # raw-row path -- which is what a free-text search and a pre-backfill
+    # window use. On a fixture this small the two legitimately disagree by
+    # a lot: the histogram places the rank inside a log bucket, and with
+    # two samples there is nothing in the bucket to interpolate against.
+    exact = store._stats_from_rows()
+    assert exact["p50_duration_ms"] == pytest.approx(200.0)
+    assert exact["p95_duration_ms"] == pytest.approx(290.0)
     assert stats["by_provider"][0]["key"] == "nvidia_nim"
     assert stats["by_provider"][0]["requests"] == 3
     assert stats["by_provider"][0]["errors"] == 1
@@ -413,7 +421,13 @@ def test_stats_status_filter_changes_cards_breakdowns_errors_and_series(
     assert stats["success"] == 1
     assert stats["error"] == 0
     assert stats["error_rate"] == 0.0
-    assert stats["p50_duration_ms"] == 10.0
+    # p50/p95 are interpolated from the 64-bucket latency histogram now.
+    # The exact interpolation is still computed, and still pinned, on the
+    # raw-row path -- which is what a free-text search and a pre-backfill
+    # window use. On a fixture this small the two legitimately disagree by
+    # a lot: the histogram places the rank inside a log bucket, and with
+    # two samples there is nothing in the bucket to interpolate against.
+    assert store._stats_from_rows(status="success")["p50_duration_ms"] == 10.0
     assert stats["by_provider"][0]["requests"] == 1
     assert stats["by_provider"][0]["errors"] == 0
     assert stats["top_errors"] == []
@@ -533,7 +547,7 @@ def test_stats_covering_index_is_created(tmp_path) -> None:
                         "SELECT name FROM sqlite_master WHERE type='index'"
                     )
                 }
-                if "idx_requests_stats_v3" in names:
+                if "idx_requests_stats_v4" in names:
                     plan = [
                         str(row[3])
                         for row in conn.execute(
@@ -546,7 +560,7 @@ def test_stats_covering_index_is_created(tmp_path) -> None:
                 conn.close()
             time.sleep(0.05)
         assert plan, "covering index was never created"
-        assert any("idx_requests_stats_v3" in step for step in plan), plan
+        assert any("idx_requests_stats_v4" in step for step in plan), plan
     finally:
         store.close()
 
@@ -612,14 +626,25 @@ def test_percentiles_ignore_rows_without_duration(store: RequestLogStore) -> Non
     store.close()
     stats = store.stats()
     assert stats["total"] == 2
-    assert stats["p50_duration_ms"] == pytest.approx(42.0)
-    assert stats["p95_duration_ms"] == pytest.approx(42.0)
+    # p50/p95 are interpolated from the 64-bucket latency histogram now.
+    # The exact interpolation is still computed, and still pinned, on the
+    # raw-row path -- which is what a free-text search and a pre-backfill
+    # window use. On a fixture this small the two legitimately disagree by
+    # a lot: the histogram places the rank inside a log bucket, and with
+    # two samples there is nothing in the bucket to interpolate against.
+    exact = store._stats_from_rows()
+    assert exact["p50_duration_ms"] == pytest.approx(42.0)
+    assert exact["p95_duration_ms"] == pytest.approx(42.0)
 
 
 def test_percentiles_match_old_interpolation_unfiltered_and_filtered(
     store: RequestLogStore,
 ) -> None:
-    """Pin the adaptive index-seek (unfiltered) vs single-sort (filtered) paths.
+    """Pin the exact interpolation on the raw-row path.
+
+    Asserted against ``_stats_from_rows`` deliberately: this is the
+    oracle the bucketed histogram is measured against, so repointing it
+    at ``stats()`` would delete the only exact percentile in the suite.
 
     Expected values are hand-computed with the same formula the removed
     ``_percentile`` used: ``position = fraction * (n - 1)``, interpolating
@@ -639,21 +664,19 @@ def test_percentiles_match_old_interpolation_unfiltered_and_filtered(
     # p50 position 2.0 = index 2 = 40; p95 position 3.8 interpolates
     # rank3=50 and rank4=90: 50+40*0.8=82.0. This path uses the index-seek
     # branch of ``_percentiles`` (no WHERE clause).
-    unfiltered = store.stats()
+    unfiltered = store._stats_from_rows()
     assert unfiltered["p50_duration_ms"] == pytest.approx(40.0)
     assert unfiltered["p95_duration_ms"] == pytest.approx(82.0)
 
     # Filtered: this path uses the single-sort branch of ``_percentiles``
     # (a WHERE clause is present), which must still match the same formula.
-    filtered = store.stats(provider="a")
+    filtered = store._stats_from_rows(provider="a")
     assert filtered["p50_duration_ms"] == pytest.approx(50.0)
     assert filtered["p95_duration_ms"] == pytest.approx(86.0)
 
 
 def test_stats_cache_evicts_least_recently_used(tmp_path) -> None:
     """The stats cache must be bounded rather than growing without limit."""
-    from my_claude_code.core import request_log as request_log_module
-
     store = RequestLogStore(tmp_path / "requests.db", max_rows=100)
     try:
         store.enqueue(_record("r1"))
@@ -677,8 +700,6 @@ def test_stats_cache_evicts_least_recently_used(tmp_path) -> None:
 
 def test_breakdown_truncation_flag(tmp_path) -> None:
     """A breakdown beyond the cap must be truncated with a visible flag."""
-    from my_claude_code.core import request_log as request_log_module
-
     store = RequestLogStore(tmp_path / "requests.db", max_rows=1000)
     try:
         limit = request_log_module._BREAKDOWN_LIMIT
@@ -840,7 +861,8 @@ def test_migrates_a_database_created_before_key_columns(tmp_path) -> None:
         # The pre-existing covering index lacked key_label, so it must be
         # replaced rather than silently kept by CREATE INDEX IF NOT EXISTS.
         assert "idx_requests_stats" not in indexes
-        assert "idx_requests_stats_v3" in indexes
+        assert "idx_requests_stats_v3" not in indexes
+        assert "idx_requests_stats_v4" in indexes
     finally:
         store.close()
 
@@ -1031,9 +1053,11 @@ def test_route_trace_columns_are_added_to_a_pre_existing_database(tmp_path) -> N
 def test_lifetime_totals_survive_the_retention_cap(tmp_path) -> None:
     """The bug this table exists for.
 
-    Every figure in ``stats`` is a sum over ``requests``, which ``prune`` caps.
-    Once the cap is reached one row leaves for each one that arrives, so those
-    sums stop moving however much traffic runs. The all-time counters must not.
+    Every figure a raw scan produces is a sum over ``requests``, which
+    ``prune`` caps. Once the cap is reached one row leaves for each one that
+    arrives, so those sums stop moving however much traffic runs. The all-time
+    counters must not -- and neither must the stats rollup, which is exempt
+    from retention for exactly the same reason.
     """
     store = RequestLogStore(tmp_path / "requests.db", max_rows=3)
     base = time.time()
@@ -1042,11 +1066,15 @@ def test_lifetime_totals_survive_the_retention_cap(tmp_path) -> None:
     store.close()
     store.prune()
 
-    windowed = store.stats()
+    windowed = store._stats_from_rows()
+    rolled_up = store.stats()
     lifetime = store.lifetime()
 
     assert windowed["total"] == 3
     assert windowed["tokens_in"] == 30
+    assert rolled_up["served_from"] == "rollup"
+    assert rolled_up["total"] == 10
+    assert rolled_up["tokens_in"] == 100
     assert lifetime["requests"] == 10
     assert lifetime["tokens_in"] == 100
     assert lifetime["tokens_out"] == 200
@@ -2404,10 +2432,19 @@ def test_an_unreadable_params_value_cannot_take_stats_down(store) -> None:
             " WHERE request_id = 'r1' AND attempt = 0"
         )
 
-    assert store.stats()["recovery"] == {
+    # The raw-row path is the one that reads the stored blob back, and one
+    # malformed value there must report nothing measured rather than raise.
+    assert store._stats_from_rows()["recovery"] == {
         "early_retries": 0,
         "midstream_recoveries": 0,
         "salvages": 0,
+    }
+    # The rollup summed the same counters off the record itself, inside the
+    # write transaction, so a value corrupted afterwards cannot reach it.
+    assert store.stats()["recovery"] == {
+        "early_retries": 2,
+        "midstream_recoveries": 1,
+        "salvages": 1,
     }
     row = store.get_request("r1")
     assert row is not None
@@ -2827,3 +2864,533 @@ def test_local_filter_composes_with_the_synthetic_provider_keys(
     assert total == 1
     _, total = store.list_requests(provider="(unknown)", local="hide")
     assert total == 1
+
+
+# --------------------------------------------------------------------------- #
+# The stats rollup
+# --------------------------------------------------------------------------- #
+
+
+def _rollup_fixture(store: RequestLogStore, base: float) -> None:
+    """Seed a store with every shape the rollup has to reproduce.
+
+    Several UTC hours; providers named, absent-with-an-optimization (a local
+    answer) and absent-without-one (genuinely unknown); models where
+    ``resolved_model`` differs from ``requested_model``; all three statuses;
+    several key labels; rows with and without durations, TTFTs, route attempts,
+    diversions, images and recovery counters.
+    """
+    hour = 3600.0
+    providers = ["p1", "p2", None, None]
+    optimizations = [None, None, "cached_answer", None]
+    for index in range(48):
+        provider = providers[index % 4]
+        optimization = optimizations[index % 4]
+        status = ("success", "error", "cancelled")[index % 3]
+        attempts: tuple[RouteAttempt, ...] = ()
+        if index % 8 == 0:
+            attempts = (
+                RouteAttempt(
+                    attempt=0,
+                    provider=provider,
+                    model_ref="m/1",
+                    outcome=RouteAttemptOutcome.FAILED,
+                    params={
+                        "early_retries": 2,
+                        "midstream_recoveries": 1,
+                        "ladder": {
+                            "tries": [
+                                {"status": 429},
+                                {"status": 429},
+                                {"status": 502},
+                            ]
+                        },
+                    },
+                    ladder_tries=3,
+                ),
+                RouteAttempt(
+                    attempt=1,
+                    provider=provider,
+                    model_ref="m/2",
+                    outcome=RouteAttemptOutcome.SUCCEEDED,
+                    params={"salvages": 1},
+                    ladder_tries=1,
+                ),
+            )
+        store.enqueue(
+            _record(
+                f"rollup-{index}",
+                ts_epoch=base + (index % 6) * hour + index,
+                provider=provider,
+                optimization=optimization,
+                requested_model=f"req-{index % 3}",
+                resolved_model=f"res-{index % 4}",
+                endpoint=("/v1/messages", "/v1/responses")[index % 2],
+                key_label=f"key-{index % 3}",
+                status=status,
+                # Distinct, well separated counts keep every LIMIT-10 list's
+                # ordering unambiguous, so the comparison is not asserting on
+                # SQLite's tie-breaking.
+                duration_ms=None if index % 7 == 0 else float(10 * (index + 1)),
+                ttft_ms=None if index % 5 == 0 else float(index + 1),
+                tokens_in=index,
+                tokens_out=index * 2,
+                cache_read_tokens=None if index % 4 == 0 else index,
+                cache_write_tokens=index,
+                tool_call_count=index % 3,
+                thinking_chars=index % 5,
+                input_image_count=index % 6,
+                error_message=f"boom-{index % 9}" if status == "error" else None,
+                route_attempt=index % 3,
+                route_primary_model=f"primary-{index % 4}",
+                route_diverted_from=f"diverted-{index % 2}" if index % 5 == 0 else None,
+                route_diversion=(
+                    ("vision_unavailable", "policy")[index % 2]
+                    if index % 5 == 0
+                    else None
+                ),
+                attempts=attempts,
+            )
+        )
+    store.close()
+
+
+_PERCENTILE_KEYS = ("p50_duration_ms", "p95_duration_ms")
+
+
+def _sorted_durations(store: RequestLogStore, arguments: dict[str, Any]) -> list[float]:
+    """The exact ordered sample the raw percentile path would read."""
+    where, args = store._where(**arguments)
+    connector = " AND" if where else " WHERE"
+    with sqlite3.connect(store.db_path) as conn:
+        return [
+            float(row[0])
+            for row in conn.execute(
+                f"SELECT duration_ms FROM requests{where}{connector}"
+                " duration_ms IS NOT NULL ORDER BY duration_ms",
+                args,
+            )
+        ]
+
+
+def _assert_payloads_agree(
+    rolled_up,
+    raw,
+    label: str,
+    *,
+    store: RequestLogStore | None = None,
+    arguments: dict[str, Any] | None = None,
+) -> None:
+    """Every payload key must match exactly except the bucketed percentiles.
+
+    The percentiles get the one bound that is provable rather than a tuned
+    tolerance. The histogram walk lands in the bucket holding the observation
+    at the same rank the exact interpolation starts from, and returns a value
+    inside that bucket -- so the estimate is within one bucket width of that
+    observation, always. On a fixture this small it is emphatically *not*
+    within a bucket width of the interpolated exact percentile: two samples
+    decades apart interpolate to a value no bucket contains, which is the
+    small-sample behaviour the design accepts and the README states.
+    """
+    assert rolled_up["served_from"] == "rollup", label
+    assert raw["served_from"] == "rows", label
+    ignored = {*_PERCENTILE_KEYS, "served_from"}
+    for name in sorted(set(raw) - ignored):
+        assert rolled_up[name] == raw[name], f"{label}: {name}"
+    if store is None or arguments is None:
+        return
+    values = _sorted_durations(store, arguments)
+    for name, fraction in zip(_PERCENTILE_KEYS, (0.50, 0.95), strict=True):
+        approximate = rolled_up[name]
+        if not values:
+            assert approximate is None, f"{label}: {name}"
+            assert raw[name] is None, f"{label}: {name}"
+            continue
+        ranked = values[int(fraction * (len(values) - 1))]
+        low, high = request_log_module._latency_bucket_edges(
+            request_log_module._latency_bucket(ranked)
+        )
+        # Rounding is monotone, so the payload's rounded value stays inside
+        # the rounded edges of the bucket its exact value fell in.
+        assert round(low, 2) <= approximate <= round(high, 2), (
+            f"{label}: {name} ({ranked})"
+        )
+
+
+def test_rollup_and_raw_stats_agree_across_every_filter_combination(
+    store: RequestLogStore,
+) -> None:
+    """The equality contract.
+
+    Exact counters must match a raw scan for every filter ``_where`` supports,
+    under all three ``local`` values, windowed and unwindowed. This is the
+    contract the whole rollup rests on: if a dimension is missing or a counter
+    is mismapped, a cell in this cross product disagrees.
+    """
+    # Hour-aligned, so the window snap of the rollup is a no-op and the two
+    # paths are answering the identical question.
+    base = float(int(time.time() // 3600) * 3600 - 48 * 3600)
+    _rollup_fixture(store, base)
+
+    filters: list[dict[str, Any]] = [
+        {},
+        {"provider": "p1"},
+        {"provider": "p1,p2"},
+        {"provider": "local:cached_answer"},
+        {"provider": "(unknown)"},
+        {"provider": "p1,local:cached_answer,(unknown)"},
+        {"provider": "no-such-provider"},
+        {"model": "res-1"},
+        {"model": "req-2"},
+        {"model": "res-1,req-2"},
+        {"status": "success"},
+        {"status": "error"},
+        {"status": "cancelled"},
+        {"endpoint": "/v1/responses"},
+        {"key": "key-1"},
+        {"key": "no-such-key"},
+        {"provider": "p2", "status": "error", "endpoint": "/v1/messages"},
+    ]
+    for local in ("all", "hide", "only"):
+        for since in (None, base + 2 * 3600):
+            for extra in filters:
+                arguments: dict[str, Any] = {
+                    "local": local,
+                    "since": since,
+                    **extra,
+                }
+                label = repr(arguments)
+                _assert_payloads_agree(
+                    store.stats(**arguments),
+                    store._stats_from_rows(**arguments),
+                    label,
+                    store=store,
+                    arguments=arguments,
+                )
+
+
+def test_a_free_text_search_falls_back_to_rows(store: RequestLogStore) -> None:
+    """``q`` is not a rollup dimension, so it forces the raw scan."""
+    store.enqueue(_record("hit", input_text="needle in a haystack"))
+    store.enqueue(_record("miss", input_text="nothing here"))
+    store.close()
+
+    searched = store.stats(q="needle")
+    assert searched["served_from"] == "rows"
+    assert searched["total"] == 1
+    raw = store._stats_from_rows(q="needle")
+    for name in sorted(searched):
+        assert searched[name] == raw[name], name
+    assert store.stats()["served_from"] == "rollup"
+
+
+def test_the_rollup_backfill_runs_once_and_is_resumable(tmp_path) -> None:
+    """Restarting mid-backfill must not double count or lose a bucket."""
+    path = tmp_path / "requests.db"
+    base = float(int(time.time() // 3600) * 3600 - 96 * 3600)
+    seed = RequestLogStore(path, max_rows=1000)
+    for index in range(60):
+        seed.enqueue(_record(f"r{index}", ts_epoch=base + index * 3600.0))
+    seed.close()
+
+    first = RequestLogStore(path, max_rows=1000)
+    first.close()
+    complete = first.stats()
+    assert complete["served_from"] == "rollup"
+    assert complete["total"] == 60
+
+    # Rewind to a partially built rollup: the completion marker is gone, the
+    # resume marker sits mid-walk, and every bucket at or past it is dropped --
+    # exactly the state a crash between two committed chunks leaves behind.
+    midpoint = int(base) + 24 * 3600
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "DELETE FROM request_log_meta WHERE key = ?",
+            (request_log_module._ROLLUP_BACKFILL_KEY,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO request_log_meta (key, value) VALUES (?, ?)",
+            (request_log_module._ROLLUP_BACKFILL_THROUGH_KEY, str(midpoint)),
+        )
+        for table in request_log_module._ROLLUP_TABLES:
+            conn.execute(f"DELETE FROM {table} WHERE hour_epoch >= ?", (midpoint,))
+
+    resumed = RequestLogStore(path, max_rows=1000)
+    resumed.close()
+    assert resumed.stats()["total"] == 60
+    for name in sorted(complete):
+        if name == "served_from":
+            continue
+        assert resumed.stats()[name] == complete[name], name
+
+    # A third construction finds the completion marker and does nothing.
+    again = RequestLogStore(path, max_rows=1000)
+    again.close()
+    assert again.stats()["total"] == 60
+
+
+def test_the_rollup_backfill_runs_on_the_writer_thread_not_in_init(tmp_path) -> None:
+    """Construction must stay instant with a large backfill still pending.
+
+    A full ``VACUUM`` in ``__init__`` once made construction take 17 seconds.
+    The rollup backfill is the same shape of one-time work and belongs in the
+    same place: the writer thread, never a request path and never here.
+    """
+    path = tmp_path / "requests.db"
+    base = float(int(time.time() // 3600) * 3600 - 400 * 3600)
+    seed = RequestLogStore(path, max_rows=20000)
+    for index in range(2000):
+        seed.enqueue(_record(f"r{index}", ts_epoch=base + index * 600.0))
+    seed.close()
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
+    assert rows == 2000
+
+    # Drop the rollup so the backfill genuinely has all 2000 rows to do again.
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "DELETE FROM request_log_meta WHERE key IN (?, ?)",
+            (
+                request_log_module._ROLLUP_BACKFILL_KEY,
+                request_log_module._ROLLUP_BACKFILL_THROUGH_KEY,
+            ),
+        )
+        for table in request_log_module._ROLLUP_TABLES:
+            conn.execute(f"DELETE FROM {table}")
+
+    started = time.monotonic()
+    store = RequestLogStore(path, max_rows=20000)
+    construction = time.monotonic() - started
+    try:
+        assert construction < 0.1, f"__init__ took {construction:.3f}s"
+    finally:
+        store.close()
+    assert store.stats()["total"] == 2000
+
+
+def test_the_stats_index_is_versioned_to_v4_and_v3_is_dropped(tmp_path) -> None:
+    """The index rule: a new column list means a new name and an explicit drop."""
+    path = tmp_path / "requests.db"
+    store = RequestLogStore(path, max_rows=10)
+    store.enqueue(_record("r1"))
+    store.close()
+
+    with sqlite3.connect(path) as conn:
+        names = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+        }
+        assert "idx_requests_stats_v3" not in names
+        assert "idx_requests_stats_v4" in names
+        plan = [
+            str(row[3])
+            for row in conn.execute(
+                "EXPLAIN QUERY PLAN SELECT COUNT(*), SUM(tokens_in)"
+                " FROM requests WHERE is_local = 0"
+            )
+        ]
+    assert any("idx_requests_stats_v4" in step for step in plan), plan
+
+
+def test_request_rows_carry_every_insert_column(store: RequestLogStore) -> None:
+    """The 42/43 guard for the ``requests`` INSERT.
+
+    A hand-written column list with a hand-written placeholder list once
+    shipped one marker short and broke every write. Both are generated from
+    ``_REQUEST_INSERT_COLUMNS`` now; this pins that the tuple, the row builder
+    and the table agree.
+    """
+    columns = request_log_module._REQUEST_INSERT_COLUMNS
+    assert request_log_module._REQUEST_INSERT_SQL.count("?") == len(columns)
+
+    store.enqueue(_record("r1"))
+    store.close()
+    with sqlite3.connect(store.db_path) as conn:
+        table = {str(row[1]) for row in conn.execute("PRAGMA table_info(requests)")}
+        row = conn.execute(
+            f"SELECT {', '.join(columns)} FROM requests WHERE id = 'r1'"
+        ).fetchone()
+    assert set(columns) <= table
+    assert len(row) == len(columns)
+    assert row[columns.index("id")] == "r1"
+    assert row[columns.index("is_local")] == 0
+
+
+def test_a_new_requests_column_must_be_declared_to_the_rollup(
+    store: RequestLogStore,
+) -> None:
+    """The drift guard.
+
+    A column added to ``requests`` without a decision about the rollup would
+    let a new fact land silently, and the rollup would report a confident zero
+    for it forever. Failing here is the prompt to make that decision.
+    """
+    store.close()
+    with sqlite3.connect(store.db_path) as conn:
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(requests)")}
+    unacknowledged = columns - request_log_module._ROLLUP_ACKNOWLEDGED_COLUMNS
+    assert not unacknowledged, (
+        f"new requests column(s) {sorted(unacknowledged)}: decide whether each"
+        " is a rollup dimension (_ROLLUP_DIMENSIONS), a rollup counter"
+        " (_ROLLUP_COUNTERS), or neither, then add it to"
+        " _REQUEST_INSERT_COLUMNS so this set follows."
+    )
+    assert request_log_module._ROLLUP_ACKNOWLEDGED_COLUMNS - columns == set()
+
+
+def test_pruning_does_not_shrink_the_rollup(tmp_path) -> None:
+    """Retention caps ``requests``; the rollup outlives it, like the totals."""
+    store = RequestLogStore(tmp_path / "requests.db", max_rows=3)
+    base = time.time()
+    for index in range(10):
+        store.enqueue(_record(f"r{index}", ts_epoch=base + index))
+    store.close()
+    before = store.stats()["total"]
+    with sqlite3.connect(store.db_path) as conn:
+        rollup_rows = conn.execute(
+            "SELECT COALESCE(SUM(requests), 0) FROM request_stats_rollup"
+        ).fetchone()[0]
+
+    store.prune()
+
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 3
+        assert (
+            conn.execute(
+                "SELECT COALESCE(SUM(requests), 0) FROM request_stats_rollup"
+            ).fetchone()[0]
+            == rollup_rows
+        )
+    assert before == 10
+    assert store.stats()["total"] == 10
+    assert store._stats_from_rows()["total"] == 3
+
+
+def test_clearing_the_log_also_clears_the_rollup(store: RequestLogStore) -> None:
+    """ "Clear log" is an explicit erase, so the rollup goes with the rows."""
+    store.enqueue(_record("r1"))
+    store.close()
+    assert store.stats()["total"] == 1
+
+    store.clear()
+
+    with sqlite3.connect(store.db_path) as conn:
+        for table in request_log_module._ROLLUP_TABLES:
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    assert store.stats()["total"] == 0
+
+
+def test_a_replayed_record_is_counted_once_in_the_rollup(tmp_path) -> None:
+    """``INSERT OR REPLACE`` rewrites a row; the rollup must not re-add it."""
+    store = RequestLogStore(tmp_path / "requests.db", max_rows=100)
+    store.enqueue(_record("same"))
+    store.close()
+
+    replay = RequestLogStore(tmp_path / "requests.db", max_rows=100)
+    replay.enqueue(_record("same"))
+    replay.close()
+
+    with sqlite3.connect(replay.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1
+        assert (
+            conn.execute("SELECT SUM(requests) FROM request_stats_rollup").fetchone()[0]
+            == 1
+        )
+    assert replay.stats()["total"] == 1
+
+
+def test_the_window_snap_is_reported(store: RequestLogStore) -> None:
+    """A window that is not hour-aligned is rounded outward, and says so."""
+    base = float(int(time.time() // 3600) * 3600 - 3600)
+    store.enqueue(_record("r1", ts_epoch=base + 60))
+    store.close()
+
+    since = base + 1800
+    until = base + 3000
+    payload = store.stats(since=since, until=until)
+
+    assert payload["served_from"] == "rollup"
+    assert payload["window"]["since"] == since
+    assert payload["window"]["until"] == until
+    assert payload["window"]["snapped_since"] == base
+    assert payload["window"]["snapped_until"] == base + 3599
+    # The row at base + 60 sits outside the requested window and inside the
+    # snapped one, which is the whole point of reporting both.
+    assert payload["total"] == 1
+    assert store._stats_from_rows(since=since, until=until)["total"] == 0
+
+
+def test_migrating_a_database_shaped_like_the_live_log(tmp_path) -> None:
+    """An upgrade over a real 6.16.0-shaped database.
+
+    The pre-existing totals must not be recounted, ``is_local`` must be
+    computed for every row including the ``(unknown)`` ones that are not local
+    answers, the index must roll to ``_v4``, and the rollup must reproduce a
+    raw scan under all three ``local`` values.
+    """
+    path = tmp_path / "requests.db"
+    base = float(int(time.time() // 3600) * 3600 - 12 * 3600)
+    seed = RequestLogStore(path, max_rows=1000)
+    for index in range(30):
+        seed.enqueue(
+            _record(
+                f"r{index}",
+                ts_epoch=base + index * 600.0,
+                provider=(None if index % 3 else "p1"),
+                optimization=("cached_answer" if index % 3 == 1 else None),
+                duration_ms=float(20 * (index + 1)),
+            )
+        )
+    seed.close()
+    totals_before = seed.lifetime()["requests"]
+
+    # Rewind the database to the previous release's shape: no ``is_local``, the
+    # old index, no rollup, and the totals backfill already marked done.
+    with sqlite3.connect(path) as conn:
+        # The index carries the column, so it has to go first.
+        conn.execute("DROP INDEX IF EXISTS idx_requests_stats_v4")
+        conn.execute("ALTER TABLE requests DROP COLUMN is_local")
+        conn.execute(
+            "CREATE INDEX idx_requests_stats_v3 ON requests("
+            " ts_epoch, status, provider, resolved_model, endpoint,"
+            " requested_model, key_label, duration_ms, ttft_ms,"
+            " tokens_in, tokens_out, cache_read_tokens, cache_write_tokens)"
+        )
+        conn.execute(
+            "DELETE FROM request_log_meta WHERE key IN (?, ?, ?)",
+            (
+                request_log_module._ROLLUP_BACKFILL_KEY,
+                request_log_module._ROLLUP_BACKFILL_THROUGH_KEY,
+                request_log_module._IS_LOCAL_BACKFILL_KEY,
+            ),
+        )
+        for table in request_log_module._ROLLUP_TABLES:
+            conn.execute(f"DROP TABLE {table}")
+
+    upgraded = RequestLogStore(path, max_rows=1000)
+    upgraded.close()
+
+    with sqlite3.connect(path) as conn:
+        names = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+        }
+        assert "idx_requests_stats_v3" not in names
+        assert "idx_requests_stats_v4" in names
+        wrong = conn.execute(
+            "SELECT COUNT(*) FROM requests WHERE is_local <>"
+            " (CASE WHEN provider IS NULL AND optimization IS NOT NULL"
+            " THEN 1 ELSE 0 END)"
+        ).fetchone()[0]
+    assert wrong == 0
+    # The totals backfill keeps its marker, so it does not run a second time.
+    assert upgraded.lifetime()["requests"] == totals_before
+
+    for local in ("all", "hide", "only"):
+        _assert_payloads_agree(
+            upgraded.stats(local=local),
+            upgraded._stats_from_rows(local=local),
+            f"local={local}",
+            store=upgraded,
+            arguments=dict[str, Any](local=local),
+        )
