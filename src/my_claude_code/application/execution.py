@@ -651,13 +651,20 @@ class ProviderExecutor:
                                 reasoning_since=reasoning_since,
                             ) from exc
                         if chunk == REASONING_HEARTBEAT:
-                            # The provider is holding reasoning back. Nothing
-                            # to forward and nothing committed, but the attempt
-                            # is demonstrably working rather than silent, so it
-                            # earns the answer allowance instead of the
-                            # first-token share.
+                            # The provider consumed an upstream fragment and
+                            # has nothing to forward yet -- reasoning held back
+                            # before the answer, or tool arguments buffered
+                            # until their JSON parses. Nothing is committed,
+                            # but the attempt is demonstrably working rather
+                            # than silent, so it earns the answer allowance
+                            # instead of the first-token share, and it counts
+                            # as progress: measuring the buffer instead of the
+                            # model is how a streaming tool call got killed as
+                            # a stall. A dead stream sends no heartbeat, so
+                            # the guard that ends one is untouched.
                             if reasoning_since is None:
                                 reasoning_since = time.monotonic()
+                            last_progress = time.monotonic()
                             continue
                         seen_chunk = True
                         # Only a chunk that moves the answer forward counts as

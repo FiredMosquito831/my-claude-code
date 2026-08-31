@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.stream_contracts import REASONING_HEARTBEAT
 from my_claude_code.core.anthropic.streaming import (
     AnthropicStreamLedger,
     tool_schemas_by_name,
@@ -228,6 +229,12 @@ class OpenAIToolCallAssembler:
             parsed = ledger.blocks.buffer_task_args(tc_index, args)
             if parsed is not None:
                 yield ledger.emit_tool_delta(tc_index, json.dumps(parsed))
+                return
+            # Held back until the JSON parses. Upstream just delivered a
+            # fragment, so the attempt is producing even though nothing can be
+            # forwarded yet; without saying so the stall guard measures this
+            # buffer instead of the model and kills a working stream.
+            yield REASONING_HEARTBEAT
             return
         aliases = (
             tool_argument_aliases.get(state.name, {}) if tool_argument_aliases else {}
@@ -243,6 +250,9 @@ class OpenAIToolCallAssembler:
             restored = self._restore_aliased_tool_arguments(buffered_args, aliases)
             if restored is None:
                 tool_argument_alias_buffers[tc_index] = buffered_args
+                # Same reason as the Task buffer: an aliased argument name can
+                # only be renamed back once the whole object parses.
+                yield REASONING_HEARTBEAT
                 return
             tool_argument_alias_buffers.pop(tc_index, None)
             yield ledger.emit_tool_delta(tc_index, restored)

@@ -18,6 +18,7 @@ from my_claude_code.core.anthropic import (
     ThinkTagParser,
 )
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.stream_contracts import REASONING_HEARTBEAT
 from my_claude_code.core.anthropic.streaming import (
     AnthropicStreamLedger,
     accept_tool_json_repair,
@@ -747,6 +748,13 @@ class _OpenAIChatStreamRunner:
                                     tool_argument_aliases=tool_argument_aliases,
                                     tool_argument_alias_buffers=tool_argument_alias_buffers,
                                 ):
+                                    if event == REASONING_HEARTBEAT:
+                                        # Not SSE and not output: it says the
+                                        # stream is alive while arguments
+                                        # buffer. Pushing it into the holdback
+                                        # would commit the route on nothing.
+                                        yield event
+                                        continue
                                     for out_event in hold_event(event):
                                         yield out_event
 

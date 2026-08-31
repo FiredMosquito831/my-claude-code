@@ -1,6 +1,7 @@
 """Application-owned provider execution contracts."""
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator, Mapping
 from unittest.mock import MagicMock
@@ -35,7 +36,9 @@ from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.anthropic.stream_contracts import (
     REASONING_HEARTBEAT,
     parse_sse_text,
+    sse_carries_content,
 )
+from my_claude_code.core.anthropic.streaming.ledger import AnthropicStreamLedger
 from my_claude_code.core.async_iterators import AsyncCloseable
 from my_claude_code.core.failures import (
     ExecutionFailure,
@@ -47,6 +50,7 @@ from my_claude_code.core.reasoning import (
     ReasoningAdaptationKind,
     ReasoningPolicy,
 )
+from my_claude_code.providers.openai_chat.tool_calls import OpenAIToolCallAssembler
 
 
 class FakeProvider:
@@ -1444,6 +1448,234 @@ async def test_disabling_the_stall_guard_tolerates_a_long_pause() -> None:
     chunks = [chunk async for chunk in stream]
     assert chunks.count(_TEXT) == 2
     assert chunks[-1] == "event: message_stop\ndata: {}\n\n"
+
+
+# The stall clock measures time since the last chunk that carried content, but
+# the openai-chat translator holds tool arguments back until the JSON parses --
+# for a ``Task`` call and for any tool whose argument names were aliased for the
+# wire. While it buffers, an actively streaming model produces no
+# ``content_block_delta`` at all, so the clock runs against a working stream.
+# This is what killed req_e49840e7 after 120s with no tool call ever completed.
+
+_TASK_ARGUMENTS = json.dumps({"description": "review", "prompt": "look at the file"})
+# Grep's ``type`` parameter cannot travel under that name, so it is sent as
+# ``_fcc_arg_type`` and renamed back on the way out -- the real alias on the
+# incident's own tool list, not an invented one.
+_ALIASED_ARGUMENTS = json.dumps({"pattern": "todo", "_fcc_arg_type": "py"})
+_GREP_ALIASES = {"Grep": {"_fcc_arg_type": "type"}}
+
+
+def _fragments(payload: str, count: int) -> tuple[str, ...]:
+    """Split one arguments JSON into ``count`` wire fragments."""
+    size = max(1, -(-len(payload) // count))
+    return tuple(
+        payload[start : start + size] for start in range(0, len(payload), size)
+    )
+
+
+class _BufferedToolArgsProvider(FakeProvider):
+    """A model streaming tool arguments through the real translator.
+
+    The buffering under test is the shipped one: this drives
+    ``OpenAIToolCallAssembler`` rather than imitating it, so the test cannot
+    pass by disagreeing with the code about when a fragment is held.
+    """
+
+    def __init__(
+        self,
+        *,
+        tool_name: str,
+        arguments: str,
+        aliases: dict[str, dict[str, str]] | None = None,
+        pause: float = 0.1,
+        count: int = 8,
+    ) -> None:
+        super().__init__()
+        self._tool_name = tool_name
+        self._fragment_list = _fragments(arguments, count)
+        self.fragment_count = len(self._fragment_list)
+        self._aliases = aliases or {}
+        self._pause = pause
+        self.fragments_sent = 0
+
+    async def stream_response(
+        self,
+        request: MessagesRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        self.stream_calls.append({"request": request})
+        ledger = AnthropicStreamLedger("msg_buffered", request.model)
+        assembler = OpenAIToolCallAssembler()
+        buffers: dict[int, str] = {}
+        for event in assembler.process_tool_call(
+            {
+                "index": 0,
+                "id": "toolu_buffered",
+                "function": {"name": self._tool_name, "arguments": ""},
+            },
+            ledger,
+            tool_argument_aliases=self._aliases,
+            tool_argument_alias_buffers=buffers,
+        ):
+            yield event
+        for fragment in self._fragment_list:
+            await asyncio.sleep(self._pause)
+            self.fragments_sent += 1
+            for event in assembler.process_tool_call(
+                {"index": 0, "function": {"arguments": fragment}},
+                ledger,
+                tool_argument_aliases=self._aliases,
+                tool_argument_alias_buffers=buffers,
+            ):
+                yield event
+        yield "event: message_stop\ndata: {}\n\n"
+
+
+async def _run_buffered(provider: FakeProvider, request_id: str) -> list[str]:
+    """Drive one attempt through the stall guard and return what reached the client."""
+    stream = _stall_executor({"primary": provider}, stall_timeout=0.3).stream(
+        _plan(_routed_request(provider_id="primary")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id=request_id,
+    )
+    seen: list[str] = []
+    async for chunk in stream:
+        seen.append(chunk)  # noqa: PERF401
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_buffered_task_arguments_do_not_starve_the_stall_clock() -> None:
+    """A Task call whose arguments are still being buffered is not a stall.
+
+    Upstream never pauses longer than one fragment interval -- a tenth of the
+    limit -- but until the JSON parses the translator has nothing to forward.
+    Counting only forwarded content made the clock measure the buffer instead
+    of the model.
+    """
+    provider = _BufferedToolArgsProvider(
+        tool_name="Task", arguments=_TASK_ARGUMENTS, count=8
+    )
+
+    seen = await _run_buffered(provider, "req_task_buffer")
+
+    assert provider.fragments_sent == provider.fragment_count, (
+        "upstream must have streamed throughout"
+    )
+    assert seen[-1] == "event: message_stop\ndata: {}\n\n"
+    assert any(sse_carries_content(chunk) for chunk in seen), (
+        "the completed arguments must still reach the client"
+    )
+
+
+@pytest.mark.asyncio
+async def test_buffered_aliased_arguments_do_not_starve_the_stall_clock() -> None:
+    """The same holds for a tool whose argument names were aliased for the wire.
+
+    An aliased name can only be renamed back once the whole object parses, so
+    the arguments accumulate until then. That buffer is silent for exactly as
+    long as the model takes to finish the call.
+    """
+    provider = _BufferedToolArgsProvider(
+        tool_name="Grep",
+        arguments=_ALIASED_ARGUMENTS,
+        aliases=_GREP_ALIASES,
+        count=8,
+    )
+
+    seen = await _run_buffered(provider, "req_alias_buffer")
+
+    assert provider.fragments_sent == provider.fragment_count
+    assert seen[-1] == "event: message_stop\ndata: {}\n\n"
+    restored = [
+        chunk for chunk in seen if "_fcc_arg_type" not in chunk and "type" in chunk
+    ]
+    assert restored, "the aliased argument must be restored before the client sees it"
+
+
+@pytest.mark.asyncio
+async def test_a_buffering_stream_that_goes_silent_is_still_stopped() -> None:
+    """The inverse guard: buffering earns time only while upstream delivers.
+
+    The heartbeat says "a fragment just arrived", not "a call is open". Once
+    upstream stops mid-arguments the heartbeats stop with it and the stall
+    guard ends the attempt exactly as it did before -- the 5.41.0 behaviour
+    this fix must not undo.
+    """
+
+    class _BuffersThenSilent(FakeProvider):
+        async def stream_response(
+            self,
+            request: MessagesRequest,
+            input_tokens: int = 0,
+            *,
+            request_id: str | None = None,
+            reasoning: ReasoningPolicy,
+        ) -> AsyncIterator[str]:
+            self.stream_calls.append({"request": request})
+            ledger = AnthropicStreamLedger("msg_silent", request.model)
+            assembler = OpenAIToolCallAssembler()
+            for event in assembler.process_tool_call(
+                {
+                    "index": 0,
+                    "id": "toolu_silent",
+                    "function": {"name": "Task", "arguments": '{"desc'},
+                },
+                ledger,
+            ):
+                yield event
+            await asyncio.sleep(3600)
+            yield "event: never\n\n"
+
+    stream = _stall_executor(
+        {"primary": _BuffersThenSilent()}, stall_timeout=0.3
+    ).stream(
+        _plan(_routed_request(provider_id="primary")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_buffer_then_silent",
+    )
+
+    with pytest.raises(ExecutionFailure) as caught:
+        async for _chunk in stream:
+            pass
+    assert caught.value.kind is FailureKind.TIMEOUT
+    assert "stopped producing output" in caught.value.message
+
+
+@pytest.mark.asyncio
+async def test_text_at_the_same_cadence_is_never_cut() -> None:
+    """The control: identical timing, nothing buffered, and it survives today.
+
+    It isolates the buffering as the cause -- the cadence alone is not what
+    ends the attempt.
+    """
+
+    class _SteadyText(FakeProvider):
+        async def stream_response(
+            self,
+            request: MessagesRequest,
+            input_tokens: int = 0,
+            *,
+            request_id: str | None = None,
+            reasoning: ReasoningPolicy,
+        ) -> AsyncIterator[str]:
+            self.stream_calls.append({"request": request})
+            for _ in range(8):
+                await asyncio.sleep(0.1)
+                yield _TEXT
+            yield "event: message_stop\ndata: {}\n\n"
+
+    seen = await _run_buffered(_SteadyText(), "req_text_cadence")
+
+    assert seen.count(_TEXT) == 8
+    assert seen[-1] == "event: message_stop\ndata: {}\n\n"
 
 
 class _ContextOverflowProvider(FakeProvider):
