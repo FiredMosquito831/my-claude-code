@@ -29,6 +29,7 @@ from .constants import (
     FALLBACK_EJECT_MIN_SAMPLES_DEFAULT,
     FALLBACK_EJECT_SECONDS_DEFAULT,
     FALLBACK_EJECT_WINDOW_DEFAULT,
+    FALLBACK_END_CLEANLY_AFTER_COMMIT_DEFAULT,
     FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
     FALLBACK_ON_REASONING_ONLY_DEFAULT,
     FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
@@ -670,6 +671,14 @@ class Settings(BaseSettings):
         description=(
             "Treat a stream that has emitted only reasoning as uncommitted, so "
             "a model that thinks without ever answering falls back."
+        ),
+    )
+    fallback_end_cleanly_after_commit: bool = Field(
+        default=FALLBACK_END_CLEANLY_AFTER_COMMIT_DEFAULT,
+        validation_alias="FALLBACK_END_CLEANLY_AFTER_COMMIT",
+        description=(
+            "End a stream that has already reached the client as a valid, "
+            "truncated message when it fails, instead of an API error."
         ),
     )
     stream_commit_holdback_seconds: float = Field(

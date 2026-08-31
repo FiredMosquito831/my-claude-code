@@ -200,13 +200,18 @@ def test_grouped_post_start_execution_failure_keeps_canonical_terminal_event(
 
     request_id = response.headers["request-id"]
     events = parse_sse_text(response.text)
-    if path == "/v1/messages":
-        assert events[-1].event == "error"
-        error = events[-1].data["error"]
-    else:
-        assert events[-1].event == "response.failed"
-        error = events[-1].data["response"]["error"]
     assert response.status_code == 200
+    if path == "/v1/messages":
+        # Reviewed behaviour change, 6.15.0: the client has already been shown
+        # this model's words, so the message is ended rather than errored --
+        # the failure is recorded on the attempt row instead. The canonical
+        # failure still reaches the terminal path on every uncommitted and
+        # non-streaming shape, which the rest of this module pins.
+        assert events[-1].event == "message_stop"
+        assert events[-2].data["delta"]["stop_reason"] == "max_tokens"
+        return
+    assert events[-1].event == "response.failed"
+    error = events[-1].data["response"]["error"]
     assert error["type"] == "rate_limit_error"
     assert error["message"] == f"upstream is busy\n\nRequest ID: {request_id}"
     assert _terminal_trace(trace_mock)["failure_kind"] == "rate_limit"
@@ -298,7 +303,52 @@ def test_responses_pre_start_execution_failure_is_correlated_terminal_json() -> 
     assert provider.stream_kwargs[0]["request_id"] == request_id
 
 
-def test_messages_post_start_execution_failure_follows_closed_block() -> None:
+def test_messages_post_start_execution_failure_ends_the_message() -> None:
+    """Reviewed behaviour change, 6.15.0.
+
+    Until 6.14.0 a 529 arriving after the client had already been shown text
+    was appended to the stream as a terminal ``error`` frame, and Claude Code
+    printed "API Error" under a half-written answer with no way to continue.
+    The failure has not moved and the stream still stops at the same instant;
+    only what the client is handed changed. The error path itself is unchanged
+    and is still pinned for every uncommitted and non-streaming shape by the
+    rest of this module, and by
+    ``test_messages_post_start_execution_failure_still_errors_when_disabled``
+    below for an operator who turns the new ending off.
+    """
+    provider = CanonicalFailureProvider(
+        _partial_anthropic_stream(close_block=True),
+        kind=FailureKind.OVERLOADED,
+        status_code=529,
+        message="provider overloaded",
+        retryable=True,
+    )
+    resolver_patch, client = _client_for(provider)
+
+    with resolver_patch, client:
+        response = client.post("/v1/messages", json=_messages_payload(stream=True))
+
+    events = parse_sse_text(response.text)
+    assert response.status_code == 200
+    assert "x-should-retry" not in response.headers
+    assert [event.event for event in events] == [
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]
+    assert events[-2].data["delta"]["stop_reason"] == "max_tokens"
+    assert _PARTIAL_CONTENT in response.text
+    assert "overloaded_error" not in response.text
+
+
+def test_messages_post_start_execution_failure_still_errors_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``FALLBACK_END_CLEANLY_AFTER_COMMIT=false`` restores the 6.14.0 stream."""
+    monkeypatch.setenv("FALLBACK_END_CLEANLY_AFTER_COMMIT", "false")
     provider = CanonicalFailureProvider(
         _partial_anthropic_stream(close_block=True),
         kind=FailureKind.OVERLOADED,

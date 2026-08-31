@@ -835,6 +835,30 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "FALLBACK_END_CLEANLY_AFTER_COMMIT",
+        "End a dead stream as a message, not an error",
+        "deadlines",
+        "boolean",
+        settings_attr="fallback_end_cleanly_after_commit",
+        default="true",
+        restart_required=True,
+        description=(
+            "Once a model has started answering, the chain can no longer step "
+            "in -- the reader has already seen its words. Until this setting "
+            "existed, any failure after that point (the stall limit above, the "
+            "total budget, a mid-stream 5xx, a dropped connection) reached the "
+            "client as an API error printed underneath a half-written answer, "
+            "and the turn died. With this on the message is instead *ended*: "
+            "the open block is closed and the client is told the answer was "
+            "cut short, so the session continues with a short but complete "
+            "reply. The answer really is incomplete, and the request detail "
+            "says how far it got and what actually went wrong. One case still "
+            "errors and cannot be helped: a stream that stopped halfway "
+            "through a tool call's arguments, which cannot be completed "
+            "honestly. Turn this off to go back to the error."
+        ),
+    ),
+    ConfigFieldSpec(
         "STREAM_COMMIT_HOLDBACK_SECONDS",
         "Commit holdback",
         "deadlines",

@@ -4,7 +4,7 @@ import asyncio
 import sys
 import time
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, cast
 
 from loguru import logger
@@ -12,6 +12,7 @@ from loguru import logger
 from my_claude_code.config.constants import (
     FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT,
     FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT,
+    FALLBACK_END_CLEANLY_AFTER_COMMIT_DEFAULT,
     FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
     FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
     FALLBACK_STALL_TIMEOUT_DEFAULT,
@@ -28,6 +29,10 @@ from my_claude_code.core.anthropic import (
 from my_claude_code.core.anthropic.stream_contracts import (
     REASONING_HEARTBEAT,
     sse_carries_content,
+)
+from my_claude_code.core.anthropic.streaming.truncation import (
+    CommittedStreamTracker,
+    StreamTruncation,
 )
 from my_claude_code.core.credential_attribution import record_credential
 from my_claude_code.core.diagnostics import safe_exception_message
@@ -85,6 +90,12 @@ class RouteAttemptRecord:
     #: structured rather than only as prose so the request detail can render it
     #: and an export can carry it.
     bench: dict[str, object] | None = None
+    #: Set when a stream that had already reached the client failed and was
+    #: ended as a valid message instead of an error: how much the reader was
+    #: left with, what actually went wrong, and what stop reason the client was
+    #: told. ``ended_cleanly`` is false for the one case that still errors, a
+    #: half-written tool call.
+    truncated: dict[str, object] | None = None
 
 
 # Reports what became of one attempt, as opposed to announcing that it started.
@@ -152,6 +163,12 @@ class RouteExecutionPolicy:
     # "cooldown for 0s" three requests running were never worth routing around
     # in the first place. 0 steps over any cooldown at all.
     cooldown_step_over_floor: float = FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT
+    # What a stream that has already reached the client does when it then
+    # fails. No chain can rescue it -- the reader has seen the first model's
+    # words -- but the protocol can still end the message: close the open
+    # block, send a stop reason that means "cut short", and stop. False
+    # restores the error the client used to receive after a partial answer.
+    end_cleanly_after_commit: bool = FALLBACK_END_CLEANLY_AFTER_COMMIT_DEFAULT
 
 
 # The wait is scheduled for exactly the remaining stall budget, so by the time
@@ -318,7 +335,21 @@ class _AttemptLedger:
             error_message=error_message,
             duration_ms=duration_ms,
             bench=bench,
+            truncated=current.truncated,
         )
+
+    def truncated_after_commit(self, index: int, truncation: StreamTruncation) -> None:
+        """Attach what became of a stream the client had already started reading.
+
+        Written beside the verdict rather than into it: the attempt still
+        failed, with the same kind and the same message it has always had, and
+        the reader of the request log should not have to infer a stall from a
+        message that now ends in ``message_stop``.
+        """
+        current = self._records.get(index)
+        if current is None:
+            return
+        self._records[index] = replace(current, truncated=truncation.as_params())
 
     def succeeded(self, index: int) -> None:
         self._set(
@@ -618,6 +649,9 @@ class ProviderExecutor:
                 provider_stream: AsyncIterator[str] | None = None
                 committed = False
                 uncommitted_failure: Exception | None = None
+                committed_failure: Exception | None = None
+                truncation: StreamTruncation | None = None
+                tracker = CommittedStreamTracker()
                 held: list[str] = []
                 try:
                     # Baseline attribution for single-credential providers. A
@@ -684,17 +718,29 @@ class ProviderExecutor:
                             held.append(chunk)
                             continue
                         committed = True
+                        tracker.observe(chunk)
                         yield chunk
                 except Exception as exc:
                     if committed:
-                        # No fallback is possible past the commit point, but the
-                        # attempt still ended in a failure and the log should
-                        # say so rather than leaving it as "never reached".
-                        ledger.failed(index, exc)
-                        ledger.unreachable_after(index, exc)
-                        ledger.publish()
-                        raise
-                    uncommitted_failure = exc
+                        # No fallback is possible past the commit point -- the
+                        # reader has seen this model's words and no other model
+                        # can un-send them. The message can still be *ended*
+                        # though, and a valid short answer beats an API error
+                        # printed under a half-written one.
+                        truncation = self._truncate_after_commit(tracker, exc, wire_api)
+                        if truncation is None or not truncation.ended_cleanly:
+                            # The attempt still ended in a failure and the log
+                            # should say so rather than leaving it as "never
+                            # reached".
+                            ledger.failed(index, exc)
+                            if truncation is not None:
+                                ledger.truncated_after_commit(index, truncation)
+                            ledger.unreachable_after(index, exc)
+                            ledger.publish()
+                            raise
+                        committed_failure = exc
+                    else:
+                        uncommitted_failure = exc
                 finally:
                     if provider_stream is not None:
                         await close_stream_input(
@@ -703,6 +749,36 @@ class ProviderExecutor:
                             source="api",
                             preserved_error=sys.exception(),
                         )
+                if truncation is not None and committed_failure is not None:
+                    # Emitted after the upstream stream is closed, so the
+                    # frames that end the message are never interleaved with a
+                    # half-open connection to the model that abandoned it.
+                    for frame in truncation.frames:
+                        yield frame
+                    ledger.failed(index, committed_failure)
+                    ledger.truncated_after_commit(index, truncation)
+                    ledger.unreachable_after(index, committed_failure)
+                    # The uncommitted path has always charged the model for a
+                    # failure here; the committed path never reached that line
+                    # because it raised first. It fails for exactly the same
+                    # reason, so it counts exactly once, the same way.
+                    committed_execution_failure = find_execution_failure(
+                        committed_failure
+                    )
+                    committed_kind = failure_kind(committed_failure)
+                    self._health.record_failure(
+                        model_ref,
+                        failure_kind=(
+                            committed_kind.value if committed_kind is not None else None
+                        ),
+                        status_code=(
+                            None
+                            if committed_execution_failure is None
+                            else committed_execution_failure.status_code
+                        ),
+                    )
+                    ledger.publish()
+                    return
                 if uncommitted_failure is None:
                     # Empty unless this attempt was held back for a
                     # non-streaming client; a failed attempt's chunks are
@@ -842,6 +918,48 @@ class ProviderExecutor:
             chunk_event=None,
             extra=stream_trace,
         )
+
+    def _truncate_after_commit(
+        self, tracker: CommittedStreamTracker, exc: Exception, wire_api: WireApi
+    ) -> StreamTruncation | None:
+        """How a stream the client is already reading should end when it fails.
+
+        ``None`` keeps the behaviour this branch has always had: re-raise, and
+        the client receives an API error underneath a partial answer. That is
+        right in only two situations -- the operator turned this off, or the
+        frames already sent cannot be completed into a valid message at all.
+
+        The one case worth a record but not a clean ending is a ``tool_use``
+        block whose arguments stopped mid-JSON. Closing it would hand Claude
+        Code a tool call with silently empty arguments, which it would then
+        *run*; an honest error is better. The truncation is still returned, so
+        the request log can say the turn died inside a tool call rather than
+        leaving the reader to guess from a timeout message.
+        """
+        if not self._policy.end_cleanly_after_commit:
+            return None
+        # The Responses dialect speaks a different event vocabulary and its
+        # assembler can only say ``response.completed`` or ``response.failed``
+        # -- there is no ``response.incomplete`` builder
+        # (``core/openai_responses/streaming/event_builders.py``). Translating a
+        # truncated message through it would tell that client the answer
+        # finished, which is the one thing this feature exists to avoid, so the
+        # honest ending there is still the error.
+        if wire_api != "messages":
+            return None
+        if tracker.incomplete_tool_use:
+            return tracker.abandoned(reason="incomplete_tool_use")
+        # Nothing to close, or the model already chose its own ending: in
+        # neither case is there a valid message to build out of these frames.
+        if not tracker.closable:
+            return None
+        logger.warning(
+            "MODEL TRUNCATED: ending a committed stream cleanly after {} chars"
+            " ({}); the answer is incomplete",
+            tracker.chars,
+            failure_kind_name(exc),
+        )
+        return tracker.close(reason=failure_kind_name(exc))
 
     def _ends_the_route(self, exc: BaseException) -> bool:
         """Whether this failure means no other model would do better.
@@ -1252,6 +1370,7 @@ def route_execution_policy(settings: Settings) -> RouteExecutionPolicy:
         attempt_share_floor=settings.fallback_attempt_share_floor,
         skip_kinds=parse_failure_kinds(settings.fallback_skip_kinds),
         cooldown_step_over_floor=settings.fallback_cooldown_step_over_floor,
+        end_cleanly_after_commit=settings.fallback_end_cleanly_after_commit,
     )
 
 

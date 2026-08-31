@@ -6465,6 +6465,14 @@ details.turn-pane > summary:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* The one line that says the reader got a short answer rather than an error.
+   Warning-coloured because the answer really is incomplete: it is the reason
+   the request looks successful and the attempt underneath it does not. */
+.req-chain-truncated {
+  color: var(--warn);
+  white-space: normal;
+}
+
 .req-chain-rootcause {
   margin: 6px 0 0;
   font-size: 12px;

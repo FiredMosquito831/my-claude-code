@@ -1043,6 +1043,9 @@ function driveDetail(row) {
     benchReasons: Array.from(chain.querySelectorAll(".req-chain-bench")).map(
       (el) => el.textContent,
     ),
+    truncations: Array.from(chain.querySelectorAll(".req-chain-truncated")).map(
+      (el) => el.textContent,
+    ),
     ladderTries: Array.from(chain.querySelectorAll(".req-chain-try")).map((el) =>
       (el.textContent || "").replace(/\s+/g, " ").trim(),
     ),
@@ -1293,6 +1296,51 @@ const requestDetail = {
             },
             credentials: [],
             root_cause: "",
+          },
+        },
+      }),
+    ],
+  }),
+  /* A stream that had already reached the client and then stalled. One
+     attempt, no ladder: the panel used to hide itself in exactly this shape,
+     which is the only place the truncation is ever said. */
+  truncated: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        outcome: "failed",
+        error_kind: "timeout",
+        error_message:
+          "Provider 'commandcode/z-ai/glm-5.3-flash' stopped producing output for 180s.",
+        params: {
+          truncated_after_commit: {
+            chars: 1333,
+            blocks: 1,
+            reason: "timeout",
+            stop_reason_sent: "max_tokens",
+            ended_cleanly: true,
+          },
+        },
+      }),
+    ],
+  }),
+  /* The one case that still errors: the stream stopped mid tool-call. */
+  truncatedTool: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        outcome: "failed",
+        error_kind: "timeout",
+        error_message: "Provider stopped producing output for 180s.",
+        params: {
+          truncated_after_commit: {
+            chars: 902,
+            blocks: 2,
+            reason: "incomplete_tool_use",
+            stop_reason_sent: null,
+            ended_cleanly: false,
           },
         },
       }),

@@ -8934,6 +8934,32 @@ function benchOf(attempt) {
   return bench && typeof bench === "object" ? bench : null;
 }
 
+/** What became of a stream that failed after the client had started reading. */
+function truncationOf(attempt) {
+  const params = attempt && attempt.params;
+  const truncated = params && params.truncated_after_commit;
+  return truncated && typeof truncated === "object" ? truncated : null;
+}
+
+/**
+ * Say what the reader was actually left with when a committed stream died.
+ *
+ * The attempt row says "timeout" either way, which cannot distinguish the
+ * turn that died from the turn that was ended early with a short answer -- and
+ * that difference is the whole of what this release changed.
+ */
+function truncationText(truncated) {
+  if (!truncated) return "";
+  if (truncated.ended_cleanly === false) {
+    return "stalled inside a tool call — cannot be completed";
+  }
+  const chars = Number(truncated.chars || 0);
+  return (
+    `ended early after ${chars.toLocaleString()} chars; the answer is` +
+    ` incomplete (sent to the client as ${truncated.stop_reason_sent || "—"})`
+  );
+}
+
 /**
  * Say why a skipped model was skipped, in the terms that benched it.
  *
@@ -8988,7 +9014,11 @@ function renderRequestChain(row) {
   // chain did something when it did not. One attempt that knocked fifteen
   // times is a different matter: the ladder is the only place that shows it,
   // so a single attempt with a ladder still gets the panel.
-  if (attempts.length < 2 && !attempts.some(hasLadder)) {
+  if (
+    attempts.length < 2 &&
+    !attempts.some(hasLadder) &&
+    !attempts.some((attempt) => truncationOf(attempt))
+  ) {
     container.hidden = true;
     return;
   }
@@ -9049,6 +9079,14 @@ function renderRequestChain(row) {
       summary.className = "req-chain-summary";
       summary.textContent = summaryText;
       head.appendChild(summary);
+    }
+
+    const truncatedText = truncationText(truncationOf(attempt));
+    if (truncatedText) {
+      const truncated = document.createElement("span");
+      truncated.className = "req-chain-summary req-chain-truncated";
+      truncated.textContent = truncatedText;
+      head.appendChild(truncated);
     }
 
     // Which credential served this attempt. The request row names only the

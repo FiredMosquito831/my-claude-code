@@ -193,6 +193,11 @@ STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT = 0.75
 # True holds reasoning back like scaffolding, so a model that thinks and
 # never answers leaves the route uncommitted and the chain can take over.
 FALLBACK_ON_REASONING_ONLY_DEFAULT = True
+# What a stream that has already reached the client does when it then fails.
+# True closes the open block and sends a stop reason meaning "cut short", so
+# the client receives a short but valid message instead of an API error printed
+# under a half-written answer. False restores the error.
+FALLBACK_END_CLEANLY_AFTER_COMMIT_DEFAULT = True
 # How long a model held at the reasoning boundary may think before the route
 # gives up on it. Measured on 21 days of traffic: every one of the 499 budget
 # exhaustions ran the *full* 600s, while 98% of slow reasoning successes had

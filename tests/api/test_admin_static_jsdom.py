@@ -1118,6 +1118,28 @@ def test_the_redacted_upstream_body_is_shown_per_try(rendered) -> None:
     ]
 
 
+def test_a_truncated_attempt_says_how_far_the_answer_got(rendered) -> None:
+    """The row reads "timeout" either way; only this says the reader got text.
+
+    Also the panel-visibility case: one attempt with no ladder used to hide the
+    whole chain, which is the only place the sentence is ever shown.
+    """
+    detail = rendered["requestDetail"]["truncated"]
+
+    assert detail["chainHidden"] is False
+    assert detail["truncations"] == [
+        "ended early after 1,333 chars; the answer is incomplete"
+        " (sent to the client as max_tokens)"
+    ]
+
+
+def test_a_truncated_tool_call_says_it_could_not_be_completed(rendered) -> None:
+    """The one case that still errors has to explain itself, not look identical."""
+    detail = rendered["requestDetail"]["truncatedTool"]
+
+    assert detail["truncations"] == ["stalled inside a tool call — cannot be completed"]
+
+
 def test_a_single_try_attempt_renders_no_ladder(rendered) -> None:
     """Nothing was hidden, so the panel adds nothing -- and stays hidden."""
     detail = rendered["requestDetail"]["singleTry"]

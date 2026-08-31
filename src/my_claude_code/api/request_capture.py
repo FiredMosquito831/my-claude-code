@@ -187,7 +187,7 @@ class RequestCapture:
                 error_message=attempt.error_message,
                 duration_ms=attempt.duration_ms,
                 params=self._attempt_params(
-                    attempt.attempt, wire, ladder, attempt.bench
+                    attempt.attempt, wire, ladder, attempt.bench, attempt.truncated
                 ),
                 wire_body=None if wire is None else wire.body_json,
                 reasoning_emitted=None if wire is None else wire.reasoning_emitted,
@@ -242,6 +242,7 @@ class RequestCapture:
         wire: WireRequest | None,
         ladder: dict[str, Any] | None = None,
         bench: dict[str, Any] | None = None,
+        truncated: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Merge what the provider survived with what it actually sent.
 
@@ -268,6 +269,12 @@ class RequestCapture:
         # more keys into the counters.
         if bench:
             params["bench"] = bench
+        # And again: what the reader was left with when a committed stream was
+        # ended early. It belongs on the attempt rather than the request,
+        # because the request row's status is about what the client received --
+        # a valid message -- and this is about which model failed to finish it.
+        if truncated:
+            params["truncated_after_commit"] = truncated
         return params or None
 
     def _recovery_events_for(self, attempt_index: int) -> dict[str, Any] | None:

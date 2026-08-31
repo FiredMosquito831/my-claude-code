@@ -35,6 +35,7 @@ from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.anthropic.stream_contracts import (
     REASONING_HEARTBEAT,
+    assert_anthropic_stream_contract,
     parse_sse_text,
     sse_carries_content,
 )
@@ -2645,3 +2646,313 @@ async def test_a_configured_step_over_floor_decides_which_cooldowns_are_routed()
 
     assert await _run(12.0, 10.0) is True, "under the floor: wait rather than route"
     assert await _run(5.0, 10.0) is False, "over the floor: step the model over"
+
+
+# --- A committed stream that dies ends as a message, not an error -----------
+#
+# Once real text has reached the client no other model can take over, so these
+# do not test fallback. They test what the client is handed instead of the API
+# error it used to get printed underneath a half-written answer.
+
+_COMMITTED_START = (
+    'event: message_start\ndata: {"type": "message_start", "message": '
+    '{"id": "msg_1", "type": "message", "role": "assistant", "content": [], '
+    '"model": "big", "stop_reason": null, "stop_sequence": null, '
+    '"usage": {"input_tokens": 41, "output_tokens": 1}}}\n\n'
+)
+_COMMITTED_TEXT_BLOCK = (
+    'event: content_block_start\ndata: {"type": "content_block_start", '
+    '"index": 0, "content_block": {"type": "text", "text": ""}}\n\n'
+)
+_COMMITTED_TEXT = (
+    'event: content_block_delta\ndata: {"type": "content_block_delta", '
+    '"index": 0, "delta": {"type": "text_delta", "text": "half an answer"}}\n\n'
+)
+_COMMITTED_TEXT_STOP = (
+    'event: content_block_stop\ndata: {"type": "content_block_stop", "index": 0}\n\n'
+)
+_COMMITTED_TOOL_BLOCK = (
+    'event: content_block_start\ndata: {"type": "content_block_start", '
+    '"index": 1, "content_block": {"type": "tool_use", "id": "t1", '
+    '"name": "Bash", "input": {}}}\n\n'
+)
+_COMMITTED_TOOL_JSON = (
+    'event: content_block_delta\ndata: {"type": "content_block_delta", '
+    '"index": 1, "delta": {"type": "input_json_delta", '
+    '"partial_json": "{\\"command\\": \\"ls -"}}\n\n'
+)
+_COMMITTED_TEXT_FRAMES = (
+    _COMMITTED_START,
+    _COMMITTED_TEXT_BLOCK,
+    _COMMITTED_TEXT,
+)
+
+
+def _committed_executor(
+    providers: Mapping[str, ProviderPort],
+    *,
+    end_cleanly_after_commit: bool = True,
+    health: RouteHealthRegistry | None = None,
+) -> ProviderExecutor:
+    """An executor whose stall deadline fires in a fraction of a second."""
+    return ProviderExecutor(
+        lambda provider_id: providers[provider_id],
+        token_counter=lambda _messages, _system, _tools: 17,
+        policy=RouteExecutionPolicy(
+            first_token_timeout=0.05,
+            total_timeout=0.0,
+            stall_timeout=0.05,
+            attempt_share_floor=0.0,
+            end_cleanly_after_commit=end_cleanly_after_commit,
+        ),
+        health=health or RouteHealthRegistry(eject_after_failures=0),
+    )
+
+
+async def _drain(stream: AsyncIterator[str]) -> list[str]:
+    return [chunk async for chunk in stream]
+
+
+@pytest.mark.asyncio
+async def test_a_committed_text_stall_ends_the_message_instead_of_erroring() -> None:
+    """The incident: 1,333 characters, then silence, then an API error."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = FakeProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    received = await _drain(
+        executor.stream(
+            _plan(
+                _routed_request("primary", "big"),
+                _routed_request("secondary", "small"),
+            ),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id="req_truncated",
+        )
+    )
+
+    events = parse_sse_text("".join(received))
+    assert_anthropic_stream_contract(events)
+    assert [event.event for event in events][-3:] == [
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]
+    delta = next(event for event in events if event.event == "message_delta")
+    assert delta.data["delta"]["stop_reason"] == "max_tokens"
+    assert delta.data["usage"]["input_tokens"] == 41
+    # The chain is not continued: the client has already seen this model's
+    # words, so a second model would be splicing into someone else's answer.
+    assert secondary.stream_calls == []
+    assert primary.stream_close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_the_ended_attempt_still_records_the_failure_that_ended_it() -> None:
+    """A valid message must not make the stall disappear from the log."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    attempts, observer = _attempt_log()
+    executor = _committed_executor({"primary": primary})
+
+    await _drain(
+        executor.stream(
+            _plan(_routed_request("primary", "big")),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id="req_truncated_row",
+            on_attempt_result=observer,
+        )
+    )
+
+    assert [(a.attempt, a.outcome, a.error_kind) for a in attempts] == [
+        (0, "failed", "timeout")
+    ]
+    assert attempts[0].truncated == {
+        "chars": len("half an answer"),
+        "blocks": 1,
+        "reason": "timeout",
+        "stop_reason_sent": "max_tokens",
+        "ended_cleanly": True,
+    }
+    assert "stopped producing output" in (attempts[0].error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_the_stalled_model_is_charged_for_the_failure_exactly_once() -> None:
+    """The committed branch used to return without ever telling the registry."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    registry = _RecordingRegistry()
+    executor = _committed_executor({"primary": primary}, health=registry)
+
+    await _drain(
+        executor.stream(
+            _plan(_routed_request("primary", "big")),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id="req_truncated_health",
+        )
+    )
+
+    assert registry.calls == [("primary/big", "timeout", 504)]
+
+
+@pytest.mark.asyncio
+async def test_disabling_the_clean_ending_restores_the_committed_error() -> None:
+    """The operator's escape hatch is byte-for-byte the old behaviour."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    attempts, observer = _attempt_log()
+    executor = _committed_executor({"primary": primary}, end_cleanly_after_commit=False)
+
+    stream = executor.stream(
+        _plan(_routed_request("primary", "big")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_truncated_off",
+        on_attempt_result=observer,
+    )
+    chunks = stream.__aiter__()
+    received: list[str] = []
+    with pytest.raises(ExecutionFailure) as failure:
+        while True:
+            received.append(await anext(chunks))
+
+    assert received == list(_COMMITTED_TEXT_FRAMES)
+    assert failure.value.kind is FailureKind.TIMEOUT
+    assert attempts[0].truncated is None
+
+
+@pytest.mark.asyncio
+async def test_a_stall_inside_a_tool_call_still_errors_and_says_so() -> None:
+    """A tool call with silently empty arguments would be *run* by the client."""
+    primary = StallingProvider(
+        before=(
+            _COMMITTED_START,
+            _COMMITTED_TEXT_BLOCK,
+            _COMMITTED_TEXT,
+            _COMMITTED_TEXT_STOP,
+            _COMMITTED_TOOL_BLOCK,
+            _COMMITTED_TOOL_JSON,
+        )
+    )
+    attempts, observer = _attempt_log()
+    executor = _committed_executor({"primary": primary})
+
+    stream = executor.stream(
+        _plan(_routed_request("primary", "big")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_truncated_tool",
+        on_attempt_result=observer,
+    )
+    chunks = stream.__aiter__()
+    with pytest.raises(ExecutionFailure):
+        while True:
+            await anext(chunks)
+
+    assert attempts[0].outcome == "failed"
+    assert attempts[0].truncated == {
+        "chars": len("half an answer"),
+        "blocks": 2,
+        "reason": "incomplete_tool_use",
+        "stop_reason_sent": None,
+        "ended_cleanly": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_committed_stall_between_blocks_ends_the_message() -> None:
+    """State (d): nothing open, so only the message itself has to be ended."""
+    primary = StallingProvider(
+        before=(
+            _COMMITTED_START,
+            _COMMITTED_TEXT_BLOCK,
+            _COMMITTED_TEXT,
+            _COMMITTED_TEXT_STOP,
+        )
+    )
+    executor = _committed_executor({"primary": primary})
+
+    received = await _drain(
+        executor.stream(
+            _plan(_routed_request("primary", "big")),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id="req_truncated_between",
+        )
+    )
+
+    events = parse_sse_text("".join(received))
+    assert_anthropic_stream_contract(events)
+    assert [event.event for event in events].count("content_block_stop") == 1
+
+
+@pytest.mark.asyncio
+async def test_a_mid_stream_upstream_failure_also_ends_the_message() -> None:
+    """Not only stalls: a 502 after the first paragraph is the same problem."""
+    failure = ExecutionFailure(
+        kind=FailureKind.UPSTREAM, status_code=502, message="boom", retryable=True
+    )
+    primary = ScriptedProvider(chunks=_COMMITTED_TEXT_FRAMES, error=failure)
+    attempts, observer = _attempt_log()
+    executor = _committed_executor({"primary": primary})
+
+    received = await _drain(
+        executor.stream(
+            _plan(_routed_request("primary", "big")),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id="req_truncated_502",
+            on_attempt_result=observer,
+        )
+    )
+
+    assert_anthropic_stream_contract(parse_sse_text("".join(received)))
+    assert attempts[0].error_kind == "upstream"
+    assert attempts[0].truncated is not None
+    assert attempts[0].truncated["reason"] == "upstream"
+
+
+@pytest.mark.asyncio
+async def test_a_scaffolding_only_stall_keeps_the_old_error() -> None:
+    """No content block means no message to build: the 5.41.0 shape is intact."""
+    primary = StallingProvider(before=("event: a\n\n",))
+    executor = _committed_executor({"primary": primary})
+
+    stream = executor.stream(
+        _plan(_routed_request("primary", "big")),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_truncated_scaffold",
+    )
+    chunks = stream.__aiter__()
+    with pytest.raises(ExecutionFailure):
+        while True:
+            await anext(chunks)
+
+
+@pytest.mark.asyncio
+async def test_a_responses_wire_request_keeps_the_old_error() -> None:
+    """That assembler can only say completed or failed, never "incomplete"."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    executor = _committed_executor({"primary": primary})
+
+    stream = executor.stream(
+        _plan(_routed_request("primary", "big")),
+        wire_api="responses",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_truncated_responses",
+    )
+    chunks = stream.__aiter__()
+    with pytest.raises(ExecutionFailure):
+        while True:
+            await anext(chunks)
