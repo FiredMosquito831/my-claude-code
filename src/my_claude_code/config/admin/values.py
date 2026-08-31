@@ -1,6 +1,7 @@
 """Admin config value state and API response assembly."""
 
 import os
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from my_claude_code.config.limits import LIMIT_RANGES
@@ -83,6 +84,67 @@ def blank_is_accepted(field: ConfigFieldSpec) -> bool:
     if attr is None:
         return False
     return attr in LIMIT_RANGES or attr in BLANK_MEANS_UNSET_FIELDS
+
+
+# One route: the setting holding its primary model, the setting holding its
+# fallback chain, and the setting holding the refs paused on it. Pause is a
+# property of a route rather than of a model -- the same ref paused on Opus
+# keeps serving Sonnet -- so every rail on Model Config owns its own list.
+ROUTE_PAUSE_KEYS: tuple[tuple[str, str, str], ...] = (
+    ("MODEL", "MODEL_FALLBACKS", "MODEL_PAUSED"),
+    ("MODEL_FABLE", "MODEL_FABLE_FALLBACKS", "MODEL_FABLE_PAUSED"),
+    ("MODEL_OPUS", "MODEL_OPUS_FALLBACKS", "MODEL_OPUS_PAUSED"),
+    ("MODEL_SONNET", "MODEL_SONNET_FALLBACKS", "MODEL_SONNET_PAUSED"),
+    ("MODEL_HAIKU", "MODEL_HAIKU_FALLBACKS", "MODEL_HAIKU_PAUSED"),
+    ("MODEL_VISION", "MODEL_VISION_FALLBACKS", "MODEL_VISION_PAUSED"),
+)
+
+PAUSE_KEY_FOR_ROUTE: dict[str, str] = {
+    model_key: paused_key for model_key, _chain, paused_key in ROUTE_PAUSE_KEYS
+}
+
+
+def prune_paused_refs(
+    values: dict[str, str],
+    effective: Mapping[str, str] | None = None,
+    touched: Iterable[str] = (),
+) -> None:
+    """Drop paused refs a route no longer names, in place.
+
+    A pause list that outlives the ref it names grows stale forever: the row
+    the user paused is gone from the rail, nothing on the page can unpause it,
+    and re-adding that model later would silently bring back a switch the user
+    never set this time. Pruning on write is the only moment both halves of
+    the route are known, so it happens here rather than in the browser.
+
+    ``values`` holds only what the *managed* file carries, and a route may
+    legitimately be configured in the repo ``.env`` or the template instead.
+    Judging a pause against the managed half alone would delete every pause on
+    such an install the moment anything was saved, so ``effective`` supplies
+    what is actually in force and ``values`` only overrides it.
+
+    Only routes this save actually edited are pruned. Pruning every route on
+    every write would make the check depend on how completely the value state
+    can see a route -- and a route the dashboard cannot see the whole of would
+    silently lose its pauses on an unrelated save.
+    """
+
+    edited = set(touched)
+    base: dict[str, str] = dict(effective or {})
+    base.update(values)
+    for model_key, chain_key, paused_key in ROUTE_PAUSE_KEYS:
+        raw = values.get(paused_key)
+        if not raw:
+            continue
+        if model_key not in edited and chain_key not in edited:
+            continue
+        live = set(parse_model_ref_list(base.get(model_key, "")))
+        live.update(parse_model_ref_list(base.get(chain_key, "")))
+        kept = [ref for ref in parse_model_ref_list(raw) if ref in live]
+        if kept:
+            values[paused_key] = format_model_ref_list(tuple(kept))
+        else:
+            values.pop(paused_key, None)
 
 
 def display_value(field: ConfigFieldSpec, value: str) -> str:

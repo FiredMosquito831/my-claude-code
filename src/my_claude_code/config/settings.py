@@ -103,6 +103,12 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "model_sonnet_fallbacks",
     "model_haiku_fallbacks",
     "model_vision_fallbacks",
+    "model_paused",
+    "model_fable_paused",
+    "model_opus_paused",
+    "model_sonnet_paused",
+    "model_haiku_paused",
+    "model_vision_paused",
     "ollama_search_api_key",
     "exa_api_key",
     "tavily_api_key",
@@ -469,6 +475,29 @@ class Settings(BaseSettings):
     # one unreachable vision model must not lose every image on the machine.
     model_vision_fallbacks: str | None = Field(
         default=None, validation_alias="MODEL_VISION_FALLBACKS"
+    )
+
+    # ==================== Paused route entries ====================
+    # Comma-separated `provider/model` refs the operator has switched off for
+    # ONE route. Pausing is not hiding: a paused ref keeps its place in the
+    # chain and still gets a row in the request log, it is simply never
+    # attempted, so no budget and no attempt is spent on it. The scope is the
+    # route, not the model -- the same ref paused on Opus keeps serving Sonnet.
+    model_paused: str | None = Field(default=None, validation_alias="MODEL_PAUSED")
+    model_fable_paused: str | None = Field(
+        default=None, validation_alias="MODEL_FABLE_PAUSED"
+    )
+    model_opus_paused: str | None = Field(
+        default=None, validation_alias="MODEL_OPUS_PAUSED"
+    )
+    model_sonnet_paused: str | None = Field(
+        default=None, validation_alias="MODEL_SONNET_PAUSED"
+    )
+    model_haiku_paused: str | None = Field(
+        default=None, validation_alias="MODEL_HAIKU_PAUSED"
+    )
+    model_vision_paused: str | None = Field(
+        default=None, validation_alias="MODEL_VISION_PAUSED"
     )
 
     # ==================== Model visibility ====================
@@ -1390,6 +1419,12 @@ class Settings(BaseSettings):
         "model_sonnet_fallbacks",
         "model_haiku_fallbacks",
         "model_vision_fallbacks",
+        "model_paused",
+        "model_fable_paused",
+        "model_opus_paused",
+        "model_sonnet_paused",
+        "model_haiku_paused",
+        "model_vision_paused",
     )
     @classmethod
     def validate_model_fallback_chain(cls, v: str | None) -> str | None:

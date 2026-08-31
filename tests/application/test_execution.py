@@ -4288,3 +4288,196 @@ def test_the_waiting_clock_is_not_the_module_that_was_removed() -> None:
     assert waited_seconds() == pytest.approx(1.5)
     install_waiting_clock()
     assert waited_seconds() == 0.0
+
+
+# ------------------------------------------------------------------- pause --
+# A paused ref is never executed and costs no attempt, yet it still gets a row
+# in the request log saying it was skipped and why. Both halves matter: a model
+# filtered out of the plan would have been cheap and invisible.
+
+
+def _paused_plan(
+    *routed: RoutedMessagesRequest, paused: frozenset[str], env_var: str
+) -> RoutedMessagesPlan:
+    return RoutedMessagesPlan(routed, paused_refs=paused, paused_env_var=env_var)
+
+
+@pytest.mark.asyncio
+async def test_a_paused_fallback_is_never_attempted_but_is_still_reported() -> None:
+    healthy = FakeProvider()
+    skipped = FakeProvider()
+    providers: dict[str, ProviderPort] = {"live": healthy, "off": skipped}
+    attempts, observer = _attempt_log()
+
+    stream = ProviderExecutor(
+        lambda provider_id: providers[provider_id],
+        token_counter=lambda _m, _s, _t: 1,
+    ).stream(
+        _paused_plan(
+            _routed_request(provider_id="live"),
+            _routed_request(provider_id="off"),
+            paused=frozenset({"off/provider-model"}),
+            env_var="MODEL_OPUS_PAUSED",
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_paused",
+        on_attempt_result=observer,
+    )
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+
+    # No upstream call, no time spent -- and a row all the same.
+    assert not skipped.preflight_calls
+    assert [(a.attempt, a.outcome, a.error_kind) for a in attempts] == [
+        (0, "succeeded", None),
+        (1, "skipped", "paused"),
+    ]
+    assert attempts[1].error_message == "paused by you on Model Config"
+
+
+@pytest.mark.asyncio
+async def test_a_paused_primary_is_skipped_and_the_first_active_fallback_serves() -> (
+    None
+):
+    off = FakeProvider()
+    live = FakeProvider()
+    providers: dict[str, ProviderPort] = {"off": off, "live": live}
+    attempts, observer = _attempt_log()
+
+    stream = ProviderExecutor(
+        lambda provider_id: providers[provider_id],
+        token_counter=lambda _m, _s, _t: 1,
+    ).stream(
+        _paused_plan(
+            _routed_request(provider_id="off"),
+            _routed_request(provider_id="live"),
+            paused=frozenset({"off/provider-model"}),
+            env_var="MODEL_OPUS_PAUSED",
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_paused_primary",
+        on_attempt_result=observer,
+    )
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+
+    assert not off.preflight_calls
+    assert live.preflight_calls
+    assert [(a.attempt, a.outcome, a.error_kind) for a in attempts] == [
+        (0, "skipped", "paused"),
+        (1, "succeeded", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_route_with_every_model_paused_fails_with_a_named_error() -> None:
+    """Falling through to another route would be a silent re-route.
+
+    And the error names Model Config, not Limits & Resilience: there is no
+    pause control on the limits page, so sending the reader there would be a
+    worse lie than no hint at all.
+    """
+    provider = FakeProvider()
+    attempts, observer = _attempt_log()
+
+    with pytest.raises(ExecutionFailure) as caught:
+        stream = ProviderExecutor(
+            lambda _provider_id: provider,
+            token_counter=lambda _m, _s, _t: 1,
+        ).stream(
+            _paused_plan(
+                _routed_request(provider_id="off"),
+                paused=frozenset({"off/provider-model"}),
+                env_var="MODEL_OPUS_PAUSED",
+            ),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id="req_all_paused",
+            on_attempt_result=observer,
+        )
+        [chunk async for chunk in stream]
+
+    assert not provider.preflight_calls
+    message = caught.value.message
+    assert "Every model on this route is paused" in message
+    assert "MODEL_OPUS_PAUSED" in message
+    assert "Model Config" in message
+    assert "Limits & Resilience" not in message
+    # The row survives the failure, so the log still says which models existed.
+    assert [(a.attempt, a.outcome, a.error_kind) for a in attempts] == [
+        (0, "skipped", "paused")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_is_both_benched_and_paused_reads_as_paused() -> None:
+    """The bench is this build's guess; the pause is the operator's decision."""
+    live = FakeProvider()
+    providers: dict[str, ProviderPort] = {"off": FakeProvider(), "live": live}
+    attempts, observer = _attempt_log()
+
+    health = RouteHealthRegistry(
+        bench_enabled=True,
+        mode="consecutive",
+        eject_after_failures=1,
+        eject_seconds=300.0,
+    )
+    health.record_failure("off/provider-model", failure_kind=FailureKind.UPSTREAM.value)
+
+    stream = ProviderExecutor(
+        lambda provider_id: providers[provider_id],
+        token_counter=lambda _m, _s, _t: 1,
+        health=health,
+    ).stream(
+        _paused_plan(
+            _routed_request(provider_id="off"),
+            _routed_request(provider_id="live"),
+            paused=frozenset({"off/provider-model"}),
+            env_var="MODEL_OPUS_PAUSED",
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_benched_and_paused",
+        on_attempt_result=observer,
+    )
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+
+    assert attempts[0].error_kind == "paused"
+    assert attempts[0].error_message == "paused by you on Model Config"
+
+
+def test_first_usable_attempt_names_a_model_that_is_not_paused() -> None:
+    """A locally answered request must name the model that would have served."""
+    executor = ProviderExecutor(
+        lambda _provider_id: FakeProvider(),
+        token_counter=lambda _m, _s, _t: 1,
+    )
+    plan = _paused_plan(
+        _routed_request(provider_id="off"),
+        _routed_request(provider_id="live"),
+        paused=frozenset({"off/provider-model"}),
+        env_var="MODEL_OPUS_PAUSED",
+    )
+
+    assert executor.first_usable_attempt(plan).resolved.provider_id == "live"
+
+
+def test_first_usable_attempt_refuses_an_all_paused_route() -> None:
+    executor = ProviderExecutor(
+        lambda _provider_id: FakeProvider(),
+        token_counter=lambda _m, _s, _t: 1,
+    )
+    plan = _paused_plan(
+        _routed_request(provider_id="off"),
+        paused=frozenset({"off/provider-model"}),
+        env_var="MODEL_PAUSED",
+    )
+
+    with pytest.raises(ExecutionFailure) as caught:
+        executor.first_usable_attempt(plan)
+
+    assert "MODEL_PAUSED" in caught.value.message

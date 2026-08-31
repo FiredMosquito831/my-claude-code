@@ -439,6 +439,12 @@
           </section>
 
           <section id="view-model_config" class="admin-view" data-view="model_config" hidden>
+            <!-- One live region for the whole page: what a drag just did to a
+                 rail, and what a Pause click just wrote. Two competing polite
+                 regions on one page announce over each other, and the drag and
+                 the pause are the same reader's same gesture stream. -->
+            <div id="routeStatus" class="route-status" role="status"
+              aria-live="polite" aria-atomic="true" hidden></div>
             <div
               id="modelConfigSections"
               class="form-sections"
@@ -1395,6 +1401,34 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   another for a stand-in after that. If the model a request routes to
                   cannot serve it, the next entry takes over &mdash; a free model that
                   rate-limits at the wrong moment stops being the end of the request.
+                </p>
+                <p class="guide-note">
+                  <strong>Reorder a chain by dragging it.</strong> Every entry has a
+                  grip on its left. Drag it to move the row; hold <em>Ctrl</em> (or
+                  <em>Cmd</em>) while clicking to pick several, or <em>Shift</em>-click
+                  for a run &mdash; <em>Shift+Space</em> and <em>Shift+&uarr;/&darr;</em>
+                  on a focused grip do the same from the keyboard. Drag onto another
+                  tier&rsquo;s card to <em>copy</em> the model there, hold <em>Shift</em>
+                  as you drop to <em>move</em> it instead, and drop onto a card&rsquo;s
+                  top slot to make that model the route&rsquo;s own &mdash; whatever it
+                  replaces becomes fallback 1. A group lands in the order it has on
+                  screen. The up/down arrows still do the same job one step at a time,
+                  <em>Ctrl+Z</em> undoes the last drag, and nothing is written until you
+                  press <em>Apply</em>.
+                </p>
+                <p class="guide-note">
+                  <strong>Pause one entry without deleting it.</strong> Each row has a
+                  <em>Pause</em> button. A paused model keeps its place and stays on
+                  screen with its whole name, but the router never tries it: no attempt
+                  is spent on it and no deadline is consumed, and it still appears in the
+                  request log under <em>not tried</em> with the reason
+                  <em>paused</em> &mdash; so a paused route is still readable. A pause
+                  takes effect immediately, with no <em>Apply</em>, and the panel at the
+                  top of this page offers an <em>Undo</em>. Pausing is scoped to one
+                  route: the same model paused on Opus keeps serving Sonnet.
+                  <strong>Pausing is not hiding.</strong> Hiding a model on the Models
+                  page only changes what appears in listings and never changes routing;
+                  pausing only changes routing and never changes listings.
                 </p>
                 <p class="guide-note">
                   <strong>Failover stops once you have seen output.</strong> A model that

@@ -127,28 +127,37 @@ const FIELDS = [
      -- it falls back to MODEL, and counting it would double-count Default.
      Vision's primary is markup, which must render as text. */
   ...[
-    ["MODEL_FALLBACKS", ""],
-    ["MODEL_FABLE", ""],
-    ["MODEL_FABLE_FALLBACKS", ""],
-    ["MODEL_OPUS", "p1/o0"],
+    ["MODEL_FALLBACKS", "", "model_chain"],
+    ["MODEL_FABLE", "", "optional_model"],
+    ["MODEL_FABLE_FALLBACKS", "", "model_chain"],
+    ["MODEL_OPUS", "p1/o0", "optional_model"],
     [
       "MODEL_OPUS_FALLBACKS",
       "p1/o1,p1/o2,p1/o3,p1/o4,p1/o5,p1/o6,p1/o7,p1/o8,p1/o9",
+      "model_chain",
     ],
-    ["MODEL_SONNET", "p1/s0"],
-    ["MODEL_SONNET_FALLBACKS", "p1/s1,p1/s2"],
-    ["MODEL_HAIKU", "p1/h0"],
-    ["MODEL_HAIKU_FALLBACKS", ""],
-    ["MODEL_VISION", "<img src=x onerror=boom()>"],
-    ["MODEL_VISION_FALLBACKS", ""],
-  ].map(([key, value]) => ({
+    ["MODEL_SONNET", "p1/s0", "optional_model"],
+    ["MODEL_SONNET_FALLBACKS", "p1/s1,p1/s2", "model_chain"],
+    ["MODEL_HAIKU", "p1/h0", "optional_model"],
+    ["MODEL_HAIKU_FALLBACKS", "", "model_chain"],
+    ["MODEL_VISION", "<img src=x onerror=boom()>", "optional_model"],
+    ["MODEL_VISION_FALLBACKS", "", "model_chain"],
+    // The pause lists. Written by the Pause button rather than typed, so they
+    // are never rendered as controls -- but they are in the payload, which is
+    // where the page reads which rows are switched off.
+    ["MODEL_PAUSED", "", "text"],
+    ["MODEL_FABLE_PAUSED", "", "text"],
+    ["MODEL_OPUS_PAUSED", "", "text"],
+    ["MODEL_SONNET_PAUSED", "", "text"],
+    ["MODEL_HAIKU_PAUSED", "", "text"],
+    ["MODEL_VISION_PAUSED", "", "text"],
+  ].map(([key, value, type]) => ({
     key,
     label: key,
     section: "models",
-    // Plain text, not the chain editor: the calculator reads the joined
-    // string off [data-key], and the editor's own hidden input carries the
-    // same attribute, so the read path is identical either way.
-    type: "text",
+    // The real control types the manifest declares, so the route rails the
+    // drag operates on are the ones the dashboard actually renders.
+    type,
     value,
     default: "",
   })),
@@ -638,6 +647,17 @@ if (!window.requestAnimationFrame) {
   window.cancelAnimationFrame = (id) => window.clearTimeout(id);
 }
 const fetchCalls = [];
+// The pause write is emulated in the fetch stub below, so the six lists have
+// to live somewhere the stub can read and update between calls.
+const PAUSE_KEY_BY_MODEL = {
+  MODEL: "MODEL_PAUSED",
+  MODEL_FABLE: "MODEL_FABLE_PAUSED",
+  MODEL_OPUS: "MODEL_OPUS_PAUSED",
+  MODEL_SONNET: "MODEL_SONNET_PAUSED",
+  MODEL_HAIKU: "MODEL_HAIKU_PAUSED",
+  MODEL_VISION: "MODEL_VISION_PAUSED",
+};
+const pausedByKey = new Map();
 const fetchUrls = [];
 const fetchBodies = [];
 window.fetch = async (url, options = {}) => {
@@ -655,7 +675,30 @@ window.fetch = async (url, options = {}) => {
       fetchBodies.push({ path: String(url).split("?")[0], body: null });
     }
   }
-  const body = routeFor(url);
+  let body = routeFor(url);
+  if (String(url).split("?")[0] === "/admin/api/config/route-pause") {
+    // Emulated rather than routed: the response has to reflect the request,
+    // because the page patches its own state from it instead of refetching
+    // the whole config payload.
+    const request = JSON.parse(options.body);
+    const key = PAUSE_KEY_BY_MODEL[request.model_key];
+    const held = pausedByKey.get(key) || [];
+    const next = request.paused
+      ? held.includes(request.model_ref)
+        ? held
+        : [...held, request.model_ref]
+      : held.filter((ref) => ref !== request.model_ref);
+    pausedByKey.set(key, next);
+    body = {
+      applied: true,
+      errors: [],
+      model_key: request.model_key,
+      model_ref: request.model_ref,
+      paused_key: key,
+      paused: request.paused,
+      paused_value: next.join(","),
+    };
+  }
   return {
     ok: true,
     status: 200,
@@ -2043,6 +2086,365 @@ requestDetail.reasoningRow = window.eval(
 );
 requestDetail.unmeasuredNumber = window.eval(`formatOptionalNumber(null)`);
 
+
+/* ------------------------------------------------------------ route rails
+   Drag, multi-select, cross-tier copy/move, the primary swap, undo and the
+   per-entry pause. Driven last, because every gesture here mutates the same
+   chains the calculator block above reads.
+
+   MouseEvent, never PointerEvent: jsdom has no PointerEvent at all, which is
+   the reason this feature is built on pointer events rather than HTML5
+   drag-and-drop -- an HTML5 implementation could not be driven from here. */
+const routing = {};
+const routingLink = navLinks.find((link) => link.dataset.view === "model_config");
+routing.present = Boolean(routingLink);
+if (routingLink) {
+  routingLink.click();
+  await settle();
+
+  const OPUS = "MODEL_OPUS_FALLBACKS";
+  const SONNET = "MODEL_SONNET_FALLBACKS";
+  const chainValue = (key) => doc.querySelector(CONTROL_SELECTOR(key)).value;
+  const primaryValue = (key) => doc.querySelector(CONTROL_SELECTOR(key)).value;
+  const nodes = () => Array.from(doc.querySelectorAll("[data-route-id]"));
+  const nodeFor = (id) => nodes().find((node) => node.dataset.routeId === id);
+  const rowIds = (key) =>
+    nodes()
+      .filter((node) => node.dataset.chainKey === key)
+      .map((node) => node.dataset.routeId);
+  const gripOf = (id) => nodeFor(id).querySelector(".route-drag-grip");
+  const selectedCount = () => doc.querySelectorAll("[data-route-id].is-selected").length;
+  const statusPanel = doc.getElementById("routeStatus");
+  const statusText = () =>
+    (statusPanel.querySelector("p")?.textContent || "").replace(/\s+/g, " ").trim();
+  const dirtyCount = () => {
+    const text = doc.getElementById("dirtyState").textContent || "";
+    const match = text.match(/(\d+)/);
+    return match ? Number(match[1]) : 0;
+  };
+  const clickNode = async (id, init) => {
+    gripOf(id).dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, ...init }),
+    );
+    await settle();
+  };
+  const keyOn = async (id, init) => {
+    gripOf(id).dispatchEvent(
+      new window.KeyboardEvent("keydown", { bubbles: true, ...init }),
+    );
+    await settle();
+  };
+  // `state` is a const inside the eval'd script and never becomes a global,
+  // so a live drag is read from the class it puts on the rails instead.
+  const dragIsLive = () => doc.querySelectorAll(".route-grid.is-dragging").length > 0;
+  const drag = async (fromId, toId, init) => {
+    gripOf(fromId).dispatchEvent(
+      new window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+    );
+    nodeFor(toId).dispatchEvent(new window.MouseEvent("pointerover", { bubbles: true }));
+    doc.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true, ...init }));
+    await settle();
+  };
+
+  // --- the rail's shape: a grip per node, and the arrows are still there
+  routing.railNodes = nodes().length;
+  routing.gripCount = doc.querySelectorAll(".route-drag-grip").length;
+  routing.opusRows = rowIds(OPUS).length;
+  routing.arrowsKept = doc.querySelectorAll(
+    `[data-chain-key="${OPUS}"] .model-chain-move`,
+  ).length;
+  routing.primaryHasGrip = Boolean(
+    nodeFor("route:MODEL_OPUS").querySelector(".route-drag-grip"),
+  );
+  routing.pauseButtons = doc.querySelectorAll(".route-pause-toggle").length;
+
+  // --- selection: plain click, Ctrl-click, Shift-click, Shift+Arrow, Escape
+  await clickNode(rowIds(OPUS)[0]);
+  routing.afterPlainClick = selectedCount();
+  await clickNode(rowIds(OPUS)[2], { ctrlKey: true });
+  routing.afterCtrlClick = selectedCount();
+  await clickNode(rowIds(OPUS)[0]);
+  await clickNode(rowIds(OPUS)[3], { shiftKey: true });
+  routing.afterShiftClick = selectedCount();
+  await keyOn(rowIds(OPUS)[3], { key: "ArrowDown", shiftKey: true });
+  routing.afterShiftArrowDown = selectedCount();
+  await keyOn(rowIds(OPUS)[4], { key: "ArrowUp", shiftKey: true });
+  routing.afterShiftArrowBack = selectedCount();
+  doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await settle();
+  routing.afterEscape = selectedCount();
+
+  // --- a drag that starts on the row rather than on the grip moves nothing
+  routing.opusBeforeStray = chainValue(OPUS);
+  nodeFor(rowIds(OPUS)[0]).dispatchEvent(
+    new window.MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+  );
+  nodeFor(rowIds(OPUS)[3]).dispatchEvent(
+    new window.MouseEvent("pointerover", { bubbles: true }),
+  );
+  doc.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true }));
+  await settle();
+  routing.opusAfterStray = chainValue(OPUS);
+
+  // --- reorder one row inside its own rail
+  await drag(rowIds(OPUS)[0], rowIds(OPUS)[2]);
+  routing.opusAfterReorder = chainValue(OPUS);
+  routing.reorderSentence = statusText();
+  routing.statusHiddenAttr = statusPanel.hidden;
+
+  // --- Ctrl+Z puts it back, and only once
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }),
+  );
+  await settle();
+  routing.opusAfterUndo = chainValue(OPUS);
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }),
+  );
+  await settle();
+  routing.opusAfterSecondUndo = chainValue(OPUS);
+
+  // --- Ctrl+Z inside a combobox belongs to the browser's own text undo
+  await drag(rowIds(OPUS)[0], rowIds(OPUS)[2]);
+  routing.opusBeforeTypingUndo = chainValue(OPUS);
+  const someInput = nodeFor(rowIds(OPUS)[0]).querySelector("input");
+  someInput.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }),
+  );
+  await settle();
+  routing.opusAfterTypingUndo = chainValue(OPUS);
+
+  // --- a group drop keeps rail order rather than click order
+  const sonnetRows = rowIds(SONNET);
+  await clickNode(sonnetRows[1]);
+  await clickNode(sonnetRows[0], { ctrlKey: true });
+  routing.groupSelected = selectedCount();
+  routing.sonnetBeforeGroup = chainValue(SONNET);
+  routing.opusBeforeGroup = chainValue(OPUS);
+  await drag(sonnetRows[0], rowIds(OPUS)[0]);
+  routing.opusAfterGroupCopy = chainValue(OPUS);
+  routing.sonnetAfterGroupCopy = chainValue(SONNET);
+  routing.groupSentence = statusText();
+
+  // --- undo the copy, then a cross-tier Shift-move that empties the source
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }),
+  );
+  await settle();
+  routing.opusAfterGroupUndo = chainValue(OPUS);
+  routing.sonnetAfterGroupUndo = chainValue(SONNET);
+
+  const changedRouteKeys = () =>
+    Object.keys(window.eval("changedValues()"))
+      .filter((key) => key.indexOf("MODEL") === 0)
+      .sort();
+  const sonnetAgain = rowIds(SONNET);
+  await clickNode(sonnetAgain[0]);
+  await clickNode(sonnetAgain[sonnetAgain.length - 1], { shiftKey: true });
+  await drag(sonnetAgain[0], rowIds(OPUS)[0], { shiftKey: true });
+  routing.sonnetAfterMove = chainValue(SONNET);
+  routing.opusAfterMove = chainValue(OPUS);
+  routing.moveSentence = statusText();
+  routing.keysAfterCrossTierMove = changedRouteKeys();
+
+  // --- a Shift-move of a primary out of its own rail is refused
+  await clickNode("route:MODEL_HAIKU");
+  const haikuPrimaryBeforeSteal = primaryValue("MODEL_HAIKU");
+  const opusBeforeSteal = chainValue(OPUS);
+  await drag("route:MODEL_HAIKU", rowIds(OPUS)[0], { shiftKey: true });
+  routing.haikuPrimaryAfterStealAttempt = primaryValue("MODEL_HAIKU");
+  routing.haikuPrimarySurvivedSteal =
+    primaryValue("MODEL_HAIKU") === haikuPrimaryBeforeSteal;
+  routing.opusUnchangedBySteal = chainValue(OPUS) === opusBeforeSteal;
+  routing.strandedSentence = statusText();
+
+  // --- a touch that did not begin on the grip is a scroll, not a drag
+  const touchPointerDown = (target, node) => {
+    const event = new window.MouseEvent("pointerdown", { bubbles: true, button: 0 });
+    // jsdom has no PointerEvent, and MouseEvent drops an unknown init key.
+    Object.defineProperty(event, "pointerType", { value: "touch" });
+    node.dispatchEvent(event);
+    return target;
+  };
+  const touchBefore = chainValue(OPUS);
+  touchPointerDown(null, nodeFor(rowIds(OPUS)[0]));
+  routing.touchOnRowStartsADrag = dragIsLive();
+  doc.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true }));
+  await settle();
+  routing.opusAfterTouchScroll = chainValue(OPUS) === touchBefore;
+  touchPointerDown(null, gripOf(rowIds(OPUS)[0]));
+  routing.touchOnGripStartsADrag = dragIsLive();
+  doc.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true }));
+  await settle();
+
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }),
+  );
+  await settle();
+  routing.sonnetAfterMoveUndo = chainValue(SONNET);
+  routing.opusAfterMoveUndo = chainValue(OPUS);
+
+  // --- a copy onto a chain that already holds the ref moves the row it has
+  routing.opusBeforeDuplicate = chainValue(OPUS);
+  await clickNode(rowIds(SONNET)[0]);
+  await drag(rowIds(SONNET)[0], rowIds(OPUS)[0]);
+  const opusWithSonnet = chainValue(OPUS);
+  routing.opusWithSonnetRef = opusWithSonnet;
+  await clickNode(rowIds(SONNET)[0]);
+  await drag(rowIds(SONNET)[0], rowIds(OPUS)[4]);
+  routing.opusAfterDuplicateCopy = chainValue(OPUS);
+  routing.duplicateOccurrences = chainValue(OPUS)
+    .split(",")
+    .filter((ref) => ref === "p1/s1").length;
+  routing.duplicateSentence = statusText();
+
+  // --- a copy onto a chain whose primary is that ref is refused
+  routing.sonnetPrimary = primaryValue("MODEL_SONNET");
+  await clickNode("route:MODEL_SONNET");
+  routing.opusBeforeRefusal = chainValue(OPUS);
+  await drag("route:MODEL_SONNET", rowIds(SONNET)[0]);
+  routing.sonnetAfterOwnPrimaryDrop = chainValue(SONNET);
+  routing.sonnetPrimaryAfterOwnDrop = primaryValue("MODEL_SONNET");
+  routing.swapSentence = statusText();
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }),
+  );
+  await settle();
+
+  // The Opus chain now holds p1/s1; dropping it onto Sonnet, whose primary is
+  // p1/s0, is fine -- so make the refusal explicit by dropping a ref that IS
+  // the destination primary.
+  const opusRowForSonnetPrimary = rowIds(OPUS).find(
+    (id) => nodeFor(id).querySelector("input").value.trim() === "p1/s1",
+  );
+  if (opusRowForSonnetPrimary) {
+    // Promote p1/s1 to Sonnet's primary first, then try to copy it back in.
+    await clickNode(rowIds(SONNET)[0]);
+    await drag(rowIds(SONNET)[0], "route:MODEL_SONNET");
+    routing.sonnetPrimaryAfterPromote = primaryValue("MODEL_SONNET");
+    routing.promoteSentence = statusText();
+    await clickNode(opusRowForSonnetPrimary);
+    const sonnetBeforeRefusal = chainValue(SONNET);
+    await drag(opusRowForSonnetPrimary, rowIds(SONNET)[0]);
+    routing.sonnetUnchangedByRefusal = chainValue(SONNET) === sonnetBeforeRefusal;
+    routing.refusalSentence = statusText();
+  }
+
+  // --- dropping on a primary slot swaps and demotes the old primary
+  const dirtyBeforeSwap = dirtyCount();
+  const haikuPrimaryBefore = primaryValue("MODEL_HAIKU");
+  await clickNode(rowIds(OPUS)[0]);
+  const promoted = nodeFor(rowIds(OPUS)[0]).querySelector("input").value.trim();
+  await drag(rowIds(OPUS)[0], "route:MODEL_HAIKU");
+  routing.haikuPrimaryAfterDrop = primaryValue("MODEL_HAIKU");
+  routing.haikuChainAfterDrop = chainValue("MODEL_HAIKU_FALLBACKS");
+  routing.haikuDemoted = haikuPrimaryBefore;
+  routing.haikuPromoted = promoted;
+  routing.dirtyAfterPrimarySwap = dirtyCount() - dirtyBeforeSwap;
+  routing.primarySwapSentence = statusText();
+
+  // --- pause: one key on the wire, and a dirty drag stays dirty
+  const opusFirstRow = rowIds(OPUS)[0];
+  const pausedRef = nodeFor(opusFirstRow).querySelector("input").value.trim();
+  const dirtyBeforePause = dirtyCount();
+  const chainLengthBeforePause = window.eval(
+    'chainLength("MODEL_OPUS", "MODEL_OPUS_FALLBACKS")',
+  );
+  fetchBodies.length = 0;
+  nodeFor(opusFirstRow)
+    .querySelector(".route-pause-toggle")
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await settle();
+  const pauseCalls = fetchBodies.filter(
+    (entry) => entry.path === "/admin/api/config/route-pause",
+  );
+  routing.pauseCalls = pauseCalls.length;
+  routing.pauseBody = pauseCalls[0] ? pauseCalls[0].body : null;
+  routing.pauseBodyKeys = pauseCalls[0] ? Object.keys(pauseCalls[0].body).sort() : [];
+  routing.dirtyAfterPause = dirtyCount();
+  routing.dirtyUnchangedByPause = dirtyCount() === dirtyBeforePause;
+  routing.pausedRef = pausedRef;
+  routing.chainLengthBeforePause = chainLengthBeforePause;
+
+  // --- the paused row stays visible, with its full ref and a Resume button
+  const pausedNode = nodeFor(opusFirstRow);
+  routing.pausedRowHidden = pausedNode.hidden;
+  routing.pausedRowClass = pausedNode.classList.contains("is-paused");
+  routing.pausedRowRef = pausedNode.querySelector("input").value;
+  routing.pausedButtonLabel = pausedNode
+    .querySelector(".route-pause-toggle")
+    .textContent.trim();
+  routing.pausedAriaPressed = pausedNode
+    .querySelector(".route-pause-toggle")
+    .getAttribute("aria-pressed");
+  routing.pausedChipShown = !pausedNode.querySelector(".route-pause-chip").hidden;
+  routing.pauseSentence = statusText();
+  routing.pauseOffersUndo = Array.from(
+    statusPanel.querySelectorAll("button"),
+  ).map((button) => button.textContent.trim());
+  // The deadline calculator stops counting a model the router will not try.
+  routing.chainLengthWhilePaused = window.eval(
+    'chainLength("MODEL_OPUS", "MODEL_OPUS_FALLBACKS")',
+  );
+
+  // --- the deadline calculator stops counting a paused model
+  // --- Undo from the panel resumes it
+  const undoButton = Array.from(statusPanel.querySelectorAll("button")).find(
+    (button) => button.textContent.trim() === "Undo",
+  );
+  if (undoButton) {
+    undoButton.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await settle();
+  }
+  routing.resumedButtonLabel = nodeFor(opusFirstRow)
+    .querySelector(".route-pause-toggle")
+    .textContent.trim();
+  routing.resumeSentence = statusText();
+
+  // --- a paused primary keeps its ref on screen and leaves the rail counted
+  const haikuPrimaryNode = nodeFor("route:MODEL_HAIKU");
+  haikuPrimaryNode
+    .querySelector(".route-pause-toggle")
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await settle();
+  routing.haikuPrimaryPaused = haikuPrimaryNode.classList.contains("is-paused");
+  routing.haikuPrimaryStillShowsItsRef =
+    haikuPrimaryNode.querySelector("input").value;
+  routing.haikuChainLengthWithPausedPrimary = window.eval(
+    'chainLength("MODEL_HAIKU", "MODEL_HAIKU_FALLBACKS")',
+  );
+  haikuPrimaryNode
+    .querySelector(".route-pause-toggle")
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await settle();
+  routing.haikuPrimaryResumed = !haikuPrimaryNode.classList.contains("is-paused");
+
+
+  // --- the panel is toggled by `hidden`, never by style.display
+  const dismiss = Array.from(statusPanel.querySelectorAll("button")).find(
+    (button) => button.textContent.trim() === "Dismiss",
+  );
+  if (dismiss) {
+    dismiss.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await settle();
+  }
+  routing.statusHiddenAfterDismiss = statusPanel.hidden;
+  routing.statusInlineDisplay = statusPanel.style.display;
+
+  // --- the arrow buttons still work
+  const arrowRow = rowIds(OPUS)[1];
+  const beforeArrow = chainValue(OPUS);
+  nodeFor(arrowRow)
+    .querySelectorAll(".model-chain-move")[0]
+    .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await settle();
+  routing.arrowsStillReorder = chainValue(OPUS) !== beforeArrow;
+
+  // --- a drag leaks no nodes
+  routing.nodeCountAtEnd = doc.querySelectorAll("*").length;
+  routing.strayIndicators = doc.querySelectorAll(".route-drop-indicator").length;
+}
+
 console.log(
   JSON.stringify(
     {
@@ -2067,6 +2469,7 @@ console.log(
       docs,
       limits,
       models,
+      routing,
       analytics,
       optimizer: {
         present: Boolean(optimizer),

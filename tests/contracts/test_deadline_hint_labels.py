@@ -15,10 +15,12 @@ import re
 from pathlib import Path
 
 from my_claude_code.application.deadline_hints import (
+    _PAGE_FOR_SECTION,
     _SECTION_FOR_ENV_VAR,
     LIMITS_PAGE_LABEL,
     card_for,
     limit_hint,
+    page_for,
 )
 from my_claude_code.config.admin.manifest import FIELDS, SECTIONS
 
@@ -34,6 +36,30 @@ ADMIN_JS = (
 _LIMITS_VIEW = re.compile(
     r"id:\s*\"limits\",\s*\n\s*label:\s*\"(?P<label>[^\"]+)\"",
 )
+
+
+def _view_blocks() -> dict[str, tuple[str, set[str]]]:
+    """Every VIEW_GROUPS entry as ``id -> (nav label, claimed section ids)``.
+
+    Parsed rather than hardcoded because the point of this file is that the
+    two languages cannot drift: `admin.js` owns both the tab name and the
+    sections the tab renders, and a hint quotes both.
+    """
+    script = ADMIN_JS.read_text(encoding="utf-8")
+    blocks: dict[str, tuple[str, set[str]]] = {}
+    pattern = (
+        r"id:\s*\"(?P<id>[a-z_]+)\",\s*\n\s*label:\s*\"(?P<label>[^\"]+)\""
+        r".*?sections:\s*\[(?P<sections>[^\]]*)\]"
+    )
+    for match in re.finditer(pattern, script, re.DOTALL):
+        blocks.setdefault(
+            match.group("id"),
+            (
+                match.group("label"),
+                set(re.findall(r"\"([^\"]+)\"", match.group("sections"))),
+            ),
+        )
+    return blocks
 
 
 def test_the_page_name_in_a_hint_is_the_nav_label_the_page_ships() -> None:
@@ -69,15 +95,28 @@ def test_a_hint_names_the_card_that_actually_owns_the_field() -> None:
         assert card_for(env_var) in limit_hint(env_var)
 
 
-def test_the_limits_page_claims_every_card_a_hint_names() -> None:
-    """A card on a page the nav does not show is a card nobody can reach."""
-    script = ADMIN_JS.read_text(encoding="utf-8")
-    block = re.search(
-        r"id:\s*\"limits\",.*?sections:\s*\[(?P<sections>[^\]]*)\]",
-        script,
-        re.DOTALL,
-    )
-    assert block, "the limits view no longer declares its sections inline"
-    claimed = set(re.findall(r"\"([^\"]+)\"", block.group("sections")))
+def test_every_page_named_in_a_hint_is_a_nav_label_the_page_ships() -> None:
+    """Generalised from the limits-only check when pausing gained a hint.
 
-    assert set(_SECTION_FOR_ENV_VAR.values()) <= claimed
+    A routing switch is not a limit, so its hint names Model Config. One
+    hardcoded page label could only ever be right for one page; the map is
+    pinned here against the nav `admin.js` actually renders.
+    """
+    labels = {label for label, _sections in _view_blocks().values()}
+    assert set(_PAGE_FOR_SECTION.values()) <= labels
+
+
+def test_the_page_a_hint_names_claims_the_card_it_names() -> None:
+    """A card on a page the nav does not show is a card nobody can reach."""
+    blocks = _view_blocks()
+    label_to_sections: dict[str, set[str]] = {}
+    for label, sections in blocks.values():
+        label_to_sections.setdefault(label, set()).update(sections)
+
+    for env_var, section_id in _SECTION_FOR_ENV_VAR.items():
+        page = page_for(env_var)
+        assert section_id in label_to_sections[page], (
+            f"{env_var} sends the reader to {page}, which does not render "
+            f"the {section_id} card"
+        )
+        assert page in limit_hint(env_var)

@@ -544,6 +544,41 @@ Every tier can carry an ordered list of stand-ins. Press **Add fallback** under 
 
 Each chain belongs to its own tier and they are never merged: a tier with its own model tries its own chain, and a tier left on **None** tries `MODEL` and `MODEL_FALLBACKS`.
 
+**Reordering a chain.** Each entry has a grip on its left. Drag it and the row moves; the up/down arrows beside it do the same thing one step at a time and still work, so the whole feature has a keyboard equivalent.
+
+| Gesture | What it does |
+| --- | --- |
+| Drag a grip within one card | Reorders that chain |
+| Ctrl/Cmd-click a row | Adds it to the selection |
+| Shift-click a row | Selects the range from the last one you clicked |
+| Shift+Space, Shift+Up/Down on a focused grip | The same range, from the keyboard |
+| Drag onto another tier's card | **Copies** the model there; the source keeps it |
+| Hold **Shift** while dropping on another card | **Moves** it instead — the source loses it |
+| Drop onto a card's top slot | That model becomes the route's own model; the one it replaces becomes fallback 1 |
+| Escape | Clears the selection, or abandons a drag in progress |
+| Ctrl+Z | Undoes the last drag — one level, and only on this page |
+
+A group keeps the order it has on screen, not the order you clicked. Nothing is written until you press **Apply**; the panel at the top of the page says what just happened in a sentence and offers an Undo.
+
+A route's own model is a drag source like any row, but it is never *moved* out of its own card: a route with no model of its own fails validation and the server refuses to start, so that drop is refused with a sentence saying so. Dragging it onto its own first fallback trades the two, which is exactly what its down arrow does.
+
+**Pausing one entry.** Every row, the route's own model included, has a **Pause** button. A paused model keeps its place and stays fully visible with its whole ref, but the router never tries it: **no attempt is spent on it and no deadline is consumed**, and the request log still lists it under *not tried* with the reason `paused`, so a paused route is still debuggable. Pause is per route — the same model paused on Opus keeps serving Sonnet.
+
+Unlike everything else on this page, a pause is written the moment you click it: there is no Apply, and an unsaved drag elsewhere on the page is left exactly as it was. The status panel offers an Undo. Pausing every model on a route is allowed and makes that route fail with an error naming the setting, rather than quietly re-routing somewhere you did not ask for.
+
+**Pausing is not hiding.** Hiding a model on the **Models** page only removes it from `/v1/models` and the admin pickers and never changes routing. Pausing only changes routing and never changes listings. They are separate switches on purpose.
+
+| Setting | Holds |
+| --- | --- |
+| `MODEL_PAUSED` | paused entries on the default route |
+| `MODEL_FABLE_PAUSED` | paused entries on Fable |
+| `MODEL_OPUS_PAUSED` | paused entries on Opus |
+| `MODEL_SONNET_PAUSED` | paused entries on Sonnet |
+| `MODEL_HAIKU_PAUSED` | paused entries on Haiku |
+| `MODEL_VISION_PAUSED` | paused entries on the vision adapter |
+
+All six are comma-separated `provider/model` lists, written by the Pause button rather than typed, and **new in 6.21.0**. An entry is dropped from its list automatically when it leaves the route it was paused on.
+
 **Failover stops once you have seen output.** This is the part people get wrong:
 
 | The model fails… | What happens |

@@ -39,7 +39,11 @@ from my_claude_code.application.release_updates import (
 from my_claude_code.config.admin.manifest import FIELD_BY_KEY
 from my_claude_code.config.admin.persistence import validate_updates
 from my_claude_code.config.admin.sources import is_locked_source
-from my_claude_code.config.admin.values import load_config_response, load_value_state
+from my_claude_code.config.admin.values import (
+    PAUSE_KEY_FOR_ROUTE,
+    load_config_response,
+    load_value_state,
+)
 from my_claude_code.config.claude_discovery import (
     DiscoveredSettings,
     discover_settings_files,
@@ -72,7 +76,11 @@ from my_claude_code.config.model_overrides import (
     current_model_overrides,
     save_model_overrides,
 )
-from my_claude_code.config.model_refs import configured_chat_model_refs
+from my_claude_code.config.model_refs import (
+    configured_chat_model_refs,
+    format_model_ref_list,
+    parse_model_ref_list,
+)
 from my_claude_code.config.onboarding import (
     OnboardingState,
     OnboardingStep,
@@ -227,6 +235,20 @@ class ModelVisibilityTogglePayload(BaseModel):
 
     model_ref: str
     visible: bool
+
+
+class RoutePausePayload(BaseModel):
+    """One chain entry switched off, or back on, for one route.
+
+    ``model_key`` names the route by its primary setting (``MODEL``,
+    ``MODEL_OPUS``, ...) rather than by a tier name, because that is the
+    identity the page already renders on the card and the only one that maps
+    to exactly one pause list.
+    """
+
+    model_key: str
+    model_ref: str
+    paused: bool
 
 
 class ModelVisibilityBulkPayload(BaseModel):
@@ -966,6 +988,61 @@ async def toggle_model_visibility(
     updated = built["visibility"]
     result["visible"] = updated.is_visible(payload.model_ref)
     result["honored"] = result["visible"] == payload.visible
+    return result
+
+
+@router.post("/admin/api/config/route-pause")
+async def set_route_pause(
+    payload: RoutePausePayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Switch one model on one route off, or back on, immediately.
+
+    Written through ``apply_admin_config_with`` rather than by reading the
+    list here and POSTing a replacement: two pause clicks landing together
+    would each derive their new list from a base read before the other
+    committed, and the second would silently drop the first. The read and the
+    write are one critical section, exactly as a visibility edit is.
+
+    Exactly one key is written. The commit renders the whole managed file from
+    the values on disk plus this update, so an unsaved drag elsewhere on the
+    page is neither saved nor lost by a pause click.
+    """
+
+    require_loopback_admin(request)
+    paused_key = PAUSE_KEY_FOR_ROUTE.get(payload.model_key)
+    if paused_key is None:
+        raise HTTPException(status_code=400, detail=f"Not a route: {payload.model_key}")
+    model_ref = payload.model_ref.strip()
+    if not model_ref:
+        raise HTTPException(status_code=400, detail="A pause needs a model ref.")
+
+    field = FIELD_BY_KEY[paused_key]
+    attr = field.settings_attr
+    assert attr is not None
+    written: dict[str, str] = {}
+
+    def build(settings: Settings) -> dict[str, str]:
+        current = list(parse_model_ref_list(getattr(settings, attr) or ""))
+        if payload.paused:
+            if model_ref not in current:
+                current.append(model_ref)
+        else:
+            current = [entry for entry in current if entry != model_ref]
+        written[paused_key] = format_model_ref_list(tuple(current))
+        return dict(written)
+
+    result = await services.admin.apply_admin_config_with(build)
+    result["model_key"] = payload.model_key
+    result["model_ref"] = model_ref
+    result["paused_key"] = paused_key
+    if result.get("errors"):
+        # Nothing reached the file, so saying the model is paused would be the
+        # opposite of what happened.
+        return result
+    result["paused"] = payload.paused
+    result["paused_value"] = written.get(paused_key, "")
     return result
 
 

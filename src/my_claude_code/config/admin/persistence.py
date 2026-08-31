@@ -35,6 +35,7 @@ from .values import (
     load_value_state,
     normalize_field_value,
     normalize_for_env,
+    prune_paused_refs,
 )
 
 
@@ -127,6 +128,13 @@ def target_values_with_updates(
             _unset_field(field, values, repo_values, warnings)
             continue
         values[key] = normalized
+    # A route's pause list is only meaningful next to the route it belongs to,
+    # and this is the first point where both halves of every rail are known.
+    prune_paused_refs(
+        values,
+        {key: str(entry["value"]) for key, entry in state.items()},
+        updates.keys(),
+    )
     return values, tuple(warnings)
 
 

@@ -44,6 +44,8 @@
 - **Imports**: Prefer top-level imports. Avoid `TYPE_CHECKING` and local imports for first-party or required dependencies; if a top-level import creates a cycle, move shared types/protocols to a neutral owner.
 - **Complete migrations**: When moving modules, update imports to the new owner and remove old compatibility shims in the same change unless preserving a published interface is explicitly required.
 - **Maximum Test Coverage**: There should be maximum test coverage for everything, preferably live smoke test coverage to catch bugs early
+- **Admin UI changes ship with jsdom coverage, and jsdom is not enough.** `tests/api/admin_jsdom_harness.mjs` renders the real `index.html` and evals the real `admin.js`, so it proves behaviour: what a gesture does to a hidden input, what a panel says, which key went out on the wire. It cannot prove *layout* -- jsdom has no CSS box model -- so a change that adds elements to a rendered row must also be opened in a browser. It must also not use `PointerEvent` or `DataTransfer`, which jsdom does not implement; synthesize pointer drags as `new window.MouseEvent("pointerdown"/"pointerover"/"pointerup")`, which is why the product's drags are built on pointer events rather than HTML5 drag-and-drop.
+- **Adding a child to a rendered row means checking its grid.** `.route-node` and `.route-rail .model-chain-row` declare explicit `grid-template-columns`; an extra child silently wraps onto a second line and every test still passes. If a child can be `hidden`, wrap it with a sibling in a cell -- a `display: none` grid item vacates its column and shifts every control after it.
 
 ## COGNITIVE WORKFLOW
 

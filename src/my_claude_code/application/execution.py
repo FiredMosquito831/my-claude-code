@@ -399,6 +399,26 @@ def _continuation_attempt(
     )
 
 
+def _all_paused_failure(env_var: str) -> ExecutionFailure:
+    """The verdict for a route whose every model the operator switched off.
+
+    Falling through to another route instead would be a silent re-route
+    nobody asked for, and chains are never merged -- so the honest answer is
+    to fail and name the switch. The hint sends the reader to Model Config
+    rather than to Limits & Resilience: pausing is a routing decision and
+    there is no such control on the limits page.
+    """
+    return ExecutionFailure(
+        kind=FailureKind.UNAVAILABLE,
+        status_code=503,
+        message=(
+            "Every model on this route is paused, so there is nothing left to "
+            f"try.{limit_hint(env_var)}"
+        ),
+        retryable=False,
+    )
+
+
 def _cooldown_failure(model_ref: str, seconds: float) -> ExecutionFailure:
     """The verdict recorded for a model the chain stepped over while limited."""
     return ExecutionFailure(
@@ -473,6 +493,33 @@ class _AttemptLedger:
                     else "benched after recent failures"
                 ),
                 bench=None if reason is None else reason.as_dict(),
+            )
+
+    def mark_paused(self, order: tuple[int, ...], paused: frozenset[str]) -> None:
+        """Record models the operator switched off on this route.
+
+        Runs after :meth:`mark_benched` on purpose. A model that is both
+        benched and paused should read as paused: the bench is this build's
+        guess about a model's health and the pause is the operator's own
+        decision, and reporting the guess over the decision tells the reader
+        their button did nothing.
+
+        The row exists at all because the paused ref is still in the plan.
+        Filtering it out of the chain instead would have removed the model
+        from the request log entirely, which is the one outcome that makes a
+        paused route impossible to debug.
+        """
+        if not paused:
+            return
+        usable = set(order)
+        for index, record in self._records.items():
+            if index in usable or record.model_ref not in paused:
+                continue
+            self._set(
+                index,
+                outcome="skipped",
+                error_kind="paused",
+                error_message="paused by you on Model Config",
             )
 
     def start(self, index: int) -> None:
@@ -667,9 +714,16 @@ class ProviderExecutor:
         not reachable; index 0 is the honest answer if it ever were.
         """
         order = self._health.usable_indexes(
-            plan.model_refs(), provider_lookup=self._provider_lookup
+            plan.model_refs(),
+            provider_lookup=self._provider_lookup,
+            paused=plan.paused_refs,
         )
-        return plan.attempts[order[0] if order else 0]
+        if not order:
+            # Only reachable when every model on the route is paused, which is
+            # an error rather than a degraded route: answering with a model the
+            # user switched off would make the button a lie.
+            raise _all_paused_failure(plan.paused_env_var)
+        return plan.attempts[order[0]]
 
     def stream(
         self,
@@ -703,8 +757,16 @@ class ProviderExecutor:
         buffer_until_complete = not plan.primary.request.stream
         failures: list[BaseException] = []
         order = self._health.usable_indexes(
-            plan.model_refs(), provider_lookup=self._provider_lookup
+            plan.model_refs(),
+            provider_lookup=self._provider_lookup,
+            paused=plan.paused_refs,
         )
+        if not order:
+            failure = _all_paused_failure(plan.paused_env_var)
+            ledger = _AttemptLedger(plan.model_refs(), attempts, on_attempt_result)
+            ledger.mark_paused((), plan.paused_refs)
+            ledger.publish()
+            raise failure
         if len(order) < len(attempts):
             logger.info(
                 "MODEL CHAIN: skipping {} recently-failing model(s) on this route",
@@ -720,6 +782,8 @@ class ProviderExecutor:
         # at the end is the whole chain's story rather than only the winner's.
         ledger = _AttemptLedger(plan.model_refs(), attempts, on_attempt_result)
         ledger.mark_benched(order, self._health.why)
+        # Second, so a model that is both benched and paused reads as paused.
+        ledger.mark_paused(order, plan.paused_refs)
         prepared = self._prepare_from(
             attempts,
             order,

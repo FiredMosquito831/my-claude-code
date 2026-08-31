@@ -191,6 +191,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="model_fallbacks",
     ),
     ConfigFieldSpec(
+        "MODEL_PAUSED",
+        "Default Route Paused Models",
+        "models",
+        "text",
+        settings_attr="model_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on this route that are "
+            "switched off. A paused model is never tried and costs no "
+            "attempt, but it keeps its place in the chain and still "
+            "appears in the request log as skipped. Pausing stops a model "
+            "being tried. Hiding (Models page) only removes it from "
+            "listings and never changes routing. Written by the Pause "
+            "button on Model Config rather than typed here."
+        ),
+    ),
+    ConfigFieldSpec(
         "MODEL_FABLE",
         "Fable Override",
         "models",
@@ -203,6 +220,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "model_chain",
         settings_attr="model_fable_fallbacks",
+    ),
+    ConfigFieldSpec(
+        "MODEL_FABLE_PAUSED",
+        "Fable Paused Models",
+        "models",
+        "text",
+        settings_attr="model_fable_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on this route that are "
+            "switched off. A paused model is never tried and costs no "
+            "attempt, but it keeps its place in the chain and still "
+            "appears in the request log as skipped. Pausing stops a model "
+            "being tried. Hiding (Models page) only removes it from "
+            "listings and never changes routing. Written by the Pause "
+            "button on Model Config rather than typed here."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_OPUS",
@@ -219,6 +253,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="model_opus_fallbacks",
     ),
     ConfigFieldSpec(
+        "MODEL_OPUS_PAUSED",
+        "Opus Paused Models",
+        "models",
+        "text",
+        settings_attr="model_opus_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on this route that are "
+            "switched off. A paused model is never tried and costs no "
+            "attempt, but it keeps its place in the chain and still "
+            "appears in the request log as skipped. Pausing stops a model "
+            "being tried. Hiding (Models page) only removes it from "
+            "listings and never changes routing. Written by the Pause "
+            "button on Model Config rather than typed here."
+        ),
+    ),
+    ConfigFieldSpec(
         "MODEL_SONNET",
         "Sonnet Override",
         "models",
@@ -231,6 +282,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "model_chain",
         settings_attr="model_sonnet_fallbacks",
+    ),
+    ConfigFieldSpec(
+        "MODEL_SONNET_PAUSED",
+        "Sonnet Paused Models",
+        "models",
+        "text",
+        settings_attr="model_sonnet_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on this route that are "
+            "switched off. A paused model is never tried and costs no "
+            "attempt, but it keeps its place in the chain and still "
+            "appears in the request log as skipped. Pausing stops a model "
+            "being tried. Hiding (Models page) only removes it from "
+            "listings and never changes routing. Written by the Pause "
+            "button on Model Config rather than typed here."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_HAIKU",
@@ -247,6 +315,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="model_haiku_fallbacks",
     ),
     ConfigFieldSpec(
+        "MODEL_HAIKU_PAUSED",
+        "Haiku Paused Models",
+        "models",
+        "text",
+        settings_attr="model_haiku_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on this route that are "
+            "switched off. A paused model is never tried and costs no "
+            "attempt, but it keeps its place in the chain and still "
+            "appears in the request log as skipped. Pausing stops a model "
+            "being tried. Hiding (Models page) only removes it from "
+            "listings and never changes routing. Written by the Pause "
+            "button on Model Config rather than typed here."
+        ),
+    ),
+    ConfigFieldSpec(
         "MODEL_VISION",
         "Vision Adapter",
         "models",
@@ -259,6 +344,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "models",
         "model_chain",
         settings_attr="model_vision_fallbacks",
+    ),
+    ConfigFieldSpec(
+        "MODEL_VISION_PAUSED",
+        "Vision Paused Models",
+        "models",
+        "text",
+        settings_attr="model_vision_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on this route that are "
+            "switched off. A paused model is never tried and costs no "
+            "attempt, but it keeps its place in the chain and still "
+            "appears in the request log as skipped. Pausing stops a model "
+            "being tried. Hiding (Models page) only removes it from "
+            "listings and never changes routing. Written by the Pause "
+            "button on Model Config rather than typed here."
+        ),
     ),
     ConfigFieldSpec(
         "MODEL_VISIBILITY_ALLOW",

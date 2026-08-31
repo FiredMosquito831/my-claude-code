@@ -22,6 +22,10 @@ from my_claude_code.config.admin.manifest import SECTIONS
 # itself; `tests/contracts/test_deadline_hint_labels.py` pins the two equal so
 # renaming one without the other fails a check rather than a user's search.
 LIMITS_PAGE_LABEL = "Limits & Resilience"
+# The page a routing decision is edited on. Pausing a model is not a limit --
+# sending its reader to Limits & Resilience would be a hint that names a page
+# with no such control on it, which is worse than no hint at all.
+MODEL_CONFIG_PAGE_LABEL = "Model Config"
 
 # Env var -> the manifest section id whose card owns it. The label is looked up
 # from SECTIONS, so it is the same string the page renders.
@@ -32,6 +36,21 @@ _SECTION_FOR_ENV_VAR: dict[str, str] = {
     "FALLBACK_STALL_TIMEOUT": "deadlines",
     "FALLBACK_REASONING_ANSWER_TIMEOUT": "deadlines",
     "RATE_LIMIT_COOLDOWN_SECONDS": "credential_health",
+    "MODEL_PAUSED": "models",
+    "MODEL_FABLE_PAUSED": "models",
+    "MODEL_OPUS_PAUSED": "models",
+    "MODEL_SONNET_PAUSED": "models",
+    "MODEL_HAIKU_PAUSED": "models",
+    "MODEL_VISION_PAUSED": "models",
+}
+
+# Manifest section id -> the dashboard page its card is rendered on. A single
+# hardcoded page label was correct while every hinted setting lived on one
+# page; it stopped being correct the moment a routing switch needed a hint.
+_PAGE_FOR_SECTION: dict[str, str] = {
+    "deadlines": LIMITS_PAGE_LABEL,
+    "credential_health": LIMITS_PAGE_LABEL,
+    "models": MODEL_CONFIG_PAGE_LABEL,
 }
 
 _CARD_LABELS: dict[str, str] = {
@@ -44,6 +63,11 @@ def card_for(env_var: str) -> str:
     return _CARD_LABELS[_SECTION_FOR_ENV_VAR[env_var]]
 
 
+def page_for(env_var: str) -> str:
+    """The dashboard page the card that edits ``env_var`` is rendered on."""
+    return _PAGE_FOR_SECTION[_SECTION_FOR_ENV_VAR[env_var]]
+
+
 def limit_hint(env_var: str) -> str:
     """The trailing hint appended to a message the client will read.
 
@@ -53,5 +77,5 @@ def limit_hint(env_var: str) -> str:
     """
     return (
         f" ({env_var} -- change it on the dashboard under "
-        f"{LIMITS_PAGE_LABEL} -> {card_for(env_var)})"
+        f"{page_for(env_var)} -> {card_for(env_var)})"
     )

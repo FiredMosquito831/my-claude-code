@@ -1340,3 +1340,285 @@ def test_a_healthy_key_with_no_model_benches_renders_exactly_as_before(
     assert "key-model-benches" not in rows[0]["html"]
     assert rows[0]["badge"] == "HEALTHY"
     assert rows[0]["badgeTitle"] == "HEALTHY \u2014 7 requests, 0 failures"
+
+
+# --------------------------------------------------------------- route rails
+# Drag, multi-select, cross-tier copy and move, the primary swap, undo, and the
+# per-entry pause -- driven through the same document the dashboard ships.
+
+
+def test_a_chain_row_has_a_drag_grip_and_keeps_its_arrows(rendered) -> None:
+    """The grip is added; the arrows stay as the WCAG 2.2 keyboard equivalent."""
+    routing = rendered["routing"]
+
+    assert routing["present"]
+    # One grip and one pause toggle per draggable node, primaries included.
+    assert routing["gripCount"] == routing["railNodes"]
+    assert routing["pauseButtons"] == routing["railNodes"]
+    assert routing["primaryHasGrip"]
+    # Two arrows per fallback row, untouched.
+    assert routing["arrowsKept"] == routing["opusRows"] * 2
+
+
+def test_a_drag_that_starts_outside_the_grip_reorders_nothing(rendered) -> None:
+    """Pressing the row itself is a click, not a handle."""
+    routing = rendered["routing"]
+
+    assert routing["opusAfterStray"] == routing["opusBeforeStray"]
+
+
+def test_a_touch_scrolls_the_card_unless_it_starts_on_the_grip(rendered) -> None:
+    """`touch-action: none` is scoped to the grip so the page still scrolls."""
+    routing = rendered["routing"]
+
+    assert routing["touchOnRowStartsADrag"] is False
+    assert routing["opusAfterTouchScroll"]
+    assert routing["touchOnGripStartsADrag"] is True
+
+
+def test_dragging_a_row_down_one_reorders_the_chain(rendered) -> None:
+    routing = rendered["routing"]
+
+    assert routing["opusBeforeStray"].startswith("p1/o1,p1/o2,")
+    assert routing["opusAfterReorder"].startswith("p1/o2,p1/o1,")
+
+
+def test_ctrl_clicking_adds_a_second_row_to_the_selection(rendered) -> None:
+    routing = rendered["routing"]
+
+    assert routing["afterPlainClick"] == 1
+    assert routing["afterCtrlClick"] == 2
+
+
+def test_shift_clicking_selects_the_range_within_one_rail(rendered) -> None:
+    routing = rendered["routing"]
+
+    assert routing["afterShiftClick"] == 4
+
+
+def test_shift_arrow_extends_the_selection_and_walking_back_shrinks_it(
+    rendered,
+) -> None:
+    """Walking back must not leave a trail of selected rows behind the cursor."""
+    routing = rendered["routing"]
+
+    assert routing["afterShiftArrowDown"] == 5
+    assert routing["afterShiftArrowBack"] == 4
+
+
+def test_escape_clears_the_route_selection(rendered) -> None:
+    routing = rendered["routing"]
+
+    assert routing["afterEscape"] == 0
+
+
+def test_dragging_a_group_keeps_rail_order_not_click_order(rendered) -> None:
+    """Picked bottom-up, landed top-down: what the reader is looking at."""
+    routing = rendered["routing"]
+
+    assert routing["groupSelected"] == 2
+    assert routing["opusAfterGroupCopy"].startswith("p1/s1,p1/s2,")
+
+
+def test_dragging_to_another_tier_copies_and_leaves_the_source_intact(
+    rendered,
+) -> None:
+    routing = rendered["routing"]
+
+    assert "p1/s1" in routing["opusAfterGroupCopy"]
+    assert routing["sonnetAfterGroupCopy"] == routing["sonnetBeforeGroup"]
+    assert "still in the Sonnet chain" in routing["groupSentence"]
+
+
+def test_shift_dragging_to_another_tier_moves_and_empties_the_source(
+    rendered,
+) -> None:
+    """An empty chain is legal; only an empty primary is refused."""
+    routing = rendered["routing"]
+
+    assert routing["sonnetAfterMove"] == ""
+    assert routing["opusAfterMove"].startswith("p1/s1,p1/s2,")
+    assert "still in" not in routing["moveSentence"]
+
+
+def test_a_cross_tier_move_marks_both_chains_unsaved(rendered) -> None:
+    routing = rendered["routing"]
+
+    assert routing["keysAfterCrossTierMove"] == [
+        "MODEL_OPUS_FALLBACKS",
+        "MODEL_SONNET_FALLBACKS",
+    ]
+
+
+def test_a_copy_onto_a_chain_that_already_has_the_ref_moves_it_instead(
+    rendered,
+) -> None:
+    """Duplicates are dropped on save, so a second row would just vanish."""
+    routing = rendered["routing"]
+
+    assert routing["duplicateOccurrences"] == 1
+    assert "already in the Opus chain" in routing["duplicateSentence"]
+    assert "moved instead of copied" in routing["duplicateSentence"]
+
+
+def test_a_copy_is_refused_when_the_target_primary_is_that_ref(rendered) -> None:
+    """A chain entry equal to its own primary could never fire."""
+    routing = rendered["routing"]
+
+    assert routing["sonnetUnchangedByRefusal"]
+    assert routing["refusalSentence"] == (
+        "Sonnet already routes to p1/s1 first, so it was not added to its own chain."
+    )
+
+
+def test_dropping_on_the_primary_slot_swaps_and_demotes_the_old_primary(
+    rendered,
+) -> None:
+    routing = rendered["routing"]
+
+    assert routing["haikuPrimaryAfterDrop"] == routing["haikuPromoted"]
+    assert routing["haikuChainAfterDrop"].startswith(routing["haikuDemoted"])
+    assert "is now the Haiku route" in routing["primarySwapSentence"]
+    assert "is fallback 1" in routing["primarySwapSentence"]
+
+
+def test_a_primary_swap_counts_two_unsaved_changes(rendered) -> None:
+    """Both halves of the rail are settings; a swap writes both."""
+    routing = rendered["routing"]
+
+    assert routing["dirtyAfterPrimarySwap"] == 2
+
+
+def test_a_primary_is_never_shift_moved_out_of_its_own_rail(rendered) -> None:
+    """An empty MODEL fails validation and the server refuses to start."""
+    routing = rendered["routing"]
+
+    assert routing["haikuPrimarySurvivedSteal"]
+    assert routing["opusUnchangedBySteal"]
+    assert routing["strandedSentence"] == (
+        "Haiku needs a model of its own -- drag a copy instead, "
+        "or promote a fallback first."
+    )
+
+
+def test_dragging_a_primary_onto_its_own_first_fallback_swaps_them(
+    rendered,
+) -> None:
+    """The same swap the down arrow already performs, reached by drag."""
+    routing = rendered["routing"]
+
+    assert routing["sonnetPrimaryAfterOwnDrop"] == "p1/s1"
+    assert routing["sonnetAfterOwnPrimaryDrop"].startswith("p1/s0")
+    assert "traded places" in routing["swapSentence"]
+
+
+def test_ctrl_z_undoes_the_last_drag_and_only_the_last(rendered) -> None:
+    """Depth one: one drag is one entry, and the entry is spent when used."""
+    routing = rendered["routing"]
+
+    assert routing["opusAfterUndo"] == routing["opusBeforeStray"]
+    assert routing["opusAfterSecondUndo"] == routing["opusAfterUndo"]
+
+
+def test_ctrl_z_inside_a_model_combobox_does_not_undo_the_drag(rendered) -> None:
+    """Native text undo belongs to whoever is typing."""
+    routing = rendered["routing"]
+
+    assert routing["opusAfterTypingUndo"] == routing["opusBeforeTypingUndo"]
+
+
+def test_undo_restores_both_chains_after_a_cross_tier_move(rendered) -> None:
+    routing = rendered["routing"]
+
+    assert routing["sonnetAfterMoveUndo"] == "p1/s1,p1/s2"
+    assert routing["opusAfterMoveUndo"] == routing["opusBeforeGroup"]
+
+
+def test_the_route_status_panel_is_a_whole_sentence_and_is_toggled_by_hidden(
+    rendered,
+) -> None:
+    """Never a bare number, and `hidden`, never `style.display`."""
+    routing = rendered["routing"]
+
+    assert routing["statusHiddenAttr"] is False
+    assert routing["reorderSentence"].endswith("press Apply.")
+    assert routing["reorderSentence"].startswith("Moved 1 model inside the Opus chain")
+    assert routing["statusHiddenAfterDismiss"] is True
+    assert routing["statusInlineDisplay"] == ""
+
+
+def test_pausing_a_fallback_posts_one_key_and_leaves_a_dirty_drag_dirty(
+    rendered,
+) -> None:
+    """The highest-risk interaction: an immediate write beside an unsaved drag.
+
+    The commit renders the whole file from the values on disk plus this
+    update, so a key the build did not return is written back unchanged --
+    which is why the drag survives. Proven on the wire: one call, and the body
+    names one route entry and nothing else.
+    """
+    routing = rendered["routing"]
+
+    assert routing["pauseCalls"] == 1
+    assert routing["pauseBodyKeys"] == ["model_key", "model_ref", "paused"]
+    assert routing["pauseBody"] == {
+        "model_key": "MODEL_OPUS",
+        "model_ref": routing["pausedRef"],
+        "paused": True,
+    }
+    assert routing["dirtyUnchangedByPause"]
+    assert routing["dirtyAfterPause"] > 0
+
+
+def test_a_paused_row_stays_visible_with_a_resume_button(rendered) -> None:
+    """Pausing is not hiding: the ref stays on screen, whole and undoable."""
+    routing = rendered["routing"]
+
+    assert routing["pausedRowHidden"] is False
+    assert routing["pausedRowClass"] is True
+    assert routing["pausedRowRef"] == routing["pausedRef"]
+    assert routing["pausedButtonLabel"] == "Resume"
+    assert routing["pausedAriaPressed"] == "true"
+    assert routing["pausedChipShown"] is True
+
+
+def test_the_status_panel_offers_undo_after_a_pause(rendered) -> None:
+    routing = rendered["routing"]
+
+    assert routing["pauseOffersUndo"] == ["Undo", "Dismiss"]
+    assert routing["pauseSentence"].startswith("Paused ")
+    assert "without spending an attempt" in routing["pauseSentence"]
+    assert routing["resumedButtonLabel"] == "Pause"
+    assert routing["resumeSentence"].startswith("Resumed ")
+
+
+def test_the_deadline_calculator_stops_counting_a_paused_model(rendered) -> None:
+    """The calculator claims to reproduce the server for your own routes."""
+    routing = rendered["routing"]
+
+    assert routing["chainLengthWhilePaused"] == routing["chainLengthBeforePause"] - 1
+
+
+def test_a_paused_primary_is_dropped_from_the_count_and_stays_on_screen(
+    rendered,
+) -> None:
+    routing = rendered["routing"]
+
+    assert routing["haikuPrimaryPaused"] is True
+    assert routing["haikuPrimaryStillShowsItsRef"] == routing["haikuPromoted"]
+    # Haiku is primary + one demoted fallback; pausing the primary leaves one.
+    assert routing["haikuChainLengthWithPausedPrimary"] == 1
+    assert routing["haikuPrimaryResumed"] is True
+
+
+def test_the_arrow_buttons_still_reorder_after_the_drag_shipped(rendered) -> None:
+    routing = rendered["routing"]
+
+    assert routing["arrowsStillReorder"]
+
+
+def test_a_drag_leaves_no_indicator_or_ghost_nodes_behind(rendered) -> None:
+    """One indicator instance is reused, and it is removed when the drag ends."""
+    routing = rendered["routing"]
+
+    assert routing["strayIndicators"] == 0

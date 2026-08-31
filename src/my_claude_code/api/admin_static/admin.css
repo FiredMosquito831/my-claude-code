@@ -1124,6 +1124,146 @@ textarea:focus-visible,
   border-color: var(--line-strong);
 }
 
+/* ------------------------------------------------------------- route drag
+   The rail is dragged by a grip rather than by the row, so a finger scrolling
+   over a card still scrolls the card. `touch-action: none` is scoped to the
+   grip alone for exactly that reason -- it is the first rule of its kind in
+   this file and widening it would make the page unscrollable on a phone. */
+
+.route-drag-grip {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  /* Over the WCAG 2.2 24px target minimum in both directions. A rail can
+     spare about 335px for the whole row, so it takes no more than it needs. */
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+}
+
+.route-drag-grip:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.route-drag-grip:active {
+  cursor: grabbing;
+}
+
+.route-grid.is-dragging,
+.route-vision.is-dragging {
+  user-select: none;
+}
+
+/* Selection is an inset bar plus a tint, never colour alone: a hue is not a
+   state to a reader who cannot see it. */
+.model-chain-row.is-selected,
+.route-node.is-selected {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--accent-muted);
+  border-radius: var(--radius-sm);
+}
+
+.model-chain-row.is-dragging,
+.route-node.is-dragging {
+  opacity: 0.6;
+}
+
+.route-card.is-drop-target {
+  border-color: var(--accent-border);
+}
+
+.route-drop-indicator {
+  height: 2px;
+  margin: 2px 0;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+/* A paused entry stays fully visible with its complete ref. Hiding it would
+   be the one thing this product is documented never to do to a configured
+   route -- the reader has to be able to see, and undo, what they switched
+   off. Dimmed and struck, not removed. */
+.model-chain-row.is-paused .model-combobox input,
+.route-node.is-paused .model-combobox input {
+  opacity: 0.65;
+  text-decoration: line-through;
+}
+
+.route-pause-chip {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-full);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.route-pause-cell {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.route-pause-toggle {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.model-chain-row.is-paused .route-pause-toggle,
+.route-node.is-paused .route-pause-toggle {
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
+/* Mirrors .models-bulk-result: one persistent panel of whole sentences with
+   its own Undo and Dismiss, not a toast that takes the answer away with it. */
+.route-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-lg);
+  background: var(--accent-muted);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.route-status p {
+  flex: 1 1 100%;
+  margin: 0;
+}
+
+.route-status-button {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-drag-grip,
+  .model-chain-row,
+  .route-node {
+    transition: none;
+  }
+}
+
 .route-card-head {
   display: flex;
   align-items: center;
@@ -1189,7 +1329,9 @@ textarea:focus-visible,
 .route-rail .model-chain-add::after {
   content: "";
   position: absolute;
-  left: 12px;
+  /* Centre of the marker column: 28px of grip, a 4px gap, then half of the
+     24px marker. The grip moved the whole rail right by exactly one column. */
+  left: 43px;
   width: 2px;
   border-radius: 1px;
   background: var(--line-strong);
@@ -1213,9 +1355,13 @@ textarea:focus-visible,
 .route-node {
   position: relative;
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
+  /* Grip, marker, control, pause cell. The columns are explicit rather than
+     auto-flowing so the primary's controls line up with the identical
+     controls on every fallback row below it. */
+  grid-template-columns: 28px 24px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  column-gap: 4px;
+  row-gap: 8px;
   min-height: 40px;
 }
 
@@ -1223,8 +1369,7 @@ textarea:focus-visible,
    so it carries the same move buttons every fallback under it carries. The
    third column is that button cluster. */
 .route-node.has-move {
-  grid-template-columns: 24px minmax(0, 1fr) auto;
-  column-gap: 6px;
+  grid-template-columns: 28px 24px minmax(0, 1fr) auto auto;
 }
 
 .route-node-move {
@@ -1292,7 +1437,10 @@ textarea:focus-visible,
 .route-rail .model-chain-row {
   position: relative;
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto auto auto;
+  /* Grip, number, control, pause cell, then the three buttons. Explicit, and
+     the first two columns match .route-node exactly, so a fallback's controls
+     sit under the primary's rather than beside them. */
+  grid-template-columns: 28px 24px minmax(0, 1fr) auto auto auto auto;
   align-items: center;
   gap: 4px;
   min-height: 40px;

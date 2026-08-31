@@ -378,3 +378,64 @@ def test_benching_off_is_the_shipped_default() -> None:
     assert not registry.is_ejected("sick/model")
     assert registry.why("sick/model") is None
     assert registry.usable_indexes(("sick/model", "b/two")) == (0, 1)
+
+
+# ------------------------------------------------------------------- pause --
+# Pausing is the operator's own decision rather than this registry's guess, so
+# it is honoured on two counts the bench is not: it applies with benching
+# switched off, and it is never restored by the all-benched bypass.
+
+
+def test_a_paused_model_is_dropped_from_the_order() -> None:
+    registry = _registry([0.0])
+
+    assert registry.usable_indexes(
+        ("a/one", "b/two", "c/three"), paused=frozenset({"b/two"})
+    ) == (0, 2)
+
+
+def test_pause_applies_even_with_benching_switched_off() -> None:
+    """The master switch governs automatic ejection, not a hand-flipped switch."""
+    registry = _registry([0.0], bench_enabled=False)
+
+    assert registry.usable_indexes(("a/one", "b/two"), paused=frozenset({"a/one"})) == (
+        1,
+    )
+
+
+def test_pause_does_not_trigger_the_ejection_bypass() -> None:
+    """The bypass restores what the bench removed, never what the user paused."""
+    clock = [0.0]
+    registry = _registry(clock, eject_after_failures=1, eject_seconds=30.0)
+    registry.record_failure("a/one", failure_kind=MODEL_SHAPED)
+    registry.record_failure("b/two", failure_kind=MODEL_SHAPED)
+
+    # Every model benched, one of them also paused: the bypass hands back the
+    # chain, minus the paused entry.
+    assert registry.usable_indexes(("a/one", "b/two"), paused=frozenset({"a/one"})) == (
+        1,
+    )
+
+
+def test_a_route_with_every_model_paused_yields_nothing_to_try() -> None:
+    """An all-paused route is an error, not a route to bypass into."""
+    registry = _registry([0.0])
+
+    assert (
+        registry.usable_indexes(
+            ("a/one", "b/two"), paused=frozenset({"a/one", "b/two"})
+        )
+        == ()
+    )
+
+
+def test_pause_changes_nothing_when_nothing_is_paused() -> None:
+    """The regression floor: the default argument is the old behaviour."""
+    clock = [0.0]
+    registry = _registry(clock, eject_after_failures=1, eject_seconds=30.0)
+    registry.record_failure("a/one", failure_kind=MODEL_SHAPED)
+
+    assert registry.usable_indexes(("a/one", "b/two", "c/three")) == (1, 2)
+    assert registry.usable_indexes(
+        ("a/one", "b/two", "c/three"), paused=frozenset()
+    ) == (1, 2)

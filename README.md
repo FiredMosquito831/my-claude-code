@@ -539,7 +539,10 @@ Every tier can carry an ordered list of stand-ins. If the model a request routes
 | `MODEL_SONNET_FALLBACKS` | after `MODEL_SONNET` |
 | `MODEL_HAIKU_FALLBACKS` | after `MODEL_HAIKU` |
 
-Each is a comma-separated list of `provider/model` refs, in priority order — for example `MODEL_OPUS_FALLBACKS="cerebras/qwen-3-coder-480b,groq/moonshotai/kimi-k2"`. Edit them in **Admin UI → Model Config**, where each chain sits directly under the model it backs up and entries can be reordered.
+**Pausing one entry.** Each row on a route rail has a **Pause** button. A paused model keeps its place in the chain and stays fully on screen, but the router never tries it: no attempt is spent, no deadline is consumed, and the request log still lists it as *not tried* with the reason `paused`. Unlike everything else on that page a pause is written the moment you click it, with no Apply, and the status panel offers an Undo. Pausing is per route — the same model paused on Opus keeps serving Sonnet — and it is stored in `MODEL_PAUSED`, `MODEL_FABLE_PAUSED`, `MODEL_OPUS_PAUSED`, `MODEL_SONNET_PAUSED`, `MODEL_HAIKU_PAUSED` and `MODEL_VISION_PAUSED`. **Pausing is not hiding:** the Models page's visibility lists change what appears in `/v1/models` and never change routing, and these change routing and never change listings. A route whose every model is paused fails with an error naming the key rather than quietly falling through to another route.
+
+
+Each is a comma-separated list of `provider/model` refs, in priority order — for example `MODEL_OPUS_FALLBACKS="cerebras/qwen-3-coder-480b,groq/moonshotai/kimi-k2"`. Edit them in **Admin UI → Model Config**, where each chain sits directly under the model it backs up. Drag a row by its grip to reorder it, Ctrl/Cmd-click or Shift-click to pick several, drag onto another tier to copy (hold Shift to move), and drop onto a card's top slot to make that model the route's own. The up/down arrows still do the same job one step at a time, Ctrl+Z undoes the last drag, and nothing is saved until you press **Apply**.
 
 A tier with its own override uses only its own chain; the two are never merged. So `MODEL_OPUS` set means Opus tries `MODEL_OPUS` then `MODEL_OPUS_FALLBACKS`, while an unset `MODEL_SONNET` means Sonnet tries `MODEL` then `MODEL_FALLBACKS`.
 

@@ -65,6 +65,18 @@ const state = {
   // an unreported capability is not a refusal.
   blindModels: new Set(),
   modelComboboxes: new Set(),
+  // Route rails: the drag's whole state. The selection is held here and
+  // never in the DOM, so a rail rebuilt by a drop cannot forget it.
+  routeSelection: new Set(),
+  routeAnchorId: null,
+  routeArrowRange: [],
+  routeDrag: null,
+  // Depth 1, and one drag is one entry however many rows it moved.
+  routeUndo: null,
+  // chainKey -> ModelChainEditor. Cross-rail drag has to reach the
+  // destination editor from a DOM node, and every editor used to be
+  // reachable only through the closure that built it.
+  routeRails: new Map(),
   activeView: "providers",
   webSearchStatsPeriod: "daily",
   webSearchAnalyticsStats: null,
@@ -880,6 +892,660 @@ const ROUTE_TIERS = [
   { id: "haiku", label: "Haiku", modelKey: "MODEL_HAIKU", chainKey: "MODEL_HAIKU_FALLBACKS" },
 ];
 
+/* ------------------------------------------------------------ route drag
+   A route is one ordered path drawn as a rail, but reordering it was only
+   ever possible one step at a time, with one arrow press per step, and moving
+   a model from the Sonnet rail to the Opus rail meant reading the ref off one
+   card and retyping it into the other. Both are now a drag.
+
+   Pointer events, not HTML5 drag-and-drop. The only drag this product already
+   has is pointer-based (startModelsDrag), two drag idioms on adjacent pages
+   read as a bug rather than as a distinction, HTML5 DnD has no touch story at
+   all, and -- decisively -- jsdom has neither PointerEvent nor a usable
+   DataTransfer, so an HTML5 implementation could not be covered by the
+   harness this repo tests its UI with.
+
+   Every gesture funnels into applyRouteDrop, which is the only function that
+   mutates a chain. Dedupe, the primary swap and the undo snapshot therefore
+   happen in exactly one place instead of once per entry point. */
+
+// Which setting holds the refs paused on a route, keyed by the route's own
+// primary model setting. Pause is per route by definition: the same ref
+// paused on Opus keeps serving Sonnet.
+const ROUTE_PAUSE_KEY = new Map([
+  ["MODEL", "MODEL_PAUSED"],
+  ["MODEL_FABLE", "MODEL_FABLE_PAUSED"],
+  ["MODEL_OPUS", "MODEL_OPUS_PAUSED"],
+  ["MODEL_SONNET", "MODEL_SONNET_PAUSED"],
+  ["MODEL_HAIKU", "MODEL_HAIKU_PAUSED"],
+  ["MODEL_VISION", "MODEL_VISION_PAUSED"],
+]);
+
+/** The name this route is called on the page, for a sentence about it. */
+function routeLabelFor(modelKey) {
+  const tier = ROUTE_TIERS.find((candidate) => candidate.modelKey === modelKey);
+  if (tier) return tier.label;
+  return modelKey === "MODEL_VISION" ? "Vision" : String(modelKey || "");
+}
+
+function routeRailFor(chainKey) {
+  return state.routeRails.get(chainKey) || null;
+}
+
+function routeRailForModel(modelKey) {
+  let found = null;
+  state.routeRails.forEach((editor) => {
+    if (editor.modelKey === modelKey) found = editor;
+  });
+  return found;
+}
+
+/** The nearest draggable node's stable id, or null.
+ *
+ * Ids are stable and are not the model ref: a ref may legitimately sit on two
+ * rails at once, and a freshly added row holds no ref at all.
+ */
+function routeIdFor(node) {
+  const owner = node && node.closest ? node.closest("[data-route-id]") : null;
+  return owner ? owner.dataset.routeId : null;
+}
+
+/** Resolve one route id back to the editor, row and ref behind it. */
+function routeEntryFor(id) {
+  if (!id) return null;
+  if (id.indexOf("route:") === 0) {
+    const modelKey = id.slice("route:".length);
+    const editor = routeRailForModel(modelKey);
+    if (!editor || !editor.primary) return null;
+    return { id, editor, row: null, ref: editor.primaryValue(), modelKey };
+  }
+  const hash = id.lastIndexOf("#");
+  if (hash < 0) return null;
+  const editor = routeRailFor(id.slice("chain:".length, hash));
+  if (!editor) return null;
+  const row = editor.rows.find((candidate) => candidate.routeId === id);
+  if (!row) return null;
+  return {
+    id,
+    editor,
+    row,
+    ref: row.combobox.input.value.trim(),
+    modelKey: editor.modelKey,
+  };
+}
+
+/** One rail's ids top to bottom: the primary, then every fallback in order. */
+function routeRailIds(editor) {
+  const ids = editor && editor.primary ? [`route:${editor.modelKey}`] : [];
+  if (editor) editor.rows.forEach((row) => ids.push(row.routeId));
+  return ids;
+}
+
+function routeRailOf(id) {
+  const entry = routeEntryFor(id);
+  return entry ? entry.editor : null;
+}
+
+/** The contiguous run between two ids, within one rail only.
+ *
+ * A range that spanned two cards would have no visual meaning: the rails are
+ * separate lists that happen to sit side by side.
+ */
+function routeRangeIds(fromId, toId) {
+  const editor = routeRailOf(fromId);
+  if (!editor || routeRailOf(toId) !== editor) return [toId];
+  const ids = routeRailIds(editor);
+  const start = ids.indexOf(fromId);
+  const end = ids.indexOf(toId);
+  if (start < 0 || end < 0) return [toId];
+  return ids.slice(Math.min(start, end), Math.max(start, end) + 1);
+}
+
+function setRouteSelection(ids, on) {
+  ids.forEach((id) => {
+    if (on) state.routeSelection.add(id);
+    else state.routeSelection.delete(id);
+  });
+  syncRouteSelectionUi();
+}
+
+function clearRouteSelection() {
+  state.routeSelection.clear();
+  state.routeAnchorId = null;
+  state.routeArrowRange = [];
+  syncRouteSelectionUi();
+}
+
+/* The selection lives in state, never in the DOM: a rail rebuilt by a drag
+   would otherwise silently forget which rows were picked. */
+function syncRouteSelectionUi() {
+  document.querySelectorAll("[data-route-id]").forEach((node) => {
+    node.classList.toggle("is-selected", state.routeSelection.has(node.dataset.routeId));
+  });
+}
+
+function onRouteSelectClick(id, event) {
+  if (!routeEntryFor(id)) return;
+  if (event.shiftKey && state.routeAnchorId) {
+    setRouteSelection(routeRangeIds(state.routeAnchorId, id), true);
+  } else if (event.ctrlKey || event.metaKey) {
+    // Ctrl/Cmd-click rather than a checkbox gutter: a rail is one to four rows
+    // on a narrow card, and a checkbox column would push the combobox into
+    // clipping. The arrow buttons remain the WCAG 2.2 keyboard equivalent.
+    setRouteSelection([id], !state.routeSelection.has(id));
+    state.routeAnchorId = id;
+  } else {
+    state.routeSelection.clear();
+    setRouteSelection([id], true);
+    state.routeAnchorId = id;
+  }
+  state.routeArrowRange = [];
+}
+
+/* Range selection must not be pointer-only: WCAG 2.2 asks for a keyboard
+   alternative to any author-controlled drag, so the same range is reachable
+   with Shift+Space and Shift+ArrowUp / Shift+ArrowDown from a focused grip. */
+function onRouteSelectKeydown(id, event) {
+  if (event.key === " " && event.shiftKey) {
+    event.preventDefault();
+    setRouteSelection(
+      routeRangeIds(state.routeAnchorId || id, id),
+      !state.routeSelection.has(id),
+    );
+    state.routeArrowRange = [];
+    return;
+  }
+  if (!event.shiftKey) return;
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const editor = routeRailOf(id);
+  if (!editor) return;
+  const ids = routeRailIds(editor);
+  const next = ids[ids.indexOf(id) + (event.key === "ArrowDown" ? 1 : -1)];
+  if (!next) return;
+  if (!state.routeAnchorId) state.routeAnchorId = id;
+  const wanted = routeRangeIds(state.routeAnchorId, next);
+  // Walking back towards the anchor shrinks the range rather than leaving the
+  // rows behind the cursor selected.
+  setRouteSelection(
+    state.routeArrowRange.filter((entry) => !wanted.includes(entry)),
+    false,
+  );
+  setRouteSelection(wanted, true);
+  state.routeArrowRange = wanted;
+  const grip = routeGripFor(next);
+  if (grip) grip.focus();
+}
+
+/** The grip button on one route node, found by scan rather than by selector:
+ *  a route id embeds a settings key and a sequence number, but building a
+ *  selector out of anything the payload names needs an escape the page cannot
+ *  rely on. */
+function routeGripFor(id) {
+  const node = Array.from(document.querySelectorAll("[data-route-id]")).find(
+    (candidate) => candidate.dataset.routeId === id,
+  );
+  return node ? node.querySelector(".route-drag-grip") : null;
+}
+
+function routeDropIndicator() {
+  // One instance, reused: a drag that created a node per hovered row would
+  // leak them, and the browser drive measures the node count before and after.
+  let bar = byId("routeDropIndicator");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "routeDropIndicator";
+    bar.className = "route-drop-indicator";
+    bar.setAttribute("aria-hidden", "true");
+  }
+  return bar;
+}
+
+function clearRouteDropIndicator() {
+  const bar = byId("routeDropIndicator");
+  if (bar && bar.parentNode) bar.parentNode.removeChild(bar);
+  document
+    .querySelectorAll(".route-card.is-drop-target")
+    .forEach((card) => card.classList.remove("is-drop-target"));
+}
+
+function startRouteDrag(id, event) {
+  // A touch that did not begin on the grip is a scroll, not a drag, so the
+  // card still moves under a finger.
+  if (
+    event.pointerType === "touch" &&
+    !(event.target.classList && event.target.classList.contains("route-drag-grip"))
+  ) {
+    return;
+  }
+  if (typeof event.button === "number" && event.button !== 0) return;
+  if (!state.routeSelection.has(id)) {
+    state.routeSelection.clear();
+    setRouteSelection([id], true);
+    state.routeAnchorId = id;
+  }
+  const editor = routeRailOf(id);
+  if (!editor) return;
+  // Rail order, top to bottom, not click order: it is what the reader is
+  // looking at, and it is deterministic under a Shift-range selection.
+  const ids = routeRailIds(editor).filter((entry) => state.routeSelection.has(entry));
+  state.routeDrag = { ids, sourceChainKey: editor.chainKey, target: null };
+  document
+    .querySelectorAll(".route-grid, .route-vision")
+    .forEach((node) => node.classList.add("is-dragging"));
+}
+
+/* Bound on the container: a pointerover dispatched on a row does not reach a
+   listener bound to an inner cell. */
+function continueRouteDrag(event) {
+  if (!state.routeDrag) return;
+  const node = event.target.closest ? event.target.closest("[data-route-id]") : null;
+  if (!node) return;
+  const id = node.dataset.routeId;
+  if (id.indexOf("route:") === 0) {
+    state.routeDrag.target = { modelKey: node.dataset.modelKey };
+  } else {
+    const entry = routeEntryFor(id);
+    if (!entry) return;
+    state.routeDrag.target = {
+      chainKey: entry.editor.chainKey,
+      index: entry.editor.rows.indexOf(entry.row),
+    };
+  }
+  clearRouteDropIndicator();
+  const card = node.closest(".route-card");
+  if (card) card.classList.add("is-drop-target");
+  if (node.parentNode) node.parentNode.insertBefore(routeDropIndicator(), node);
+}
+
+function endRouteDrag(event) {
+  const drag = state.routeDrag;
+  state.routeDrag = null;
+  clearRouteDropIndicator();
+  document
+    .querySelectorAll(".route-grid, .route-vision")
+    .forEach((node) => node.classList.remove("is-dragging"));
+  if (!drag || !drag.target) return;
+  const source = routeRailFor(drag.sourceChainKey);
+  const dest = drag.target.modelKey
+    ? routeRailForModel(drag.target.modelKey)
+    : routeRailFor(drag.target.chainKey);
+  // The modifier is read at drop rather than at press, so the reader can
+  // change their mind mid-drag.
+  const copy = dest !== source && !(event && event.shiftKey);
+  applyRouteDrop(drag.target, drag.ids, copy);
+}
+
+/** Every hidden input a drop is about to touch, and its value right now. */
+function routeSnapshot(editors) {
+  const values = [];
+  editors.forEach((editor) => {
+    values.push([editor.input, editor.input.value]);
+    if (editor.primary) values.push([editor.primary.input, editor.primary.input.value]);
+  });
+  return { values };
+}
+
+/** Put one ref into a chain at a given position, as one new row. */
+function insertRouteRow(editor, ref, index) {
+  editor.addRow(ref, false);
+  const row = editor.rows.pop();
+  editor.rows.splice(Math.max(0, Math.min(index, editor.rows.length)), 0, row);
+  editor.rows.forEach((item) => editor.rowsEl.appendChild(item.wrapper));
+  editor.renumber();
+  editor.syncValue();
+  return row;
+}
+
+/** The one place a drag mutates a chain.
+ *
+ * `target` is either `{chainKey, index}` -- land in front of that row -- or
+ * `{modelKey}`, the rail's primary slot. `copy` leaves the source rows where
+ * they are; a same-rail drop is always a move, because a rail that grew a
+ * duplicate of its own row would lose it again on Apply.
+ */
+function applyRouteDrop(target, ids, copy) {
+  const dest = target.modelKey
+    ? routeRailForModel(target.modelKey)
+    : routeRailFor(target.chainKey);
+  if (!dest) return false;
+  const entries = ids
+    .map((id) => routeEntryFor(id))
+    .filter((entry) => entry && entry.ref);
+  if (!entries.length) return false;
+
+  const touched = new Set([dest]);
+  entries.forEach((entry) => touched.add(entry.editor));
+  const snapshot = routeSnapshot(touched);
+  const notes = [];
+  const stranded = `${routeLabelFor(dest.modelKey)} needs a model of its own -- drag a copy instead, or promote a fallback first.`;
+
+  // A primary is a drag source for a reorder and for a copy, never for a move
+  // out of its own rail: an empty MODEL fails validation and the server
+  // refuses to start, which is why the arrows only ever offer a swap.
+  const usable = entries.filter((entry) => {
+    if (entry.row || copy || entry.editor === dest) return true;
+    notes.push(
+      `${routeLabelFor(entry.editor.modelKey)} needs a model of its own -- drag a copy instead, or promote a fallback first.`,
+    );
+    return false;
+  });
+  if (!usable.length) {
+    announceRoute(notes.join(" "), null);
+    return false;
+  }
+
+  // Dragging a rail's own primary down into its own chain is the swap the
+  // down arrow already performs; anywhere else in the rail would empty it.
+  if (
+    target.chainKey &&
+    usable.length === 1 &&
+    !usable[0].row &&
+    usable[0].editor === dest
+  ) {
+    if (target.index !== 0 || !dest.canDemotePrimary()) {
+      announceRoute(stranded, null);
+      return false;
+    }
+    dest.swapPrimaryAndFirst();
+    state.routeUndo = snapshot;
+    syncRouteSelectionUi();
+    syncRoutePauseUi();
+    announceRoute(
+      `${routeLabelFor(dest.modelKey)} and fallback 1 traded places. Nothing was saved yet -- press Apply.`,
+      "Undo",
+    );
+    return true;
+  }
+
+  const refs = usable.map((entry) => entry.ref);
+  const sourceLabel = routeLabelFor(usable[0].editor.modelKey);
+  let anchorRow = null;
+  if (target.chainKey) {
+    const removing = new Set(
+      usable
+        .filter((entry) => entry.row && entry.editor === dest && !copy)
+        .map((entry) => entry.row),
+    );
+    for (let at = target.index; at < dest.rows.length; at += 1) {
+      if (!removing.has(dest.rows[at])) {
+        anchorRow = dest.rows[at];
+        break;
+      }
+    }
+  }
+  if (!copy) {
+    usable.forEach((entry) => {
+      if (entry.row) entry.editor.removeRow(entry.row);
+    });
+  }
+
+  let sentence = "";
+  if (target.modelKey) {
+    const head = refs[0];
+    const demoted = dest.primaryValue();
+    dest.setPrimaryValue(head);
+    dest.rows.slice().forEach((row) => {
+      if (row.combobox.input.value.trim() === head) dest.removeRow(row);
+    });
+    let at = 0;
+    if (demoted && demoted !== head) {
+      insertRouteRow(dest, demoted, at);
+      at += 1;
+    }
+    refs.slice(1).forEach((ref) => {
+      if (ref === head) return;
+      const existing = dest.rows.find((row) => row.combobox.input.value.trim() === ref);
+      if (existing) dest.removeRow(existing);
+      insertRouteRow(dest, ref, at);
+      at += 1;
+    });
+    sentence = `${head} is now the ${routeLabelFor(dest.modelKey)} route's model.`;
+    if (demoted && demoted !== head) {
+      sentence += ` The previous one, ${demoted}, is fallback 1.`;
+    }
+  } else {
+    let landed = 0;
+    let firstAt = dest.rows.length;
+    refs.forEach((ref) => {
+      // A chain entry equal to its own primary is dropped at resolve time, so
+      // the row could never fire: saying so beats adding a row that vanishes.
+      if (ref === dest.primaryValue()) {
+        notes.push(
+          `${routeLabelFor(dest.modelKey)} already routes to ${ref} first, so it was not added to its own chain.`,
+        );
+        return;
+      }
+      // Duplicates are dropped on save, so a second copy would be a row the
+      // reader watches disappear. Move the one that is already there instead.
+      const existing = dest.rows.find((row) => row.combobox.input.value.trim() === ref);
+      if (existing) {
+        if (existing === anchorRow) {
+          anchorRow = dest.rows[dest.rows.indexOf(existing) + 1] || null;
+        }
+        dest.removeRow(existing);
+        notes.push(
+          `${ref} was already in the ${routeLabelFor(dest.modelKey)} chain -- moved instead of copied.`,
+        );
+      }
+      const at = anchorRow ? dest.rows.indexOf(anchorRow) : dest.rows.length;
+      if (!landed) firstAt = at;
+      insertRouteRow(dest, ref, at);
+      landed += 1;
+    });
+    if (!landed) {
+      announceRoute(notes.join(" "), null);
+      return false;
+    }
+    const where = `at position ${firstAt + 1}`;
+    if (dest === usable[0].editor) {
+      sentence = `Moved ${landed} model${landed === 1 ? "" : "s"} inside the ${routeLabelFor(dest.modelKey)} chain, ${where}.`;
+    } else if (copy) {
+      sentence = `Copied ${landed} model${landed === 1 ? "" : "s"} into the ${routeLabelFor(dest.modelKey)} chain, ${where}. They are still in the ${sourceLabel} chain.`;
+    } else {
+      sentence = `Moved ${landed} model${landed === 1 ? "" : "s"} into the ${routeLabelFor(dest.modelKey)} chain, ${where}.`;
+    }
+  }
+  state.routeUndo = snapshot;
+  syncRouteSelectionUi();
+  syncRoutePauseUi();
+  announceRoute(
+    `${[sentence, ...notes].join(" ")} Nothing was saved yet -- press Apply.`,
+    "Undo",
+  );
+  return true;
+}
+
+/** Put the last drag back. One drag is one entry, however many rows it moved. */
+function undoLastRouteDrag() {
+  const undo = state.routeUndo;
+  if (!undo) return false;
+  state.routeUndo = null;
+  undo.values.forEach((pair) => {
+    const input = pair[0];
+    const value = pair[1];
+    const editor = state.routeRails.get(input.dataset.key);
+    if (editor) {
+      editor.setValue(value);
+    } else {
+      input.value = value;
+      // Assigning .value fires nothing, so the hover title and the dirty
+      // state would go stale after an undo.
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+  clearRouteSelection();
+  updateDirtyState();
+  syncRoutePauseUi();
+  announceRoute("Put the last drag back. Nothing was saved yet -- press Apply.", null);
+  return true;
+}
+
+/* ---------------------------------------------------------------- pause --
+   Pausing stops a model being tried. Hiding, on the Models page, only removes
+   it from listings and never changes routing -- the two are deliberately
+   different words for deliberately different things. A pause is written the
+   moment it is clicked, through the same locked read-derive-write a
+   visibility edit uses, so two clicks landing together cannot lose one. */
+
+function routePausedRefs(modelKey) {
+  const key = ROUTE_PAUSE_KEY.get(modelKey);
+  const field = key ? state.fields.get(key) : null;
+  return String((field && field.value) || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function isRoutePaused(modelKey, ref) {
+  return Boolean(ref) && routePausedRefs(modelKey).includes(ref);
+}
+
+/** Repaint every pause control from state. Rows carry no pause state of their
+ *  own, so a rebuilt rail cannot disagree with the settings payload. */
+function syncRoutePauseUi() {
+  document.querySelectorAll("[data-route-id]").forEach((node) => {
+    const button = node.querySelector(".route-pause-toggle");
+    if (!button) return;
+    const modelKey = node.dataset.modelKey || "";
+    const input = node.querySelector("input");
+    const ref = input ? input.value.trim() : "";
+    const paused = isRoutePaused(modelKey, ref);
+    // A paused row stays fully visible with its complete ref: hiding it would
+    // be the one thing the Models page is documented never to do to routing.
+    node.classList.toggle("is-paused", paused);
+    button.textContent = paused ? "Resume" : "Pause";
+    button.setAttribute("aria-pressed", paused ? "true" : "false");
+    button.setAttribute(
+      "aria-label",
+      `${paused ? "Resume" : "Pause"} ${ref || "this entry"} on the ${routeLabelFor(modelKey)} route`,
+    );
+    button.disabled = !modelKey || !ref;
+    const chip = node.querySelector(".route-pause-chip");
+    if (chip) chip.hidden = !paused;
+  });
+}
+
+async function toggleRoutePause(modelKey, ref, paused, button) {
+  if (!modelKey || !ref) return;
+  // The models tick reverts optimistically and leaves its box live while the
+  // write is in flight; a second click there raced the first. Disable instead.
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/admin/api/config/route-pause", {
+      method: "POST",
+      body: JSON.stringify({ model_key: modelKey, model_ref: ref, paused }),
+    });
+    if ((result.errors || []).length) {
+      showMessage(result.errors.join("; "), "error");
+      return;
+    }
+    // Patched in place rather than refetched: the whole payload is megabytes,
+    // and one key changed.
+    const field = state.fields.get(result.paused_key);
+    if (field) field.value = result.paused_value || "";
+    syncRoutePauseUi();
+    updateDeadlineCalculator();
+    announceRoute(
+      paused
+        ? `Paused ${ref} on the ${routeLabelFor(modelKey)} route. It is skipped without spending an attempt, and still shows in the request log as not tried.`
+        : `Resumed ${ref} on the ${routeLabelFor(modelKey)} route.`,
+      "Undo",
+      () => toggleRoutePause(modelKey, ref, !paused, null),
+    );
+  } catch (error) {
+    showMessage(error.message, "error");
+  } finally {
+    if (button) button.disabled = false;
+    syncRoutePauseUi();
+  }
+}
+
+/** One live region for the whole Model Config page: drag and pause both.
+ *
+ * Whole sentences, never a bare number, and a persistent panel rather than a
+ * toast -- the same shape the Models page's bulk result panel uses, and
+ * `hidden` is toggled rather than `style.display`.
+ */
+function announceRoute(sentence, undoLabel, undoAction) {
+  const target = byId("routeStatus");
+  if (!target) return;
+  target.textContent = "";
+  if (!sentence) {
+    target.hidden = true;
+    return;
+  }
+  target.hidden = false;
+  const lead = document.createElement("p");
+  lead.textContent = sentence;
+  target.appendChild(lead);
+  if (undoLabel) {
+    const undo = document.createElement("button");
+    undo.type = "button";
+    undo.className = "secondary-button route-status-button";
+    undo.textContent = undoLabel;
+    undo.addEventListener("click", () => {
+      undo.disabled = true;
+      if (undoAction) undoAction();
+      else undoLastRouteDrag();
+    });
+    target.appendChild(undo);
+  }
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "secondary-button route-status-button";
+  dismiss.textContent = "Dismiss";
+  dismiss.addEventListener("click", () => {
+    target.textContent = "";
+    target.hidden = true;
+  });
+  target.appendChild(dismiss);
+}
+
+/** Grip, pause button and paused chip for one route node.
+ *
+ * A real <button> for each, so the keyboard entry point to the drag is the
+ * same element the pointer uses rather than a second mechanism bolted on.
+ */
+function routeNodeControls(node, id, label) {
+  node.dataset.routeId = id;
+
+  const grip = document.createElement("button");
+  grip.type = "button";
+  grip.className = "route-drag-grip";
+  grip.textContent = "⠿";
+  grip.setAttribute("aria-label", `Reorder ${label}`);
+  grip.addEventListener("pointerdown", (event) => startRouteDrag(id, event));
+  grip.addEventListener("click", (event) => onRouteSelectClick(id, event));
+  grip.addEventListener("keydown", (event) => onRouteSelectKeydown(id, event));
+
+  // Chip and button share one cell. A hidden chip is `display: none` and
+  // would otherwise vacate a grid column, shifting every control on a paused
+  // row one place left of the same control on the row above it.
+  const cell = document.createElement("div");
+  cell.className = "route-pause-cell";
+
+  const chip = document.createElement("span");
+  chip.className = "route-pause-chip";
+  chip.textContent = "Paused";
+  chip.hidden = true;
+
+  const pause = document.createElement("button");
+  pause.type = "button";
+  pause.className = "ghost-button route-pause-toggle";
+  pause.textContent = "Pause";
+  pause.setAttribute("aria-pressed", "false");
+  pause.addEventListener("click", () => {
+    const modelKey = node.dataset.modelKey || "";
+    const input = node.querySelector("input");
+    const ref = input ? input.value.trim() : "";
+    toggleRoutePause(modelKey, ref, !isRoutePaused(modelKey, ref), pause);
+  });
+
+  cell.append(chip, pause);
+  return { grip, cell };
+}
+
 function routeNode(marker, control, modifier) {
   const node = document.createElement("div");
   node.className = `route-node${modifier ? ` ${modifier}` : ""}`;
@@ -907,6 +1573,14 @@ function routeNode(marker, control, modifier) {
 function appendRouteRail(rail, modelField, chainField) {
   const { control, input } = buildFieldControl(modelField);
   const node = routeNode("", control, "is-primary");
+  node.dataset.modelKey = modelField.key;
+  const primaryControls = routeNodeControls(
+    node,
+    `route:${modelField.key}`,
+    modelField.label,
+  );
+  node.insertBefore(primaryControls.grip, node.firstChild);
+  node.appendChild(primaryControls.cell);
   rail.appendChild(node);
   if (!chainField) return;
 
@@ -944,6 +1618,11 @@ function appendRouteRail(rail, modelField, chainField) {
   node.appendChild(moves);
   node.classList.add("has-move");
   editor.setPrimary({ input, label: modelField.label, upButton, downButton });
+  // The registry cross-rail drag needs: the destination editor has to be
+  // reachable from a DOM node, and until now every editor was reachable only
+  // through the closure that built it.
+  state.routeRails.set(chainField.key, editor);
+  syncRoutePauseUi();
 }
 
 function renderRouteCard(tier, fieldByKey) {
@@ -1176,6 +1855,8 @@ function renderModelRouting(fields, allFields) {
   if (visionField) {
     const vision = document.createElement("article");
     vision.className = "route-card route-vision";
+    // Cross-tier drag selects rails uniformly; the adapter had no tier at all.
+    vision.dataset.tier = "vision";
     vision.dataset.key = visionField.key;
 
     const head = document.createElement("header");
@@ -1217,6 +1898,10 @@ function renderModelRouting(fields, allFields) {
     "MODEL_VISION",
     "MODEL_VISION_FALLBACKS",
     ...ROUTE_TIERS.flatMap((tier) => [tier.modelKey, tier.chainKey]),
+    // The pause lists are written by the Pause button beside the ref they
+    // name, never typed. Leaving them unclaimed would render six bare text
+    // boxes under the route grid saying nothing a reader could act on.
+    ...ROUTE_PAUSE_KEY.values(),
   ]);
   const unclaimed = fields.filter((field) => !claimed.has(field.key));
   if (unclaimed.length) {
@@ -1287,13 +1972,24 @@ function calcNumber(key) {
 const CONTROL_FOR_KEY = (key) =>
   `input[data-key="${key}"], select[data-key="${key}"], textarea[data-key="${key}"]`;
 
+/** How many models this route would actually try.
+ *
+ * Paused entries are excluded. The calculator's whole claim is that it
+ * reproduces `_attempt_deadline` for *your* routes, and the router will not
+ * try a paused model -- counting it would overstate the divisor and
+ * understate every share on the page.
+ */
 function chainLength(modelKey, chainKey) {
+  const paused = new Set(routePausedRefs(modelKey));
   const primary = liveValue(modelKey).trim();
   const chain = liveValue(chainKey)
     .split(",")
     .map((part) => part.trim())
-    .filter(Boolean);
-  return (primary && primary.toLowerCase() !== "none" ? 1 : 0) + chain.length;
+    .filter(Boolean)
+    .filter((ref) => !paused.has(ref));
+  const head =
+    primary && primary.toLowerCase() !== "none" && !paused.has(primary) ? 1 : 0;
+  return head + chain.length;
 }
 
 /** Mirror of `_attempt_deadline` + `_chunk_timeout` before the first chunk.
@@ -1906,6 +2602,13 @@ const SECTION_RENDERERS = {
 
 function renderSections(sections, fields) {
   state.modelComboboxes.clear();
+  // Rebuilt rails mean stale editors and stale ids; the drag's whole state is
+  // view state and must not survive a re-render.
+  state.routeRails.clear();
+  state.routeSelection.clear();
+  state.routeAnchorId = null;
+  state.routeArrowRange = [];
+  state.routeUndo = null;
   VIEW_GROUPS.forEach((view) => {
     // Static views (the guide) have no settings container to clear.
     const container = view.containerId ? byId(view.containerId) : null;
@@ -3104,6 +3807,10 @@ class ModelChainEditor {
     this.field = field;
     this.rows = [];
     this.rowSeq = 0;
+    // The two settings identifying this rail, so a route id resolves back to
+    // an editor without walking the DOM.
+    this.chainKey = field.key;
+    this.modelKey = "";
     // Set by setPrimary() when this chain sits on a route rail. Null for a
     // chain rendered on its own, which then has nothing to trade places with.
     this.primary = null;
@@ -3145,13 +3852,26 @@ class ModelChainEditor {
       .filter(Boolean)
       .join(",");
     updateDirtyState();
+    // A row's ref is what a pause names, and editing the combobox changes it.
+    syncRoutePauseUi();
+  }
+
+  /** Replace every row from a comma-joined value. Used by undo, which restores
+   *  the string the drop started from rather than replaying the moves. */
+  setValue(value) {
+    this.rows.slice().forEach((row) => this.removeRow(row));
+    this.input.value = value;
+    this.parseValue(value).forEach((entry) => this.addRow(entry, false));
+    this.renumber();
+    this.syncValue();
   }
 
   addRow(value, notify) {
     const row = {};
+    const seq = this.rowSeq++;
     const rowField = {
       type: "model",
-      key: `${this.field.key}__chain_${this.rowSeq++}`,
+      key: `${this.field.key}__chain_${seq}`,
       label: `${this.field.label} fallback`,
     };
 
@@ -3190,9 +3910,30 @@ class ModelChainEditor {
 
     const wrapper = document.createElement("div");
     wrapper.className = "model-chain-row";
-    wrapper.append(numberEl, combobox.element, upButton, downButton, removeButton);
+    // A ref may legitimately sit on two rails and a fresh row holds none, so
+    // identity is the sequence number rather than the value.
+    const routeId = `chain:${this.chainKey}#${seq}`;
+    wrapper.dataset.chainKey = this.chainKey;
+    const controls = routeNodeControls(wrapper, routeId, rowField.label);
+    wrapper.append(
+      controls.grip,
+      numberEl,
+      combobox.element,
+      controls.cell,
+      upButton,
+      downButton,
+      removeButton,
+    );
 
-    Object.assign(row, { wrapper, combobox, numberEl, upButton, downButton, removeButton });
+    Object.assign(row, {
+      wrapper,
+      combobox,
+      numberEl,
+      upButton,
+      downButton,
+      removeButton,
+      routeId,
+    });
     this.rows.push(row);
     this.rowsEl.appendChild(wrapper);
     this.renumber();
@@ -3209,6 +3950,7 @@ class ModelChainEditor {
     this.rows.splice(index, 1);
     row.wrapper.remove();
     state.modelComboboxes.delete(row.combobox);
+    state.routeSelection.delete(row.routeId);
     this.renumber();
     this.syncValue();
   }
@@ -3252,6 +3994,9 @@ class ModelChainEditor {
         "aria-label",
         `${this.field.label} fallback ${index + 1}`,
       );
+      // Which route a pause on this row belongs to. Known only once the rail
+      // has adopted a primary, which happens after the rows are built.
+      row.wrapper.dataset.modelKey = this.modelKey;
     });
     this.renumberPrimary();
   }
@@ -3266,6 +4011,7 @@ class ModelChainEditor {
   /** Adopt a route's primary model field as position 0 of this rail. */
   setPrimary({ input, label, upButton, downButton }) {
     this.primary = { input, label, upButton, downButton };
+    this.modelKey = input.dataset.key || "";
     // upButton carries no handler: nothing sits above the primary. It is
     // rendered, permanently disabled, so the primary reads as position 1 of
     // the list rather than as a field that happens to sit above one.
@@ -3276,8 +4022,12 @@ class ModelChainEditor {
     // enable pass has to run again when the user edits it -- not only when
     // the chain changes.
     input.addEventListener("input", () => this.renumberPrimary());
-    input.addEventListener("change", () => this.renumberPrimary());
-    this.renumberPrimary();
+    input.addEventListener("change", () => {
+      this.renumberPrimary();
+      // The primary's ref is what a pause on the primary names.
+      syncRoutePauseUi();
+    });
+    this.renumber();
   }
 
   primaryLabel() {
@@ -13127,3 +13877,52 @@ function initModelsView() {
 }
 
 initModelsView();
+
+/* ------------------------------------------------------ route rail wiring
+   The drop target is tracked by pointerover on the container rather than
+   computed from coordinates at pointerup: a pointerover dispatched on a row
+   does not reach a listener bound to the grip inside it, and jsdom has no
+   layout to hit-test against. */
+function initRouteRails() {
+  const view = byId("view-model_config");
+  if (view) view.addEventListener("pointerover", continueRouteDrag);
+  document.addEventListener("pointerup", endRouteDrag);
+  document.addEventListener("pointercancel", () => {
+    if (state.routeDrag) endRouteDrag(null);
+  });
+  document.addEventListener("keydown", (event) => {
+    const routing = byId("view-model_config");
+    if (!routing || routing.hidden) return;
+    const target = event.target;
+    const typing =
+      target &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable);
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+      // Never inside a combobox: the browser's own text undo belongs to
+      // whoever is typing, and fighting it would be a worse bug than no undo.
+      if (typing) return;
+      if (!state.routeUndo) return;
+      event.preventDefault();
+      undoLastRouteDrag();
+      return;
+    }
+    if (event.key !== "Escape") return;
+    const modals = ["webSearchDetailModal", "exportModal", "reqDetailModal"].map(byId);
+    if (modals.some((modal) => modal && !modal.hidden)) return;
+    if (state.routeDrag) {
+      // Abandoned, not applied: the target is dropped so endRouteDrag has
+      // nothing to act on.
+      state.routeDrag = null;
+      clearRouteDropIndicator();
+      document
+        .querySelectorAll(".route-grid, .route-vision")
+        .forEach((node) => node.classList.remove("is-dragging"));
+      return;
+    }
+    if (state.routeSelection.size) clearRouteSelection();
+  });
+}
+
+initRouteRails();

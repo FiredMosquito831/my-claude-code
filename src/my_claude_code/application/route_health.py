@@ -367,6 +367,7 @@ class RouteHealthRegistry:
         self,
         model_refs: tuple[str, ...],
         provider_lookup: Callable[[str], float | None] | None = None,
+        paused: frozenset[str] = frozenset(),
     ) -> tuple[int, ...]:
         """Indexes worth attempting, in order, given what is currently benched.
 
@@ -379,11 +380,33 @@ class RouteHealthRegistry:
         cooldown (reported by ``provider_lookup``) are also skipped, so the chain
         steps over a provider that is only going to sleep inside its own limiter
         instead of paying the wait.
+
+        ``paused`` is the operator's own decision rather than this registry's
+        guess, so it is honoured on two counts the bench is not. It applies
+        even when benching is switched off entirely -- the master switch
+        governs automatic ejection, not a switch the user flipped by hand --
+        and it is excluded from the bypass above: silently running a model
+        somebody paused would be the opposite of what the button says. An
+        all-paused route therefore returns an empty tuple, and the executor
+        turns that into an error naming the setting.
         """
+        if paused:
+            live = tuple(
+                index
+                for index, model_ref in enumerate(model_refs)
+                if model_ref not in paused
+            )
+            if not live:
+                return ()
+        else:
+            live = tuple(range(len(model_refs)))
         if not self.enabled:
-            return tuple(range(len(model_refs)))
+            return live
+        allowed = set(live)
         usable = []
         for index, model_ref in enumerate(model_refs):
+            if index not in allowed:
+                continue
             if self.is_ejected(model_ref):
                 continue
             if provider_lookup is not None and self.mode == "rate_based":
@@ -408,4 +431,6 @@ class RouteHealthRegistry:
         logger.warning(
             "MODEL EJECTION BYPASSED: every model on this route is benched; trying the chain in order anyway"
         )
-        return tuple(range(len(model_refs)))
+        # The bypass restores what the *bench* removed, never what the operator
+        # paused: a paused model is a decision, not a health signal.
+        return live

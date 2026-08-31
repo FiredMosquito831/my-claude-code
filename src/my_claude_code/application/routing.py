@@ -47,6 +47,19 @@ _ROUTE_SETTINGS = (
     ("sonnet", "model_sonnet", "reasoning_sonnet", "model_sonnet_fallbacks"),
 )
 
+# Which pause list covers a route, and the env var to name when every model on
+# it is switched off. Pause is per route by definition -- the same ref paused
+# on Opus keeps serving Sonnet -- so the plan carries the answer for the route
+# it was built from rather than the executor guessing from a model ref.
+_PAUSE_SETTINGS: dict[str, tuple[str, str]] = {
+    "fable": ("model_fable_paused", "MODEL_FABLE_PAUSED"),
+    "opus": ("model_opus_paused", "MODEL_OPUS_PAUSED"),
+    "haiku": ("model_haiku_paused", "MODEL_HAIKU_PAUSED"),
+    "sonnet": ("model_sonnet_paused", "MODEL_SONNET_PAUSED"),
+}
+_DEFAULT_PAUSE_SETTING = ("model_paused", "MODEL_PAUSED")
+_VISION_PAUSE_SETTING = ("model_vision_paused", "MODEL_VISION_PAUSED")
+
 
 @dataclass(frozen=True, slots=True)
 class ResolvedModel:
@@ -146,6 +159,15 @@ class RoutedMessagesPlan:
     diverted_from: str | None = None
     diversion: RouteDiversion | None = None
     probe_candidates: Mapping[str, ResolvedModel] = field(default_factory=dict)
+    #: Refs on this plan the operator has paused on THIS route. They stay in
+    #: ``attempts`` on purpose: the executor never runs them, and the request
+    #: log still gets a row saying the model was skipped because it is paused.
+    #: Removing them here instead would make a paused model vanish from the
+    #: log entirely, which is the one thing the feature must not do.
+    paused_refs: frozenset[str] = frozenset()
+    #: The env var that holds ``paused_refs``, so an all-paused route can name
+    #: the setting the reader has to change.
+    paused_env_var: str = "MODEL_PAUSED"
 
     def __post_init__(self) -> None:
         if not self.attempts:
@@ -477,11 +499,16 @@ class ModelRouter:
             diversion = RouteDiversion.VISION_UNAVAILABLE
         else:
             diversion = None
+        paused_refs, paused_env_var = self._paused_for(
+            request.model, chain, route_chain
+        )
         plan = RoutedMessagesPlan(
             tuple(self._route_for(request, resolved) for resolved in chain),
             diverted_from=(route_chain[0].provider_model_ref if diverted else None),
             diversion=diversion,
             probe_candidates=self._probe_candidates(),
+            paused_refs=paused_refs,
+            paused_env_var=paused_env_var,
         )
         if plan.has_fallbacks or diverted:
             logger.debug(
@@ -490,6 +517,46 @@ class ModelRouter:
                 " -> ".join(plan.model_refs()),
             )
         return plan
+
+    def _paused_for(
+        self,
+        claude_model_name: str,
+        chain: tuple[ResolvedModel, ...],
+        route_chain: tuple[ResolvedModel, ...],
+    ) -> tuple[frozenset[str], str]:
+        """Which refs on this plan are switched off, and the key that says so.
+
+        Scoped to the route each ref came from. A vision diversion splices the
+        adapter's own chain in front of the tier's, and the adapter is a route
+        like any other -- so an entry the adapter contributed is judged by
+        ``MODEL_VISION_PAUSED`` and everything else by the tier's own list.
+        """
+        route = self._matched_route(claude_model_name)
+        attr, env_var = (
+            _PAUSE_SETTINGS[route[0]]
+            if route is not None and isinstance(getattr(self._settings, route[1]), str)
+            else _DEFAULT_PAUSE_SETTING
+        )
+        route_paused = set(parse_model_ref_list(getattr(self._settings, attr)))
+        vision_paused = set(
+            parse_model_ref_list(getattr(self._settings, _VISION_PAUSE_SETTING[0]))
+        )
+        route_refs = {resolved.provider_model_ref for resolved in route_chain}
+        paused = {
+            resolved.provider_model_ref
+            for resolved in chain
+            if resolved.provider_model_ref
+            in (
+                route_paused
+                if resolved.provider_model_ref in route_refs
+                else vision_paused
+            )
+        }
+        # The adapter leads a diverted chain, so name its key when the head of
+        # the plan is the adapter's rather than the tier's.
+        if chain and chain[0].provider_model_ref not in route_refs:
+            env_var = _VISION_PAUSE_SETTING[1]
+        return frozenset(paused), env_var
 
     #: The order the probe walks the operator's own routes in. Haiku first
     #: because it is the declared small/cheap model; the provider's ``/models``

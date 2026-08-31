@@ -477,3 +477,73 @@ def test_visibility_patterns_never_change_a_resolved_route(settings):
         "nous_portal/tencent/hy3:free",
         "commandcode/minimax/minimax-m3-free",
     )
+
+
+# ------------------------------------------------------------------- pause --
+# A paused ref stays in the plan on purpose. Filtering it out here would remove
+# it from the request log as well, and the whole point of pausing rather than
+# deleting is that the reader can still see what was skipped and why.
+
+
+def test_a_paused_model_stays_in_the_plan_so_it_can_be_reported(settings):
+    settings.model_opus = "cerebras/primary"
+    settings.model_opus_fallbacks = "groq/one,groq/two"
+    settings.model_opus_paused = "groq/one"
+
+    plan = ModelRouter(settings).resolve_messages_plan(_request())
+
+    assert plan.model_refs() == ("cerebras/primary", "groq/one", "groq/two")
+    assert plan.paused_refs == frozenset({"groq/one"})
+    assert plan.paused_env_var == "MODEL_OPUS_PAUSED"
+
+
+def test_pausing_in_one_tier_leaves_the_same_ref_live_in_another(settings):
+    """Pause is a property of a route, not of a model."""
+    settings.model_opus = "cerebras/primary"
+    settings.model_opus_fallbacks = "groq/shared"
+    settings.model_opus_paused = "groq/shared"
+    settings.model_sonnet = "cerebras/primary"
+    settings.model_sonnet_fallbacks = "groq/shared"
+
+    router = ModelRouter(settings)
+
+    assert router.resolve_messages_plan(_request()).paused_refs == frozenset(
+        {"groq/shared"}
+    )
+    sonnet = router.resolve_messages_plan(_request(model="claude-sonnet-4"))
+    assert sonnet.paused_refs == frozenset()
+    assert sonnet.paused_env_var == "MODEL_SONNET_PAUSED"
+
+
+def test_a_route_without_an_override_is_covered_by_the_default_pause_list(
+    settings,
+):
+    settings.model_fallbacks = "cerebras/one,groq/two"
+    settings.model_paused = "cerebras/one"
+
+    plan = ModelRouter(settings).resolve_messages_plan(_request())
+
+    assert plan.paused_refs == frozenset({"cerebras/one"})
+    assert plan.paused_env_var == "MODEL_PAUSED"
+
+
+def test_a_paused_primary_is_still_in_the_plan(settings):
+    settings.model_opus = "cerebras/primary"
+    settings.model_opus_fallbacks = "groq/one"
+    settings.model_opus_paused = "cerebras/primary"
+
+    plan = ModelRouter(settings).resolve_messages_plan(_request())
+
+    assert plan.model_refs() == ("cerebras/primary", "groq/one")
+    assert plan.paused_refs == frozenset({"cerebras/primary"})
+
+
+def test_pause_never_changes_a_resolved_route_when_nothing_is_paused(settings):
+    """The regression floor: an install that pauses nothing routes as before."""
+    settings.model_opus = "cerebras/primary"
+    settings.model_opus_fallbacks = "groq/one,groq/two"
+
+    plan = ModelRouter(settings).resolve_messages_plan(_request())
+
+    assert plan.model_refs() == ("cerebras/primary", "groq/one", "groq/two")
+    assert plan.paused_refs == frozenset()
