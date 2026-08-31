@@ -50,6 +50,7 @@ from my_claude_code.core.trace import (
     traced_async_stream,
 )
 
+from .deadline_hints import limit_hint
 from .ports import ProviderPort, ProviderResolver
 from .route_health import BenchReason, RouteHealthRegistry
 from .routing import (
@@ -203,6 +204,31 @@ async def _next_chunk(chunks: AsyncIterator[str], timeout: float | None) -> str:
     return pending.result()
 
 
+def _timeout_env_var(
+    *, first_token: bool, stalled: bool, reasoning_only: bool, share_bound: bool
+) -> str:
+    """The setting that actually ended this attempt, named for the reader.
+
+    The same order the message wording is chosen in, so the knob named is
+    always the knob whose number is printed alongside it. ``share_bound`` is
+    the one case where the two come apart: a silent attempt cut short by its
+    slice of the request budget rather than by the first-token deadline was
+    ended by the floor/budget pair, and sending that reader to the first-token
+    box means raising a number that never fires.
+    """
+    if reasoning_only:
+        return "FALLBACK_REASONING_ANSWER_TIMEOUT"
+    if first_token:
+        return (
+            "FALLBACK_ATTEMPT_SHARE_FLOOR"
+            if share_bound
+            else "FALLBACK_FIRST_TOKEN_TIMEOUT"
+        )
+    if stalled:
+        return "FALLBACK_STALL_TIMEOUT"
+    return "FALLBACK_TOTAL_TIMEOUT"
+
+
 def _timeout_failure(
     model_ref: str,
     *,
@@ -210,6 +236,7 @@ def _timeout_failure(
     first_token: bool,
     stalled: bool = False,
     reasoning_only: bool = False,
+    share_bound: bool = False,
 ) -> ExecutionFailure:
     if reasoning_only:
         reason = f"produced only reasoning for {seconds:g}s without answering"
@@ -222,10 +249,22 @@ def _timeout_failure(
         reason = f"stopped producing output for {seconds:g}s"
     else:
         reason = f"exceeded the {seconds:g}s request budget"
+    # The hint travels with the message, so it survives every path the message
+    # takes: the API error body, the SSE error frame, and the attempt row in
+    # the request log -- including the committed-stream truncation path, which
+    # records this same failure rather than raising it.
+    hint = limit_hint(
+        _timeout_env_var(
+            first_token=first_token,
+            stalled=stalled,
+            reasoning_only=reasoning_only,
+            share_bound=share_bound,
+        )
+    )
     return ExecutionFailure(
         kind=FailureKind.TIMEOUT,
         status_code=504,
-        message=f"Provider '{model_ref}' {reason}.",
+        message=f"Provider '{model_ref}' {reason}.{hint}",
         retryable=True,
     )
 
@@ -236,7 +275,8 @@ def _cooldown_failure(model_ref: str, seconds: float) -> ExecutionFailure:
         kind=FailureKind.RATE_LIMIT,
         status_code=429,
         message=(
-            f"Provider for '{model_ref}' is in rate-limit cooldown for {seconds:.0f}s."
+            f"Provider for '{model_ref}' is in rate-limit cooldown for "
+            f"{seconds:.0f}s.{limit_hint('RATE_LIMIT_COOLDOWN_SECONDS')}"
         ),
         retryable=True,
     )
@@ -1109,7 +1149,11 @@ class ProviderExecutor:
         # Report the limit that actually ended it. "produced no output within
         # 120s" on a request abandoned at 40s, because it was one of three
         # models sharing a budget, sends the reader to the wrong setting.
+        # ``share_bound`` records which of the two won, so the hint on the
+        # message names that same setting rather than the first-token box.
+        share_bound = False
         if first_token and not reasoning_only and attempt_budget is not None:
+            share_bound = seconds <= 0 or attempt_budget < seconds
             seconds = attempt_budget if seconds <= 0 else min(seconds, attempt_budget)
         logger.warning(
             "MODEL DEADLINE: '{}' {} after {:g}s",
@@ -1138,6 +1182,7 @@ class ProviderExecutor:
             first_token=first_token,
             stalled=stalled,
             reasoning_only=reasoning_only,
+            share_bound=share_bound,
         )
 
     def _error_is_retryable(self, exc: BaseException) -> bool:

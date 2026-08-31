@@ -2086,26 +2086,31 @@ async def test_a_silent_model_is_still_judged_by_the_first_token_deadline() -> N
 
 def test_the_thinking_allowance_has_a_shipped_default() -> None:
     """A default is a separate contract from the parameter (§173)."""
-    assert RouteExecutionPolicy().reasoning_answer_timeout == 450.0
+    assert RouteExecutionPolicy().reasoning_answer_timeout == 0.0
 
 
 def test_the_shipped_deadlines_are_the_numbers_operators_read() -> None:
-    """The four deadline defaults, pinned as the literals they ship as.
+    """The five deadline defaults, pinned as the literals they ship as.
 
-    Raised together in 6.10.0 (120/120/300 -> 180/180/450) once the share floor
-    made the first-token deadline the number that actually fires: before that a
-    long chain cut it down anyway, so its exact value bought little. The floor
-    ships equal to the first-token deadline, which is what makes the pair
-    honour itself out of the box on any chain length.
+    All zero since 6.16.0. They were 120/120/300 through 6.9.x and
+    180/180/450 with a 600s budget through 6.15.0, chosen off measured
+    traffic; the reason they are gone is not that the measurements were wrong
+    but that the failure they produce is worse than the one they prevent -- a
+    model legitimately thinking for half an hour was killed mid-work, and the
+    error never said which knob did it. MCC is configured by the operator who
+    runs it, so the shipped value decides nothing.
+
+    The consequence is deliberate and is what the docs say: with these zeros
+    MCC never ends a silent or stalled upstream on its own, and the chain
+    moves only on an error the provider returns.
     """
     policy = RouteExecutionPolicy()
 
-    assert policy.first_token_timeout == 180.0
-    assert policy.attempt_share_floor == 180.0
-    assert policy.stall_timeout == 180.0
-    assert policy.reasoning_answer_timeout == 450.0
-    assert policy.total_timeout == 600.0
-    assert policy.attempt_share_floor == policy.first_token_timeout
+    assert policy.first_token_timeout == 0.0
+    assert policy.attempt_share_floor == 0.0
+    assert policy.stall_timeout == 0.0
+    assert policy.reasoning_answer_timeout == 0.0
+    assert policy.total_timeout == 0.0
 
 
 def _share(*, total: float, attempts_remaining: int, floor: float) -> float:

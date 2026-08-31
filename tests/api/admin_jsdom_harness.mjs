@@ -984,6 +984,59 @@ if (firstInput) {
   firstInput.dispatchEvent(new window.Event("input", { bubbles: true }));
 }
 
+// (f) the shipped state since 6.16.0: every deadline 0. The card must say so
+// rather than printing "0 s" or NaN, and none of the warnings that describe a
+// budget being carved up may fire, because there is no budget.
+if (firstInput && totalInput && floorInput) {
+  [firstInput, totalInput, floorInput].forEach((control) => {
+    control.value = "0";
+    control.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+  limits.afterAllDeadlinesZeroed = {
+    calcHeadline: textOf(limitsView, "#calcHeadline"),
+    calcFormula: textOf(limitsView, "#calcFormula"),
+    calcWarning: textOf(limitsView, "#calcWarning"),
+    calcWarningHidden: calcWarningEl ? calcWarningEl.hidden : null,
+    calcRows: calcRowsNow(),
+  };
+  [firstInput, totalInput, floorInput].forEach((control) => {
+    control.value = control.dataset.original;
+    control.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+}
+
+// (g) six models against a 1800s budget with a 600s floor: 6 x 600 = 3600s of
+// demand the budget cannot meet, which is the trade the warning must state.
+// Three models fit exactly, and it must stay quiet for those.
+if (firstInput && totalInput && floorInput) {
+  const driveChain = (models) => {
+    // Model Config lives in another view, so this one is not scoped to
+    // limitsView -- the calculator reads it off the document the same way.
+    const chain = doc.querySelector(CONTROL_SELECTOR("MODEL_OPUS_FALLBACKS"));
+    if (!chain) return null;
+    chain.value = Array.from({ length: models - 1 }, (_v, i) => `p/m${i}`).join(",");
+    chain.dispatchEvent(new window.Event("input", { bubbles: true }));
+    firstInput.value = "600";
+    totalInput.value = "1800";
+    floorInput.value = "600";
+    [firstInput, totalInput, floorInput].forEach((control) =>
+      control.dispatchEvent(new window.Event("input", { bubbles: true })),
+    );
+    const seen = {
+      calcWarning: textOf(limitsView, "#calcWarning"),
+      calcWarningHidden: calcWarningEl ? calcWarningEl.hidden : null,
+    };
+    chain.value = chain.dataset.original;
+    chain.dispatchEvent(new window.Event("input", { bubbles: true }));
+    return seen;
+  };
+  limits.floorAgainstBudget = { six: driveChain(6), three: driveChain(3) };
+  [firstInput, totalInput, floorInput].forEach((control) => {
+    control.value = control.dataset.original;
+    control.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+}
+
 // Every control the drive touched goes back to what it loaded with: the
 // optimizer's own dirty assertion below counts from zero.
 [modeSelect, benchSelect, floorInput, totalInput, firstInput].forEach((control) => {

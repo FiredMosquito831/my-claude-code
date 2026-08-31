@@ -207,3 +207,63 @@ def test_the_longest_retry_wait_ships_at_ten_seconds() -> None:
         ).provider_retry_backoff_max_seconds
         == 10.0
     )
+
+
+# --- the shipped deadlines ------------------------------------------------
+#
+# All five ship at 0 -- no limit -- since 6.16.0. Pinned by name because they
+# are the numbers an operator reads out of the docs, and because zero is the
+# whole point: with these values MCC never ends a silent or stalled upstream
+# on its own, and the fallback chain moves only on an error the provider
+# actually returns. Changing one of these is a user-visible product decision,
+# not a tuning tweak, so it should have to change a test that says so.
+SHIPPED_DEADLINE_DEFAULTS = (
+    "fallback_first_token_timeout",
+    "fallback_total_timeout",
+    "fallback_attempt_share_floor",
+    "fallback_stall_timeout",
+    "fallback_reasoning_answer_timeout",
+)
+
+
+@pytest.mark.parametrize("attr", SHIPPED_DEADLINE_DEFAULTS)
+def test_every_deadline_ships_at_no_limit(attr: str) -> None:
+    """The code default, which is what a key nobody sets resolves to."""
+    assert Settings.model_fields[attr].default == 0.0
+
+
+@pytest.mark.parametrize(
+    "attr", [a for a in SHIPPED_DEADLINE_DEFAULTS if a in LIMIT_RANGES]
+)
+def test_a_cleared_deadline_field_falls_back_to_no_limit(attr: str) -> None:
+    """The admin UI writes ``KEY=`` for a cleared box, so blank is not exotic.
+
+    ``fallback_reasoning_answer_timeout`` is excluded because it has no
+    LIMIT_RANGES entry and so never joined the blank-coercion validator --
+    a pre-existing gap, unchanged here, and equally true when it shipped at
+    450.
+    """
+    assert getattr(_with(attr, ""), attr) == 0.0
+
+
+@pytest.mark.parametrize("attr", SHIPPED_DEADLINE_DEFAULTS)
+def test_a_deadline_the_operator_sets_survives(attr: str) -> None:
+    """The zeros are a default, not a ceiling: a set value must reach Settings.
+
+    An install that already writes one of these keys keeps its own number, and
+    that is the upgrade promise the release notes make.
+    """
+    assert getattr(_with(attr, "600"), attr) == 600.0
+
+
+@pytest.mark.parametrize("attr", SHIPPED_DEADLINE_DEFAULTS)
+def test_zero_is_inside_every_deadline_range(attr: str) -> None:
+    """A shipped default the admin form would reject is a form nobody can save."""
+    limit = range_for(attr)
+    if limit is None:
+        # fallback_reasoning_answer_timeout has no declared range; nothing to
+        # be outside of. Assert that rather than skipping silently.
+        assert attr == "fallback_reasoning_answer_timeout"
+        return
+    assert limit.minimum <= 0 <= limit.maximum
+    assert range_errors({_alias(attr): "0"}) == []

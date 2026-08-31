@@ -85,28 +85,39 @@ ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-anthropic-oauth"
 # Fallback timing. These live here rather than beside the executor because
 # Settings needs them and the application layer already reads Settings.
 #
-# Measured against a 51,000-request log: first-token latency is 4.5s at p50 and
-# 181.7s at p99.9, so a 120s deadline re-rolled 0.21% of healthy requests onto
-# the next model while ending stalls that otherwise ran for 9 minutes. Raised
-# to 180s in 6.10.0: 120 sat just under the p99.9, and now that the share floor
-# means this number is actually the one that fires, cutting off a model that
-# was merely slow costs a real answer rather than a share that had already
-# been shortened anyway.
-FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT = 180.0
-# Whole-request durations on that same log: 7.5s at p50, 255.7s at p99.9. A 600s
-# budget cuts 0.03% of healthy requests short and caps the rest.
-FALLBACK_TOTAL_TIMEOUT_DEFAULT = 600.0
+# All five deadline defaults are 0 -- no limit -- since 6.16.0. The measured
+# numbers they used to ship as (180s first token, 600s budget, 180s floor,
+# 180s stall, 450s thinking; first-token latency 4.5s at p50 and 181.7s at
+# p99.9 over a 51,000-request log) were right for the traffic they were
+# measured on and wrong for a model that legitimately thinks for half an hour:
+# a deadline that ends real work is a worse failure than a stall that has to
+# be noticed. MCC is configured by the operator who runs it, so the shipped
+# value is the one that decides nothing and the operator sets the one that
+# does. The consequence, stated plainly here and in every doc: with these
+# zeros MCC never ends a silent or stalled upstream on its own, and the
+# fallback chain moves only on an error the provider actually returns. Set
+# FALLBACK_FIRST_TOKEN_TIMEOUT / FALLBACK_STALL_TIMEOUT /
+# FALLBACK_TOTAL_TIMEOUT to get time-based failover back. An install that
+# already sets any of these keys keeps its own value.
+FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT = 0.0
+# Whole-request budget across every attempt, retry and recovery. 0 disables it,
+# which also makes the share division below moot: with no budget there is
+# nothing to divide.
+FALLBACK_TOTAL_TIMEOUT_DEFAULT = 0.0
 # Smallest first-token allowance an attempt may be cut down to by sharing the
-# total budget. Without it the share alone decides, and on a long chain it
-# silently replaced the deadline the operator had configured: 600s over an
-# eight-model chain is 75s, so a box reading 120 produced
-# "produced no first token after 74.9494s" in the log. The floor is what makes
-# the box mean what it says. Set equal to the first-token deadline, so the
-# shipped pair honours itself out of the box; 0 restores pure equal-share.
-# The trade, spelled out in RouteExecutionPolicy._attempt_deadline and on the
-# Limits & Resilience page: N silent models can spend up to N x this before
-# the total budget clamps them, leaving later models less than the floor.
-FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT = 180.0
+# total budget. The share division exists because on a long chain the equal
+# share silently replaced the deadline the operator had configured: 600s over
+# an eight-model chain is 75s, so a box reading 120 produced "produced no
+# first token after 74.9494s" in the log. The floor is what makes the box mean
+# what it says, and it is CHAIN-side -- it bounds each model's first-token
+# allowance, never a retry of the same model.
+# 0 restores the pure equal share, and is moot anyway while the total budget
+# is 0: there is no budget to divide, so nothing can undercut the first-token
+# deadline. The trade an operator who sets both takes on, spelled out in
+# RouteExecutionPolicy._attempt_deadline and on the Limits & Resilience page:
+# N silent models can spend up to N x this before the total budget clamps
+# them, leaving later models less than the floor.
+FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT = 0.0
 # Consecutive failures before routing skips a provider/model, and for how long.
 # Failure kinds that end a route instead of moving to the next model.
 #
@@ -127,10 +138,11 @@ FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT = 180.0
 # the answer, which at least covers queueing and cold starts.
 #
 # Measured against 146,857 successful requests, the slowest of them averaged
-# one output token every 2.27 seconds, so this sits far beyond the worst rate
-# ever observed here. Tracks the first-token deadline (180s since 6.10.0)
-# because it answers the same question. 0 disables it.
-FALLBACK_STALL_TIMEOUT_DEFAULT = 180.0
+# one output token every 2.27 seconds, so any value an operator picks here has
+# a lot of room above the worst rate ever observed. Ships 0 -- disabled --
+# with the rest of the deadlines: a stalled stream then runs until the
+# transport read timeout ends it, not MCC.
+FALLBACK_STALL_TIMEOUT_DEFAULT = 0.0
 
 FALLBACK_SKIP_KINDS_DEFAULT = "invalid_request"
 
@@ -201,10 +213,12 @@ FALLBACK_END_CLEANLY_AFTER_COMMIT_DEFAULT = True
 # How long a model held at the reasoning boundary may think before the route
 # gives up on it. Measured on 21 days of traffic: every one of the 499 budget
 # exhaustions ran the *full* 600s, while 98% of slow reasoning successes had
-# started answering by 300s -- so this separates the two almost exactly. Raised
-# to 450s in 6.10.0 with the other deadlines (1.5x), which keeps it clear of
-# that 98% mark and still well inside the 600s budget it has to fit under.
-FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT = 450.0
+# started answering by 300s -- so a value between the two separates them
+# almost exactly, and 450 is the one this shipped as until 6.16.0. It ships 0
+# now for the same reason as the rest: a model that thinks for an hour is
+# doing the work asked of it, and the operator, not MCC, decides when that
+# stops being worth waiting for.
+FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT = 0.0
 STREAM_COMMIT_HOLDBACK_MAX_BYTES_DEFAULT = 65_536
 # Used only when a rate-limited provider sends no Retry-After to obey.
 RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT = 60.0

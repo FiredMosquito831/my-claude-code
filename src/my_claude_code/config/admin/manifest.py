@@ -121,10 +121,12 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
     ConfigSectionSpec(
         "deadlines",
         "Deadlines",
-        "How long one model may hold a request before the chain moves on. The "
-        "first-token deadline is not what a model on a long chain actually "
-        "gets -- the readout below this grid computes the real number from "
-        "your routes.",
+        "How long one model may hold a request before the chain moves on. "
+        "Every one of these ships at 0, meaning no limit: out of the box MCC "
+        "never ends a silent or stalled upstream itself, and the fallback "
+        "chain moves only on an error the provider returns. Set the ones you "
+        "want and the readout below this grid computes what each model on "
+        "your own routes actually gets.",
     ),
     ConfigSectionSpec(
         "benching",
@@ -736,11 +738,14 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="fallback_first_token_timeout",
-        default="180",
+        default="0",
         description=(
             "Seconds a model may stay silent before the next model on the "
             "chain takes over. Nothing has reached the client yet, so the "
-            "handover is invisible. 0 waits indefinitely."
+            "handover is invisible. Ships 0, which waits indefinitely: with "
+            "no value here a silent model holds the request until the "
+            "transport read timeout ends it, and the chain is never reached. "
+            "This is the one setting that turns a hang into a failover."
         ),
     ),
     ConfigFieldSpec(
@@ -749,17 +754,19 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="fallback_attempt_share_floor",
-        default="180",
+        default="0",
         description=(
             "Smallest slice of the total budget one attempt may be cut to. "
-            "The budget is divided between the models still to try, and on a "
-            "long chain that share used to fall below the first-token "
-            "deadline and quietly replace it -- 600 over eight models is 75 "
-            "seconds, whatever the deadline said. This floor keeps the "
-            "first-token deadline above the number that actually fires. The "
-            "trade: several silent models in a row can spend the floor each "
-            "until the total budget runs out, leaving the models after them "
-            "less. 0 divides the budget equally with no floor."
+            "The budget is divided between the models still to try -- this is "
+            "a chain-side allowance, not a per-retry one -- and on a long "
+            "chain that share can fall below the first-token deadline and "
+            "quietly replace it: 600 over eight models is 75 seconds, "
+            "whatever the deadline said. This floor keeps the first-token "
+            "deadline above the number that actually fires. The trade: "
+            "several silent models in a row can spend the floor each until "
+            "the total budget runs out, leaving the models after them less. "
+            "Ships 0, which divides the budget equally with no floor, and is "
+            "moot while the total budget is 0 -- there is no budget to divide."
         ),
     ),
     ConfigFieldSpec(
@@ -768,14 +775,16 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="fallback_total_timeout",
-        default="600",
+        default="0",
         description=(
             "Seconds one request may run across every attempt, retry and "
             "recovery. Each attempt gets an equal share of what is left until "
             "it produces output, so a silent model cannot spend the whole "
             "budget -- but never less than the silent-attempt floor above. "
             "Once output has started no fallback can replace it, but it can "
-            "still stop. 0 disables the budget."
+            "still stop. Ships 0, which disables the budget entirely: a "
+            "request may then run for as long as the upstream keeps the "
+            "connection open."
         ),
     ),
     ConfigFieldSpec(
@@ -784,13 +793,14 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="fallback_stall_timeout",
-        default="180",
+        default="0",
         description=(
             "Seconds a model that has already produced output may then say "
             "nothing before the request is given up on. Measured from the last "
             "chunk that moved the answer forward, so a long answer is never "
-            "cut and a keepalive never counts as progress. 0 disables it and "
-            "leaves only the total budget."
+            "cut and a keepalive never counts as progress. Ships 0, which "
+            "disables it and leaves only the total budget -- and with that at "
+            "0 too, nothing here ends a stalled stream at all."
         ),
     ),
     ConfigFieldSpec(
@@ -799,7 +809,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="fallback_reasoning_answer_timeout",
-        default="450",
+        default="0",
         restart_required=True,
         description=(
             "Seconds a model may think before the route stops waiting for it "
@@ -807,8 +817,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "the setting below is on, because only then is the attempt still "
             "abandonable. Measured on real traffic: every request that ran out "
             "of budget while thinking used the full 600s, and 98% of slow "
-            "reasoning requests that did answer had started by 300s. Set 0 to "
-            "let a thinking model run to the total request budget."
+            "reasoning requests that did answer had started by 300s, so a "
+            "value between the two separates them almost exactly. Ships 0, "
+            "which lets a thinking model run to the total request budget -- "
+            "and to no limit at all while that is 0."
         ),
     ),
     ConfigFieldSpec(

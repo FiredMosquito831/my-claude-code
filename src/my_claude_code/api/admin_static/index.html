@@ -2104,23 +2104,65 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   of one.
                 </p>
                 <h4>When to stop waiting</h4>
+                <p class="guide-note">
+                  <strong>Every deadline on this card ships at 0, meaning no
+                  limit &mdash; so out of the box MCC never ends a silent or
+                  stalled upstream on its own.</strong> The fallback chain moves
+                  only on an error the provider actually returns. A model that
+                  thinks for forty minutes is left to think; a stream that goes
+                  quiet and never resumes stays open until the transport read
+                  timeout below ends it, or the client disconnects. That is
+                  deliberate: a deadline that kills real work is a worse failure
+                  than a stall you can see in Analytics, and this is your
+                  server to tune. Set the ones you want and the readout under
+                  the grid shows what each model on your routes then gets. An
+                  install that already sets any of these keys keeps its own
+                  values.
+                </p>
                 <p>
                   A fallback chain can only rescue a request while nothing has
                   reached the client. A model that accepts a request and then
-                  goes silent used to hold it until the transport read timeout,
-                  minutes later, so the chain got its turn long after the client
-                  had given up.
+                  goes silent holds it until the transport read timeout, minutes
+                  later, so the chain gets its turn long after the client has
+                  given up. These are what bound it, and they measure different
+                  things:
                 </p>
                 <ul>
                   <li>
-                    <strong>First-token deadline</strong> — seconds a model may
-                    stay silent before the next model on the chain takes over.
-                    Nothing has streamed yet, so the handover is invisible.
+                    <strong>First-token deadline</strong>
+                    (<code>FALLBACK_FIRST_TOKEN_TIMEOUT</code>) — seconds a model
+                    may stay silent <em>before any output</em> before the next
+                    model on the chain takes over. Nothing has streamed yet, so
+                    the handover is invisible. This is the only deadline here
+                    that produces a <em>failover</em> rather than an ending.
                   </li>
                   <li>
-                    <strong>Total request budget</strong> — the whole request,
+                    <strong>Stall deadline</strong>
+                    (<code>FALLBACK_STALL_TIMEOUT</code>) — seconds a stream that
+                    <em>has</em> started producing may then say nothing,
+                    measured from the last chunk that moved the answer forward.
+                    No model can replace a stream the reader is already looking
+                    at, so this ends the request rather than moving the chain.
+                  </li>
+                  <li>
+                    <strong>Total request budget</strong>
+                    (<code>FALLBACK_TOTAL_TIMEOUT</code>) — the whole request,
                     across every attempt, retry and recovery. Once output has
                     started no fallback can replace it, but it can still stop.
+                  </li>
+                  <li>
+                    <strong>Thinking before the chain moves</strong>
+                    (<code>FALLBACK_REASONING_ANSWER_TIMEOUT</code>) — seconds a
+                    model may think without starting an answer, while reasoning
+                    is being held back so the attempt is still abandonable.
+                  </li>
+                  <li>
+                    <strong>Silent-attempt floor</strong>
+                    (<code>FALLBACK_ATTEMPT_SHARE_FLOOR</code>) — the smallest
+                    slice of the total budget the chain-side division may hand
+                    one model. It bounds each model's first-token allowance,
+                    never a retry of the same model. Moot while the total budget
+                    is 0.
                   </li>
                   <li>
                     <strong>Retries before the chain</strong> — attempts against
@@ -2129,16 +2171,29 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   </li>
                 </ul>
                 <p>
-                  The first-token deadline is a <em>ceiling</em>, not an
-                  allowance. A request's total budget is divided by the number
-                  of models still to try, so on a ten-model chain with the 600 s
-                  default each model gets 60 s, not 120 — and the box reading
-                  120 is inert for that route. The Deadlines card computes this
-                  for your own routes, one row each, and says which total budget
-                  would honour the number you asked for &mdash; <em>a total budget
-                  of 1200s would give every model the 120s you asked for</em>. If
-                  the figure surprises you, either shorten the chain or raise the
-                  total budget.
+                  Once you set a total budget, the first-token deadline becomes a
+                  <em>ceiling</em> rather than an allowance: the budget is divided
+                  by the number of models still to try, so on a ten-model chain
+                  with a 600 s budget each model gets 60 s, not 120 — and the box
+                  reading 120 is inert for that route. The silent-attempt floor is
+                  what stops that share falling below the number you typed. The
+                  Deadlines card computes this for your own routes, one row each,
+                  and says which total budget would honour the number you asked
+                  for &mdash; <em>a total budget of 1200s would give every model
+                  the 120s you asked for</em>. At the shipped zeros every row
+                  reads <strong>no limit</strong>.
+                </p>
+                <p>
+                  <strong>Every error one of these limits raises names its own
+                  knob.</strong> A request MCC ended reaches your client as, for
+                  example, <code>Provider 'open_router/qwen/qwen3-max' produced no
+                  output within 300s. (FALLBACK_FIRST_TOKEN_TIMEOUT -- change it
+                  on the dashboard under Limits &amp; Resilience -&gt;
+                  Deadlines)</code>. The hint names the limit that
+                  <em>actually</em> ended the attempt, so a model cut short by its
+                  slice of the request budget names the silent-attempt floor
+                  instead. The same sentence appears on the attempt row in the
+                  request detail.
                 </p>
                 <img class="guide-shot" src="/admin/img/admin-limits-calculator.png"
                      alt="Deadlines card: the per-route first-token allowance calculator"

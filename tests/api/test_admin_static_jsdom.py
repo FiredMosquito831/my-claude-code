@@ -536,6 +536,60 @@ def test_a_blank_deadline_is_read_as_its_default_not_as_no_limit(rendered) -> No
     assert "No first-token deadline is set" not in after["calcHeadline"]
 
 
+def test_the_calculator_says_no_limit_when_every_deadline_is_zero(
+    rendered,
+) -> None:
+    """The shipped state since 6.16.0, and the one it must not print 0 s for.
+
+    An operator looking at a fresh install has to be able to read "nothing
+    here will end a silent model" off the card. A table of "0 s" says the
+    opposite, and a NaN says nothing at all.
+    """
+    after = rendered["limits"]["afterAllDeadlinesZeroed"]
+    rows = {row[0]: row[2] for row in after["calcRows"][1:]}
+
+    assert set(rows.values()) == {"no limit"}
+    assert "No first-token deadline is set" in after["calcHeadline"]
+    # It still names what is left: the transport, not MCC, ends this request.
+    assert "HTTP read timeout" in after["calcHeadline"]
+
+
+def test_no_budget_warning_fires_when_there_is_no_budget(rendered) -> None:
+    """Every warning on this card describes a budget being carved up.
+
+    With the total at 0 there is nothing to carve, so a warning about the
+    floor not fitting, or the deadline being undercut, would be describing a
+    machine that does not exist.
+    """
+    after = rendered["limits"]["afterAllDeadlinesZeroed"]
+
+    assert after["calcWarningHidden"] is True
+    assert after["calcFormula"] == ""
+
+
+def test_the_floor_warning_fires_on_six_models_and_not_on_three(rendered) -> None:
+    """600 s floor, 1800 s budget: three chains fit exactly, six do not.
+
+    The boundary is the interesting part. At six models the floor is asking
+    for 3600 s of an 1800 s budget and only the first three silent models can
+    have it; at three it adds up to exactly the budget and the trade the
+    warning describes is not being made.
+    """
+    six = rendered["limits"]["floorAgainstBudget"]["six"]
+    three = rendered["limits"]["floorAgainstBudget"]["three"]
+
+    assert six["calcWarningHidden"] is False
+    assert "6 models at the 600 s floor add up to 3600 s" in six["calcWarning"]
+    assert "more than the 1800 s budget" in six["calcWarning"]
+    assert "first 3 silent models" in six["calcWarning"]
+
+    # Three does raise the unrelated transport warning -- HTTP_READ_TIMEOUT is
+    # 300 s against a 600 s allowance -- which is the point: the card shows one
+    # warning at a time, most severe first, and the floor is not one of them
+    # here because the floor fits.
+    assert "floor add up to" not in three["calcWarning"]
+
+
 def test_the_calculator_never_interpolates_a_model_name_into_markup(rendered) -> None:
     """The vision route's primary model in this payload is an <img> tag.
 

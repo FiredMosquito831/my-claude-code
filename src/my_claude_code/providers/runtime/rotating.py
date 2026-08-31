@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
+from my_claude_code.application.deadline_hints import limit_hint
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic.models import MessagesRequest
@@ -215,6 +216,7 @@ class RotatingProvider(BaseProvider):
                 raise ApplicationUnavailableError(
                     "All API keys for this provider are in cooldown. "
                     f"Retry in {max(1, int(wait))}s."
+                    f"{limit_hint('RATE_LIMIT_COOLDOWN_SECONDS')}"
                 )
             if index in attempted:
                 # The pool handed back a credential this request already tried,

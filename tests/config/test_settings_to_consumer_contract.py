@@ -94,7 +94,8 @@ def test_the_attempt_share_floor_reaches_the_route_policy() -> None:
     policy = route_execution_policy(_settings(FALLBACK_ATTEMPT_SHARE_FLOOR=210.0))
     assert policy.attempt_share_floor == 210.0
 
-    assert route_execution_policy(_settings()).attempt_share_floor == 180.0
+    # Ships 0 since 6.16.0: no shipped deadline, so nothing to floor.
+    assert route_execution_policy(_settings()).attempt_share_floor == 0.0
     assert (
         route_execution_policy(
             _settings(FALLBACK_ATTEMPT_SHARE_FLOOR=0.0)
