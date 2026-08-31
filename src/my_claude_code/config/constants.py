@@ -160,6 +160,13 @@ FAILURE_KIND_NAMES: frozenset[str] = frozenset(
     }
 )
 
+# Whether the route-level bench runs at all. Ships OFF: the bench was fed by
+# request-shaped failures (a prompt too large for every model, a provider's
+# 429s) and ejected the models that could actually have served the request,
+# so a chain with healthy members answered with the last member's 400. Turn
+# it on to have a model that keeps failing skipped for FALLBACK_EJECT_SECONDS.
+FALLBACK_BENCH_ENABLED_DEFAULT = False
+
 FALLBACK_EJECT_AFTER_FAILURES_DEFAULT = 3
 FALLBACK_EJECT_SECONDS_DEFAULT = 30.0
 # Rate-based ejection policy: skip a model when at least this fraction of the

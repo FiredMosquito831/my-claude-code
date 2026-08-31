@@ -748,9 +748,12 @@ async def test_a_model_benched_by_earlier_failures_is_skipped_entirely() -> None
     primary = FakeProvider()
     secondary = FakeProvider()
     health = RouteHealthRegistry(
-        mode="consecutive", eject_after_failures=1, eject_seconds=300.0
+        bench_enabled=True,
+        mode="consecutive",
+        eject_after_failures=1,
+        eject_seconds=300.0,
     )
-    health.record_failure("primary/big")
+    health.record_failure("primary/big", failure_kind="upstream")
     executor = _deadline_executor(
         {"primary": primary, "secondary": secondary}, health=health
     )
@@ -779,7 +782,7 @@ async def test_a_model_benched_by_earlier_failures_is_skipped_entirely() -> None
 async def test_a_served_request_clears_the_models_failure_streak() -> None:
     provider = FakeProvider()
     health = RouteHealthRegistry(eject_after_failures=2, eject_seconds=300.0)
-    health.record_failure("primary/big")
+    health.record_failure("primary/big", failure_kind="upstream")
     executor = _deadline_executor({"primary": provider}, health=health)
 
     stream = executor.stream(
@@ -791,7 +794,7 @@ async def test_a_served_request_clears_the_models_failure_streak() -> None:
     )
     assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
 
-    health.record_failure("primary/big")
+    health.record_failure("primary/big", failure_kind="upstream")
     assert not health.is_ejected("primary/big")
 
 
@@ -883,9 +886,12 @@ async def test_a_model_benched_by_recent_failures_is_recorded_as_benched() -> No
     configured -- which is exactly the confusion this row exists to prevent.
     """
     health = RouteHealthRegistry(
-        mode="consecutive", eject_after_failures=1, eject_seconds=300.0
+        bench_enabled=True,
+        mode="consecutive",
+        eject_after_failures=1,
+        eject_seconds=300.0,
     )
-    health.record_failure("sick/provider-model")
+    health.record_failure("sick/provider-model", failure_kind="upstream")
     attempts, observer = _attempt_log()
 
     stream = ProviderExecutor(
@@ -908,7 +914,12 @@ async def test_a_model_benched_by_recent_failures_is_recorded_as_benched() -> No
     benched = attempts[0]
     assert benched.outcome == "skipped"
     assert benched.error_kind == "ejected"
-    assert "recent consecutive failures" in (benched.error_message or "")
+    assert benched.error_message == (
+        "benched: 1 consecutive failure (last: upstream), 300 s left"
+    )
+    assert benched.bench is not None
+    assert benched.bench["mode"] == "consecutive"
+    assert benched.bench["last_kind"] == "upstream"
     assert attempts[1].outcome == "succeeded"
 
 
@@ -1073,7 +1084,7 @@ async def test_a_model_is_benched_across_requests_not_within_one() -> None:
     assert first is second
 
     for _ in range(2):
-        first.record_failure("sick/model")
+        first.record_failure("sick/model", failure_kind="upstream")
     assert second.usable_indexes(("sick/model", "healthy/model")) == (1,)
 
 
@@ -1088,7 +1099,7 @@ def test_changing_the_ejection_policy_starts_a_clean_registry() -> None:
     lenient = _ejection_settings(after_failures=9, bench_enabled=True)
     route = ("sick/model", "healthy/model")
 
-    route_health_registry(strict).record_failure("sick/model")
+    route_health_registry(strict).record_failure("sick/model", failure_kind="upstream")
 
     assert route_health_registry(strict).usable_indexes(route) == (1,)
     assert route_health_registry(lenient).usable_indexes(route) == (0, 1)
@@ -2409,31 +2420,40 @@ def test_error_is_retryable_classifies_failures() -> None:
     assert executor._error_is_retryable(TimeoutError("slow")) is True
 
 
-def test_benching_is_on_by_default() -> None:
-    """The 5.58.0-5.60.0 regression: ejection shipped off and looked on.
+def test_benching_is_off_by_default() -> None:
+    """Shipped off in 6.14.0: the guard removes capacity, so it is opt-in.
 
-    ``fallback_bench_enabled`` defaulted to False and was absent from
-    .env.example, so upgrading silently disabled route-model ejection for every
-    existing install. FALLBACK_EJECT_* stayed documented and stayed set in user
-    .env files while doing nothing, and a flapping model was re-tried at
-    position 0 on every request instead of being parked.
+    It shipped off in 5.58.0-5.60.0 by accident and on from 5.61.0 on purpose.
+    What changed the answer is what fed it: every failure counted, so a prompt
+    larger than any model's context ejected the whole chain and the request
+    was answered by whichever model was left holding the 400.
     """
     settings = Settings()
 
-    assert settings.fallback_bench_enabled is True
+    assert settings.fallback_bench_enabled is False
 
     registry = route_health_registry(settings)
-    assert registry.bench_enabled is True
-    assert registry.enabled is True
+    assert registry.bench_enabled is False
+    assert registry.enabled is False
 
 
-def test_the_eject_knobs_are_live_under_the_default_settings() -> None:
-    """A default install must actually bench, not just be configured to."""
+def test_a_failing_model_is_retried_every_request_under_the_default_settings() -> None:
+    """The consequence of the default, stated as behaviour rather than a flag."""
+    registry = route_health_registry(Settings())
+
+    for _ in range(20):
+        registry.record_failure("sick/model", failure_kind="upstream")
+
+    assert registry.usable_indexes(("sick/model", "healthy/model")) == (0, 1)
+
+
+def test_the_eject_knobs_are_live_once_benching_is_turned_on() -> None:
+    """Turning the switch on must actually bench, not just be configured to."""
     settings = _ejection_settings(after_failures=2)
     registry = route_health_registry(settings)
 
     for _ in range(2):
-        registry.record_failure("sick/model")
+        registry.record_failure("sick/model", failure_kind="upstream")
 
     assert registry.usable_indexes(("sick/model", "healthy/model")) == (1,)
 
@@ -2443,20 +2463,20 @@ class _RecordingRegistry(RouteHealthRegistry):
 
     def __init__(self) -> None:
         super().__init__(bench_enabled=False)
-        self.calls: list[tuple[str, str | None, float | None]] = []
+        self.calls: list[tuple[str, str | None, int | None]] = []
 
     def record_failure(
         self,
         model_ref: str,
         *,
         failure_kind: str | None = None,
-        retry_after_seconds: float | None = None,
+        status_code: int | None = None,
     ) -> None:
-        self.calls.append((model_ref, failure_kind, retry_after_seconds))
+        self.calls.append((model_ref, failure_kind, status_code))
         super().record_failure(
             model_ref,
             failure_kind=failure_kind,
-            retry_after_seconds=retry_after_seconds,
+            status_code=status_code,
         )
 
 
@@ -2464,9 +2484,9 @@ class _RecordingRegistry(RouteHealthRegistry):
 async def test_the_failure_kind_reaches_the_health_registry() -> None:
     """Without the kind, every ejection used the full eject_seconds.
 
-    The kind-aware bench ladder in RouteHealthRegistry keys off this argument:
-    a 5xx/timeout parks the model for a second, auth/quota take the full
-    window. The executor never passed it, so the whole ladder was dead code.
+    The kind is what decides whether the failure counts against the model at
+    all, and the status is what the skipped row quotes back. The executor
+    passed neither, so the registry could not tell a 502 from a 400.
     """
     failure = ExecutionFailure(
         kind=FailureKind.UPSTREAM, status_code=502, message="boom", retryable=True
@@ -2493,7 +2513,7 @@ async def test_the_failure_kind_reaches_the_health_registry() -> None:
     )
     [chunk async for chunk in stream]
 
-    assert registry.calls == [("primary/big", "upstream", None)]
+    assert registry.calls == [("primary/big", "upstream", 502)]
 
 
 @pytest.mark.asyncio

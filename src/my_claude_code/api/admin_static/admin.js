@@ -1069,7 +1069,82 @@ function updateVisionRouting() {
     : "No tier needs it right now: no tier's model is known to reject images.";
 }
 
-function renderModelRouting(fields) {
+/** The Chain benching master switch, rendered on Model Config.
+ *
+ * Whether a chain is allowed to drop one of its own members is a routing
+ * decision, and this is the page where routes are read. It is the same
+ * variable the Limits & Resilience card gates itself on -- one manifest
+ * field, one saved key, two controls kept in step by `syncSharedControls` --
+ * so flipping it here and flipping it there are the same edit. The tuning
+ * knobs stay where the consequence is explained, and the link below goes
+ * there rather than repeating them.
+ */
+function renderBenchMasterSwitch(field) {
+  const card = document.createElement("article");
+  card.className = "route-card route-bench";
+
+  const head = document.createElement("header");
+  head.className = "route-card-head";
+  const name = document.createElement("h4");
+  name.className = "route-tier";
+  name.textContent = "Chain benching";
+  head.appendChild(name);
+  const source = sourceText(field);
+  if (source) {
+    const chip = document.createElement("span");
+    chip.className = "field-source";
+    chip.textContent = source;
+    head.appendChild(chip);
+  }
+  card.appendChild(head);
+
+  const control = document.createElement("label");
+  control.className = "field route-bench-control";
+  const labelText = document.createElement("span");
+  labelText.textContent = field.label;
+  const input = inputForField(field);
+  input.id = `field-${field.key}-model-config`;
+  input.dataset.key = field.key;
+  input.dataset.original = field.value || "";
+  input.dataset.default = field.default ?? "";
+  input.dataset.secret = "false";
+  input.dataset.configured = field.configured ? "true" : "false";
+  input.dataset.fieldType = field.type;
+  input.disabled = field.locked;
+  const onEdit = () => {
+    syncSharedControls(input);
+    updateDirtyState();
+  };
+  input.addEventListener("input", onEdit);
+  input.addEventListener("change", onEdit);
+  control.append(labelText, input);
+  card.appendChild(control);
+
+  const note = document.createElement("p");
+  note.className = "route-note";
+  note.textContent = field.description || "";
+  card.appendChild(note);
+
+  const crosslink = document.createElement("p");
+  crosslink.className = "bench-crosslink";
+  crosslink.append(
+    document.createTextNode("Tuning (window, rate, duration) lives on "),
+  );
+  const link = document.createElement("a");
+  link.href = "#";
+  link.textContent = "Limits & Resilience → Chain benching";
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    setActiveView("limits", { scroll: true });
+    const target = byId("section-benching");
+    if (target) target.scrollIntoView({ block: "start" });
+  });
+  crosslink.append(link, document.createTextNode("."));
+  card.appendChild(crosslink);
+  return card;
+}
+
+function renderModelRouting(fields, allFields) {
   const fieldByKey = new Map(fields.map((field) => [field.key, field]));
   const wrap = document.createElement("div");
   wrap.className = "route-layout";
@@ -1080,6 +1155,11 @@ function renderModelRouting(fields) {
     "Each tier tries its models in order. If one cannot serve a request the " +
     "next takes over, up until the response starts streaming.";
   wrap.appendChild(rule);
+
+  const benchField = (allFields || []).find(
+    (candidate) => candidate.key === "FALLBACK_BENCH_ENABLED",
+  );
+  if (benchField) wrap.appendChild(renderBenchMasterSwitch(benchField));
 
   const grid = document.createElement("div");
   grid.className = "route-grid";
@@ -1533,6 +1613,23 @@ function renderBenching(fields) {
   // OFF makes every Eject setting below inert, and saying it twice in one
   // card reads as two different rules.
   if (enabled) master.appendChild(renderField(enabled));
+  const alsoOn = document.createElement("p");
+  alsoOn.className = "bench-crosslink";
+  alsoOn.append(
+    document.createTextNode("The same switch is on "),
+  );
+  const alsoLink = document.createElement("a");
+  alsoLink.href = "#";
+  alsoLink.textContent = "Model Config";
+  alsoLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    setActiveView("model_config", { scroll: true });
+  });
+  alsoOn.append(
+    alsoLink,
+    document.createTextNode(", beside the routes it applies to — one setting, two places to reach it."),
+  );
+  master.appendChild(alsoOn);
   wrap.appendChild(master);
 
   const modeRow = document.createElement("div");
@@ -1837,7 +1934,11 @@ function renderSections(sections, fields) {
 
       const renderer = SECTION_RENDERERS[section.id];
       if (renderer) {
-        sectionEl.appendChild(renderer(gridFields));
+        // Second argument: every field, not just this section's. A renderer
+        // that shows a control owned by another section (the Chain benching
+        // master switch on Model Config) needs the spec, and reaching for it
+        // through a module global is how two pages start disagreeing.
+        sectionEl.appendChild(renderer(gridFields, fields));
       } else {
         const grid = document.createElement("div");
         grid.className = "field-grid";
@@ -2224,8 +2325,15 @@ function buildFieldControl(field) {
   input.dataset.fieldType = field.type;
   input.disabled = field.locked;
   if (field.type !== "oauth_login") {
-    input.addEventListener("input", updateDirtyState);
-    input.addEventListener("change", updateDirtyState);
+    // A field may legitimately render on two pages (see the Chain benching
+    // master switch). Mirroring on edit is what keeps that a second view of
+    // one value rather than a second copy of it.
+    const onEdit = () => {
+      syncSharedControls(input);
+      updateDirtyState();
+    };
+    input.addEventListener("input", onEdit);
+    input.addEventListener("change", onEdit);
     if (field.type === "optional_model") {
       input.addEventListener("blur", () => {
         if (!input.value.trim() || input.value.trim().toLowerCase() === "none") {
@@ -3237,14 +3345,30 @@ function changedValues() {
  * and `changedValues()` submits whichever it walked last. Mirroring on edit
  * makes the duplicate a view of one value rather than a second copy of it, and
  * the dirty count stays at one because it counts keys, not controls.
+ *
+ * The twin is notified, not just assigned. A control can be the thing another
+ * card is gated on -- the Chain benching master switch is -- and that card
+ * listens for `change` on its own control. Setting `.value` silently left the
+ * Limits card live while the Model Config copy said the feature was off,
+ * which is precisely the "two answers" this function exists to prevent. The
+ * re-entry guard is what stops the twin's own handler bouncing it back.
  */
+let syncingSharedControls = false;
 function syncSharedControls(source) {
+  if (syncingSharedControls) return;
   const key = source.dataset.key;
-  document
-    .querySelectorAll(`input[data-key="${key}"], select[data-key="${key}"]`)
-    .forEach((twin) => {
-      if (twin !== source && twin.value !== source.value) twin.value = source.value;
-    });
+  syncingSharedControls = true;
+  try {
+    document
+      .querySelectorAll(`input[data-key="${key}"], select[data-key="${key}"]`)
+      .forEach((twin) => {
+        if (twin === source || twin.value === source.value) return;
+        twin.value = source.value;
+        twin.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+  } finally {
+    syncingSharedControls = false;
+  }
 }
 
 function updateDirtyState() {
@@ -8803,6 +8927,57 @@ function appendLadder(item, ladder) {
   }
 }
 
+/** The registry's account of a bench, when this attempt was skipped by one. */
+function benchOf(attempt) {
+  const params = attempt && attempt.params;
+  const bench = params && params.bench;
+  return bench && typeof bench === "object" ? bench : null;
+}
+
+/**
+ * Say why a skipped model was skipped, in the terms that benched it.
+ *
+ * The row's own sentence is stored server-side, so this is the breakdown
+ * underneath it: which mode decided, on what evidence, and how much of the
+ * bench is left at the moment the request ran. Before this the modal showed
+ * one fixed line about consecutive failures on a build whose default mode has
+ * been rate-based since 5.61.0, so the reader was told about a counter that
+ * was never consulted.
+ */
+function appendBenchReason(item, bench) {
+  if (!bench) return;
+  const parts = [];
+  if (bench.mode === "rate_based" && bench.window) {
+    const share =
+      bench.rate == null ? "" : ` of at least ${Math.round(bench.rate * 100)}%`;
+    parts.push(
+      `${bench.failures} counted failure${bench.failures === 1 ? "" : "s"} in the` +
+        ` last ${bench.window} attempts${share}`,
+    );
+  } else {
+    parts.push(
+      `${bench.failures} consecutive failure${bench.failures === 1 ? "" : "s"}`,
+    );
+  }
+  if (bench.last_kind) {
+    parts.push(
+      bench.last_status == null
+        ? `last: ${bench.last_kind}`
+        : `last: ${bench.last_status} ${bench.last_kind}`,
+    );
+  }
+  if (bench.remaining_seconds != null) {
+    parts.push(`${formatSeconds(Math.round(bench.remaining_seconds))} left`);
+  }
+  if (bench.since != null) {
+    parts.push(`benched ${formatSeconds(Math.round(bench.since))} ago`);
+  }
+  const why = document.createElement("p");
+  why.className = "req-chain-bench";
+  why.textContent = parts.join(" · ");
+  item.appendChild(why);
+}
+
 function renderRequestChain(row) {
   const container = byId("reqDetailChain");
   if (!container) return;
@@ -8823,6 +8998,20 @@ function renderRequestChain(row) {
   heading.className = "req-chain-title";
   heading.textContent = "Route attempts";
   container.appendChild(heading);
+
+  // The chain's own root cause, above the per-attempt ones: when models were
+  // removed before the request began, what the surviving model answered is
+  // not the whole story, and the incident this came from is exactly that --
+  // four capable models benched, and the request answered by the one left.
+  const benched = attempts.filter((attempt) => benchOf(attempt) !== null).length;
+  if (benched) {
+    const note = document.createElement("p");
+    note.className = "req-chain-rootcause";
+    note.textContent =
+      `${benched} model${benched === 1 ? " was" : "s were"} benched and never` +
+      " tried on this request.";
+    container.appendChild(note);
+  }
 
   const list = document.createElement("ol");
   list.className = "req-chain-list";
@@ -8895,6 +9084,7 @@ function renderRequestChain(row) {
       item.appendChild(why);
     }
 
+    appendBenchReason(item, benchOf(attempt));
     appendLadder(item, ladderOf(attempt));
     list.appendChild(item);
   });

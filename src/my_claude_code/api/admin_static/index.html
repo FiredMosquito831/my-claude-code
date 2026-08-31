@@ -1282,7 +1282,7 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                 <p>
                   The file records what you chose, not what the defaults are. A
                   setting you never touched is written as a commented placeholder
-                  naming its default &mdash; <code># FALLBACK_BENCH_ENABLED= (default: true)</code>
+                  naming its default &mdash; <code># FALLBACK_BENCH_ENABLED= (default: false)</code>
                   &mdash; while a plain <code>KEY=value</code> line means the dashboard
                   set it, and the field shows <em>set here</em>. Every field prints its
                   default underneath, and one that was set gets a <strong>Use default</strong>
@@ -2153,9 +2153,29 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                 <h4>When to stop trying a model</h4>
                 <ul>
                   <li>
-                    <strong>Bench failures</strong> — the master switch. With it
-                    off every other control in the card is inert and a failing
-                    model is retried at every request.
+                    <strong>Bench failures</strong> — the master switch, and it
+                    ships <strong>off</strong>: every model in the chain is
+                    tried every time and a failing model is retried at every
+                    request. With it off every other control in the card is
+                    inert. The same switch is at the top of
+                    <strong>Model Config</strong>, beside the routes it governs
+                    — one setting, two places to reach it. A default only
+                    applies where the key is unset: an install whose
+                    <code>.env</code> already carries
+                    <code>FALLBACK_BENCH_ENABLED=true</code> keeps benching on
+                    until that line is removed.
+                  </li>
+                  <li>
+                    <strong>What counts as a failure</strong>, once it is on:
+                    an upstream <strong>5xx</strong>, an
+                    <strong>overloaded</strong> response, and a
+                    <strong>401/403</strong> from the provider. Those say
+                    something about the model. Timeouts (first token, stall,
+                    budget), <strong>429</strong>s,
+                    <code>context_length</code> and malformed requests are facts
+                    about the <em>request</em> — they fail identically on a
+                    healthy model — and never bench one. Counting them is how a
+                    single oversized prompt used to eject an entire chain.
                   </li>
                   <li>
                     <strong>Eject mode</strong> — <code>rate_based</code> benches

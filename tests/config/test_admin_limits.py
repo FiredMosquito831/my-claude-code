@@ -336,6 +336,29 @@ def test_no_resilience_field_is_orphaned(section: str) -> None:
     assert declared == set(SECTION_KEYS[section])
 
 
+def test_the_bench_master_switch_is_one_field_in_one_section() -> None:
+    """It renders on two pages; it must not exist twice.
+
+    Model Config shows the switch beside the routes it governs and Limits &
+    Resilience keeps the copy that gates its card. Both controls are bound to
+    the one manifest key, so a Save carries one line and the two can never
+    disagree about what is stored. A second spec pointing at the same
+    ``settings_attr`` would be two saved keys wearing one name.
+    """
+    specs = [f for f in FIELDS if f.settings_attr == "fallback_bench_enabled"]
+
+    assert [f.key for f in specs] == ["FALLBACK_BENCH_ENABLED"]
+    assert specs[0].section_id == "benching"
+
+
+def test_the_bench_master_switch_ships_off() -> None:
+    """Pinned, not derived: the value is the point of the release."""
+    (spec,) = [f for f in FIELDS if f.key == "FALLBACK_BENCH_ENABLED"]
+
+    assert spec.default == "false"
+    assert Settings().fallback_bench_enabled is False
+
+
 # --------------------------------------------------------------------------
 # A Save records choices. Everything below pins one half of that sentence.
 # The bug these come from: the first Save of any field materialised every
@@ -357,7 +380,7 @@ def test_a_save_writes_only_what_was_set(isolated_config) -> None:
         if line and not line.startswith("#") and "=" in line
     ]
     assert value_lines == ["REQUEST_LOG_MAX_ROWS=500000"]
-    assert "# FALLBACK_BENCH_ENABLED= (default: true)" in rendered
+    assert "# FALLBACK_BENCH_ENABLED= (default: false)" in rendered
 
 
 def test_dotenv_sees_only_set_keys_in_the_rendered_file(isolated_config) -> None:
@@ -397,7 +420,7 @@ def test_an_unset_field_follows_a_changed_default(isolated_config, monkeypatch) 
     assert errors == []
     assert settings is not None
     # Nothing is stored for it, so the running server uses the code default.
-    assert settings.fallback_bench_enabled is True
+    assert settings.fallback_bench_enabled is False
 
 
 def test_blanking_unsets_when_the_repo_env_is_silent(isolated_config) -> None:

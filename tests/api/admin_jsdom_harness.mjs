@@ -903,6 +903,43 @@ if (benchSelect) {
   limits.afterBenchOff = { benchGroups: benchGroupsNow() };
 }
 
+// (b2) the master switch renders twice on purpose -- once on Limits, where it
+// gates the card, and once on Model Config, beside the routes it applies to.
+// They are one manifest field and one saved key, so editing either has to be
+// the same edit: the twin follows, the Limits card re-gates itself, and the
+// dirty counter stays at one because it counts keys, not controls.
+const benchOnModelConfig = doc.getElementById(
+  "field-FALLBACK_BENCH_ENABLED-model-config",
+);
+if (benchOnModelConfig && benchSelect) {
+  benchOnModelConfig.value = "true";
+  benchOnModelConfig.dispatchEvent(new window.Event("change", { bubbles: true }));
+  // Nothing is dispatched on the Limits control here on purpose: the mirror
+  // has to notify it, or the two cards disagree about whether the feature is
+  // on. A browser drive found exactly that -- the value copied across and the
+  // Limits card stayed live.
+  limits.benchMirror = {
+    controls: doc.querySelectorAll(
+      'select[data-key="FALLBACK_BENCH_ENABLED"]',
+    ).length,
+    onModelConfig: benchOnModelConfig.value,
+    onLimits: benchSelect.value,
+    submitted: Object.keys(window.eval("changedValues()")),
+    benchGroups: benchGroupsNow(),
+    crosslink: textOf(
+      doc.querySelector(".route-bench"),
+      ".bench-crosslink",
+    ),
+    label: textOf(doc.querySelector(".route-bench"), ".route-tier"),
+    markup: doc.querySelector(".route-bench")
+      ? doc.querySelector(".route-bench").innerHTML.includes("<script")
+      : null,
+  };
+  // Back to where (b) left it so nothing below sees a different world.
+  benchOnModelConfig.value = "false";
+  benchOnModelConfig.dispatchEvent(new window.Event("change", { bubbles: true }));
+}
+
 // (c) raise the silent-attempt floor above the equal share. 600 over ten
 // models is 60s, so a 180s floor binds: the share becomes 180, the first-token
 // deadline caps the allowance back to 120, and ten models at 180 want 1,800s
@@ -998,6 +1035,12 @@ function driveDetail(row) {
       (el) => el.textContent,
     ),
     ladderRootCauses: Array.from(chain.querySelectorAll(".req-chain-rootcause")).map(
+      (el) => el.textContent,
+    ),
+    chainReasons: Array.from(chain.querySelectorAll(".req-chain-reason")).map(
+      (el) => (el.textContent || "").replace(/\s+/g, " ").trim(),
+    ),
+    benchReasons: Array.from(chain.querySelectorAll(".req-chain-bench")).map(
       (el) => el.textContent,
     ),
     ladderTries: Array.from(chain.querySelectorAll(".req-chain-try")).map((el) =>
@@ -1266,6 +1309,35 @@ const requestDetail = {
         key_index: -1,
         key_label: "(no key available)",
       }),
+    ],
+  }),
+  /* A model the chain removed before the request began. The row must say WHY
+     -- which mode decided, on what evidence, and how long is left -- not the
+     one fixed sentence about consecutive failures every skip used to get. */
+  benchReason: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        outcome: "skipped",
+        duration_ms: null,
+        error_kind: "ejected",
+        error_message:
+          "benched: 5 upstream errors in the last 10 attempts (rate_based >= 50%), 22 s left",
+        params: {
+          bench: {
+            mode: "rate_based",
+            failures: 5,
+            window: 10,
+            rate: 0.5,
+            last_kind: "upstream",
+            last_status: 502,
+            remaining_seconds: 22.0,
+            since: 8.0,
+          },
+        },
+      }),
+      detailAttempt({ attempt: 1, model_ref: "commandcode/kimi-k3" }),
     ],
   }),
 };

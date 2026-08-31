@@ -562,11 +562,13 @@ Requests that name a provider and model directly (`open_router/…`) are never r
 
 Ejection can never empty a chain: if every model on a route is benched, they are tried in order anyway — skipping a bad model is an optimisation, refusing to try anything is an outage.
 
-**What benches a model.** `FALLBACK_BENCH_ENABLED` is the master switch, and with it off *every* control below is inert — a model failing half its requests is retried at chain position 0 on every single request. `FALLBACK_BEHAVIOR` then picks the evidence:
+**What benches a model.** `FALLBACK_BENCH_ENABLED` is the master switch, and it **ships off**: every model in the chain is tried every time, so a model failing half its requests is still retried at chain position 0 on every single request. It reads on two pages — **Model Config**, at the top of the routing view, beside the routes it governs, and **Limits & Resilience → Chain benching**, where it gates the tuning below. They are the same setting; changing either changes both. With it off *every* control below is inert. Turn it on and `FALLBACK_BEHAVIOR` picks the evidence:
+
+**Only model-shaped failures count.** With benching on, a failure benches a model only when it says something about the *model*: an upstream 5xx, an overloaded response, or a 401/403 from the provider. Timeouts (first-token, stall, budget), 429s, `context_length` and malformed requests are facts about the *request* — they fail identically on a healthy model and a dead one — and never bench anything. That distinction is why the switch could be turned off by default: the bench used to count everything, so one prompt larger than any model's context window ejected the entire chain and the request was answered by whichever model was left holding the 400.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `FALLBACK_BENCH_ENABLED` | `true` | Master switch for benching. Off makes the whole card inert, not just the mode you can see. |
+| `FALLBACK_BENCH_ENABLED` | `false` | Master switch for benching. Off (the default) tries every model every time; on makes the whole card live. Set on **Model Config** or on this card — one setting, two places. |
 | `FALLBACK_BEHAVIOR` | `rate_based` | `rate_based` benches on a failure rate over a window; `legacy` restores the older consecutive-count rule. |
 | `FALLBACK_EJECT_WINDOW` / `FALLBACK_EJECT_FAILURE_RATE` | `10` / `0.5` | `rate_based` only: benched once 5 of the last 10 requests fail. |
 | `FALLBACK_EJECT_MIN_SAMPLES` | `8` | `rate_based` only: nothing is benched until that many of its requests have been seen, so one failure on a barely-used model cannot trip it. |
@@ -723,12 +725,12 @@ What it deliberately does *not* model: time already spent on the request, a prim
 
 ### Saving Settings: Blank Means Unset
 
-Pressing **Apply** writes only what you actually changed. Until 6.1.0 it did the opposite: the first Save of any field materialised *every* manifest default into `~/.fcc/.env` as a real value — and a value on disk outranks a code default forever, so on any install that had pressed Save once, **no shipped default could ever change again**. `FALLBACK_BENCH_ENABLED=false` outliving the release that flipped its default to `true` is the casualty people actually hit.
+Pressing **Apply** writes only what you actually changed. Until 6.1.0 it did the opposite: the first Save of any field materialised *every* manifest default into `~/.fcc/.env` as a real value — and a value on disk outranks a code default forever, so on any install that had pressed Save once, **no shipped default could ever change again**. `FALLBACK_BENCH_ENABLED=false` outliving the release that flipped its default to `true` is the casualty people actually hit — and the same rule cuts the other way now that the default is `false` again: an install with `FALLBACK_BENCH_ENABLED=true` written into `~/.fcc/.env` keeps benching on until that line is removed.
 
 Now the managed file is the starting point, and an untouched field is written as a commented placeholder that records what it would do:
 
 ```bash
-# FALLBACK_BENCH_ENABLED= (default: true)
+# FALLBACK_BENCH_ENABLED= (default: false)
 ```
 
 The rules that follow from that:
@@ -1178,7 +1180,7 @@ Prefer the command line? Re-running the install command from [Quick Start](#inst
 Nothing in the 6.x line requires you to edit a file before it will start, and the one schema change — three `ALTER`s and an index on the request log, about half a second on a 200 MB database — runs itself on first start and backfills nothing. Three things are worth doing by hand:
 
 1. **Check `MAX_OUTPUT_TOKENS_CEILING`.** It ships set to `131072` as of 6.8.0, where it was previously unset. If you want no ceiling at all, the value is now **`0`** — a blank field resolves to the default, not to off. See [Output Token Budget](#output-token-budget) for why it ships set.
-2. **Check `FALLBACK_BENCH_ENABLED` on Limits & Resilience.** If it reads `false` and you never chose that, an older Save wrote the then-current default into your `.env` and it outlived the release that flipped it. Press **Use default**, or delete the line. Nothing was migrated for you on purpose: a value on disk is effective configuration, and rewriting it silently would be the worse bug.
+2. **Check `FALLBACK_BENCH_ENABLED` on Limits & Resilience** (or on Model Config — same setting). If it shows a *set here* chip and you never chose the value, an older Save wrote the then-current default into your `.env` and it outlived every release that has moved it since. Press **Use default**, or delete the line. Nothing was migrated for you on purpose: a value on disk is effective configuration, and rewriting it silently would be the worse bug.
 3. **Delete any `CREDENTIAL_CIRCUIT_THRESHOLD=` line from `~/.fcc/.env`.** The setting was removed in 6.0.0 along with the circuit breaker it configured. `Settings` is declared `extra="ignore"`, so the stale line starts fine and does nothing — which is exactly why it is worth deleting before it reads as live configuration to the next person.
 
 Your first Save after 6.2.0 will rewrite `~/.fcc/.env` with six section headings where there was one `# Limits` heading. No value changes; the diff just looks larger than it is.

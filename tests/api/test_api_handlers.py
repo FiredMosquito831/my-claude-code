@@ -575,7 +575,10 @@ async def test_probe_reply_names_the_primary_when_nothing_is_benched() -> None:
         _probe_route_settings(), provider_resolver=provider_resolver
     )
     handler._provider_executor._health = RouteHealthRegistry(
-        mode="consecutive", eject_after_failures=1, eject_seconds=60.0
+        bench_enabled=True,
+        mode="consecutive",
+        eject_after_failures=1,
+        eject_seconds=60.0,
     )
 
     response = await handler.create(_probe_request())
@@ -598,9 +601,12 @@ async def test_probe_reply_names_the_fallback_when_the_primary_is_benched() -> N
         _probe_route_settings(), provider_resolver=provider_resolver
     )
     health = RouteHealthRegistry(
-        mode="consecutive", eject_after_failures=1, eject_seconds=60.0
+        bench_enabled=True,
+        mode="consecutive",
+        eject_after_failures=1,
+        eject_seconds=60.0,
     )
-    health.record_failure("nvidia_nim/primary-model")
+    health.record_failure("nvidia_nim/primary-model", failure_kind="upstream")
     assert health.is_ejected("nvidia_nim/primary-model") is True
     handler._provider_executor._health = health
 

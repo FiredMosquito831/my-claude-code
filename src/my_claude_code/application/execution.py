@@ -36,6 +36,7 @@ from my_claude_code.core.failures import (
     FailureKind,
     failure_kind,
     failure_kind_name,
+    find_execution_failure,
     parse_failure_kinds,
 )
 from my_claude_code.core.trace import (
@@ -45,7 +46,7 @@ from my_claude_code.core.trace import (
 )
 
 from .ports import ProviderPort, ProviderResolver
-from .route_health import RouteHealthRegistry
+from .route_health import BenchReason, RouteHealthRegistry
 from .routing import (
     RoutedMessagesPlan,
     RoutedMessagesRequest,
@@ -79,6 +80,11 @@ class RouteAttemptRecord:
     error_kind: str | None = None
     error_message: str | None = None
     duration_ms: float | None = None
+    #: For a ``skipped``/``ejected`` row, the registry's account of why -- mode,
+    #: how many failures, of what kind, and how much of the bench is left. Kept
+    #: structured rather than only as prose so the request detail can render it
+    #: and an export can carry it.
+    bench: dict[str, object] | None = None
 
 
 # Reports what became of one attempt, as opposed to announcing that it started.
@@ -207,26 +213,6 @@ def _timeout_failure(
     )
 
 
-def _provider_retry_after(provider: ProviderPort) -> float | None:
-    """The provider's own remaining cooldown, when it reports a usable one.
-
-    Used to size a rate-limit bench from the provider's signal instead of a
-    fixed number, per "read signals, don't invent thresholds".
-
-    Deliberately total: this runs while a failure is already being recorded,
-    so anything raised here would replace a real upstream error with an
-    internal one. A provider that cannot answer just yields None, and the
-    registry falls back to its configured eject window.
-    """
-    try:
-        remaining = provider.throttle_remaining()
-    except Exception:
-        return None
-    if isinstance(remaining, bool) or not isinstance(remaining, int | float):
-        return None
-    return float(remaining) if remaining > 0 else None
-
-
 def _cooldown_failure(model_ref: str, seconds: float) -> ExecutionFailure:
     """The verdict recorded for a model the chain stepped over while limited."""
     return ExecutionFailure(
@@ -271,17 +257,36 @@ class _AttemptLedger:
                 error_message="never reached",
             )
 
-    def mark_benched(self, order: tuple[int, ...]) -> None:
-        """Record models the health registry removed before the request began."""
+    def mark_benched(
+        self,
+        order: tuple[int, ...],
+        why: Callable[[str], BenchReason | None] | None = None,
+    ) -> None:
+        """Record models the health registry removed before the request began.
+
+        The row used to read "benched after recent consecutive failures" for
+        every skip, in a build whose default mode has been rate-based since
+        5.61.0 -- so the one line the reader got was, for most installs, about
+        a counter that was never consulted. ``why`` is the registry's own
+        account, so the sentence names the mode, the evidence and the time
+        left, and the structured form rides along for the modal.
+        """
         usable = set(order)
-        for index in self._records:
-            if index not in usable:
-                self._set(
-                    index,
-                    outcome="skipped",
-                    error_kind="ejected",
-                    error_message="benched after recent consecutive failures",
-                )
+        for index, record in self._records.items():
+            if index in usable:
+                continue
+            reason = None if why is None else why(record.model_ref)
+            self._set(
+                index,
+                outcome="skipped",
+                error_kind="ejected",
+                error_message=(
+                    reason.sentence()
+                    if reason is not None
+                    else "benched after recent failures"
+                ),
+                bench=None if reason is None else reason.as_dict(),
+            )
 
     def start(self, index: int) -> None:
         self._current = index
@@ -299,6 +304,7 @@ class _AttemptLedger:
         error_kind: str | None = None,
         error_message: str | None = None,
         duration_ms: float | None = None,
+        bench: dict[str, object] | None = None,
     ) -> None:
         current = self._records.get(index)
         if current is None:
@@ -311,6 +317,7 @@ class _AttemptLedger:
             error_kind=error_kind,
             error_message=error_message,
             duration_ms=duration_ms,
+            bench=bench,
         )
 
     def succeeded(self, index: int) -> None:
@@ -498,7 +505,7 @@ class ProviderExecutor:
         # tried, benched or timed out overwrites its own entry, so what is left
         # at the end is the whole chain's story rather than only the winner's.
         ledger = _AttemptLedger(plan.model_refs(), attempts, on_attempt_result)
-        ledger.mark_benched(order)
+        ledger.mark_benched(order, self._health.why)
         prepared = self._prepare_from(
             attempts,
             order,
@@ -711,26 +718,27 @@ class ProviderExecutor:
                 # runs alongside a half-open connection to the previous one.
                 failures.append(uncommitted_failure)
                 ledger.failed(index, uncommitted_failure)
-                # Pass the kind through so the bench duration matches the
-                # failure: a 5xx/timeout parks the model for a second, a
-                # rate-limit honours the provider's own remaining cooldown,
-                # and auth/quota take the full eject window. Without these
-                # arguments every ejection used eject_seconds and the whole
-                # kind-aware ladder in RouteHealthRegistry was dead code.
+                # Pass the kind through: it is what decides whether this
+                # failure counts against the model at all. A timeout, a 429 or
+                # a prompt no model could hold is the request's problem, and
+                # counting it is what let one oversized request eject a whole
+                # chain. The status rides along so the skipped row can name
+                # what the last failure actually was.
                 # failure_kind() rather than .kind: an attempt can fail with a
                 # raw exception (httpx TimeoutError, RuntimeError from a
                 # construction error) that never reached provider
-                # classification, and those have no .kind at all.
+                # classification, and those have no .kind at all -- and now
+                # never bench anything either.
                 kind = failure_kind(uncommitted_failure)
-                retry_after_seconds = (
-                    _provider_retry_after(provider)
-                    if kind is FailureKind.RATE_LIMIT
-                    else None
-                )
+                execution_failure = find_execution_failure(uncommitted_failure)
                 self._health.record_failure(
                     model_ref,
                     failure_kind=kind.value if kind is not None else None,
-                    retry_after_seconds=retry_after_seconds,
+                    status_code=(
+                        None
+                        if execution_failure is None
+                        else execution_failure.status_code
+                    ),
                 )
                 if self._ends_the_route(uncommitted_failure):
                     ledger.unreachable_after(index, uncommitted_failure)
@@ -1149,7 +1157,20 @@ class ProviderExecutor:
         failures.append(exc)
         if ledger is not None:
             ledger.failed(index, exc)
-        self._health.record_failure(routed.resolved.provider_model_ref)
+        # The kind matters here too: a pre-stream failure is usually a
+        # resolution or credential problem, and only the model-shaped ones
+        # should count against the model the route points at.
+        pre_stream_failure = find_execution_failure(exc)
+        pre_stream_kind = failure_kind(exc)
+        self._health.record_failure(
+            routed.resolved.provider_model_ref,
+            failure_kind=(
+                pre_stream_kind.value if pre_stream_kind is not None else None
+            ),
+            status_code=(
+                None if pre_stream_failure is None else pre_stream_failure.status_code
+            ),
+        )
         self._trace_fallback(routed, exc, request_id=request_id, attempt=index)
         if self._ends_the_route(exc):
             if ledger is not None:

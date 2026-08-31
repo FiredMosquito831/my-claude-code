@@ -3255,6 +3255,26 @@ details.turn-pane > summary:focus-visible {
   color: var(--accent);
 }
 
+/* The Chain benching master switch on Model Config. A route card, because
+   it is a routing decision and reads beside the routes it governs. */
+.route-bench .route-bench-control {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: left;
+  gap: 12px;
+}
+
+.route-bench .route-bench-control > span {
+  font-weight: 600;
+}
+
+.route-bench .route-bench-control select {
+  flex: 0 1 200px;
+  min-width: 0;
+}
+
 .bench-crosslink {
   color: var(--muted);
   font-size: 12.5px;
@@ -6450,6 +6470,15 @@ details.turn-pane > summary:focus-visible {
   font-size: 12px;
   line-height: 1.5;
   color: var(--text);
+}
+
+/* The bench breakdown under a skipped row's sentence: same weight as the
+   ladder's root cause, muted because it explains a row rather than being one. */
+.req-chain-bench {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
 .req-chain-ladder {

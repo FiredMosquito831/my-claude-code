@@ -186,7 +186,9 @@ class RequestCapture:
                 error_kind=attempt.error_kind,
                 error_message=attempt.error_message,
                 duration_ms=attempt.duration_ms,
-                params=self._attempt_params(attempt.attempt, wire, ladder),
+                params=self._attempt_params(
+                    attempt.attempt, wire, ladder, attempt.bench
+                ),
                 wire_body=None if wire is None else wire.body_json,
                 reasoning_emitted=None if wire is None else wire.reasoning_emitted,
                 key_index=key_index,
@@ -239,6 +241,7 @@ class RequestCapture:
         attempt_index: int,
         wire: WireRequest | None,
         ladder: dict[str, Any] | None = None,
+        bench: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Merge what the provider survived with what it actually sent.
 
@@ -260,6 +263,11 @@ class RequestCapture:
         # keep theirs.
         if ladder is not None:
             params["ladder"] = ladder
+        # Same reason again: the registry's account of a bench is a small
+        # record about one attempt, so it nests rather than flattening five
+        # more keys into the counters.
+        if bench:
+            params["bench"] = bench
         return params or None
 
     def _recovery_events_for(self, attempt_index: int) -> dict[str, Any] | None:

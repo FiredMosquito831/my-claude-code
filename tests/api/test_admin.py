@@ -818,7 +818,7 @@ def test_apply_with_an_unrelated_field_does_not_write_other_defaults(
         if line and not line.startswith("#") and "=" in line
     ]
     assert value_lines == ["LOG_LEVEL=DEBUG"]
-    assert "# FALLBACK_BENCH_ENABLED= (default: true)" in written
+    assert "# FALLBACK_BENCH_ENABLED= (default: false)" in written
 
 
 def test_credential_key_management_flow(monkeypatch, tmp_path):

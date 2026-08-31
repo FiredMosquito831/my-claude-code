@@ -872,6 +872,75 @@ def test_ordinary_row_leaves_the_optimization_columns_null(
     assert row["optimization_tokens_saved"] is None
 
 
+def test_a_benched_attempt_stores_why_it_was_benched(
+    store: RequestLogStore,
+) -> None:
+    """The registry's account rides on the row, not only in its prose.
+
+    Nested under ``params.bench`` beside ``wire`` and ``ladder`` for the same
+    reason those are: a small record of variable shape about one attempt, next
+    to the flat recovery counters rather than flattened into them.
+    """
+    capture = _make_capture(store, request_id="req_bench")
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="commandcode",
+            model_ref="commandcode/kimi-k3",
+            outcome="skipped",
+            error_kind="ejected",
+            error_message=(
+                "benched: 5 upstream errors in the last 10 attempts"
+                " (rate_based >= 50%), 22 s left"
+            ),
+            bench={
+                "mode": "rate_based",
+                "failures": 5,
+                "window": 10,
+                "rate": 0.5,
+                "last_kind": "upstream",
+                "last_status": 502,
+                "remaining_seconds": 22.0,
+                "since": 8.0,
+            },
+        )
+    )
+    capture.finish_success("ok")
+    store.close()
+
+    row = store.get_request("req_bench")
+    assert row is not None
+    (attempt,) = row["route_attempts"]
+    assert attempt["error_kind"] == "ejected"
+    assert attempt["error_message"] == (
+        "benched: 5 upstream errors in the last 10 attempts"
+        " (rate_based >= 50%), 22 s left"
+    )
+    assert attempt["params"]["bench"]["mode"] == "rate_based"
+    assert attempt["params"]["bench"]["last_status"] == 502
+    assert attempt["params"]["bench"]["remaining_seconds"] == 22.0
+
+
+def test_an_ordinary_attempt_stores_no_bench_key(store: RequestLogStore) -> None:
+    """Only a skipped-by-bench row carries it; everything else stays as it was."""
+    capture = _make_capture(store, request_id="req_nobench")
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="commandcode",
+            model_ref="commandcode/kimi-k3",
+            outcome="succeeded",
+        )
+    )
+    capture.finish_success("ok")
+    store.close()
+
+    row = store.get_request("req_nobench")
+    assert row is not None
+    (attempt,) = row["route_attempts"]
+    assert attempt["params"] is None
+
+
 def test_recovery_counters_land_on_their_own_attempt_row(
     store: RequestLogStore,
 ) -> None:

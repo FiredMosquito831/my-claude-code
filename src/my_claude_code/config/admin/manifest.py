@@ -911,13 +911,18 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "benching",
         "select",
         settings_attr="fallback_bench_enabled",
-        default="true",
+        default="false",
         options=("false", "true"),
         description=(
-            "Whether the chain benches a model that keeps failing. ON "
-            "(default) ejects it for the configured time and honours a "
-            "provider Retry-After. OFF makes every Eject setting below inert "
-            "and retries a failing model at every request."
+            "Off (default): every model in the chain is tried every time. On: "
+            "a model that keeps failing is skipped for FALLBACK_EJECT_SECONDS "
+            "and a provider Retry-After is honoured, and every Eject setting "
+            "below becomes live. Only model-shaped failures count towards the "
+            "bench -- upstream 5xx, overloaded, and 401/403 from the provider. "
+            "Timeouts, 429s, context-length and malformed-request failures are "
+            "the request's problem rather than the model's and never bench "
+            "one. The default changed to off in 6.14.0; an install that "
+            "already has this written in its .env keeps whatever it says."
         ),
     ),
     ConfigFieldSpec(

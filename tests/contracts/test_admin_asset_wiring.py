@@ -70,6 +70,11 @@ KNOWN_DYNAMIC_ONLY_IDS: set[str] = {
     # `field-<KEY>`, so this one exists only once the Model Config view has
     # rendered. The Benching card's cross-link focuses it after switching view.
     "field-FALLBACK_SKIP_KINDS",
+    # section-benching: renderSections() ids each rendered section
+    # `section-<id>`, so this one exists only once the Limits view has
+    # rendered. renderBenchMasterSwitch()'s cross-link scrolls to it after
+    # switching view.
+    "section-benching",
 }
 
 

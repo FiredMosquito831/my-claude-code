@@ -22,6 +22,7 @@ from .constants import (
     FAILURE_KIND_NAMES,
     FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT,
     FALLBACK_BEHAVIOR_DEFAULT,
+    FALLBACK_BENCH_ENABLED_DEFAULT,
     FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT,
     FALLBACK_EJECT_AFTER_FAILURES_DEFAULT,
     FALLBACK_EJECT_FAILURE_RATE_DEFAULT,
@@ -565,23 +566,25 @@ class Settings(BaseSettings):
         validation_alias="FALLBACK_SKIP_KINDS",
     )
 
-    # Consecutive failures before a provider/model is skipped by routing, and
-    # how long it stays skipped. Without this every request re-pays a dead
-    # model's timeout on its way to a healthy fallback. 0 disables ejection.
-    # When True (the default), benching is active: the configured eject mode
-    # (consecutive or rate-based), the provider rate-limit skip and the
-    # kind-aware bench durations all apply. Set False to opt a route out and
-    # get direct retry / direct fallback with no benching at all.
+    # Whether the route-level bench runs at all. When on, the configured eject
+    # mode (consecutive or rate-based), the provider rate-limit skip and the
+    # kind-aware bench durations all apply to the models on a route. When off,
+    # every model in the chain is tried on every request.
     #
-    # This defaulted to False in 5.58.0-5.60.0, which silently disabled
-    # ejection for every existing install on upgrade -- FALLBACK_EJECT_* were
-    # still documented and still set in user .env files, but were inert. A
-    # flapping model was then re-tried at position 0 on every request instead
-    # of being parked, which showed up as bursts of upstream stream failures.
-    # Ejection is a resilience guard, so it defaults on; opting out stays
-    # possible and is now documented in .env.example.
+    # It shipped off in 5.58.0-5.60.0, on from 5.61.0, and off again here.
+    # What changed the answer is what feeds it: the bench counted every
+    # failure, including request-shaped ones, so a prompt larger than any
+    # model's context ejected the whole chain and the request was answered by
+    # whichever model was left holding the 400. Benching now counts only
+    # model-shaped failures (see ``failure_counts_toward_bench``), but a guard
+    # that removes capacity is opt-in rather than something an install
+    # inherits.
+    #
+    # A default only applies where the key is unset: an install whose managed
+    # .env already carries FALLBACK_BENCH_ENABLED=true keeps benching on until
+    # the line is removed (the field's "set here" chip says so).
     fallback_bench_enabled: bool = Field(
-        default=True,
+        default=FALLBACK_BENCH_ENABLED_DEFAULT,
         validation_alias="FALLBACK_BENCH_ENABLED",
     )
     fallback_eject_after_failures: int = Field(

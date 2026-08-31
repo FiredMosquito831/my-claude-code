@@ -590,11 +590,80 @@ def test_turning_benching_off_makes_every_eject_knob_inert(rendered) -> None:
 
 
 def test_the_benching_card_points_at_where_skip_kinds_lives(rendered) -> None:
-    """A setting rendered on two pages can show two answers."""
+    """A setting rendered on two pages can show two answers.
+
+    Two cross-links now: one sending the reader to FALLBACK_SKIP_KINDS, which
+    renders only on Model Config, and one naming Model Config as the other
+    place the master switch is reachable. The switch is the deliberate
+    exception -- one manifest field, one saved key, two controls mirrored by
+    ``syncSharedControls`` -- and FALLBACK_SKIP_KINDS is still not.
+    """
     limits = rendered["limits"]
-    assert limits["crosslinks"] == 1
+    assert limits["crosslinks"] == 2
     assert "Model Config" in limits["crosslinkText"]
     assert limits["skipKindsOnLimits"] == 0
+
+
+def test_the_master_switch_renders_on_both_pages_as_one_value(rendered) -> None:
+    """Two controls, one setting.
+
+    Chain benching is a routing decision, so it reads on Model Config beside
+    the routes it governs; it also gates the Limits card, so it stays there
+    too. That is the one field this project renders twice, and the rule that
+    makes it safe is that both controls are bound to the same manifest key and
+    mirrored on edit -- otherwise the page shows two answers and
+    ``changedValues()`` submits whichever it walked last.
+    """
+    mirror = rendered["limits"]["benchMirror"]
+
+    assert mirror["controls"] == 2
+    assert mirror["onModelConfig"] == "true"
+    assert mirror["onLimits"] == "true"
+    # One key, not two controls' worth. (FALLBACK_BEHAVIOR is dirty too: an
+    # earlier step in the harness switched the card to legacy mode.)
+    assert mirror["submitted"].count("FALLBACK_BENCH_ENABLED") == 1
+    assert sorted(mirror["submitted"]) == [
+        "FALLBACK_BEHAVIOR",
+        "FALLBACK_BENCH_ENABLED",
+    ]
+    # The Limits card followed: the mode's own group came back to life.
+    assert [group["inert"] for group in mirror["benchGroups"]] == [True, False]
+
+
+def test_the_master_switch_links_to_where_the_tuning_lives(rendered) -> None:
+    mirror = rendered["limits"]["benchMirror"]
+
+    assert mirror["label"] == "Chain benching"
+    assert mirror["crosslink"] == (
+        "Tuning (window, rate, duration) lives on Limits & Resilience → Chain benching."
+    )
+    assert mirror["markup"] is False
+
+
+def test_a_benched_row_says_why_it_was_benched(rendered) -> None:
+    """ "Benched after recent consecutive failures" was one sentence for every
+    skip, in a build whose default mode has been rate-based since 5.61.0.
+    """
+    detail = rendered["requestDetail"]["benchReason"]
+
+    assert detail["chainReasons"] == [
+        "ejectedbenched: 5 upstream errors in the last 10 attempts"
+        " (rate_based >= 50%), 22 s left"
+    ]
+    assert detail["benchReasons"] == [
+        "5 counted failures in the last 10 attempts of at least 50%"
+        " · last: 502 upstream · 22s left · benched 8s ago"
+    ]
+
+
+def test_the_chain_panel_counts_the_models_that_were_benched(rendered) -> None:
+    """The incident in one line: capable models removed before the request ran."""
+    detail = rendered["requestDetail"]["benchReason"]
+
+    assert (
+        "1 model was benched and never tried on this request."
+        in (detail["ladderRootCauses"])
+    )
 
 
 def test_each_numeric_limit_shows_its_range_beside_the_input(rendered) -> None:
