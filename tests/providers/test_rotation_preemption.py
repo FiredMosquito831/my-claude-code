@@ -25,8 +25,18 @@ import httpx
 import openai
 import pytest
 
+from my_claude_code.application.errors import ApplicationUnavailableError
+from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
+from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from my_claude_code.core.upstream_ladder import (
+    _LADDER,
+    install_ladder_trace,
+    ladder_payload,
+)
+from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.credential_rotation import CredentialRotationState
+from my_claude_code.providers.runtime.rotating import RotatingProvider
 from tests.providers.support import rotation_state
 from tests.providers.test_credential_rotation import (
     _failure_record,
@@ -300,3 +310,145 @@ def test_the_state_requires_its_settings() -> None:
         assert parameters[name].default is inspect.Parameter.empty
         assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
     assert "circuit_threshold" not in parameters
+
+
+# --------------------------------------------------------------------------
+# The pool wrapper's half of the (key, model) bench.
+# --------------------------------------------------------------------------
+
+
+def _model_request(model: str) -> MessagesRequest:
+    return MessagesRequest(model=model, messages=[Message(role="user", content="hi")])
+
+
+def _scoped_pool(count: int, policy: str = "round_robin") -> RotatingProvider:
+    """A pool wired the way the factory wires it: escalation 2."""
+    providers = [_FakeProvider() for _ in range(count)]
+    config = ProviderConfig(
+        api_key="k1",
+        base_url="http://x",
+        api_keys=tuple(f"k{i + 1}" for i in range(count)),
+        credential_rotation=policy,
+    )
+    state = rotation_state(count, policy, model_bench_escalation=2)
+    return RotatingProvider(config, providers, state)
+
+
+@pytest.mark.asyncio
+async def test_unavailable_now_includes_keys_benched_for_this_model() -> None:
+    """Nothing pinned ``_unavailable_now`` before; the union shape is #216."""
+    pool = _scoped_pool(3)
+
+    await pool._state.report_failure(1, _rate_limited(429.0), model="kimi")
+
+    assert pool._unavailable_now("kimi") == frozenset({1})
+    assert pool._unavailable_now("nemotron") == frozenset()
+    # Without a model the pool answers about limiter windows only, exactly as
+    # it did before: the engine keeps a model-benched slot HEALTHY.
+    assert pool._unavailable_now() == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_the_step_over_asks_about_the_model_the_attempt_will_send() -> None:
+    """``routed.request.model`` is the same string ``report_failure`` gets.
+
+    Any other spelling -- the provider-prefixed ref, say -- would make every
+    (key, model) bench invisible to the executor's cooldown step-over. This
+    pins the two ends against each other rather than against a literal.
+    """
+    pool = _scoped_pool(1, "round_robin")
+    request = _model_request("moonshotai/kimi-k3")
+    seen: list[str | None] = []
+
+    class _Recorder(_FakeProvider):
+        def stream_response(
+            self,
+            request: MessagesRequest,
+            input_tokens: int = 0,
+            *,
+            request_id: str | None = None,
+            reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        ):
+            seen.append(request.model)
+            return super().stream_response(
+                request,
+                input_tokens,
+                request_id=request_id,
+                reasoning=reasoning,
+            )
+
+    recorder = _Recorder()
+    pool._providers = (recorder,)
+
+    async for _ in pool.stream_response(request):
+        pass
+
+    assert seen == [request.model]
+    # And the model the step-over would ask about is that same string.
+    await pool._state.report_failure(0, _rate_limited(60.0), model=request.model)
+    assert pool._state.model_benched_indexes(request.model) == (0,)
+
+
+@pytest.mark.asyncio
+async def test_the_pool_reports_no_key_for_this_model_distinctly_from_no_key_at_all() -> (
+    None
+):
+    trace = install_ladder_trace()
+    pool = _scoped_pool(2)
+
+    for index in (0, 1):
+        await pool._state.report_failure(index, _rate_limited(60.0), model="kimi")
+
+    with pytest.raises(ApplicationUnavailableError) as scoped:
+        async for _ in pool.stream_response(_model_request("kimi")):
+            pass
+
+    assert "rate-limited for kimi" in str(scoped.value)
+    assert "use another model on this provider" in str(scoped.value).lower()
+    rows = ladder_payload(trace.slot())["tries"]
+    assert rows[-1]["kind"] == "pool_benched_model"
+    _LADDER.set(None)
+
+    # Now the whole pool, and the existing sentence byte for byte.
+    trace = install_ladder_trace()
+    whole = _scoped_pool(2)
+    for index in (0, 1):
+        await whole._state.report_failure(index, _RetryableError())
+
+    with pytest.raises(ApplicationUnavailableError) as everything:
+        async for _ in whole.stream_response(_model_request("kimi")):
+            pass
+
+    assert "All API keys for this provider are in cooldown." in str(everything.value)
+    rows = ladder_payload(trace.slot())["tries"]
+    assert rows[-1]["kind"] == "pool_benched"
+    _LADDER.set(None)
+
+
+@pytest.mark.asyncio
+async def test_throttle_remaining_is_zero_for_a_model_whose_keys_are_free() -> None:
+    pool = _scoped_pool(2)
+
+    await pool._state.report_failure(0, _rate_limited(60.0), model="kimi")
+    await pool._state.report_failure(1, _rate_limited(60.0), model="kimi")
+
+    assert pool.throttle_remaining("kimi") > 0
+    assert pool.throttle_remaining("nemotron") == 0.0
+    # No model in hand: the pool's best case over all models, and every slot
+    # is still HEALTHY.
+    assert pool.throttle_remaining() == 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_bench_is_visible_in_key_health() -> None:
+    """What the dashboard reads, and the whole observable win of this PR."""
+    pool = _scoped_pool(3)
+
+    for index in range(3):
+        await pool._state.report_failure(index, _rate_limited(None), model="kimi")
+
+    health = pool.key_health()
+    assert [entry["state"] for entry in health] == ["HEALTHY"] * 3
+    for entry in health:
+        assert [bench["model"] for bench in entry["model_benches"]] == ["kimi"]
+        assert entry["model_benches"][0]["remaining"] == pytest.approx(60.0, abs=1.0)

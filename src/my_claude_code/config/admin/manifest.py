@@ -144,7 +144,9 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
     ConfigSectionSpec(
         "credential_health",
         "Credential health",
-        "What one API key's failures cost it, and how long it sits out. "
+        "What one API key's failures cost it, and how long it sits out. A rate "
+        "limit is scoped to the model it happened on unless several models are "
+        "limited on the same key. "
         "Rotation policy is per pool and lives on each provider's card.",
     ),
     ConfigSectionSpec(
@@ -1256,6 +1258,22 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "staying at the last entry. This is the only ladder left: a 429 "
             "waits exactly as long as the provider asked, and nothing else "
             "changes a key's health."
+        ),
+    ),
+    ConfigFieldSpec(
+        "CREDENTIAL_MODEL_BENCH_ESCALATION",
+        "Models before a whole key is benched",
+        "credential_health",
+        "number",
+        settings_attr="credential_model_bench_escalation",
+        default="2",
+        restart_required=True,
+        minimum=0,
+        description=(
+            "A 429 benches only the model it happened on, on the key it "
+            "happened on. Once this many different models are rate-limited "
+            "on the same key at once, the key itself is benched instead. "
+            "1 benches the whole key on every 429; 0 never does."
         ),
     ),
     # ---- Request log: what to keep ---------------------------------------

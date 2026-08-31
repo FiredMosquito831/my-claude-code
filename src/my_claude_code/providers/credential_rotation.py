@@ -118,10 +118,34 @@ def _charged_reason(
     retry_after: float | None,
     benched_for: float,
     auth_failures: int,
+    model: str | None = None,
+    model_benched_for: float | None = None,
+    models_throttled: int = 0,
 ) -> str:
-    """What the pool did to this credential, in the pool's own numbers."""
+    """What the pool did to this credential, in the pool's own numbers.
+
+    A 429 is scoped to the (key, model) pair, so there are three shapes rather
+    than two: the pair was benched and the key stayed healthy; enough distinct
+    models were throttled that the key itself went into cooldown; or no model
+    was in hand at all, which is the unscoped 6.18.0 wording, byte for byte.
+    """
     named = str(status) if status is not None else failure_class
     if failure_class == "rate_limit":
+        if model is not None and model_benched_for is not None:
+            if benched_for <= 0:
+                if retry_after is not None:
+                    return (
+                        f"{named} with Retry-After {retry_after:g}s"
+                        f" -- {model} benched on this key"
+                    )
+                return (
+                    f"{named}, no Retry-After"
+                    f" -- {model} benched {model_benched_for:.0f}s on this key"
+                )
+            return (
+                f"{named} -- {models_throttled} models throttled on this key,"
+                f" whole key benched {benched_for:.0f}s"
+            )
         if retry_after is not None:
             return f"{named} with Retry-After {retry_after:g}s"
         return f"{named}, no Retry-After -- operator cooldown {benched_for:.0f}s"
@@ -194,6 +218,7 @@ class CredentialRotationState:
         *,
         rate_limit_seconds: float,
         lockout_tiers: Sequence[float],
+        model_bench_escalation: int = 1,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if policy == "on_error":
@@ -203,6 +228,7 @@ class CredentialRotationState:
             PROVIDER_TUNING,
             rate_limit_seconds=rate_limit_seconds,
             lockout_tiers=tuple(lockout_tiers),
+            model_bench_escalation=model_bench_escalation,
         )
         self._engine = RotationEngine(
             key_count, policy=canonical, tuning=tuning, clock=clock
@@ -216,7 +242,9 @@ class CredentialRotationState:
     def policy(self) -> str:
         return self._engine.policy
 
-    async def acquire(self, avoid: frozenset[int] = frozenset()) -> int:
+    async def acquire(
+        self, avoid: frozenset[int] = frozenset(), *, model: str | None = None
+    ) -> int:
         """Return the index of the credential to use for one new request.
 
         ``avoid`` lists credentials that are healthy but cannot serve right now
@@ -224,11 +252,16 @@ class CredentialRotationState:
         else is available, and fall back to normal selection when every
         credential is in that state, so a fully throttled pool still queues on
         its limiter rather than hard-failing.
+
+        ``model`` additionally excludes credentials holding a live (key, model)
+        bench for it, and is **not** relaxed by the second call: a key benched
+        for this model cannot serve this model, so falling back to it would be
+        a guaranteed 429.
         """
         async with self._lock:
-            selected = self._engine.choose(avoid)
+            selected = self._engine.choose(avoid, model)
             if selected is None and avoid:
-                selected = self._engine.choose(frozenset())
+                selected = self._engine.choose(frozenset(), model)
             if selected is None:
                 return -1
             self._engine.mark_acquired(selected)
@@ -287,22 +320,36 @@ class CredentialRotationState:
             else None
         )
         async with self._lock:
-            self._engine.fail(index, failure_class, retry_after=retry_after)
+            self._engine.fail(
+                index, failure_class, retry_after=retry_after, model=model
+            )
             # Read the bench back out of the engine that just decided it. The
             # number is never recomputed from tuning here: an operator cooldown,
             # a published Retry-After and a lockout tier all land in the same
             # two deadlines, and only the engine knows which one applied.
             slot = self._engine.slot(index)
             now = self._clock()
+            model_until = slot.model_benches.get(model) if model else None
             benched_for = max(slot.cooldown_until, slot.lockout_until) - now
+            model_benched_for = None if model_until is None else model_until - now
+            models_throttled = len(slot.model_benches)
         record_credential_decision(
             key_index=index,
             cls=failure_class,
             benched_for_s=benched_for if benched_for > 0 else None,
             status=status,
             retry_after=retry_after,
+            model=model if model_benched_for is not None else None,
+            model_benched_for_s=model_benched_for,
             reason=_charged_reason(
-                failure_class, status, retry_after, benched_for, slot.auth_failures
+                failure_class,
+                status,
+                retry_after,
+                benched_for,
+                slot.auth_failures,
+                model=model,
+                model_benched_for=model_benched_for,
+                models_throttled=models_throttled,
             ),
         )
         return rotate
@@ -317,7 +364,7 @@ class CredentialRotationState:
         async with self._lock:
             return self._engine.restore_all()
 
-    def selectable_indexes(self) -> tuple[int, ...]:
+    def selectable_indexes(self, model: str | None = None) -> tuple[int, ...]:
         """Credentials the policy could hand out this instant.
 
         Synchronous and lock-free on purpose: routing asks this question from
@@ -325,20 +372,31 @@ class CredentialRotationState:
         interface. It only reads slot state and expires elapsed benches, the
         same thing ``get_metrics`` already does outside the lock.
         """
-        return self._engine.selectable_indexes()
+        return self._engine.selectable_indexes(model)
 
-    def bench_remaining_now(self) -> float:
+    def model_benched_indexes(self, model: str) -> tuple[int, ...]:
+        """Credentials holding a live (key, model) bench for ``model``.
+
+        Lock-free for the same reason :meth:`selectable_indexes` is: it reads
+        slot state and expires elapsed benches, nothing more.
+        """
+        return self._engine.model_benched_indexes(model)
+
+    def bench_remaining_now(self, model: str | None = None) -> float:
         """Synchronous view of :meth:`shortest_cooldown_remaining`."""
-        return self._engine.shortest_bench_remaining()
+        return self._engine.shortest_bench_remaining(model)
 
-    async def shortest_cooldown_remaining(self) -> float:
+    async def shortest_cooldown_remaining(self, model: str | None = None) -> float:
         """Seconds until the soonest non-healthy credential may serve again."""
         async with self._lock:
-            return self._engine.shortest_bench_remaining()
+            return self._engine.shortest_bench_remaining(model)
 
     def get_metrics(self) -> list[dict[str, Any]]:
         """Return per-credential health snapshots for dashboards."""
-        now = time.monotonic()
+        # Expire elapsed benches first rather than relying on some earlier
+        # caller having done it: the reader should not have to know.
+        self._engine.refresh()
+        now = self._clock()
         return [
             {
                 "state": slot.state.name,
@@ -348,6 +406,13 @@ class CredentialRotationState:
                 "rate_limits": slot.rate_limits,
                 "cooldown_remaining": max(0.0, slot.cooldown_until - now),
                 "lockout_remaining": max(0.0, slot.lockout_until - now),
+                "model_benches": [
+                    {"model": model, "remaining": until - now}
+                    for model, until in sorted(
+                        slot.model_benches.items(), key=lambda item: -item[1]
+                    )
+                    if until - now > 0
+                ],
             }
             for slot in self._engine.slots()
         ]

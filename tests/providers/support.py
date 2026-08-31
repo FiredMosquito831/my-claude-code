@@ -69,21 +69,30 @@ def rotation_state(
     *,
     rate_limit_seconds: float = DEFAULT_RATE_LIMIT_SECONDS,
     lockout_tiers: tuple[float, ...] = DEFAULT_LOCKOUT_TIERS,
+    model_bench_escalation: int = 1,
     clock: Callable[[], float] | None = None,
 ) -> CredentialRotationState:
-    """Build a rotation pool with the settings a default install would give it."""
+    """Build a rotation pool with the settings a default install would give it.
+
+    ``model_bench_escalation`` defaults to 1 -- never scope a 429 to a model --
+    so every test written before (key, model) benches existed keeps describing
+    exactly the behaviour it was written for. Tests about the scoped bench pass
+    the runtime value explicitly.
+    """
     if clock is None:
         return CredentialRotationState(
             key_count,
             policy,
             rate_limit_seconds=rate_limit_seconds,
             lockout_tiers=lockout_tiers,
+            model_bench_escalation=model_bench_escalation,
         )
     return CredentialRotationState(
         key_count,
         policy,
         rate_limit_seconds=rate_limit_seconds,
         lockout_tiers=lockout_tiers,
+        model_bench_escalation=model_bench_escalation,
         clock=clock,
     )
 

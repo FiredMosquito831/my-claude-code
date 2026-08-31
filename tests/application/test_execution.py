@@ -72,7 +72,7 @@ class FakeProvider:
         self.stream_close_calls = 0
         self.cooldown_seconds = 0.0
 
-    def throttle_remaining(self) -> float:
+    def throttle_remaining(self, model: str | None = None) -> float:
         return self.cooldown_seconds
 
     @property

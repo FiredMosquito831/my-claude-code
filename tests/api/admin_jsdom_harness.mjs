@@ -358,6 +358,55 @@ const BULK_RESULT = {
 };
 
 const ROUTES = {
+  /* Two credential pools for the key manager: one whose keys hold live
+     (key, model) 429 benches, and one plain healthy pool that must render
+     exactly as it did before model benches existed. */
+  "/admin/api/credentials/SCOPED_API_KEY/keys": {
+    count: 2,
+    locked: false,
+    keys: ["nvap...ubCk", "nvap...9fQt"],
+    health: [
+      {
+        index: 0,
+        state: "HEALTHY",
+        request_count: 12,
+        failure_count: 5,
+        cooldown_remaining: 0,
+        lockout_remaining: 0,
+        model_benches: [
+          { model: "moonshotai/kimi-k3", remaining: 58.4 },
+          { model: "nvidia/nemotron-3-ultra", remaining: 30.0 },
+          { model: "minimaxai/minimax-m2", remaining: 12.0 },
+          { model: "openai/gpt-oss-120b", remaining: 4.0 },
+        ],
+      },
+      {
+        index: 1,
+        state: "COOLDOWN",
+        request_count: 3,
+        failure_count: 3,
+        cooldown_remaining: 45,
+        lockout_remaining: 0,
+        model_benches: [{ model: "moonshotai/kimi-k3", remaining: 45.0 }],
+      },
+    ],
+  },
+  "/admin/api/credentials/PLAIN_API_KEY/keys": {
+    count: 1,
+    locked: false,
+    keys: ["nvap...2vLm"],
+    health: [
+      {
+        index: 0,
+        state: "HEALTHY",
+        request_count: 7,
+        failure_count: 0,
+        cooldown_remaining: 0,
+        lockout_remaining: 0,
+        model_benches: [],
+      },
+    ],
+  },
   "/admin/api/config": {
     fields: FIELDS,
     sections: SECTIONS,
@@ -1906,6 +1955,28 @@ const analytics = {};
   analytics.loadsAfterEnterAndPause = statsCalls().length;
 }
 
+/* ------------------------------------------------------- credential keys
+   The key manager is opened from a credential field's panel. Render both
+   pools and report what came out, so a model bench sub-line is proven to
+   exist and a pool without one is proven byte-identical. */
+const keyManager = {};
+for (const [name, key] of [
+  ["scoped", "SCOPED_API_KEY"],
+  ["plain", "PLAIN_API_KEY"],
+]) {
+  const panel = doc.createElement("div");
+  doc.body.appendChild(panel);
+  await window.eval(`renderKeyManager`)(panel, { key });
+  const rows = Array.from(panel.querySelectorAll(".key-manager-row"));
+  keyManager[name] = rows.map((row) => ({
+    badge: (row.querySelector(".key-health-badge")?.textContent || "").trim(),
+    badgeTitle: row.querySelector(".key-health-badge")?.title || "",
+    benchLine: (row.querySelector(".key-model-benches")?.textContent || "").trim(),
+    benchTitle: row.querySelector(".key-model-benches")?.title || "",
+    html: row.innerHTML,
+  }));
+}
+
 requestDetail.reasoningRow = window.eval(
   `formatRequestReasoningEmitted({route_attempts:[{outcome:"succeeded",reasoning_emitted:0}]})`,
 );
@@ -1930,6 +2001,7 @@ console.log(
       },
       requestCards,
       requestDetail,
+      keyManager,
       dialectPanels,
       docs,
       limits,

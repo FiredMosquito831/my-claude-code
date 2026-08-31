@@ -609,7 +609,14 @@ passed to `acquire` as an avoid set, so rotation cannot end with keys untried.
 `CREDENTIAL_LOCKOUT_TIERS`; a 429 is benched for exactly the `Retry-After` the
 provider published, carried on `ExecutionFailure.retry_after_seconds`, or for
 `RATE_LIMIT_COOLDOWN_SECONDS` when it published none, under a one-hour cap. No
-bench duration is invented at this layer. The deliberate cost is that a key
+bench duration is invented at this layer. That 429 bench is scoped to the
+**(key, model)** pair -- `PoolSlot.model_benches`, expired lazily by the same
+`refresh()` that expires every other deadline -- and leaves the slot `HEALTHY`,
+because a gateway that limits one model has made no statement about the key's
+others. The credential itself is benched only once
+`CREDENTIAL_MODEL_BENCH_ESCALATION` distinct models hold a live bench on it at
+the same time, for the longest window already published and never less than the
+triggering 429 asked for. The deliberate cost is that a key
 failing 5xx or transport on every request is retried once per request rather
 than benched: the failure classes able to identify a dead key were the same
 ones emptying healthy pools.

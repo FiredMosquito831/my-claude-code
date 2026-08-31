@@ -67,16 +67,23 @@ class RotatingProvider(BaseProvider):
         """No single label applies: the credential is chosen per request."""
         return None
 
-    def _unavailable_now(self) -> frozenset[int]:
+    def _unavailable_now(self, model: str | None = None) -> frozenset[int]:
         """Credentials that are healthy but cannot serve this instant.
 
-        A rate-limited credential stays HEALTHY -- being throttled is not a
-        fault -- so rotation used to select it anyway and the request then sat
-        waiting inside that credential's own limiter while an idle credential
-        went unused. The throttle window comes from the provider's own
-        response, never from a limit invented here.
+        Two reasons now. The provider's own limiter window, as before -- a
+        rate-limited credential stays HEALTHY, so rotation used to select it
+        anyway and the request sat inside that credential's limiter while an
+        idle credential went unused. And, since a 429 is scoped to the (key,
+        model) pair, a credential benched for *this* model while healthy for
+        every other one. Both windows come from the provider's own response,
+        never from a limit invented here.
         """
-        return frozenset(
+        benched = (
+            frozenset(self._state.model_benched_indexes(model))
+            if model
+            else frozenset()
+        )
+        return benched | frozenset(
             index
             for index, provider in enumerate(self._providers)
             if provider.throttle_remaining() > 0
@@ -87,7 +94,7 @@ class RotatingProvider(BaseProvider):
             return self._key_labels[index]
         return None
 
-    def throttle_remaining(self) -> float:
+    def throttle_remaining(self, model: str | None = None) -> float:
         """The shortest wait before any credential can serve; 0 while one can.
 
         ``BaseProvider`` answers 0 unconditionally, which for a rotating
@@ -95,14 +102,20 @@ class RotatingProvider(BaseProvider):
         rate-limited. Rotation already prefers an unthrottled sub-provider, so
         the value routing needs is the best case, not the first one.
 
-        Two independent things bench a credential and both have to be read.
+        Three independent things bench a credential and all have to be read.
         The rate limiter is the provider's own throttle window. Health is the
-        rotation engine's -- COOLDOWN (a 429 the provider timed) or
-        LOCKED_OUT (an auth rejection). Reading only
+        rotation engine's -- COOLDOWN (a 429 that cost the whole key) or
+        LOCKED_OUT (an auth rejection). The third is the (key, model) bench a
+        429 installs first, which leaves the slot HEALTHY and is invisible
+        unless ``model`` is named. Reading only
         the limiter meant a pool whose every key was health-benched but not
         throttled still reported 0: routing skipped its step-over, committed
         the attempt, and the request paid a full round trip only to be told
         every key was in cooldown.
+
+        ``model`` asks the question for one model. Without it the answer is
+        the pool's best case over all models, which is what a caller with no
+        model in hand should be told.
 
         The contract is therefore: 0 whenever any credential can serve, and
         otherwise the shortest wait until one can. Selectability comes from
@@ -111,9 +124,9 @@ class RotatingProvider(BaseProvider):
         provider serves slot 0 regardless of its health, and must keep
         reporting itself free.
         """
-        ready = self._state.selectable_indexes()
+        ready = self._state.selectable_indexes(model)
         if not ready:
-            return self._state.bench_remaining_now()
+            return self._state.bench_remaining_now(model)
         return min(
             (
                 self._providers[index].throttle_remaining()
@@ -192,11 +205,20 @@ class RotatingProvider(BaseProvider):
             # ``failover`` would re-pick slot 0 and the loop would give up
             # with the other keys untouched.
             index = await self._state.acquire(
-                self._unavailable_now() | frozenset(attempted)
+                self._unavailable_now(request.model) | frozenset(attempted),
+                model=request.model,
             )
             if index < 0:
-                # Every credential is benched (cooldown or auth lockout).
-                wait = await self._state.shortest_cooldown_remaining()
+                # Every credential is benched. Two different facts, and the
+                # reader's next move differs: the whole pool is in cooldown,
+                # or only this model is rate-limited on every key while the
+                # provider's other models still answer.
+                model_wait = await self._state.shortest_cooldown_remaining(
+                    request.model
+                )
+                pool_wait = await self._state.shortest_cooldown_remaining()
+                model_only = pool_wait <= 0 < model_wait
+                wait = model_wait if model_only else pool_wait
                 # No key served this attempt, and the request-level baseline
                 # (execution.py) has already claimed key 0 with a NULL label,
                 # which renders as an ordinary keyless request. Say what
@@ -208,11 +230,18 @@ class RotatingProvider(BaseProvider):
                 record_upstream_try(
                     key_index=NO_CREDENTIAL_INDEX,
                     key_label=NO_CREDENTIAL_LABEL,
-                    kind="pool_benched",
+                    kind="pool_benched_model" if model_only else "pool_benched",
                     error_kind="unavailable",
                     retry_after=wait,
                     source="bench",
                 )
+                if model_only:
+                    raise ApplicationUnavailableError(
+                        "All API keys for this provider are rate-limited for "
+                        f"{request.model}. Retry in {max(1, int(wait))}s, or use "
+                        "another model on this provider."
+                        f"{limit_hint('RATE_LIMIT_COOLDOWN_SECONDS')}"
+                    )
                 raise ApplicationUnavailableError(
                     "All API keys for this provider are in cooldown. "
                     f"Retry in {max(1, int(wait))}s."

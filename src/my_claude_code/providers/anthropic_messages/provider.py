@@ -84,7 +84,7 @@ class AnthropicMessagesProvider(BaseProvider):
             ),
         )
 
-    def throttle_remaining(self) -> float:
+    def throttle_remaining(self, model: str | None = None) -> float:
         return self._rate_limiter.remaining_wait()
 
     async def cleanup(self) -> None:

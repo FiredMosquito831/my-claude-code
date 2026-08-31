@@ -905,7 +905,7 @@ The detail dialog answers the question "what did MCC actually put on the wire, a
 | Shown | Means |
 | --- | --- |
 | a key label (`nvap…8f21`) | that attempt used that key. Attempts in one request can name different keys |
-| **`no key available`** | every credential in the pool was benched; the attempt never reached a key at all |
+| **`no key available`** | every credential in the pool was benched; the attempt never reached a key at all. Since 6.19.0 this splits in two: the whole pool in cooldown, or every key rate-limited **for this model** while its other models still serve |
 | a dash | no credential was recorded — not measured, not "keyless" |
 | a **ladder headline** (`15 tries · 12×429, 3×502 · 3 keys · 96s sleeping`) | 6.12.0: how many times that attempt actually knocked, and what it met |
 
@@ -1023,9 +1023,11 @@ EXA_API_KEY_ROTATION=failover
 
 ### Health tracking
 
-Each key carries its own state, and only two things change it. A **401/403** locks the key out on an escalating ladder (`CREDENTIAL_LOCKOUT_TIERS`). A **429** benches it for exactly as long as the provider asked. Nothing else does — a timeout, a 5xx, a `410 model gone`, a 400 or a dropped connection leaves every key exactly as it was, because the same keys serve every model in your chain and none of those failures is the key's doing. When a model will not answer, the fallback chain moves to the next **model**.
+Each key carries its own state, and only two things change it. A **401/403** locks the key out on an escalating ladder (`CREDENTIAL_LOCKOUT_TIERS`). A **429** benches it for exactly as long as the provider asked, and only for the **model** that was rate-limited (see `CREDENTIAL_MODEL_BENCH_ESCALATION` below). Nothing else does — a timeout, a 5xx, a `410 model gone`, a 400 or a dropped connection leaves every key exactly as it was, because the same keys serve every model in your chain and none of those failures is the key's doing. When a model will not answer, the fallback chain moves to the next **model**.
 
 A **rate-limited key is benched for exactly as long as the provider says** — parsed from `Retry-After`, `retry-after-ms` or `x-ratelimit-reset-*` — rather than an invented fixed delay. A key that resets in one second isn't idled for a minute, and one that needs an hour isn't hammered.
+
+Since 6.19.0 that bench is also scoped to the **model** it happened on. Gateways that front many models rate-limit them separately: measured on NVIDIA NIM on 2026-08-31, `moonshotai/kimi-k3` returned 429 on all three keys inside 0.1 s while `nvidia/nemotron-3-ultra` and a MiniMax model answered on those same keys in the same second — and NIM sends no `Retry-After` at all. Charging the whole key for that took **every** NIM model off the route for a full minute. Now the pair is benched, the key stays `HEALTHY`, and the key itself is benched only once `CREDENTIAL_MODEL_BENCH_ESCALATION` (default 2) different models are limited on it at once — which is what a genuinely key-wide limit looks like, one extra 429 later.
 
 Per-key state, usage and health are visible in the Admin UI, including which key served which request; the ladder and the no-header cooldown are the **Credential health** card on [Limits and resilience](#12-limits-and-resilience).
 
@@ -1044,10 +1046,11 @@ A key that is out of rotation and a model that is failing look the same from you
 | Badge | What put it there |
 | --- | --- |
 | `HEALTHY` | in rotation |
-| `COOLDOWN` | a 429 — benched for a stated time |
+| `HEALTHY` with a model line under it | a 429 on **one model** — that model is benched on this key for a stated time, everything else on the key still serves |
+| `COOLDOWN` | a 429 that cost the whole key: several models limited on it at once, or `CREDENTIAL_MODEL_BENCH_ESCALATION=1` |
 | `LOCKED_OUT` | a 401 or 403 — benched on the escalating ladder |
 
-**2. Confirm it against a real request.** Analytics → **View** on a failing request → the chain panel names the key per attempt (see [the previous tutorial](#tutorial-read-the-request-detail)). If every entry reads **`no key available`**, the whole pool was benched and nothing was even attempted upstream — which is a credential problem. If the attempts name keys and still fail, it is a *model* problem and no key is at fault.
+**2. Confirm it against a real request.** Analytics → **View** on a failing request → the chain panel names the key per attempt (see [the previous tutorial](#tutorial-read-the-request-detail)). If every entry reads **`no key available`**, nothing was attempted upstream. The error says which of the two reasons applies: *All API keys for this provider are in cooldown* is a credential problem, while *All API keys for this provider are rate-limited for `<model>`* is a **model** problem on a healthy pool — try another model on that same provider. If the attempts name keys and still fail, it is a *model* problem and no key is at fault.
 
 **3. Read the ladder under the attempt.** Since 6.12.0 the chain panel names every upstream try, and one line per credential saying whether the pool charged it. If the ladder shows `12×429` before a `502`, the 502 is not the story — the pool was throttled and the last key simply happened to fail differently.
 
@@ -1056,7 +1059,7 @@ A key that is out of rotation and a model that is failing look the same from you
 | What the provider returned | The key | The request |
 | --- | --- | --- |
 | **401 / 403** | steps the `CREDENTIAL_LOCKOUT_TIERS` ladder — **300 s, then 3,600 s, then 86,400 s** (5 min → 1 h → 24 h), one step per consecutive rejection, staying at the last entry | rotates to the next key |
-| **429** | benched for **exactly the provider's `Retry-After`** — parsed from `Retry-After`, `retry-after-ms` or `x-ratelimit-reset-*` — or `RATE_LIMIT_COOLDOWN_SECONDS` (60 s) when the host publishes no header, capped at one hour either way | rotates to the next key |
+| **429** | the **(key, model) pair** is benched for **exactly the provider's `Retry-After`** — parsed from `Retry-After`, `retry-after-ms` or `x-ratelimit-reset-*` — or `RATE_LIMIT_COOLDOWN_SECONDS` (60 s) when the host publishes no header, capped at one hour either way. The key itself is benched only once `CREDENTIAL_MODEL_BENCH_ESCALATION` different models hold a live bench on it | rotates to the next key |
 | connection error / transport fault | nothing | rotates to the next key |
 | **timeout, 5xx, `410 model gone`, "overloaded", 400, context overflow** | **nothing at all** | moves to the next **model** in the chain |
 
@@ -1174,7 +1177,7 @@ How hard one model is tried before the chain is used at all: the retries on a 42
 
 ### Credential health
 
-What one key's failures cost it, and it is a short list. A **401 or 403** walks the lockout ladder — `CREDENTIAL_LOCKOUT_TIERS`, five minutes then an hour then a day by default, one step per consecutive rejection and staying at the last entry. A **429** benches the key for exactly as long as the provider asked in its `Retry-After`, or for `RATE_LIMIT_COOLDOWN_SECONDS` when it sends no header. A **timeout or a 5xx costs a key nothing at all**, because the same keys serve every model in your chain and neither failure is the key's doing.
+What one key's failures cost it, and it is a short list. A **401 or 403** walks the lockout ladder — `CREDENTIAL_LOCKOUT_TIERS`, five minutes then an hour then a day by default, one step per consecutive rejection and staying at the last entry. A **429** benches the key for exactly as long as the provider asked in its `Retry-After`, or for `RATE_LIMIT_COOLDOWN_SECONDS` when it sends no header — and only for the model it happened on, until `CREDENTIAL_MODEL_BENCH_ESCALATION` (default 2) different models are limited on that key at the same time, which is when the limit is the key's rather than the model's. A **timeout or a 5xx costs a key nothing at all**, because the same keys serve every model in your chain and neither failure is the key's doing.
 
 ### Diagnostics
 
@@ -1300,6 +1303,7 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | --- | --- | --- |
 | `CREDENTIAL_LOCKOUT_TIERS` | `300,3600,86400` | The auth lockout ladder, in seconds. A 401/403 takes the next entry each time and stays on the last one. Any comma-separated list of positive seconds works; the field spells your list back at you as *1st auth failure: 5m out · 2nd: 1h out · 3rd and after: 1d out*. |
 | `RATE_LIMIT_COOLDOWN_SECONDS` | `60` | Only used when a 429 arrives with no `Retry-After` and no equivalent header. When one does arrive, the provider's own number wins. Capped at one hour either way. Named in the `All API keys for this provider are in cooldown` error since 6.16.0, alongside the **Credential health** card that edits it. |
+| `CREDENTIAL_MODEL_BENCH_ESCALATION` | `2` | New in 6.19.0. A 429 benches the (key, model) pair, not the key; this is how many different models must be limited on one key at once before the key itself is benched. `1` restores the 6.18.0 whole-key bench, `0` never escalates. |
 | `FALLBACK_FIRST_TOKEN_TIMEOUT` | `0` (no limit) | **Changed in 6.16.0** — was `180`. Silence before any output. The only deadline that produces a failover. |
 | `FALLBACK_ATTEMPT_SHARE_FLOOR` | `0` (equal share) | **Changed in 6.16.0** — was `180`. Chain-side floor on one model's slice of the total budget. Moot while the budget is `0`. |
 | `FALLBACK_TOTAL_TIMEOUT` | `0` (no limit) | **Changed in 6.16.0** — was `600`. The whole request, across every attempt and retry. |

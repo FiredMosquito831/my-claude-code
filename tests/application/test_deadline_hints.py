@@ -227,7 +227,7 @@ class _SilentProvider:
     def __init__(self) -> None:
         self.entered = asyncio.Event()
 
-    def throttle_remaining(self) -> float:
+    def throttle_remaining(self, model: str | None = None) -> float:
         return 0.0
 
     @property

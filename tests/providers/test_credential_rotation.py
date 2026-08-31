@@ -671,7 +671,7 @@ class _ThrottledProvider(_FakeProvider):
         super().__init__(**kwargs)
         self._throttled_for = throttled_for
 
-    def throttle_remaining(self) -> float:
+    def throttle_remaining(self, model: str | None = None) -> float:
         return self._throttled_for
 
 
@@ -1094,3 +1094,148 @@ async def test_recording_a_decision_does_not_change_the_health_verdict() -> None
     metrics = state.get_metrics()
     assert metrics[0]["state"] != "HEALTHY"
     assert metrics[1]["state"] == "HEALTHY"
+
+
+# --------------------------------------------------------------------------
+# The (key, model) 429 bench, as the async adapter records and reports it.
+# The pool defaults to escalation 1 -- never scope -- so every test above
+# still describes exactly the behaviour it was written for; these pass the
+# runtime value (2) explicitly.
+# --------------------------------------------------------------------------
+
+
+def _kimi_request() -> MessagesRequest:
+    return MessagesRequest(
+        model="moonshotai/kimi-k3",
+        messages=[Message(role="user", content="hi")],
+    )
+
+
+@pytest.mark.asyncio
+async def test_report_failure_passes_the_model_through_to_the_engine() -> None:
+    """Getting this string wrong makes every bench invisible to the step-over."""
+    state = rotation_state(3, "round_robin", model_bench_escalation=2)
+
+    await state.report_failure(
+        0, _rate_limited(retry_after=None), model="moonshotai/kimi-k3"
+    )
+
+    slot = state._engine.slot(0)
+    assert slot.state is PoolHealthState.HEALTHY
+    assert set(slot.model_benches) == {"moonshotai/kimi-k3"}
+    assert state.model_benched_indexes("moonshotai/kimi-k3") == (0,)
+    assert state.model_benched_indexes("nvidia/nemotron-3-ultra-550b-a55b") == ()
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_bench_records_the_model_on_the_credential_decision() -> None:
+    trace = install_ladder_trace()
+    state = rotation_state(3, "round_robin", model_bench_escalation=2)
+
+    await state.report_failure(
+        0, _rate_limited(retry_after=None), model="moonshotai/kimi-k3"
+    )
+
+    decision = ladder_payload(trace.slot())["credentials"][0]
+    assert decision["class"] == "rate_limit"
+    assert decision["status"] == 429
+    assert decision["model"] == "moonshotai/kimi-k3"
+    # The substring the unscoped assertion pins is still there.
+    assert "no Retry-After" in decision["reason"]
+    assert "moonshotai/kimi-k3 benched" in decision["reason"]
+    _LADDER.set(None)
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_bench_leaves_benched_for_s_absent_and_sets_model_benched_for_s() -> (
+    None
+):
+    """Two different facts: the pair's bench, and the credential's."""
+    trace = install_ladder_trace()
+    state = rotation_state(2, "round_robin", model_bench_escalation=2)
+
+    await state.report_failure(
+        0, _rate_limited(retry_after=None), model="moonshotai/kimi-k3"
+    )
+
+    decision = ladder_payload(trace.slot())["credentials"][0]
+    assert decision["benched_for_s"] is None
+    assert decision["model_benched_for_s"] == pytest.approx(60.0, abs=1.0)
+    _LADDER.set(None)
+
+
+@pytest.mark.asyncio
+async def test_an_unscoped_bench_omits_the_model_keys_entirely() -> None:
+    """Absent rather than null, exactly like every other optional ladder term."""
+    trace = install_ladder_trace()
+    state = rotation_state(2, "round_robin")
+
+    await state.report_failure(0, _rate_limited(retry_after=None))
+
+    decision = ladder_payload(trace.slot())["credentials"][0]
+    assert "model" not in decision
+    assert "model_benched_for_s" not in decision
+    assert decision["reason"] == "429, no Retry-After -- operator cooldown 60s"
+    _LADDER.set(None)
+
+
+@pytest.mark.asyncio
+async def test_an_escalated_bench_says_how_many_models_were_throttled() -> None:
+    trace = install_ladder_trace()
+    state = rotation_state(2, "round_robin", model_bench_escalation=2)
+
+    await state.report_failure(
+        0, _rate_limited(retry_after=None), model="moonshotai/kimi-k3"
+    )
+    await state.report_failure(
+        0, _rate_limited(retry_after=None), model="nvidia/nemotron-3-ultra"
+    )
+
+    decision = ladder_payload(trace.slot())["credentials"][1]
+    assert decision["benched_for_s"] == pytest.approx(60.0, abs=1.0)
+    assert "2 models throttled on this key" in decision["reason"]
+    _LADDER.set(None)
+
+
+@pytest.mark.asyncio
+async def test_acquire_skips_a_key_benched_for_this_model_even_when_nothing_else_is_free() -> (
+    None
+):
+    """The avoid-relaxing second choose() still carries the model.
+
+    Falling back to a key benched for this very model would be a guaranteed
+    429, which is the one case where relaxing ``avoid`` must not help.
+    """
+    state = rotation_state(2, "round_robin", model_bench_escalation=2)
+
+    await state.report_failure(
+        0, _rate_limited(retry_after=None), model="moonshotai/kimi-k3"
+    )
+    await state.report_failure(
+        1, _rate_limited(retry_after=None), model="moonshotai/kimi-k3"
+    )
+
+    assert await state.acquire(frozenset({0, 1}), model="moonshotai/kimi-k3") == -1
+    # Every other model on those same keys is still served.
+    assert await state.acquire(frozenset(), model="nvidia/nemotron") in (0, 1)
+
+
+@pytest.mark.asyncio
+async def test_get_metrics_lists_live_model_benches_soonest_expiry_last() -> None:
+    state = rotation_state(1, "single", model_bench_escalation=0)
+
+    await state.report_failure(0, _rate_limited(retry_after=30.0), model="short")
+    await state.report_failure(0, _rate_limited(retry_after=300.0), model="long")
+
+    benches = state.get_metrics()[0]["model_benches"]
+    assert [entry["model"] for entry in benches] == ["long", "short"]
+    assert benches[0]["remaining"] == pytest.approx(300.0, abs=1.0)
+    assert benches[1]["remaining"] == pytest.approx(30.0, abs=1.0)
+    assert state.get_metrics()[0]["state"] == "HEALTHY"
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_key_with_no_model_benches_reports_an_empty_list() -> None:
+    state = rotation_state(1, "single")
+
+    assert state.get_metrics()[0]["model_benches"] == []

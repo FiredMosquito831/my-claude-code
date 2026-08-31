@@ -237,6 +237,15 @@ RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT = 60.0
 # indexed by consecutive auth failures and clamped at the last entry. Auth is
 # the one failure a key can own outright, so it is the one ladder that stays.
 CREDENTIAL_LOCKOUT_TIERS_DEFAULT = "300,3600,86400"
+
+# Distinct models that must be simultaneously rate-limited on ONE key before
+# the key itself is benched. A 429 is scoped to the (key, model) pair by
+# default, because a gateway that limits one model says nothing about the
+# key's others: measured on NVIDIA NIM, kimi-k3 429s on all three keys inside
+# 0.1s while nemotron and minimax answer on the same keys in the same second,
+# and 6.18.0 removed every NIM model from the route for 60s as a result.
+# 1 restores that behaviour (never scope); 0 never escalates to the whole key.
+CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT = 2
 # Stepping a cooled-down model over costs the chain a slot, so the wait has to
 # outlive the hop it saves before routing is worth doing.
 FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT = 5.0

@@ -175,7 +175,7 @@ class ChatGPTOAuthProvider(BaseProvider):
             ),
         )
 
-    def throttle_remaining(self) -> float:
+    def throttle_remaining(self, model: str | None = None) -> float:
         """Seconds this credential is rate-limited for; 0 when free to serve."""
         return self._rate_limiter.remaining_wait()
 

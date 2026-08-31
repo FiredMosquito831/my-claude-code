@@ -1,0 +1,175 @@
+{
+  "_source": "Replayed from ~/.fcc/logs/requests.db for request req_cf646eed209a4c7f95064201d4a2a339 (2026-08-31T14:10:35Z), read read-only from request_attempts.params.$.ladder. Request id and key labels are anonymised; the tries, the statuses, the measured backoff sleeps and the three health decisions are what the row recorded. The decisions are re-expressed as this version's (key, model) benches: 6.18.0 recorded the same three 429s as whole-key cooldowns, which is the defect. At 14:13:07Z nvidia/nemotron-3-ultra-550b answered 200 on key 0, only because the bench had expired.",
+  "attempt": {
+    "error_kind": "upstream",
+    "duration_ms": 57284.3,
+    "error_message": "Upstream provider NIM returned HTTP 502."
+  },
+  "tries": [
+    {
+      "source": "upstream",
+      "key_index": 0,
+      "key_label": "nvap...ubCk",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66,
+      "waited_ms": 2100.4
+    },
+    {
+      "source": "upstream",
+      "key_index": 0,
+      "key_label": "nvap...ubCk",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66,
+      "waited_ms": 4210.9
+    },
+    {
+      "source": "upstream",
+      "key_index": 0,
+      "key_label": "nvap...ubCk",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66,
+      "waited_ms": 8402.1
+    },
+    {
+      "source": "upstream",
+      "key_index": 0,
+      "key_label": "nvap...ubCk",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66,
+      "waited_ms": 15891.7
+    },
+    {
+      "source": "upstream",
+      "key_index": 0,
+      "key_label": "nvap...ubCk",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66
+    },
+    {
+      "source": "upstream",
+      "key_index": 1,
+      "key_label": "nvap...9fQt",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66,
+      "waited_ms": 2050.7
+    },
+    {
+      "source": "upstream",
+      "key_index": 1,
+      "key_label": "nvap...9fQt",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66,
+      "waited_ms": 4090.3
+    },
+    {
+      "source": "upstream",
+      "key_index": 1,
+      "key_label": "nvap...9fQt",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66,
+      "waited_ms": 8188.5
+    },
+    {
+      "source": "upstream",
+      "key_index": 1,
+      "key_label": "nvap...9fQt",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66
+    },
+    {
+      "source": "upstream",
+      "key_index": 1,
+      "key_label": "nvap...9fQt",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66
+    },
+    {
+      "source": "upstream",
+      "key_index": 2,
+      "key_label": "nvap...2vLm",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66,
+      "waited_ms": 2010.2
+    },
+    {
+      "source": "upstream",
+      "key_index": 2,
+      "key_label": "nvap...2vLm",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66,
+      "waited_ms": 4022.8
+    },
+    {
+      "source": "upstream",
+      "key_index": 2,
+      "key_label": "nvap...2vLm",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66
+    },
+    {
+      "source": "upstream",
+      "key_index": 2,
+      "key_label": "nvap...2vLm",
+      "status": 429,
+      "error_kind": "rate_limit",
+      "upstream_ms": 409.66
+    },
+    {
+      "source": "upstream",
+      "key_index": 2,
+      "key_label": "nvap...2vLm",
+      "status": 502,
+      "error_kind": "upstream",
+      "upstream_ms": 409.66
+    }
+  ],
+  "decisions": [
+    {
+      "key_index": 0,
+      "key_label": "nvap...ubCk",
+      "cls": "rate_limit",
+      "benched_for_s": null,
+      "status": 429,
+      "retry_after": null,
+      "model": "moonshotai/kimi-k3",
+      "model_benched_for_s": 60.0,
+      "reason": "429, no Retry-After -- moonshotai/kimi-k3 benched 60s on this key"
+    },
+    {
+      "key_index": 1,
+      "key_label": "nvap...9fQt",
+      "cls": "rate_limit",
+      "benched_for_s": null,
+      "status": 429,
+      "retry_after": null,
+      "model": "moonshotai/kimi-k3",
+      "model_benched_for_s": 60.0,
+      "reason": "429, no Retry-After -- moonshotai/kimi-k3 benched 60s on this key"
+    },
+    {
+      "key_index": 2,
+      "key_label": "nvap...2vLm",
+      "cls": "rate_limit",
+      "benched_for_s": null,
+      "status": 429,
+      "retry_after": null,
+      "model": "moonshotai/kimi-k3",
+      "model_benched_for_s": 60.0,
+      "reason": "429, no Retry-After -- moonshotai/kimi-k3 benched 60s on this key"
+    }
+  ],
+  "time_limiter_ms": 0.0
+}

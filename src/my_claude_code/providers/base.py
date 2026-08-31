@@ -9,6 +9,7 @@ from loguru import logger
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.constants import (
     CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
+    CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT,
     FALLBACK_ON_REASONING_ONLY_DEFAULT,
     HTTP_CONNECT_TIMEOUT_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
@@ -80,6 +81,9 @@ class ProviderConfig:
     lockout_tiers: tuple[float, ...] = tuple(
         float(part) for part in CREDENTIAL_LOCKOUT_TIERS_DEFAULT.split(",")
     )
+    # Distinct models that must be rate-limited on one key at once before the
+    # key itself is benched instead of just the (key, model) pair.
+    credential_model_bench_escalation: int = CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT
 
 
 class BaseProvider(ABC):
@@ -103,7 +107,7 @@ class BaseProvider(ABC):
         """
         return None
 
-    def throttle_remaining(self) -> float:
+    def throttle_remaining(self, model: str | None = None) -> float:
         """Seconds this provider's credential is rate-limited for, 0 if free.
 
         Rotation uses this to prefer a credential that can serve immediately

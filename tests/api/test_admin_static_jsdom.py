@@ -1276,3 +1276,41 @@ def test_the_filter_choice_round_trips_through_persisted_state(rendered) -> None
     assert analytics["persisted"]["search"] == "abc"
     assert analytics["persistedAfterClear"]["local"] == "hide"
     assert "search" not in analytics["persistedAfterClear"]
+
+
+def test_a_key_with_model_benches_renders_the_model_sub_line(rendered) -> None:
+    """The operator asking "why is my key benched" gets the answer on the row.
+
+    A tooltip would not: the whole point of the (key, model) bench is that the
+    key reads HEALTHY, so nothing invites a hover.
+    """
+    rows = rendered["keyManager"]["scoped"]
+
+    assert len(rows) == 2
+    line = rows[0]["benchLine"]
+    # Capped at three, with the count of what was left out.
+    assert line.startswith("moonshotai/kimi-k3 ")
+    assert "nvidia/nemotron-3-ultra" in line
+    assert "minimaxai/minimax-m2" in line
+    assert "openai/gpt-oss-120b" not in line
+    assert line.endswith("+1 more")
+    assert "still serves" in rows[0]["benchTitle"]
+    # A slot the engine keeps HEALTHY must not read as plain "HEALTHY".
+    assert rows[0]["badge"] == "HEALTHY (4 models)"
+    assert "rate-limited for moonshotai/kimi-k3" in rows[0]["badgeTitle"]
+    # A benched key shows both facts: the key's own window and the models.
+    assert rows[1]["badge"] == "COOLDOWN (1 model)"
+    assert rows[1]["benchLine"].startswith("moonshotai/kimi-k3 ")
+
+
+def test_a_healthy_key_with_no_model_benches_renders_exactly_as_before(
+    rendered,
+) -> None:
+    """Additive only: no model benches, no sub-line, no badge suffix."""
+    rows = rendered["keyManager"]["plain"]
+
+    assert len(rows) == 1
+    assert rows[0]["benchLine"] == ""
+    assert "key-model-benches" not in rows[0]["html"]
+    assert rows[0]["badge"] == "HEALTHY"
+    assert rows[0]["badgeTitle"] == "HEALTHY \u2014 7 requests, 0 failures"

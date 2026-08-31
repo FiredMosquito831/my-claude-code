@@ -688,6 +688,9 @@ textarea:focus-visible,
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* So the model-bench sub-line can take a line of its own under the key
+     rather than being squeezed in beside the Remove button. */
+  flex-wrap: wrap;
 }
 
 .key-manager-key {
@@ -735,6 +738,14 @@ textarea:focus-visible,
 
 .key-manager-rotation select {
   max-width: 150px;
+}
+
+.key-model-benches {
+  /* Its own line under the key row: the row is a flex line and this is a
+     sentence, not a chip. */
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .key-health-badge {

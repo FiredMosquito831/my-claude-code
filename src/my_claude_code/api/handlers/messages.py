@@ -137,6 +137,8 @@ class MessagesHandler:
         except Exception:
             return None
         try:
+            # No model in hand at this point: the answer is the pool's best
+            # case over all models, which is what a header can honestly say.
             return provider.throttle_remaining()
         except Exception:
             return None

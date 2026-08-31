@@ -315,6 +315,7 @@ def create_provider(provider_id: str, settings: Settings) -> BaseProvider:
         config.credential_rotation,
         rate_limit_seconds=config.rate_limit_cooldown_seconds,
         lockout_tiers=config.lockout_tiers,
+        model_bench_escalation=config.credential_model_bench_escalation,
     )
     labels = tuple(mask_key_label(key) for key in keys)
     return RotatingProvider(config, providers, state, key_labels=labels)

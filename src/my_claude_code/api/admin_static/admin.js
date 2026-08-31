@@ -1781,10 +1781,40 @@ function renderCredentialHealth(fields) {
 
   const rule = document.createElement("p");
   rule.className = "field-description";
-  rule.textContent =
-    "A 401/403 walks the lockout ladder; a 429 benches the key for the " +
-    "provider's Retry-After, or the cooldown above when it sends none; a " +
-    "timeout or 5xx costs a key nothing.";
+  const paintRule = () => {
+    // calcNumber, not liveValue: an untouched field renders blank and its
+    // default lives in the placeholder, so reading the blank as 0 would claim
+    // the key is never benched when the server is applying 2.
+    const escalation = state.fields.has("CREDENTIAL_MODEL_BENCH_ESCALATION")
+      ? calcNumber("CREDENTIAL_MODEL_BENCH_ESCALATION")
+      : 2;
+    let scope;
+    if (escalation === 1) {
+      scope =
+        "a 429 benches the whole key for the provider's Retry-After, or the " +
+        "cooldown above when it sends none";
+    } else if (escalation <= 0) {
+      scope =
+        "a 429 benches only the model it happened on, on that key, and never " +
+        "the whole key";
+    } else {
+      scope =
+        "a 429 benches only the model it happened on, on that key, for the " +
+        "provider's Retry-After or the cooldown above when it sends none — " +
+        `the key itself is benched once ${escalation} different models are ` +
+        "rate-limited on it at the same time";
+    }
+    rule.textContent = `A 401/403 walks the lockout ladder; ${scope}; a timeout or 5xx costs a key nothing.`;
+  };
+  const escalationField = wrappers.get("CREDENTIAL_MODEL_BENCH_ESCALATION");
+  if (escalationField) {
+    const input = escalationField.querySelector("input, select, textarea");
+    if (input) {
+      input.addEventListener("input", paintRule);
+      input.addEventListener("change", paintRule);
+    }
+  }
+  paintRule();
   wrap.appendChild(rule);
 
   // Rotation is per pool and the provider card owns it; this is a readout, and
@@ -2596,6 +2626,11 @@ async function renderKeyManager(panel, field) {
     );
 
     row.appendChild(remove);
+    // Last, so it wraps onto a line of its own under the key rather than
+    // pushing Remove off the first line.
+    if (health && Array.isArray(health.model_benches) && health.model_benches.length) {
+      row.appendChild(modelBenchList(health.model_benches));
+    }
     list.appendChild(row);
   });
   panel.appendChild(list);
@@ -2660,10 +2695,36 @@ function keyHealthBadge(health) {
   }
   badge.textContent = state;
 
+  // A slot the engine keeps HEALTHY can still be benched for individual
+  // models; reading plain "HEALTHY" there is the exact confusion this PR
+  // exists to remove. A key with no model benches renders byte-identically.
+  const benched = Array.isArray(health.model_benches) ? health.model_benches : [];
+  let modelNote = "";
+  if (benched.length) {
+    badge.textContent = `${state} (${benched.length} model${benched.length === 1 ? "" : "s"})`;
+    modelNote = ` — rate-limited for ${benched.map((b) => b.model).join(", ")}`;
+  }
+
   const requests = health.request_count || 0;
   const failures = health.failure_count || 0;
-  badge.title = `${state}${backIn} — ${requests} requests, ${failures} failures`;
+  badge.title = `${state}${backIn} — ${requests} requests, ${failures} failures${modelNote}`;
   return badge;
+}
+
+/** The models this key is rate-limited for right now, capped at three. */
+function modelBenchList(benches) {
+  const wrap = document.createElement("span");
+  wrap.className = "key-model-benches";
+  const shown = benches.slice(0, 3);
+  let text = shown.map((b) => `${b.model} ${formatSeconds(b.remaining)}`).join(", ");
+  if (benches.length > shown.length) {
+    text += `, +${benches.length - shown.length} more`;
+  }
+  wrap.textContent = text;
+  wrap.title =
+    "Rate-limited on this key for these models only. Every other model on " +
+    "this key still serves.";
+  return wrap;
 }
 
 async function reloadAndReopenKeyManager(field, message) {
@@ -8852,12 +8913,16 @@ function ladderDecisionText(decision) {
       : decision.key_label
         ? `key ${decision.key_index} ${decision.key_label}`
         : `key ${decision.key_index}`;
+  // A (key, model) bench is a different fact from a whole-key bench, and
+  // the reader needs to see which one happened.
   const verdict =
     decision["class"] == null
       ? "health unchanged"
       : decision.benched_for_s != null
         ? `benched ${Math.round(decision.benched_for_s)}s (${decision["class"]})`
-        : `charged (${decision["class"]})`;
+        : decision.model != null && decision.model_benched_for_s != null
+          ? `${decision.model} benched ${Math.round(decision.model_benched_for_s)}s (${decision["class"]})`
+          : `charged (${decision["class"]})`;
   const reason = decision.reason ? `: ${decision.reason}` : "";
   return `${who} — ${verdict}${reason}`;
 }

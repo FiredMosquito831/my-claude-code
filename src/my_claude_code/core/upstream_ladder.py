@@ -120,6 +120,12 @@ class CredentialDecision:
     status: int | None = None
     #: What the provider published, if anything.
     retry_after: float | None = None
+    #: The model the 429 was scoped to, when the bench is a (key, model) pair.
+    model: str | None = None
+    #: Seconds that pair is benched for. ``benched_for_s`` stays the
+    #: *credential-wide* bench, which is None for a scoped 429 -- two
+    #: different facts, and the modal shows both.
+    model_benched_for_s: float | None = None
     reason: str = ""
 
 
@@ -301,6 +307,8 @@ def record_credential_decision(
     benched_for_s: float | None = None,
     status: int | None = None,
     retry_after: float | None = None,
+    model: str | None = None,
+    model_benched_for_s: float | None = None,
     reason: str = "",
 ) -> None:
     """Record what the pool decided about one credential's health, if tracked."""
@@ -315,6 +323,8 @@ def record_credential_decision(
             benched_for_s=benched_for_s,
             status=status,
             retry_after=retry_after,
+            model=model,
+            model_benched_for_s=model_benched_for_s,
             reason=reason,
         )
     )
@@ -394,6 +404,16 @@ def ladder_payload(ladder: AttemptLadder) -> dict[str, Any]:
             "retry_after": decision.retry_after,
             "reason": decision.reason,
         }
+        # Absent rather than null, exactly like the try rows above: an
+        # unscoped decision has no model and says so by omission.
+        | {
+            name: value
+            for name, value in (
+                ("model", decision.model),
+                ("model_benched_for_s", _rounded(decision.model_benched_for_s)),
+            )
+            if value is not None
+        }
         for decision in ladder.decisions
     ]
 
@@ -463,7 +483,7 @@ def format_status_census(counts: Mapping[str, int]) -> str:
 
 def _charged_clause(credentials: list[Mapping[str, Any]]) -> str:
     """Name the credentials whose health actually moved, and by how much."""
-    groups: dict[tuple[Any, Any, Any], list[int]] = {}
+    groups: dict[tuple[Any, Any, Any, Any, Any], list[int]] = {}
     for entry in credentials:
         if entry.get("class") is None:
             continue
@@ -471,13 +491,22 @@ def _charged_clause(credentials: list[Mapping[str, Any]]) -> str:
             entry.get("status"),
             entry.get("benched_for_s"),
             entry.get("retry_after"),
+            entry.get("model"),
+            entry.get("model_benched_for_s"),
         )
         groups.setdefault(key, []).append(int(entry["key_index"]))
     parts: list[str] = []
-    for (status, benched, retry_after), indexes in groups.items():
+    scoped_only = True
+    for (status, benched, retry_after, model, model_benched), indexes in groups.items():
         noun = "keys" if len(indexes) > 1 else "key"
         text = f"{noun} {_join([str(index) for index in sorted(indexes)])}"
-        text += " charged" if benched is None else f" benched {float(benched):.0f}s"
+        if benched is None and model is not None and model_benched is not None:
+            # A (key, model) bench: the key is still healthy for every other
+            # model, so saying "charged" would overstate what the pool did.
+            text += f" benched {float(model_benched):.0f}s for {model}"
+        else:
+            scoped_only = False
+            text += " charged" if benched is None else f" benched {float(benched):.0f}s"
         if status is not None:
             text += f" on {status}"
         text += (
@@ -486,6 +515,8 @@ def _charged_clause(credentials: list[Mapping[str, Any]]) -> str:
             else f" (Retry-After {float(retry_after):g}s)"
         )
         parts.append(text)
+    if parts and scoped_only:
+        parts.append("no key charged")
     return "; ".join(parts)
 
 

@@ -11,6 +11,7 @@ from .constants import (
     ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
+    CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT,
     DESKTOP_ACTIVATION_POLL_SECONDS_DEFAULT,
     DESKTOP_ADMIN_REQUEST_TIMEOUT_DEFAULT,
     DESKTOP_HEALTH_CHECK_INTERVAL_DEFAULT,
@@ -714,6 +715,14 @@ class Settings(BaseSettings):
     credential_lockout_tiers: str = Field(
         default=CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
         validation_alias="CREDENTIAL_LOCKOUT_TIERS",
+    )
+    # A 429 benches the (key, model) pair, not the key. This many distinct
+    # models rate-limited on one key at once means the limit is the key's
+    # after all, and the key is benched. 1 never scopes; 0 never escalates.
+    credential_model_bench_escalation: int = Field(
+        default=CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT,
+        validation_alias="CREDENTIAL_MODEL_BENCH_ESCALATION",
+        ge=0,
     )
     # Backoff between a provider's own retries of a 429 or 5xx.
     provider_retry_backoff_base_seconds: float = Field(

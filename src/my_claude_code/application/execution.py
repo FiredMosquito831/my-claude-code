@@ -1507,8 +1507,14 @@ class ProviderExecutor:
             # is still better than refusing outright.
             # Asked only when the answer can change something: with nothing
             # behind this candidate the chain has to try it either way.
+            # ``routed.request.model`` and not the provider-prefixed ref: it is
+            # the exact string this attempt will send upstream, and the same
+            # one the pool's ``report_failure`` scopes a 429 to. Any other
+            # spelling makes every (key, model) bench invisible here.
             cooldown = (
-                provider.throttle_remaining() if position + 1 < len(order) else 0.0
+                provider.throttle_remaining(routed.request.model)
+                if position + 1 < len(order)
+                else 0.0
             )
             if cooldown >= self._policy.cooldown_step_over_floor:
                 logger.warning(

@@ -78,7 +78,7 @@ class AnthropicProvider(BaseProvider):
         """
         return self._messages.reasoning_dialect(model_id)
 
-    def throttle_remaining(self) -> float:
+    def throttle_remaining(self, model: str | None = None) -> float:
         return self._rate_limiter.remaining_wait()
 
     async def cleanup(self) -> None:

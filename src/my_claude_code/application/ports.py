@@ -19,12 +19,17 @@ class ProviderPort(Protocol):
         """Masked label of the credential in use, or ``None`` if per-request."""
         ...
 
-    def throttle_remaining(self) -> float:
+    def throttle_remaining(self, model: str | None = None) -> float:
         """Seconds this provider is in rate-limit cooldown for, 0 when free.
 
         Routing reads this so a chain can step over a provider that is only
         going to sleep inside its own limiter. Every provider reports it
         already; nothing above the provider layer used to look.
+
+        ``model`` narrows the question to one model, because a pooled
+        provider's 429 is scoped to the (key, model) pair. Providers with a
+        single credential and one limiter ignore it; omitting it asks for the
+        provider's best case over all models.
         """
         ...
 

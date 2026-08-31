@@ -120,8 +120,8 @@ class CommandCodeProvider(BaseProvider):
         """
         return self._delegate(model_id).reasoning_dialect(model_id)
 
-    def throttle_remaining(self) -> float:
-        return self._openai.throttle_remaining()
+    def throttle_remaining(self, model: str | None = None) -> float:
+        return self._openai.throttle_remaining(model)
 
     async def cleanup(self) -> None:
         results = await asyncio.gather(

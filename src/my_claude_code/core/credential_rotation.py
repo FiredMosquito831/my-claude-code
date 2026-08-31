@@ -31,11 +31,12 @@ request and cannot strand a key.
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
 from my_claude_code.core.rate_limit import (
+    DEFAULT_MODEL_BENCH_ESCALATION,
     DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
     MAX_RATE_LIMIT_COOLDOWN_SECONDS,
 )
@@ -43,6 +44,12 @@ from my_claude_code.core.rate_limit import (
 POLICIES: frozenset[str] = frozenset(
     {"single", "round_robin", "least_used", "failover"}
 )
+
+#: Hard ceiling on live (key, model) benches held by one slot. Expired entries
+#: are dropped on every read, so this only ever bites a pool serving more than
+#: 64 distinct models inside one cooldown window; the soonest to expire go
+#: first, because they are the closest to being dropped anyway.
+MAX_MODEL_BENCHES_PER_SLOT = 64
 
 
 class PoolHealthState(StrEnum):
@@ -86,6 +93,10 @@ class RotationTuning:
     rate_limit_seconds: float = 60.0
     #: Fixed-mode cap so a hostile header cannot bench a slot indefinitely.
     rate_limit_max_seconds: float | None = None
+    #: Distinct models that must hold a live (key, model) bench before a 429
+    #: benches the whole credential. 1 = never scope (6.18.0 behaviour);
+    #: 0 = never escalate. Only ``rate_limit_mode == "fixed"`` reads it.
+    model_bench_escalation: int = 1
     #: ``single`` serves slot 0 unconditionally, ignoring blocklists and
     #: health (provider analytics contract); when False, a benched slot 0
     #: dries the pool up.
@@ -105,6 +116,7 @@ PROVIDER_TUNING = RotationTuning(
     rate_limit_mode="fixed",
     rate_limit_seconds=DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
     rate_limit_max_seconds=MAX_RATE_LIMIT_COOLDOWN_SECONDS,
+    model_bench_escalation=DEFAULT_MODEL_BENCH_ESCALATION,
 )
 
 #: Reproduces the websearch KeyPool: doubling lockout capped at one hour, the
@@ -153,6 +165,14 @@ class PoolSlot:
     lockout_until: float = 0.0
     last_used_at: float | None = None
     last_error: str | None = None
+    #: Live per-model 429 benches: model id -> deadline on the engine's clock.
+    #: A 429 is scoped here first, because a provider that rate-limits one
+    #: model says nothing about the key's other models -- measured on NVIDIA
+    #: NIM, kimi-k3 429s on all three keys inside 0.1s while nemotron and
+    #: minimax answer on the same keys in the same second. ``state`` stays
+    #: HEALTHY while only this dict is populated: a per-model throttle is not
+    #: a fault of the credential.
+    model_benches: dict[str, float] = field(default_factory=dict)
 
     @property
     def deadline(self) -> float:
@@ -218,6 +238,7 @@ class RotationEngine:
         """
         now = self._clock()
         for slot in self._slots:
+            self._expire_model_benches(slot, now)
             if slot.state is PoolHealthState.HEALTHY:
                 continue
             deadline = (
@@ -228,9 +249,38 @@ class RotationEngine:
             if deadline > 0 and now >= deadline:
                 slot.state = PoolHealthState.HEALTHY
 
-    def selectable(self, index: int) -> bool:
-        """Whether slot ``index`` may take new work right now."""
-        return self._slots[index].state is PoolHealthState.HEALTHY
+    def _expire_model_benches(self, slot: PoolSlot, now: float) -> None:
+        """Drop elapsed (key, model) benches; bound the dict.
+
+        Called from every path that reads or writes them, mirroring
+        ``refresh()``: the engine has no timer, only lazy expiry.
+        """
+        if not slot.model_benches:
+            return
+        for model, until in list(slot.model_benches.items()):
+            if until <= now:
+                del slot.model_benches[model]
+        overflow = len(slot.model_benches) - MAX_MODEL_BENCHES_PER_SLOT
+        if overflow > 0:
+            for model, _ in sorted(
+                slot.model_benches.items(), key=lambda item: item[1]
+            )[:overflow]:
+                del slot.model_benches[model]
+
+    def selectable(self, index: int, model: str | None = None) -> bool:
+        """Whether slot ``index`` may take new work right now.
+
+        ``model`` narrows the question: a slot HEALTHY overall can still hold
+        a live (key, model) bench, which makes it unusable for that model and
+        fully usable for every other one.
+        """
+        slot = self._slots[index]
+        if slot.state is not PoolHealthState.HEALTHY:
+            return False
+        if model is None:
+            return True
+        self._expire_model_benches(slot, self._clock())
+        return model not in slot.model_benches
 
     def _forced_single(self) -> bool:
         """Whether the policy serves slot 0 regardless of blocklists and health."""
@@ -238,7 +288,7 @@ class RotationEngine:
             self._count == 1 and self._tuning.single_key_forces_slot_zero
         )
 
-    def selectable_indexes(self) -> tuple[int, ...]:
+    def selectable_indexes(self, model: str | None = None) -> tuple[int, ...]:
         """Slots :meth:`choose` could hand out right now.
 
         Answers the same question as ``choose`` without consuming a policy
@@ -251,13 +301,25 @@ class RotationEngine:
         if self._forced_single():
             return (0,)
         candidates = tuple(
-            index for index in range(self._count) if self.selectable(index)
+            index for index in range(self._count) if self.selectable(index, model)
         )
         if self._policy == "single":
             return (0,) if 0 in candidates else ()
         return candidates
 
-    def choose(self, blocked: frozenset[int] = frozenset()) -> int | None:
+    def model_benched_indexes(self, model: str) -> tuple[int, ...]:
+        """Slots holding a live (key, model) bench right now."""
+        now = self._clock()
+        found: list[int] = []
+        for index, slot in enumerate(self._slots):
+            self._expire_model_benches(slot, now)
+            if model in slot.model_benches:
+                found.append(index)
+        return tuple(found)
+
+    def choose(
+        self, blocked: frozenset[int] = frozenset(), model: str | None = None
+    ) -> int | None:
         """Pure policy choice among selectable slots, skipping ``blocked``.
 
         Performs the lazy expiry refresh; performs no bookkeeping. Returns
@@ -271,7 +333,7 @@ class RotationEngine:
         candidates = [
             index
             for index in range(self._count)
-            if index not in blocked and self.selectable(index)
+            if index not in blocked and self.selectable(index, model)
         ]
         if self._policy == "single":
             # The single policy may only ever serve from slot 0.
@@ -302,6 +364,7 @@ class RotationEngine:
         *,
         message: str | None = None,
         retry_after: float | None = None,
+        model: str | None = None,
     ) -> None:
         """Record one classified failure.
 
@@ -313,6 +376,11 @@ class RotationEngine:
         ``retry_after`` is the wait the upstream published with its 429. A
         fixed-mode pool benches for exactly that, under the cap; a ladder-mode
         pool has no flat window to put it in and ignores it.
+
+        ``model`` scopes a fixed-mode 429 to the (key, model) pair. The whole
+        credential is benched only once ``model_bench_escalation`` distinct
+        models hold live benches -- a limit on one model is not a statement
+        about the key.
         """
         if not (0 <= index < self._count):
             return
@@ -324,7 +392,7 @@ class RotationEngine:
             self._auth_failure(slot, now)
         elif failure_class == "rate_limit":
             if self._tuning.rate_limit_mode == "fixed":
-                self._fixed_rate_window(slot, now, retry_after)
+                self._fixed_rate_window(slot, now, retry_after, model)
             else:
                 self._escalate_tier_window(slot, now)
         else:
@@ -352,15 +420,21 @@ class RotationEngine:
         else:
             slot.tier = min(slot.tier + 1, len(self._tuning.cooldown_tiers))
 
-    def shortest_bench_remaining(self) -> float:
-        """Seconds until the soonest non-healthy slot may serve again."""
+    def shortest_bench_remaining(self, model: str | None = None) -> float:
+        """Seconds until the soonest non-healthy slot may serve again.
+
+        ``model`` widens the question to the (key, model) benches: a slot that
+        is HEALTHY overall but benched for this model cannot serve it either,
+        and its own deadline is the wait that matters.
+        """
         self.refresh()
         now = self._clock()
-        remaining = [
-            max(slot.cooldown_until, slot.lockout_until) - now
-            for slot in self._slots
-            if slot.state is not PoolHealthState.HEALTHY
-        ]
+        remaining: list[float] = []
+        for slot in self._slots:
+            if slot.state is not PoolHealthState.HEALTHY:
+                remaining.append(max(slot.cooldown_until, slot.lockout_until) - now)
+            elif model is not None and model in slot.model_benches:
+                remaining.append(slot.model_benches[model] - now)
         positives = [value for value in remaining if value > 0]
         return min(positives) if positives else 0.0
 
@@ -378,6 +452,12 @@ class RotationEngine:
             if slot.state is not PoolHealthState.HEALTHY:
                 self._clear_benching(slot)
                 count += 1
+            else:
+                # A slot HEALTHY overall can still hold live (key, model)
+                # benches. "Reset every key" has to clear those too, or the
+                # operator's reset silently leaves models unroutable. It is
+                # not a restored *credential*, so it is not counted.
+                slot.model_benches.clear()
         return count
 
     def _select(self, candidates: list[int]) -> int:
@@ -442,7 +522,11 @@ class RotationEngine:
         slot.state = PoolHealthState.COOLDOWN
 
     def _fixed_rate_window(
-        self, slot: PoolSlot, now: float, retry_after: float | None
+        self,
+        slot: PoolSlot,
+        now: float,
+        retry_after: float | None,
+        model: str | None = None,
     ) -> None:
         value = (
             retry_after
@@ -453,8 +537,24 @@ class RotationEngine:
         if cap is not None:
             value = min(value, cap)
         slot.rate_limits += 1
+        escalation = self._tuning.model_bench_escalation
+        if model is None or escalation == 1:
+            # No model in hand, or scoping disabled: 6.18.0 exactly.
+            slot.state = PoolHealthState.COOLDOWN
+            slot.cooldown_until = now + value
+            return
+        self._expire_model_benches(slot, now)
+        slot.model_benches[model] = max(slot.model_benches.get(model, 0.0), now + value)
+        if escalation <= 0 or len(slot.model_benches) < escalation:
+            # HEALTHY on purpose: a per-model throttle is not a fault of the
+            # credential, and every other model on this key still serves.
+            return
+        # Enough distinct models are throttled that the limit is the key's,
+        # not the model's. The whole-key window is the longest bench already
+        # published, never shorter than what this 429 asked for -- the engine
+        # may not take back time it has promised.
         slot.state = PoolHealthState.COOLDOWN
-        slot.cooldown_until = now + value
+        slot.cooldown_until = max(now + value, *slot.model_benches.values())
 
     @staticmethod
     def _clear_benching(slot: PoolSlot) -> None:
@@ -468,3 +568,8 @@ class RotationEngine:
         slot.tier = 0
         slot.cooldown_until = 0.0
         slot.lockout_until = 0.0
+        # A success, a manual restore and a reset-all all mean "this credential
+        # is good now". Keeping stale model benches would make the admin reset
+        # lie, and clearing only the model that just succeeded would strand a
+        # key benched forever for a model that never recovers.
+        slot.model_benches.clear()

@@ -89,6 +89,10 @@ RATE_LIMIT_RESET_HEADERS: tuple[str, ...] = (
 
 DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 60.0
 MAX_RATE_LIMIT_COOLDOWN_SECONDS = 3600.0
+#: Distinct models that must be rate-limited on one key at the same time before
+#: the key itself is benched. Mirrors ``CREDENTIAL_MODEL_BENCH_ESCALATION`` in
+#: the config layer, which core deliberately does not import.
+DEFAULT_MODEL_BENCH_ESCALATION = 2
 
 _DURATION_PATTERN = re.compile(
     r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m(?!s))?"
