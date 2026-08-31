@@ -11,6 +11,7 @@ import openai
 from my_claude_code.core.anthropic.stream_contracts import (
     REASONING_HEARTBEAT,
     sse_is_scaffolding,
+    sse_visible_chars,
 )
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.trace import trace_event
@@ -21,6 +22,7 @@ EARLY_TRANSPARENT_TOTAL_ATTEMPTS = 5
 EARLY_TRANSPARENT_MAX_RETRIES = EARLY_TRANSPARENT_TOTAL_ATTEMPTS - 1
 MIDSTREAM_RECOVERY_ATTEMPTS = 5
 EARLY_HOLDBACK_SECONDS = 0.75
+EARLY_HOLDBACK_CHARS = 0
 RECOVERY_BUFFER_MAX_BYTES = 65_536
 
 
@@ -62,22 +64,35 @@ class RecoveryHoldbackBuffer:
     route: measured on 21 days of real traffic, 500 requests hung for the full
     600s budget with a three-model chain sitting unused, every one of them with
     ``tokens_out = 0``.
+
+    ``holdback_chars`` is the second half of the same question. The window
+    answers "has this model had time to fail yet"; the character count answers
+    "has it said enough to be worth keeping". A model that writes one word and
+    dies half a second later has shown the reader nothing worth protecting,
+    and holding until *both* conditions are met lets the route start over on
+    the next model with no seam and nothing lost. The cost is real and is paid
+    by every request, not only the ones that fail: it is exactly that much
+    time-to-first-visible-word. 0 -- the shipped default -- asks only the
+    clock, which is how this buffer has always behaved.
     """
 
     def __init__(
         self,
         *,
         holdback_seconds: float = EARLY_HOLDBACK_SECONDS,
+        holdback_chars: int = EARLY_HOLDBACK_CHARS,
         max_bytes: int = RECOVERY_BUFFER_MAX_BYTES,
         reasoning_commits: bool = True,
         now: Callable[[], float] | None = None,
     ) -> None:
         self._holdback_seconds = holdback_seconds
+        self._holdback_chars = max(0, holdback_chars)
         self._reasoning_commits = reasoning_commits
         self._max_bytes = max_bytes
         self._now = now or time.monotonic
         self._events: list[str] = []
         self._bytes = 0
+        self._chars = 0
         self._started_at: float | None = None
         self.committed = False
         # Whether the most recent push held a frame back *only* because
@@ -116,13 +131,14 @@ class RecoveryHoldbackBuffer:
         self.last_push_held_reasoning = False
         if self.committed:
             return [event]
-        if self._holdback_seconds <= 0:
+        if self._holdback_seconds <= 0 and self._holdback_chars <= 0:
             # No window at all: commit immediately rather than hold the first
             # event until some later push happens to check the clock.
             self._events.append(event)
             return self.flush()
         self._events.append(event)
         self._bytes += len(event.encode("utf-8", errors="replace"))
+        self._chars += sse_visible_chars(event)
         # The window is anchored to the first frame that shows the reader
         # something, not to the first frame. Scaffolding -- message_start,
         # content_block_start, ping -- never starts it, so a stream that emits
@@ -141,10 +157,14 @@ class RecoveryHoldbackBuffer:
         ):
             self._started_at = self._now()
         if self._bytes >= self._max_bytes:
+            # The memory ceiling is not a policy and never waits on the
+            # character count: a buffer this large has to be released whatever
+            # the operator asked for.
             return self.flush()
         if (
             self._started_at is not None
             and self._now() - self._started_at >= self._holdback_seconds
+            and self._chars >= self._holdback_chars
         ):
             return self.flush()
         return []
@@ -156,12 +176,14 @@ class RecoveryHoldbackBuffer:
         events = self._events
         self._events = []
         self._bytes = 0
+        self._chars = 0
         self._started_at = None
         return events
 
     def discard(self) -> None:
         self._events = []
         self._bytes = 0
+        self._chars = 0
         self._started_at = None
 
     @property
@@ -178,6 +200,7 @@ class RecoveryController:
         provider_name: str,
         request_id: str | None,
         holdback_seconds: float = EARLY_HOLDBACK_SECONDS,
+        holdback_chars: int = EARLY_HOLDBACK_CHARS,
         early_retry_attempts: int = EARLY_TRANSPARENT_TOTAL_ATTEMPTS,
         midstream_recovery_attempts: int = MIDSTREAM_RECOVERY_ATTEMPTS,
         reasoning_commits: bool = True,
@@ -185,6 +208,7 @@ class RecoveryController:
         self._provider_name = provider_name
         self._request_id = request_id
         self._holdback_seconds = holdback_seconds
+        self._holdback_chars = holdback_chars
         self._reasoning_commits = reasoning_commits
         # Attempts are counted as retries *after* the first try.
         self._max_early_retries = max(0, early_retry_attempts - 1)
@@ -202,6 +226,7 @@ class RecoveryController:
         """
         return RecoveryHoldbackBuffer(
             holdback_seconds=self._holdback_seconds,
+            holdback_chars=self._holdback_chars,
             reasoning_commits=self._reasoning_commits,
         )
 

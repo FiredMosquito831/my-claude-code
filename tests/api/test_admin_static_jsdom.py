@@ -1187,6 +1187,30 @@ def test_a_truncated_attempt_says_how_far_the_answer_got(rendered) -> None:
     ]
 
 
+def test_a_continued_attempt_names_the_model_that_stalled_and_the_char_count(
+    rendered,
+) -> None:
+    """The stream has no seam on purpose, so the row carries the whole story."""
+    detail = rendered["requestDetail"]["continued"]
+
+    assert detail["chainHidden"] is False
+    assert detail["continuations"] == [
+        "continued here after commandcode/z-ai/glm-5.3-flash stalled at 1,333 chars"
+    ]
+
+
+def test_a_continuation_that_was_not_usable_does_not_claim_a_rescue(
+    rendered,
+) -> None:
+    """ "Accepted: false" is the reader getting the short message after all."""
+    detail = rendered["requestDetail"]["continuedUnusable"]
+
+    assert detail["continuations"] == [
+        "commandcode/z-ai/glm-5.3-flash stalled at 1,333 chars;"
+        " the continuation was not usable"
+    ]
+
+
 def test_a_truncated_tool_call_says_it_could_not_be_completed(rendered) -> None:
     """The one case that still errors has to explain itself, not look identical."""
     detail = rendered["requestDetail"]["truncatedTool"]

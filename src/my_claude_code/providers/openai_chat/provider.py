@@ -604,6 +604,7 @@ class _OpenAIChatStreamRunner:
             provider_name=tag,
             request_id=self._request_id,
             holdback_seconds=config.commit_holdback_seconds,
+            holdback_chars=config.commit_holdback_chars,
             reasoning_commits=not config.fallback_on_reasoning_only,
             early_retry_attempts=config.early_retry_attempts,
             midstream_recovery_attempts=config.midstream_recovery_attempts,

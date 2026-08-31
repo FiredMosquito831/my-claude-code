@@ -903,11 +903,41 @@ deliberately keeps the simple one-limiter-per-provider policy; a degraded NIM
 function can therefore briefly delay other NIM models during backoff. No
 provider-specific marker enters `core/`, another provider, or an API adapter.
 [providers/stream_recovery.py](src/my_claude_code/providers/stream_recovery.py)
-owns the 0.75-second/65,536-byte holdback, four transparent early retries after
-the first attempt, and five midstream recovery attempts. Provider opening keeps
+owns the 0.75-second/0-character/65,536-byte holdback, four transparent early
+retries after the first attempt, and five midstream recovery attempts. The
+character half of the holdback (`STREAM_COMMIT_HOLDBACK_CHARS`, shipped 0)
+withholds output until both the window has elapsed *and* that many visible
+characters have arrived, so a model that writes one word and dies inside the
+window is an ordinary pre-commit failure and the route restarts on the next
+model with nothing shown; the byte ceiling still releases output regardless. Provider opening keeps
 its existing five-attempt exponential-backoff budget. `ExecutionFailure.retryable`
 records provider-policy eligibility; it never tells the client to retry after FCC
 has finalized the failure.
+
+Past the commit boundary the executor owns two endings, both in `core/` and
+both pure. [core/anthropic/streaming/truncation.py](src/my_claude_code/core/anthropic/streaming/truncation.py)
+follows the frames already forwarded closely enough to close every open block
+and end the message with a `stop_reason` meaning "cut short"
+(`FALLBACK_END_CLEANLY_AFTER_COMMIT`).
+[core/anthropic/streaming/splice.py](src/my_claude_code/core/anthropic/streaming/splice.py)
+is the ending after that one (`FALLBACK_RESUME_AFTER_COMMIT`): it freezes what
+the reader was shown, and rewrites a *second* model's SSE so the two form one
+message -- dropping the continuation's `message_start`, offsetting every block
+index above the highest already seen, mapping the continuation's first `text`
+block onto the block left open at the failure, dropping a foreign model's
+thinking (its signature cannot be valid here), and emitting exactly one
+`message_delta`/`message_stop` pair with the output tokens summed across both
+models. Neither module decides *when*: the executor's `_can_resume` does, and
+the continuation is dispatched through the same `_prepare_from` a pre-commit
+fallback uses, so benching, cooldown step-over, `FALLBACK_SKIP_KINDS` and the
+attempt's share of the budget all apply unchanged and no new retry layer or
+deadline exists. A continuation that restarts the answer rather than continuing
+it is rejected before any of it reaches the client, and every unusable
+continuation falls through to the truncated message rather than to an error.
+The model change is recorded on the attempt row (`params.continuation`), not in
+the stream: the protocol's own `fallback` content block is deliberately not
+emitted, because `stream_contracts._ALLOWED_BLOCK_START_TYPES` would have to be
+widened for a beta the client never opted into.
 
 The OpenAI-chat provider remains an upstream adapter: it converts OpenAI chat
 chunks into ledger operations. After retry, continuation, and tool salvage are

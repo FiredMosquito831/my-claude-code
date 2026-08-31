@@ -1099,6 +1099,9 @@ function driveDetail(row) {
     truncations: Array.from(chain.querySelectorAll(".req-chain-truncated")).map(
       (el) => el.textContent,
     ),
+    continuations: Array.from(chain.querySelectorAll(".req-chain-continued")).map(
+      (el) => el.textContent,
+    ),
     ladderTries: Array.from(chain.querySelectorAll(".req-chain-try")).map((el) =>
       (el.textContent || "").replace(/\s+/g, " ").trim(),
     ),
@@ -1394,6 +1397,65 @@ const requestDetail = {
             reason: "incomplete_tool_use",
             stop_reason_sent: null,
             ended_cleanly: false,
+          },
+        },
+      }),
+    ],
+  }),
+  /* A message one model started and another finished. There is no seam in the
+     stream itself, so this row is the only place the model change is said. */
+  continued: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        outcome: "failed",
+        error_kind: "timeout",
+        error_message:
+          "Provider 'commandcode/z-ai/glm-5.3-flash' stopped producing output for 180s.",
+      }),
+      detailAttempt({
+        attempt: 1,
+        model_ref: "commandcode/Qwen/Qwen3.8-Flash",
+        outcome: "succeeded",
+        error_kind: null,
+        error_message: null,
+        params: {
+          continuation: {
+            resumed_from_model: "commandcode/z-ai/glm-5.3-flash",
+            prefix_chars: 1333,
+            continued_chars: 412,
+            dropped_overlap_chars: 0,
+            accepted: true,
+          },
+        },
+      }),
+    ],
+  }),
+  /* The continuation ran but said nothing usable; the reader got the short
+     message instead, and the row has to say so rather than claim a rescue. */
+  continuedUnusable: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        outcome: "failed",
+        error_kind: "timeout",
+        error_message: "Provider stopped producing output for 180s.",
+      }),
+      detailAttempt({
+        attempt: 1,
+        model_ref: "commandcode/Qwen/Qwen3.8-Flash",
+        outcome: "failed",
+        error_kind: "timeout",
+        error_message: "Provider stopped producing output for 180s.",
+        params: {
+          continuation: {
+            resumed_from_model: "commandcode/z-ai/glm-5.3-flash",
+            prefix_chars: 1333,
+            continued_chars: 0,
+            dropped_overlap_chars: 0,
+            accepted: false,
           },
         },
       }),

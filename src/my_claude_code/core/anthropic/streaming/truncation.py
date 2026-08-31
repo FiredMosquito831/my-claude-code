@@ -76,6 +76,15 @@ class CommittedStreamTracker:
     _open_blocks: dict[int, str] = field(default_factory=dict)
     _tool_json: dict[int, list[str]] = field(default_factory=dict)
     _output_parts: list[str] = field(default_factory=list)
+    #: Kept apart from ``_output_parts`` because a continuation may only be
+    #: prefilled with what the reader can actually read back to a model: text.
+    #: Thinking is provider-cryptographic and tool JSON is machine-only.
+    _text_parts: list[str] = field(default_factory=list)
+    _thinking_parts: list[str] = field(default_factory=list)
+    #: Highest block index this stream has *ever* opened. Block indices are
+    #: single-use for the whole message (``stream_contracts`` rejects a reused
+    #: one), so anything spliced in behind this stream has to start above it.
+    _max_index: int = -1
     blocks: int = 0
     chars: int = 0
     input_tokens: int = 0
@@ -118,6 +127,7 @@ class CommittedStreamTracker:
         if not isinstance(index, int) or not isinstance(block, dict):
             return
         self._open_blocks[index] = str(block.get("type", ""))
+        self._max_index = max(self._max_index, index)
         self.blocks += 1
         # A ``text`` block may carry its whole body on the start frame; that
         # text is as visible to the reader as any delta and has to be counted.
@@ -125,6 +135,7 @@ class CommittedStreamTracker:
         if isinstance(eager, str) and eager:
             self.chars += len(eager)
             self._output_parts.append(eager)
+            self._text_parts.append(eager)
 
     def _observe_delta(self, data: dict[str, Any]) -> None:
         index = data.get("index")
@@ -136,8 +147,11 @@ class CommittedStreamTracker:
             text = str(delta.get("text", ""))
             self.chars += len(text)
             self._output_parts.append(text)
+            self._text_parts.append(text)
         elif kind == "thinking_delta":
-            self._output_parts.append(str(delta.get("thinking", "")))
+            thinking = str(delta.get("thinking", ""))
+            self._output_parts.append(thinking)
+            self._thinking_parts.append(thinking)
         elif kind == "input_json_delta":
             fragment = str(delta.get("partial_json", ""))
             self._tool_json.setdefault(index, []).append(fragment)
@@ -150,6 +164,26 @@ class CommittedStreamTracker:
         usage = data.get("usage")
         if isinstance(usage, dict) and isinstance(usage.get("output_tokens"), int):
             self.output_tokens = usage["output_tokens"]
+
+    @property
+    def text_prefix(self) -> str:
+        """Every character of ``text`` the reader has been shown, in order."""
+        return "".join(self._text_parts)
+
+    @property
+    def thinking_prefix(self) -> str:
+        """Every character of reasoning the reader has been shown, in order."""
+        return "".join(self._thinking_parts)
+
+    @property
+    def next_index(self) -> int:
+        """The first content block index nothing in this message has used."""
+        return self._max_index + 1
+
+    @property
+    def open_blocks(self) -> dict[int, str]:
+        """Index to block type, for every block still open. A copy."""
+        return dict(self._open_blocks)
 
     @property
     def incomplete_tool_use(self) -> bool:
@@ -216,7 +250,7 @@ class CommittedStreamTracker:
                     },
                     "usage": {
                         "input_tokens": self.input_tokens,
-                        "output_tokens": self._consumed_output_tokens(),
+                        "output_tokens": self.consumed_output_tokens,
                     },
                 },
             )
@@ -248,7 +282,8 @@ class CommittedStreamTracker:
             ended_cleanly=False,
         )
 
-    def _consumed_output_tokens(self) -> int:
+    @property
+    def consumed_output_tokens(self) -> int:
         """What the model actually produced, as far as anything can know.
 
         The upstream's own count when it sent one; otherwise the same estimate

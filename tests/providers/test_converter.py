@@ -9,7 +9,11 @@ from my_claude_code.core.anthropic import (
     build_base_request_body,
     is_synthetic_openai_tool_turn_boundary,
 )
-from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.models import (
+    ContentBlockText,
+    Message,
+    MessagesRequest,
+)
 
 # --- Mock Classes ---
 
@@ -1523,3 +1527,59 @@ def test_convert_assistant_server_tool_blocks_raise(content) -> None:
     messages = [MockMessage("assistant", content)]
     with pytest.raises(OpenAIConversionError, match="server tool"):
         AnthropicToOpenAIConverter.convert_messages(messages)
+
+
+# --- The continuation shape survives every dialect's converter --------------
+#
+# A resumed request is an ordinary conversation -- an assistant turn carrying
+# the answer so far, then a user turn asking for the rest. It is deliberately
+# *not* a prefill: Anthropic returns a 400 for one on Claude 4.6 and later, and
+# only three hosts market-wide accept a `prefix` flag at all. These pin that the
+# shape reaches the wire intact rather than being reordered, merged or dropped.
+
+
+def _continuation_request() -> MessagesRequest:
+    from my_claude_code.core.anthropic.streaming.recovery import CONTINUATION_NUDGE
+
+    return MessagesRequest(
+        model="m",
+        max_tokens=64,
+        messages=[
+            Message(role="user", content="Write three sentences about the sea."),
+            Message(
+                role="assistant",
+                content=[
+                    ContentBlockText(type="text", text="The sea is vast. It carries")
+                ],
+            ),
+            Message(role="user", content=CONTINUATION_NUDGE),
+        ],
+    )
+
+
+def test_a_trailing_assistant_prefill_survives_the_openai_converter():
+    converter = AnthropicToOpenAIConverter()
+    request = _continuation_request()
+
+    messages = converter.convert_messages(request.messages)
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert messages[1]["content"] == "The sea is vast. It carries"
+    assert "prefix" not in messages[1]
+
+
+def test_a_trailing_assistant_prefill_survives_the_anthropic_passthrough():
+    from my_claude_code.core.reasoning import ReasoningPolicy
+    from my_claude_code.providers.anthropic_messages.request import (
+        build_anthropic_messages_body,
+    )
+
+    body = build_anthropic_messages_body(
+        _continuation_request(), reasoning=ReasoningPolicy.off()
+    )
+
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant", "user"]
+    assert body["messages"][1]["content"] == [
+        {"type": "text", "text": "The sea is vast. It carries"}
+    ]
+    assert "prefix" not in body["messages"][1]

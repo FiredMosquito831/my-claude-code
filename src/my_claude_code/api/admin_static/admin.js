@@ -8960,6 +8960,30 @@ function truncationText(truncated) {
   );
 }
 
+/** The account of a message this attempt inherited half-written. */
+function continuationOf(attempt) {
+  const params = attempt && attempt.params;
+  const continued = params && params.continuation;
+  return continued && typeof continued === "object" ? continued : null;
+}
+
+/**
+ * Name the model that stalled, and how far it had got.
+ *
+ * There is no seam in the stream itself -- the reader sees one continuous
+ * answer, which is the point -- so this row is the only place the model change
+ * is recorded at all.
+ */
+function continuationText(continued) {
+  if (!continued) return "";
+  const from = continued.resumed_from_model || "—";
+  const chars = Number(continued.prefix_chars || 0).toLocaleString();
+  if (continued.accepted === false) {
+    return `${from} stalled at ${chars} chars; the continuation was not usable`;
+  }
+  return `continued here after ${from} stalled at ${chars} chars`;
+}
+
 /**
  * Say why a skipped model was skipped, in the terms that benched it.
  *
@@ -9017,7 +9041,8 @@ function renderRequestChain(row) {
   if (
     attempts.length < 2 &&
     !attempts.some(hasLadder) &&
-    !attempts.some((attempt) => truncationOf(attempt))
+    !attempts.some((attempt) => truncationOf(attempt)) &&
+    !attempts.some((attempt) => continuationOf(attempt))
   ) {
     container.hidden = true;
     return;
@@ -9087,6 +9112,14 @@ function renderRequestChain(row) {
       truncated.className = "req-chain-summary req-chain-truncated";
       truncated.textContent = truncatedText;
       head.appendChild(truncated);
+    }
+
+    const continuedText = continuationText(continuationOf(attempt));
+    if (continuedText) {
+      const continued = document.createElement("span");
+      continued.className = "req-chain-summary req-chain-continued";
+      continued.textContent = continuedText;
+      head.appendChild(continued);
     }
 
     // Which credential served this attempt. The request row names only the

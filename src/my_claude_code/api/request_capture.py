@@ -187,7 +187,12 @@ class RequestCapture:
                 error_message=attempt.error_message,
                 duration_ms=attempt.duration_ms,
                 params=self._attempt_params(
-                    attempt.attempt, wire, ladder, attempt.bench, attempt.truncated
+                    attempt.attempt,
+                    wire,
+                    ladder,
+                    attempt.bench,
+                    attempt.truncated,
+                    attempt.continuation,
                 ),
                 wire_body=None if wire is None else wire.body_json,
                 reasoning_emitted=None if wire is None else wire.reasoning_emitted,
@@ -243,6 +248,7 @@ class RequestCapture:
         ladder: dict[str, Any] | None = None,
         bench: dict[str, Any] | None = None,
         truncated: dict[str, Any] | None = None,
+        continuation: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Merge what the provider survived with what it actually sent.
 
@@ -275,6 +281,14 @@ class RequestCapture:
         # a valid message -- and this is about which model failed to finish it.
         if truncated:
             params["truncated_after_commit"] = truncated
+        # Which model this attempt inherited a half-written answer from, and
+        # whether what it wrote was usable. The request row names the model
+        # that *finished*, which is what "which model answered this" means to
+        # every existing consumer; that another model started it is recoverable
+        # only from here, so it is recorded here rather than as a column
+        # nothing else would read.
+        if continuation:
+            params["continuation"] = continuation
         return params or None
 
     def _recovery_events_for(self, attempt_index: int) -> dict[str, Any] | None:

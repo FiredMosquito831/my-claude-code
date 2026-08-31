@@ -10,7 +10,16 @@ from loguru import logger
 
 from ..models import MessagesRequest
 
-_RECOVERY_USER_PREFIX = (
+#: The turn appended after a partial answer to ask for the rest of it.
+#:
+#: Public because two paths now send it: this module's same-provider recovery,
+#: and the executor's cross-model continuation. One wording, measured -- of
+#: thirteen live model/host pairs, every non-empty answer to this prompt was a
+#: clean continuation, while the same models asked with a bare trailing
+#: assistant turn restarted and repeated themselves. Deliberately tool-neutral:
+#: wording like "finish writing" makes a model narrate where it should have
+#: called a tool, which is a shipped bug in at least one other gateway.
+CONTINUATION_NUDGE = (
     "The previous provider stream was interrupted. Continue the assistant response "
     "exactly where it stopped. Do not repeat text already written."
 )
@@ -133,7 +142,7 @@ def make_text_recovery_body(
     messages = _copied_messages(recovery)
     if partial_text:
         messages.append({"role": "assistant", "content": partial_text})
-    prompt = _RECOVERY_USER_PREFIX
+    prompt = CONTINUATION_NUDGE
     if partial_thinking:
         prompt = f"{_RECOVERY_THINKING_PREFIX}{partial_thinking}\n\n{prompt}"
     messages.append({"role": "user", "content": prompt})

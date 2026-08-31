@@ -15,11 +15,13 @@ from my_claude_code.config.constants import (
     FALLBACK_END_CLEANLY_AFTER_COMMIT_DEFAULT,
     FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
     FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
+    FALLBACK_RESUME_AFTER_COMMIT_DEFAULT,
     FALLBACK_STALL_TIMEOUT_DEFAULT,
     FALLBACK_TOTAL_TIMEOUT_DEFAULT,
 )
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import (
+    ContentBlockText,
     Message,
     SystemContent,
     Tool,
@@ -29,6 +31,14 @@ from my_claude_code.core.anthropic import (
 from my_claude_code.core.anthropic.stream_contracts import (
     REASONING_HEARTBEAT,
     sse_carries_content,
+)
+from my_claude_code.core.anthropic.streaming.recovery import CONTINUATION_NUDGE
+from my_claude_code.core.anthropic.streaming.splice import (
+    ContinuationSplicer,
+    SpliceFreeze,
+    SpliceState,
+    close_frames,
+    freeze_stream,
 )
 from my_claude_code.core.anthropic.streaming.truncation import (
     CommittedStreamTracker,
@@ -97,6 +107,11 @@ class RouteAttemptRecord:
     #: told. ``ended_cleanly`` is false for the one case that still errors, a
     #: half-written tool call.
     truncated: dict[str, object] | None = None
+    #: Set on the attempt that finished a message another model had started:
+    #: which model stalled, how far it had got, and whether its successor's
+    #: output was actually usable. The row that *stalled* keeps its own
+    #: failure verdict, so the pair reads as one story.
+    continuation: dict[str, object] | None = None
 
 
 # Reports what became of one attempt, as opposed to announcing that it started.
@@ -170,6 +185,16 @@ class RouteExecutionPolicy:
     # block, send a stop reason that means "cut short", and stop. False
     # restores the error the client used to receive after a partial answer.
     end_cleanly_after_commit: bool = FALLBACK_END_CLEANLY_AFTER_COMMIT_DEFAULT
+    # Whether a stream that has already reached the client may be *continued*
+    # by the next model on the route rather than only ended. The words already
+    # sent stay exactly as they are and the next model is asked to carry on
+    # from them. Every way this can fail -- no model left, a model that says
+    # nothing, a model that starts the answer over -- lands on
+    # ``end_cleanly_after_commit``'s truncated message, never on an error, so
+    # turning it off can only ever produce a shorter answer, never a worse
+    # failure. The one state it does not attempt is a half-written tool call,
+    # which cannot be handed to another model honestly.
+    resume_after_commit: bool = FALLBACK_RESUME_AFTER_COMMIT_DEFAULT
 
 
 # The wait is scheduled for exactly the remaining stall budget, so by the time
@@ -266,6 +291,41 @@ def _timeout_failure(
         status_code=504,
         message=f"Provider '{model_ref}' {reason}.{hint}",
         retryable=True,
+    )
+
+
+def _continuation_attempt(
+    routed: RoutedMessagesRequest, freeze: SpliceFreeze
+) -> RoutedMessagesRequest:
+    """The next model's request, carrying the answer written so far.
+
+    Assistant turn, then user turn -- deliberately, and this is the one shape
+    that works. A request whose *last* message is the assistant's is a prefill,
+    which Anthropic rejects with a 400 on Claude 4.6 and later and which only
+    three hosts market-wide accept at all. Ending on the user turn makes this
+    an ordinary conversation that every dialect's converter already serialises
+    correctly, sets no ``prefix`` flag, and needs no provider-specific base
+    URL. Measured across thirteen live model/host pairs, it is also the only
+    shape that produced a clean continuation rather than a restart.
+
+    Text only. A synthesized ``thinking`` block would reach Anthropic without
+    the provider-cryptographic signature it cannot have, and on a think-tags
+    host it would be inlined into model-visible prose; neither is a thing the
+    reader asked for.
+
+    ``tools`` are deliberately left in place. The same-provider recovery path
+    strips them because it only ever wants prose, but a continuation may
+    legitimately need to call a tool, and dropping them would leave the model
+    narrating the call it should have made.
+    """
+    prefix = freeze.prefix_text.rstrip()
+    messages = [
+        *routed.request.messages,
+        Message(role="assistant", content=[ContentBlockText(type="text", text=prefix)]),
+        Message(role="user", content=CONTINUATION_NUDGE),
+    ]
+    return replace(
+        routed, request=routed.request.model_copy(update={"messages": messages})
     )
 
 
@@ -376,6 +436,7 @@ class _AttemptLedger:
             duration_ms=duration_ms,
             bench=bench,
             truncated=current.truncated,
+            continuation=current.continuation,
         )
 
     def truncated_after_commit(self, index: int, truncation: StreamTruncation) -> None:
@@ -390,6 +451,18 @@ class _AttemptLedger:
         if current is None:
             return
         self._records[index] = replace(current, truncated=truncation.as_params())
+
+    def continued(self, index: int, continuation: dict[str, object]) -> None:
+        """Attach the account of a message this attempt inherited half-written.
+
+        Beside the verdict for the same reason ``truncated_after_commit`` is:
+        the attempt succeeded or failed on its own terms, and how it came to be
+        finishing someone else's sentence is a separate fact about it.
+        """
+        current = self._records.get(index)
+        if current is None:
+            return
+        self._records[index] = replace(current, continuation=continuation)
 
     def succeeded(self, index: int) -> None:
         self._set(
@@ -659,9 +732,33 @@ class ProviderExecutor:
 
         async def provider_body() -> AsyncIterator[str]:
             position, provider = prepared
+            # Hoisted out of the loop, because they belong to the *message*
+            # rather than to an attempt. Once anything has reached the client
+            # every later attempt is bound by it: a continuation must never
+            # believe it may still fall back invisibly, and the tracker has to
+            # keep following what the reader has actually been shown across
+            # the seam so a second failure can be ended -- or continued --
+            # against the whole message rather than only its last third.
+            committed = False
+            tracker = CommittedStreamTracker()
+            splicer: ContinuationSplicer | None = None
+            resume: SpliceFreeze | None = None
+            resumed_from: str | None = None
             while True:
                 index = order[position]
                 routed = attempts[index]
+                attempt_input_tokens = input_tokens
+                if resume is not None:
+                    routed = _continuation_attempt(routed, resume)
+                    # A different body deserves a different count: this one
+                    # carries the answer so far and the nudge, and the number
+                    # the client was told about describes neither. One extra
+                    # tokenization per resume, paid only on the rescue path.
+                    attempt_input_tokens = self._token_counter(
+                        routed.request.messages,
+                        routed.request.system,
+                        routed.request.tools,
+                    )
                 model_ref = routed.resolved.provider_model_ref
                 self._trace_route(
                     routed,
@@ -687,11 +784,9 @@ class ProviderExecutor:
                 )
 
                 provider_stream: AsyncIterator[str] | None = None
-                committed = False
                 uncommitted_failure: Exception | None = None
                 committed_failure: Exception | None = None
                 truncation: StreamTruncation | None = None
-                tracker = CommittedStreamTracker()
                 held: list[str] = []
                 try:
                     # Baseline attribution for single-credential providers. A
@@ -700,7 +795,7 @@ class ProviderExecutor:
                     record_credential(0, provider.credential_label)
                     provider_stream = provider.stream_response(
                         routed.request,
-                        input_tokens=input_tokens,
+                        input_tokens=attempt_input_tokens,
                         request_id=request_id,
                         reasoning=routed.reasoning,
                     )
@@ -757,27 +852,20 @@ class ProviderExecutor:
                         if buffer_until_complete:
                             held.append(chunk)
                             continue
-                        committed = True
-                        tracker.observe(chunk)
-                        yield chunk
+                        if splicer is None:
+                            committed = True
+                            tracker.observe(chunk)
+                            yield chunk
+                            continue
+                        # A continuation's frames are not the client's frames:
+                        # its indices collide with blocks already on screen and
+                        # its opening is held back until it has proved it is
+                        # continuing the answer rather than starting it again.
+                        for frame in splicer.rewrite(chunk):
+                            tracker.observe(frame)
+                            yield frame
                 except Exception as exc:
                     if committed:
-                        # No fallback is possible past the commit point -- the
-                        # reader has seen this model's words and no other model
-                        # can un-send them. The message can still be *ended*
-                        # though, and a valid short answer beats an API error
-                        # printed under a half-written one.
-                        truncation = self._truncate_after_commit(tracker, exc, wire_api)
-                        if truncation is None or not truncation.ended_cleanly:
-                            # The attempt still ended in a failure and the log
-                            # should say so rather than leaving it as "never
-                            # reached".
-                            ledger.failed(index, exc)
-                            if truncation is not None:
-                                ledger.truncated_after_commit(index, truncation)
-                            ledger.unreachable_after(index, exc)
-                            ledger.publish()
-                            raise
                         committed_failure = exc
                     else:
                         uncommitted_failure = exc
@@ -789,11 +877,93 @@ class ProviderExecutor:
                             source="api",
                             preserved_error=sys.exception(),
                         )
-                if truncation is not None and committed_failure is not None:
-                    # Emitted after the upstream stream is closed, so the
-                    # frames that end the message are never interleaved with a
-                    # half-open connection to the model that abandoned it.
+                if committed_failure is not None:
+                    # The reader has this model's words on screen and no other
+                    # model can un-send them -- but the next model on the route
+                    # can be asked to carry on from them. The route order, the
+                    # bench, the cooldown step-over and the attempt's share of
+                    # the budget are all decided by the same ``_prepare_from``
+                    # a pre-commit fallback calls, so a resume is one more turn
+                    # of this loop rather than a second routing policy.
+                    freeze = (
+                        freeze_stream(tracker)
+                        if self._can_resume(committed_failure, tracker, wire_api)
+                        else None
+                    )
+                    following = (
+                        None
+                        if freeze is None
+                        else self._prepare_from(
+                            attempts,
+                            order,
+                            position + 1,
+                            failures,
+                            request_id=request_id,
+                            on_attempt=on_attempt,
+                            deadline=deadline,
+                            ledger=ledger,
+                        )
+                    )
+                    if freeze is not None and following is not None:
+                        keep_text_open = freeze.state is SpliceState.IN_TEXT
+                        # After the upstream stream is closed, so the frames
+                        # that shape the seam are never interleaved with a
+                        # half-open connection to the model that abandoned it.
+                        for frame in close_frames(
+                            freeze, keep_text_open=keep_text_open
+                        ):
+                            tracker.observe(frame)
+                            yield frame
+                        ledger.failed(index, committed_failure)
+                        # The same single charge the committed-truncation path
+                        # makes, for the same failure. ``_prepare_from`` charges
+                        # only the models it could not even start.
+                        self._charge_failure(model_ref, committed_failure)
+                        self._trace_fallback(
+                            routed,
+                            committed_failure,
+                            request_id=request_id,
+                            attempt=index,
+                        )
+                        logger.warning(
+                            "MODEL CONTINUED: '{}' died after {} chars ({});"
+                            " asking the next model to finish the answer",
+                            model_ref,
+                            freeze.chars,
+                            failure_kind_name(committed_failure),
+                        )
+                        resumed_from = model_ref
+                        position, provider = following
+                        resume = freeze
+                        splicer = ContinuationSplicer(
+                            freeze, keep_text_open=keep_text_open
+                        )
+                        continue
+                    # Nothing left to continue on, or nothing safe to continue
+                    # from: end the message on what was already sent. A valid
+                    # short answer beats an API error printed under a
+                    # half-written one, and it is where every unusable
+                    # continuation lands too.
+                    truncation = self._truncate_after_commit(
+                        tracker, committed_failure, wire_api
+                    )
+                    if splicer is not None:
+                        ledger.continued(
+                            index,
+                            splicer.as_params(resumed_from_model=resumed_from or ""),
+                        )
+                    if truncation is None or not truncation.ended_cleanly:
+                        # The attempt still ended in a failure and the log
+                        # should say so rather than leaving it as "never
+                        # reached".
+                        ledger.failed(index, committed_failure)
+                        if truncation is not None:
+                            ledger.truncated_after_commit(index, truncation)
+                        ledger.unreachable_after(index, committed_failure)
+                        ledger.publish()
+                        raise committed_failure
                     for frame in truncation.frames:
+                        tracker.observe(frame)
                         yield frame
                     ledger.failed(index, committed_failure)
                     ledger.truncated_after_commit(index, truncation)
@@ -802,21 +972,7 @@ class ProviderExecutor:
                     # failure here; the committed path never reached that line
                     # because it raised first. It fails for exactly the same
                     # reason, so it counts exactly once, the same way.
-                    committed_execution_failure = find_execution_failure(
-                        committed_failure
-                    )
-                    committed_kind = failure_kind(committed_failure)
-                    self._health.record_failure(
-                        model_ref,
-                        failure_kind=(
-                            committed_kind.value if committed_kind is not None else None
-                        ),
-                        status_code=(
-                            None
-                            if committed_execution_failure is None
-                            else committed_execution_failure.status_code
-                        ),
-                    )
+                    self._charge_failure(model_ref, committed_failure)
                     ledger.publish()
                     return
                 if uncommitted_failure is None:
@@ -825,6 +981,17 @@ class ProviderExecutor:
                     # dropped with it and never reach the aggregator.
                     for chunk in held:
                         yield chunk
+                    if splicer is not None:
+                        # The continuation's own ``message_delta`` and
+                        # ``message_stop`` were dropped by ``rewrite``; exactly
+                        # one pair ends the message, and it is this one.
+                        continuation_params = splicer.as_params(
+                            resumed_from_model=resumed_from or ""
+                        )
+                        for frame in splicer.finish():
+                            tracker.observe(frame)
+                            yield frame
+                        ledger.continued(index, continuation_params)
                     self._health.record_success(model_ref)
                     ledger.succeeded(index)
                     ledger.publish()
@@ -845,17 +1012,7 @@ class ProviderExecutor:
                 # construction error) that never reached provider
                 # classification, and those have no .kind at all -- and now
                 # never bench anything either.
-                kind = failure_kind(uncommitted_failure)
-                execution_failure = find_execution_failure(uncommitted_failure)
-                self._health.record_failure(
-                    model_ref,
-                    failure_kind=kind.value if kind is not None else None,
-                    status_code=(
-                        None
-                        if execution_failure is None
-                        else execution_failure.status_code
-                    ),
-                )
+                self._charge_failure(model_ref, uncommitted_failure)
                 if self._ends_the_route(uncommitted_failure):
                     ledger.unreachable_after(index, uncommitted_failure)
                     ledger.publish()
@@ -1000,6 +1157,80 @@ class ProviderExecutor:
             failure_kind_name(exc),
         )
         return tracker.close(reason=failure_kind_name(exc))
+
+    def _charge_failure(self, model_ref: str, exc: Exception) -> None:
+        """Count one attempt's failure against the model, exactly once.
+
+        The kind matters: it is what decides whether this failure counts
+        against the model at all. A timeout, a 429 or a prompt no model could
+        hold is the request's problem, and counting it is what let one
+        oversized request eject a whole chain. The status rides along so a
+        skipped row can name what the last failure actually was.
+
+        ``failure_kind()`` rather than ``.kind``: an attempt can fail with a
+        raw exception (an httpx ``TimeoutError``, a ``RuntimeError`` from a
+        construction error) that never reached provider classification, and
+        those have no ``.kind`` at all -- and now never bench anything either.
+
+        One function because there are now three ways an attempt can end in a
+        failure -- uncommitted, committed-and-truncated, committed-and-
+        continued -- and they must charge identically and once.
+        """
+        kind = failure_kind(exc)
+        execution_failure = find_execution_failure(exc)
+        self._health.record_failure(
+            model_ref,
+            failure_kind=kind.value if kind is not None else None,
+            status_code=(
+                None if execution_failure is None else execution_failure.status_code
+            ),
+        )
+
+    def _can_resume(
+        self, exc: Exception, tracker: CommittedStreamTracker, wire_api: WireApi
+    ) -> bool:
+        """Whether the next model may be asked to finish this message.
+
+        Every ``False`` below falls through to ``_truncate_after_commit``,
+        which is the same short-but-valid message the reader would have got
+        without this feature -- so the cost of being wrong here is length, not
+        correctness. That asymmetry is why the conditions are permissive about
+        *which failure* (any mid-stream death qualifies: a stall, the request
+        budget, a 5xx, a dropped transport -- they all leave the same
+        half-written answer) and strict about *what state* the stream is in.
+
+        The exclusions, each for its own reason:
+
+        ``responses`` speaks a different event vocabulary with its own ledger,
+        which the splicer does not read and could not rewrite.
+
+        A failure kind the operator listed in ``FALLBACK_SKIP_KINDS`` means no
+        other model would do better, and that judgement does not stop applying
+        because output has started.
+
+        A half-written ``tool_use`` cannot be continued *or* closed honestly --
+        ``sse_aggregation`` would substitute ``input={}`` for JSON it cannot
+        read and Claude Code would run the call. That one case still raises,
+        and it is the only place a reader is still left with a dead turn.
+
+        A ``stop_reason`` already sent means the model chose its own ending;
+        ``max_tokens`` exhaustion arrives exactly this way and is not a stall.
+
+        No text sent means there is nothing to continue *from*: the prefill
+        would be empty and the request would simply be the original one again.
+        """
+        if not self._policy.resume_after_commit:
+            return False
+        if wire_api != "messages":
+            return False
+        if self._ends_the_route(exc):
+            return False
+        # ``closable`` is the protocol question -- can these frames be
+        # completed into a valid message -- and a stream that cannot be ended
+        # cannot be continued either, because a continuation still has to end.
+        if not tracker.closable:
+            return False
+        return bool(tracker.text_prefix)
 
     def _ends_the_route(self, exc: BaseException) -> bool:
         """Whether this failure means no other model would do better.
@@ -1416,6 +1647,7 @@ def route_execution_policy(settings: Settings) -> RouteExecutionPolicy:
         skip_kinds=parse_failure_kinds(settings.fallback_skip_kinds),
         cooldown_step_over_floor=settings.fallback_cooldown_step_over_floor,
         end_cleanly_after_commit=settings.fallback_end_cleanly_after_commit,
+        resume_after_commit=settings.fallback_resume_after_commit,
     )
 
 

@@ -88,6 +88,12 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "stream_commit_holdback_seconds": LimitRange(
         0.0, 30.0, "0 commits the first chunk immediately"
     ),
+    # A character count, not a byte cap: the buffer's own 65,536-byte ceiling
+    # still ends the window whatever this says, so a model that writes a novel
+    # in one frame cannot be held indefinitely.
+    "stream_commit_holdback_chars": LimitRange(
+        0, 8_192, "0 uses the holdback clock alone"
+    ),
     "rate_limit_cooldown_seconds": LimitRange(0.0, DAY, "0 does not pause"),
     # Below this a cooldown is not worth spending a chain slot on; the ceiling
     # is ten minutes, past which nothing would ever be stepped over.

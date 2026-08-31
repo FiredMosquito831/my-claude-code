@@ -554,3 +554,89 @@ def test_an_early_retry_keeps_holding_reasoning_back() -> None:
     # abandonable. A buffer that had reverted would return the thoughts here.
     assert controller.push(THINKING) == [REASONING_HEARTBEAT]
     assert not controller.committed
+
+
+def _text_frame(text: str) -> str:
+    return (
+        'event: content_block_delta\ndata: {"type": "content_block_delta", '
+        '"index": 0, "delta": {"type": "text_delta", "text": "' + text + '"}}\n\n'
+    )
+
+
+def test_the_character_holdback_keeps_a_short_answer_uncommitted() -> None:
+    """A model that writes one word and dies has shown the reader nothing.
+
+    The clock alone cannot tell "this model is working" from "this model
+    managed six characters"; the character count can, and while the frames are
+    held the route can still start over on the next model with no seam.
+    """
+    now = [10.0]
+    holdback = RecoveryHoldbackBuffer(
+        holdback_seconds=0.75, holdback_chars=100, now=lambda: now[0]
+    )
+
+    assert holdback.push(_text_frame("a short answer")) == []
+    now[0] += 5.0
+    assert holdback.push(_text_frame(" and no more")) == []
+    assert not holdback.committed
+
+    released = holdback.push(_text_frame("x" * 100))
+    assert holdback.committed
+    assert len(released) == 3
+
+
+def test_the_character_holdback_still_obeys_the_clock() -> None:
+    """Both conditions, not either: enough characters is not enough time."""
+    now = [10.0]
+    holdback = RecoveryHoldbackBuffer(
+        holdback_seconds=3.0, holdback_chars=10, now=lambda: now[0]
+    )
+
+    assert holdback.push(_text_frame("more than ten characters")) == []
+    assert not holdback.committed
+
+    now[0] += 3.0
+    assert holdback.push(_text_frame("!")) != []
+    assert holdback.committed
+
+
+def test_the_byte_ceiling_releases_output_whatever_the_character_count_says() -> None:
+    """The memory bound is not a policy and never waits on the operator."""
+    holdback = RecoveryHoldbackBuffer(
+        holdback_seconds=3600.0, holdback_chars=1_000_000, max_bytes=5, now=lambda: 1.0
+    )
+
+    assert holdback.push("ab") == []
+    assert holdback.push("cde") == ["ab", "cde"]
+    assert holdback.committed
+
+
+def test_the_shipped_character_holdback_asks_only_the_clock() -> None:
+    """0 is the default, and it has to reproduce the old behaviour exactly."""
+    now = [10.0]
+    holdback = RecoveryHoldbackBuffer(holdback_seconds=0.75, now=lambda: now[0])
+
+    assert holdback.push(_text_frame("x")) == []
+    now[0] += 0.75
+
+    assert holdback.push(_text_frame("y")) != []
+    assert holdback.committed
+
+
+def test_a_controller_retry_keeps_the_character_holdback() -> None:
+    """The retry rebuilds the buffer; a setting must not be lost in the copy."""
+    controller = RecoveryController(
+        provider_name="fake",
+        request_id=None,
+        holdback_seconds=0.75,
+        holdback_chars=250,
+    )
+    controller.advance_failure(
+        TimeoutError("boom"),
+        stream_opened=True,
+        generated_output=False,
+        complete_tool_salvageable=False,
+    )
+
+    assert controller.push(_text_frame("short")) == []
+    assert not controller.committed

@@ -871,6 +871,30 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "FALLBACK_RESUME_AFTER_COMMIT",
+        "Continue a dead answer on the next model",
+        "deadlines",
+        "boolean",
+        settings_attr="fallback_resume_after_commit",
+        default="true",
+        restart_required=True,
+        description=(
+            "When a model dies part-way through an answer, the setting above "
+            "ends the message early and the reader keeps whatever was written. "
+            "With this on, the route goes one step further: the next model is "
+            "given the text already on screen and asked to carry on from it, "
+            "and its output is spliced into the same message -- so the turn "
+            "survives instead of stopping short. It is the same chain, the "
+            "same bench and the same budget as an ordinary fallback; nothing "
+            "new is retried. Continuation is not reliable on every model: many "
+            "answer nothing, and one that starts the answer over is rejected "
+            "rather than shown twice. Every one of those outcomes ends as the "
+            "short message you would have got anyway, never as an error. The "
+            "one state never continued is a half-written tool call. Turn this "
+            "off to stop at the short message."
+        ),
+    ),
+    ConfigFieldSpec(
         "STREAM_COMMIT_HOLDBACK_SECONDS",
         "Commit holdback",
         "deadlines",
@@ -883,6 +907,27 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "While it is held a failure can still fall back silently, so this "
             "is the width of the invisible-recovery window. 0 commits at once "
             "and disables invisible recovery."
+        ),
+    ),
+    ConfigFieldSpec(
+        "STREAM_COMMIT_HOLDBACK_CHARS",
+        "Commit holdback characters",
+        "deadlines",
+        "number",
+        settings_attr="stream_commit_holdback_chars",
+        default="0",
+        restart_required=True,
+        description=(
+            "Visible characters that must also arrive before output is "
+            "released, on top of the seconds above -- both conditions have to "
+            "be met, or the stream has to end. It buys the trade the seconds "
+            "box cannot: a model that writes one word and dies inside the "
+            "window has shown the reader nothing, so the route can start over "
+            "on the next model invisibly and the reader sees only the answer "
+            "that worked. The cost is paid on every request, in time-to-first-"
+            "visible-word, whether or not anything goes wrong. 0 asks only the "
+            "clock. The buffer's own 65,536-byte ceiling still releases output "
+            "whatever is set here."
         ),
     ),
     ConfigFieldSpec(

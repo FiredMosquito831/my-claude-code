@@ -16,6 +16,7 @@ from my_claude_code.config.constants import (
     PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
+    STREAM_COMMIT_HOLDBACK_CHARS_DEFAULT,
     STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
     STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT,
     STREAM_MIDSTREAM_RECOVERY_ATTEMPTS_DEFAULT,
@@ -66,6 +67,7 @@ class ProviderConfig:
     early_retry_attempts: int = STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT
     midstream_recovery_attempts: int = STREAM_MIDSTREAM_RECOVERY_ATTEMPTS_DEFAULT
     commit_holdback_seconds: float = STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT
+    commit_holdback_chars: int = STREAM_COMMIT_HOLDBACK_CHARS_DEFAULT
     fallback_on_reasoning_only: bool = FALLBACK_ON_REASONING_ONLY_DEFAULT
     rate_limit_cooldown_seconds: float = RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT
     # Backoff schedule for this provider's own retries of a 429 or 5xx.

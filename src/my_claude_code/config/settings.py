@@ -33,6 +33,7 @@ from .constants import (
     FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT,
     FALLBACK_ON_REASONING_ONLY_DEFAULT,
     FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT,
+    FALLBACK_RESUME_AFTER_COMMIT_DEFAULT,
     FALLBACK_RETRY_FIRST_DEFAULT,
     FALLBACK_SKIP_KINDS_DEFAULT,
     FALLBACK_STALL_TIMEOUT_DEFAULT,
@@ -57,6 +58,7 @@ from .constants import (
     REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT,
     REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT,
     SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
+    STREAM_COMMIT_HOLDBACK_CHARS_DEFAULT,
     STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
     STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT,
     STREAM_MIDSTREAM_RECOVERY_ATTEMPTS_DEFAULT,
@@ -681,9 +683,25 @@ class Settings(BaseSettings):
             "truncated message when it fails, instead of an API error."
         ),
     )
+    fallback_resume_after_commit: bool = Field(
+        default=FALLBACK_RESUME_AFTER_COMMIT_DEFAULT,
+        validation_alias="FALLBACK_RESUME_AFTER_COMMIT",
+        description=(
+            "Ask the next model on the route to finish an answer whose model "
+            "died mid-stream, instead of only ending the message early."
+        ),
+    )
     stream_commit_holdback_seconds: float = Field(
         default=STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
         validation_alias="STREAM_COMMIT_HOLDBACK_SECONDS",
+    )
+    stream_commit_holdback_chars: int = Field(
+        default=STREAM_COMMIT_HOLDBACK_CHARS_DEFAULT,
+        validation_alias="STREAM_COMMIT_HOLDBACK_CHARS",
+        description=(
+            "Visible characters that must arrive before output commits, on "
+            "top of the holdback seconds. 0 uses the clock alone."
+        ),
     )
     # Applied only when a rate-limited provider sends no Retry-After header.
     rate_limit_cooldown_seconds: float = Field(

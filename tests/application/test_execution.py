@@ -14,6 +14,8 @@ from my_claude_code.application.execution import (
     ProviderExecutor,
     RouteAttemptRecord,
     RouteExecutionPolicy,
+    TokenCounter,
+    WireApi,
     route_health_registry,
 )
 from my_claude_code.application.ports import ProviderPort
@@ -32,14 +34,23 @@ from my_claude_code.config.constants import (
 )
 from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.config.settings import Settings
-from my_claude_code.core.anthropic.models import Message, MessagesRequest
+from my_claude_code.core.anthropic.models import (
+    ContentBlockText,
+    Message,
+    MessagesRequest,
+    SystemContent,
+    Tool,
+)
 from my_claude_code.core.anthropic.stream_contracts import (
     REASONING_HEARTBEAT,
+    SSEEvent,
     assert_anthropic_stream_contract,
     parse_sse_text,
     sse_carries_content,
+    text_content,
 )
 from my_claude_code.core.anthropic.streaming.ledger import AnthropicStreamLedger
+from my_claude_code.core.anthropic.streaming.recovery import CONTINUATION_NUDGE
 from my_claude_code.core.async_iterators import AsyncCloseable
 from my_claude_code.core.failures import (
     ExecutionFailure,
@@ -2697,18 +2708,23 @@ def _committed_executor(
     providers: Mapping[str, ProviderPort],
     *,
     end_cleanly_after_commit: bool = True,
+    resume_after_commit: bool = True,
+    skip_kinds: frozenset[FailureKind] = frozenset({FailureKind.INVALID_REQUEST}),
     health: RouteHealthRegistry | None = None,
+    token_counter: TokenCounter = lambda _messages, _system, _tools: 17,
 ) -> ProviderExecutor:
     """An executor whose stall deadline fires in a fraction of a second."""
     return ProviderExecutor(
         lambda provider_id: providers[provider_id],
-        token_counter=lambda _messages, _system, _tools: 17,
+        token_counter=token_counter,
         policy=RouteExecutionPolicy(
             first_token_timeout=0.05,
             total_timeout=0.0,
             stall_timeout=0.05,
             attempt_share_floor=0.0,
             end_cleanly_after_commit=end_cleanly_after_commit,
+            resume_after_commit=resume_after_commit,
+            skip_kinds=skip_kinds,
         ),
         health=health or RouteHealthRegistry(eject_after_failures=0),
     )
@@ -2723,7 +2739,9 @@ async def test_a_committed_text_stall_ends_the_message_instead_of_erroring() -> 
     """The incident: 1,333 characters, then silence, then an API error."""
     primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
     secondary = FakeProvider()
-    executor = _committed_executor({"primary": primary, "secondary": secondary})
+    executor = _committed_executor(
+        {"primary": primary, "secondary": secondary}, resume_after_commit=False
+    )
 
     received = await _drain(
         executor.stream(
@@ -2748,8 +2766,11 @@ async def test_a_committed_text_stall_ends_the_message_instead_of_erroring() -> 
     delta = next(event for event in events if event.event == "message_delta")
     assert delta.data["delta"]["stop_reason"] == "max_tokens"
     assert delta.data["usage"]["input_tokens"] == 41
-    # The chain is not continued: the client has already seen this model's
-    # words, so a second model would be splicing into someone else's answer.
+    # Pinned with the continuation deliberately off, which is what this test
+    # has always measured: ending the message is the floor the resume falls
+    # back to, and it has to keep working on its own. The chain *is* asked to
+    # continue when the setting is on -- see
+    # ``test_a_committed_text_stall_continues_on_the_next_model``.
     assert secondary.stream_calls == []
     assert primary.stream_close_calls == 1
 
@@ -2961,3 +2982,748 @@ async def test_a_responses_wire_request_keeps_the_old_error() -> None:
     with pytest.raises(ExecutionFailure):
         while True:
             await anext(chunks)
+
+
+# --- A committed stream that dies is CONTINUED on the next model -----------
+#
+# The floor these sit on is the section above: every way a continuation can
+# fail lands there, on a short but valid message, and never on an error. What
+# these test is the step past it -- the next model finishing the sentence.
+
+_CONTINUATION_START = (
+    'event: message_start\ndata: {"type": "message_start", "message": '
+    '{"id": "msg_2", "type": "message", "role": "assistant", "content": [], '
+    '"model": "small", "stop_reason": null, "stop_sequence": null, '
+    '"usage": {"input_tokens": 88, "output_tokens": 1}}}\n\n'
+)
+_CONTINUATION_TEXT_BLOCK = (
+    'event: content_block_start\ndata: {"type": "content_block_start", '
+    '"index": 0, "content_block": {"type": "text", "text": ""}}\n\n'
+)
+
+
+def _continuation_text(text: str) -> str:
+    return (
+        'event: content_block_delta\ndata: {"type": "content_block_delta", '
+        '"index": 0, "delta": {"type": "text_delta", "text": '
+        + json.dumps(text)
+        + "}}\n\n"
+    )
+
+
+_CONTINUATION_END = (
+    'event: content_block_stop\ndata: {"type": "content_block_stop", '
+    '"index": 0}\n\n'
+    'event: message_delta\ndata: {"type": "message_delta", "delta": '
+    '{"stop_reason": "end_turn", "stop_sequence": null}, '
+    '"usage": {"input_tokens": 88, "output_tokens": 9}}\n\n'
+    'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+)
+
+
+def _continuation_frames(text: str = ", and the rest of it.") -> tuple[str, ...]:
+    return (
+        _CONTINUATION_START,
+        _CONTINUATION_TEXT_BLOCK,
+        _continuation_text(text),
+        _CONTINUATION_END,
+    )
+
+
+class ContinuingProvider(FakeProvider):
+    """A model that answers the continuation prompt, and records what it got."""
+
+    def __init__(self, frames: tuple[str, ...] = ()) -> None:
+        super().__init__()
+        self._frames = frames or _continuation_frames()
+
+    async def stream_response(
+        self,
+        request: MessagesRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        self.stream_calls.append(
+            {"request": request, "input_tokens": input_tokens, "request_id": request_id}
+        )
+        try:
+            for frame in self._frames:
+                yield frame
+        finally:
+            self.stream_close_calls += 1
+
+    @property
+    def last_request(self) -> MessagesRequest:
+        request = self.stream_calls[-1]["request"]
+        assert isinstance(request, MessagesRequest)
+        return request
+
+
+async def _continued(
+    executor: ProviderExecutor,
+    *routed: RoutedMessagesRequest,
+    wire_api: WireApi = "messages",
+    request_id: str = "req_resumed",
+    on_attempt_result: AttemptResultObserver | None = None,
+) -> list[SSEEvent]:
+    received = await _drain(
+        executor.stream(
+            _plan(*routed),
+            wire_api=wire_api,
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id=request_id,
+            on_attempt_result=on_attempt_result,
+        )
+    )
+    return parse_sse_text("".join(received))
+
+
+@pytest.mark.asyncio
+async def test_a_committed_text_stall_continues_on_the_next_model() -> None:
+    """The incident, rescued: 1,333 characters, silence, then the rest of it."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    events = await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert text_content(events) == "half an answer, and the rest of it."
+    # One envelope, one ending, one text block: no seam of any kind.
+    assert [e.event for e in events].count("message_start") == 1
+    assert [e.event for e in events].count("message_stop") == 1
+    assert [e.event for e in events].count("content_block_start") == 1
+    delta = next(e for e in events if e.event == "message_delta")
+    assert delta.data["delta"]["stop_reason"] == "end_turn"
+    assert primary.stream_close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_the_resumed_attempt_is_prefilled_with_the_text_already_sent() -> None:
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+    )
+    messages = secondary.last_request.messages
+
+    assert [m.role for m in messages] == ["user", "assistant", "user"]
+    assert messages[1].content == [ContentBlockText(type="text", text="half an answer")]
+    assert messages[2].content == CONTINUATION_NUDGE
+
+
+@pytest.mark.asyncio
+async def test_the_prefilled_request_never_ends_on_an_assistant_message() -> None:
+    """Prefill is a 400 on Claude 4.6+ and unsupported almost everywhere else.
+
+    The assistant turn is followed by a user turn, so the request is an
+    ordinary conversation and no dialect ever has to spell "prefill".
+    """
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+    )
+
+    assert secondary.last_request.messages[-1].role == "user"
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_request_never_sets_a_prefix_flag() -> None:
+    """No ``prefix: true``, no DeepSeek ``/beta``, no provider-specific shape."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+    )
+    body = secondary.last_request.model_dump()
+
+    assert "prefix" not in body
+    assert all("prefix" not in (m.get("extra") or {}) for m in body["messages"])
+
+
+@pytest.mark.asyncio
+async def test_the_prefill_is_text_only_and_carries_no_thinking_block() -> None:
+    """A synthesized thinking block would reach Anthropic without a signature."""
+    primary = StallingProvider(
+        before=(
+            _COMMITTED_START,
+            'event: content_block_start\ndata: {"type": "content_block_start", '
+            '"index": 0, "content_block": {"type": "thinking", "thinking": ""}}\n\n',
+            'event: content_block_delta\ndata: {"type": "content_block_delta", '
+            '"index": 0, "delta": {"type": "thinking_delta", '
+            '"thinking": "weighing it up"}}\n\n',
+            'event: content_block_stop\ndata: {"type": "content_block_stop", '
+            '"index": 0}\n\n',
+            'event: content_block_start\ndata: {"type": "content_block_start", '
+            '"index": 1, "content_block": {"type": "text", "text": ""}}\n\n',
+            'event: content_block_delta\ndata: {"type": "content_block_delta", '
+            '"index": 1, "delta": {"type": "text_delta", '
+            '"text": "half an answer"}}\n\n',
+        )
+    )
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+    )
+    assistant = secondary.last_request.messages[1]
+
+    assert assistant.content == [ContentBlockText(type="text", text="half an answer")]
+    assert "weighing it up" not in str(assistant.content)
+
+
+@pytest.mark.asyncio
+async def test_a_committed_thinking_stall_continues_on_the_next_model() -> None:
+    """State (b): the thinking block closes, the continuation opens fresh."""
+    primary = StallingProvider(
+        before=(
+            _COMMITTED_START,
+            _COMMITTED_TEXT_BLOCK,
+            _COMMITTED_TEXT,
+            _COMMITTED_TEXT_STOP,
+            'event: content_block_start\ndata: {"type": "content_block_start", '
+            '"index": 1, "content_block": {"type": "thinking", "thinking": ""}}\n\n',
+            'event: content_block_delta\ndata: {"type": "content_block_delta", '
+            '"index": 1, "delta": {"type": "thinking_delta", '
+            '"thinking": "still thinking"}}\n\n',
+        )
+    )
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    events = await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert text_content(events) == "half an answer, and the rest of it."
+    indexes = [e.data["index"] for e in events if e.event == "content_block_start"]
+    assert indexes == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_a_stall_between_blocks_continues_on_the_next_model() -> None:
+    """State (d): nothing open, so the continuation simply opens a new block."""
+    primary = StallingProvider(
+        before=(
+            _COMMITTED_START,
+            _COMMITTED_TEXT_BLOCK,
+            _COMMITTED_TEXT,
+            _COMMITTED_TEXT_STOP,
+        )
+    )
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    events = await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert text_content(events) == "half an answer, and the rest of it."
+    assert [e.data["index"] for e in events if e.event == "content_block_start"] == [
+        0,
+        1,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_tool_call_is_not_resumed() -> None:
+    """A half-written tool call cannot be handed to another model honestly."""
+    primary = StallingProvider(
+        before=(
+            _COMMITTED_START,
+            _COMMITTED_TEXT_BLOCK,
+            _COMMITTED_TEXT,
+            _COMMITTED_TEXT_STOP,
+            _COMMITTED_TOOL_BLOCK,
+            _COMMITTED_TOOL_JSON,
+        )
+    )
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("primary", "big"),
+            _routed_request("secondary", "small"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_resume_tool",
+    )
+    chunks = stream.__aiter__()
+    with pytest.raises(ExecutionFailure):
+        while True:
+            await anext(chunks)
+
+    assert secondary.stream_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_complete_tool_call_that_then_stalls_is_resumed() -> None:
+    """Arguments that *did* finish arriving leave a closable, resumable state."""
+    primary = StallingProvider(
+        before=(
+            _COMMITTED_START,
+            _COMMITTED_TEXT_BLOCK,
+            _COMMITTED_TEXT,
+            _COMMITTED_TEXT_STOP,
+            _COMMITTED_TOOL_BLOCK,
+            'event: content_block_delta\ndata: {"type": "content_block_delta", '
+            '"index": 1, "delta": {"type": "input_json_delta", '
+            '"partial_json": "{\\"command\\": \\"ls\\"}"}}\n\n',
+        )
+    )
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    events = await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert secondary.stream_calls != []
+    assert text_content(events) == "half an answer, and the rest of it."
+
+
+@pytest.mark.asyncio
+async def test_a_second_stall_continues_to_the_third_model() -> None:
+    """A resume is one more turn of the same loop, so it composes."""
+    first = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    second = StallingProvider(
+        before=(
+            _CONTINUATION_START,
+            _CONTINUATION_TEXT_BLOCK,
+            _continuation_text(", then more of it here"),
+        )
+    )
+    third = ContinuingProvider(frames=_continuation_frames(", and finally the end."))
+    executor = _committed_executor({"first": first, "second": second, "third": third})
+
+    events = await _continued(
+        executor,
+        _routed_request("first", "a"),
+        _routed_request("second", "b"),
+        _routed_request("third", "c"),
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert text_content(events) == (
+        "half an answer, then more of it here, and finally the end."
+    )
+    assert [e.event for e in events].count("content_block_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_the_last_model_stalling_ends_the_message_cleanly() -> None:
+    """With nothing behind it the resume becomes the truncated message."""
+    first = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    second = StallingProvider(
+        before=(
+            _CONTINUATION_START,
+            _CONTINUATION_TEXT_BLOCK,
+            _continuation_text(", then more of it here"),
+        )
+    )
+    attempts, observer = _attempt_log()
+    executor = _committed_executor({"first": first, "second": second})
+
+    events = await _continued(
+        executor,
+        _routed_request("first", "a"),
+        _routed_request("second", "b"),
+        on_attempt_result=observer,
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert text_content(events) == "half an answer, then more of it here"
+    delta = next(e for e in events if e.event == "message_delta")
+    assert delta.data["delta"]["stop_reason"] == "max_tokens"
+    assert [(a.attempt, a.outcome) for a in attempts] == [
+        (0, "failed"),
+        (1, "failed"),
+    ]
+    assert attempts[1].truncated is not None
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_that_says_nothing_still_ends_the_message() -> None:
+    """The dominant measured failure of the nudge is silence, not garbling."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = ContinuingProvider(
+        frames=(
+            _CONTINUATION_START,
+            'event: message_delta\ndata: {"type": "message_delta", "delta": '
+            '{"stop_reason": "end_turn", "stop_sequence": null}, '
+            '"usage": {"input_tokens": 88, "output_tokens": 0}}\n\n',
+            'event: message_stop\ndata: {"type": "message_stop"}\n\n',
+        )
+    )
+    attempts, observer = _attempt_log()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    events = await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+        on_attempt_result=observer,
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert text_content(events) == "half an answer"
+    delta = next(e for e in events if e.event == "message_delta")
+    assert delta.data["delta"]["stop_reason"] == "max_tokens"
+    assert attempts[1].continuation is not None
+    assert attempts[1].continuation["accepted"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_restarted_answer_is_rejected_rather_than_shown_twice() -> None:
+    """The reader must never see the same opening paragraph twice."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = ContinuingProvider(
+        frames=_continuation_frames("half an answer and then some more of it")
+    )
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    events = await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert text_content(events) == "half an answer"
+
+
+@pytest.mark.asyncio
+async def test_the_continued_attempt_names_the_model_that_stalled() -> None:
+    """The one place the model change is recorded, since there is no seam."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = ContinuingProvider()
+    attempts, observer = _attempt_log()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+        on_attempt_result=observer,
+    )
+
+    assert [(a.attempt, a.outcome) for a in attempts] == [
+        (0, "failed"),
+        (1, "succeeded"),
+    ]
+    assert attempts[0].error_kind == "timeout"
+    # ``unreachable_after`` must not fire on a resumed route: the model behind
+    # the stalled one *was* tried, and it is the one that answered.
+    assert attempts[1].error_message is None
+    assert attempts[1].continuation == {
+        "resumed_from_model": "primary/big",
+        "prefix_chars": len("half an answer"),
+        "continued_chars": len(", and the rest of it."),
+        "dropped_overlap_chars": 0,
+        "accepted": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_stalled_model_is_charged_exactly_once_when_resumed() -> None:
+    """Invariant: one mid-stream failure, one entry in the health registry."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = ContinuingProvider()
+    registry = _RecordingRegistry()
+    executor = _committed_executor(
+        {"primary": primary, "secondary": secondary}, health=registry
+    )
+
+    await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+    )
+
+    assert registry.calls == [("primary/big", "timeout", 504)]
+
+
+@pytest.mark.asyncio
+async def test_disabling_resume_restores_the_committed_truncation() -> None:
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = ContinuingProvider()
+    executor = _committed_executor(
+        {"primary": primary, "secondary": secondary}, resume_after_commit=False
+    )
+
+    events = await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert text_content(events) == "half an answer"
+    assert secondary.stream_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_responses_wire_request_is_never_resumed() -> None:
+    """A different event vocabulary the splicer does not speak."""
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("primary", "big"),
+            _routed_request("secondary", "small"),
+        ),
+        wire_api="responses",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_resume_responses",
+    )
+    chunks = stream.__aiter__()
+    with pytest.raises(ExecutionFailure):
+        while True:
+            await anext(chunks)
+
+    assert secondary.stream_calls == []
+
+
+@pytest.mark.asyncio
+async def test_max_tokens_exhaustion_is_not_a_stall() -> None:
+    """The model chose its own ending; there is nothing to continue."""
+    primary = StallingProvider(
+        before=(
+            _COMMITTED_START,
+            _COMMITTED_TEXT_BLOCK,
+            _COMMITTED_TEXT,
+            _COMMITTED_TEXT_STOP,
+            'event: message_delta\ndata: {"type": "message_delta", "delta": '
+            '{"stop_reason": "max_tokens", "stop_sequence": null}, '
+            '"usage": {"input_tokens": 41, "output_tokens": 4}}\n\n',
+        )
+    )
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    stream = executor.stream(
+        _plan(
+            _routed_request("primary", "big"),
+            _routed_request("secondary", "small"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_resume_max_tokens",
+    )
+    chunks = stream.__aiter__()
+    with pytest.raises(ExecutionFailure):
+        while True:
+            await anext(chunks)
+
+    assert secondary.stream_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resume_respects_fallback_skip_kinds() -> None:
+    """A failure the operator says ends the route still ends it."""
+    failure = ExecutionFailure(
+        kind=FailureKind.INVALID_REQUEST,
+        status_code=400,
+        message="malformed",
+        retryable=False,
+    )
+    primary = ScriptedProvider(chunks=_COMMITTED_TEXT_FRAMES, error=failure)
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    events = await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+        request_id="req_resume_skip_kind",
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert text_content(events) == "half an answer"
+    assert secondary.stream_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_mid_stream_upstream_failure_is_resumed_too() -> None:
+    """Any mid-stream death leaves the same half-written answer behind."""
+    failure = ExecutionFailure(
+        kind=FailureKind.UPSTREAM, status_code=502, message="boom", retryable=True
+    )
+    primary = ScriptedProvider(chunks=_COMMITTED_TEXT_FRAMES, error=failure)
+    secondary = ContinuingProvider()
+    executor = _committed_executor({"primary": primary, "secondary": secondary})
+
+    events = await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+        request_id="req_resume_502",
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert text_content(events) == "half an answer, and the rest of it."
+
+
+@pytest.mark.asyncio
+async def test_resume_respects_a_benched_model() -> None:
+    """The resume walks ``order``, so a benched model is never continued on."""
+    registry = RouteHealthRegistry(
+        mode="consecutive",
+        eject_after_failures=1,
+        eject_seconds=300.0,
+        bench_enabled=True,
+    )
+    registry.record_failure("second/b", failure_kind="upstream", status_code=502)
+    first = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    second = ContinuingProvider(frames=_continuation_frames(" FROM THE BENCH"))
+    third = ContinuingProvider()
+    executor = _committed_executor(
+        {"first": first, "second": second, "third": third}, health=registry
+    )
+
+    events = await _continued(
+        executor,
+        _routed_request("first", "a"),
+        _routed_request("second", "b"),
+        _routed_request("third", "c"),
+        request_id="req_resume_benched",
+    )
+
+    assert second.stream_calls == []
+    assert third.stream_calls != []
+    assert text_content(events) == "half an answer, and the rest of it."
+
+
+@pytest.mark.asyncio
+async def test_resume_stops_at_the_total_budget() -> None:
+    """The whole-request backstop still fires across a resume."""
+    first = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    second = ContinuingProvider()
+    executor = ProviderExecutor(
+        lambda provider_id: {"first": first, "second": second}[provider_id],
+        token_counter=lambda _m, _s, _t: 17,
+        policy=RouteExecutionPolicy(
+            first_token_timeout=0.05,
+            total_timeout=0.05,
+            stall_timeout=0.05,
+            attempt_share_floor=0.0,
+        ),
+        health=RouteHealthRegistry(eject_after_failures=0),
+    )
+
+    events = await _continued(
+        executor,
+        _routed_request("first", "a"),
+        _routed_request("second", "b"),
+        request_id="req_resume_budget",
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert second.stream_calls == []
+    assert text_content(events) == "half an answer"
+
+
+@pytest.mark.asyncio
+async def test_the_continuation_is_costed_on_its_own_prompt() -> None:
+    """The count the client was told about describes the original body only."""
+    counted: list[int] = []
+
+    def counter(
+        messages: list[Message],
+        system: str | list[SystemContent] | None,
+        tools: list[Tool] | None,
+    ) -> int:
+        counted.append(len(messages))
+        return 17 * len(messages)
+
+    primary = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    secondary = ContinuingProvider()
+    executor = _committed_executor(
+        {"primary": primary, "secondary": secondary}, token_counter=counter
+    )
+
+    await _continued(
+        executor,
+        _routed_request("primary", "big"),
+        _routed_request("secondary", "small"),
+        request_id="req_resume_tokens",
+    )
+
+    assert counted == [1, 3]
+    assert secondary.stream_calls[-1]["input_tokens"] == 51
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_that_dies_before_it_is_judged_shows_nothing() -> None:
+    """Held bytes are the point: a continuation nobody saw can be discarded.
+
+    Nothing the continuation writes reaches the client until it has proved it
+    is continuing rather than restarting, so a second model that dies inside
+    that window has shown the reader nothing -- and the next model continues
+    from the *first* model's words, not from an unjudged fragment.
+    """
+    first = StallingProvider(before=_COMMITTED_TEXT_FRAMES)
+    second = StallingProvider(
+        before=(
+            _CONTINUATION_START,
+            _CONTINUATION_TEXT_BLOCK,
+            _continuation_text(", tiny"),
+        )
+    )
+    third = ContinuingProvider()
+    executor = _committed_executor({"first": first, "second": second, "third": third})
+
+    events = await _continued(
+        executor,
+        _routed_request("first", "a"),
+        _routed_request("second", "b"),
+        _routed_request("third", "c"),
+        request_id="req_resume_unjudged",
+    )
+
+    assert_anthropic_stream_contract(events)
+    assert ", tiny" not in text_content(events)
+    assert text_content(events) == "half an answer, and the rest of it."
+    third_request = third.last_request
+    assert third_request.messages[1].content == [
+        ContentBlockText(type="text", text="half an answer")
+    ]

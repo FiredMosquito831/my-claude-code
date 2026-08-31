@@ -289,6 +289,18 @@ def sse_is_scaffolding(text: str, *, reasoning_commits: bool = True) -> bool:
     return all(_event_is_scaffolding(event, reasoning_commits) for event in events)
 
 
+def sse_visible_chars(text: str) -> int:
+    """How many characters of answer an SSE fragment shows the reader.
+
+    Text only, and deliberately: reasoning and tool arguments are output, but
+    they are not what a reader loses when a stream is thrown away and started
+    again somewhere else. The commit holdback counts this rather than bytes
+    because a frame's byte length is mostly protocol -- 200 bytes of envelope
+    around one word is not a paragraph the reader would miss.
+    """
+    return len(text_content(parse_sse_text(text)))
+
+
 def sse_carries_content(text: str) -> bool:
     """Whether an SSE fragment moves the answer forward.
 

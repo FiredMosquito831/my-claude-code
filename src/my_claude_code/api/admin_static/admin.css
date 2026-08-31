@@ -6473,6 +6473,13 @@ details.turn-pane > summary:focus-visible {
   white-space: normal;
 }
 
+/* The model change has no seam in the stream, so the row is the only place it
+   is visible. Not a warning colour: a continued answer is the good outcome. */
+.req-chain-continued {
+  color: var(--muted);
+  white-space: normal;
+}
+
 .req-chain-rootcause {
   margin: 6px 0 0;
   font-size: 12px;

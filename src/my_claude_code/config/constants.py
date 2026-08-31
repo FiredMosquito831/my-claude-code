@@ -201,6 +201,12 @@ STREAM_MIDSTREAM_RECOVERY_ATTEMPTS_DEFAULT = 5
 # Output is held this long before it commits. While held, a failure can still
 # fall back invisibly, so this is the width of the fallback window itself.
 STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT = 0.75
+# Visible characters that must also arrive before the window may close. The
+# seconds above answer "has the model had time to fail yet"; this answers "has
+# it said enough to be worth keeping", which is the question that matters when
+# a model emits one word and dies. 0 asks only the clock, which is how the
+# holdback has always behaved.
+STREAM_COMMIT_HOLDBACK_CHARS_DEFAULT = 0
 # Whether a stream that has emitted only reasoning may still fall back.
 # True holds reasoning back like scaffolding, so a model that thinks and
 # never answers leaves the route uncommitted and the chain can take over.
@@ -210,6 +216,11 @@ FALLBACK_ON_REASONING_ONLY_DEFAULT = True
 # the client receives a short but valid message instead of an API error printed
 # under a half-written answer. False restores the error.
 FALLBACK_END_CLEANLY_AFTER_COMMIT_DEFAULT = True
+# Whether a stream that has already reached the client may be continued by the
+# next model on the route rather than only ended. Ships on: every way the
+# continuation can fail lands on the truncated message above, so the worst
+# outcome is the behaviour of the setting before it.
+FALLBACK_RESUME_AFTER_COMMIT_DEFAULT = True
 # How long a model held at the reasoning boundary may think before the route
 # gives up on it. Measured on 21 days of traffic: every one of the 499 budget
 # exhaustions ran the *full* 600s, while 98% of slow reasoning successes had
