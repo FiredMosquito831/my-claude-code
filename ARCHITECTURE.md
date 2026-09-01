@@ -218,7 +218,8 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
 - `mcc-opencode` / `mcc-opencode2` / `mcc-kilo` call
   `my_claude_code.cli.launchers.opencode:launch` / `:launch_v2` / `:launch_kilo`.
 - `mcc-commandcode` calls `my_claude_code.cli.launchers.commandcode:launch`.
-  These four have no `fcc-` alias: no installed copy of MCC ever published
+- `mcc-kimi` calls `my_claude_code.cli.launchers.kimi:launch`.
+  These five have no `fcc-` alias: no installed copy of MCC ever published
   one, so inventing it would ship a command that never had users.
 - `mcc-desktop` (legacy alias `fcc-desktop`) calls `my_claude_code.cli.desktop_entrypoint:main`;
   [cli/desktop.py](src/my_claude_code/cli/desktop.py) is the controller that owns the `mcc-server`
@@ -1367,6 +1368,47 @@ refreshed, an idempotent content-compare, and a reversible
 the *presence of MCC's own key* rather than the file's existence, so a
 `provider.mcc` block can never appear in the config of someone who never ran
 the launcher.
+
+[cli/launchers/kimi.py](src/my_claude_code/cli/launchers/kimi.py) owns
+`mcc-kimi`, and is the first harness pointed at an MCC-owned document by a
+**command-line flag** rather than by an environment variable. Kimi Code 1.50.0
+resolves its config as `get_share_dir() / "config.toml"`, where `get_share_dir`
+is `$KIMI_SHARE_DIR` or `~/.kimi`. That variable is deliberately *not* the
+lever used: the share directory also holds the user's sessions, credentials,
+plugins and background-worker state, so redirecting it to serve one config file
+would hide every session they have. `kimi --config-file PATH` moves the config
+alone, so the launcher writes `~/.fcc/kimi-code-config.toml` and passes that
+path ahead of the user's arguments — ahead, because the flag binds to Kimi's
+root Typer callback and would otherwise be read as an argument to a subcommand.
+`~/.kimi/config.toml` is never read, written or backed up. The trade is that
+`--config-file` *replaces* the config rather than overlaying it, so an
+`mcc-kimi` session takes Kimi's own defaults for `theme`, `hooks` and
+`loop_control`; sessions, skills and MCP servers come from elsewhere and are
+unaffected.
+
+Kimi's document is also the first generated catalogue that is **not JSON**, so
+[config/harness_toml.py](src/my_claude_code/config/harness_toml.py) supplies the
+same atomic write-if-changed contract as `config/atomic_json.py` over a narrow
+deterministic TOML emitter — `tomllib` reads TOML and does not write it, and
+what MCC emits is far narrower than TOML. `HarnessCatalogue.document_format`
+selects between the two writers in the launcher and in the fan-out publisher.
+
+**Kimi is the one harness whose generated file carries the proxy token, and the
+reason is a property of its schema.** `LLMProvider.api_key` is a plain
+`SecretStr`: Kimi publishes no `"$VAR"`, `"{env:VAR}"` or `"!command"`
+reference form, and `augment_provider_with_env_vars` overrides `api_key` from
+the environment only for provider types `kimi`, `openai_legacy` and
+`openai_responses` — an `anthropic` provider hits its `case _: pass`. There is
+no out-of-band channel, so the choice was a literal or no Kimi Code support.
+The literal is written into a file MCC owns under `~/.fcc`, chmod `0600`, in
+the same directory as the `~/.fcc/.env` that already stores the identical
+`ANTHROPIC_AUTH_TOKEN` in clear; nothing is written into a document the user
+owns, and with proxy auth off the value is the non-credential `fcc-no-auth`
+marker. Both values are emitted by the serialiser as sentinels
+(`KIMI_BASE_URL_SENTINEL`, `KIMI_API_KEY_SENTINEL`) and resolved by
+`config/harness_toml.py:with_kimi_credentials`, for the same reason Command
+Code's base URL is: the serialiser is a pure function of the model records and
+knows neither the port nor the token.
 
 The proxy token stays off disk here too, by a different mechanism: Command Code
 rejects a literal key in `providers.json` and expands a `"$VAR"` reference from

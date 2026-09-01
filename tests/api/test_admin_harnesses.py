@@ -274,3 +274,55 @@ def test_a_users_config_without_mccs_key_reads_as_never_launched(monkeypatch, tm
     ]
     assert entry["exists"] is False
     assert entry["model_count"] is None
+
+
+def test_a_toml_catalogue_is_read_back_with_the_parser_its_format_needs(
+    monkeypatch, tmp_path
+):
+    """A TOML document parsed as JSON reads as "never written" and lies.
+
+    The card would then offer "written on the first mcc-kimi" to someone who
+    has run it, which is the one thing that row exists to answer.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    config_dir = tmp_path / ".fcc"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "kimi-code-config.toml").write_text(
+        "\n".join(
+            [
+                "[providers.mcc]",
+                'type = "anthropic"',
+                "",
+                '[models."mcc/a/b"]',
+                'provider = "mcc"',
+                "",
+                '[models."mcc/a/c"]',
+                'provider = "mcc"',
+                "",
+                "[_mcc_defaulted]",
+                '"mcc/a/b" = ["max_context_size"]',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    entry = next(item for item in body["harnesses"] if item["id"] == "kimi_code")[
+        "catalogue"
+    ]
+    assert entry["delivery"] == "file"
+    assert entry["config_flag"] == "--config-file"
+    assert entry["config_env_var"] is None
+    assert entry["merged_key"] is None
+    assert entry["path"].endswith("kimi-code-config.toml")
+    assert entry["exists"] is True
+    assert entry["model_count"] == 2
+    assert entry["defaulted_model_count"] == 1

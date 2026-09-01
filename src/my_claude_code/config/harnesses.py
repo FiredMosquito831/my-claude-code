@@ -18,6 +18,20 @@ would make one catalogue lookup silently answer for the other -- and a user can
 run ``mcc-commandcode`` routed to ``anthropic`` with the ``commandcode``
 provider switched off entirely.
 
+Kimi Code is the second such pair and the one most likely to be misread,
+because the two halves do not even share a spelling. The *providers* ``kimi``
+and ``kimi_coding`` in ``config/provider_catalog.py`` are Moonshot endpoints
+MCC sends requests **to**, paid for with a Moonshot key. The *harness*
+``kimi_code`` below is Moonshot's ``kimi`` CLI, a Python tool published on
+PyPI as ``kimi-cli``, which MCC serves requests **for** over
+``POST /v1/messages``. ``mcc-kimi`` does not require a Moonshot account, a
+Moonshot key or either of those providers being switched on: it declares a
+provider of type ``anthropic`` pointed at this proxy, and every model in its
+picker is whatever the ladder resolved. Reusing ``kimi`` as the harness id
+would have made ``harness_spec("kimi")`` and ``PROVIDER_CATALOG["kimi"]``
+resolve two different things under one name, which is exactly the class of bug
+these separate namespaces exist to prevent.
+
 Everything a harness needs stated once lives here, because the alternative is
 what this module replaced: the same three ids written out by hand in
 ``pyproject.toml``, both installers, ``mcc-help``, the RTK state file, the RTK
@@ -72,6 +86,25 @@ COMMANDCODE_API_KEY_ENV = "MCC_COMMANDCODE_API_KEY"
 #: a provider that fails loudly on connect rather than one Command Code drops
 #: at load time with a warning nobody reads.
 COMMANDCODE_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
+
+#: Kimi Code's two placeholders, replaced by the caller for the same reason
+#: Command Code's ``baseURL`` one is: the serialiser is a pure function of the
+#: model records and knows neither which port this install listens on nor what
+#: the proxy token is.
+#:
+#: Kimi is the first harness where the *key* has to be a placeholder too.
+#: ``kimi_cli.config.LLMProvider.api_key`` is a plain ``SecretStr`` -- there is
+#: no ``"$VAR"``, ``"{env:VAR}"`` or ``"!command"`` form to write instead --
+#: and ``kimi_cli.llm.augment_provider_with_env_vars`` overrides ``api_key``
+#: from the environment only for provider types ``kimi``, ``openai_legacy``
+#: and ``openai_responses``; an ``anthropic`` provider falls through its
+#: ``case _: pass``. So the value has to be literal in the document, and
+#: ``ARCHITECTURE.md`` records why that is acceptable here and nowhere else:
+#: the document is MCC's own file under ``~/.fcc``, in the same directory as
+#: ``~/.fcc/.env``, which already holds the identical ``ANTHROPIC_AUTH_TOKEN``
+#: in clear. Nothing is written into a file the user owns.
+KIMI_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
+KIMI_API_KEY_SENTINEL = "mcc-proxy-token-placeholder"
 
 
 PROTOCOL_LABELS: dict[HarnessProtocol, str] = {
@@ -200,6 +233,20 @@ class HarnessCatalogue:
     #: then owns a file of its own under ``~/.fcc`` and never edits, merges
     #: into or backs up the document the user wrote.
     config_env_var: str | None = None
+    #: The CLI's own command-line option naming a config file, for a harness
+    #: that publishes a flag where the OpenCode family publishes a variable.
+    #: Kimi Code is the first: it reads ``KIMI_SHARE_DIR`` for its *share*
+    #: directory -- sessions, credentials, plugins, background state -- and
+    #: redirecting that to serve one config file would hide every session the
+    #: user has. ``--config-file`` moves the config alone, which is the only
+    #: thing MCC has any business moving. Mutually exclusive with ``merge``
+    #: for the same reason ``config_env_var`` is.
+    config_flag: str | None = None
+    #: How the generated document is encoded. ``json`` for every harness that
+    #: reads JSON; ``toml`` for Kimi Code, whose ``config.toml`` is parsed with
+    #: ``tomlkit``. It is a property of the *file format*, not of the
+    #: serialiser, which emits the same neutral mapping either way.
+    document_format: str = "json"
     #: Set only where a CLI publishes neither an extra-config variable nor a
     #: command-line provider form, so the sole way to declare a provider is to
     #: edit the document the user wrote. Mutually exclusive with
@@ -628,6 +675,85 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             "the document up first."
         ),
         tagline="The Command Code agent, served through this proxy.",
+    ),
+    HarnessSpec(
+        # ``kimi_code``, not ``kimi``: the latter is an upstream Moonshot
+        # gateway in ``config/provider_catalog.py``. See the module docstring.
+        id="kimi_code",
+        display_name="Kimi Code",
+        binary="kimi",
+        # ``uv tool install kimi-cli`` installs two executables for one entry
+        # point, ``kimi`` and ``kimi-cli``. Either satisfies the launcher.
+        binary_aliases=("kimi-cli",),
+        protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        # A Python tool on PyPI, not an npm package: ``uv tool install`` is
+        # Moonshot's own first line and ``pipx install kimi-cli`` is the
+        # documented alternative. MCC installs neither -- it prints this and
+        # exits 127.
+        install_hint=(
+            "Install Kimi Code with: uv tool install kimi-cli "
+            "(or: pipx install kimi-cli)"
+        ),
+        commands=(
+            HarnessCommand(
+                suffix="kimi",
+                target="my_claude_code.cli.launchers.kimi:launch",
+                legacy_alias=False,
+                help_text="Launch Kimi Code through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments="-m mcc/<provider>/<model>",
+                        help_text=(
+                            "Start on one specific MCC-routed model. Kimi Code "
+                            "has no model-list subcommand and MCC states no "
+                            "default model, so either pass this or pick one "
+                            "with /model once the session is up"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments='--print -p "<prompt>"',
+                        help_text=(
+                            "Run one prompt non-interactively (add "
+                            "--output-format stream-json for the event stream)"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments='--quiet -p "<prompt>"',
+                        help_text=(
+                            "Kimi Code's own alias for --print "
+                            "--output-format text --final-message-only"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="info",
+                        help_text=(
+                            "Passed straight to Kimi Code: MCC injects no "
+                            "provider for a non-session command"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="kimi",
+            filename="kimi-code-config.toml",
+            document_format="toml",
+            config_flag="--config-file",
+        ),
+        # ``term``, ``acp``, ``web`` and ``vis`` are omitted deliberately:
+        # the first three run an agent and do need MCC's provider, and ``vis``
+        # is the tracing viewer, which does not.
+        passthrough_commands=frozenset(
+            {"login", "logout", "info", "export", "mcp", "plugin", "vis"}
+        ),
+        # ``-V``, not ``-v``: Kimi Code spells its version flag ``--version``
+        # / ``-V`` and has no ``-v`` at all.
+        passthrough_flags=frozenset({"--help", "-h", "--version", "-V"}),
+        summary=(
+            "Kimi Code, pointed at an MCC-owned config.toml through its own "
+            "--config-file flag so ~/.kimi/config.toml is never edited."
+        ),
+        tagline="Moonshot's Kimi Code CLI, served through this proxy.",
     ),
 )
 

@@ -1,6 +1,7 @@
 """The fan-out publisher refreshes what exists and creates nothing else."""
 
 import json
+import tomllib
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
 from my_claude_code.config.harnesses import harness_specs
+from my_claude_code.config.proxy_auth import PROXY_NO_AUTH_SENTINEL
 from my_claude_code.config.settings import Settings
 from my_claude_code.runtime.harness_catalogues import HarnessCatalogueFanoutPublisher
 
@@ -227,6 +229,7 @@ def test_the_default_path_resolves_under_the_fcc_config_directory(
         ("opencode-config.json",),
         ("opencode2-config.json",),
         ("kilo-config.json",),
+        ("kimi-code-config.toml",),
     ]
 
 
@@ -295,5 +298,48 @@ def test_a_merge_target_is_never_created_at_startup(tmp_path: Path) -> None:
     path = tmp_path / "providers.json"
 
     _merge_publisher(path).ensure_exists(_runtime())
+
+    assert not path.exists()
+
+
+# ------------------------------------------------------------------ TOML target
+
+
+def test_a_toml_catalogue_is_written_as_toml_with_its_credentials_resolved(
+    tmp_path: Path,
+) -> None:
+    """The one generated document that is not JSON, and the one that holds a key.
+
+    The server writes it as well as the launcher, so this is where the
+    substitution has to hold: a sentinel that survived to disk would be a
+    config that parses and cannot authenticate.
+    """
+
+    path = tmp_path / "kimi-code-config.toml"
+    path.write_text("providers = {}\n", encoding="utf-8")
+    publisher = HarnessCatalogueFanoutPublisher({"kimi_code": path})
+
+    publisher.publish(_runtime({"nvidia_nim/configured": 300_000}))
+
+    document = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert document["providers"]["mcc"]["type"] == "anthropic"
+    assert not document["providers"]["mcc"]["base_url"].endswith("/v1")
+    assert document["providers"]["mcc"]["base_url"].startswith("http")
+    assert "base-url.mcc.invalid" not in path.read_text(encoding="utf-8")
+    assert document["providers"]["mcc"]["api_key"] == PROXY_NO_AUTH_SENTINEL
+    models = document["models"]
+    assert sorted(models) == [
+        "mcc/nvidia_nim/configured",
+        "mcc/open_router/discovered",
+    ]
+    assert models["mcc/nvidia_nim/configured"]["max_context_size"] == 300_000
+
+
+def test_a_toml_catalogue_is_never_created_for_an_unlaunched_harness(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "kimi-code-config.toml"
+
+    HarnessCatalogueFanoutPublisher({"kimi_code": path}).ensure_exists(_runtime())
 
     assert not path.exists()

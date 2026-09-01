@@ -429,6 +429,14 @@ With **Model discovery** on, the app populates its picker from MCC's `/v1/models
 > (`harness_id` in `cli/harnesses/` and `config/harnesses.py`, `provider_id` in
 > `providers/` and `config/provider_catalog.py`) and are never joined.
 >
+> **Kimi Code is the pair most likely to be misread**, because the two halves
+> do not even share a spelling. The providers `kimi` and `kimi_coding` are
+> Moonshot endpoints MCC sends requests *to*, paid for with a Moonshot key.
+> `mcc-kimi` launches Moonshot's Kimi Code *CLI* (`kimi`, published on PyPI as
+> `kimi-cli`), which sends its requests to MCC — and needs no Moonshot account,
+> no Moonshot key and neither of those providers switched on. Its harness id is
+> `kimi_code`, deliberately not `kimi`.
+>
 > **Command Code is the sharpest case, because both halves ship.** The provider
 > `commandcode` is the Command Code *gateway* MCC sends requests to, paid for
 > with a `COMMANDCODE_API_KEY` you bought. `mcc-commandcode` launches the
@@ -586,22 +594,82 @@ model and even with `--local-only`. Sign in once, or set
 `COMMAND_CODE_API_KEY`. MCC will not fake that credential for you: it belongs
 to Command Code's account, not to this proxy.
 
+### Kimi Code
+
+```bash
+mcc-kimi
+```
+
+Kimi Code is Moonshot's `kimi` CLI. It is a **Python tool on PyPI**, not an npm
+package: install it with `uv tool install kimi-cli` or `pipx install kimi-cli`.
+MCC never installs it — a missing binary prints Moonshot's own line and exits
+127. The version everything below was read against is **1.50.0**, and it was
+read out of the installed package's source rather than its docs, because four
+things the docs would have told you are no longer true:
+
+| What you might expect | What Kimi Code 1.50.0 actually does |
+| --- | --- |
+| `KIMI_CODE_HOME` overrides the config directory | There is no such variable. The share directory is `$KIMI_SHARE_DIR` or `~/.kimi`, and the config is `<share dir>/config.toml`. `~/.kimi-code/` is an older layout. |
+| `[models."…"]` has `max_output_size` | It does not. `LLMModel` is `provider`, `model`, `max_context_size`, `capabilities`, `display_name` — nothing else. Kimi derives the completion cap itself from `max_context_size`. |
+| `capabilities` names vision, tools and reasoning | The whole vocabulary is `image_in`, `video_in`, `thinking`, `always_thinking`. There is no tools capability and no per-model reasoning-effort field anywhere. |
+| `KIMI_MODEL_*` / `KIMI_API_KEY` can override a provider | Only for provider types `kimi`, `openai_legacy` and `openai_responses`. An `anthropic` provider — the only type that reaches MCC — falls through untouched. |
+
+**Your `~/.kimi/config.toml` is never read, written or backed up.** Kimi
+publishes `--config-file PATH`, so MCC writes a `config.toml` of its own at
+`~/.fcc/kimi-code-config.toml` and passes that path for the launch. The share
+directory is deliberately *not* redirected: it also holds your sessions, your
+credentials, your plugins and the background-worker state, and moving it to
+serve one config file would hide every session you have.
+
+The trade, stated rather than hidden: `--config-file` **replaces** the config
+document, it does not overlay it. So an `mcc-kimi` session takes Kimi's own
+defaults for `theme`, `hooks` and `loop_control` rather than yours. Sessions,
+skills and MCP servers are unaffected — those come from the share directory and
+from Kimi's own MCP defaults, neither of which MCC touches.
+
+**This is the one agent whose generated file holds the proxy token**, and the
+reason is in the table above: `api_key` is a plain string with no `"$VAR"`,
+`"{env:VAR}"` or `"!command"` form, and Kimi's environment overrides do not
+reach an `anthropic` provider. There is no out-of-band channel, so the choice
+was a literal value or no Kimi Code support at all. The literal goes into a
+file MCC owns under `~/.fcc`, mode `0600`, in the same directory as the
+`~/.fcc/.env` that already holds the identical `ANTHROPIC_AUTH_TOKEN` in
+clear — nothing is disclosed that was not disclosed already, and nothing is
+written into a document you own. With proxy auth off, the value written is the
+`fcc-no-auth` marker, which is not a credential.
+
+MCC appears inside Kimi Code as the provider `mcc`, and its models as
+`mcc/<provider>/<model>`. Kimi Code has **no model-list subcommand** and MCC
+states no default model, so name one on the command line or pick it with
+`/model` once the session is up:
+
+```bash
+mcc-kimi -m mcc/openrouter/anthropic/claude-sonnet-4.5
+mcc-kimi --print -p "say ok"            # one prompt, non-interactively
+mcc-kimi --quiet -p "say ok"            # only the final message
+```
+
+Maintenance subcommands — `login`, `logout`, `info`, `export`, `mcp`,
+`plugin`, `vis` — and `--help` / `--version` reach the CLI untouched and do not
+need a running proxy. `acp`, `term` and `web` are not passed through: they run
+an agent, so they get MCC's provider like any other session.
+
 ### What MCC tells an agent about a model
 
 The catalogue MCC generates for an agent carries each model's **real**
 metadata, as MCC's resolution ladder resolved it, translated into that CLI's
 own schema:
 
-| What the ladder resolves | Where it lands in Codex | Where it lands in Pi | Where it lands in OpenCode / Kilo | Where it lands in Command Code |
-| --- | --- | --- | --- | --- |
-| context window | `context_window` / `max_context_window` | `contextWindow` | `limit.context` | `contextWindow` |
-| output ceiling | *(Codex has no field)* | `maxTokens` | `limit.output` | `maxOutput` |
-| vision support | `input_modalities` | `input` | `attachment` + `modalities.input` | *(no field)* |
-| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* | `tool_call` | *(no field)* |
-| reasoning support | `supports_reasoning_summaries` | `reasoning` | `reasoning` | `reasoning` |
-| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* | `variants.<rung>`, clamped to OpenCode's own rungs | `reasoningEfforts[]`, clamped to `low\|medium\|high\|xhigh\|max` |
-| prices | *(Codex has no field)* | `cost.input` / `cost.output` | `cost.input` / `cost.output` | `cost.input` / `cost.output` |
-| pinned parameters | *(Codex has no field)* | *(Pi has no field)* | `options` | `options` |
+| What the ladder resolves | Where it lands in Codex | Where it lands in Pi | Where it lands in OpenCode / Kilo | Where it lands in Command Code | Where it lands in Kimi Code |
+| --- | --- | --- | --- | --- | --- |
+| context window | `context_window` / `max_context_window` | `contextWindow` | `limit.context` | `contextWindow` | `max_context_size` |
+| output ceiling | *(Codex has no field)* | `maxTokens` | `limit.output` | `maxOutput` | *(Kimi has no field)* |
+| vision support | `input_modalities` | `input` | `attachment` + `modalities.input` | *(no field)* | `capabilities: ["image_in"]` |
+| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* | `tool_call` | *(no field)* | *(Kimi has no field)* |
+| reasoning support | `supports_reasoning_summaries` | `reasoning` | `reasoning` | `reasoning` | `capabilities: ["thinking"]`, plus `"always_thinking"` when it cannot be turned off |
+| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* | `variants.<rung>`, clamped to OpenCode's own rungs | `reasoningEfforts[]`, clamped to `low\|medium\|high\|xhigh\|max` | *(Kimi has no field)* |
+| prices | *(Codex has no field)* | `cost.input` / `cost.output` | `cost.input` / `cost.output` | `cost.input` / `cost.output` | *(Kimi has no field)* |
+| pinned parameters | *(Codex has no field)* | *(Pi has no field)* | `options` | `options` | *(Kimi has no field)* |
 
 A model with a 32k window is advertised as 32k. A model that publishes only
 `low` and `high` gets exactly those two rungs in Codex's picker — `xhigh`
@@ -616,6 +684,14 @@ never a number MCC invented — and records the substitution in three places: a
 when it starts, and a count on the agent's card in **Coding agents**. So you can
 always tell which figures are the CLI's guess from which are your provider's
 answer.
+
+Kimi Code is the clearest illustration of what "that CLI's own default" means.
+`max_context_size` is a *required* integer there, so a model whose context
+window nobody published cannot simply omit it — and MCC still refuses to invent
+one. It writes `0`, which is Kimi's own marker: `compute_max_completion_tokens`
+branches on `max_context_size <= 0` and falls back to its own 32,000-token
+budget. The `0` is recorded under `_mcc_defaulted` like every other
+substitution.
 
 **Editor integrations** work the same way — Claude Code and Codex in VS Code, or Claude Code through JetBrains ACP. Point them at the proxy address and they behave normally.
 

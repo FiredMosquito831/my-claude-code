@@ -24,6 +24,7 @@ import asyncio
 import json
 import os
 import shutil
+import tomllib
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -122,6 +123,7 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         return {
             "format": catalogue.format_id,
             "config_env_var": None,
+            "config_flag": None,
             "merged_key": None,
             "delivery": "process_local",
             "path": None,
@@ -142,6 +144,10 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         # The CLI's own variable naming an extra config file. Its presence is
         # what lets MCC own a document instead of editing the user's.
         "config_env_var": catalogue.config_env_var,
+        # Set instead when the CLI names its config file on the command line
+        # rather than through a variable. Same zero-clobber story, different
+        # lever: MCC owns a document and hands the CLI its path.
+        "config_flag": catalogue.config_flag,
         # Set instead when the CLI reads only its own document: the one key
         # MCC writes into a file it does not own.
         "merged_key": merge.owned_key_label if merge is not None else None,
@@ -152,7 +158,7 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         "model_count": None,
         "defaulted_model_count": None,
     }
-    document = _read_catalogue(path)
+    document = _read_catalogue(path, catalogue.document_format)
     if document is None:
         return entry
     if merge is not None:
@@ -183,10 +189,26 @@ def _merged_block(
     return node if isinstance(node, Mapping) else None
 
 
-def _read_catalogue(path: Path) -> Mapping[str, Any] | None:
+def _read_catalogue(
+    path: Path, document_format: str = "json"
+) -> Mapping[str, Any] | None:
+    """Return a generated catalogue, parsed the way its own format demands.
+
+    ``tomllib`` reads and does not write, which is exactly the half needed
+    here: the dashboard only reports what is on disk. Writing goes through
+    ``config/harness_toml.py``.
+    """
+
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except OSError, ValueError:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    try:
+        if document_format == "toml":
+            payload: Any = tomllib.loads(raw.decode("utf-8"))
+        else:
+            payload = json.loads(raw.decode("utf-8"))
+    except ValueError, tomllib.TOMLDecodeError:
         return None
     return payload if isinstance(payload, Mapping) else None
 

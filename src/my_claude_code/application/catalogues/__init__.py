@@ -20,6 +20,7 @@ from my_claude_code.application.catalogues.commandcode import (
 from my_claude_code.application.catalogues.commandcode import (
     build_commandcode_catalogue,
 )
+from my_claude_code.application.catalogues.kimi import build_kimi_catalogue
 from my_claude_code.application.catalogues.opencode import (
     PROVIDER_ID as OPENCODE_PROVIDER_ID,
 )
@@ -33,18 +34,22 @@ type CatalogueSerialiser = Callable[
 SERIALISERS: dict[str, CatalogueSerialiser] = {
     "codex": build_codex_catalogue,
     "commandcode": build_commandcode_catalogue,
+    "kimi": build_kimi_catalogue,
     "opencode": build_opencode_catalogue,
     "pi": build_pi_catalogue,
 }
 
 #: Where each format keeps its per-model entries. Two shapes exist and both
 #: are the CLI's own: Codex and Pi take a list under ``models``, OpenCode a
-#: mapping nested under the provider key it was told to write. Stating the
-#: path once is what lets a launcher check "did I get any models?" and the
-#: contract tests inspect every format without knowing any of them by name.
+#: mapping nested under the provider key it was told to write. Kimi Code is a
+#: third: a mapping at the document root, keyed by the whole model id, because
+#: that is what ``Config.models`` is. Stating the path once is what lets a
+#: launcher check "did I get any models?" and the contract tests inspect every
+#: format without knowing any of them by name.
 MODEL_ENTRY_PATHS: dict[str, tuple[str, ...]] = {
     "codex": ("models",),
     "commandcode": ("provider", COMMANDCODE_PROVIDER_ID, "models"),
+    "kimi": ("models",),
     "opencode": ("provider", OPENCODE_PROVIDER_ID, "models"),
     "pi": ("models",),
 }

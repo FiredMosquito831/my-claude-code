@@ -8,6 +8,7 @@ answer, which is exactly the case it was hiding in before.
 
 import ast
 import re
+from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -156,9 +157,29 @@ def test_a_fully_unknown_model_never_produces_a_zero_limit(format_id: str) -> No
             # A price of zero is a real, defensible CLI default -- free is a
             # number a model can genuinely cost. A *limit* of zero never is.
             continue
-        if LIMIT_KEY_PATTERN.search(key) and isinstance(value, int):
-            assert value > 0, f"{format_id}.{key} was zeroed rather than defaulted"
+        if not LIMIT_KEY_PATTERN.search(key) or not isinstance(value, int):
+            continue
+        if value == 0 and _cli_documented_defaults(format_id).get(key) == 0:
+            # A zero the CLI itself documents as its unknown marker, declared
+            # in that serialiser's own CLI_DOCUMENTED_DEFAULTS. Kimi Code is
+            # the case: ``max_context_size`` is a required int and
+            # ``compute_max_completion_tokens`` branches on ``<= 0`` to fall
+            # back to its own budget, so zero is the CLI's own way of saying
+            # "nobody published one" and any positive number would be a
+            # context window MCC invented. The exemption is derived from the
+            # declared dict rather than listed here, so a stray zero anywhere
+            # else in any format still fails this guard.
+            continue
+        assert value > 0, f"{format_id}.{key} was zeroed rather than defaulted"
     assert defaulted.model_count == 1
+
+
+def _cli_documented_defaults(format_id: str) -> dict[str, object]:
+    """Return one serialiser's declared CLI defaults, or an empty mapping."""
+
+    module = import_module(f"my_claude_code.application.catalogues.{format_id}")
+    declared = getattr(module, ALLOWED_DEFAULTS_DICT, {})
+    return dict(declared) if isinstance(declared, dict) else {}
 
 
 def _flatten(entry: object, prefix: str = "") -> list[tuple[str, object]]:

@@ -1844,13 +1844,14 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
     agents = rendered["codingAgents"]
 
     assert agents["present"] is True
-    assert agents["cardCount"] == 5
+    assert agents["cardCount"] == 6
     assert [card["id"] for card in agents["cards"]] == [
         "claude",
         "codex",
         "pi",
         "opencode",
         "commandcode_cli",
+        "kimi_code",
     ]
     assert [card["title"] for card in agents["cards"]] == [
         "Claude Code",
@@ -1858,6 +1859,7 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "Pi",
         "OpenCode",
         "Command Code",
+        "Kimi Code",
     ]
     assert [card["command"] for card in agents["cards"]] == [
         "mcc-claude",
@@ -1865,6 +1867,7 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "mcc-pi",
         "mcc-opencode",
         "mcc-commandcode",
+        "mcc-kimi",
     ]
 
 
@@ -1936,6 +1939,34 @@ def test_a_merging_harness_names_the_users_file_and_the_one_key_mcc_writes(
     assert card["defaulted"] is not None and "2 model(s)" in card["defaulted"]
     assert "mcc-commandcode --disconnect" in [
         line["command"] for line in card["commandLines"]
+    ]
+
+
+def test_a_flag_owning_harness_names_the_flag_it_is_pointed_with(
+    rendered: dict,
+) -> None:
+    """Kimi Code's card has to say MCC owns a file, not that it edits theirs.
+
+    Same guarantee as OpenCode's row above, told with the lever Kimi Code
+    actually publishes: it takes ``--config-file`` on the command line where
+    OpenCode reads a variable, and neither one touches the user's document.
+    """
+
+    kimi = next(
+        card for card in rendered["codingAgents"]["cards"] if card["id"] == "kimi_code"
+    )
+
+    assert "--config-file" in kimi["meta"]
+    assert "passed for this launch only" in kimi["meta"]
+    assert "your own config file is never edited" in kimi["meta"]
+    assert "kimi-code-config.toml" in kimi["meta"]
+    # A card that owns its own file must never also claim a merged key: that
+    # row is the one that says MCC edited a document the user wrote.
+    assert "Merged key" not in kimi["meta"]
+    assert "Models7" in kimi["meta"].replace(" ", "")
+    assert kimi["defaulted"] is not None and "1 model(s)" in kimi["defaulted"]
+    assert "mcc-kimi -m mcc/<provider>/<model>" in [
+        line["command"] for line in kimi["commandLines"]
     ]
 
 

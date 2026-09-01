@@ -53,9 +53,15 @@ from my_claude_code.config.harness_config_merge import (
     owned_block_present,
     with_base_url,
 )
+from my_claude_code.config.harness_toml import (
+    with_kimi_credentials,
+    write_toml_document_atomically_if_changed,
+)
 from my_claude_code.config.harnesses import HarnessSpec, harness_specs
 from my_claude_code.config.paths import harness_catalogue_path
+from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
+from my_claude_code.config.settings import Settings
 
 
 class HarnessCatalogueFanoutPublisher:
@@ -96,7 +102,7 @@ class HarnessCatalogueFanoutPublisher:
 
         proxy_root_url = local_proxy_root_url(settings)
         for spec, path in targets:
-            self._publish_one(spec, path, models, proxy_root_url)
+            self._publish_one(spec, path, models, proxy_root_url, settings)
 
     def _is_materialised(
         self, spec: HarnessSpec, path: Path, *, create_missing: bool
@@ -125,6 +131,7 @@ class HarnessCatalogueFanoutPublisher:
         path: Path,
         models: tuple[CatalogueModel, ...],
         proxy_root_url: str,
+        settings: Settings,
     ) -> None:
         catalogue = spec.catalogue
         if catalogue is None:
@@ -140,6 +147,22 @@ class HarnessCatalogueFanoutPublisher:
                         proxy_root_url,
                     ),
                     backup_suffix=catalogue.merge.backup_suffix,
+                )
+            elif catalogue.document_format == "toml":
+                # Kimi Code's ``config.toml`` is the one generated document
+                # that is not JSON, and the one whose provider block carries
+                # the proxy token literally: its schema has no ``"$VAR"``
+                # form and its environment overrides skip the ``anthropic``
+                # provider type entirely. The file is MCC's own, under
+                # ``~/.fcc`` beside the ``.env`` that already holds the same
+                # value; nothing is written into a file the user owns.
+                write_toml_document_atomically_if_changed(
+                    path,
+                    with_kimi_credentials(
+                        document,
+                        proxy_root_url=proxy_root_url,
+                        api_key=proxy_auth_token(settings.anthropic_auth_token),
+                    ),
                 )
             else:
                 write_json_document_atomically_if_changed(path, document)

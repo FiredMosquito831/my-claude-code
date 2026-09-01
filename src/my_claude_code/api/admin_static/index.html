@@ -371,6 +371,18 @@
                 </li>
                 <li class="claude-launcher">
                   <div class="claude-launcher-info">
+                    <h4>Kimi Code</h4>
+                    <p>
+                      Moonshot's Kimi Code CLI, pointed at a
+                      <code>config.toml</code> this proxy owns through Kimi's own
+                      <code>--config-file</code> flag, so your
+                      <code>~/.kimi/config.toml</code> is never edited.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-kimi</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
                     <h4>Previous Claude Code build</h4>
                     <p>
                       Launches the older Claude Code you had installed before, for
@@ -1755,7 +1767,8 @@ mcc-pi
 mcc-opencode
 mcc-opencode2
 mcc-kilo
-mcc-commandcode</code></pre>
+mcc-commandcode
+mcc-kimi</code></pre>
                 <p>
                   The <strong>Coding agents</strong> page lists every CLI this proxy can
                   launch: whether its binary is on your <code>PATH</code>,
@@ -1790,6 +1803,23 @@ mcc-commandcode</code></pre>
                   literal key there and expands
                   <code>$MCC_COMMANDCODE_API_KEY</code> from the launched
                   process's environment instead.
+                </p>
+                <p>
+                  <strong>Kimi Code reads a config file too, and takes a flag for
+                  it.</strong> It is a Python tool &mdash;
+                  <code>uv tool install kimi-cli</code>, not npm &mdash; and it
+                  publishes <code>--config-file</code>, so this proxy writes
+                  <code>~/.fcc/kimi-code-config.toml</code> and passes that path.
+                  Your <code>~/.kimi/config.toml</code> is never read, written or
+                  backed up, and your sessions and skills are untouched. Two things
+                  are different from the CLIs above and both are on its card: the
+                  flag <em>replaces</em> the config rather than overlaying it, so an
+                  <code>mcc-kimi</code> session takes Kimi's own defaults for
+                  <code>theme</code> and <code>hooks</code>; and Kimi's
+                  <code>api_key</code> accepts no environment reference of any kind,
+                  so this is the one generated file that holds the proxy token
+                  &mdash; mode <code>0600</code>, under <code>~/.fcc</code>, beside
+                  the <code>.env</code> that already holds the same value.
                 </p>
                 <img class="guide-shot" src="/admin/img/codex-model-picker.png"
                      alt="Codex model picker with the generated MCC catalog" loading="lazy">

@@ -99,6 +99,11 @@ def test_every_catalogue_declares_how_it_reaches_its_agent() -> None:
     in-memory registration, which leaves nothing behind; ``merge`` is the last
     resort for a CLI that reads only its own config, and Command Code is the
     only harness that has ever needed it.
+
+    ``file`` covers two levers, because what makes a document MCC's own is
+    that the CLI can be *told* where it is, not how it is told: the OpenCode
+    family reads a variable and Kimi Code takes ``--config-file`` on the
+    command line. Both leave the user's own config untouched.
     """
 
     by_delivery = {
@@ -113,6 +118,7 @@ def test_every_catalogue_declares_how_it_reaches_its_agent() -> None:
         "opencode2": "file",
         "kilo": "file",
         "commandcode_cli": "merge",
+        "kimi_code": "file",
     }
     assert [
         spec.id
@@ -123,6 +129,7 @@ def test_every_catalogue_declares_how_it_reaches_its_agent() -> None:
         "opencode",
         "opencode2",
         "kilo",
+        "kimi_code",
     ]
 
 
@@ -293,24 +300,37 @@ def test_only_harnesses_that_shipped_before_the_registry_have_an_fcc_alias() -> 
 def test_a_config_owning_harness_names_the_variable_it_is_pointed_with() -> None:
     """MCC owns a file only where the CLI documents a way to be handed one.
 
-    Without such a variable the only way to configure a file-reading CLI is to
-    edit the user's own document, which MCC does for exactly one harness and
-    only because that CLI publishes no alternative at all.
+    A variable or a flag: either is a published lever, and either is enough.
+    Without one the only way to configure a file-reading CLI is to edit the
+    user's own document, which MCC does for exactly one harness and only
+    because that CLI publishes no alternative at all.
     """
 
     by_id = {
-        spec.id: spec.catalogue.config_env_var
+        spec.id: (spec.catalogue.config_env_var, spec.catalogue.config_flag)
         for spec in catalogue_specs()
         if spec.catalogue is not None
     }
     assert by_id == {
-        "codex": None,
-        "pi": None,
-        "opencode": "OPENCODE_CONFIG",
-        "opencode2": "OPENCODE_CONFIG",
-        "kilo": "KILO_CONFIG",
-        "commandcode_cli": None,
+        "codex": (None, None),
+        "pi": (None, None),
+        "opencode": ("OPENCODE_CONFIG", None),
+        "opencode2": ("OPENCODE_CONFIG", None),
+        "kilo": ("KILO_CONFIG", None),
+        "commandcode_cli": (None, None),
+        "kimi_code": (None, "--config-file"),
     }
+
+    for spec in catalogue_specs():
+        catalogue = spec.catalogue
+        assert catalogue is not None
+        if catalogue.writes_file:
+            # Codex is the exception and states why: it needs no lever at all
+            # because it takes its whole configuration as ephemeral ``-c``
+            # assignments on the command line.
+            assert (
+                catalogue.config_env_var or catalogue.config_flag or spec.id == "codex"
+            ), spec.id
 
 
 def test_a_merging_harness_never_also_claims_a_config_variable() -> None:
@@ -321,6 +341,7 @@ def test_a_merging_harness_never_also_claims_a_config_variable() -> None:
         assert catalogue is not None
         if catalogue.merge is not None:
             assert catalogue.config_env_var is None, spec.id
+            assert catalogue.config_flag is None, spec.id
             assert catalogue.filename is None, spec.id
 
 

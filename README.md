@@ -48,7 +48,7 @@ Run your coding agents with free, paid, or local models. Choose and validate pro
 
 | Area | What you get |
 | --- | --- |
-| **Coding agents** | Launch Claude Code with `mcc-claude`, Codex with `mcc-codex`, Pi with `mcc-pi`, OpenCode with `mcc-opencode`, the OpenCode 2 preview with `mcc-opencode2`, Kilo CLI with `mcc-kilo` and Command Code with `mcc-commandcode`; every native model picker except Claude Code's lists the MCC catalog on its own, Claude Code's needs `mcc-claude --discover-models` (or `mcc-claude-old`). Every agent MCC can launch is declared in one registry, and the **Coding agents** dashboard page shows each one's installed state, every command and flag it answers to with a copy button, its protocol and its generated catalogue. Legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases still work. |
+| **Coding agents** | Launch Claude Code with `mcc-claude`, Codex with `mcc-codex`, Pi with `mcc-pi`, OpenCode with `mcc-opencode`, the OpenCode 2 preview with `mcc-opencode2`, Kilo CLI with `mcc-kilo`, Command Code with `mcc-commandcode` and Kimi Code with `mcc-kimi`; every native model picker except Claude Code's lists the MCC catalog on its own, Claude Code's needs `mcc-claude --discover-models` (or `mcc-claude-old`). Every agent MCC can launch is declared in one registry, and the **Coding agents** dashboard page shows each one's installed state, every command and flag it answers to with a copy button, its protocol and its generated catalogue. Legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases still work. |
 | **Real capabilities in every agent catalogue** | The model list MCC generates for an agent carries that model's own context window, output ceiling, vision and tool support and reasoning-effort vocabulary, resolved by MCC's metadata ladder. Where a CLI's schema demands a value nothing published, MCC uses **that CLI's** documented default and says so — in the generated file, in the launcher's output, and on the dashboard card. |
 | **Model providers** | 56 cloud and local providers, including Anthropic's own Claude API, Kimi For Coding, and experimental ChatGPT OAuth. Switch and validate providers from the Admin UI. |
 | **Claude, direct** | `anthropic` speaks Anthropic's native Messages API with a Claude Console API key, billed per token. A separate `anthropic_oauth` provider can use a Pro/Max subscription instead — **which Anthropic does not permit**; read [docs/ANTHROPIC-SUBSCRIPTION.md](docs/ANTHROPIC-SUBSCRIPTION.md) before enabling it. |
@@ -121,7 +121,7 @@ mcc-server --version
 
 1. Installs `uv` (the Python tool runner) if it's missing or too old.
 2. Looks up the **latest** release, downloads its wheel, and **verifies the SHA-256 that GitHub publishes for that asset** — a mismatch aborts rather than running unverified code.
-3. Installs My Claude Code and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, and `mcc-commandcode` on your `PATH` (the legacy `fcc-*` spellings remain as aliases for the first five).
+3. Installs My Claude Code and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, and `mcc-kimi` on your `PATH` (the legacy `fcc-*` spellings remain as aliases for the first five).
 
 That's all it does. **It does not install Claude Code, Codex, Pi, OpenCode, Kilo or Command Code** — those are separate third-party tools, and My Claude Code doesn't need any of them to run. Install whichever you actually use, yourself. The `mcc-*` launchers just point an agent you already have at the proxy: when one is missing, the launcher prints that agent's own install command and exits 127 rather than fetching anything. A test in the suite greps both installers for every known agent package name so the rule cannot quietly change.
 
@@ -262,10 +262,48 @@ mcc-commandcode -p "hello"
 mcc-commandcode -m mcc/openrouter/gpt-5 -p "hello"
 ```
 
+Kimi Code:
+
+```bash
+mcc-kimi
+```
+
+Kimi Code is Moonshot's `kimi` CLI — a Python tool on PyPI, installed with `uv
+tool install kimi-cli` or `pipx`, not npm. It reads one config document,
+`~/.kimi/config.toml`, but unlike Command Code it publishes a flag naming
+another: `kimi --config-file PATH`. So MCC writes a `config.toml` of its own
+under `~/.fcc` and passes that path for the launch. **Your own
+`~/.kimi/config.toml` is never read, written or backed up.** Your sessions,
+skills and MCP servers are untouched too — those come from `~/.kimi` and from
+Kimi's own MCP defaults, neither of which MCC moves. The one thing that does
+not carry over is the rest of your config: because `--config-file` replaces the
+document rather than overlaying it, an `mcc-kimi` session takes Kimi's defaults
+for `theme`, `hooks` and `loop_control` rather than yours.
+
+This is also the one agent whose generated file holds the proxy token. Kimi's
+`api_key` is a plain string — there is no `"$VAR"` reference form, and Kimi's
+environment overrides do not apply to an `anthropic`-type provider at all — so
+there is no out-of-band channel to use. The token goes into a file MCC owns
+under `~/.fcc`, mode `0600`, in the same directory as the `~/.fcc/.env` that
+already holds the identical value; nothing is written into a file you own. With
+proxy auth switched off, the value written is the `fcc-no-auth` marker, which
+is not a credential.
+
+Kimi Code has no model-list subcommand and MCC states no default model, so pick
+one on the command line or with `/model` once the session is up:
+
+```bash
+mcc-kimi -m mcc/openrouter/gpt-5
+mcc-kimi --print -p "hello"
+mcc-kimi --quiet -p "hello"
+```
+
 The dashboard's **Coding agents** page lists every agent MCC can launch, whether its binary is on your `PATH`, **every command and flag it answers to** with a copy button each, the protocol it will speak, and the catalogue MCC writes for it — including when that catalogue was last written and how many of its models carry a value the CLI supplied rather than a provider.
 
 > **A coding agent is not a provider.**
 > The agents above sit **downstream** of MCC: they send requests to it. The names on the Providers page — including `opencode`, `commandcode`, `cline`, `kimi_coding` and `kilo` — are **upstream** gateways MCC buys tokens from. Some names appear in both lists and mean different things, and both can be on at once: you can run a coding agent against MCC while the same-named upstream provider is switched off. In the code the two live in separate namespaces (`harness_id` in `cli/harnesses/` and `config/harnesses.py`, `provider_id` in `providers/` and `config/provider_catalog.py`) and are never joined.
+>
+> **Kimi Code is the pair most likely to be misread, because the two halves do not even share a spelling.** The providers `kimi` and `kimi_coding` on the Providers page are Moonshot endpoints MCC sends requests *to*, paid for with a Moonshot key. `mcc-kimi` launches Moonshot's Kimi Code *CLI* (`kimi`, published on PyPI as `kimi-cli`), which sends its requests to MCC — and needs no Moonshot account, no Moonshot key and neither of those providers switched on. Its registry id is `kimi_code`, deliberately not `kimi`.
 >
 > **Command Code is the sharpest case, because both halves ship.** The provider `commandcode` on the Providers page is the Command Code *gateway* MCC sends requests to, paid for with a `COMMANDCODE_API_KEY` you bought. `mcc-commandcode` launches the Command Code *CLI*, which sends its requests to MCC. Running `mcc-commandcode` routed to `anthropic` with the `commandcode` provider switched off is a perfectly ordinary setup. The two even have different ids in the registry — the harness is `commandcode_cli` — so no lookup can ever resolve one and answer with the other.
 
@@ -283,7 +321,7 @@ Where a CLI's schema requires a value and no provider published one, MCC fills i
 | --- | --- |
 | `mcc-server: command not found` right after installing | Your shell's `PATH` is stale. **Close and reopen the terminal.** If it persists, check that `~/.local/bin` (Windows: `%USERPROFILE%\.local\bin`) is on `PATH`. |
 | The install stopped partway with an error about `claude`, `codex`, or `pi` | An old installer tried to install those for you and aborted when one failed. The current installer doesn't touch them at all — just re-run the command above. |
-| I want Claude Code / Codex / Pi / OpenCode / Kilo / Command Code installed too | The installer no longer installs them. Install each from its own official installer; then `mcc-claude`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, and `mcc-commandcode` will launch them through the proxy. |
+| I want Claude Code / Codex / Pi / OpenCode / Kilo / Command Code / Kimi Code installed too | The installer no longer installs them. Install each from its own official installer (Kimi Code is a Python tool: `uv tool install kimi-cli`); then `mcc-claude`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, and `mcc-kimi` will launch them through the proxy. |
 | `MCC release wheel checksum mismatch; refusing to install` | The download was corrupted or incomplete. Re-run the command. This check is deliberate: it will not install a wheel it can't verify. |
 | PowerShell refuses to run the script | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then re-run. This only affects the current window. |
 | Admin UI won't open, or settings don't seem to apply | You probably installed in **both** PowerShell and WSL and are editing one config while the server reads the other. Run `mcc-server --version` in each and pick one environment. |

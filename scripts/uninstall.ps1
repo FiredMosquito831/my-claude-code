@@ -25,7 +25,7 @@ $FccCommands = @(
     "free-claude-code",
     "fcc-anthropic-oauth-login", "fcc-rtk", "fcc-help", "fcc-desktop",
     "mcc-server", "mcc-claude", "mcc-claude-old", "mcc-codex", "mcc-pi",
-    "mcc-opencode", "mcc-opencode2", "mcc-kilo", "mcc-commandcode",
+    "mcc-opencode", "mcc-opencode2", "mcc-kilo", "mcc-commandcode", "mcc-kimi",
     "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
     "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-desktop",
     "my-claude-code"

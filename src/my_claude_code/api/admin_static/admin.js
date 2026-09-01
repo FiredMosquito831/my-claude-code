@@ -7515,6 +7515,16 @@ function harnessMeta(harness) {
     ]);
   }
 
+  if (catalogue && catalogue.config_flag) {
+    // Same story as the config variable below, told with the lever this agent
+    // actually publishes: MCC owns the document and passes its path on the
+    // command line, so the agent's own config file is never edited.
+    rows.push([
+      "Config flag",
+      `${catalogue.config_flag} - passed for this launch only, so your own config file is never edited`,
+    ]);
+  }
+
   if (catalogue && catalogue.config_env_var) {
     // The whole zero-clobber story in one row: MCC owns a file of its own and
     // hands the agent its path through the agent's own documented variable.
