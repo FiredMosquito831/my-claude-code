@@ -14,6 +14,7 @@ from .admin.values import load_value_state
 from .model_refs import parse_provider_type
 from .paths import onboarding_state_path
 from .provider_catalog import PROVIDER_CATALOG
+from .provider_registry import get_provider_registry
 from .websearch_catalog import WEBSEARCH_CATALOG
 
 
@@ -102,7 +103,15 @@ def _provider_credential_configured() -> bool:
         value = str(state.get(descriptor.credential_env, {}).get("value", ""))
         if value.strip():
             return True
-    return False
+    # A custom provider's keys never reach ``.env`` by design, so iterating the
+    # static catalog alone reported "no credential configured" on an install
+    # whose only provider was a working custom one -- while the sibling check
+    # below, on the same install, took that provider at face value. The two
+    # answered differently about one machine.
+    return any(
+        entry.enabled and entry.api_keys
+        for entry in get_provider_registry().list_custom()
+    )
 
 
 def _websearch_credential_configured() -> bool:

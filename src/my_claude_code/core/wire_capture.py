@@ -36,6 +36,7 @@ names; and the output always parses as JSON.
 """
 
 import json
+import time
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -553,6 +554,11 @@ class WireTrace:
     # 400. Merged with routing's verdict at commit time, not here, because the
     # request row holds one verdict and routing's is written first.
     reasoning_adaptations: list[ReasoningAdaptation] = field(default_factory=list)
+    # What came back, by shape only, keyed by attempt. A missing entry means
+    # the attempt was never measured -- an uninstrumented provider, or one that
+    # never opened a stream -- which is a different statement from an empty
+    # tally.
+    responses: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     def record(self, body: Mapping[str, Any]) -> None:
         # Last write wins: a create-level retry rewrites the body (dropping
@@ -606,3 +612,112 @@ def record_reasoning_adaptation(kind: ReasoningAdaptationKind, message: str) -> 
     if slot is None:
         return
     slot.reasoning_adaptations.append(ReasoningAdaptation(kind, message))
+
+
+RESPONSE_SHAPE_MAX_CHARS = 2048
+"""Hard cap on one attempt's shape record. It is a tally, not a transcript."""
+
+_SHAPE_FIELDS = ("reasoning_content", "reasoning", "content", "tool_calls")
+
+
+@dataclass(slots=True)
+class ResponseShape:
+    """A content-free tally of what one upstream reply actually contained.
+
+    "reasoning requested 1, returned 0" is two measurements of two different
+    things, and with nothing recorded about the reply there is no way to tell
+    which half is wrong: a host that sent no reasoning, or a translation that
+    dropped it. This records the second half -- which delta fields arrived, how
+    many of each and how many characters, the finish reason, whether usage came
+    and under which keys, and how long the first chunk took.
+
+    Deliberately no text. Not a truncated sample, not a first line: the request
+    pane next to it already carries a redacted body, and a "shape" that can
+    quote the model is not a shape. Absent means not measured; zero means
+    measured and empty, and those are different facts.
+    """
+
+    started_at: float
+    counts: dict[str, int] = field(default_factory=dict)
+    chars: dict[str, int] = field(default_factory=dict)
+    finish_reason: str | None = None
+    usage_keys: tuple[str, ...] = ()
+    first_chunk_ms: int | None = None
+    chunks: int = 0
+
+    def note_chunk(self, now: float) -> None:
+        """Record that a chunk arrived, timing the first one."""
+        self.chunks += 1
+        if self.first_chunk_ms is None:
+            self.first_chunk_ms = max(0, int((now - self.started_at) * 1000))
+
+    def note_field(self, name: str, size: int) -> None:
+        """Record one delta on ``name`` carrying ``size`` characters."""
+        self.counts[name] = self.counts.get(name, 0) + 1
+        self.chars[name] = self.chars.get(name, 0) + max(0, size)
+
+    def note_finish(self, reason: object) -> None:
+        if isinstance(reason, str) and reason:
+            self.finish_reason = reason[:64]
+
+    def note_usage(self, usage: object) -> None:
+        """Record which usage keys arrived, never their values."""
+        if usage is None:
+            return
+        keys = usage.keys() if isinstance(usage, Mapping) else _public_attrs(usage)
+        self.usage_keys = tuple(sorted(str(key)[:48] for key in keys))[:24]
+
+    def payload(self) -> dict[str, Any]:
+        """Render the tally, bounded, for storage on the attempt."""
+        fields = {
+            name: {"deltas": self.counts[name], "chars": self.chars.get(name, 0)}
+            for name in _SHAPE_FIELDS
+            if name in self.counts
+        }
+        for name in sorted(self.counts):
+            if name not in fields and len(fields) < 12:
+                fields[name] = {
+                    "deltas": self.counts[name],
+                    "chars": self.chars.get(name, 0),
+                }
+        out: dict[str, Any] = {
+            "fields": fields,
+            "chunks": self.chunks,
+            "finish_reason": self.finish_reason,
+            "usage": bool(self.usage_keys),
+            "usage_keys": list(self.usage_keys),
+            "first_chunk_ms": self.first_chunk_ms,
+        }
+        if len(json.dumps(out, default=str)) > RESPONSE_SHAPE_MAX_CHARS:
+            out["usage_keys"] = []
+            out["_degraded"] = True
+        return out
+
+
+def _public_attrs(usage: object) -> list[str]:
+    fields = getattr(usage, "model_fields", None)
+    if isinstance(fields, Mapping):
+        return [str(key) for key in fields]
+    return [name for name in dir(usage) if not name.startswith("_")][:24]
+
+
+def start_response_shape() -> ResponseShape | None:
+    """Begin tallying one attempt's reply, or ``None`` outside a tracked request.
+
+    Returning ``None`` rather than a throwaway object is what keeps this free
+    for the paths that are not being captured: token counting, model discovery
+    and every direct provider use do no work at all.
+    """
+    if _WIRE_TRACE.get() is None:
+        return None
+    return ResponseShape(started_at=time.monotonic())
+
+
+def record_response_shape(shape: ResponseShape | None) -> None:
+    """Store a finished tally against the current attempt, if tracked."""
+    if shape is None:
+        return
+    slot = _WIRE_TRACE.get()
+    if slot is None:
+        return
+    slot.responses[slot.current_attempt] = shape.payload()

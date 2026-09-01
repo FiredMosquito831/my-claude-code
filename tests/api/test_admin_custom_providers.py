@@ -499,11 +499,17 @@ def test_delete_custom_provider_removes_and_reloads(monkeypatch, tmp_path):
     response = _local_client(app).delete("/admin/api/custom-providers/custom_acme")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "applied": True,
-        "provider_id": "custom_acme",
-        "removed": True,
-    }
+    body = response.json()
+    assert body["applied"] is True
+    assert body["provider_id"] == "custom_acme"
+    assert body["removed"] is True
+    # Nothing routed to this provider, so nothing was rewritten -- but the key
+    # is always present, so a caller never has to guess whether an empty list
+    # means "no refs" or "an older server". The route write still runs: the
+    # read of the current routes and the write of the new ones have to be one
+    # critical section, and a dry run outside it is a second source of truth.
+    assert body["removed_route_refs"] == []
+    assert body["routes"]["applied"] is True
     assert registry.get("custom_acme") is None
     reload_providers.assert_awaited_once_with(
         reason="custom_provider_change", refresh_provider_id=None

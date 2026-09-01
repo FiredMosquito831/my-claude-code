@@ -6417,9 +6417,159 @@ function customProviderCard(provider) {
     deleteCustomProvider(provider, deleteButton),
   );
 
-  actions.append(testButton, editButton, deleteButton);
-  card.append(title, meta, details, keyList, actions);
+  // Enable/disable lives on the card, not only in the API. Disabling a
+  // provider a MODEL* route names used to take the whole Settings object
+  // down; it now pauses those chain entries, and the gesture that does it has
+  // to be reachable for anyone to find out.
+  const toggleButton = document.createElement("button");
+  toggleButton.type = "button";
+  toggleButton.className = "secondary-button cp-toggle";
+  toggleButton.textContent = provider.enabled ? "Disable" : "Enable";
+  toggleButton.addEventListener("click", () =>
+    setCustomProviderEnabled(provider, !provider.enabled, toggleButton),
+  );
+
+  actions.append(testButton, toggleButton, editButton, deleteButton);
+  card.append(title, meta, details, customProviderDialect(provider), keyList, actions);
+  loadCustomProviderKeyHealth(provider.provider_id);
   return card;
+}
+
+/**
+ * What this host was measured spelling `reasoning_effort` with.
+ *
+ * A static provider declares its effort vocabulary in a profile. A custom one
+ * cannot, so until 6.25.0 every custom provider was assumed to speak the four
+ * standard OpenAI words -- and a host documenting `{low, high, max}` had every
+ * request for `max` clamped to `high`, because MCC had no way to spell the
+ * word the host itself had named in a 400. This line says what was learned,
+ * and the field beside it lets the answer be corrected by hand.
+ */
+function customProviderDialect(provider) {
+  const wrap = document.createElement("div");
+  wrap.className = "cp-dialect";
+
+  const label = document.createElement("span");
+  label.className = "cp-dialect-label";
+  label.textContent = `reasoning dialect: ${provider.reasoning_dialect_label || "unknown"}`;
+  label.title =
+    "The reasoning_effort values this host accepted when asked with an " +
+    "invalid one. Learned from the host's own 400; never a guess.";
+  wrap.appendChild(label);
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "cp-dialect-edit";
+  input.placeholder = "low, high, max";
+  input.value = (provider.reasoning_effort_enum || []).join(", ");
+  input.setAttribute("aria-label", `Effort vocabulary for ${provider.provider_id}`);
+
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "ghost-button cp-dialect-save";
+  save.textContent = "Save";
+  save.addEventListener("click", () =>
+    saveCustomProviderDialect(provider, input.value, save),
+  );
+
+  const probe = document.createElement("button");
+  probe.type = "button";
+  probe.className = "ghost-button cp-dialect-probe";
+  probe.textContent = "Probe reasoning dialect";
+  probe.addEventListener("click", () =>
+    probeCustomProviderDialect(provider, probe),
+  );
+
+  wrap.append(input, save, probe);
+  return wrap;
+}
+
+/** Per-key health for a custom pool, in the static pool's own badges. */
+async function loadCustomProviderKeyHealth(providerId) {
+  let info;
+  try {
+    info = await api(`/admin/api/custom-providers/${providerId}/keys`);
+  } catch (error) {
+    return;
+  }
+  const card = document.querySelector(`[data-custom-provider="${providerId}"]`);
+  if (!card) return;
+  const rows = card.querySelectorAll(".cp-key-row");
+  (info.health || []).forEach((health, index) => {
+    const row = rows[index];
+    if (!row || !health) return;
+    const slot = document.createElement("span");
+    slot.className = "cp-key-health";
+    slot.appendChild(keyHealthBadge(health));
+    const benched = Array.isArray(health.model_benches) ? health.model_benches : [];
+    if (benched.length) slot.appendChild(modelBenchList(benched));
+    row.insertBefore(slot, row.lastElementChild);
+  });
+}
+
+async function probeCustomProviderDialect(provider, button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Probing";
+  try {
+    const result = await api(
+      `/admin/api/custom-providers/${provider.provider_id}/reasoning-probe`,
+      { method: "POST", body: "{}" },
+    );
+    showMessage(
+      `Reasoning dialect: ${result.reasoning_dialect_label}`,
+      result.reasoning_effort_enum ? "ok" : "warn",
+    );
+    await loadCustomProviders();
+  } catch (error) {
+    showMessage(`Could not probe dialect: ${error.message}`, "error");
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+async function saveCustomProviderDialect(provider, value, button) {
+  button.disabled = true;
+  try {
+    const result = await api(
+      `/admin/api/custom-providers/${provider.provider_id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ reasoning_effort_enum: value }),
+      },
+    );
+    showMessage(`Reasoning dialect: ${result.reasoning_dialect_label}`, "ok");
+    await loadCustomProviders();
+  } catch (error) {
+    showMessage(`Could not save dialect: ${error.message}`, "error");
+    button.disabled = false;
+  }
+}
+
+async function setCustomProviderEnabled(provider, enabled, button) {
+  button.disabled = true;
+  try {
+    const result = await api(
+      `/admin/api/custom-providers/${provider.provider_id}`,
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+    );
+    showMessage(describeCustomProviderRoutes(result, enabled), "ok");
+    await loadCustomProviders();
+  } catch (error) {
+    showMessage(`Could not update provider: ${error.message}`, "error");
+    button.disabled = false;
+  }
+}
+
+/** Say out loud what happened to the routes that named this provider. */
+function describeCustomProviderRoutes(result, enabled) {
+  const routes = result.routes || {};
+  const touched = routes.paused || routes.unpaused || [];
+  const verb = enabled ? "Enabled" : "Disabled";
+  if (!touched.length) return `${verb} ${result.display_name}.`;
+  const refs = touched.map((entry) => entry.model_ref).join(", ");
+  const what = enabled ? "un-paused" : "paused";
+  return `${verb} ${result.display_name}; ${what} ${touched.length} chain entry(s): ${refs}.`;
 }
 
 function updateCustomProviderCard(providerId, status, label, metaText, modelCount) {
@@ -6465,6 +6615,18 @@ async function refreshCustomProviderModels(provider, button) {
         ...state.modelOptions,
         ...result.models.map((model) => `${provider.provider_id}/${model}`),
       ]);
+      // A refresh is when a custom provider's models are re-read, so it is
+      // also when its host is re-asked what it spells reasoning_effort with.
+      // The two facts go stale together.
+      try {
+        await api(
+          `/admin/api/custom-providers/${provider.provider_id}/reasoning-probe`,
+          { method: "POST", body: "{}" },
+        );
+        await loadCustomProviders();
+      } catch (error) {
+        /* The models refreshed; the dialect is optional. */
+      }
     } else {
       updateCustomProviderCard(
         provider.provider_id,
@@ -6531,10 +6693,19 @@ async function deleteCustomProvider(provider, button) {
   if (!confirmed) return;
   button.disabled = true;
   try {
-    await api(`/admin/api/custom-providers/${provider.provider_id}`, {
-      method: "DELETE",
-    });
-    showMessage(`Deleted ${provider.display_name}.`, "ok");
+    const result = await api(
+      `/admin/api/custom-providers/${provider.provider_id}`,
+      { method: "DELETE" },
+    );
+    // A silent rewrite of somebody's routing is not an improvement on a
+    // crash, so every MODEL* key that lost a ref is named here.
+    const removed = result.removed_route_refs || [];
+    showMessage(
+      removed.length
+        ? `Deleted ${provider.display_name}; removed from ${removed.join(", ")}.`
+        : `Deleted ${provider.display_name}.`,
+      "ok",
+    );
     await loadCustomProviders();
   } catch (error) {
     showMessage(`Could not delete provider: ${error.message}`, "error");
@@ -10285,6 +10456,9 @@ function renderWireRequest(row) {
     const knobs = buildWireKnobs(attempt);
     if (knobs) pane.appendChild(knobs);
 
+    const shapePane = buildResponseShape(attempt);
+    if (shapePane) pane.appendChild(shapePane);
+
     if (body == null) {
       const note = document.createElement("p");
       note.className = "req-wire-unmeasured";
@@ -10470,6 +10644,71 @@ function wireReasoningValue(attempt) {
   if (!keys.length) return "";
   if (keys.length === 1) return wireValueText(reasoning[keys[0]]);
   return keys.join(", ");
+}
+
+/**
+ * What came back, opposite the body that asked for it.
+ *
+ * "reasoning requested 1, returned 0" is two measurements of two different
+ * things: the first counts outbound bodies carrying a reasoning field, the
+ * second counts requests whose client saw a thinking block. With nothing
+ * recorded about the reply there was no way to tell which half was wrong --
+ * a host that sent no reasoning, or a translation that dropped it. This is
+ * the reply's shape and only its shape: which delta fields arrived, how many
+ * and how long, the finish reason, whether usage came. Never the text.
+ */
+function buildResponseShape(attempt) {
+  const shape = attempt.params && attempt.params.response_shape;
+  if (!shape) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "req-shape-pane";
+
+  const title = document.createElement("p");
+  title.className = "req-shape-title";
+  title.textContent = "Response shape";
+  title.title =
+    "Structure of the upstream reply, recorded without any of its content.";
+  wrap.appendChild(title);
+
+  const grid = document.createElement("dl");
+  grid.className = "req-shape-grid";
+  const fields = shape.fields || {};
+  const names = Object.keys(fields);
+  if (names.length === 0) {
+    const note = document.createElement("p");
+    note.className = "req-shape-empty";
+    note.textContent = "No content deltas arrived on this attempt.";
+    wrap.appendChild(note);
+  }
+  names.forEach((name) => {
+    const entry = fields[name] || {};
+    appendShapeRow(
+      grid,
+      name,
+      `${Number(entry.deltas || 0).toLocaleString()} deltas, ` +
+        `${Number(entry.chars || 0).toLocaleString()} chars`,
+    );
+  });
+  appendShapeRow(grid, "finish_reason", shape.finish_reason || "—");
+  appendShapeRow(
+    grid,
+    "usage",
+    shape.usage ? (shape.usage_keys || []).join(", ") || "yes" : "absent",
+  );
+  if (typeof shape.first_chunk_ms === "number") {
+    appendShapeRow(grid, "first chunk", `${shape.first_chunk_ms} ms`);
+  }
+  appendShapeRow(grid, "chunks", Number(shape.chunks || 0).toLocaleString());
+  wrap.appendChild(grid);
+  return wrap;
+}
+
+function appendShapeRow(grid, term, value) {
+  const dt = document.createElement("dt");
+  dt.textContent = term;
+  const dd = document.createElement("dd");
+  dd.textContent = value;
+  grid.append(dt, dd);
 }
 
 function formatWireBody(body) {

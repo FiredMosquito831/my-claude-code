@@ -638,6 +638,33 @@ through a settings field -- and `all_descriptors()` merges them with the frozen
 builds them through `GENERIC_OPENAI_PROFILE`, which deliberately does not
 normalize the base URL: the URL the user typed is the URL called.
 
+One fact a custom provider cannot inherit that way is its host's
+`reasoning_effort` vocabulary, because a static provider states that by
+*writing a profile* and a dynamic one has none to write. So it is measured
+instead. `providers/runtime/reasoning_probe.py` sends at most two 16-token chat
+completions -- the first with a deliberately invalid effort value -- and reads
+the enum out of the 400 the host answers with;
+[config/reasoning_enum.py](src/my_claude_code/config/reasoning_enum.py) owns
+that parse and nothing else, so the words are config data with no provider
+imports. `CustomProviderEntry.reasoning_effort_enum` persists them,
+`descriptor_for()` carries them onto the descriptor, and
+`providers/openai_chat/learned_dialect.py` binds them to a
+`NamedEffortReasoning` that the factory folds in with one
+`dataclasses.replace` of the profile's `reasoning` field. That replace is the
+entire seam: it is the same declaration a static profile makes literally, so
+reasoning gating, `adapt_reasoning_policy` and every downstream consumer are
+untouched and cannot tell a learned dialect from a declared one.
+
+The two ways of retiring a custom provider are answered differently, in
+[config/admin/route_refs.py](src/my_claude_code/config/admin/route_refs.py).
+Delete removes the provider's refs from every `MODEL*` setting through the
+managed-`.env` write path and reports what it removed; disable leaves them and
+pauses them through the existing `MODEL_<TIER>_PAUSED` mechanism, recording the
+pairs it paused so re-enabling lifts its own pauses and not the operator's.
+Neither may take `Settings` down, which is why validation resolves ids through
+`configurable_ids()` -- static catalog plus *every* custom entry -- while
+`all_descriptors()`, the runtime's question, still drops the disabled ones.
+
 A registry mutation is not a settings change, so it commits nothing and only
 republishes the provider generation. That republication is *scoped*: the caller
 names the one provider it changed, `replace()` skips its blanket background

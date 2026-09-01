@@ -15,6 +15,11 @@ from .extra_body import (
     validate_extra_body_does_not_override_canonical_fields,
     validate_extra_body_does_not_override_reasoning_fields,
 )
+from .learned_dialect import (
+    learned_effort_values,
+    learned_named_effort_reasoning,
+    profile_with_learned_dialect,
+)
 from .profiles import (
     GENERIC_OPENAI_PROFILE,
     OPENAI_CHAT_PROFILES,
@@ -66,8 +71,11 @@ __all__ = [
     "complaint_evidence_snippet",
     "create_openai_chat_provider",
     "is_bad_request",
+    "learned_effort_values",
+    "learned_named_effort_reasoning",
     "matched_token",
     "openai_v1_base_url",
+    "profile_with_learned_dialect",
     "sampling_parameter_evidence",
     "upstream_complaint",
     "usage_int",

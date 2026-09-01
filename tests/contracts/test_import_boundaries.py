@@ -106,6 +106,15 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "Owner: admin dashboard credential key health API. "
         "Reason: admin routes read live per-key health from cached rotating providers."
     ),
+    (
+        "my_claude_code.api.admin_custom_routes",
+        "my_claude_code.providers.runtime.rotating",
+    ): (
+        "Owner: admin dashboard custom provider key health API. "
+        "Reason: a custom pool has no credential_env, so its health is addressed "
+        "by provider id on its own route -- the same read, through the same "
+        "cached rotating provider, as the static pool's."
+    ),
 }
 
 FACADE_ONLY_BOUNDARIES = {

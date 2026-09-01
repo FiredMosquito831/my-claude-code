@@ -181,6 +181,9 @@ class RequestCapture:
         if not self.enabled:
             return
         wire = None if self._wire is None else self._wire.requests.get(attempt.attempt)
+        shape = (
+            None if self._wire is None else self._wire.responses.get(attempt.attempt)
+        )
         ladder = self._ladder_payload(attempt)
         key_index, key_label = self._attempt_credential(ladder)
         self._attempts.append(
@@ -199,6 +202,7 @@ class RequestCapture:
                     attempt.bench,
                     attempt.truncated,
                     attempt.continuation,
+                    shape,
                 ),
                 wire_body=None if wire is None else wire.body_json,
                 reasoning_emitted=None if wire is None else wire.reasoning_emitted,
@@ -255,6 +259,7 @@ class RequestCapture:
         bench: dict[str, Any] | None = None,
         truncated: dict[str, Any] | None = None,
         continuation: dict[str, Any] | None = None,
+        shape: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Merge what the provider survived with what it actually sent.
 
@@ -295,6 +300,13 @@ class RequestCapture:
         # nothing else would read.
         if continuation:
             params["continuation"] = continuation
+        # The reply's shape, opposite the body that asked for it. Nested for
+        # the same reason as ``wire``: it is a small structured record about
+        # one attempt, and the flat counters above must keep their shape.
+        # Absent means not measured, which is not the same as "nothing came
+        # back" -- an attempt that was skipped has no reply to describe.
+        if shape:
+            params["response_shape"] = shape
         return params or None
 
     def _recovery_events_for(self, attempt_index: int) -> dict[str, Any] | None:

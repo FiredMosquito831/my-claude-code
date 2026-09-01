@@ -109,6 +109,12 @@ def provider_config_status(
                 "label": label,
                 "custom": True,
                 "base_url": entry.base_url,
+                # The "Rotation, per pool" readout is built from whatever
+                # declares a rotation policy. A custom pool rotates, benches
+                # and cools down on exactly the same machinery as a static one
+                # (B12); omitting this field was the only reason it never
+                # appeared in the list.
+                "credential_rotation": entry.credential_rotation,
             }
         )
     return statuses

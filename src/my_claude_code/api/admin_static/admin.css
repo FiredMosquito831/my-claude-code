@@ -6854,3 +6854,87 @@ details.turn-pane > summary:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Custom provider: learned reasoning dialect, and per-key health.
+   The dialect line sits under the base URL because it is a fact about the
+   host, not about the pool; the health badges reuse the static pool's own
+   classes so the two readouts cannot drift apart visually.
+   --------------------------------------------------------------------------- */
+
+.cp-dialect {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 2px;
+  font-size: 12px;
+}
+
+.cp-dialect-label {
+  color: var(--muted);
+  flex: 1 1 100%;
+}
+
+.cp-dialect-edit {
+  flex: 1 1 160px;
+  min-width: 120px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.cp-dialect-save,
+.cp-dialect-probe {
+  flex: 0 0 auto;
+}
+
+.cp-key-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.cp-toggle {
+  flex: 0 0 auto;
+}
+
+/* ---------------------------------------------------------------------------
+   Request detail: the reply's shape, opposite the body that asked for it.
+   --------------------------------------------------------------------------- */
+
+.req-shape-pane {
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.req-shape-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.req-shape-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.req-shape-grid dt {
+  color: var(--muted);
+}
+
+.req-shape-grid dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.req-shape-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}

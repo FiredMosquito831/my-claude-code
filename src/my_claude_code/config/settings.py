@@ -152,7 +152,11 @@ def parse_lockout_tiers(value: str) -> tuple[float, ...]:
 def _require_provider_prefixed_model_ref(model_ref: str) -> None:
     """Raise when a model ref is not a `provider/model` for a known provider."""
 
-    supported_ids = get_provider_registry().supported_ids()
+    # ``configurable_ids``, not ``supported_ids``: a custom provider the
+    # operator disabled is still a provider this install knows about, and a
+    # route that names it must stay loadable so the disable can be undone.
+    # Whether it can be *built* is the runtime's question, asked per attempt.
+    supported_ids = get_provider_registry().configurable_ids()
     if "/" not in model_ref:
         raise ValueError(
             f"Model must be prefixed with provider type. "

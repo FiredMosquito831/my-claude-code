@@ -8,18 +8,29 @@ stayed green against a fake shaped like the guess.
 """
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from loguru import logger
 from pydantic import BaseModel
 
+from my_claude_code.config.admin.route_refs import (
+    PausedPair,
+    updates_pausing_provider,
+    updates_removing_provider,
+    updates_unpausing,
+)
 from my_claude_code.config.provider_registry import (
     CustomProviderEntry,
     ProviderRegistry,
     custom_provider_id,
     get_provider_registry,
 )
+from my_claude_code.config.reasoning_enum import normalize_effort_words
+from my_claude_code.config.settings import Settings
+from my_claude_code.providers.runtime.rotating import RotatingProvider
 
 from .admin_routes import _mask_credential_key, require_loopback_admin
 from .dependencies import get_services
@@ -30,6 +41,10 @@ router = APIRouter()
 ROTATION_POLICIES = ("single", "round_robin", "least_used", "failover")
 DEFAULT_ROTATION = "failover"
 HOT_RELOAD_REASON = "custom_provider_change"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 def get_custom_provider_registry() -> ProviderRegistry:
@@ -55,6 +70,10 @@ class CustomProviderUpdatePayload(BaseModel):
     proxy: str | None = None
     enabled: bool | None = None
     credential_rotation: str | None = None
+    # A comma list, or a JSON list, of the effort words this host accepts.
+    # An empty string forgets the learned vocabulary and restores the generic
+    # OpenAI enum; ``None`` (absent) leaves it untouched.
+    reasoning_effort_enum: str | list[str] | None = None
 
 
 class CustomProviderKeyPayload(BaseModel):
@@ -163,7 +182,38 @@ def _serialize_entry(
         "status": status,
         "models": models,
         "added_at": entry.added_at,
+        "reasoning_effort_enum": (
+            None
+            if entry.reasoning_effort_enum is None
+            else list(entry.reasoning_effort_enum)
+        ),
+        "reasoning_field_ignored": entry.reasoning_field_ignored,
+        "reasoning_probe_status": entry.reasoning_probe_status,
+        "reasoning_probed_at": entry.reasoning_probed_at,
+        "reasoning_dialect_label": _dialect_label(entry),
+        "auto_paused_refs": [
+            {"paused_key": paused_key, "model_ref": model_ref}
+            for paused_key, model_ref in entry.auto_paused_refs
+        ],
     }
+
+
+def _dialect_label(entry: CustomProviderEntry) -> str:
+    """One line for the card saying what the host was measured doing.
+
+    Never the key, never the response body -- a status word, the vocabulary
+    itself, and the day it was established.
+    """
+    when = entry.reasoning_probed_at[:10]
+    suffix = f" on {when}" if when else ""
+    if entry.reasoning_effort_enum:
+        words = ", ".join(entry.reasoning_effort_enum)
+        return f"learned {{{words}}}{suffix}"
+    if entry.reasoning_field_ignored:
+        return f"ignored{suffix}"
+    if entry.reasoning_probe_status:
+        return f"unknown ({entry.reasoning_probe_status}){suffix}"
+    return "unknown (not probed)"
 
 
 def _discovery_target(entry: CustomProviderEntry) -> str | None:
@@ -264,8 +314,31 @@ async def create_custom_provider(
     # just filled. They used to come from a *second*, independent probe, which
     # is how a card could truthfully advertise 44 models while /v1/models, the
     # Models page and every picker held none.
+    # One probe, here, while the operator is still looking at the card: what
+    # this host spells ``reasoning_effort`` with is a fact about the host, and
+    # asking for it costs two 16-token requests once in the provider's life.
+    probe = await _probe_dialect_quietly(services, provider_id)
+    stored = registry.get(provider_id) or stored
     result = _serialize_entry(stored, services.admin.cached_model_ids())
+    if probe:
+        result["probe"] = probe
     return _attach_discovery(result, discovery)
+
+
+async def _probe_dialect_quietly(
+    services: ApiServices, provider_id: str
+) -> dict[str, Any]:
+    """Probe the dialect, letting a failure cost the caller nothing.
+
+    A create that worked must not be reported as a failure because an optional
+    measurement did not come back; the card says ``unknown`` and the operator
+    can press the button again.
+    """
+    try:
+        return await services.admin.probe_custom_provider_dialect(provider_id)
+    except Exception as exc:
+        logger.debug("Reasoning dialect probe skipped: {}", type(exc).__name__)
+        return {}
 
 
 @router.patch("/admin/api/custom-providers/{provider_id}")
@@ -278,7 +351,7 @@ async def update_custom_provider(
 ):
     """Apply a partial update to one custom provider and hot reload."""
     require_loopback_admin(request)
-    _registry_get_or_404(registry, provider_id)
+    existing = _registry_get_or_404(registry, provider_id)
 
     changes: dict[str, Any] = {}
     if payload.display_name is not None:
@@ -291,8 +364,23 @@ async def update_custom_provider(
         changes["proxy"] = _normalize_proxy(payload.proxy)
     if payload.enabled is not None:
         changes["enabled"] = payload.enabled
+    if payload.reasoning_effort_enum is not None:
+        words = normalize_effort_words(payload.reasoning_effort_enum)
+        changes["reasoning_effort_enum"] = list(words) if words else None
+        changes["reasoning_field_ignored"] = False
+        changes["reasoning_probe_status"] = "edited" if words else "cleared"
+        changes["reasoning_probed_at"] = _utc_now_iso()
     if not changes:
         raise HTTPException(status_code=422, detail="No updatable fields provided")
+
+    # The route rewrite happens before the registry changes, while the entry is
+    # still resolvable, so the Settings validation inside the write sees a
+    # consistent world.
+    routes: dict[str, Any] = {}
+    if payload.enabled is False and existing.enabled:
+        routes = await _pause_routes_for(services, registry, existing)
+    elif payload.enabled is True and not existing.enabled:
+        routes = await _unpause_routes_for(services, registry, existing)
 
     try:
         registry.update(provider_id, **changes)
@@ -304,6 +392,8 @@ async def update_custom_provider(
     )
     stored = _registry_get_or_404(registry, provider_id)
     result = _serialize_entry(stored, services.admin.cached_model_ids())
+    if routes:
+        result["routes"] = routes
     return _attach_discovery(result, discovery)
 
 
@@ -380,9 +470,141 @@ async def delete_custom_provider(
     """Remove one custom provider and hot reload."""
     require_loopback_admin(request)
     _registry_get_or_404(registry, provider_id)
+    # Before the entry goes, not after: the write validates the whole Settings
+    # object, and a ref to a provider that has already been removed is exactly
+    # the ValidationError this is here to prevent.
+    removed_refs: tuple[str, ...] = ()
+    route_result: dict[str, Any] = {}
+
+    def build(settings: Settings) -> dict[str, str]:
+        nonlocal removed_refs
+        updates, removed_refs = updates_removing_provider(settings, provider_id)
+        return updates
+
+    # Always through ``apply_admin_config_with``: the read of the current
+    # routes and the write of the new ones have to be one critical section.
+    # A dry run against the settings this process happens to be holding is a
+    # second source of truth, and it was wrong the first time it was tried.
+    route_result = await services.admin.apply_admin_config_with(build)
     try:
         registry.remove(provider_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown custom provider") from exc
     await _reload_provider_runtime(services)
-    return {"applied": True, "provider_id": provider_id, "removed": True}
+    return {
+        "applied": True,
+        "provider_id": provider_id,
+        "removed": True,
+        "removed_route_refs": list(removed_refs),
+        "routes": route_result,
+    }
+
+
+async def _pause_routes_for(
+    services: ApiServices, registry: ProviderRegistry, entry: CustomProviderEntry
+) -> dict[str, Any]:
+    """Switch every chain entry naming ``entry`` off, and record which."""
+    added: tuple[PausedPair, ...] = ()
+
+    def build(settings: Settings) -> dict[str, str]:
+        nonlocal added
+        updates, added = updates_pausing_provider(settings, entry.provider_id)
+        return updates
+
+    result = await services.admin.apply_admin_config_with(build)
+    if result.get("errors"):
+        return {"errors": result["errors"]}
+    registry.update(
+        entry.provider_id,
+        auto_paused_refs=tuple(entry.auto_paused_refs) + added,
+    )
+    return {
+        "action": "paused",
+        "paused": [
+            {"paused_key": paused_key, "model_ref": model_ref}
+            for paused_key, model_ref in added
+        ],
+    }
+
+
+async def _unpause_routes_for(
+    services: ApiServices, registry: ProviderRegistry, entry: CustomProviderEntry
+) -> dict[str, Any]:
+    """Lift exactly the pauses a previous disable added."""
+    pairs = tuple(entry.auto_paused_refs)
+    if not pairs:
+        return {}
+
+    def build(settings: Settings) -> dict[str, str]:
+        return updates_unpausing(settings, pairs)
+
+    result = await services.admin.apply_admin_config_with(build)
+    if result.get("errors"):
+        return {"errors": result["errors"]}
+    registry.update(entry.provider_id, auto_paused_refs=())
+    return {
+        "action": "unpaused",
+        "unpaused": [
+            {"paused_key": paused_key, "model_ref": model_ref}
+            for paused_key, model_ref in pairs
+        ],
+    }
+
+
+@router.post("/admin/api/custom-providers/{provider_id}/reasoning-probe")
+async def probe_custom_provider_reasoning(
+    provider_id: str,
+    request: Request,
+    registry: ProviderRegistry = Depends(get_custom_provider_registry),
+    services: ApiServices = Depends(get_services),
+):
+    """Ask this host which ``reasoning_effort`` words it takes, and store it."""
+    require_loopback_admin(request)
+    _registry_get_or_404(registry, provider_id)
+    probe = await services.admin.probe_custom_provider_dialect(provider_id)
+    stored = _registry_get_or_404(registry, provider_id)
+    result = _serialize_entry(stored, services.admin.cached_model_ids())
+    result["probe"] = probe
+    return result
+
+
+@router.get("/admin/api/custom-providers/{provider_id}/keys")
+async def list_custom_provider_keys(
+    provider_id: str,
+    request: Request,
+    registry: ProviderRegistry = Depends(get_custom_provider_registry),
+    services: ApiServices = Depends(get_services),
+):
+    """Per-key health for one custom pool, in the static pool's own shape.
+
+    The static route is keyed by ``credential_env``, which a custom provider
+    does not have and cannot be given -- its keys never reach ``.env`` by
+    design (B15). So the pool is addressed by provider id instead, and returns
+    the identical payload the key-pool component already renders.
+    """
+    require_loopback_admin(request)
+    entry = _registry_get_or_404(registry, provider_id)
+    keys = list(entry.api_keys)
+    health: list[dict[str, Any] | None] = [None] * len(keys)
+    try:
+        async with await services.requests.acquire() as lease:
+            if lease.is_provider_cached(provider_id):
+                provider = lease.resolve_provider(provider_id)
+                if isinstance(provider, RotatingProvider):
+                    snapshots = provider.key_health()
+                    for index in range(min(len(keys), len(snapshots))):
+                        health[index] = snapshots[index]
+    except Exception:
+        # Health is informational; a listing that fails because the runtime is
+        # mid-reload is worse than a listing with no badges.
+        pass
+    return {
+        "provider_id": provider_id,
+        "env_key": None,
+        "source": "custom_providers.json",
+        "locked": False,
+        "credential_rotation": entry.credential_rotation,
+        "count": len(keys),
+        "keys": [_mask_credential_key(key) for key in keys],
+        "health": health,
+    }

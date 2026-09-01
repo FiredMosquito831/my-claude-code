@@ -15,7 +15,11 @@ from my_claude_code.core.reasoning import (
     ReasoningPolicy,
 )
 from my_claude_code.core.trace import trace_event
-from my_claude_code.core.wire_capture import record_wire_request
+from my_claude_code.core.wire_capture import (
+    record_response_shape,
+    record_wire_request,
+    start_response_shape,
+)
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import close_provider_stream
@@ -195,13 +199,15 @@ class AnthropicMessagesProvider(BaseProvider):
                     )
                     stream_opened = True
                     recovery.upstream_opened()
+                    shape = start_response_shape()
                     async for event in iter_anthropic_sse_frames(
-                        response.aiter_bytes()
+                        response.aiter_bytes(), shape
                     ):
                         for held_event in recovery.push(event):
                             yield held_event
                     for held_event in recovery.flush():
                         yield held_event
+                    record_response_shape(shape)
                     return
                 except asyncio.CancelledError, GeneratorExit:
                     raise

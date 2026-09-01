@@ -29,6 +29,7 @@ from my_claude_code.config.env_files import (
 )
 from my_claude_code.config.model_refs import parse_provider_type
 from my_claude_code.config.paths import messaging_state_dir_path
+from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
@@ -41,6 +42,10 @@ from my_claude_code.messaging.platforms.ports import (
 )
 from my_claude_code.messaging.voice import Transcriber
 from my_claude_code.providers.runtime.discovery import cache_enriched_model_infos
+from my_claude_code.providers.runtime.reasoning_probe import (
+    ReasoningProbeOutcome,
+    probe_reasoning_dialect,
+)
 
 from .provider_manager import ProviderRuntimeManager
 
@@ -327,6 +332,57 @@ class ApplicationRuntime:
             "ok": True,
             "models": sorted(info.model_id for info in cached),
         }
+
+    async def probe_custom_provider_dialect(self, provider_id: str) -> dict[str, Any]:
+        """Learn one custom host's effort vocabulary and store what it said.
+
+        Runs against a model the catalogue already discovered, so the probe
+        never invents a model id, and stores the answer on the registry entry
+        where the factory reads it. An ``unknown`` outcome is stored too: the
+        card should be able to say "asked, and the host answered 401" rather
+        than looking as though nobody ever asked.
+        """
+        registry = get_provider_registry()
+        entry = registry.get(provider_id)
+        if entry is None:
+            return {
+                "provider_id": provider_id,
+                "status": "unknown",
+                "detail": "unknown provider",
+            }
+        models = sorted(self.cached_model_ids().get(provider_id, frozenset()))
+        key = entry.api_keys[0] if entry.api_keys else ""
+        outcome: ReasoningProbeOutcome = await probe_reasoning_dialect(
+            entry.base_url,
+            key,
+            models[0] if models else "",
+            proxy=entry.proxy,
+        )
+        registry.update(
+            provider_id,
+            reasoning_effort_enum=(
+                list(outcome.effort_enum) if outcome.status == "learned" else None
+            ),
+            reasoning_field_ignored=outcome.field_ignored,
+            reasoning_probe_status=outcome.status,
+            reasoning_probed_at=outcome.probed_at,
+        )
+        # The vocabulary is read when a provider is *built*, so the generation
+        # has to be replaced before the next request can spell the new word.
+        # Republish only -- explicitly no discovery sweep. A create already
+        # queried this host's ``/models`` exactly once (A1.3), and a probe that
+        # quietly made it twice would put that invariant back the way it was.
+        async with self._config_lock:
+            await self.provider_manager.replace(
+                self.settings,
+                commit=lambda: None,
+                reason="reasoning_dialect_probe",
+                background_refresh=False,
+            )
+        payload = outcome.as_payload()
+        payload["provider_id"] = provider_id
+        payload["model"] = models[0] if models else ""
+        return payload
 
     async def refresh_models(self) -> ProviderModelRefreshResult:
         return await self.provider_manager.refresh_model_list_cache()

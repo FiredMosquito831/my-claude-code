@@ -17,6 +17,7 @@ from my_claude_code.providers.openai_chat import (
     GENERIC_OPENAI_PROFILE,
     OPENAI_CHAT_PROFILES,
     create_openai_chat_provider,
+    profile_with_learned_dialect,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
@@ -275,6 +276,14 @@ def _create_single_provider(
         profile = OPENAI_CHAT_PROFILES.get(
             descriptor.provider_id, GENERIC_OPENAI_PROFILE
         )
+        # The declaration seam. A static profile writes its effort table by
+        # hand; a probed one arrives on the descriptor and is folded in here,
+        # producing the same ``NamedEffortReasoning`` a declaration would.
+        # Nothing past this line knows which of the two it got.
+        if descriptor.reasoning_effort_enum:
+            profile = profile_with_learned_dialect(
+                profile, descriptor.reasoning_effort_enum
+            )
         return create_openai_chat_provider(
             descriptor.provider_id, config, rate_limiter, profile=profile
         )

@@ -516,14 +516,51 @@ const ROUTES = {
   "/admin/api/claude/settings": { configured: false },
   "/admin/api/claude/config": { entries: [], values: {}, path: "", parsed: true },
   "/admin/api/providers/custom": { providers: [] },
+  "/admin/api/custom-providers/custom_acme/keys": {
+    provider_id: "custom_acme",
+    env_key: null,
+    source: "custom_providers.json",
+    locked: false,
+    credential_rotation: "failover",
+    count: 2,
+    keys: ["sk-acm\u2026bbbb", "sk-acm\u2026dddd"],
+    health: [
+      {
+        state: "HEALTHY",
+        request_count: 12,
+        failure_count: 0,
+        cooldown_remaining: 0,
+        lockout_remaining: 0,
+        model_benches: [],
+        index: 0,
+        key_label: "sk-acm\u2026bbbb",
+      },
+      {
+        state: "HEALTHY",
+        request_count: 4,
+        failure_count: 1,
+        cooldown_remaining: 0,
+        lockout_remaining: 0,
+        model_benches: [{ model: "m1", remaining: 42 }],
+        index: 1,
+        key_label: "sk-acm\u2026dddd",
+      },
+    ],
+  },
   "/admin/api/custom-providers": {
     providers: [
       {
         provider_id: "custom_acme",
         display_name: "Acme",
         base_url: "https://api.acme.example/v1",
-        key_count: 1,
-        masked_keys: ["sk-acm\u2026bbbb"],
+        key_count: 2,
+        masked_keys: ["sk-acm\u2026bbbb", "sk-acm\u2026dddd"],
+        reasoning_effort_enum: ["low", "high", "max"],
+        reasoning_field_ignored: false,
+        reasoning_probe_status: "learned",
+        reasoning_probed_at: "2026-09-01T10:00:00+00:00",
+        reasoning_dialect_label: "learned {low, high, max} on 2026-09-01",
+        auto_paused_refs: [],
         credential_rotation: "failover",
         proxy: null,
         enabled: true,
@@ -1326,6 +1363,14 @@ function driveDetail(row) {
     contradictions: wire.querySelectorAll(".req-wire-contradiction").length,
     pre: wire.querySelector("pre") ? wire.querySelector("pre").textContent : null,
     unmeasured: wire.querySelectorAll(".req-wire-unmeasured").length,
+    shapePanes: wire.querySelectorAll(".req-shape-pane").length,
+    shapeTerms: Array.from(wire.querySelectorAll(".req-shape-grid dt")).map(
+      (dt) => dt.textContent,
+    ),
+    shapeValues: Array.from(wire.querySelectorAll(".req-shape-grid dd")).map(
+      (dd) => dd.textContent,
+    ),
+    shapeEmpty: textOf(wire, ".req-shape-empty"),
     chainKeys: Array.from(chain.querySelectorAll(".req-chain-key")).map(
       (el) => el.textContent,
     ),
@@ -1389,6 +1434,37 @@ const detailAttempt = (extra) =>
   );
 
 const requestDetail = {
+  // The reply's shape, opposite the body that asked for it. The first row is
+  // the live symptom the pane exists for: a reasoning field went out and no
+  // reasoning delta came back.
+  responseShape: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        wire_body: { model: "glm-5.3-flash" },
+        reasoning_emitted: 1,
+        params: {
+          wire: { model: "glm-5.3-flash" },
+          response_shape: {
+            fields: { content: { deltas: 7, chars: 135 } },
+            chunks: 9,
+            finish_reason: "stop",
+            usage: true,
+            usage_keys: ["completion_tokens", "prompt_tokens"],
+            first_chunk_ms: 14700,
+          },
+        },
+      }),
+    ],
+  }),
+  responseShapeAbsent: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({ wire_body: { model: "m" }, reasoning_emitted: 0 }),
+    ],
+  }),
   degraded: driveDetail({
     reasoning_adaptation: null,
     reasoning_adaptation_kind: null,
@@ -2776,6 +2852,24 @@ const customProviders = {};
     : null;
   const banner = doc.getElementById("messageArea");
   customProviders.message = banner ? banner.textContent : "";
+
+  // The learned dialect, the hand-edit field, and the per-key health a custom
+  // pool has always had and never showed.
+  const acme = doc.querySelector('[data-custom-provider="custom_acme"]');
+  if (acme) {
+    customProviders.dialectLabel = textOf(acme, ".cp-dialect-label");
+    const edit = acme.querySelector(".cp-dialect-edit");
+    customProviders.dialectValue = edit ? edit.value : null;
+    customProviders.probeButton = textOf(acme, ".cp-dialect-probe");
+    customProviders.toggleLabel = textOf(acme, ".cp-toggle");
+    customProviders.keyHealthStates = Array.from(
+      acme.querySelectorAll(".cp-key-health .key-health-badge"),
+    ).map((el) => el.textContent);
+    customProviders.keyBenches = Array.from(
+      acme.querySelectorAll(".cp-key-health .key-model-benches"),
+    ).map((el) => el.textContent);
+    customProviders.keyRowCount = acme.querySelectorAll(".cp-key-row").length;
+  }
 }
 
 // ------------------------------------------------------------ coding agents

@@ -1774,6 +1774,69 @@ def test_a_create_with_a_failed_discovery_does_not_render_a_healthy_card(
     assert "Refresh models" in card["message"]
 
 
+def test_the_custom_card_shows_the_dialect_its_host_was_measured_speaking(
+    rendered,
+) -> None:
+    """The fact that decides whether ``max`` can leave the process.
+
+    A static provider declares its effort vocabulary in a profile; a custom one
+    could not, so every custom host was assumed to speak the four standard
+    OpenAI words and a request for ``max`` went out as ``high``.
+    """
+    card = rendered["customProviders"]
+
+    assert card["dialectLabel"] == (
+        "reasoning dialect: learned {low, high, max} on 2026-09-01"
+    )
+    assert card["dialectValue"] == "low, high, max"
+    assert card["probeButton"] == "Probe reasoning dialect"
+
+
+def test_the_custom_card_offers_disable_as_a_gesture(rendered) -> None:
+    assert rendered["customProviders"]["toggleLabel"] == "Disable"
+
+
+def test_a_custom_pool_shows_per_key_health_like_a_static_one(rendered) -> None:
+    """``key_health()`` had exactly one caller, and no custom pool could reach it.
+
+    The machinery was always shared -- custom pools rotate, bench and cool down
+    on the same engine -- so this is the readout arriving, not the behaviour.
+    """
+    card = rendered["customProviders"]
+
+    assert card["keyRowCount"] == 2
+    assert card["keyHealthStates"] == ["HEALTHY", "HEALTHY (1 model)"]
+    assert card["keyBenches"] == ["m1 42s"]
+
+
+def test_the_wire_pane_shows_the_shape_of_what_came_back(rendered) -> None:
+    """ "reasoning requested 1, returned 0" is two measurements; this is the second."""
+    detail = rendered["requestDetail"]["responseShape"]
+
+    assert detail["shapePanes"] == 1
+    assert detail["shapeTerms"] == [
+        "content",
+        "finish_reason",
+        "usage",
+        "first chunk",
+        "chunks",
+    ]
+    assert detail["shapeValues"][0] == "7 deltas, 135 chars"
+    assert detail["shapeValues"][1] == "stop"
+    assert detail["shapeValues"][2] == "completion_tokens, prompt_tokens"
+    assert detail["shapeValues"][3] == "14700 ms"
+    # A reasoning field went out and no reasoning delta came back -- exactly
+    # the ambiguity this pane exists to settle.
+    assert "reasoning_content" not in detail["shapeTerms"]
+
+
+def test_an_unmeasured_attempt_renders_no_shape_pane_rather_than_an_empty_one(
+    rendered,
+) -> None:
+    """NULL is "not measured", which is not the same as "nothing came back"."""
+    assert rendered["requestDetail"]["responseShapeAbsent"]["shapePanes"] == 0
+
+
 # --------------------------------------------------------------- coding agents
 
 

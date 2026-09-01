@@ -190,6 +190,10 @@ class ProviderDescriptor:
     base_url_attr: str | None = None
     proxy_attr: str | None = None
     dynamic: bool = False
+    # The effort words this host was measured accepting, for a dynamic
+    # provider that had them probed. Static providers declare theirs in a
+    # profile instead, so this stays ``None`` for the whole catalog.
+    reasoning_effort_enum: tuple[str, ...] | None = None
     # Settings attributes beyond a credential that must be non-empty to configure
     # the provider (e.g. VERTEX_PROJECT_ID for Application Default Credentials).
     required_settings_attrs: tuple[str, ...] = ()

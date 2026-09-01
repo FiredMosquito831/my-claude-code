@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from datetime import date
@@ -45,8 +46,11 @@ from my_claude_code.core.request_log import (
 )
 from my_claude_code.core.trace import provider_chat_body_snapshot, trace_event
 from my_claude_code.core.wire_capture import (
+    ResponseShape,
     record_reasoning_adaptation,
+    record_response_shape,
     record_wire_request,
+    start_response_shape,
 )
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
@@ -650,17 +654,26 @@ class _OpenAIChatStreamRunner:
                         yield event
                 stream: Any | None = None
                 stream_opened = False
+                shape: ResponseShape | None = None
                 try:
                     stream, body = await self._provider._create_stream(body)
                     stream_opened = True
+                    # Opposite the wire body recorded at the commit boundary:
+                    # what came back, by shape only. Started here because a
+                    # create that never opened has no reply to describe.
+                    shape = start_response_shape()
                     # Only now can upstream bytes arrive, so only now does the
                     # holdback window mean anything.
                     recovery.upstream_opened()
                     tool_argument_aliases = self._provider._tool_argument_aliases(body)
                     async for chunk in stream:
+                        if shape is not None:
+                            shape.note_chunk(time.monotonic())
                         chunk_usage = getattr(chunk, "usage", None)
                         if chunk_usage is not None:
                             usage_info = chunk_usage
+                            if shape is not None:
+                                shape.note_usage(chunk_usage)
 
                         if not chunk.choices:
                             continue
@@ -672,9 +685,20 @@ class _OpenAIChatStreamRunner:
 
                         if choice.finish_reason:
                             finish_reason = choice.finish_reason
+                            if shape is not None:
+                                shape.note_finish(finish_reason)
                             logger.debug("{} finish_reason: {}", tag, finish_reason)
 
                         reasoning = self._provider._profile.reasoning_delta(delta)
+                        if shape is not None and reasoning:
+                            shape.note_field(
+                                self._provider._profile.reasoning_delta_field,
+                                len(reasoning),
+                            )
+                        if shape is not None and delta.content:
+                            shape.note_field("content", len(delta.content))
+                        if shape is not None and delta.tool_calls:
+                            shape.note_field("tool_calls", len(delta.tool_calls))
                         if output_reasoning and reasoning is not None:
                             for event in hold_events(ledger.ensure_thinking_block()):
                                 yield event
@@ -763,6 +787,7 @@ class _OpenAIChatStreamRunner:
                         raise TruncatedProviderStreamError(
                             "Provider stream ended without finish_reason."
                         )
+                    record_response_shape(shape)
                     break
 
                 except asyncio.CancelledError, GeneratorExit:

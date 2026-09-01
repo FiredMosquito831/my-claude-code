@@ -26,6 +26,7 @@ from my_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
     ProviderDescriptor,
 )
+from my_claude_code.config.reasoning_enum import normalize_effort_words
 
 CUSTOM_PROVIDER_ID_PREFIX = "custom_"
 CUSTOM_PROVIDERS_FILENAME = "custom_providers.json"
@@ -49,6 +50,23 @@ class CustomProviderEntry:
     proxy: str | None = None
     enabled: bool = True
     added_at: str = ""
+    # What this host was measured accepting in ``reasoning_effort``, in the
+    # order it named them. A static provider writes this into its profile; a
+    # custom one has it probed and stored here. ``None`` is "not measured" --
+    # distinct from ``()``, which never occurs, and from
+    # ``reasoning_field_ignored``, which is a measurement.
+    reasoning_effort_enum: tuple[str, ...] | None = None
+    # The host answered 200 to a deliberately invalid effort value, so it does
+    # not read the field at all. Sending one costs nothing and means nothing.
+    reasoning_field_ignored: bool = False
+    # Free text for the card: "learned", "ignored", or why it is still unknown
+    # ("401"). Never the key, never the response body.
+    reasoning_probe_status: str = ""
+    reasoning_probed_at: str = ""
+    # ``(MODEL_*_PAUSED key, model ref)`` pairs that disabling this provider
+    # paused. Recorded rather than recomputed so re-enabling lifts its own
+    # pauses and leaves a hand-paused ref exactly where the operator put it.
+    auto_paused_refs: tuple[tuple[str, str], ...] = ()
 
 
 def _slug(display_name: str) -> str:
@@ -70,6 +88,40 @@ def custom_provider_id(display_name: str) -> str:
 
     slug = _slug(display_name)
     return f"{CUSTOM_PROVIDER_ID_PREFIX}{slug}" if slug else ""
+
+
+def _effort_enum_from_payload(value: object) -> tuple[str, ...] | None:
+    """Return a stored vocabulary, or ``None`` for "never measured".
+
+    An empty list on disk reads back as ``None`` rather than ``()``: no probe
+    produces an empty vocabulary, so an empty one is a hand-edit meaning
+    "forget what you learned".
+    """
+    if value is None:
+        return None
+    words = normalize_effort_words(value)
+    return words or None
+
+
+def _paused_pair(item: object) -> tuple[str, str] | None:
+    if not isinstance(item, list) or len(item) != 2:
+        return None
+    first, second = item
+    if isinstance(first, str) and first and isinstance(second, str) and second:
+        return (first, second)
+    return None
+
+
+def _paused_pairs_from_payload(value: object) -> tuple[tuple[str, str], ...]:
+    """Read back the pauses a disable added, ignoring anything malformed."""
+    if not isinstance(value, list):
+        return ()
+    pairs = (_paused_pair(item) for item in value)
+    return tuple(pair for pair in pairs if pair is not None)
+
+
+def _text_or_empty(value: object) -> str:
+    return value if isinstance(value, str) else ""
 
 
 def _utc_now_iso() -> str:
@@ -151,6 +203,13 @@ class ProviderRegistry:
             proxy=proxy if isinstance(proxy, str) and proxy.strip() else None,
             enabled=bool(item.get("enabled", True)),
             added_at=added_at if isinstance(added_at, str) else "",
+            reasoning_effort_enum=_effort_enum_from_payload(
+                item.get("reasoning_effort_enum")
+            ),
+            reasoning_field_ignored=bool(item.get("reasoning_field_ignored", False)),
+            reasoning_probe_status=_text_or_empty(item.get("reasoning_probe_status")),
+            reasoning_probed_at=_text_or_empty(item.get("reasoning_probed_at")),
+            auto_paused_refs=_paused_pairs_from_payload(item.get("auto_paused_refs")),
         )
 
     # ------------------------------------------------------------- persistence
@@ -168,6 +227,18 @@ class ProviderRegistry:
                     "proxy": entry.proxy,
                     "enabled": entry.enabled,
                     "added_at": entry.added_at,
+                    "reasoning_effort_enum": (
+                        None
+                        if entry.reasoning_effort_enum is None
+                        else list(entry.reasoning_effort_enum)
+                    ),
+                    "reasoning_field_ignored": entry.reasoning_field_ignored,
+                    "reasoning_probe_status": entry.reasoning_probe_status,
+                    "reasoning_probed_at": entry.reasoning_probed_at,
+                    "auto_paused_refs": [
+                        [paused_key, model_ref]
+                        for paused_key, model_ref in entry.auto_paused_refs
+                    ],
                 }
                 for entry in self._custom.values()
             ]
@@ -208,6 +279,26 @@ class ProviderRegistry:
         """Return static catalog order followed by enabled custom ids."""
         return tuple(self.all_descriptors())
 
+    def configurable_ids(self) -> tuple[str, ...]:
+        """Ids a ``MODEL*`` route setting may name, disabled customs included.
+
+        Deliberately not :meth:`supported_ids`. Runtime asks "can I build this
+        provider right now", and a disabled entry must answer no -- that is
+        what disabling is. Settings validation asks a different question:
+        "is this a provider this install knows about", and for a custom entry
+        the operator switched off for the afternoon the answer is yes. Fusing
+        the two is what made ``Settings()`` raise ``ValidationError`` on every
+        ``MODEL*`` naming a disabled custom provider, taking the whole process
+        down rather than the one route.
+        """
+        with self._lock:
+            self._ensure_loaded()
+            return tuple(PROVIDER_CATALOG) + tuple(
+                provider_id
+                for provider_id in self._custom
+                if provider_id not in PROVIDER_CATALOG
+            )
+
     @staticmethod
     def descriptor_for(entry: CustomProviderEntry) -> ProviderDescriptor:
         """Build the dynamic descriptor for one custom provider entry."""
@@ -217,6 +308,7 @@ class ProviderRegistry:
             static_credential=entry.api_keys[0] if entry.api_keys else None,
             default_base_url=entry.base_url,
             dynamic=True,
+            reasoning_effort_enum=entry.reasoning_effort_enum,
         )
 
     # ---------------------------------------------------------------- mutations
@@ -285,6 +377,11 @@ class ProviderRegistry:
         credential_rotation: str | None = None,
         proxy: str | None | object = _UNSET,
         enabled: bool | None = None,
+        reasoning_effort_enum: tuple[str, ...] | list[str] | None | object = _UNSET,
+        reasoning_field_ignored: bool | None = None,
+        reasoning_probe_status: str | None = None,
+        reasoning_probed_at: str | None = None,
+        auto_paused_refs: tuple[tuple[str, str], ...] | None = None,
     ) -> CustomProviderEntry:
         """Update fields of one custom provider and return the new entry."""
         with self._lock:
@@ -332,6 +429,31 @@ class ProviderRegistry:
                 ),
                 enabled=current.enabled if enabled is None else bool(enabled),
                 added_at=current.added_at,
+                reasoning_effort_enum=(
+                    current.reasoning_effort_enum
+                    if reasoning_effort_enum is _UNSET
+                    else _effort_enum_from_payload(reasoning_effort_enum)
+                ),
+                reasoning_field_ignored=(
+                    current.reasoning_field_ignored
+                    if reasoning_field_ignored is None
+                    else bool(reasoning_field_ignored)
+                ),
+                reasoning_probe_status=(
+                    current.reasoning_probe_status
+                    if reasoning_probe_status is None
+                    else reasoning_probe_status
+                ),
+                reasoning_probed_at=(
+                    current.reasoning_probed_at
+                    if reasoning_probed_at is None
+                    else reasoning_probed_at
+                ),
+                auto_paused_refs=(
+                    current.auto_paused_refs
+                    if auto_paused_refs is None
+                    else tuple(auto_paused_refs)
+                ),
             )
             self._custom[provider_id] = updated
             self._persist_locked()

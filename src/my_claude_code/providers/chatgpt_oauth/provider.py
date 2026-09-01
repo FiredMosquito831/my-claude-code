@@ -28,7 +28,11 @@ from my_claude_code.core.reasoning import (
 )
 from my_claude_code.core.trace import trace_event
 from my_claude_code.core.version import package_version
-from my_claude_code.core.wire_capture import record_wire_request
+from my_claude_code.core.wire_capture import (
+    record_response_shape,
+    record_wire_request,
+    start_response_shape,
+)
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.model_listing import model_infos_from_ids
@@ -44,7 +48,11 @@ from .credentials import (
     force_refresh_managed_chatgpt_oauth_credentials,
     load_chatgpt_oauth_credentials,
 )
-from .streaming import ChatGPTOAuthStreamConverter, iter_chatgpt_oauth_sse_events
+from .streaming import (
+    ChatGPTOAuthStreamConverter,
+    iter_chatgpt_oauth_sse_events,
+    note_responses_event_shape,
+)
 
 CHATGPT_OAUTH_DEFAULT_BASE = "https://chatgpt.com/backend-api"
 
@@ -350,14 +358,17 @@ class ChatGPTOAuthProvider(BaseProvider):
                             )
 
                         yield ledger.message_start()
+                        shape = start_response_shape()
                         async for event in iter_chatgpt_oauth_sse_events(
                             response.aiter_raw()
                         ):
+                            note_responses_event_shape(shape, event)
                             for sse_event in converter.feed(event):
                                 yield sse_event
 
                         for sse_event in converter.finish():
                             yield sse_event
+                        record_response_shape(shape)
                     finally:
                         await response.aclose()
 

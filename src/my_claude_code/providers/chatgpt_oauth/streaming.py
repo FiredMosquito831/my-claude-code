@@ -1,10 +1,12 @@
 """Convert ChatGPT Responses API SSE events to Anthropic SSE format."""
 
 import json
-from collections.abc import AsyncIterator, Iterator
+import time
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any
 
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
+from my_claude_code.core.wire_capture import ResponseShape
 
 
 def _finish_reason_from_status(status: Any) -> str:
@@ -153,3 +155,37 @@ async def iter_chatgpt_oauth_sse_events(
                 continue
             if isinstance(event, dict):
                 yield event
+
+
+_RESPONSES_SHAPE_FIELDS = {
+    "response.output_text.delta": "content",
+    "response.reasoning_summary_text.delta": "reasoning",
+    "response.reasoning_text.delta": "reasoning",
+    "response.function_call_arguments.delta": "tool_calls",
+}
+
+
+def note_responses_event_shape(shape: ResponseShape | None, event: Any) -> None:
+    """Tally one ChatGPT Responses API event, storing no text.
+
+    The Responses API spells its channels as event types rather than delta
+    fields, so the mapping is named here rather than guessed downstream. Only
+    the four that carry model output are counted; the rest are lifecycle.
+    """
+    if shape is None or not isinstance(event, Mapping):
+        return
+    shape.note_chunk(time.monotonic())
+    kind = str(event.get("type", ""))
+    name = _RESPONSES_SHAPE_FIELDS.get(kind)
+    if name is not None:
+        delta = event.get("delta")
+        shape.note_field(name, len(delta) if isinstance(delta, str) else 0)
+        return
+    if kind in ("response.completed", "response.incomplete", "response.failed"):
+        response = event.get("response")
+        if isinstance(response, Mapping):
+            shape.note_usage(response.get("usage"))
+            status = response.get("status")
+            shape.note_finish(status if isinstance(status, str) else kind)
+        else:
+            shape.note_finish(kind)

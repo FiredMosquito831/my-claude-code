@@ -584,7 +584,7 @@ These take no credentials — the key field stays empty and validation just chec
 
 Any OpenAI-compatible endpoint that is not one of the 56 built-in cards can be added by hand. Press **Add custom provider** on the **Providers** tab and give it a display name, a base URL and one API key.
 
-**The base URL must include `/v1` (or whatever path segment your gateway uses).** MCC calls the URL you typed, verbatim — it does not append `/v1` for you. `https://api.example.com/v1` is right; `https://api.example.com` produces a 404 on every request with no other diagnostic. Check the gateway's own `curl` example: whatever comes before `/chat/completions` is your base URL.
+**The base URL must include `/v1` (or whatever path segment your gateway uses).** MCC calls the URL you typed, verbatim — it does not append `/v1` for you. `https://api.example.com/v1` is right; `https://api.example.com` is refused by the gateway on every request — measured against one real host, that is a **403** naming the paths it does serve, not a silent 404, and it surfaces immediately as a red card because the create route probes `/models` before it answers you. Check the gateway's own `curl` example: whatever comes before `/chat/completions` is your base URL.
 
 Creating the provider registers it, hot-reloads the provider runtime and queries `GET <base_url>/models` **once**. What that query returns is what the card reports, what `/v1/models` serves, what the **Models** page counts and what the **Model Config** pickers offer — one discovery, one answer, no restart. If it fails, MCC retries it once and then says so: the card turns red with the upstream's error, and the banner tells you to press Refresh models. A failed discovery never renders as a healthy card.
 
@@ -592,7 +592,28 @@ Creating the provider registers it, hot-reloads the provider runtime and queries
 
 Keys for a custom provider live in **`~/.fcc/custom_providers.json`, not `~/.fcc/.env`.** There is no environment variable for them, so the `{ENV}_API_KEY` / `{ENV}_ROTATION` file workflow does not apply — but the pool itself is the same one built-in providers use, so several keys plus a rotation policy work exactly as they do elsewhere.
 
-One caveat on capabilities. models.dev, which supplies context windows, output caps and reasoning-effort vocabularies, is keyed by *its* provider ids — and a provider you invented is not in it. Custom models therefore resolve their limits and reasoning efforts from the cross-provider vote (the same model id as served by other providers) rather than from a bucket of their own, and a generic `/models` payload that publishes only `id`/`object`/`created`/`owned_by` adds nothing. Expect `context_length` and `supported_parameters` to read as unknown on the Models page. Routing, rotation, key health, benching, fallback chains, visibility globs and analytics are all identical to a built-in provider.
+**Per-key health.** A custom pool has always rotated, benched and cooled down on the same engine a built-in pool uses; since 6.25.0 the card also *shows* it. Each key row carries the same badge the built-in pools carry — `HEALTHY`, a cooldown with the time remaining, a lockout, or `HEALTHY (1 model)` when the key is rate-limited for one model and still serving every other. Custom pools also appear in the **Rotation, per pool** readout on the Providers tab.
+
+**Disabling and deleting.** These now mean different things, because you mean different things by them.
+
+- **Disable** is temporary, so your routing is left alone and switched off instead: every `MODEL*` chain entry naming the provider is **paused**, exactly as if you had paused it on **Model Config**, and the banner names the entries it paused. Re-enabling lifts precisely those pauses — a ref you paused by hand before disabling stays paused.
+- **Delete** is permanent, so the references go with it. Every `MODEL*` key that named the provider is rewritten, and the banner lists what was removed. A route whose own model was the deleted provider is reset to its default rather than left pointing at nothing.
+
+Before 6.25.0 either gesture, applied to a provider a `MODEL*` setting named, made the next settings load fail outright — the whole process, rather than the one route. A disabled custom provider now stays valid in configuration while remaining unbuildable at runtime, which is what "disabled" should have meant all along.
+
+**Reasoning dialect.** This is the one capability a custom provider genuinely could not have. A built-in provider's `reasoning_effort` vocabulary is written into its profile by someone who probed the host; a provider you invented has no profile, so it was assumed to speak the four standard OpenAI words (`minimal`, `low`, `medium`, `high`) — and a host that documents `low`, `high`, `max` had every request for `max` quietly clamped to `high`, with no user-accessible way around it.
+
+MCC now asks the host directly. On create, and again on every **Refresh models**, it sends at most two 16-token chat completions: the first carries a deliberately invalid `reasoning_effort`, and if the host answers `400` naming its enum, that enum becomes this provider's vocabulary. Three outcomes, all shown on the card:
+
+| Card reads | What was established |
+| --- | --- |
+| `learned {low, high, max} on 2026-09-01` | the host named its enum in a 400; MCC now spells those words |
+| `ignored on 2026-09-01` | the host answered 200 to a value no scale contains, so it does not read the field |
+| `unknown (401)` / `unknown (not probed)` | nothing was measured; behaviour is unchanged from before |
+
+**Probe reasoning dialect** on the card re-runs it on demand, and the field beside it takes a comma list (`low, high, max`) if you would rather state the answer than measure it; clearing the field forgets what was learned. Nothing about reasoning gating changes: the vocabulary is still intersected with the model's own, a clamp is still recorded in the request log, and an unknown dialect still behaves exactly as it did before.
+
+One caveat on capabilities. models.dev, which supplies context windows, output caps and reasoning-effort vocabularies, is keyed by *its* provider ids — and a provider you invented is not in it. That turns out to be an advantage rather than a gap: without a bucket, custom models fall through to the cross-provider vote (the same model id as served by other providers), which in practice resolves *more* than a bucket does. `supported_parameters` and `default_parameters` are the fields that genuinely stay unknown, and they are unknown for nine of the eleven live providers, built-in ones included. Routing, rotation, key health, benching, fallback chains, visibility globs and analytics are all identical to a built-in provider.
 
 ---
 

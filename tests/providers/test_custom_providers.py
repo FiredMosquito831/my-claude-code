@@ -75,13 +75,38 @@ def test_settings_validator_rejects_unknown_custom_ref(make_settings) -> None:
         make_settings(MODEL="custom_missing/model")
 
 
-def test_settings_validator_rejects_disabled_custom_ref(
+def test_settings_builds_with_a_disabled_routed_custom_provider(
     custom_registry: ProviderRegistry, make_settings
 ) -> None:
+    """Disabling a routed custom provider must not take Settings down.
+
+    This asserted the opposite until 6.25.0, and the opposite was the bug: a
+    disabled entry left ``supported_ids()`` and the very next ``Settings()``
+    raised ``ValidationError`` on every ``MODEL*`` that named it -- the whole
+    process, rather than the one route. Disabling now pauses those chain
+    entries instead, which it cannot do if the settings holding them refuse to
+    load.
+    """
     custom_registry.update("custom_acme_ai", enabled=False)
 
-    with pytest.raises(ValueError, match="custom_acme_ai"):
-        make_settings(MODEL="custom_acme_ai/some-model")
+    settings = make_settings(
+        MODEL="custom_acme_ai/some-model",
+        MODEL_OPUS_FALLBACKS="custom_acme_ai/some-model",
+    )
+
+    assert settings.model == "custom_acme_ai/some-model"
+    assert settings.model_opus_fallbacks == "custom_acme_ai/some-model"
+
+
+def test_disabled_custom_provider_is_not_buildable(
+    custom_registry: ProviderRegistry,
+) -> None:
+    """...and it is still disabled, which is the other half of the contract."""
+    custom_registry.update("custom_acme_ai", enabled=False)
+
+    assert "custom_acme_ai" in custom_registry.configurable_ids()
+    assert "custom_acme_ai" not in custom_registry.supported_ids()
+    assert "custom_acme_ai" not in custom_registry.all_descriptors()
 
 
 def test_routing_resolves_direct_custom_provider_model(make_settings) -> None:
