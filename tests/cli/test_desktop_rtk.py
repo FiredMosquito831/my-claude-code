@@ -81,7 +81,13 @@ def test_token_optimizer_submenu_presents_three_checkable_agents(monkeypatch, tm
 
     submenu = _token_optimizer_menu(tray)
 
-    assert [item.text for item in submenu.items] == ["Claude Code", "Codex", "Pi"]
+    # Labels come from the harness registry's display names, so the tray, the
+    # exit-127 hint and the dashboard card all name the CLI the same way.
+    assert [item.text for item in submenu.items] == [
+        "Claude Code",
+        "Codex CLI",
+        "Pi",
+    ]
 
 
 def test_toggling_agent_persists_and_reconciles(monkeypatch, tmp_path):
@@ -121,7 +127,7 @@ def test_toggling_does_not_disturb_other_agents(monkeypatch, tmp_path):
     tray = PystrayDesktopTray(controller)
     submenu = _token_optimizer_menu(tray)
 
-    _toggle(tray, _agent_item(submenu, "Codex"))
+    _toggle(tray, _agent_item(submenu, "Codex CLI"))
 
     assert load_rtk_state() == RtkState(claude=True, codex=False, pi=True)
     assert applied == [RtkState(claude=True, codex=False, pi=True)]
@@ -160,7 +166,7 @@ def test_checked_reflects_persisted_state(monkeypatch, tmp_path):
 
     checks = {item.text: item.checked for item in submenu.items}
 
-    assert checks == {"Claude Code": True, "Codex": False, "Pi": True}
+    assert checks == {"Claude Code": True, "Codex CLI": False, "Pi": True}
 
 
 def _real_state_tray(monkeypatch, tmp_path):

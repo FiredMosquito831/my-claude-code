@@ -1,5 +1,6 @@
 """pystray adapter for the Windows tray and macOS menu bar."""
 
+from collections.abc import Callable
 from io import BytesIO
 
 from PIL import Image
@@ -13,6 +14,7 @@ from my_claude_code.config.desktop import (
     set_start_at_login,
     set_tray_enabled,
 )
+from my_claude_code.config.harnesses import harness_spec, rtk_capable_ids
 from my_claude_code.config.rtk import (
     RtkState,
     apply_rtk_state,
@@ -38,12 +40,7 @@ class PystrayDesktopTray:
         self._start_at_login = state.start_at_login
         self._tray_enabled = state.tray_enabled
         self._server_mode = state.server_mode
-        rtk = load_rtk_state()
-        self._rtk_state = {
-            "claude": rtk.claude,
-            "codex": rtk.codex,
-            "pi": rtk.pi,
-        }
+        self._rtk_state = load_rtk_state().as_dict()
         self._icon = Icon(
             "my-claude-code",
             _create_icon(),
@@ -88,26 +85,7 @@ class PystrayDesktopTray:
                 checked=lambda item: self._tray_enabled,
             ),
             Menu.SEPARATOR,
-            MenuItem(
-                "Token optimizer",
-                Menu(
-                    MenuItem(
-                        "Claude Code",
-                        self._toggle_rtk_claude,
-                        checked=lambda item: self._rtk_checked(item, "claude"),
-                    ),
-                    MenuItem(
-                        "Codex",
-                        self._toggle_rtk_codex,
-                        checked=lambda item: self._rtk_checked(item, "codex"),
-                    ),
-                    MenuItem(
-                        "Pi",
-                        self._toggle_rtk_pi,
-                        checked=lambda item: self._rtk_checked(item, "pi"),
-                    ),
-                ),
-            ),
+            MenuItem("Token optimizer", Menu(*self._rtk_menu_items())),
             Menu.SEPARATOR,
             MenuItem("Quit", self._quit),
         )
@@ -179,30 +157,51 @@ class PystrayDesktopTray:
         self._tray_enabled = not load_desktop_state().tray_enabled
         set_tray_enabled(self._tray_enabled)
 
-    def _rtk_checked(self, _item: MenuItem, agent: str) -> bool:
-        return self._rtk_state[agent]
+    def _rtk_menu_items(self) -> list[MenuItem]:
+        """Build one checkbox per RTK-capable harness, from the registry.
 
-    def _toggle_rtk_claude(self, _icon: Icon, _item: MenuItem) -> None:
-        self._toggle_rtk_agent("claude")
+        Three hand-written menu entries until the registry existed. Each
+        closure is built by a factory rather than a lambda with a default
+        argument: pystray inspects an action's arity and rejects anything but
+        ``()``, ``(icon)`` or ``(icon, item)``, so a captured default would
+        raise at menu construction time.
+        """
 
-    def _toggle_rtk_codex(self, _icon: Icon, _item: MenuItem) -> None:
-        self._toggle_rtk_agent("codex")
+        return [
+            MenuItem(
+                harness_spec(agent).display_name,
+                self._toggle_action(agent),
+                checked=self._checked_probe(agent),
+            )
+            for agent in rtk_capable_ids()
+        ]
 
-    def _toggle_rtk_pi(self, _icon: Icon, _item: MenuItem) -> None:
-        self._toggle_rtk_agent("pi")
+    def _toggle_action(self, agent: str) -> Callable[[Icon, MenuItem], None]:
+        def toggle(_icon: Icon, _item: MenuItem) -> None:
+            self._toggle_rtk_agent(agent)
+
+        return toggle
+
+    def _checked_probe(self, agent: str) -> Callable[[MenuItem], bool]:
+        def checked(_item: MenuItem) -> bool:
+            return self._rtk_checked(agent)
+
+        return checked
+
+    def _rtk_checked(self, agent: str) -> bool:
+        return self._rtk_state.get(agent, False)
 
     def _toggle_rtk_agent(self, agent: str) -> None:
         # Re-read from disk instead of writing from the in-memory cache: the
         # tray and the admin HTTP API are separate processes that both
         # persist RtkState to the same file, and the tray's cache can be
         # stale relative to a change the API made after the tray started.
-        # Writing all three fields reconstructed from a stale cache would
+        # Writing every field reconstructed from a stale cache would
         # silently revert whatever the other process last wrote. Do not
         # "optimise" this back into a cached write.
-        fresh = load_rtk_state()
-        rtk_values = {"claude": fresh.claude, "codex": fresh.codex, "pi": fresh.pi}
-        rtk_values[agent] = not rtk_values[agent]
-        state = RtkState(**rtk_values)
+        rtk_values = load_rtk_state().as_dict()
+        rtk_values[agent] = not rtk_values.get(agent, False)
+        state = RtkState(rtk_values)
         save_rtk_state(state)
         apply_rtk_state(state)
         self._rtk_state = rtk_values

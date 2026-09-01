@@ -2,10 +2,13 @@
 
 from collections.abc import Mapping
 
+from my_claude_code.config.harnesses import harness_spec
 from my_claude_code.config.proxy_auth import proxy_auth_token
 
 CLAUDE_CODE_AUTO_COMPACT_WINDOW = "190000"
-CLAUDE_BINARY_NAME = "claude"
+#: Read from the harness registry so the managed session, the launcher and the
+#: dashboard's installed-probe can never look for different executables.
+CLAUDE_BINARY_NAME = harness_spec("claude").binary
 
 
 def build_claude_proxy_env(

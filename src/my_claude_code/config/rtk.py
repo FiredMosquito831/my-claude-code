@@ -13,11 +13,12 @@ import tarfile
 import tempfile
 import urllib.request
 import zipfile
+from collections.abc import Mapping
 from contextlib import suppress
-from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .harnesses import harness_specs, rtk_capable_ids
 from .paths import config_dir_path
 
 RTK_STATE_FILENAME = "rtk.json"
@@ -71,15 +72,14 @@ _RELEASES: dict[tuple[str, str], tuple[str, str]] = {
     ),
 }
 
+# Derived from the harness registry rather than restated: an agent RTK is
+# enabled for and an agent MCC can launch are the same list, and keeping two
+# copies is how one of them ends up missing an entry.
 _ENABLE_COMMANDS: dict[str, tuple[str, ...]] = {
-    "claude": ("init", "-g", "--auto-patch"),
-    "codex": ("init", "-g", "--codex"),
-    "pi": ("init", "-g", "--agent", "pi"),
+    spec.id: spec.rtk_enable_args for spec in harness_specs() if spec.rtk_agent
 }
 _UNINSTALL_COMMANDS: dict[str, tuple[str, ...]] = {
-    "claude": ("init", "-g", "--uninstall"),
-    "codex": ("init", "--uninstall", "-g", "--codex"),
-    "pi": ("init", "--uninstall", "-g", "--agent", "pi"),
+    spec.id: spec.rtk_uninstall_args for spec in harness_specs() if spec.rtk_agent
 }
 
 
@@ -87,13 +87,68 @@ class RtkError(Exception):
     """Raised when RTK state cannot be persisted or reconciled."""
 
 
-@dataclass(frozen=True)
 class RtkState:
-    """Desired RTK integration state for each supported coding agent."""
+    """Desired RTK integration state, keyed by harness id.
 
-    claude: bool = False
-    codex: bool = False
-    pi: bool = False
+    Three hard-coded booleans until the harness registry existed, which meant
+    every new agent needed this class, the RTK CLI, the tray menu, the admin
+    payload and the installer's enable list edited together. It is now a
+    mapping whose keys come from ``rtk_capable_ids()``, so an agent is added in
+    one place.
+
+    Attribute access (``state.claude``) is kept because it reads better at the
+    call sites and because the persisted document has always been a flat
+    ``{"claude": true, ...}`` object -- the on-disk format is unchanged, and a
+    state file written by an older MCC loads with no migration step beyond
+    dropping keys for agents this build does not know.
+    """
+
+    __slots__ = ("_agents",)
+
+    def __init__(
+        self, agents: Mapping[str, bool] | None = None, **per_agent: bool
+    ) -> None:
+        values = dict.fromkeys(rtk_capable_ids(), False)
+        for source in (agents or {}, per_agent):
+            for name, value in source.items():
+                if name not in values:
+                    raise ValueError(f"unknown RTK agent: {name}")
+                values[name] = bool(value)
+        self._agents = values
+
+    def enabled(self, harness_id: str) -> bool:
+        """Return whether RTK is desired for one harness."""
+
+        return self._agents.get(harness_id, False)
+
+    def as_dict(self) -> dict[str, bool]:
+        """Return the persisted flat mapping of harness id to desired state."""
+
+        return dict(self._agents)
+
+    @property
+    def any_enabled(self) -> bool:
+        """Return whether RTK is desired for at least one harness."""
+
+        return any(self._agents.values())
+
+    def __getattr__(self, name: str) -> bool:
+        try:
+            return self._agents[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, RtkState):
+            return NotImplemented
+        return self._agents == other._agents
+
+    def __hash__(self) -> int:
+        return hash(frozenset(self._agents.items()))
+
+    def __repr__(self) -> str:
+        enabled = ", ".join(f"{name}={value}" for name, value in self._agents.items())
+        return f"RtkState({enabled})"
 
 
 def rtk_state_path() -> Path:
@@ -112,11 +167,15 @@ def load_rtk_state() -> RtkState:
     if not isinstance(data, dict):
         return RtkState()
 
-    values = asdict(RtkState())
-    for name in values:
-        if isinstance(data.get(name), bool):
-            values[name] = data[name]
-    return RtkState(**values)
+    # Keys for agents this build does not know are dropped rather than being
+    # an error: a state file written by a newer MCC, or by one that supported
+    # an agent since removed, must still load.
+    values = {
+        name: value
+        for name, value in data.items()
+        if name in rtk_capable_ids() and isinstance(value, bool)
+    }
+    return RtkState(values)
 
 
 def save_rtk_state(state: RtkState) -> None:
@@ -126,7 +185,7 @@ def save_rtk_state(state: RtkState) -> None:
     tmp_path = path.with_suffix(f"{path.suffix}.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path.write_text(json.dumps(asdict(state)), encoding="utf-8")
+        tmp_path.write_text(json.dumps(state.as_dict()), encoding="utf-8")
         os.replace(tmp_path, path)
     except OSError as exc:
         with suppress(OSError):
@@ -318,14 +377,13 @@ def _ensure_claude_config_directory() -> None:
 def apply_rtk_state(state: RtkState, *, uninstall: bool = False) -> None:
     """Reconcile installed RTK hooks and optionally remove its managed binary."""
 
-    any_enabled = state.claude or state.codex or state.pi
-    binary = _ensure_rtk_binary() if any_enabled else _available_binary()
+    binary = _ensure_rtk_binary() if state.any_enabled else _available_binary()
 
     if binary is not None:
-        if state.claude:
+        if state.enabled("claude"):
             _ensure_claude_config_directory()
-        for agent in ("claude", "codex", "pi"):
-            enabled = getattr(state, agent)
+        for agent in rtk_capable_ids():
+            enabled = state.enabled(agent)
             command = _ENABLE_COMMANDS[agent] if enabled else _UNINSTALL_COMMANDS[agent]
             _run_rtk(binary, command)
 
@@ -354,7 +412,7 @@ def parse_rtk_version(text: str | None) -> str | None:
     return match.group(0) if match is not None else None
 
 
-def rtk_status() -> dict[str, bool | str | None]:
+def rtk_status() -> dict[str, Any]:
     """Return desired agent state and verified binary metadata."""
 
     state = load_rtk_state()
@@ -373,9 +431,8 @@ def rtk_status() -> dict[str, bool | str | None]:
         matches_pin = installed_version == RTK_VERSION
     return {
         "installed": installed,
-        "claude": state.claude,
-        "codex": state.codex,
-        "pi": state.pi,
+        **state.as_dict(),
+        "agents": state.as_dict(),
         "binary_path": str(binary) if binary is not None else None,
         "version": version,
         "installed_version": installed_version,

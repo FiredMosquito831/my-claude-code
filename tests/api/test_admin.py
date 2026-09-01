@@ -349,8 +349,9 @@ def test_admin_static_renders_and_binds_rtk_token_optimizer_card():
         encoding="utf-8"
     )
 
-    # The three toggle checkboxes live in a "Token optimizer" card.
-    for control_id in ("rtkClaude", "rtkCodex", "rtkPi", "rtkStatusLine"):
+    # The toggles are generated from /admin/api/harnesses into this container,
+    # so the agents listed are exactly the agents RTK is confirmed to wrap.
+    for control_id in ("rtkAgentToggles", "rtkStatusLine"):
         assert f'id="{control_id}"' in html
 
     # Each toggle binds to the shared POST endpoint and the shared reconciler
@@ -361,13 +362,10 @@ def test_admin_static_renders_and_binds_rtk_token_optimizer_card():
     assert "renderRtkState" in script
     assert "updateRtk" in script
     assert (
-        'updateRtk("claude", event.currentTarget.checked, event.currentTarget)'
+        "updateRtk(harness.id, event.currentTarget.checked, event.currentTarget)"
         in script
     )
-    assert (
-        'updateRtk("codex", event.currentTarget.checked, event.currentTarget)' in script
-    )
-    assert 'updateRtk("pi", event.currentTarget.checked, event.currentTarget)' in script
+    assert "rtkCapableHarnesses" in script
     assert ".rtk-status-line" in styles
     assert ".rtk-status-line.ok" in styles
     assert ".rtk-status-line.warn" in styles

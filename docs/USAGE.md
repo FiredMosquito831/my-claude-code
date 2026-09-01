@@ -19,7 +19,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [The embedded webview (pywebview), and its caveat](#the-embedded-webview-pywebview-and-its-caveat)
 - [4. Tutorial: connect Claude Code (CLI)](#4-tutorial-connect-claude-code-cli)
 - [5. Tutorial: connect Claude Desktop](#5-tutorial-connect-claude-desktop)
-- [6. Tutorial: connect Codex and Pi](#6-tutorial-connect-codex-and-pi)
+- [6. Tutorial: connect another CLI](#6-tutorial-connect-another-cli)
 - [7. Providers and API keys](#7-providers-and-api-keys)
   - [Using Claude models](#using-claude-models)
   - [Custom providers](#custom-providers)
@@ -417,7 +417,34 @@ With **Model discovery** on, the app populates its picker from MCC's `/v1/models
 
 ---
 
-## 6. Tutorial: connect Codex and Pi
+## 6. Tutorial: connect another CLI
+
+> **A coding agent is not a provider.**
+> The CLIs in this section sit **downstream** of MCC: they send requests to it.
+> The names on the Providers page — including `opencode`, `commandcode`,
+> `cline`, `kimi_coding` and `kilo` — are **upstream** gateways MCC buys tokens
+> from. Some names appear in both lists and mean different things, and both can
+> be on at once: you can run a coding agent against MCC while the same-named
+> upstream provider is switched off. In the code they are separate namespaces
+> (`harness_id` in `cli/harnesses/` and `config/harnesses.py`, `provider_id` in
+> `providers/` and `config/provider_catalog.py`) and are never joined.
+
+Every CLI MCC can launch is declared once, in `config/harnesses.py`. That one
+declaration produces the `mcc-<id>` command, the `mcc-help` line, the
+installer's verification list, the RTK toggles and the **Coding agents**
+dashboard page — so an agent cannot be present in one of those and missing from
+another.
+
+Open **Coding agents** in the dashboard to see, per agent: whether its binary is
+on your `PATH`, the command to copy, the protocol it will speak to MCC, the
+catalogue MCC generates for it (with the file's path, when it was last written,
+and how many models carry a value the CLI supplied rather than a provider), and
+its RTK toggle.
+
+MCC never installs a coding agent. When one is missing, its launcher prints that
+agent's own install command and exits 127.
+
+### Codex and Pi
 
 Both have launchers that configure the environment for you:
 
@@ -428,6 +455,10 @@ mcc-pi         # Pi
 
 (The legacy `fcc-codex` and `fcc-pi` aliases behave identically.)
 
+Neither rewrites your own configuration. Codex is configured with ephemeral
+`-c` assignments on the command line, and Pi is registered by a bundled
+extension that lives only for that process.
+
 Codex reads a model catalog that MCC generates, so its own picker works normally:
 
 <div align="center">
@@ -437,6 +468,36 @@ Codex reads a model catalog that MCC generates, so its own picker works normally
 <div align="center">
   <img src="../assets/codex.png" alt="Codex CLI running through My Claude Code" width="720">
 </div>
+
+### What MCC tells an agent about a model
+
+The catalogue MCC generates for an agent carries each model's **real**
+metadata, as MCC's resolution ladder resolved it, translated into that CLI's
+own schema:
+
+| What the ladder resolves | Where it lands in Codex | Where it lands in Pi |
+| --- | --- | --- |
+| context window | `context_window` / `max_context_window` | `contextWindow` |
+| output ceiling | *(Codex has no field)* | `maxTokens` |
+| vision support | `input_modalities` | `input` |
+| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* |
+| reasoning support | `supports_reasoning_summaries` | `reasoning` |
+| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* |
+| prices | *(Codex has no field)* | `cost.input` / `cost.output` |
+
+A model with a 32k window is advertised as 32k. A model that publishes only
+`low` and `high` gets exactly those two rungs in Codex's picker — `xhigh`
+disappears rather than being offered and rejected. A model that cannot reason
+gets no effort list at all.
+
+**Unknown stays unknown.** Where a CLI's schema makes a field optional and no
+provider published a value, MCC omits the key rather than writing a zero. Where
+the schema *requires* a value, MCC uses **that CLI's own documented default** —
+never a number MCC invented — and records the substitution in three places: a
+`_mcc_defaulted` block in the generated file, a line on the launcher's stderr
+when it starts, and a count on the agent's card in **Coding agents**. So you can
+always tell which figures are the CLI's guess from which are your provider's
+answer.
 
 **Editor integrations** work the same way — Claude Code and Codex in VS Code, or Claude Code through JetBrains ACP. Point them at the proxy address and they behave normally.
 
@@ -527,7 +588,7 @@ Any OpenAI-compatible endpoint that is not one of the 56 built-in cards can be a
 
 Creating the provider registers it, hot-reloads the provider runtime and queries `GET <base_url>/models` **once**. What that query returns is what the card reports, what `/v1/models` serves, what the **Models** page counts and what the **Model Config** pickers offer — one discovery, one answer, no restart. If it fails, MCC retries it once and then says so: the card turns red with the upstream's error, and the banner tells you to press Refresh models. A failed discovery never renders as a healthy card.
 
-**Refresh models** on a custom card does exactly what it does on a built-in remote card: re-queries the upstream's model list and republishes the catalogue, including `~/.fcc/codex-model-catalog.json`. Use it after the upstream adds a model, or after a discovery failure you have since fixed. Enabling a provider, adding a key and removing a key each re-run discovery on their own.
+**Refresh models** on a custom card does exactly what it does on a built-in remote card: re-queries the upstream's model list and republishes every generated harness catalogue, including `~/.fcc/codex-model-catalog.json`. Use it after the upstream adds a model, or after a discovery failure you have since fixed. Enabling a provider, adding a key and removing a key each re-run discovery on their own.
 
 Keys for a custom provider live in **`~/.fcc/custom_providers.json`, not `~/.fcc/.env`.** There is no environment variable for them, so the `{ENV}_API_KEY` / `{ENV}_ROTATION` file workflow does not apply — but the pool itself is the same one built-in providers use, so several keys plus a rotation policy work exactly as they do elsewhere.
 
@@ -622,7 +683,7 @@ Requests that name a provider and model directly (`open_router/…`) are never r
 
 ### The Codex App catalog
 
-The Codex App has no launcher — it reads a persistent `~/.codex/config.toml` rather than an environment built per command. So the server itself owns the model catalog file: `mcc-server` writes `~/.fcc/codex-model-catalog.json` on startup and whenever the model inventory changes, and the Codex App points at that stable path from its config:
+The Codex App has no launcher — it reads a persistent `~/.codex/config.toml` rather than an environment built per command. It is the one generated catalogue the server creates on its own: `mcc-server` writes `~/.fcc/codex-model-catalog.json` at startup if it is missing, and rewrites it whenever the model inventory *or any model's resolved capabilities* change. Every other harness catalogue is created by that harness's own launcher on its first run, so MCC leaves no files behind for a CLI you do not use. The Codex App points at that stable path from its config:
 
 ```toml
 model_catalog_json = "/Users/YOUR_USERNAME/.fcc/codex-model-catalog.json"   # macOS

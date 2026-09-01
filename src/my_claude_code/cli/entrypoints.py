@@ -8,6 +8,7 @@ the two command families are interchangeable entry points.
 import sys
 from collections.abc import Sequence
 
+from my_claude_code.config.harnesses import harness_specs
 from my_claude_code.core.identity import owner_for_invocation
 from my_claude_code.core.version import package_version
 
@@ -18,8 +19,39 @@ def help_command(argv: Sequence[str] | None = None) -> None:
     print(_help_text())
 
 
+def _harness_command_lines() -> str:
+    """Render one help line per registered harness command.
+
+    Generated rather than written out: a harness added to the registry appears
+    here, in the installer summary and on the dashboard without three separate
+    edits, which is how one of them used to be forgotten.
+    """
+
+    lines: list[str] = []
+    for spec in harness_specs():
+        for command in spec.commands:
+            lines.append(f"  {command.command:<23} {command.help_text}".rstrip())
+            if spec.id == "claude" and command.primary:
+                lines.append(
+                    "  mcc-claude --discover-models   "
+                    "Also enable the model picker from the catalog"
+                )
+    lines.append("  mcc-desktop             Open the system tray app (desktop)")
+    return "\n".join(lines)
+
+
+def _legacy_alias_line() -> str:
+    aliases = [
+        command.legacy_command
+        for spec in harness_specs()
+        for command in spec.commands
+        if command.legacy_command is not None and command.primary
+    ]
+    return ", ".join(["fcc-server", *aliases])
+
+
 def _help_text() -> str:
-    return """My Claude Code -- commands
+    return f"""My Claude Code -- commands
 
 The proxy runs on your machine and routes your coding agents to the models and
 providers you configure. Everything is local: your keys stay in ~/.fcc.
@@ -29,12 +61,7 @@ Start the proxy:
   my-claude-code          Same as mcc-server (full command name)
 
 Use a coding agent through the proxy:
-  mcc-claude              Launch Claude Code through the proxy
-  mcc-claude --discover-models   Also enable the model picker from the catalog
-  mcc-claude-old          Legacy launcher: full proxy environment, auto-compact
-  mcc-codex               Launch Codex through the proxy
-  mcc-pi                  Launch Pi through the proxy
-  mcc-desktop             Open the system tray app (desktop)
+{_harness_command_lines()}
 
 Manage and inspect:
   mcc-init                Create or repair ~/.fcc/.env with the config template
@@ -46,7 +73,7 @@ Manage and inspect:
   mcc-rtk                 Manage the RTK token optimizer
   mcc-help                Show this command reference
 
-The legacy fcc-* commands (fcc-server, fcc-claude, fcc-codex, fcc-pi,
+The legacy fcc-* commands ({_legacy_alias_line()},
 fcc-init, fcc-chatgpt-oauth-login, fcc-compact-log, fcc-rtk, free-claude-code)
 are kept as aliases and behave identically.
 

@@ -316,13 +316,13 @@ def test_bootstrap_configures_default_log_and_publishes_only_services(tmp_path):
     assert set(api_app.state._state) == {"services"}
 
 
-def test_bootstrap_wires_the_codex_catalog_publisher() -> None:
+def test_bootstrap_wires_the_harness_catalogue_fanout_publisher() -> None:
     publisher = MagicMock()
 
     with (
         patch("my_claude_code.runtime.bootstrap.configure_logging"),
         patch(
-            "my_claude_code.runtime.bootstrap.CodexModelCatalogPublisher",
+            "my_claude_code.runtime.bootstrap.HarnessCatalogueFanoutPublisher",
             return_value=publisher,
         ) as publisher_type,
     ):

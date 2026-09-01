@@ -1,8 +1,10 @@
 """``mcc-rtk`` / ``fcc-rtk`` command: manage the RTK token optimizer."""
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
+from my_claude_code.config.harnesses import rtk_capable_ids
 from my_claude_code.config.rtk import (
     RtkError,
     RtkState,
@@ -12,7 +14,10 @@ from my_claude_code.config.rtk import (
     save_rtk_state,
 )
 
-_ALL_AGENTS = ("claude", "codex", "pi")
+# Derived, never restated: an agent this command accepts and an agent the
+# registry marks RTK-capable are the same list by construction.
+_ALL_AGENTS = rtk_capable_ids()
+_AGENT_LIST = ", ".join(_ALL_AGENTS)
 
 
 def rtk_command(argv: Sequence[str] | None = None) -> None:
@@ -57,7 +62,7 @@ def _require_no_extra(args: Sequence[str]) -> None:
 
 def _parse_agents(args: Sequence[str]) -> set[str]:
     if not args:
-        raise ValueError("specify one or more agents: claude, codex, pi")
+        raise ValueError(f"specify one or more agents: {_AGENT_LIST}")
 
     agents: set[str] = set()
     for argument in args:
@@ -67,7 +72,7 @@ def _parse_agents(args: Sequence[str]) -> set[str]:
                 raise ValueError(f"unknown agent: {token}")
             agents.add(agent)
     if not agents:
-        raise ValueError("specify one or more agents: claude, codex, pi")
+        raise ValueError(f"specify one or more agents: {_AGENT_LIST}")
     return agents
 
 
@@ -77,16 +82,16 @@ def _reconcile(
     enabled: bool,
     uninstall: bool = False,
 ) -> None:
-    values = {agent: getattr(load_rtk_state(), agent) for agent in _ALL_AGENTS}
+    values = load_rtk_state().as_dict()
     for agent in agents:
         values[agent] = enabled
 
-    state = RtkState(**values)
+    state = RtkState(values)
     save_rtk_state(state)
     apply_rtk_state(state, uninstall=uninstall)
 
 
-def _print_status(status: dict[str, bool | str | None]) -> None:
+def _print_status(status: Mapping[str, Any]) -> None:
     lines = [f"installed:   {status['installed']}"]
     lines.extend(f"{agent:<11} {status[agent]}" for agent in _ALL_AGENTS)
     lines.append(f"binary_path: {status['binary_path']}")
@@ -96,14 +101,14 @@ def _print_status(status: dict[str, bool | str | None]) -> None:
 
 def _print_usage() -> None:
     print(
-        """Usage: mcc-rtk <subcommand> [agents]
+        f"""Usage: mcc-rtk <subcommand> [agents]
 
 Manage the RTK token optimizer across coding agents.
 
 Subcommands:
   status                  Print RTK install and agent state.
-  enable <agents>         Enable RTK for comma-separated agents (claude, codex, pi).
-  disable <agents>        Disable RTK for comma-separated agents (claude, codex, pi).
+  enable <agents>         Enable RTK for comma-separated agents ({_AGENT_LIST}).
+  disable <agents>        Disable RTK for comma-separated agents ({_AGENT_LIST}).
   uninstall               Disable all agents and remove the RTK binary.
   apply                   Re-reconcile the machine from the stored state.
   help                    Show this help text.

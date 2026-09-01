@@ -1,0 +1,211 @@
+"""The Coding agents page's two routes: what is installed, and what it is told."""
+
+import json
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from my_claude_code.application.model_metadata import (
+    ModelReasoningCapability,
+    ProviderModelInfo,
+)
+from my_claude_code.config import rtk as rtk_config
+from my_claude_code.config.harnesses import harness_ids
+from my_claude_code.config.rtk import RtkState
+from my_claude_code.config.settings import Settings
+from my_claude_code.core.reasoning import ReasoningEffort
+from tests.api.support import create_test_app, runtime_for_app
+
+
+def _set_home(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+
+def _local_client(app):
+    return TestClient(app, client=("127.0.0.1", 50000))
+
+
+def _remote_client(app):
+    return TestClient(app, client=("10.0.0.9", 50000))
+
+
+def test_harnesses_route_lists_every_registered_harness(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which",
+        lambda name: "/usr/local/bin/codex" if name == "codex" else None,
+    )
+    rtk_config.save_rtk_state(RtkState(claude=True))
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    by_id = {entry["id"]: entry for entry in body["harnesses"]}
+    assert tuple(by_id) == harness_ids()
+    assert by_id["codex"]["installed"] is True
+    assert by_id["codex"]["binary_path"] == "/usr/local/bin/codex"
+    assert by_id["codex"]["command"] == "mcc-codex"
+    assert by_id["codex"]["protocol_label"].startswith("OpenAI Responses")
+    assert by_id["pi"]["installed"] is False
+    assert by_id["pi"]["protocol_label"].startswith("Anthropic Messages")
+    assert by_id["claude"]["rtk_enabled"] is True
+    assert by_id["codex"]["rtk_enabled"] is False
+
+
+def test_a_missing_binary_reports_the_vendor_install_hint_and_nothing_else(
+    monkeypatch, tmp_path
+):
+    """The card must never offer to install a CLI, only say how the user can."""
+
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    for entry in body["harnesses"]:
+        assert entry["installed"] is False
+        assert entry["binary_path"] is None
+        assert entry["install_hint"]
+
+
+def test_catalogue_card_reports_path_model_count_and_defaulted_count(
+    monkeypatch, tmp_path
+):
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    catalogue = tmp_path / ".fcc" / "codex-model-catalog.json"
+    catalogue.parent.mkdir(parents=True, exist_ok=True)
+    catalogue.write_text(
+        json.dumps(
+            {
+                "models": [{"slug": "a"}, {"slug": "b"}],
+                "_mcc_defaulted": {"a": ["context_window"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    codex = next(entry for entry in body["harnesses"] if entry["id"] == "codex")
+    assert codex["catalogue"]["exists"] is True
+    assert codex["catalogue"]["model_count"] == 2
+    assert codex["catalogue"]["defaulted_model_count"] == 1
+    assert codex["catalogue"]["updated_at"] is not None
+    assert codex["catalogue"]["path"].endswith("codex-model-catalog.json")
+
+    pi = next(entry for entry in body["harnesses"] if entry["id"] == "pi")
+    assert pi["catalogue"]["delivery"] == "process_local"
+    assert pi["catalogue"]["path"] is None
+
+    claude = next(entry for entry in body["harnesses"] if entry["id"] == "claude")
+    assert claude["catalogue"] is None
+
+
+def test_a_never_launched_harness_reports_no_catalogue_file(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    codex = next(entry for entry in body["harnesses"] if entry["id"] == "codex")
+    assert codex["catalogue"]["exists"] is False
+    assert codex["catalogue"]["model_count"] is None
+
+
+def test_both_routes_are_loopback_only(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    app = create_test_app()
+
+    with _remote_client(app) as client:
+        assert client.get("/admin/api/harnesses").status_code == 403
+        assert client.get("/admin/api/catalogue-models").status_code == 403
+
+
+def test_catalogue_models_route_carries_capabilities_and_each_cli_document(
+    monkeypatch, tmp_path
+):
+    _set_home(monkeypatch, tmp_path)
+    settings = Settings().model_copy(update={"model": "nvidia_nim/configured"})
+    app = create_test_app(settings)
+    manager = runtime_for_app(app).provider_manager
+    manager.cache_model_infos(
+        "nvidia_nim",
+        {
+            ProviderModelInfo(
+                "big",
+                context_length=262144,
+                max_output_tokens=32768,
+                supports_vision=True,
+                supported_parameters=frozenset({"tools"}),
+                reasoning_capability=ModelReasoningCapability(
+                    can_reason=True,
+                    supports_effort_control=True,
+                    supported_efforts=frozenset(
+                        {ReasoningEffort.LOW, ReasoningEffort.HIGH}
+                    ),
+                ),
+            )
+        },
+    )
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/catalogue-models").json()
+
+    entry = next(
+        model
+        for model in body["models"]
+        if model["gateway_id"] == "anthropic/nvidia_nim/big"
+    )
+    assert entry["context_length"] == 262144
+    assert entry["max_output_tokens"] == 32768
+    assert entry["supports_vision"] is True
+    assert entry["supports_tool_calls"] is True
+    assert entry["reasoning"]["supported_efforts"] == ["high", "low"]
+    assert entry["provenance"]["context_length"]["source_label"]
+
+    codex_models = body["catalogues"]["codex"]["document"]["models"]
+    codex_entry = next(
+        model for model in codex_models if model["slug"] == "nvidia_nim/big"
+    )
+    assert codex_entry["context_window"] == 262144
+    assert [rung["effort"] for rung in codex_entry["supported_reasoning_levels"]] == [
+        "low",
+        "high",
+    ]
+
+    pi_models = body["catalogues"]["pi"]["document"]["models"]
+    pi_entry = next(model for model in pi_models if model["id"] == "nvidia_nim/big")
+    assert pi_entry["contextWindow"] == 262144
+    assert pi_entry["maxTokens"] == 32768
+    assert pi_entry["input"] == ["text", "image"]
+
+
+def test_a_model_the_ladder_knows_nothing_about_is_reported_as_defaulted(
+    monkeypatch, tmp_path
+):
+    _set_home(monkeypatch, tmp_path)
+    settings = Settings().model_copy(update={"model": "nvidia_nim/configured"})
+    app = create_test_app(settings)
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/catalogue-models").json()
+
+    defaulted = body["catalogues"]["codex"]["defaulted"]
+    assert "nvidia_nim/configured" in defaulted
+    assert "context_window" in defaulted["nvidia_nim/configured"]

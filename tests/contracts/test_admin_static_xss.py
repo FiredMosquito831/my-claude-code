@@ -214,3 +214,27 @@ def test_no_adjacent_html_injection_vectors_exist() -> None:
     for vector in ("insertAdjacentHTML", "document.write"):
         assert vector not in source, f"admin.js uses {vector}"
     assert not re.search(r"\.outerHTML\s*=", source), "admin.js assigns outerHTML"
+
+
+def test_a_coding_agent_card_renders_its_name_and_path_as_text(
+    rendered_open: dict,
+) -> None:
+    """Harness names and catalogue paths are strings the card puts in the DOM.
+
+    They come from the server rather than from a form, but the card is the
+    only surface that renders free text about a harness, and a path is
+    attacker-influenceable the moment a future harness config writer takes one
+    from a user's file. Same contract as every other rendered string here.
+    """
+
+    agent = rendered_open["codingAgent"]
+
+    assert agent["cardPresent"] is True
+    assert agent["titleText"] == PROBE["display_name"]
+    assert agent["summaryText"] == PROBE["description"]
+    assert PROBE["label"] in agent["cataloguePath"]
+    assert agent["rtkLabel"] == PROBE["display_name"]
+    assert "IMG" not in agent["elementTags"]
+    assert "SCRIPT" not in agent["elementTags"]
+    assert "B" not in agent["elementTags"]
+    assert rendered_open["scriptErrors"] == []

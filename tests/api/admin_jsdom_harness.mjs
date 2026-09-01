@@ -427,7 +427,85 @@ const ROUTES = {
   "/admin/api/config/validate": { valid: true, errors: [] },
   "/admin/api/version": { current: "5.47.1" },
   "/admin/api/desktop": { available: false },
-  "/admin/api/rtk": { installed: false, claude: false, codex: false, pi: false },
+  "/admin/api/rtk": {
+    installed: false,
+    claude: false,
+    codex: true,
+    pi: false,
+    agents: { claude: false, codex: true, pi: false },
+  },
+  // One of each shape the Coding agents page has to render: an installed
+  // harness with a materialised catalogue carrying CLI defaults, a
+  // not-installed one whose catalogue was never written, and one whose model
+  // list never touches disk.
+  "/admin/api/harnesses": {
+    harnesses: [
+      {
+        id: "claude",
+        display_name: "Claude Code",
+        binary: "claude",
+        installed: true,
+        binary_path: "/usr/local/bin/claude",
+        install_hint: "Install Claude Code with: npm install -g @anthropic-ai/claude-code",
+        command: "mcc-claude",
+        commands: ["mcc-claude", "mcc-claude-old"],
+        protocol: "anthropic_messages",
+        protocol_label: "Anthropic Messages (POST /v1/messages)",
+        summary: "Anthropic's Claude Code, pointed here with two environment variables.",
+        rtk_agent: true,
+        rtk_enabled: false,
+        catalogue: null,
+      },
+      {
+        id: "codex",
+        display_name: "Codex CLI",
+        binary: "codex",
+        installed: true,
+        binary_path: "/usr/local/bin/codex",
+        install_hint: "Install Codex with: npm install -g @openai/codex",
+        command: "mcc-codex",
+        commands: ["mcc-codex"],
+        protocol: "openai_responses",
+        protocol_label: "OpenAI Responses (POST /v1/responses)",
+        summary: "OpenAI's Codex CLI, configured with ephemeral -c assignments.",
+        rtk_agent: true,
+        rtk_enabled: true,
+        catalogue: {
+          format: "codex",
+          delivery: "file",
+          path: "/home/u/.fcc/codex-model-catalog.json",
+          exists: true,
+          updated_at: "2026-09-01T09:12:44Z",
+          model_count: 12,
+          defaulted_model_count: 3,
+        },
+      },
+      {
+        id: "pi",
+        display_name: "Pi",
+        binary: "pi",
+        installed: false,
+        binary_path: null,
+        install_hint: "Install Pi with: curl -fsSL https://pi.dev/install.sh | sh",
+        command: "mcc-pi",
+        commands: ["mcc-pi"],
+        protocol: "anthropic_messages",
+        protocol_label: "Anthropic Messages (POST /v1/messages)",
+        summary: "The Pi coding agent, registered process-locally by a bundled extension.",
+        rtk_agent: true,
+        rtk_enabled: false,
+        catalogue: {
+          format: "pi",
+          delivery: "process_local",
+          path: null,
+          exists: true,
+          updated_at: null,
+          model_count: null,
+          defaulted_model_count: null,
+        },
+      },
+    ],
+  },
   "/admin/api/rtk/gain": {
     available: false,
     reason: "not_installed",
@@ -627,6 +705,7 @@ if (process.env.EMPTY === "1") {
   };
   ROUTES["/admin/api/requests/stats"] = { enabled: false };
   ROUTES["/admin/api/rtk"] = { installed: false };
+  ROUTES["/admin/api/harnesses"] = { harnesses: [] };
   ROUTES["/admin/api/rtk/gain"] = {
     available: false,
     reason: "not_installed",
@@ -2551,6 +2630,47 @@ const customProviders = {};
   customProviders.message = banner ? banner.textContent : "";
 }
 
+// ------------------------------------------------------------ coding agents
+const codingAgentsLink = navLinks.find(
+  (link) => link.dataset.view === "coding_agents",
+);
+const codingAgents = { present: Boolean(codingAgentsLink) };
+if (codingAgentsLink) {
+  codingAgentsLink.click();
+  await new Promise((resolve) => setTimeout(resolve, 160));
+  const list = doc.getElementById("codingAgentsList");
+  const cards = Array.from(list.querySelectorAll(".coding-agent-card"));
+  const flatten = (el) => (el.textContent || "").replace(/\s+/g, " ").trim();
+  codingAgents.cardCount = cards.length;
+  codingAgents.cards = cards.map((card) => ({
+    id: card.dataset.harness,
+    title: card.querySelector("h4").textContent,
+    state: card.querySelector(".agent-state").textContent,
+    installed: card.querySelector(".agent-state").classList.contains("installed"),
+    command: card.querySelector(".agent-command").textContent,
+    meta: flatten(card.querySelector(".agent-meta")),
+    defaulted: card.querySelector(".agent-defaulted")
+      ? flatten(card.querySelector(".agent-defaulted"))
+      : null,
+    installHint: card.querySelector(".agent-install-hint")
+      ? flatten(card.querySelector(".agent-install-hint"))
+      : null,
+  }));
+  codingAgents.gatewayNote = flatten(doc.getElementById("codingAgentsGatewayNote"));
+}
+
+const rtkToggleContainer = doc.getElementById("rtkAgentToggles");
+const rtkToggles = rtkToggleContainer
+  ? Array.from(rtkToggleContainer.querySelectorAll("input[type=checkbox]")).map(
+      (input) => ({
+        id: input.id,
+        harness: input.dataset.harness,
+        checked: input.checked,
+        label: (input.parentElement.textContent || "").trim(),
+      }),
+    )
+  : null;
+
 console.log(
   JSON.stringify(
     {
@@ -2595,6 +2715,8 @@ console.log(
         dirtyAfterToggle,
       },
       customProviders,
+      codingAgents,
+      rtkToggles,
       fetched: Array.from(new Set(fetchCalls)).sort(),
     },
     null,

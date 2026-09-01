@@ -139,20 +139,10 @@
                   </p>
                 </div>
               </div>
-              <div class="desktop-toggles">
-                <label class="toggle-control">
-                  <input id="rtkClaude" type="checkbox" />
-                  Claude Code
-                </label>
-                <label class="toggle-control">
-                  <input id="rtkCodex" type="checkbox" />
-                  Codex
-                </label>
-                <label class="toggle-control">
-                  <input id="rtkPi" type="checkbox" />
-                  Pi
-                </label>
-              </div>
+              <!-- Filled from /admin/api/harnesses so the agents listed here
+                   are exactly the agents RTK is confirmed to wrap. Three
+                   hand-written checkboxes drifted from the registry before. -->
+              <div class="desktop-toggles" id="rtkAgentToggles"></div>
               <div id="rtkStatusLine" class="rtk-status-line" aria-live="polite"></div>
             </section>
             <section class="provider-strip" aria-label="Custom providers">
@@ -321,7 +311,10 @@
                 <li class="claude-launcher">
                   <div class="claude-launcher-info">
                     <h4>Codex</h4>
-                    <p>OpenAI&rsquo;s Codex CLI, served through this proxy.</p>
+                    <p>
+                      OpenAI&rsquo;s Codex CLI, served through this proxy. See
+                      <strong>Coding agents</strong> for what its model picker is told.
+                    </p>
                   </div>
                   <div class="claude-command-block"><code>mcc-codex</code></div>
                 </li>
@@ -436,6 +429,38 @@
                 </div>
               </div>
             </div>
+          </section>
+
+          <section
+            id="view-coding_agents"
+            class="admin-view"
+            data-view="coding_agents"
+            hidden
+          >
+            <section class="settings-section" aria-label="Coding agents">
+              <div class="section-heading">
+                <div>
+                  <h3>Agents this proxy can launch</h3>
+                  <p>
+                    Whether each one is installed on this machine, and what MCC tells it
+                    about your models.
+                  </p>
+                </div>
+              </div>
+              <div class="callout" id="codingAgentsGatewayNote">
+                <strong>A coding agent is not a provider.</strong>
+                The CLIs on this page sit <em>downstream</em> of MCC: they send
+                requests to it. The names on the Providers page are the
+                <em>upstream</em> gateways MCC buys tokens from. Some names appear in
+                both places and mean different things - you can run a CLI against MCC
+                while the same-named upstream provider is switched off.
+              </div>
+              <p class="field-description">
+                MCC never installs a coding agent. When one is missing, its launcher
+                prints the vendor's own install command and stops.
+              </p>
+              <div id="codingAgentsList" class="coding-agents-list"></div>
+            </section>
           </section>
 
           <section id="view-model_config" class="admin-view" data-view="model_config" hidden>
@@ -1207,7 +1232,7 @@
                 <a href="#guide-reasoning">Reasoning</a>
                 <a href="#guide-cli">Claude Code</a>
                 <a href="#guide-desktop">Claude Desktop</a>
-                <a href="#guide-other">Codex &amp; Pi</a>
+                <a href="#guide-other">Point another CLI here</a>
                 <a href="#guide-websearch">Search the web</a>
                 <a href="#guide-analytics">See what happened</a>
                 <a href="#guide-deploy">Desktop &amp; RTK</a>
@@ -1657,11 +1682,38 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   active the app runs <strong>local sessions only</strong>.
                 </p>
 
-                <h3 id="guide-other">Point Codex or Pi here</h3>
+                <h3 id="guide-other">Point another CLI here</h3>
                 <pre><code>mcc-codex
 mcc-pi</code></pre>
+                <p>
+                  The <strong>Coding agents</strong> page lists every CLI this proxy can
+                  launch: whether its binary is on your <code>PATH</code>, the command to
+                  copy, the protocol it will speak, and the catalogue this proxy generates
+                  for it. Nothing here installs a coding agent &mdash; a missing one is
+                  reported with that agent's own install command.
+                </p>
                 <img class="guide-shot" src="/admin/img/codex-model-picker.png"
                      alt="Codex model picker with the generated MCC catalog" loading="lazy">
+                <p>
+                  <strong>What the picker is told.</strong> Each model in that catalogue
+                  carries its own context window, output ceiling, vision and tool support
+                  and reasoning-effort vocabulary, as this proxy's metadata ladder resolved
+                  them &mdash; not a fixed placeholder. A model with a 32k window is
+                  advertised as 32k, and a model that only supports <code>low</code> and
+                  <code>high</code> offers exactly those two rungs.
+                </p>
+                <p>
+                  Where a CLI's own format demands a number nothing published, the proxy
+                  uses <em>that CLI's</em> documented default and says so &mdash; on the
+                  agent's card, in the launcher's output, and in a
+                  <code>_mcc_defaulted</code> block inside the generated file.
+                </p>
+                <p class="guide-note">
+                  A coding agent is not a provider. The CLIs here sit downstream of this
+                  proxy and send requests to it; the names on the Providers page are the
+                  upstream gateways it buys tokens from. Some names appear in both and mean
+                  different things.
+                </p>
                 <p>
                   Editor integrations work the same way &mdash; Claude Code and Codex in VS
                   Code, or Claude Code through JetBrains ACP.

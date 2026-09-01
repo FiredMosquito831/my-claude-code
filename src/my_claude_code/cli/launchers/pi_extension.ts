@@ -3,8 +3,12 @@ import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-codin
 const API_KEY_ENV = "FCC_PI_API_KEY";
 const BASE_URL_ENV = "FCC_PI_BASE_URL";
 const CATALOG_TIMEOUT_MS = 3000;
-const DEFAULT_CONTEXT_WINDOW = 128000;
-const DEFAULT_MAX_TOKENS = 16384;
+const CATALOGUE_MODELS_PATH = "/admin/api/catalogue-models";
+// Only reached when the proxy is older than this extension and has no
+// capability-bearing route. Every number below is then unknown, so the models
+// carry Pi's own defaults; the capability route is what makes them real.
+const FALLBACK_CONTEXT_WINDOW = 128000;
+const FALLBACK_MAX_TOKENS = 16384;
 const NORMAL_MODEL_PREFIX = "anthropic/";
 const NO_THINKING_MODEL_PREFIX = "claude-3-freecc-no-thinking/";
 
@@ -63,8 +67,8 @@ function modelDefinition(providerModel: string, reasoning: boolean): ProviderMod
 		reasoning,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: DEFAULT_CONTEXT_WINDOW,
-		maxTokens: DEFAULT_MAX_TOKENS,
+		contextWindow: FALLBACK_CONTEXT_WINDOW,
+		maxTokens: FALLBACK_MAX_TOKENS,
 	};
 }
 
@@ -100,18 +104,46 @@ export function projectFccModels(payload: unknown): ProviderModelConfig[] {
 	return models;
 }
 
+function isModelConfig(value: unknown): value is ProviderModelConfig {
+	return isRecord(value) && typeof value.id === "string" && value.id.trim() !== "";
+}
+
+/**
+ * Project MCC's capability-bearing catalogue payload into Pi's model list.
+ *
+ * The server has already run Pi's own serialiser over the resolution ladder,
+ * so every contextWindow, maxTokens, reasoning flag and cost here is either a
+ * value some provider actually published or a Pi default the server recorded
+ * under `_mcc_defaulted`. Nothing is re-derived on this side: a second copy of
+ * the mapping is a second thing to drift.
+ */
+export function projectMccCatalogueModels(payload: unknown): ProviderModelConfig[] {
+	if (!isRecord(payload) || !isRecord(payload.catalogues)) {
+		throw new Error("MCC catalogue route returned an invalid response shape.");
+	}
+	const entry = payload.catalogues.pi;
+	if (!isRecord(entry) || !isRecord(entry.document) || !Array.isArray(entry.document.models)) {
+		throw new Error("MCC catalogue route carried no Pi catalogue.");
+	}
+	const models = entry.document.models.filter(isModelConfig);
+	if (models.length === 0) {
+		throw new Error("MCC catalogue contains no routable provider models.");
+	}
+	return models;
+}
+
 function requestIdSuffix(response: Response): string {
 	const requestId = response.headers.get("request-id") ?? response.headers.get("x-request-id");
 	return requestId ? ` (request ${requestId})` : "";
 }
 
-async function fetchFccModels(baseUrl: string, apiKey: string): Promise<ProviderModelConfig[]> {
+async function fetchJson(baseUrl: string, path: string, apiKey: string): Promise<unknown> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), CATALOG_TIMEOUT_MS);
 	try {
 		let response: Response;
 		try {
-			response = await fetch(`${baseUrl}/v1/models`, {
+			response = await fetch(`${baseUrl}${path}`, {
 				headers: { Authorization: `Bearer ${apiKey}` },
 				signal: controller.signal,
 			});
@@ -127,18 +159,29 @@ async function fetchFccModels(baseUrl: string, apiKey: string): Promise<Provider
 			throw new Error(`MCC model catalog returned HTTP ${response.status}${requestIdSuffix(response)}.`);
 		}
 
-		let payload: unknown;
 		try {
-			payload = await response.json();
+			return await response.json();
 		} catch (error) {
 			if (error instanceof Error && error.name === "AbortError") {
 				throw new Error(`MCC model catalog timed out after ${CATALOG_TIMEOUT_MS}ms.`);
 			}
 			throw new Error(`MCC model catalog returned invalid JSON${requestIdSuffix(response)}.`);
 		}
-		return projectFccModels(payload);
 	} finally {
 		clearTimeout(timeout);
+	}
+}
+
+async function fetchFccModels(baseUrl: string, apiKey: string): Promise<ProviderModelConfig[]> {
+	try {
+		return projectMccCatalogueModels(await fetchJson(baseUrl, CATALOGUE_MODELS_PATH, apiKey));
+	} catch (error) {
+		// An MCC old enough to lack the capability route still has /v1/models.
+		// Falling back keeps the session working; it costs the real numbers,
+		// which is exactly what upgrading the proxy restores.
+		const message = error instanceof Error ? error.message : String(error);
+		console.warn(`My Claude Code: falling back to /v1/models without capabilities (${message}).`);
+		return projectFccModels(await fetchJson(baseUrl, "/v1/models", apiKey));
 	}
 }
 

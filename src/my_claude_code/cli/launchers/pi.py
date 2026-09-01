@@ -6,50 +6,46 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from my_claude_code.cli.harnesses.registry import (
+    install_hint,
+    resolve_harness_binary,
+    spec_for,
+)
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 
-from .common import preflight_proxy, resolve_client_binary, run_client_process
+from .common import preflight_proxy, run_client_process
 
+HARNESS_ID = "pi"
 _API_KEY_ENV = "FCC_PI_API_KEY"
 _BASE_URL_ENV = "FCC_PI_BASE_URL"
-_BINARY_NAME = "pi"
-_DISPLAY_NAME = "Pi"
 _HELP_TIMEOUT_SECONDS = 5.0
 _MODEL_SCOPE = "free-claude-code/**"
-_REQUIRED_HELP_MARKERS = ("--extension", "--models")
-_PASSTHROUGH_COMMANDS = frozenset(
-    {"config", "install", "list", "remove", "uninstall", "update"}
-)
-_PASSTHROUGH_FLAGS = frozenset({"--help", "-h", "--version", "-v"})
 
 
 def launch(argv: Sequence[str] | None = None) -> None:
     """Launch Pi with a process-local Free Claude Code provider."""
 
+    spec = spec_for(HARNESS_ID)
     args = list(sys.argv[1:] if argv is None else argv)
-    install_hint = pi_install_hint()
-    binary_path = resolve_client_binary(
-        binary_name=_BINARY_NAME,
-        display_name=_DISPLAY_NAME,
-        install_hint=install_hint,
-    )
+    hint = pi_install_hint()
+    binary_path = resolve_harness_binary(spec)
     if not pi_binary_is_compatible(binary_path):
         print(
             f"The 'pi' command at {binary_path} is not a compatible Pi Coding Agent.",
             file=sys.stderr,
         )
-        print(install_hint, file=sys.stderr)
+        print(hint, file=sys.stderr)
         raise SystemExit(126)
 
     if is_pi_passthrough(args):
         run_client_process(
             command=[binary_path, *args],
             env=os.environ,
-            binary_name=_BINARY_NAME,
-            display_name=_DISPLAY_NAME,
-            install_hint=install_hint,
+            binary_name=spec.binary,
+            display_name=spec.display_name,
+            install_hint=hint,
         )
         return
 
@@ -82,9 +78,9 @@ def launch(argv: Sequence[str] | None = None) -> None:
             auth_token=settings.anthropic_auth_token,
             base_env=os.environ,
         ),
-        binary_name=_BINARY_NAME,
-        display_name=_DISPLAY_NAME,
-        install_hint=install_hint,
+        binary_name=spec.binary,
+        display_name=spec.display_name,
+        install_hint=hint,
     )
 
 
@@ -125,8 +121,9 @@ def build_pi_launcher_env(
 def is_pi_passthrough(argv: Sequence[str]) -> bool:
     """Return whether Pi must receive argv unchanged as a non-session command."""
 
+    spec = spec_for(HARNESS_ID)
     return bool(argv) and (
-        argv[0] in _PASSTHROUGH_COMMANDS or argv[0] in _PASSTHROUGH_FLAGS
+        argv[0] in spec.passthrough_commands or argv[0] in spec.passthrough_flags
     )
 
 
@@ -151,13 +148,11 @@ def pi_binary_is_compatible(binary_path: str) -> bool:
     except OSError, subprocess.TimeoutExpired:
         return False
     return result.returncode == 0 and all(
-        marker in result.stdout for marker in _REQUIRED_HELP_MARKERS
+        marker in result.stdout for marker in spec_for(HARNESS_ID).identity_help_markers
     )
 
 
 def pi_install_hint(platform: str | None = None) -> str:
     """Return Pi's official installer command for the current platform."""
 
-    if (platform or sys.platform) == "win32":
-        return 'Install Pi with: powershell -c "irm https://pi.dev/install.ps1 | iex"'
-    return "Install Pi with: curl -fsSL https://pi.dev/install.sh | sh"
+    return install_hint(spec_for(HARNESS_ID), platform)

@@ -98,6 +98,52 @@ class TestLoadRtkState:
         assert state.codex is False
         assert state.pi is False
 
+    def test_legacy_three_field_state_file_migrates_to_keyed_dict(
+        self, monkeypatch, tmp_path
+    ):
+        """The persisted shape never changed, so the migration is a filter.
+
+        Every MCC that ever wrote this file wrote a flat object of harness id
+        to boolean. Keying ``RtkState`` by harness id therefore reads an old
+        file directly; what the registry adds is that a key for an agent this
+        build does not know is dropped instead of becoming an attribute.
+        """
+
+        _set_home(monkeypatch, tmp_path)
+        path = rtk_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"claude": True, "codex": False, "pi": True}),
+            encoding="utf-8",
+        )
+
+        state = load_rtk_state()
+
+        assert state.as_dict() == {"claude": True, "codex": False, "pi": True}
+        assert state == RtkState(claude=True, pi=True)
+        assert state.any_enabled is True
+        assert state.enabled("claude") is True
+
+    def test_unknown_agent_id_in_state_file_is_ignored_not_fatal(
+        self, monkeypatch, tmp_path
+    ):
+        _set_home(monkeypatch, tmp_path)
+        path = rtk_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"claude": True, "opencode": True}),
+            encoding="utf-8",
+        )
+
+        state = load_rtk_state()
+
+        assert "opencode" not in state.as_dict()
+        assert state.claude is True
+
+    def test_constructing_with_an_unknown_agent_is_a_programming_error(self):
+        with pytest.raises(ValueError, match="unknown RTK agent"):
+            RtkState(opencode=True)
+
     def test_non_boolean_value_falls_back_to_default(self, monkeypatch, tmp_path):
         _set_home(monkeypatch, tmp_path)
         path = rtk_state_path()
@@ -460,6 +506,7 @@ class TestRtkStatus:
             "claude": True,
             "codex": False,
             "pi": False,
+            "agents": {"claude": True, "codex": False, "pi": False},
             "binary_path": str(binary),
             "version": f"rtk {rtk_config.RTK_VERSION}",
             "installed_version": rtk_config.RTK_VERSION,

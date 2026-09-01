@@ -291,13 +291,22 @@ single best-effort discovery task. The catalog survives provider replacement.
 This keeps the server model inventory stable without extra synchronization;
 Claude clients may independently retain the list they fetched at startup.
 
-[runtime/codex_catalog.py](src/my_claude_code/runtime/codex_catalog.py) publishes that model inventory to the
-stable Codex catalog file `~/.fcc/codex-model-catalog.json` so the Codex App —
-which reads persistent `~/.codex` config rather than a launcher-built
-environment — always sees the current catalog. It builds from the same
-`build_models_list_response()` output and the same content-aware writer the
-`mcc-codex` launcher uses, so the server-published copy and the launcher's
-ephemeral override are byte-consistent and identical bytes are never rewritten.
+[runtime/harness_catalogues.py](src/my_claude_code/runtime/harness_catalogues.py)
+fans that inventory out over every registered harness that has a catalogue file.
+It builds one neutral
+[application/catalogue_model.py](src/my_claude_code/application/catalogue_model.py)
+record per routable model from the resolution ladder, runs each harness's own
+serialiser under
+[application/catalogues/](src/my_claude_code/application/catalogues), and writes
+each result through the shared content-aware writer in
+[config/atomic_json.py](src/my_claude_code/config/atomic_json.py), so identical
+bytes are never rewritten. It refreshes only files that already exist — a
+catalogue is created by that harness's own launcher — with one declared
+exception: `~/.fcc/codex-model-catalog.json` is created at startup because the
+Codex App reads persistent `~/.codex` config and has no launcher to create it.
+Because the records come from the ladder rather than from
+`build_models_list_response()`, a capability change with no change to the model
+list still re-emits every catalogue.
 Startup publishes only when no prior catalog exists; model-inventory changes
 republish it.
 
@@ -322,7 +331,9 @@ source detection for startup warnings also belongs to `src/my_claude_code/config
 
 - config directory: `~/.fcc`;
 - managed env file: `~/.fcc/.env`;
-- generated Codex model catalog: `~/.fcc/codex-model-catalog.json`;
+- generated harness model catalogues: `~/.fcc/<harness>-model-catalog.json`,
+  resolved through `harness_catalogue_path()`; today only
+  `~/.fcc/codex-model-catalog.json`;
 - messaging state directory: `~/.fcc/agent_workspace`;
 - server log: `~/.fcc/logs/server.log`.
 
@@ -533,18 +544,21 @@ translate reasoning. The catalog is not part of an individual provider
 generation, so a hot replacement does not erase the last useful model list.
 Discovery failures retain prior entries.
 
-Codex-specific model picker shaping stays out of this route.
-[runtime/codex_catalog.py](src/my_claude_code/runtime/codex_catalog.py) is the
-composition bridge: it asks this route's pure builder for the exact application
-inventory, passes that response to the existing Codex adapter, and writes
-`~/.fcc/codex-model-catalog.json` without making a loopback HTTP request.
+Per-CLI model picker shaping stays out of this route: `ModelResponse` carries an
+id, a display name and no capability fields at all, so nothing built from it
+could state a real context window.
+[runtime/harness_catalogues.py](src/my_claude_code/runtime/harness_catalogues.py) is the
+composition bridge instead: it builds `CatalogueModel` records from the ladder
+using the same visibility filter, ref enumeration and two-variant projection as
+this route — so a model can never appear in one and not the other — and writes
+each harness's catalogue without making a loopback HTTP request.
 `ProviderRuntimeManager` invokes the bridge after authoritative settings,
-discovery, provider-test, or connected-account changes. Startup writes a missing
-file once the background discovery pass completes, and preserves an existing
-last-known-good catalog until then. `ensure_exists` additionally supports a
-warm-start path that creates a minimal catalog before the full discovery pass
-for callers that warm routed providers first. Writes are atomic and identical
-bytes are not rewritten. Projection or filesystem failures emit only a concise
+discovery, provider-test, or connected-account changes. `ensure_exists` runs at
+startup and may create only a catalogue whose spec sets `created_at_startup`
+(today just Codex's, for the launcher-less Codex App); every other missing file
+is left for that harness's own first launch. An existing last-known-good
+catalogue is preserved whenever the projection resolves no routable models.
+Writes are atomic and identical bytes are not rewritten. Projection or filesystem failures emit only a concise
 warning and do not fail server startup, Admin operations, discovery, or
 inference. Shutdown never publishes the cleared in-memory cache.
 
@@ -1126,6 +1140,72 @@ otherwise the Messages handler rejects them before provider execution.
 
 ## CLI Launchers And Managed Claude
 
+### The Harness Registry
+
+A *harness* is a third-party coding-agent CLI MCC serves — Claude Code, Codex,
+Pi. It is not a *provider*: the names in
+[config/provider_catalog.py](src/my_claude_code/config/provider_catalog.py) are
+the upstream gateways MCC buys tokens from, several of which share a name with a
+CLI (`opencode`, `commandcode`, `cline`, `kimi_coding`, `kilo`). A harness is
+downstream of MCC, a provider upstream of it; the two are unrelated, can be on
+at once, and are kept in separate namespaces (`harness_id` vs `provider_id`,
+`cli/harnesses/` vs `providers/`). They are never joined.
+
+[config/harnesses.py](src/my_claude_code/config/harnesses.py) is the single
+declaration of every harness: id, display name, binary, protocol, install hint
+(with a Windows override), console-script commands, catalogue format and
+filename, passthrough subcommands, binary-identity help markers, and RTK
+capability with its enable/uninstall arguments. Eight surfaces are generated
+from it rather than restated — `pyproject.toml` console scripts, both
+installers' verification, RTK-enable and summary lists, `mcc-help`, the RTK
+state file's keys, the RTK CLI, the desktop tray menu and the dashboard's Coding
+agents page — and a contract test compares each surface back to the tuple.
+
+It holds *data only*, and it lives under `config/` rather than beside the
+launchers for the same reason `config/proxy_auth.py` does: `api/` may not depend
+on `cli/`, and the dashboard has to list harnesses.
+[cli/harnesses/registry.py](src/my_claude_code/cli/harnesses/registry.py) binds a
+spec to launcher behaviour and is the one place the never-install rule is
+enforced: a missing binary prints the vendor's own install line and exits 127.
+MCC does not fetch, download, or run a package manager for a third-party CLI.
+
+### Capability To Catalogue Mapping
+
+[application/catalogue_model.py](src/my_claude_code/application/catalogue_model.py)
+defines `CatalogueModel`: one routable model as MCC's resolution ladder resolves
+it — context length, output ceiling, vision, tool support (derived from the
+gateway's published `supported_parameters`, never assumed), the full
+`ModelReasoningCapability`, prices, and per-field provenance. Every capability
+field is `X | None`, and `None` means *no source stated this*, which the ladder
+keeps deliberately distinct from a source stating the model lacks the
+capability.
+
+[application/catalogues/](src/my_claude_code/application/catalogues) holds one
+pure serialiser per CLI schema, looked up by `format_id`. Shared rules live in
+`base.py`:
+
+- **Reasoning clamping.** A CLI's effort vocabulary is *intersected* with the
+  model's published `supported_efforts`, never extended. Codex's `xhigh`
+  disappears for a model that never claimed it; a model that reasons with no
+  knob gets reasoning-on and no effort list; a model that cannot reason gets no
+  list at all; a `mandatory` model is never offered an "off".
+- **Unknown stays unknown.** Where a CLI's schema makes a field optional, a
+  `None` omits the key — never a `0`. Where the schema requires a value, the
+  serialiser uses *that CLI's* documented default from its module-level
+  `CLI_DOCUMENTED_DEFAULTS` and records the substitution, which surfaces in the
+  file's `_mcc_defaulted` block, on the launcher's stderr and on the dashboard
+  card. `tests/application/test_serialiser_contract.py::test_no_serialiser_hard_codes_a_limit`
+  AST-scans the package and fails on any large integer literal bound to a
+  limit-shaped key outside that dict.
+
+Launchers cannot reach the ladder: they run in their own process with no
+`RequestRuntimePort`, and `/v1/models` carries no capability fields.
+[api/admin_harness_routes.py](src/my_claude_code/api/admin_harness_routes.py)
+closes that gap with two loopback-only routes — `GET /admin/api/harnesses` for
+the dashboard's installed probe and catalogue state, and
+`GET /admin/api/catalogue-models` for the neutral records plus each harness's
+already-serialised document. A launcher writes the bytes it is handed.
+
 [config/proxy_auth.py](src/my_claude_code/config/proxy_auth.py) owns the
 neutral proxy-auth token policy shared by client launchers and by the admin
 API. A blank configured token becomes the local-only `fcc-no-auth` sentinel so
@@ -1202,14 +1282,17 @@ helper parameterized by env builder:
   each launched client owns an independent runtime identity.
 - It creates an ephemeral `fcc` model provider with `wire_api = "responses"` and
   a base URL pointing at the local proxy `/v1` path.
-- After proxy health succeeds, it fetches `/v1/models`, writes a generated Codex
+- After proxy health succeeds, it fetches `/admin/api/catalogue-models`, writes
+  the Codex document that route already serialised to a
   `model_catalog_json` file under `~/.fcc/`, and injects that path so Codex's
-  native `/model` picker lists FCC provider slugs. Catalog generation is
-  fail-open: launch continues with a warning if the catalog cannot be prepared.
-  The same content-aware writer is shared with
-  [runtime/codex_catalog.py](src/my_claude_code/runtime/codex_catalog.py), so the
-  server's published catalog and the launcher's ephemeral override are always
-  byte-consistent and identical bytes are never rewritten.
+  native `/model` picker lists FCC provider slugs with each model's real limits.
+  It fetches that route rather than `/v1/models` because a launcher runs in its
+  own process with no `RequestRuntimePort` and `/v1/models` carries no
+  capability fields; it writes the bytes the server produced rather than
+  re-running the mapping, so the launch-time path and the background refresh
+  cannot drift. Catalog generation is fail-open: launch continues with a warning
+  if the catalog cannot be prepared. The same content-aware writer is shared
+  with [runtime/harness_catalogues.py](src/my_claude_code/runtime/harness_catalogues.py).
 - Catalog discovery and inference both authenticate with HTTP bearer authorization.
 - It stores the proxy auth token in `FCC_CODEX_API_KEY` for Codex's provider
   `env_key` to read. This process-local variable is a client credential carrier,
@@ -1639,6 +1722,31 @@ when maintainers want branch-level assurance.
 4. Mark `restart_required` or `session_sensitive` when runtime state cannot be
    updated in place.
 5. Add tests under [tests/api/](tests/api/) or [tests/config/](tests/config/).
+
+### Add A Coding Agent Harness
+
+1. Add one `HarnessSpec` to
+   [config/harnesses.py](src/my_claude_code/config/harnesses.py). Set
+   `rtk_agent` only after someone has confirmed RTK's shell-tool wrapper
+   applies to that agent.
+2. Add its `mcc-<id>` console script to [pyproject.toml](pyproject.toml)
+   (an `fcc-<id>` alias only if that spelling already shipped), and add the
+   command to both installers' verification, cleanup and summary lists.
+   `tests/cli/test_harness_registry.py` and
+   `tests/scripts/test_installer_harnesses.py` fail until all of them agree.
+3. Add a launcher under [cli/launchers/](src/my_claude_code/cli/launchers/) that
+   resolves its binary through `cli/harnesses/registry.py` and keeps credential
+   stripping local to that client. Prefer process-local configuration; only
+   merge into a user's own file when the CLI offers no other mechanism, and then
+   through `config/atomic_json.py` after a backup.
+4. If MCC must generate a model list for it, add a serialiser under
+   [application/catalogues/](src/my_claude_code/application/catalogues), register
+   it in that package's `SERIALISERS`, and name its `format_id` in the spec.
+   Leave `created_at_startup` false unless the consumer has no launcher at all.
+5. Never add an install step. A missing binary exits 127 with the vendor's own
+   line, and `test_installers_never_install_a_third_party_cli` enforces it.
+6. Add tests under [tests/cli/](tests/cli/) and
+   [tests/application/](tests/application/), plus a jsdom case for the card.
 
 ### Add Or Change A Client Surface
 

@@ -95,6 +95,10 @@ const state = {
   autostartOptions: null,
   rtk: null,
   rtkBusy: false,
+  // Every registered coding-agent harness, from /admin/api/harnesses. Owned
+  // here rather than by the Coding agents view because the Token Optimizer
+  // page's RTK checkboxes are generated from the same list.
+  harnesses: null,
   claudeSettings: null,
   claudeSettingsBusy: false,
   claudeConfig: {
@@ -146,6 +150,16 @@ const VIEW_GROUPS = [
     id: "claude",
     label: "Configure Claude Code",
     title: "Configure Claude Code",
+    sections: [],
+    containerId: null,
+  },
+  {
+    // One page per concept: which agents exist, what MCC tells each of them,
+    // and the RTK toggle. It claims no manifest section, so `containerId`
+    // stays null and renderSections() skips it.
+    id: "coding_agents",
+    label: "Coding agents",
+    title: "Coding agents",
     sections: [],
     containerId: null,
   },
@@ -372,6 +386,7 @@ async function loadDashboardState() {
   showMessage("");
   await loadVersionInfo();
   await loadDesktopState();
+  await loadHarnesses();
   await loadRtkState();
   await loadClaudeSettings();
   initClaudeConnectCopyButtons();
@@ -456,6 +471,10 @@ function setActiveView(viewId, { scroll = false } = {}) {
 
   if (activeView.id === "models") {
     loadModelsView().catch((error) => showMessage(error.message, "error"));
+  }
+
+  if (activeView.id === "coding_agents") {
+    loadHarnesses().catch((error) => showMessage(error.message, "error"));
   }
 
   if (activeView.id === "docs") {
@@ -7099,18 +7118,38 @@ async function loadRtkState() {
   renderRtkState();
 }
 
+function rtkCapableHarnesses() {
+  // Falling back to whatever RTK itself reported keeps the checkboxes usable
+  // when /admin/api/harnesses is the request that failed.
+  if (Array.isArray(state.harnesses)) {
+    return state.harnesses.filter((harness) => harness.rtk_agent);
+  }
+  const agents = state.rtk?.agents;
+  if (!agents || typeof agents !== "object") return [];
+  return Object.keys(agents).map((id) => ({ id, display_name: id }));
+}
+
 function renderRtkState() {
-  const claude = byId("rtkClaude");
-  const codex = byId("rtkCodex");
-  const pi = byId("rtkPi");
+  const container = byId("rtkAgentToggles");
   const statusLine = byId("rtkStatusLine");
-  if (!claude || !codex || !pi || !statusLine) return;
-  claude.checked = Boolean(state.rtk?.claude);
-  codex.checked = Boolean(state.rtk?.codex);
-  pi.checked = Boolean(state.rtk?.pi);
-  claude.disabled = state.rtkBusy;
-  codex.disabled = state.rtkBusy;
-  pi.disabled = state.rtkBusy;
+  if (!container || !statusLine) return;
+
+  container.textContent = "";
+  rtkCapableHarnesses().forEach((harness) => {
+    const label = document.createElement("label");
+    label.className = "toggle-control";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.id = `rtkAgent-${harness.id}`;
+    input.dataset.harness = harness.id;
+    input.checked = Boolean(state.rtk?.[harness.id]);
+    input.disabled = state.rtkBusy;
+    input.addEventListener("change", (event) => {
+      updateRtk(harness.id, event.currentTarget.checked, event.currentTarget);
+    });
+    label.append(input, document.createTextNode(` ${harness.display_name}`));
+    container.append(label);
+  });
 
   if (state.rtk?.error) {
     statusLine.textContent = `Could not load RTK status: ${state.rtk.error}`;
@@ -7137,8 +7176,11 @@ async function updateRtk(field, value, toggle) {
       method: "POST",
       body: JSON.stringify({ [field]: value }),
     });
-    const label = field === "claude" ? "Claude Code" : field === "codex" ? "Codex" : "Pi";
-    showMessage(`RTK ${value ? "enabled" : "disabled"} for ${label}`, "ok");
+    const harness = rtkCapableHarnesses().find((entry) => entry.id === field);
+    showMessage(
+      `RTK ${value ? "enabled" : "disabled"} for ${harness?.display_name || field}`,
+      "ok",
+    );
   } catch (error) {
     toggle.checked = !value;
     showMessage(`Could not update RTK: ${error.message}`, "error");
@@ -7148,15 +7190,128 @@ async function updateRtk(field, value, toggle) {
   }
 }
 
-byId("rtkClaude").addEventListener("change", (event) => {
-  updateRtk("claude", event.currentTarget.checked, event.currentTarget);
-});
-byId("rtkCodex").addEventListener("change", (event) => {
-  updateRtk("codex", event.currentTarget.checked, event.currentTarget);
-});
-byId("rtkPi").addEventListener("change", (event) => {
-  updateRtk("pi", event.currentTarget.checked, event.currentTarget);
-});
+/* --------------------------------------------------------------------- */
+/* Coding agents                                                           */
+/* --------------------------------------------------------------------- */
+
+async function loadHarnesses() {
+  try {
+    const payload = await api("/admin/api/harnesses");
+    state.harnesses = Array.isArray(payload.harnesses) ? payload.harnesses : [];
+  } catch (error) {
+    state.harnesses = [];
+    renderHarnesses(error.message);
+    renderRtkState();
+    return;
+  }
+  renderHarnesses();
+  renderRtkState();
+}
+
+function renderHarnesses(errorMessage) {
+  const list = byId("codingAgentsList");
+  if (!list) return;
+  list.textContent = "";
+
+  if (errorMessage) {
+    const failed = document.createElement("p");
+    failed.className = "field-description";
+    failed.textContent = `Could not load coding agents: ${errorMessage}`;
+    list.append(failed);
+    return;
+  }
+  (state.harnesses || []).forEach((harness) => {
+    list.append(harnessCard(harness));
+  });
+}
+
+function harnessCard(harness) {
+  const card = document.createElement("div");
+  card.className = "coding-agent-card";
+  card.dataset.harness = harness.id;
+
+  const heading = document.createElement("div");
+  heading.className = "agent-heading";
+  const title = document.createElement("h4");
+  title.textContent = harness.display_name;
+  const badge = document.createElement("span");
+  badge.className = harness.installed ? "agent-state installed" : "agent-state";
+  badge.textContent = harness.installed ? "Installed" : "Not installed";
+  heading.append(title, badge);
+  card.append(heading);
+
+  if (harness.summary) {
+    const summary = document.createElement("p");
+    summary.className = "agent-summary";
+    summary.textContent = harness.summary;
+    card.append(summary);
+  }
+
+  const command = document.createElement("code");
+  command.className = "agent-command";
+  command.textContent = harness.command;
+  card.append(command);
+
+  card.append(harnessMeta(harness));
+
+  if (!harness.installed && harness.install_hint) {
+    const hint = document.createElement("p");
+    hint.className = "agent-install-hint";
+    // MCC installs no coding agent: the card repeats the vendor's own line
+    // and offers no button that would run it.
+    hint.textContent = harness.install_hint;
+    card.append(hint);
+  }
+  return card;
+}
+
+function harnessMeta(harness) {
+  const meta = document.createElement("dl");
+  meta.className = "agent-meta";
+  const rows = [["Protocol", harness.protocol_label]];
+  const catalogue = harness.catalogue;
+
+  if (!catalogue) {
+    rows.push(["Model list", "Fetched by the agent itself from /v1/models"]);
+  } else if (catalogue.delivery === "process_local") {
+    rows.push(["Model list", "Registered in-process at launch; no file on disk"]);
+  } else if (!catalogue.exists) {
+    rows.push(["Catalogue", catalogue.path]);
+    rows.push(["Last written", `Never - written on the first ${harness.command}`]);
+  } else {
+    rows.push(["Catalogue", catalogue.path]);
+    rows.push(["Last written", catalogue.updated_at || "unknown"]);
+    rows.push(["Models", String(catalogue.model_count ?? "unknown")]);
+  }
+
+  rows.forEach(([label, value]) => {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = value;
+    meta.append(term, detail);
+  });
+
+  if (catalogue && catalogue.defaulted_model_count) {
+    const term = document.createElement("dt");
+    term.textContent = "CLI defaults";
+    const detail = document.createElement("dd");
+    detail.className = "agent-defaulted";
+    detail.textContent =
+      `${catalogue.defaulted_model_count} model(s) carry a value ` +
+      `${harness.display_name} supplied because no provider published one`;
+    meta.append(term, detail);
+  }
+
+  if (harness.rtk_agent) {
+    const term = document.createElement("dt");
+    term.textContent = "Token optimizer";
+    const detail = document.createElement("dd");
+    detail.textContent = harness.rtk_enabled ? "RTK enabled" : "RTK off";
+    meta.append(term, detail);
+  }
+  return meta;
+}
 
 /* --------------------------------------------------------------------- */
 /* Claude Code settings file                                               */

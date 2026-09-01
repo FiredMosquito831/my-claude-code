@@ -1,28 +1,28 @@
-"""Installed `fcc-codex` launcher."""
+"""Installed `mcc-codex` / `fcc-codex` launcher."""
 
 import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
-from urllib.request import Request, urlopen
 
+from my_claude_code.cli.harnesses.catalogue_client import (
+    defaulted_summary_lines,
+    fetch_catalogue_models,
+    harness_catalogue,
+)
+from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
+from my_claude_code.config.atomic_json import (
+    write_json_document_atomically_if_changed,
+)
 from my_claude_code.config.paths import codex_model_catalog_path
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 
-from .codex_model_catalog import build_codex_model_catalog, write_codex_model_catalog
-from .common import (
-    PROXY_PREFLIGHT_TIMEOUT_SECONDS,
-    preflight_proxy,
-    resolve_client_binary,
-    run_client_process,
-)
+from .common import preflight_proxy, run_client_process
 
+HARNESS_ID = "codex"
 _CODEX_AUTH_ENV_KEY = "FCC_CODEX_API_KEY"
-_DISPLAY_NAME = "Codex CLI"
-_DEFAULT_BINARY = "codex"
-_INSTALL_HINT = "Install Codex with: npm install -g @openai/codex"
 # Preserve CODEX_HOME: it owns durable user configuration, not parent-task identity.
 _STRIPPED_CODEX_ENV_KEYS = frozenset(
     {
@@ -42,8 +42,9 @@ _STRIPPED_CODEX_ENV_KEYS = frozenset(
 
 
 def launch(argv: Sequence[str] | None = None) -> None:
-    """Launch Codex CLI with Free Claude Code proxy configuration."""
+    """Launch Codex CLI with My Claude Code proxy configuration."""
 
+    spec = spec_for(HARNESS_ID)
     settings = get_settings()
     proxy_root_url = local_proxy_root_url(settings)
     if error := preflight_proxy(proxy_root_url):
@@ -54,12 +55,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
         print("Start it in another terminal with: fcc-server", file=sys.stderr)
         raise SystemExit(1)
 
-    binary_name = codex_binary_name()
-    binary_path = resolve_client_binary(
-        binary_name=binary_name,
-        display_name=_DISPLAY_NAME,
-        install_hint=_INSTALL_HINT,
-    )
+    binary_path = resolve_harness_binary(spec)
     catalog_args = codex_model_catalog_config_args(proxy_root_url, settings)
     args = list(sys.argv[1:] if argv is None else argv)
     run_client_process(
@@ -74,16 +70,16 @@ def launch(argv: Sequence[str] | None = None) -> None:
             auth_token=settings.anthropic_auth_token,
             base_env=os.environ,
         ),
-        binary_name=binary_name,
-        display_name=_DISPLAY_NAME,
-        install_hint=_INSTALL_HINT,
+        binary_name=spec.binary,
+        display_name=spec.display_name,
+        install_hint=spec.install_hint,
     )
 
 
 def codex_binary_name() -> str:
     """Return the Codex CLI binary name."""
 
-    return _DEFAULT_BINARY
+    return spec_for(HARNESS_ID).binary
 
 
 def build_codex_launcher_command(
@@ -126,13 +122,17 @@ def build_codex_launcher_env(
 def codex_model_catalog_config_args(
     proxy_root_url: str, settings: Settings
 ) -> list[str]:
-    """Prepare the generated Codex model catalog and return its config args."""
+    """Refresh the generated Codex model catalog and return its config args.
+
+    Every failure -- unreachable proxy, an older server without the catalogue
+    route, an empty catalogue -- degrades to launching Codex with no catalogue
+    rather than refusing to launch. A model picker without MCC's models is a
+    worse session; a session that will not start is no session at all.
+    """
 
     try:
-        models_response = fetch_proxy_models_response(
-            proxy_root_url, settings.anthropic_auth_token
-        )
-        catalog = build_codex_model_catalog(models_response)
+        payload = fetch_catalogue_models(proxy_root_url, settings.anthropic_auth_token)
+        catalog = harness_catalogue(payload, HARNESS_ID)
         models = catalog.get("models")
         if not isinstance(models, list) or not models:
             print(
@@ -142,7 +142,8 @@ def codex_model_catalog_config_args(
             )
             return []
         catalog_path = codex_model_catalog_path()
-        write_codex_model_catalog(catalog_path, catalog)
+        write_json_document_atomically_if_changed(catalog_path, catalog)
+        _print_defaulted_summary(catalog)
     except Exception as exc:
         print(
             "My Claude Code warning: could not prepare Codex model catalog "
@@ -154,23 +155,19 @@ def codex_model_catalog_config_args(
     return build_model_catalog_config_args(str(catalog_path))
 
 
-def fetch_proxy_models_response(
-    proxy_root_url: str, auth_token: str
-) -> dict[str, object]:
-    """Fetch the local proxy `/v1/models` response for Codex catalog generation."""
+def _print_defaulted_summary(catalog: Mapping[str, object]) -> None:
+    """Say which figures are Codex's own default rather than a provider's."""
 
-    url = f"{proxy_root_url.rstrip('/')}/v1/models"
-    headers: dict[str, str] = {}
-    if token := auth_token.strip():
-        headers["Authorization"] = f"Bearer {token}"
-
-    request = Request(url, headers=headers, method="GET")
-    with urlopen(request, timeout=PROXY_PREFLIGHT_TIMEOUT_SECONDS) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-
-    if not isinstance(payload, dict):
-        raise ValueError("model list response was not a JSON object")
-    return payload
+    lines = defaulted_summary_lines(catalog)
+    if not lines:
+        return
+    print(
+        f"My Claude Code: {len(lines)} model(s) use Codex's own defaults where "
+        "no provider published a value:",
+        file=sys.stderr,
+    )
+    for line in lines:
+        print(line, file=sys.stderr)
 
 
 def build_model_catalog_config_args(catalog_path: str) -> list[str]:

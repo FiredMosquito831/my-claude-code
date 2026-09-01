@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from my_claude_code.api.docs_content import available_documents
 from my_claude_code.api.docs_render import render_document
@@ -72,6 +72,7 @@ from my_claude_code.config.desktop import (
     resolve_auto_window,
     save_desktop_state,
 )
+from my_claude_code.config.harnesses import rtk_capable_ids
 from my_claude_code.config.model_overrides import (
     current_model_overrides,
     save_model_overrides,
@@ -282,13 +283,24 @@ class ModelOverridePayload(BaseModel):
 class RtkUpdatePayload(BaseModel):
     """Partial RTK integration update submitted by the admin UI.
 
-    Only these three boolean flags are accepted; anything else is ignored so a
-    stray body cannot corrupt the RTK state file.
+    Keys are harness ids and values are booleans. Extra keys are accepted by
+    the model and then filtered against ``rtk_capable_ids()`` in the handler:
+    the allow-list is the registry, so a harness added there becomes toggleable
+    without touching this model, and a stray key still cannot reach the RTK
+    state file.
     """
 
-    claude: bool | None = None
-    codex: bool | None = None
-    pi: bool | None = None
+    model_config = ConfigDict(extra="allow")
+
+    def submitted_agents(self) -> dict[str, bool]:
+        """Return only the registered harness flags this body actually set."""
+
+        allowed = rtk_capable_ids()
+        return {
+            name: value
+            for name, value in self.model_dump().items()
+            if name in allowed and isinstance(value, bool)
+        }
 
 
 def _is_loopback_host(host: str | None) -> bool:
@@ -1353,11 +1365,7 @@ async def update_desktop(payload: DesktopUpdatePayload, request: Request):
 
 
 def _rtk_state_response(state: RtkState) -> dict[str, Any]:
-    return {
-        "claude": state.claude,
-        "codex": state.codex,
-        "pi": state.pi,
-    }
+    return {**state.as_dict(), "agents": state.as_dict()}
 
 
 @router.get("/admin/api/rtk")
@@ -1392,19 +1400,11 @@ async def update_rtk(payload: RtkUpdatePayload, request: Request):
     require_loopback_admin(request)
     current = await asyncio.to_thread(load_rtk_state)
 
-    updates: dict[str, bool] = {}
-    for name in ("claude", "codex", "pi"):
-        submitted = getattr(payload, name)
-        if submitted is not None:
-            updates[name] = submitted
+    updates = payload.submitted_agents()
     if not updates:
         return await asyncio.to_thread(rtk_status)
 
-    updated = RtkState(
-        claude=updates.get("claude", current.claude),
-        codex=updates.get("codex", current.codex),
-        pi=updates.get("pi", current.pi),
-    )
+    updated = RtkState({**current.as_dict(), **updates})
     try:
         await asyncio.to_thread(save_rtk_state, updated)
         await asyncio.to_thread(apply_rtk_state, updated)

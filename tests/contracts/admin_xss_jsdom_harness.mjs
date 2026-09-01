@@ -74,6 +74,37 @@ const CUSTOM_PROVIDER = {
 
 const ROUTES = {
   "/admin/api/config": configPayload,
+  // A harness display name and catalogue path are server-side strings, but
+  // they are the page's only free-text fields and the card renders them into
+  // the DOM, so they get the same escaping contract as everything else here.
+  "/admin/api/harnesses": {
+    harnesses: [
+      {
+        id: "evil",
+        display_name: MALICIOUS.displayName,
+        binary: "evil",
+        installed: false,
+        binary_path: null,
+        install_hint: MALICIOUS.description,
+        command: "mcc-evil",
+        commands: ["mcc-evil"],
+        protocol: "anthropic_messages",
+        protocol_label: "Anthropic Messages (POST /v1/messages)",
+        summary: MALICIOUS.description,
+        rtk_agent: true,
+        rtk_enabled: false,
+        catalogue: {
+          format: "evil",
+          delivery: "file",
+          path: MALICIOUS.label,
+          exists: true,
+          updated_at: "2026-09-01T00:00:00Z",
+          model_count: 1,
+          defaulted_model_count: 0,
+        },
+      },
+    ],
+  },
   "/admin/api/onboarding": { dismissed: true, complete: true, steps: [] },
   "/admin/api/providers/local-status": { providers: [] },
   "/admin/api/config/validate": { valid: true, errors: [] },
@@ -170,6 +201,8 @@ const heading = doc.querySelector("#limitsSections .settings-section .section-he
 const card = doc.querySelector('[data-custom-provider="evil"]');
 const providerTitle = card?.querySelector(".provider-title");
 const notice = doc.getElementById("messagingAuthNotice");
+const agentCard = doc.querySelector(".coding-agent-card[data-harness=\"evil\"]");
+const rtkToggle = doc.querySelector("#rtkAgentToggles input[type=checkbox]");
 
 console.log(
   JSON.stringify(
@@ -196,6 +229,18 @@ console.log(
         present: Boolean(notice),
         hidden: Boolean(notice?.hidden),
         text: notice?.textContent ?? null,
+      },
+      codingAgent: {
+        cardPresent: Boolean(agentCard),
+        titleText: agentCard?.querySelector("h4")?.textContent ?? null,
+        summaryText: agentCard?.querySelector(".agent-summary")?.textContent ?? null,
+        cataloguePath:
+          agentCard?.querySelector(".agent-meta dd")?.parentElement
+            ?.textContent ?? null,
+        elementTags: agentCard
+          ? Array.from(agentCard.querySelectorAll("*")).map((el) => el.tagName)
+          : null,
+        rtkLabel: rtkToggle?.parentElement?.textContent?.trim() ?? null,
       },
     },
     null,

@@ -48,7 +48,8 @@ Run your coding agents with free, paid, or local models. Choose and validate pro
 
 | Area | What you get |
 | --- | --- |
-| **Coding agents** | Launch Claude Code with `mcc-claude`, Codex with `mcc-codex`, or Pi with `mcc-pi`; Codex and Pi's native model pickers always list the MCC catalog, Claude Code's needs `mcc-claude --discover-models` (or `mcc-claude-old`). Legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases still work. |
+| **Coding agents** | Launch Claude Code with `mcc-claude`, Codex with `mcc-codex`, or Pi with `mcc-pi`; Codex and Pi's native model pickers always list the MCC catalog, Claude Code's needs `mcc-claude --discover-models` (or `mcc-claude-old`). Every agent MCC can launch is declared in one registry, and the **Coding agents** dashboard page shows each one's installed state, command, protocol and generated catalogue. Legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases still work. |
+| **Real capabilities in every agent catalogue** | The model list MCC generates for an agent carries that model's own context window, output ceiling, vision and tool support and reasoning-effort vocabulary, resolved by MCC's metadata ladder. Where a CLI's schema demands a value nothing published, MCC uses **that CLI's** documented default and says so — in the generated file, in the launcher's output, and on the dashboard card. |
 | **Model providers** | 56 cloud and local providers, including Anthropic's own Claude API, Kimi For Coding, and experimental ChatGPT OAuth. Switch and validate providers from the Admin UI. |
 | **Claude, direct** | `anthropic` speaks Anthropic's native Messages API with a Claude Console API key, billed per token. A separate `anthropic_oauth` provider can use a Pro/Max subscription instead — **which Anthropic does not permit**; read [docs/ANTHROPIC-SUBSCRIPTION.md](docs/ANTHROPIC-SUBSCRIPTION.md) before enabling it. |
 | **Model-tier routing** | Route Fable, Opus, Sonnet, Haiku, and fallback traffic to different models, each with an ordered fallback chain. |
@@ -122,7 +123,7 @@ mcc-server --version
 2. Looks up the **latest** release, downloads its wheel, and **verifies the SHA-256 that GitHub publishes for that asset** — a mismatch aborts rather than running unverified code.
 3. Installs My Claude Code and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex`, and `mcc-pi` on your `PATH` (the legacy `fcc-*` spellings remain as aliases).
 
-That's all it does. **It does not install Claude Code, Codex, or Pi** — those are separate third-party tools, and My Claude Code doesn't need any of them to run. Install whichever you actually use, yourself. The `mcc-*` launchers just point an agent you already have at the proxy.
+That's all it does. **It does not install Claude Code, Codex, or Pi** — those are separate third-party tools, and My Claude Code doesn't need any of them to run. Install whichever you actually use, yourself. The `mcc-*` launchers just point an agent you already have at the proxy: when one is missing, the launcher prints that agent's own install command and exits 127 rather than fetching anything. A test in the suite greps both installers for every known agent package name so the rule cannot quietly change.
 
 The command always installs the **newest** release, so re-running it is how you update from the command line. To install a specific release instead:
 
@@ -206,7 +207,18 @@ All three launchers use the current Admin UI settings. Codex and Pi's native mod
 mcc-codex exec "hello"
 ```
 
-`mcc-pi` registers MCC only for that Pi process; your existing Pi settings, sessions, credentials, and extensions remain unchanged. The legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases behave identically.
+`mcc-pi` registers MCC only for that Pi process; your existing Pi settings, sessions, credentials, and extensions remain unchanged. `mcc-codex` is the same idea one layer down: it passes ephemeral `-c` assignments on the command line, so your own `~/.codex/config.toml` is never rewritten. The legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases behave identically.
+
+The dashboard's **Coding agents** page lists every agent MCC can launch, whether its binary is on your `PATH`, the command to copy, the protocol it will speak, and the catalogue MCC writes for it — including when that catalogue was last written and how many of its models carry a value the CLI supplied rather than a provider.
+
+> **A coding agent is not a provider.**
+> The agents above sit **downstream** of MCC: they send requests to it. The names on the Providers page — including `opencode`, `commandcode`, `cline`, `kimi_coding` and `kilo` — are **upstream** gateways MCC buys tokens from. Some names appear in both lists and mean different things, and both can be on at once: you can run a coding agent against MCC while the same-named upstream provider is switched off. In the code the two live in separate namespaces (`harness_id` in `cli/harnesses/` and `config/harnesses.py`, `provider_id` in `providers/` and `config/provider_catalog.py`) and are never joined.
+
+#### What MCC tells an agent about a model
+
+Every catalogue MCC generates for an agent carries that model's **real** metadata as MCC's resolution ladder resolved it — context window, output ceiling, vision support, tool support and the reasoning efforts the model actually publishes — translated into that CLI's own schema. A model with a 32k window is advertised as 32k, and a model that supports only `low` and `high` gets exactly those two rungs in Codex's picker rather than a fixed set of four.
+
+Where a CLI's schema requires a value and no provider published one, MCC fills in **that CLI's own documented default** — never a number MCC invented — and records it. You can see which numbers are guesses three ways: a `_mcc_defaulted` block in the generated file, a line on stderr when the launcher starts, and a count on the agent's dashboard card.
 
 <a id="install-troubleshooting"></a>
 

@@ -1650,3 +1650,101 @@ def test_a_create_with_a_failed_discovery_does_not_render_a_healthy_card(
     assert card["failedDetails"].endswith("0 models")
     assert "model discovery failed" in card["message"]
     assert "Refresh models" in card["message"]
+
+
+# --------------------------------------------------------------- coding agents
+
+
+def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None:
+    agents = rendered["codingAgents"]
+
+    assert agents["present"] is True
+    assert agents["cardCount"] == 3
+    assert [card["id"] for card in agents["cards"]] == ["claude", "codex", "pi"]
+    assert [card["title"] for card in agents["cards"]] == [
+        "Claude Code",
+        "Codex CLI",
+        "Pi",
+    ]
+    assert [card["command"] for card in agents["cards"]] == [
+        "mcc-claude",
+        "mcc-codex",
+        "mcc-pi",
+    ]
+
+
+def test_coding_agents_card_shows_not_installed_state_without_crashing(
+    rendered: dict,
+) -> None:
+    """A missing CLI is a normal state, and the card offers the vendor's line."""
+
+    pi = next(card for card in rendered["codingAgents"]["cards"] if card["id"] == "pi")
+    codex = next(
+        card for card in rendered["codingAgents"]["cards"] if card["id"] == "codex"
+    )
+
+    assert pi["state"] == "Not installed"
+    assert pi["installed"] is False
+    assert pi["installHint"].startswith("Install Pi with:")
+    assert codex["state"] == "Installed"
+    # MCC never installs a coding agent, so an installed card offers no hint
+    # and no card offers a button that would run one.
+    assert codex["installHint"] is None
+    assert rendered["scriptErrors"] == []
+
+
+def test_coding_agents_card_shows_defaulted_capability_badge(rendered: dict) -> None:
+    codex = next(
+        card for card in rendered["codingAgents"]["cards"] if card["id"] == "codex"
+    )
+
+    assert codex["defaulted"] is not None
+    assert "3 model(s)" in codex["defaulted"]
+    assert "no provider published one" in codex["defaulted"]
+    assert "codex-model-catalog.json" in codex["meta"]
+    assert "2026-09-01T09:12:44Z" in codex["meta"]
+    assert "Models12" in codex["meta"].replace(" ", "")
+
+
+def test_a_process_local_catalogue_names_no_file_on_disk(rendered: dict) -> None:
+    pi = next(card for card in rendered["codingAgents"]["cards"] if card["id"] == "pi")
+    claude = next(
+        card for card in rendered["codingAgents"]["cards"] if card["id"] == "claude"
+    )
+
+    assert "no file on disk" in pi["meta"]
+    assert "Fetched by the agent itself" in claude["meta"]
+
+
+def test_the_coding_agents_page_separates_a_harness_from_a_provider(
+    rendered: dict,
+) -> None:
+    """The one paragraph that stops `opencode` meaning two things at once."""
+
+    note = rendered["codingAgents"]["gatewayNote"]
+
+    assert "A coding agent is not a provider." in note
+    assert "downstream" in note
+    assert "upstream" in note
+
+
+def test_rtk_checkboxes_render_from_harness_list(rendered: dict) -> None:
+    toggles = rendered["rtkToggles"]
+
+    assert [toggle["harness"] for toggle in toggles] == ["claude", "codex", "pi"]
+    assert [toggle["id"] for toggle in toggles] == [
+        "rtkAgent-claude",
+        "rtkAgent-codex",
+        "rtkAgent-pi",
+    ]
+    assert [toggle["label"] for toggle in toggles] == ["Claude Code", "Codex CLI", "Pi"]
+    # The checked state comes from /admin/api/rtk, not from the harness list.
+    assert [toggle["checked"] for toggle in toggles] == [False, True, False]
+
+
+def test_a_fresh_install_renders_the_coding_agents_page_empty_not_broken(
+    fresh_install: dict,
+) -> None:
+    assert fresh_install["codingAgents"]["cardCount"] == 0
+    assert fresh_install["rtkToggles"] == []
+    assert fresh_install["scriptErrors"] == []

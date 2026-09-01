@@ -984,7 +984,7 @@ def test_launch_claude_discover_models_flag_strips_flag_and_enables_discovery(
         patch.object(claude_launcher, "preflight_proxy", return_value=None),
         patch.object(
             claude_launcher,
-            "resolve_client_binary",
+            "resolve_harness_binary",
             return_value="resolved-claude.cmd",
         ),
         patch.object(
@@ -1019,7 +1019,7 @@ def test_launch_claude_without_flag_forwards_args_and_skips_discovery(
         patch.object(claude_launcher, "preflight_proxy", return_value=None),
         patch.object(
             claude_launcher,
-            "resolve_client_binary",
+            "resolve_harness_binary",
             return_value="resolved-claude.cmd",
         ),
         patch.object(
@@ -1086,6 +1086,7 @@ def test_launch_claude_legacy_passes_args_and_full_child_env(
 def test_launch_codex_passes_responses_config_and_child_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from my_claude_code.cli.launchers.codex import launch
 
@@ -1105,20 +1106,28 @@ def test_launch_codex_passes_responses_config_and_child_env(
         assert timeout == 1.5
         return _JsonResponse(
             {
-                "data": [
-                    {
-                        "id": "anthropic/nvidia_nim/provider-model",
-                        "display_name": "NVIDIA model",
-                    },
-                    {
-                        "id": ("claude-3-freecc-no-thinking/nvidia_nim/provider-model"),
-                        "display_name": "NVIDIA model (no thinking)",
-                    },
-                    {
-                        "id": "claude-opus-4-20250514",
-                        "display_name": "Claude Opus 4",
-                    },
-                ]
+                "models": [],
+                "catalogues": {
+                    "codex": {
+                        "format": "codex",
+                        "filename": "codex-model-catalog.json",
+                        "document": {
+                            "models": [
+                                {
+                                    "slug": "nvidia_nim/provider-model",
+                                    "display_name": "nvidia_nim/provider-model",
+                                    "context_window": 262144,
+                                }
+                            ],
+                            "_mcc_defaulted": {
+                                "nvidia_nim/provider-model": ["input_modalities"]
+                            },
+                        },
+                        "defaulted": {
+                            "nvidia_nim/provider-model": ["input_modalities"]
+                        },
+                    }
+                },
             }
         )
 
@@ -1133,7 +1142,10 @@ def test_launch_codex_passes_responses_config_and_child_env(
             "my_claude_code.cli.launchers.codex.codex_model_catalog_path",
             return_value=catalog_path,
         ),
-        patch("my_claude_code.cli.launchers.codex.urlopen", side_effect=fake_urlopen),
+        patch(
+            "my_claude_code.cli.harnesses.catalogue_client.urlopen",
+            side_effect=fake_urlopen,
+        ),
         patch("my_claude_code.cli.launchers.common.subprocess.Popen") as popen,
         patch("my_claude_code.cli.launchers.common.register_pid") as register_pid,
         patch("my_claude_code.cli.launchers.common.unregister_pid") as unregister_pid,
@@ -1154,7 +1166,7 @@ def test_launch_codex_passes_responses_config_and_child_env(
     assert command[-2:] == ["exec", "hello"]
     assert len(requests) == 1
     request = requests[0]
-    assert request.full_url == "http://127.0.0.1:9191/v1/models"
+    assert request.full_url == "http://127.0.0.1:9191/admin/api/catalogue-models"
     headers = {key.lower(): value for key, value in request.header_items()}
     assert headers["authorization"] == "Bearer proxy-token"
     assert "x-api-key" not in headers
@@ -1162,6 +1174,10 @@ def test_launch_codex_passes_responses_config_and_child_env(
     assert [model["slug"] for model in catalog["models"]] == [
         "nvidia_nim/provider-model"
     ]
+    # The window is the server's answer for that model, not a launcher literal.
+    assert catalog["models"][0]["context_window"] == 262144
+    error_output = capsys.readouterr().err
+    assert "use Codex's own defaults" in error_output
     child_env = popen.call_args.kwargs["env"]
     assert child_env["FCC_CODEX_API_KEY"] == "proxy-token"
     assert child_env["CODEX_HOME"] == "keep-home"
@@ -1195,7 +1211,8 @@ def test_launch_codex_catalog_failure_warns_and_continues(
             return_value=tmp_path / "codex-model-catalog.json",
         ),
         patch(
-            "my_claude_code.cli.launchers.codex.urlopen", side_effect=URLError("boom")
+            "my_claude_code.cli.harnesses.catalogue_client.urlopen",
+            side_effect=URLError("boom"),
         ),
         patch("my_claude_code.cli.launchers.common.subprocess.Popen") as popen,
         patch("my_claude_code.cli.launchers.common.register_pid"),

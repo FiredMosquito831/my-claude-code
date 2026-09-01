@@ -76,7 +76,19 @@ def server_log_path() -> Path:
 def codex_model_catalog_path() -> Path:
     """Return the generated Codex model catalog path."""
 
-    return config_dir_path() / CODEX_MODEL_CATALOG_FILENAME
+    return harness_catalogue_path(CODEX_MODEL_CATALOG_FILENAME)
+
+
+def harness_catalogue_path(filename: str) -> Path:
+    """Return the path of one generated harness catalogue.
+
+    Always under ``~/.fcc``, never inside the CLI's own configuration
+    directory: a file MCC writes is a file MCC must be able to remove, and a
+    user who stops using a harness should not be left with MCC's leftovers in
+    ``~/.codex`` or ``~/.config``.
+    """
+
+    return config_dir_path() / filename
 
 
 def chatgpt_oauth_auth_path() -> Path:

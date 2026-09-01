@@ -68,7 +68,7 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
             "tests/api/test_openai_responses.py",
             "tests/core/openai_responses/test_sse.py",
             "tests/cli/test_entrypoints.py",
-            "tests/cli/test_codex_model_catalog.py",
+            "tests/application/test_codex_serialiser.py",
         ),
         (
             "test_probe_and_models_routes",
@@ -485,7 +485,7 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
         "Responses config, auth env, and native /model catalog injection",
         "proxy preflight and catalog fail-open warning",
         (
-            "tests/cli/test_codex_model_catalog.py",
+            "tests/application/test_codex_serialiser.py",
             "tests/cli/test_entrypoints.py",
         ),
         (),

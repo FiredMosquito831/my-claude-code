@@ -89,6 +89,7 @@ def test_post_partial_update_preserves_other_agents(monkeypatch, tmp_path):
         "claude": True,
         "codex": False,
         "pi": True,
+        "agents": {"claude": True, "codex": False, "pi": True},
         "binary_path": None,
         "version": None,
         "installed_version": None,
