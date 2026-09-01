@@ -314,6 +314,8 @@ const modelsFor = (providerId, hiddenTail) =>
       index % 5 === 0 ? ":free" : ""
     }`,
     visible: !(hiddenTail && index % 5 === 0),
+    // What dictates the row's state, which the row reports permanently.
+    hidden_by: hiddenTail && index % 5 === 0 ? "*:free" : "",
     configured: providerId === "alpha" && index === 0,
     has_metadata: true,
     override: index === 1 ? { temperature: 0.1 } : {},
@@ -560,6 +562,18 @@ const ROUTES = {
     visibility: { allow: [], deny: [] },
   },
   "/admin/api/model-admin/visibility": { visibility: { allow: [], deny: [] } },
+  "/admin/api/model-admin/visibility/migrate-globs": {
+    providers: ["beta"],
+    removed_patterns: ["beta/model-00:free", "beta/model-05:free"],
+    added_patterns: ["beta/*"],
+    hidden_before: 9,
+    hidden_after: 9,
+    identical: true,
+    pattern_count_before: 3,
+    pattern_count_after: 2,
+    previous: { allow: [], deny: ["*:free"] },
+    applied: false,
+  },
   "/admin/api/requests/optimization-stats": {
     enabled: true,
     series_days: 14,
@@ -1898,11 +1912,16 @@ if (modelsLink) {
   models.rowsAfterOpen = rows().length;
   models.moreLabel = flat(tree.querySelector(".models-more"));
   models.selectBoxes = boxes().length;
-  models.visibilityTicks = tree.querySelectorAll(
-    ".models-visible-toggle input",
+  models.visibilityReadouts = tree.querySelectorAll(".models-visible-state").length;
+  // The row's second checkbox is gone: there is one control and one readout.
+  models.readoutInputs = tree.querySelectorAll(
+    ".models-visible-state input",
   ).length;
-  models.controlsAreDistinct =
-    boxes()[0] !== tree.querySelector(".models-visible-toggle input");
+  models.readoutWords = Array.from(
+    new Set(
+      Array.from(tree.querySelectorAll(".models-visible-word")).map(flat),
+    ),
+  ).sort();
   models.measuredBadges = tree.querySelectorAll(".models-chip-measured").length;
 
   // --- plain click, then a shift-click range
@@ -1923,6 +1942,11 @@ if (modelsLink) {
   models.selectAllChecked = selectAll.checked;
   models.selectAllIndeterminate = selectAll.indeterminate;
   models.selectedAfterSelectAll = flat(bar);
+  // 45 of 45 alpha models: the whole-provider glob is offered, not taken.
+  const promote = Array.from(bar.querySelectorAll("button")).find((button) =>
+    flat(button).startsWith("Hide all as one pattern"),
+  );
+  models.promoteOffer = promote ? flat(promote) : "";
 
   // --- a selection survives a filter rebuild
   const filter = doc.getElementById("modelsFilter");
@@ -2000,11 +2024,135 @@ if (modelsLink) {
   window.eval("clearModelsSelection()");
   await settle();
 
+  // --- the readout, driven directly: three states, no control in any of them
+  const readout = (model) =>
+    window.eval(`buildModelsVisibilityState(${JSON.stringify(model)})`);
+  const shownState = readout({ model_ref: "beta/a", visible: true, hidden_by: "" });
+  const ownState = readout({ model_ref: "beta/b", visible: false, hidden_by: "" });
+  const globState = readout({
+    model_ref: "beta/c:free",
+    visible: false,
+    hidden_by: "*:free",
+  });
+  models.readoutShown = flat(shownState);
+  models.readoutOwnHidden = flat(ownState);
+  models.readoutGlobHidden = flat(globState);
+  models.readoutGlobPattern = flat(
+    globState.querySelector(".models-blocked-pattern"),
+  );
+  models.readoutGlobIsButton =
+    globState.querySelector(".models-blocked-pattern").tagName;
+  models.readoutGlobAria = globState
+    .querySelector(".models-blocked-pattern")
+    .getAttribute("aria-label");
+  models.readoutsHaveNoInput =
+    [shownState, ownState, globState].every(
+      (node) => node.querySelectorAll("input").length === 0,
+    );
+  // Clicking the pattern offers the one edit that would free the row.
+  const patternButton = globState.querySelector(".models-blocked-pattern");
+  await click(patternButton);
+  models.patternOffer = flat(patternButton);
+
+  // --- one row, through the one write path there is
+  const soloRef = rows()[1].dataset.ref;
+  models.soloWordBefore = flat(rows()[1].querySelector(".models-visible-word"));
+  BULK_RESULT.action = "hide";
+  BULK_RESULT.scope = "selection";
+  BULK_RESULT.provider_id = null;
+  BULK_RESULT.wrote_glob = null;
+  BULK_RESULT.removed_patterns = [];
+  BULK_RESULT.honored_count = 1;
+  BULK_RESULT.unhonored_count = 0;
+  BULK_RESULT.results = [
+    { model_ref: soloRef, visible: false, honored: true, hidden_by: "" },
+  ];
+  BULK_RESULT.visibility = { allow: [], deny: ["*:free", soloRef] };
+  await click(boxes()[1]);
+  models.soloBarLabels = Array.from(bar.querySelectorAll("button")).map(flat);
+  fetchCalls.length = 0;
+  fetchBodies.length = 0;
+  const hideOne = Array.from(bar.querySelectorAll("button")).find((button) =>
+    flat(button).startsWith("Hide 1 selected"),
+  );
+  if (hideOne) await click(hideOne);
+  models.soloBulkCalls = fetchCalls.filter((path) =>
+    path.endsWith("/visibility/bulk"),
+  ).length;
+  models.soloToggleCalls = fetchCalls.filter((path) =>
+    path.endsWith("/visibility/toggle"),
+  ).length;
+  models.soloRefetches = fetchCalls.filter(
+    (path) => path === "/admin/api/model-admin",
+  ).length;
+  models.soloBody = fetchBodies.find((entry) =>
+    entry.path.endsWith("/visibility/bulk"),
+  );
+  const soloRow = rows().find((row) => row.dataset.ref === soloRef);
+  models.soloWordAfter = flat(soloRow.querySelector(".models-visible-word"));
+  models.soloHeadAfter = flat(
+    tree.querySelector('.models-provider[data-provider="alpha"] .models-chip-hidden'),
+  );
+
+  // --- a single write a glob overrules leaves the explanation in the row
+  const blockedRef = rows()[2].dataset.ref;
+  BULK_RESULT.honored_count = 0;
+  BULK_RESULT.unhonored_count = 1;
+  BULK_RESULT.results = [
+    {
+      model_ref: blockedRef,
+      visible: false,
+      honored: false,
+      blocked_by: "*:free",
+      hidden_by: "*:free",
+    },
+  ];
+  window.eval("clearModelsSelection()");
+  await settle();
+  await click(boxes()[2]);
+  const hideBlocked = Array.from(bar.querySelectorAll("button")).find((button) =>
+    flat(button).startsWith("Hide 1 selected"),
+  );
+  if (hideBlocked) await click(hideBlocked);
+  const blockedRow = rows().find((row) => row.dataset.ref === blockedRef);
+  models.blockedRowText = flat(blockedRow.querySelector(".models-visible-state"));
+  models.blockedRowPattern = flat(
+    blockedRow.querySelector(".models-blocked-pattern"),
+  );
+  // Dismiss the panel: the row keeps saying it, which the toast never did.
+  const dismiss = Array.from(panel.querySelectorAll("button")).find(
+    (button) => flat(button) === "Dismiss",
+  );
+  if (dismiss) await click(dismiss);
+  models.blockedRowSurvivesDismiss = flat(
+    blockedRow.querySelector(".models-blocked-pattern"),
+  );
+
+  // --- the migration is previewed, and the preview is not a write
+  fetchBodies.length = 0;
+  await click(doc.getElementById("modelsMigrateGlobs"));
+  models.migrateBody = fetchBodies.find((entry) =>
+    entry.path.endsWith("/visibility/migrate-globs"),
+  );
+  models.migrateText = flat(panel);
+  models.migrateOffersWrite = Array.from(panel.querySelectorAll("button")).some(
+    (button) => flat(button).startsWith("Write the"),
+  );
+
+  BULK_RESULT.action = "hide";
+  BULK_RESULT.scope = "provider";
+  BULK_RESULT.provider_id = "alpha";
+  BULK_RESULT.wrote_glob = "alpha/*";
+  BULK_RESULT.visibility = { allow: [], deny: ["alpha/*"] };
+  window.eval("clearModelsSelection()");
+  await settle();
+
   // --- Hide all: one request, no refs, no refetch
   BULK_RESULT.results = MODEL_ADMIN_PAGE.providers[0].models.map((model) => ({
     model_ref: model.model_ref,
     visible: false,
     honored: true,
+    hidden_by: "alpha/*",
   }));
   BULK_RESULT.honored_count = BULK_RESULT.results.length;
   BULK_RESULT.unhonored_count = 0;

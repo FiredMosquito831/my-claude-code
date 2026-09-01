@@ -12950,10 +12950,13 @@ function buildModelRow(model, editable) {
   row.className = "models-model-row";
   row.dataset.ref = model.model_ref;
 
-  // Two checkboxes on one row is the design's biggest legibility bet, so they
-  // are separated three ways: the selection box sits in its own ruled gutter
-  // cell, it carries no visible word, and the visibility control keeps its
-  // "Show" label.
+  // One control per row, not two. The select box in the gutter, plus the
+  // action bar it feeds, is the only thing on this page that changes what the
+  // catalogue shows; the word beside it is a readout of the result. Two
+  // checkboxes on one row was the design's biggest legibility bet and the
+  // person using it called it: the second tick was bound to the *recomputed*
+  // visibility, so a glob could overrule it and it sprang back with nothing
+  // but a toast to say why.
   const cell = document.createElement("div");
   cell.className = "models-select-cell";
   const select = document.createElement("input");
@@ -12974,26 +12977,123 @@ function buildModelRow(model, editable) {
   row.appendChild(cell);
   if (select.checked) row.classList.add("is-selected");
 
-  const tick = document.createElement("label");
-  tick.className = "models-visible-toggle";
-  const toggle = document.createElement("input");
-  toggle.type = "checkbox";
-  toggle.checked = model.visible;
-  toggle.addEventListener("change", () => {
-    toggleModelVisibility(model.model_ref, toggle.checked).catch((error) => {
-      toggle.checked = !toggle.checked;
-      showMessage(error.message, "error");
-    });
-  });
-  tick.appendChild(toggle);
-  const tickText = document.createElement("span");
-  tickText.textContent = model.visible ? "Show" : "Hidden";
-  tick.appendChild(tickText);
-  tick.title = `Show ${model.model_ref} in /v1/models and the admin pickers`;
-  row.appendChild(tick);
-
+  row.appendChild(buildModelsVisibilityState(model));
   row.appendChild(buildModelNode(model, editable));
   return row;
+}
+
+/* Shown / Hidden / Hidden by <pattern>. A state, never a verb: "Show" sitting
+   in the slot that reports what is *true* is what made an unticked row look
+   like a control that had not responded. */
+function buildModelsVisibilityState(model) {
+  const state = document.createElement("div");
+  state.className = "models-visible-state";
+  fillModelsVisibilityState(state, model);
+  return state;
+}
+
+function fillModelsVisibilityState(state, model) {
+  state.textContent = "";
+  state.classList.toggle("is-hidden", !model.visible);
+  const word = document.createElement("span");
+  word.className = "models-visible-word";
+  word.textContent = model.visible ? "Shown" : "Hidden";
+  state.appendChild(word);
+  const pattern = model.visible ? "" : model.hidden_by || "";
+  if (!pattern) {
+    state.title = model.visible
+      ? `${model.model_ref} is listed in /v1/models and the admin pickers`
+      : `${model.model_ref} is hidden by its own entry in your hide list`;
+    return;
+  }
+  // Rendered every time the row is drawn, not announced once in a toast: with
+  // 994 patterns in the list, "a pattern overrules this" is not actionable and
+  // a state that disappears is not an explanation.
+  // Real spaces, not a flex gap: the readout is read aloud as one phrase, and
+  // "Hiddenby*:free" is what a gap-only separation gives a screen reader.
+  const by = document.createElement("span");
+  by.className = "models-visible-by";
+  by.textContent = " by ";
+  state.appendChild(by);
+  const named = modelsPatternName(pattern);
+  const link = document.createElement("button");
+  link.type = "button";
+  link.className = "models-blocked-pattern";
+  link.textContent = named;
+  link.setAttribute(
+    "aria-label",
+    `${model.model_ref} is hidden by ${named}. Review it in the pattern editor.`,
+  );
+  link.addEventListener("click", () => offerModelsPatternRemoval(pattern, link));
+  state.appendChild(link);
+  state.title = `${model.model_ref} is hidden by ${named}, not by a choice this row can change`;
+}
+
+function modelsPatternName(pattern) {
+  return pattern === "__allow_list__"
+    ? 'your "Show only these" list'
+    : pattern;
+}
+
+/* A row whose state is dictated by a glob must not present an affordance that
+   cannot change it -- but it must not be a dead end either. Clicking the
+   pattern scrolls to the editor that owns it and offers the one edit that
+   would free the row, confirmed in place and undoable like every other write
+   on this page. */
+function offerModelsPatternRemoval(pattern, button) {
+  const section = byId("section-model-visibility");
+  if (section && section.scrollIntoView) {
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  if (pattern === "__allow_list__") {
+    setModelsVisibilityStatus(
+      'Your "Show only these" list makes listing opt-in, so every model it does ' +
+        "not name is hidden. Name this model there, or empty the list.",
+    );
+    return;
+  }
+  if (button.dataset.confirming === "1") {
+    button.dataset.confirming = "";
+    removeModelsDenyPattern(pattern).catch((error) =>
+      setModelsVisibilityStatus(error.message, "error"),
+    );
+    return;
+  }
+  const label = button.textContent;
+  button.dataset.confirming = "1";
+  button.textContent = `remove ${pattern}?`;
+  window.setTimeout(() => {
+    if (button.dataset.confirming !== "1") return;
+    button.dataset.confirming = "";
+    button.textContent = label;
+  }, 5000);
+}
+
+async function removeModelsDenyPattern(pattern) {
+  const data = modelsState.data;
+  if (!data) return;
+  const allow = data.visibility.allow_raw || "";
+  const deny = modelsPatternList(data.visibility.deny_raw);
+  const next = deny.filter((entry) => entry !== pattern);
+  if (next.length === deny.length) return;
+  setModelsVisibilityStatus("Removing...");
+  await api("/admin/api/model-admin/visibility", {
+    method: "POST",
+    body: JSON.stringify({ allow, deny: next.join(",") }),
+  });
+  modelsState.undo = { allow: modelsPatternList(allow), deny };
+  await loadModelsView(true);
+  setModelsVisibilityStatus("");
+  renderModelsWritePanel(
+    `Removed ${pattern} from your hide list. Routing is unaffected either way.`,
+  );
+}
+
+function modelsPatternList(raw) {
+  return (raw || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function buildModelNode(model, editable) {
@@ -13066,15 +13166,8 @@ function buildModelSummary(model) {
       "reply contained thinking text. Succeeded attempts only.";
     second.appendChild(chip);
   }
-  // Only when a pattern that is not this model's own exact ref is what hides
-  // it: a row that springs back with no explanation is the complaint the
-  // single-toggle path never answered.
-  if (model.blocked_by) {
-    const note = document.createElement("span");
-    note.className = "models-blocked-note";
-    note.textContent = `hidden by your pattern ${model.blocked_by}`;
-    second.appendChild(note);
-  }
+  // The pattern that overrules this row is named in the row's own visibility
+  // readout, which is drawn whether or not the summary is on screen.
   if (second.childElementCount) summary.appendChild(second);
   return summary;
 }
@@ -13527,30 +13620,6 @@ function findModelInData(modelRef) {
   return null;
 }
 
-/* Repaint one model row from the current payload without touching the tree
-   around it: the summary chips, the tick, and the body if it is open. */
-function refreshModelRow(modelRef) {
-  const model = findModelInData(modelRef);
-  if (!model) return;
-  const editable =
-    (modelsState.data && modelsState.data.overrides.editable_parameters) || [];
-  document.querySelectorAll("details.models-model").forEach((node) => {
-    const ref = node.querySelector(".models-ref");
-    if (!ref || ref.textContent !== modelRef) return;
-    const summary = node.querySelector("summary");
-    if (summary) node.replaceChild(buildModelSummary(model), summary);
-    const row = node.parentElement;
-    const tick =
-      row && row.querySelector(".models-visible-toggle input[type=checkbox]");
-    if (tick) tick.checked = model.visible;
-    const body = node.querySelector(".models-model-body");
-    if (!body || body.dataset.filled !== "1") return;
-    const readouts = body.querySelector(".models-readouts");
-    if (readouts) fillModelReadouts(readouts, model);
-    else fillModelBody(body, model, editable);
-  });
-}
-
 function refreshProviderRow(providerId) {
   const data = modelsState.data;
   if (!data) return;
@@ -13571,12 +13640,14 @@ function refreshProviderRow(providerId) {
   });
   // A provider override changes what every model under it sends, so the open
   // model bodies below it have to be repainted too.
-  (provider.models || []).forEach((model) => refreshModelRow(model.model_ref));
+  refreshModelRows((provider.models || []).map((model) => model.model_ref));
 }
 
-/* One pass over the rendered rows for many refs. refreshModelRow() runs its
-   own document-wide query, so calling it three hundred times is quadratic in
-   the number of rows on screen -- which is exactly the size a bulk action
+/* The one repaint. There used to be two -- a single-write one that moved the
+   checkbox and left its word behind, and this one that moved both -- so the
+   same row behaved differently depending on which control had touched it.
+   One pass over the rendered rows for many refs, because a per-ref function
+   running its own document-wide query is quadratic at the size a bulk action
    reaches. */
 function refreshModelRows(modelRefs) {
   const wanted = new Set(modelRefs);
@@ -13590,17 +13661,47 @@ function refreshModelRows(modelRefs) {
     const summary = node.querySelector("summary");
     if (summary) node.replaceChild(buildModelSummary(model), summary);
     const row = node.parentElement;
-    const tick =
-      row && row.querySelector(".models-visible-toggle input[type=checkbox]");
-    if (tick) tick.checked = model.visible;
-    const word = row && row.querySelector(".models-visible-toggle span");
-    if (word) word.textContent = model.visible ? "Show" : "Hidden";
+    const state = row && row.querySelector(".models-visible-state");
+    if (state) fillModelsVisibilityState(state, model);
     const body = node.querySelector(".models-model-body");
     if (!body || body.dataset.filled !== "1") return;
     const readouts = body.querySelector(".models-readouts");
     if (readouts) fillModelReadouts(readouts, model);
     else fillModelBody(body, model, editable);
   });
+}
+
+/* How much of the selection is already in each state. Indexed once rather
+   than searched per ref: the payload holds 1,120 models on a real install and
+   a selection can hold every one of them. */
+function modelsSelectionVisibility() {
+  const index = new Map();
+  ((modelsState.data && modelsState.data.providers) || []).forEach((provider) => {
+    (provider.models || []).forEach((model) => index.set(model.model_ref, model));
+  });
+  let hidden = 0;
+  let shown = 0;
+  modelsState.selected.forEach((ref) => {
+    const model = index.get(ref);
+    if (!model) return;
+    if (model.visible) shown += 1;
+    else hidden += 1;
+  });
+  return { hidden, shown };
+}
+
+/* The selection covers 100% of exactly one provider's models, or null. */
+function modelsWholeProviderSelection() {
+  const refs = Array.from(modelsState.selected);
+  if (!refs.length) return null;
+  const providerId = modelsProviderOf(refs[0]);
+  if (!providerId) return null;
+  const provider = modelsProviderEntry(providerId);
+  if (!provider) return null;
+  const all = (provider.models || []).map((model) => model.model_ref);
+  if (!all.length || all.length !== refs.length) return null;
+  if (!all.every((ref) => modelsState.selected.has(ref))) return null;
+  return { providerId, count: all.length, glob: `${providerId}/*` };
 }
 
 function renderModelsBulkBar() {
@@ -13619,15 +13720,20 @@ function renderModelsBulkBar() {
   line.className = "models-bulk-count";
   line.textContent = `${count} selected across ${providers} provider(s)`;
   bar.appendChild(line);
+  // No tri-state control -- "Hide" on a mixed selection hides all of it, which
+  // is correct and unsurprising -- but the button says how much of the work is
+  // already done, which is the fact the bar used to leave the user to count.
+  const already = modelsSelectionVisibility();
   [
-    ["show", "Show"],
-    ["hide", "Hide"],
-    ["invert", "Invert"],
-  ].forEach(([action, label]) => {
+    ["show", "Show", already.shown, "already shown"],
+    ["hide", "Hide", already.hidden, "already hidden"],
+    ["invert", "Invert", 0, ""],
+  ].forEach(([action, label, done, phrase]) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "secondary-button models-bulk-button";
-    button.textContent = label;
+    const suffix = done ? ` (${done} ${phrase})` : "";
+    button.textContent = `${label} ${count} selected${suffix}`;
     button.setAttribute("aria-label", `${label} the ${count} selected model(s)`);
     button.addEventListener("click", () => {
       runModelsBulk({
@@ -13641,6 +13747,33 @@ function renderModelsBulkBar() {
     });
     bar.appendChild(button);
   });
+  // Offered, never taken automatically: a selection that happens to cover a
+  // whole provider today is still a fact about a closed set, and promoting it
+  // to a standing policy is the user's call. Not offering it at all is how an
+  // install reaches 994 exact patterns and not one glob.
+  const whole = modelsWholeProviderSelection();
+  if (whole) {
+    const promote = document.createElement("button");
+    promote.type = "button";
+    promote.className = "secondary-button models-bulk-button models-bulk-promote";
+    promote.textContent = `Hide all as one pattern, ${whole.glob}`;
+    promote.setAttribute(
+      "aria-label",
+      `Hide every ${whole.providerId} model by writing ${whole.glob} instead of ${whole.count} exact patterns`,
+    );
+    promote.addEventListener("click", () => {
+      runModelsBulk({
+        scope: "provider",
+        action: "hide",
+        providerId: whole.providerId,
+        // No refs is what tells the server this is a policy, not a selection.
+        refs: [],
+        affected: whole.count,
+        button: promote,
+      });
+    });
+    bar.appendChild(promote);
+  }
   const clear = document.createElement("button");
   clear.type = "button";
   clear.className = "secondary-button models-bulk-button";
@@ -13684,6 +13817,22 @@ function renderModelsBulkResult(result) {
   lead.textContent = text;
   target.appendChild(lead);
 
+  // Lifting a provider glob restores the per-model choices it was shadowing
+  // rather than clearing them, so the rows that stay hidden are not a failure
+  // -- they are the state the Hide all was covering up. Saying which it is
+  // beats leaving the user to read "17 did not change" as a bug.
+  const lifted = (result.removed_patterns || []).some((pattern) =>
+    pattern.endsWith("/*"),
+  );
+  if (result.action === "show" && lifted && unhonored.length) {
+    const restored = document.createElement("p");
+    restored.textContent =
+      `Your per-model choices from before the Hide all are back: ` +
+      `${unhonored.length} of them stay hidden by their own patterns. ` +
+      `Press Show all again to clear those too.`;
+    target.appendChild(restored);
+  }
+
   if (unhonored.length) {
     // Grouped by the pattern that won, so one offending glob is named once
     // rather than three hundred times.
@@ -13703,7 +13852,7 @@ function renderModelsBulkResult(result) {
               ? 'in the "Show only these" list'
               : pattern
           } overrules an exact tick.`
-        : `${refs.length} of them did not change.`;
+        : `${refs.length} of them did not change: your own per-model hide patterns still name them.`;
       list.appendChild(item);
     });
     target.appendChild(list);
@@ -13719,6 +13868,24 @@ function renderModelsBulkResult(result) {
     target.appendChild(show);
   }
 
+  appendModelsPanelActions(target);
+}
+
+/* One sentence carrying the same Undo and Dismiss the bulk panel carries, for
+   the writes that are not bulk gestures: removing a pattern a row named, and
+   the glob migration. */
+function renderModelsWritePanel(sentence) {
+  const target = byId("modelsBulkResult");
+  if (!target) return;
+  target.textContent = "";
+  target.hidden = false;
+  const lead = document.createElement("p");
+  lead.textContent = sentence;
+  target.appendChild(lead);
+  appendModelsPanelActions(target);
+}
+
+function appendModelsPanelActions(target) {
   if (modelsState.undo) {
     const undo = document.createElement("button");
     undo.type = "button";
@@ -13756,6 +13923,70 @@ function renderModelsBulkResult(result) {
     target.hidden = true;
   });
   target.appendChild(dismiss);
+}
+
+/* Offered, never applied on its own. One real install reached 994 exact deny
+   patterns and not a single glob -- a ~30 KB line in the managed env file,
+   parsed, folded and rewritten on every write -- without ever asking for one.
+   The preview names both counts and proves the fold hides exactly the same
+   models; only then is the write offered, and it is undoable. */
+async function runModelsGlobMigration(button, apply) {
+  setModelsVisibilityStatus(apply ? "Migrating..." : "Checking...");
+  try {
+    const result = await api("/admin/api/model-admin/visibility/migrate-globs", {
+      method: "POST",
+      body: JSON.stringify({ apply: Boolean(apply) }),
+    });
+    if ((result.errors || []).length) {
+      setModelsVisibilityStatus(result.errors.join(" "), "error");
+      return;
+    }
+    setModelsVisibilityStatus("");
+    if (apply) {
+      modelsState.undo = result.previous || null;
+      await loadModelsView(true);
+    }
+    renderModelsMigration(result, button);
+  } catch (error) {
+    setModelsVisibilityStatus(error.message, "error");
+  }
+}
+
+function renderModelsMigration(result, button) {
+  const target = byId("modelsBulkResult");
+  if (!target) return;
+  target.textContent = "";
+  target.hidden = false;
+  const lead = document.createElement("p");
+  const providers = result.providers || [];
+  if (!providers.length) {
+    lead.textContent =
+      "Nothing to fold: no provider has every one of its models hidden by " +
+      "exact patterns of their own.";
+    target.appendChild(lead);
+    appendModelsPanelActions(target);
+    return;
+  }
+  const removed = (result.removed_patterns || []).length;
+  const added = result.added_patterns || [];
+  lead.textContent =
+    `${result.applied ? "Folded" : "Would fold"} ${removed} exact pattern(s) ` +
+    `across ${providers.length} provider(s) into ${added.join(", ")}: ` +
+    `${result.pattern_count_before} pattern(s) become ${result.pattern_count_after}. ` +
+    `${result.hidden_before} model(s) hidden before, ${result.hidden_after} after` +
+    (result.identical
+      ? " -- identical, which is the only reason this is offered."
+      : " -- not identical, so it will not be written.");
+  target.appendChild(lead);
+  if (!result.applied && result.identical) {
+    const go = document.createElement("button");
+    go.type = "button";
+    go.className = "secondary-button models-bulk-button";
+    go.textContent = `Write the ${added.length} glob(s)`;
+    go.addEventListener("click", () => runModelsGlobMigration(button, true));
+    target.appendChild(go);
+  }
+  appendModelsPanelActions(target);
 }
 
 /* One POST and one settings commit per gesture. The per-model route re-reads
@@ -13832,7 +14063,10 @@ function applyModelsBulkResult(result) {
       const row = rows.get(model.model_ref);
       if (row) {
         model.visible = row.visible;
-        model.blocked_by = row.honored === false ? row.blocked_by || "" : "";
+        // What dictates the row's state now, which the row keeps saying long
+        // after the result panel is dismissed -- not the same question as
+        // "what stopped this gesture", which the panel answers once.
+        model.hidden_by = row.hidden_by || "";
       }
       if (!model.visible) hidden += 1;
     });
@@ -13891,28 +14125,6 @@ function renderModelsPatternProvenance() {
   target.textContent = `${globs} glob pattern(s) and ${exact} exact model pattern(s) in your two lists.`;
 }
 
-async function toggleModelVisibility(modelRef, visible) {
-  const result = await api("/admin/api/model-admin/visibility/toggle", {
-    method: "POST",
-    body: JSON.stringify({ model_ref: modelRef, visible }),
-  });
-  applyModelsData(await api("/admin/api/model-admin"));
-  refreshModelRow(modelRef);
-  if (result.honored === false) {
-    // An exact pattern cannot beat a broader glob the user wrote. Saying so
-    // beats a checkbox that springs back with no explanation.
-    showMessage(
-      `${modelRef} is still ${result.visible ? "visible" : "hidden"}: a pattern in your allow/deny lists overrules this tick.`,
-      "error",
-    );
-  } else {
-    showMessage(
-      `${modelRef} is now ${visible ? "shown in" : "hidden from"} /v1/models and the admin pickers. Routing is unaffected either way.`,
-      "ok",
-    );
-  }
-}
-
 async function saveModelOverrides(scope, key, updates) {
   applyModelsData(
     await api("/admin/api/model-admin/overrides", {
@@ -13921,7 +14133,7 @@ async function saveModelOverrides(scope, key, updates) {
     }),
   );
   if (scope === "provider") refreshProviderRow(key);
-  else refreshModelRow(key);
+  else refreshModelRows([key]);
 }
 
 function renderModelsPreview(result) {
@@ -14028,6 +14240,11 @@ function initModelsView() {
       renderModelsTree();
     });
   }
+  const migrate = byId("modelsMigrateGlobs");
+  if (migrate) {
+    migrate.addEventListener("click", () => runModelsGlobMigration(migrate, false));
+  }
+
   if (reload) {
     reload.addEventListener("click", () => {
       clearModelsSelection();

@@ -985,13 +985,135 @@ def test_opening_a_provider_renders_one_page_of_rows_not_all_of_them(
     assert models["moreLabel"] == "Show 5 more of 5"
 
 
-def test_every_row_has_a_selection_box_and_a_visibility_tick(rendered) -> None:
-    """Two controls per row, and they must not be the same node."""
+def test_every_row_has_one_selection_box_and_one_visibility_readout(
+    rendered,
+) -> None:
+    """One control per row and one readout of the result, not two checkboxes.
+
+    "there seem to be 2 overlapping functions for showing/hiding" was the
+    report, and two visually similar checkboxes on one line was where it began.
+    """
 
     models = rendered["models"]
     assert models["selectBoxes"] == models["rowsAfterOpen"]
-    assert models["visibilityTicks"] == models["rowsAfterOpen"]
-    assert models["controlsAreDistinct"] is True
+    assert models["visibilityReadouts"] == models["rowsAfterOpen"]
+    assert models["readoutInputs"] == 0
+
+
+def test_the_visibility_readout_says_a_state_and_never_an_imperative(
+    rendered,
+) -> None:
+    """ "Show" in the slot that reports what is true read as a control that had
+    not responded, which is the literal symptom the user described."""
+
+    words = rendered["models"]["readoutWords"]
+    assert words == ["Shown"]
+    assert "Show" not in words
+
+
+def test_the_readout_has_three_states_and_none_of_them_is_a_control(
+    rendered,
+) -> None:
+    models = rendered["models"]
+    assert models["readoutShown"] == "Shown"
+    assert models["readoutOwnHidden"] == "Hidden"
+    assert models["readoutGlobHidden"] == "Hidden by *:free"
+    assert models["readoutsHaveNoInput"] is True
+
+
+def test_a_glob_overruled_row_names_the_pattern_with_an_accessible_name(
+    rendered,
+) -> None:
+    """D12: the old visibility checkbox had no accessible name of its own."""
+
+    models = rendered["models"]
+    assert models["readoutGlobPattern"] == "*:free"
+    assert models["readoutGlobIsButton"] == "BUTTON"
+    assert models["readoutGlobAria"] == (
+        "beta/c:free is hidden by *:free. Review it in the pattern editor."
+    )
+
+
+def test_clicking_the_pattern_offers_to_remove_it_rather_than_doing_nothing(
+    rendered,
+) -> None:
+    """A row a glob dictates must not be a dead end, and must not be silently
+    disabled either."""
+
+    assert rendered["models"]["patternOffer"] == "remove *:free?"
+
+
+def test_a_single_row_write_goes_through_the_bulk_endpoint(rendered) -> None:
+    """One write path. The per-row tick used to POST /visibility/toggle and
+    then GET the whole 3.4 MB catalogue back."""
+
+    models = rendered["models"]
+    assert models["soloBulkCalls"] == 1
+    assert models["soloToggleCalls"] == 0
+    assert models["soloBody"]["body"]["scope"] == "selection"
+    assert len(models["soloBody"]["body"]["model_refs"]) == 1
+
+
+def test_a_single_row_write_does_not_refetch_the_whole_payload(rendered) -> None:
+    """D4/D5: two owners of one state is what made the page unstable."""
+
+    assert rendered["models"]["soloRefetches"] == 0
+
+
+def test_single_toggle_updates_both_the_box_and_its_word(rendered) -> None:
+    """The D1 regression, in the words of the report: "the hide button tick
+    when unticked doesn't change to show or the other way around"."""
+
+    models = rendered["models"]
+    assert models["soloWordBefore"] == "Shown"
+    assert models["soloWordAfter"] == "Hidden"
+
+
+def test_a_single_row_write_repaints_the_provider_head_too(rendered) -> None:
+    """D10: after four per-row ticks the head still read "2 hidden" with 7
+    actually hidden, because the single path called neither of the two
+    functions the bulk path calls."""
+
+    assert rendered["models"]["soloHeadAfter"] == "1 hidden"
+
+
+def test_the_action_bar_says_how_much_of_the_selection_is_already_done(
+    rendered,
+) -> None:
+    """No tri-state control -- the count instead."""
+
+    labels = rendered["models"]["soloBarLabels"]
+    assert "Hide 1 selected" in labels
+    assert "Show 1 selected (1 already shown)" in labels
+
+
+def test_a_selection_covering_a_whole_provider_is_offered_one_glob(
+    rendered,
+) -> None:
+    """Offered, not taken: automatic promotion is lossy the way Hide all was."""
+
+    assert rendered["models"]["promoteOffer"] == "Hide all as one pattern, alpha/*"
+
+
+def test_a_glob_overruled_row_keeps_a_persistent_explanation(rendered) -> None:
+    """Not a toast: the row still names the pattern after the panel is
+    dismissed, which is the only form of the message that is actionable."""
+
+    models = rendered["models"]
+    assert models["blockedRowText"] == "Hidden by *:free"
+    assert models["blockedRowPattern"] == "*:free"
+    assert models["blockedRowSurvivesDismiss"] == "*:free"
+
+
+def test_the_glob_migration_previews_before_it_writes(rendered) -> None:
+    """994 exact patterns and no globs is worth folding, but not silently."""
+
+    models = rendered["models"]
+    assert models["migrateBody"]["body"] == {"apply": False}
+    assert "Would fold 2 exact pattern(s)" in models["migrateText"]
+    assert "3 pattern(s) become 2" in models["migrateText"]
+    assert "9 model(s) hidden before, 9 after" in models["migrateText"]
+    assert models["migrateOffersWrite"] is True
 
 
 def test_selecting_rows_shows_the_bulk_bar_with_a_whole_sentence(rendered) -> None:

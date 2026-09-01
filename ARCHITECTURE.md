@@ -569,6 +569,30 @@ and writer, and passes the path as an ephemeral override. Codex users open the
 native picker with `/model`; FCC does not implement a proxy-level `/models`
 alias.
 
+## Model visibility has one filter and one writer
+
+`core/model_visibility.py` is the single place that decides whether a
+`provider/model` ref is listed, and `api/model_admin.py` is its only writer.
+Everything that hides a model -- the pattern textareas, the selection action
+bar, a provider's Hide all, the glob migration -- goes through
+`apply_visibility_toggle` / `apply_visibility_bulk` in that module and lands in
+the two env values `MODEL_VISIBILITY_ALLOW` and `MODEL_VISIBILITY_DENY` through
+`apply_admin_config`. There is no second store and no second rule.
+
+That is not decoration. The Models page grew a per-row checkbox *and* a
+selection bar, each with its own endpoint and its own client-side repaint; the
+two disagreed about who owned the page's state, and a row repainted differently
+depending on which control had touched it. It is now one write path
+(`/admin/api/model-admin/visibility/bulk`) and one repaint
+(`applyModelsBulkResult`). A future page that needs to hide models must reuse
+this writer rather than grow a third.
+
+**Hiding never affects routing** (`core/model_visibility.py` module docstring):
+the filter is applied at `api/model_catalog.py` and in the admin picker
+payloads, never in resolution. A hidden model named in `MODEL` or a fallback
+chain still serves.
+
+
 ## Provider Architecture
 
 Provider metadata is neutral and centralized in

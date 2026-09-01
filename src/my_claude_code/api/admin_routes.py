@@ -3,7 +3,7 @@
 import asyncio
 import ipaddress
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -21,10 +21,13 @@ from my_claude_code.api.model_admin import (
     MODEL_VISIBILITY_BULK_LIMIT,
     PROVIDER_SCOPE,
     REASONING_MEASUREMENT_DAYS,
+    GlobMigration,
     apply_visibility_bulk,
     apply_visibility_toggle,
     build_models_page_payload,
     bulk_result_rows,
+    hiding_pattern,
+    migrate_exact_patterns_to_globs,
     render_patterns,
     visibility_payload,
     with_override_row,
@@ -265,6 +268,17 @@ class ModelVisibilityBulkPayload(BaseModel):
     action: str
     provider_id: str | None = None
     model_refs: list[str] = []
+
+
+class ModelGlobMigrationPayload(BaseModel):
+    """A request to fold exact deny patterns into ``provider/*`` globs.
+
+    ``apply`` defaults to false so the same route answers "what would this do"
+    and "do it": the preview and the write must be computed by one function, or
+    the counts the user agreed to would not be the counts they got.
+    """
+
+    apply: bool = False
 
 
 class ModelOverridePayload(BaseModel):
@@ -1000,6 +1014,11 @@ async def toggle_model_visibility(
     updated = built["visibility"]
     result["visible"] = updated.is_visible(payload.model_ref)
     result["honored"] = result["visible"] == payload.visible
+    # Which pattern, not just "a pattern": with 994 of them in the list, the
+    # generic sentence this route used to justify was not actionable.
+    result["hidden_by"] = hiding_pattern(updated, payload.model_ref)
+    if not result["honored"]:
+        result["blocked_by"] = result["hidden_by"]
     return result
 
 
@@ -1147,6 +1166,87 @@ async def bulk_model_visibility(
     result["honored_count"] = sum(1 for row in rows if row["honored"])
     result["unhonored_count"] = sum(1 for row in rows if not row["honored"])
     return result
+
+
+@router.post("/admin/api/model-admin/visibility/migrate-globs")
+async def migrate_model_visibility_globs(
+    payload: ModelGlobMigrationPayload,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    services: ApiServices = Depends(get_services),
+):
+    """Preview, or apply, the fold of exact deny patterns into provider globs.
+
+    Offered rather than applied: an install can reach a thousand exact patterns
+    without ever having asked for one, but rewriting somebody's configuration
+    on their behalf is not a thing a page does quietly. The preview proves the
+    two states hide exactly the same models, and the write is undoable.
+    """
+
+    require_loopback_admin(request)
+    page = await asyncio.to_thread(_models_page_payload, services)
+    provider_models = {
+        str(provider["provider_id"]): [
+            str(model["model_ref"]) for model in provider.get("models", [])
+        ]
+        for provider in page.get("providers", [])
+    }
+    settings = services.requests.current_settings()
+    base = settings_model_visibility(settings)
+    if not payload.apply:
+        return _glob_migration_payload(
+            base, migrate_exact_patterns_to_globs(base, provider_models), {}
+        )
+
+    previous_box: dict[str, list[str]] = {}
+
+    def build(current: Settings) -> ModelVisibility:
+        # Recomputed inside the lock rather than reusing the preview: the
+        # preview read the patterns outside it, and a concurrent write would
+        # otherwise be lost to a fold derived from a base that predates it.
+        locked = settings_model_visibility(current)
+        previous_box["allow"] = list(locked.allow)
+        previous_box["deny"] = list(locked.deny)
+        return migrate_exact_patterns_to_globs(locked, provider_models).visibility
+
+    built: dict[str, ModelVisibility] = {}
+    result = await _apply_visibility_with(services, background_tasks, build, built)
+    if result.get("errors"):
+        return result
+    committed = ModelVisibility(
+        allow=tuple(previous_box["allow"]), deny=tuple(previous_box["deny"])
+    )
+    result.update(
+        _glob_migration_payload(
+            committed,
+            migrate_exact_patterns_to_globs(committed, provider_models),
+            previous_box,
+        )
+    )
+    result["applied"] = True
+    return result
+
+
+def _glob_migration_payload(
+    base: ModelVisibility,
+    migration: GlobMigration,
+    previous: Mapping[str, list[str]],
+) -> dict[str, Any]:
+    """The same numbers for the preview and for the write that follows it."""
+
+    after = migration.visibility
+    return {
+        "providers": list(migration.providers),
+        "removed_patterns": list(migration.removed_patterns),
+        "added_patterns": list(migration.added_patterns),
+        "hidden_before": migration.hidden_before,
+        "hidden_after": migration.hidden_after,
+        "identical": migration.identical,
+        "pattern_count_before": len(base.allow) + len(base.deny),
+        "pattern_count_after": len(after.allow) + len(after.deny),
+        "previous": dict(previous),
+        "applied": False,
+    }
 
 
 async def _apply_visibility_with(

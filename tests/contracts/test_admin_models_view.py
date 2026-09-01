@@ -144,12 +144,15 @@ def test_the_models_page_talks_to_the_endpoints_that_exist() -> None:
         "/admin/api/model-admin",
         "/admin/api/model-admin/visibility",
         "/admin/api/model-admin/visibility/preview",
-        "/admin/api/model-admin/visibility/toggle",
         "/admin/api/model-admin/visibility/bulk",
+        "/admin/api/model-admin/visibility/migrate-globs",
         "/admin/api/model-admin/overrides",
     ):
         assert f'"{path}"' in script, f"admin.js never calls {path}"
         assert f'"{path}"' in routes, f"admin_routes.py does not serve {path}"
+    # The single-tick route is still served for API callers and still tested,
+    # but the page no longer has a second write path to reach it with.
+    assert '"/admin/api/model-admin/visibility/toggle"' in routes
 
 
 def test_the_override_editor_offers_all_three_states() -> None:
@@ -294,7 +297,7 @@ def test_saving_an_override_does_not_destroy_its_own_status_element() -> None:
         "other open editor and destroys the button's own status element"
     )
     assert "refreshProviderRow(key)" in save_body
-    assert "refreshModelRow(key)" in save_body
+    assert "refreshModelRows([key])" in save_body
     # The refresh repaints the read-only panels, never the editor around them.
     assert "function fillModelReadouts(" in section
     assert "if (readouts) fillModelReadouts(readouts, model);" in section
@@ -396,7 +399,8 @@ def test_the_page_says_hiding_is_display_only_where_the_user_ticks() -> None:
         markup.index('id="view-models"') : markup.index('id="view-messaging"')
     ]
     assert "Hiding wins over showing" in view
-    assert "exact-match pattern into the hide list" in view
+    assert "an exact-match pattern per model" in view
+    assert "Hiding never affects routing" in view
 
 
 def test_the_measured_reasoning_chip_names_its_window_and_both_numbers() -> None:
@@ -412,14 +416,111 @@ def test_the_measured_chip_is_not_rendered_without_a_measurement() -> None:
 
 
 def _bulk_slice() -> str:
-    """The bulk runner, up to the single-tick route it must not fall back to."""
+    """The bulk runner, up to the repaint it hands its result to."""
 
     section = _models_section()
     return section[
         section.index("async function runModelsBulk(") : section.index(
-            "async function toggleModelVisibility("
+            "function applyModelsBulkResult("
         )
     ]
+
+
+def test_the_models_page_has_exactly_one_write_path_for_visibility() -> None:
+    """The report was "2 overlapping functions for showing/hiding", and it was.
+
+    A per-row tick wrote through ``/visibility/toggle`` and then re-read the
+    whole 3.4 MB catalogue; the select column wrote through ``/visibility/bulk``
+    and patched the payload in place. The two disagreed about who owned client
+    state, and the row repainted differently depending on which had touched it.
+    There is now one endpoint, and the row carries a readout rather than a
+    second checkbox.
+    """
+
+    section = _models_section()
+
+    assert '"/admin/api/model-admin/visibility/toggle"' not in section, (
+        "a second write path is how the page came to disagree with itself"
+    )
+    assert "function toggleModelVisibility(" not in section
+    assert "function refreshModelRow(" not in section, (
+        "two repaint functions is defect D1: one moved the box and left the word"
+    )
+    assert "function refreshModelRows(" in section
+    assert "function applyModelsBulkResult(" in section
+
+
+def test_the_row_reports_visibility_and_does_not_offer_a_second_checkbox() -> None:
+    """A row whose state a glob dictates must not present a control that cannot
+    change it -- and the word beside it is a state, not an imperative."""
+
+    section = _models_section()
+    row_builder = section[
+        section.index("function buildModelRow(") : section.index(
+            "function buildModelsVisibilityState("
+        )
+    ]
+    assert 'select.className = "models-select";' in row_builder
+    assert row_builder.count('createElement("input")') == 1, (
+        "the gutter select is the only input on the row"
+    )
+    state_builder = section[
+        section.index("function fillModelsVisibilityState(") : section.index(
+            "function modelsPatternName("
+        )
+    ]
+    assert 'createElement("input")' not in state_builder
+    assert 'model.visible ? "Shown" : "Hidden"' in state_builder
+    assert '"Show"' not in state_builder
+
+
+def test_a_glob_overruled_row_names_the_pattern_and_offers_to_remove_it() -> None:
+    """Not a toast, and not a silently disabled control."""
+
+    section = _models_section()
+
+    assert "model.hidden_by" in section
+    assert "function offerModelsPatternRemoval(" in section
+    assert "async function removeModelsDenyPattern(" in section
+    assert "`remove ${pattern}?`" in section, "the removal is confirmed in place"
+
+
+def test_the_action_bar_says_how_much_of_the_selection_is_already_done() -> None:
+    """No tri-state control; the count instead."""
+
+    section = _models_section()
+
+    assert '["hide", "Hide", already.hidden, "already hidden"]' in section
+    assert "`${label} ${count} selected${suffix}`" in section
+
+
+def test_a_whole_provider_selection_is_offered_a_glob_and_never_given_one() -> None:
+    """Automatic promotion is lossy in the way Hide all used to be."""
+
+    section = _models_section()
+
+    assert "function modelsWholeProviderSelection(" in section
+    assert "`Hide all as one pattern, ${whole.glob}`" in section
+
+
+def test_show_all_explains_the_per_model_states_it_restored() -> None:
+    """Lifting a provider glob uncovers the choices it was shadowing, and rows
+    that stay hidden are the point of that, not a failure of it."""
+
+    section = _models_section()
+
+    assert "Your per-model choices from before the Hide all are back:" in section
+    assert 'pattern.endsWith("/*")' in section
+
+
+def test_the_glob_migration_is_previewed_before_it_is_written() -> None:
+    """994 exact patterns and no globs is worth folding, but not silently."""
+
+    section = _models_section()
+
+    assert '"/admin/api/model-admin/visibility/migrate-globs"' in section
+    assert "JSON.stringify({ apply: Boolean(apply) })" in section
+    assert "not identical, so it will not be written." in section
 
 
 def test_the_selection_box_is_not_inside_a_summary_element() -> None:

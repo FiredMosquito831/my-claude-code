@@ -6082,11 +6082,6 @@ details.turn-pane > summary:focus-visible {
   inline-size: 100%;
 }
 
-.models-blocked-note {
-  color: var(--muted);
-  font-size: 12px;
-}
-
 .models-facets {
   display: flex;
   gap: var(--space-1);
@@ -6224,18 +6219,62 @@ details.turn-pane > summary:focus-visible {
   min-width: 0;
 }
 
-.models-visible-toggle {
+/* A readout, not a control: no cursor, no hit area, nothing that invites a
+   click except the pattern button, which is the only thing on the row that can
+   actually change the state it reports. */
+.models-visible-state {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: baseline;
   padding: var(--space-3) 0 0 var(--space-3);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);
-  cursor: pointer;
-  user-select: none;
   white-space: nowrap;
+  max-inline-size: 22ch;
+  overflow: hidden;
+}
+
+.models-visible-state .models-visible-word {
+  font-weight: 600;
+}
+
+.models-visible-state.is-hidden .models-visible-word {
+  color: var(--warn);
+}
+
+/* The connective word carries none of the emphasis of the two facts it joins. */
+.models-visible-state .models-visible-by {
+  opacity: 0.7;
+}
+
+/* Underlined rather than coloured only: the row is already muted, and the one
+   interactive thing in it must not be told apart by hue alone. */
+.models-blocked-pattern {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  text-transform: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The offer is not a fourth action of the same kind: it replaces N patterns
+   with one, so it reads as the outlier in the bar rather than a peer. */
+.models-bulk-promote {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.models-blocked-pattern:hover,
+.models-blocked-pattern:focus-visible {
+  text-decoration-thickness: 2px;
 }
 
 .models-model {

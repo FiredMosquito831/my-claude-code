@@ -505,17 +505,23 @@
               </div>
               <p class="section-help">
                 Comma-separated globs, matched case-insensitively against the full
-                <code>provider/model</code> ref. Hiding wins over showing. Unticking a
-                model below writes an exact-match pattern into the hide list.
-                Hiding a whole provider writes one pattern like
-                <code>nous_portal/*</code>; hiding a few models writes their exact
-                refs.
+                <code>provider/model</code> ref. Hiding wins over showing. Selecting
+                models below and pressing Hide writes an exact-match pattern per model
+                into the hide list; hiding a whole provider writes one pattern like
+                <code>nous_portal/*</code>. A model hidden by a pattern broader than
+                its own ref says so in its row, and no selection can move it until that
+                pattern goes. Hiding never affects routing: a hidden model named in
+                <code>MODEL</code> or a fallback chain still serves.
               </p>
               <div class="models-actions">
                 <button type="button" class="secondary" id="modelsPreviewVisibility">
                   Preview
                 </button>
                 <button type="button" id="modelsSaveVisibility">Save patterns</button>
+                <button type="button" class="secondary" id="modelsMigrateGlobs"
+                  title="Fold every provider whose models are all individually hidden into one provider/* pattern">
+                  Migrate exact patterns to globs
+                </button>
                 <span id="modelsVisibilityStatus" class="models-status"></span>
               </div>
               <p id="modelsPatternProvenance" class="section-help" hidden></p>
@@ -1410,14 +1416,31 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   provider to. Tick the boxes in the left gutter to pick models by hand
                   &mdash; click one and <em>Shift</em>-click another for a range,
                   <em>Shift</em>+arrow to extend or shrink one from the keyboard, or press
-                  and drag down the gutter &mdash; then use the bar at the bottom.
+                  and drag down the gutter &mdash; then use the bar at the bottom. That
+                  bar is the <em>only</em> way this page changes what the catalogue
+                  shows, for one row as much as for three hundred; the word beside each
+                  checkbox is a readout &mdash; <em>Shown</em>, <em>Hidden</em>, or
+                  <em>Hidden by nous_portal/*</em> &mdash; and not a second control.
                   <em>Hide all</em> for a whole provider writes <em>one</em> pattern like
                   <code>nous_portal/*</code> as a standing policy, so models that provider
-                  adds next week are hidden on arrival too; <em>Show all</em> removes that
-                  pattern and the exact refs under it, but never a glob you wrote yourself
-                  &mdash; if one of yours still hides a model, the result panel names that
-                  pattern once as <em>honoured by your glob</em>. None of this changes
-                  routing: a hidden model still resolves and still serves.
+                  adds next week are hidden on arrival too. It <em>shadows</em> the exact
+                  patterns underneath rather than deleting them, so the first
+                  <em>Show all</em> afterwards lifts only the glob and hands back exactly
+                  the per-model state you had before; press it again to clear those too.
+                  A glob you wrote yourself is never deleted on your behalf &mdash; if one
+                  of yours still hides a model, that row says <em>Hidden by</em> it, and
+                  clicking the pattern offers to remove it. None of this changes routing:
+                  a hidden model still resolves and still serves.
+                </p>
+                <p class="guide-note">
+                  <strong>994 patterns and no globs?</strong> Ticking models one at a
+                  time writes one exact pattern each, and a real install reached 994 of
+                  them &mdash; a 30 KB line rewritten on every write.
+                  <em>Migrate exact patterns to globs</em>, beside <em>Save patterns</em>,
+                  folds every provider whose models are all individually hidden into one
+                  <code>provider/*</code>. It previews first: how many patterns become how
+                  many, and how many models are hidden before and after. It is only
+                  offered when those two numbers are equal, and the write is undoable.
                 </p>
                 <img class="guide-shot" src="/admin/img/admin-models-bulk.png"
                      alt="Models page: bulk action bar below a sticky provider header"

@@ -774,9 +774,12 @@ def test_hiding_a_filtered_subset_writes_exact_patterns_not_a_glob(
     assert body["wrote_glob"] is None
 
 
-def test_showing_a_whole_provider_removes_its_glob_and_its_exact_patterns(
-    monkeypatch, tmp_path
-):
+def test_showing_a_whole_provider_lifts_its_glob_and_stops_there(monkeypatch, tmp_path):
+    """Changed deliberately in 6.24.0: Show all is first of all the undo of
+    Hide all, so it lifts the glob and lets the exact patterns underneath
+    decide again -- which is the state that preceded the Hide all. A second
+    press clears those too."""
+
     _isolated_home(monkeypatch, tmp_path)
     app = _app_with_models(
         model_visibility_deny="open_router/*,open_router/extra,*:free"
@@ -785,8 +788,13 @@ def test_showing_a_whole_provider_removes_its_glob_and_its_exact_patterns(
 
     body = _bulk(client, action="show", provider_id="open_router").json()
 
-    assert body["visibility"]["deny"] == ["*:free"]
-    assert set(body["removed_patterns"]) == {"open_router/*", "open_router/extra"}
+    assert body["visibility"]["deny"] == ["open_router/extra", "*:free"]
+    assert body["removed_patterns"] == ["open_router/*"]
+
+    again = _bulk(client, action="show", provider_id="open_router").json()
+
+    assert again["visibility"]["deny"] == ["*:free"]
+    assert again["removed_patterns"] == ["open_router/extra"]
 
 
 def test_showing_a_whole_provider_never_deletes_a_user_glob_that_merely_overlaps(
@@ -820,6 +828,148 @@ def test_a_bulk_result_reports_honored_per_ref_and_names_the_blocking_pattern(
     assert blocked[0]["model_ref"] == "open_router/extra"
     assert blocked[0]["blocked_by"] == "*extra"
     assert all("blocked_by" not in row for row in body["results"] if row["honored"])
+
+
+def test_the_single_toggle_route_names_the_blocking_pattern(monkeypatch, tmp_path):
+    """ "A pattern in your allow/deny lists overrules this tick" is not
+    actionable when the list holds 994 of them."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models(model_visibility_deny="open_router/*"))
+
+    body = client.post(
+        f"{MODELS_ENDPOINT}/visibility/toggle",
+        json={"model_ref": "open_router/routed", "visible": True},
+    ).json()
+
+    assert body["honored"] is False
+    assert body["blocked_by"] == "open_router/*"
+    assert body["hidden_by"] == "open_router/*"
+
+
+def test_the_page_payload_names_the_pattern_that_hides_each_row(monkeypatch, tmp_path):
+    """Rendered permanently in the row, so it is on the payload the row is
+    built from -- not only on the result of the gesture that provoked it."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(
+        _app_with_models(model_visibility_deny="open_router/*,open_router/extra")
+    )
+
+    body = client.get(MODELS_ENDPOINT).json()
+    rows = {
+        model["model_ref"]: model
+        for provider in body["providers"]
+        for model in provider["models"]
+    }
+
+    # Both are hidden; only one of them by a pattern its own row could clear.
+    assert rows["open_router/routed"]["hidden_by"] == "open_router/*"
+    assert rows["open_router/extra"]["hidden_by"] == "open_router/*"
+
+
+def test_a_row_hidden_only_by_its_own_pattern_names_nothing(monkeypatch, tmp_path):
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models(model_visibility_deny="open_router/extra"))
+
+    body = client.get(MODELS_ENDPOINT).json()
+    rows = {
+        model["model_ref"]: model
+        for provider in body["providers"]
+        for model in provider["models"]
+    }
+
+    assert rows["open_router/extra"]["visible"] is False
+    assert rows["open_router/extra"]["hidden_by"] == ""
+    assert rows["open_router/routed"]["hidden_by"] == ""
+
+
+# ------------------------------------------------------------ glob migration
+
+MIGRATE_ENDPOINT = f"{MODELS_ENDPOINT}/visibility/migrate-globs"
+
+
+def test_the_glob_migration_preview_writes_nothing(monkeypatch, tmp_path):
+    """The preview is the argument for the write; it must not be the write."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(
+        _app_with_models(model_visibility_deny="open_router/routed,open_router/extra")
+    )
+
+    body = client.post(MIGRATE_ENDPOINT, json={"apply": False}).json()
+
+    assert body["applied"] is False
+    assert body["providers"] == ["open_router"]
+    assert body["added_patterns"] == ["open_router/*"]
+    assert sorted(body["removed_patterns"]) == [
+        "open_router/extra",
+        "open_router/routed",
+    ]
+    assert body["pattern_count_before"] == 2
+    assert body["pattern_count_after"] == 1
+    assert body["hidden_before"] == body["hidden_after"] == 2
+    assert body["identical"] is True
+
+    after = client.get(MODELS_ENDPOINT).json()
+    assert after["visibility"]["deny"] == ["open_router/routed", "open_router/extra"]
+
+
+def test_applying_the_glob_migration_folds_the_patterns_and_hides_the_same_models(
+    monkeypatch, tmp_path
+):
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(
+        _app_with_models(model_visibility_deny="open_router/routed,open_router/extra")
+    )
+
+    body = client.post(MIGRATE_ENDPOINT, json={"apply": True}).json()
+
+    assert body["applied"] is True
+    assert body["visibility"]["deny"] == ["open_router/*"]
+    assert body["previous"]["deny"] == ["open_router/routed", "open_router/extra"]
+    # The identity is the entire licence for rewriting somebody's patterns, so
+    # the route reports it alongside the write it just made.
+    assert body["identical"] is True
+    assert body["hidden_before"] == body["hidden_after"] == 2
+
+
+def test_the_glob_migration_leaves_a_partly_visible_provider_alone(
+    monkeypatch, tmp_path
+):
+    """One visible model is the whole difference between a fact and a policy."""
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models(model_visibility_deny="open_router/extra"))
+
+    body = client.post(MIGRATE_ENDPOINT, json={"apply": True}).json()
+
+    assert body["providers"] == []
+    assert body["visibility"]["deny"] == ["open_router/extra"]
+
+
+def test_a_hidden_model_named_by_MODEL_is_still_named_as_a_route(monkeypatch, tmp_path):
+    """D8 at the HTTP boundary: hiding is display-only, so the page that hides
+    a configured route lists it as hidden rather than losing it.
+
+    That such a model still *serves* is pinned where routing lives, by
+    ``tests/application/test_routing_chains.py::
+    test_visibility_patterns_never_change_a_resolved_route``, which this change
+    leaves untouched.
+    """
+
+    _isolated_home(monkeypatch, tmp_path)
+    client = _local_client(_app_with_models())
+
+    body = client.post(
+        f"{MODELS_ENDPOINT}/visibility/preview",
+        json={"allow": "", "deny": "open_router/*"},
+    ).json()
+    hidden_routes = {row["model_ref"] for row in body["hidden_route_refs"]}
+
+    assert "open_router/routed" in body["hidden_model_refs"]
+    assert "open_router/routed" in hidden_routes
+    assert body["hide_only_notice"]
 
 
 def test_a_bulk_show_under_an_opt_in_allow_list_names_the_provider_there(

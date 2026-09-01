@@ -725,7 +725,7 @@ A provider with three hundred models is not manageable one tick at a time. On a 
 
 **3. Apply to what the filter left.** This is the point of the filter: the bulk buttons act on the *filtered* set, not the whole catalogue. "Hide the 38 models matching `opus` across four providers" is three interactions — filter, Select all 38, Hide.
 
-**4. Or pick a range by hand.** Every row has a checkbox in the ruled left gutter, beside its visibility tick:
+**4. Or pick a range by hand.** Every row has one checkbox, in the ruled left gutter. Beside it is a readout — `Shown`, `Hidden`, or `Hidden by <pattern>` — which reports the row's state and is not a second control:
 
 | Gesture | Selects |
 | --- | --- |
@@ -748,9 +748,34 @@ The bulk actions edit the same `MODEL_VISIBILITY_DENY` / `MODEL_VISIBILITY_ALLOW
 
 - **Hide all on a whole provider writes ONE glob**, `nous_portal/*`, as a standing policy. Models that provider publishes next week are hidden on arrival. **Show all** removes that glob again. Running Hide all on an already-globbed provider is idempotent and reports that nothing was written.
 - **A selection, or a provider narrowed by a filter, writes exact refs** — one per model. A hand-picked set is a fact, not a policy, and no glob describes it without also hiding something you did not choose. **Invert** writes exact refs for the same reason.
-- **A glob you wrote yourself is never deleted on your behalf.** If `*:free` or `nous*` still hides a model after a Show all, the panel says so once per offending pattern — *12 of them did not change: your pattern `*:free` overrules an exact tick* — with a **Show the 12** button that filters the list down to exactly those rows. One pattern named once, not 317 rows reported individually.
+- **A glob you wrote yourself is never deleted on your behalf.** If `*:free` or `nous*` still hides a model after a Show all, the panel says so once per offending pattern — *12 of them did not change: your pattern `*:free` overrules an exact tick* — with a **Show the 12** button that filters the list down to exactly those rows. One pattern named once, not 317 rows reported individually. Those rows also say it themselves, permanently: their readout reads `Hidden by *:free`, and clicking the pattern offers to remove it.
+- **Hide all shadows your per-model choices; it does not delete them.** Writing `nous_portal/*` leaves the exact patterns underneath it in place, and the first **Show all** afterwards lifts only the glob — so the per-model state you had before the Hide all comes back exactly. Press **Show all** again and it clears those exact patterns too. Hide all → Show all is an identity; Show all → Show all is "show everything".
 
 **Undo** sits in the same panel and restores both pattern lists exactly as they were, in one click. It restores the *lists*; it cannot undo a hand edit you made to the pattern fields since. And none of this changes routing — hiding is display-only, so a hidden model you have configured still resolves, still serves, and still appears in your agent's picker.
+
+<a id="hiding-models"></a>
+
+#### Hiding models: the three rules
+
+Everything above reduces to three sentences, and they are the whole model:
+
+1. **The allow list is opt-in when it is not empty.** `MODEL_VISIBILITY_ALLOW` empty means "list everything". The moment it names one pattern, every model it does *not* name is hidden.
+2. **The deny list is applied after the allow list, and it wins.** `MODEL_VISIBILITY_DENY` cannot be overruled by anything in the allow list, which is why an exact tick can fail against a glob: showing `nous_portal/aion-2.0` writes its exact ref, and `nous_portal/*` still hides it. The row says so — `Hidden by nous_portal/*` — instead of springing back with no explanation.
+3. **Hiding never affects routing.** A hidden model named in `MODEL`, in a tier override, or in a `MODEL_*_FALLBACKS` chain still resolves and still serves. Hiding removes it from `/v1/models` and from the pickers; that is all it does. A visibility filter that silently broke a working chain would be worse than a chain entry that is invisible but alive, because the breakage would surface as an outage nowhere near the setting that caused it.
+
+Both lists are comma-separated globs matched case-insensitively against the full `provider/model` ref, with `*`, `?` and `[...]`. `*` crosses `/`, so `nous_portal/*` covers `nous_portal/anthropic/claude-opus-4.6` as well as `nous_portal/aion-2.0`.
+
+#### One mechanism, one write path
+
+There is exactly one way to change what the catalogue shows from this page: select rows in the gutter and press a button in the action bar. That is true for three hundred rows and it is true for one — a single row goes out on the same batched request, so there is one endpoint, one repaint and one owner of what the page is holding. The readout beside each checkbox is a *state* (`Shown` / `Hidden`), never a verb, because a word that reads like a command in the slot that reports what is true makes a row that did not change look like a control that did not respond.
+
+The action bar says how much of the work is already done — *Hide 3 selected (2 already hidden)* — rather than offering a tri-state control. Hide on a mixed selection hides all of it; **Invert** is computed against the state at the moment you click, before anything is written.
+
+#### Folding a thousand exact patterns into globs
+
+Ticking models one at a time writes one exact pattern each, and that adds up: a real install reached **994 exact deny patterns and not a single glob** — a ~30 KB line in the managed env file, parsed and rewritten on every write. **Migrate exact patterns to globs**, beside *Save patterns*, folds every provider whose models are *all* individually hidden into one `provider/*`.
+
+It is offered, never applied on its own. Pressing it previews: how many patterns become how many, which providers, and how many models are hidden before and after. The fold is only offered when those last two numbers are equal — the migration is verified model by model and abandoned whole if it would move even one — and the write that follows is undoable from the same panel. One thing does change going forward: a `provider/*` glob also hides models that provider publishes *later*, which is the point of a policy and is worth knowing before you accept it.
 
 ### Reasoning control
 

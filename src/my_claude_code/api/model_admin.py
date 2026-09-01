@@ -21,7 +21,7 @@ Read-only for capabilities; the visibility and override sections write through
 the existing owners (``apply_admin_config`` and ``save_model_overrides``).
 """
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from typing import Any
@@ -492,39 +492,53 @@ def apply_visibility_bulk(
         )
 
     glob = provider_glob(provider_id)
+    if not visible:
+        # The glob *shadows* the exact patterns beneath it; it does not delete
+        # them. Deleting was defensible on the reasoning that the glob subsumes
+        # them -- until the user presses Show all, at which point the per-model
+        # choices they made before the Hide all are gone rather than restored.
+        # Shadowing makes Hide all -> Show all an identity.
+        if glob in visibility.deny:
+            # Idempotent: the user already wrote this pattern by hand.
+            return BulkVisibilityOutcome(
+                visibility=visibility,
+                removed_patterns=(),
+                wrote_glob=None,
+                wanted=wanted,
+            )
+        return BulkVisibilityOutcome(
+            visibility=ModelVisibility(
+                allow=visibility.allow, deny=(*visibility.deny, glob)
+            ),
+            removed_patterns=(),
+            wrote_glob=glob,
+            wanted=wanted,
+        )
+
+    allow = visibility.allow
     removed: list[str] = []
+    if glob in visibility.deny:
+        # Show all is first of all the undo of Hide all: lift the glob and the
+        # exact patterns it was shadowing decide again, which is exactly the
+        # state that preceded the Hide all. A second press clears those too.
+        deny = tuple(pattern for pattern in visibility.deny if pattern != glob)
+        removed.append(glob)
+        return BulkVisibilityOutcome(
+            visibility=ModelVisibility(allow=allow, deny=deny),
+            removed_patterns=tuple(removed),
+            wrote_glob=None,
+            wanted=wanted,
+        )
 
     def keep(pattern: str) -> bool:
-        # Every exact ref under the provider is subsumed by the glob either
-        # way: on hide it becomes redundant, on show it is one of the patterns
-        # this button owns.
+        # No glob to lift, so what is left hiding this provider's models is the
+        # exact patterns its own ticks wrote; showing them means removing them.
         if is_exact_ref_under(pattern, provider_id):
             removed.append(pattern)
             return False
         return True
 
     deny = tuple(pattern for pattern in visibility.deny if keep(pattern))
-    allow = tuple(
-        pattern
-        for pattern in visibility.allow
-        if not is_exact_ref_under(pattern, provider_id)
-    )
-    if not visible:
-        if glob not in deny:
-            deny = (*deny, glob)
-            wrote = glob
-        else:
-            # Idempotent: the user already wrote this pattern by hand.
-            wrote = None
-        return BulkVisibilityOutcome(
-            visibility=ModelVisibility(allow=allow, deny=deny),
-            removed_patterns=tuple(removed),
-            wrote_glob=wrote,
-            wanted=wanted,
-        )
-    if glob in deny:
-        removed.append(glob)
-        deny = tuple(pattern for pattern in deny if pattern != glob)
     wrote: str | None = None
     # An opt-in allow list hides everything it does not name, so showing a
     # whole provider means naming it there too -- the bulk mirror of
@@ -560,23 +574,127 @@ def bulk_result_rows(
             "model_ref": model_ref,
             "visible": visible,
             "honored": visible == target,
+            # What dictates this row's state now, which is what the row itself
+            # has to keep saying long after the result panel is dismissed.
+            "hidden_by": hiding_pattern(visibility, model_ref),
         }
         if not row["honored"]:
-            row["blocked_by"] = _blocking_pattern(visibility, model_ref, target)
+            # Never a ref's *own* exact pattern: after a whole-provider Show
+            # that only lifted the glob, the exact patterns underneath are
+            # deliberately still there, and naming one of them as the thing
+            # that "overrules an exact tick" describes the design as a fault.
+            row["blocked_by"] = row["hidden_by"]
         rows.append(row)
     return rows
 
 
-def _blocking_pattern(visibility: ModelVisibility, model_ref: str, target: bool) -> str:
-    """The first pattern that explains why ``model_ref`` did not reach ``target``."""
+def hiding_pattern(visibility: ModelVisibility, model_ref: str) -> str:
+    """The pattern that hides ``model_ref`` other than its own exact tick.
 
+    This is the difference between a row the select column can change and one
+    it cannot. A model hidden by the exact pattern its own tick wrote is simply
+    ``Hidden``: show it and it shows. A model hidden by ``nous_portal/*`` is
+    ``Hidden by nous_portal/*``, and no amount of ticking will move it -- which
+    is the "a per-model tick that does nothing" half of the original report.
+    Empty string when the row is visible or hidden only by its own pattern.
+    """
+
+    if visibility.is_visible(model_ref):
+        return ""
+    own = exact_pattern(model_ref)
     candidate = model_ref.strip().casefold()
     for pattern in visibility.deny:
-        if fnmatchcase(candidate, pattern):
+        if pattern != own and fnmatchcase(candidate, pattern):
             return pattern
-    if visibility.allow:
+    if visibility.allow and not any(
+        fnmatchcase(candidate, pattern) for pattern in visibility.allow
+    ):
         return ALLOW_LIST_SENTINEL
     return ""
+
+
+@dataclass(frozen=True, slots=True)
+class GlobMigration:
+    """A proposed fold of exact deny patterns into ``provider/*`` globs."""
+
+    visibility: ModelVisibility
+    providers: tuple[str, ...]
+    removed_patterns: tuple[str, ...]
+    added_patterns: tuple[str, ...]
+    hidden_before: int
+    hidden_after: int
+    identical: bool
+
+
+def migrate_exact_patterns_to_globs(
+    visibility: ModelVisibility,
+    provider_models: Mapping[str, Sequence[str]],
+) -> GlobMigration:
+    """Fold every wholly hidden provider's exact deny patterns into one glob.
+
+    A real install reached 994 exact deny patterns and zero globs: a ~30 KB
+    single line in the managed env file, parsed, folded and rewritten on every
+    write. A provider whose every published model is individually denied is
+    already expressing ``provider/*``; saying it in one pattern is the same
+    policy in a fraction of the bytes.
+
+    **It must never change what is visible.** The fold is therefore verified
+    ref by ref against the catalogue it was derived from, and abandoned whole
+    rather than partly if it would move a single model.
+    """
+
+    deny = list(visibility.deny)
+    folded: list[str] = []
+    removed: list[str] = []
+    added: list[str] = []
+    for provider_id in sorted(provider_models):
+        refs = tuple(provider_models[provider_id])
+        if not refs or any(visibility.is_visible(ref) for ref in refs):
+            continue
+        glob = provider_glob(provider_id)
+        if glob in deny:
+            continue
+        under = [
+            pattern for pattern in deny if is_exact_ref_under(pattern, provider_id)
+        ]
+        # Nothing to save: a provider hidden entirely by a pattern like
+        # ``*:free`` is already expressed in one line.
+        if not under:
+            continue
+        shadowed = set(under)
+        deny = [pattern for pattern in deny if pattern not in shadowed]
+        deny.append(glob)
+        folded.append(provider_id)
+        removed.extend(under)
+        added.append(glob)
+
+    every = [ref for refs in provider_models.values() for ref in refs]
+    hidden_before = sum(1 for ref in every if not visibility.is_visible(ref))
+    after = ModelVisibility(allow=visibility.allow, deny=tuple(deny))
+    identical = all(
+        after.is_visible(ref) == visibility.is_visible(ref) for ref in every
+    )
+    if not identical:
+        # Proving the fold is a no-op is the whole licence for making it, so a
+        # fold that cannot be proved is not offered at all.
+        return GlobMigration(
+            visibility=visibility,
+            providers=(),
+            removed_patterns=(),
+            added_patterns=(),
+            hidden_before=hidden_before,
+            hidden_after=hidden_before,
+            identical=False,
+        )
+    return GlobMigration(
+        visibility=after,
+        providers=tuple(folded),
+        removed_patterns=tuple(removed),
+        added_patterns=tuple(added),
+        hidden_before=hidden_before,
+        hidden_after=sum(1 for ref in every if not after.is_visible(ref)),
+        identical=True,
+    )
 
 
 def render_patterns(patterns: Iterable[str]) -> str:
@@ -693,6 +811,9 @@ def _model_entry(
         "model_ref": model_ref,
         "model_id": model_id,
         "visible": visibility.is_visible(model_ref),
+        # Rendered permanently in the row, not announced once in a toast: a
+        # state dictated by a glob must say which glob every time it is drawn.
+        "hidden_by": hiding_pattern(visibility, model_ref),
         "configured": model_ref in configured_refs,
         "has_metadata": info is not None,
         "override": _row_state(model_row),
