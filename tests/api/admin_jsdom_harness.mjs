@@ -451,6 +451,13 @@ const ROUTES = {
         install_hint: "Install Claude Code with: npm install -g @anthropic-ai/claude-code",
         command: "mcc-claude",
         commands: ["mcc-claude", "mcc-claude-old"],
+        command_lines: [
+          { command: "mcc-claude", help: "Launch Claude Code through the proxy", kind: "primary" },
+          { command: "mcc-claude --discover-models", help: "Also enable the model picker from the catalog", kind: "flag" },
+          { command: "mcc-claude-old", help: "Legacy launcher: full proxy environment", kind: "flag" },
+          { command: "fcc-claude", help: "Legacy alias for mcc-claude", kind: "legacy" },
+          { command: "mcc-rtk enable claude", help: "Wrap Claude Code's shell tool with the token optimizer", kind: "rtk" },
+        ],
         protocol: "anthropic_messages",
         protocol_label: "Anthropic Messages (POST /v1/messages)",
         summary: "Anthropic's Claude Code, pointed here with two environment variables.",
@@ -467,6 +474,11 @@ const ROUTES = {
         install_hint: "Install Codex with: npm install -g @openai/codex",
         command: "mcc-codex",
         commands: ["mcc-codex"],
+        command_lines: [
+          { command: "mcc-codex", help: "Launch Codex through the proxy", kind: "primary" },
+          { command: 'mcc-codex exec "<prompt>"', help: "Run Codex non-interactively on one prompt", kind: "flag" },
+          { command: "fcc-codex", help: "Legacy alias for mcc-codex", kind: "legacy" },
+        ],
         protocol: "openai_responses",
         protocol_label: "OpenAI Responses (POST /v1/responses)",
         summary: "OpenAI's Codex CLI, configured with ephemeral -c assignments.",
@@ -474,6 +486,7 @@ const ROUTES = {
         rtk_enabled: true,
         catalogue: {
           format: "codex",
+          config_env_var: null,
           delivery: "file",
           path: "/home/u/.fcc/codex-model-catalog.json",
           exists: true,
@@ -491,6 +504,10 @@ const ROUTES = {
         install_hint: "Install Pi with: curl -fsSL https://pi.dev/install.sh | sh",
         command: "mcc-pi",
         commands: ["mcc-pi"],
+        command_lines: [
+          { command: "mcc-pi", help: "Launch Pi through the proxy", kind: "primary" },
+          { command: "fcc-pi", help: "Legacy alias for mcc-pi", kind: "legacy" },
+        ],
         protocol: "anthropic_messages",
         protocol_label: "Anthropic Messages (POST /v1/messages)",
         summary: "The Pi coding agent, registered process-locally by a bundled extension.",
@@ -498,9 +515,40 @@ const ROUTES = {
         rtk_enabled: false,
         catalogue: {
           format: "pi",
+          config_env_var: null,
           delivery: "process_local",
           path: null,
           exists: true,
+          updated_at: null,
+          model_count: null,
+          defaulted_model_count: null,
+        },
+      },
+      {
+        id: "opencode",
+        display_name: "OpenCode",
+        binary: "opencode",
+        installed: true,
+        binary_path: "/usr/local/bin/opencode",
+        install_hint: "Install OpenCode with: npm install -g opencode-ai",
+        command: "mcc-opencode",
+        commands: ["mcc-opencode"],
+        command_lines: [
+          { command: "mcc-opencode", help: "Launch OpenCode through the proxy", kind: "primary" },
+          { command: 'mcc-opencode run "<prompt>"', help: "Run OpenCode non-interactively on one prompt", kind: "flag" },
+          { command: "mcc-opencode models mcc", help: "List the models MCC published", kind: "flag" },
+        ],
+        protocol: "anthropic_messages",
+        protocol_label: "Anthropic Messages (POST /v1/messages)",
+        summary: "OpenCode, pointed at an MCC-owned config file through its own OPENCODE_CONFIG variable.",
+        rtk_agent: false,
+        rtk_enabled: false,
+        catalogue: {
+          format: "opencode",
+          config_env_var: "OPENCODE_CONFIG",
+          delivery: "file",
+          path: "/home/u/.fcc/opencode-config.json",
+          exists: false,
           updated_at: null,
           model_count: null,
           defaulted_model_count: null,
@@ -797,6 +845,15 @@ window.IntersectionObserver = NoopObserver;
 window.ResizeObserver = NoopObserver;
 window.MutationObserver = window.MutationObserver || NoopObserver;
 window.scrollTo = () => {};
+// jsdom ships no clipboard, and addCopyButton returns without appending a
+// button when writeText is missing -- so without this stub the copy controls
+// the Coding agents page is built around would be invisible to every test.
+if (!window.navigator.clipboard) {
+  Object.defineProperty(window.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: () => Promise.resolve() },
+  });
+}
 window.matchMedia =
   window.matchMedia ||
   ((query) => ({
@@ -2890,6 +2947,16 @@ if (codingAgentsLink) {
     state: card.querySelector(".agent-state").textContent,
     installed: card.querySelector(".agent-state").classList.contains("installed"),
     command: card.querySelector(".agent-command").textContent,
+    commandLines: Array.from(card.querySelectorAll(".agent-command-row")).map(
+      (row) => ({
+        command: row.querySelector(".agent-command-line").textContent,
+        kind: row.dataset.kind,
+        help: row.querySelector(".agent-command-help")
+          ? flatten(row.querySelector(".agent-command-help"))
+          : null,
+        hasCopy: Boolean(row.querySelector(".guide-copy-button")),
+      }),
+    ),
     meta: flatten(card.querySelector(".agent-meta")),
     defaulted: card.querySelector(".agent-defaulted")
       ? flatten(card.querySelector(".agent-defaulted"))

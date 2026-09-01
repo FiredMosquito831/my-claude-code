@@ -219,4 +219,12 @@ def test_the_default_path_resolves_under_the_fcc_config_directory(
     ) as resolved:
         publisher.publish(_runtime())
 
-    resolved.assert_called_once_with("codex-model-catalog.json")
+    # One resolution per harness that materialises a file, and every one of
+    # them through the same helper, so no generated document can land outside
+    # ~/.fcc.
+    assert [call.args for call in resolved.call_args_list] == [
+        ("codex-model-catalog.json",),
+        ("opencode-config.json",),
+        ("opencode2-config.json",),
+        ("kilo-config.json",),
+    ]

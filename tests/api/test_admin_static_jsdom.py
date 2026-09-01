@@ -1844,17 +1844,68 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
     agents = rendered["codingAgents"]
 
     assert agents["present"] is True
-    assert agents["cardCount"] == 3
-    assert [card["id"] for card in agents["cards"]] == ["claude", "codex", "pi"]
+    assert agents["cardCount"] == 4
+    assert [card["id"] for card in agents["cards"]] == [
+        "claude",
+        "codex",
+        "pi",
+        "opencode",
+    ]
     assert [card["title"] for card in agents["cards"]] == [
         "Claude Code",
         "Codex CLI",
         "Pi",
+        "OpenCode",
     ]
     assert [card["command"] for card in agents["cards"]] == [
         "mcc-claude",
         "mcc-codex",
         "mcc-pi",
+        "mcc-opencode",
+    ]
+
+
+def test_coding_agents_card_lists_every_command_with_a_copy_button(
+    rendered: dict,
+) -> None:
+    """The page answers "what can I type" without sending anyone to the docs."""
+
+    claude = next(
+        card for card in rendered["codingAgents"]["cards"] if card["id"] == "claude"
+    )
+
+    assert [line["command"] for line in claude["commandLines"]] == [
+        "mcc-claude",
+        "mcc-claude --discover-models",
+        "mcc-claude-old",
+        "fcc-claude",
+        "mcc-rtk enable claude",
+    ]
+    assert [line["kind"] for line in claude["commandLines"]] == [
+        "primary",
+        "flag",
+        "flag",
+        "legacy",
+        "rtk",
+    ]
+    assert all(line["hasCopy"] for line in claude["commandLines"])
+    assert all(line["help"] for line in claude["commandLines"])
+
+
+def test_a_config_owning_harness_names_the_variable_it_is_pointed_with(
+    rendered: dict,
+) -> None:
+    """OpenCode's card has to say MCC owns a file, not that it edits theirs."""
+
+    opencode = next(
+        card for card in rendered["codingAgents"]["cards"] if card["id"] == "opencode"
+    )
+
+    assert "OPENCODE_CONFIG" in opencode["meta"]
+    assert "your own config file is never edited" in opencode["meta"]
+    assert "opencode-config.json" in opencode["meta"]
+    assert 'mcc-opencode run "<prompt>"' in [
+        line["command"] for line in opencode["commandLines"]
     ]
 
 

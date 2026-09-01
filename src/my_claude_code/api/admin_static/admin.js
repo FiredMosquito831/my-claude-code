@@ -7423,6 +7423,7 @@ function harnessCard(harness) {
   command.textContent = harness.command;
   card.append(command);
 
+  card.append(harnessCommandList(harness));
   card.append(harnessMeta(harness));
 
   if (!harness.installed && harness.install_hint) {
@@ -7434,6 +7435,52 @@ function harnessCard(harness) {
     card.append(hint);
   }
   return card;
+}
+
+// Every command line this agent answers to, generated server-side from the
+// registry: the launcher, its documented arguments, the legacy fcc- alias and
+// the RTK toggles. The list is the reason the page exists -- "what can I
+// actually type" used to be answerable only by reading three doc pages that
+// disagreed. Each row copies itself, so the answer is one click from useful.
+const HARNESS_COMMAND_KIND_LABELS = {
+  flag: "argument",
+  legacy: "legacy alias",
+  rtk: "token optimizer",
+};
+
+function harnessCommandList(harness) {
+  const list = document.createElement("ul");
+  list.className = "agent-command-list";
+  const lines = Array.isArray(harness.command_lines) ? harness.command_lines : [];
+  lines.forEach((line) => {
+    const row = document.createElement("li");
+    row.className = "agent-command-row";
+    row.dataset.kind = line.kind || "primary";
+
+    const code = document.createElement("code");
+    code.className = "agent-command-line";
+    code.textContent = line.command;
+    row.append(code);
+
+    if (line.help) {
+      const help = document.createElement("p");
+      help.className = "agent-command-help";
+      help.textContent = line.help;
+      row.append(help);
+    }
+
+    const label = HARNESS_COMMAND_KIND_LABELS[line.kind];
+    if (label) {
+      const kind = document.createElement("span");
+      kind.className = "agent-command-kind";
+      kind.textContent = label;
+      row.append(kind);
+    }
+
+    addCopyButton(row, () => line.command);
+    list.append(row);
+  });
+  return list;
 }
 
 function harnessMeta(harness) {
@@ -7453,6 +7500,15 @@ function harnessMeta(harness) {
     rows.push(["Catalogue", catalogue.path]);
     rows.push(["Last written", catalogue.updated_at || "unknown"]);
     rows.push(["Models", String(catalogue.model_count ?? "unknown")]);
+  }
+
+  if (catalogue && catalogue.config_env_var) {
+    // The whole zero-clobber story in one row: MCC owns a file of its own and
+    // hands the agent its path through the agent's own documented variable.
+    rows.push([
+      "Config variable",
+      `${catalogue.config_env_var} - set for the launched process only, so your own config file is never edited`,
+    ]);
   }
 
   rows.forEach(([label, value]) => {

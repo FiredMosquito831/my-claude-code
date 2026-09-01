@@ -33,10 +33,45 @@ class HarnessProtocol(StrEnum):
     OPENAI_RESPONSES = "openai_responses"
 
 
+#: The two variables the OpenCode-family generated config refers to through
+#: OpenCode's own ``{env:VARIABLE}`` substitution, and that the launcher sets
+#: in the child process only. They live here rather than beside either user
+#: because the serialiser writes the placeholder and the launcher supplies the
+#: value: a rename in one place and not the other would produce a config that
+#: parses and cannot authenticate. ``cli`` may not import ``application``, so
+#: ``config`` is the one module both are allowed to agree through.
+OPENCODE_BASE_URL_ENV = "MCC_OPENCODE_BASE_URL"
+OPENCODE_API_KEY_ENV = "MCC_OPENCODE_API_KEY"
+
+
 PROTOCOL_LABELS: dict[HarnessProtocol, str] = {
     HarnessProtocol.ANTHROPIC_MESSAGES: "Anthropic Messages (POST /v1/messages)",
     HarnessProtocol.OPENAI_RESPONSES: "OpenAI Responses (POST /v1/responses)",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessInvocation:
+    """One documented way of calling an installed console script.
+
+    The Coding agents page lists these verbatim with a copy button, so the
+    string has to be the line a user can paste. ``arguments`` is appended to
+    the command name; an empty string is the bare command itself.
+    """
+
+    arguments: str = ""
+    help_text: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessCommandLine:
+    """One copyable command line, with the sentence explaining what it does."""
+
+    command: str
+    help_text: str
+    #: ``primary`` is the headline command, ``flag`` a documented argument
+    #: form, ``legacy`` the ``fcc-`` alias, ``rtk`` a token-optimizer toggle.
+    kind: str = "primary"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +91,10 @@ class HarnessCommand:
     primary: bool = True
     #: Trailing text for the generated ``mcc-help`` line.
     help_text: str = ""
+    #: Documented argument forms beyond the bare command. Listed on the
+    #: dashboard so the answer to "what else can I type" is in the registry
+    #: rather than in three prose pages that drift apart.
+    invocations: tuple[HarnessInvocation, ...] = ()
 
     @property
     def command(self) -> str:
@@ -91,6 +130,12 @@ class HarnessCatalogue:
     #: created on the first ``mcc-<id>`` run and only *refreshed* thereafter.
     #: True only where a consumer exists that has no launcher to create it.
     created_at_startup: bool = False
+    #: The CLI's own documented environment variable naming a config file it
+    #: should read *in addition to* the user's own. Set for a harness that
+    #: takes its provider block from a file rather than from argv or env: MCC
+    #: then owns a file of its own under ``~/.fcc`` and never edits, merges
+    #: into or backs up the document the user wrote.
+    config_env_var: str | None = None
 
     @property
     def writes_file(self) -> bool:
@@ -164,6 +209,22 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
                 suffix="claude",
                 target="my_claude_code.cli.launchers.claude:launch",
                 help_text="Launch Claude Code through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments="--discover-models",
+                        help_text=(
+                            "Also enable the model picker from the catalog "
+                            "(MCC's own flag; stripped before Claude Code sees it)"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments='-p "<prompt>"',
+                        help_text=(
+                            "Run one prompt non-interactively; every other "
+                            "argument is passed to Claude Code unchanged"
+                        ),
+                    ),
+                ),
             ),
             HarnessCommand(
                 suffix="claude-old",
@@ -192,6 +253,16 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
                 suffix="codex",
                 target="my_claude_code.cli.launchers.codex:launch",
                 help_text="Launch Codex through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='exec "<prompt>"',
+                        help_text="Run Codex non-interactively on one prompt",
+                    ),
+                    HarnessInvocation(
+                        arguments="resume --last",
+                        help_text="Continue the most recent Codex session",
+                    ),
+                ),
             ),
         ),
         catalogue=HarnessCatalogue(
@@ -225,6 +296,15 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
                 suffix="pi",
                 target="my_claude_code.cli.launchers.pi:launch",
                 help_text="Launch Pi through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments="--version",
+                        help_text=(
+                            "Passed straight to Pi: MCC injects no provider "
+                            "for a non-session command"
+                        ),
+                    ),
+                ),
             ),
         ),
         catalogue=HarnessCatalogue(format_id="pi"),
@@ -241,6 +321,127 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             "extension so nothing under ~/.pi is rewritten."
         ),
         tagline="The Pi coding agent, served through this proxy.",
+    ),
+    HarnessSpec(
+        id="opencode",
+        display_name="OpenCode",
+        binary="opencode",
+        protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        install_hint="Install OpenCode with: npm install -g opencode-ai",
+        commands=(
+            HarnessCommand(
+                suffix="opencode",
+                target="my_claude_code.cli.launchers.opencode:launch",
+                legacy_alias=False,
+                help_text="Launch OpenCode through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='run "<prompt>"',
+                        help_text="Run OpenCode non-interactively on one prompt",
+                    ),
+                    HarnessInvocation(
+                        arguments="models mcc",
+                        help_text=(
+                            "List the models MCC published, with the limits "
+                            "and prices the ladder resolved"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="-m mcc/<provider>/<model>",
+                        help_text="Start on one specific MCC-routed model",
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="opencode",
+            filename="opencode-config.json",
+            config_env_var="OPENCODE_CONFIG",
+        ),
+        passthrough_commands=frozenset({"upgrade", "uninstall", "completion"}),
+        passthrough_flags=frozenset({"--help", "-h", "--version", "-v"}),
+        summary=(
+            "OpenCode, pointed at an MCC-owned config file through its own "
+            "OPENCODE_CONFIG variable so your opencode.json is never edited."
+        ),
+        tagline="The OpenCode agent, served through this proxy.",
+    ),
+    HarnessSpec(
+        id="opencode2",
+        display_name="OpenCode 2",
+        binary="opencode2",
+        protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        install_hint=("Install OpenCode 2 with: npm install -g @opencode-ai/cli@beta"),
+        commands=(
+            HarnessCommand(
+                suffix="opencode2",
+                target="my_claude_code.cli.launchers.opencode:launch_v2",
+                legacy_alias=False,
+                help_text="Launch the OpenCode 2 preview through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='run --standalone "<prompt>"',
+                        help_text=(
+                            "Run one prompt in a private server. Prefer "
+                            "--standalone: v2's background service keeps the "
+                            "config it started with, so a config MCC has since "
+                            "refreshed does not reach an already-running one"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="models",
+                        help_text="List every model OpenCode 2 can see, MCC's included",
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="opencode",
+            filename="opencode2-config.json",
+            config_env_var="OPENCODE_CONFIG",
+        ),
+        passthrough_flags=frozenset({"--help", "-h", "--version", "-v"}),
+        summary=(
+            "The OpenCode 2 preview, which installs beside v1 under its own "
+            "opencode2 binary and reads the same config schema."
+        ),
+        tagline="The OpenCode 2 preview, served through this proxy.",
+    ),
+    HarnessSpec(
+        id="kilo",
+        display_name="Kilo CLI",
+        binary="kilo",
+        protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        install_hint="Install Kilo CLI with: npm install -g @kilocode/cli",
+        commands=(
+            HarnessCommand(
+                suffix="kilo",
+                target="my_claude_code.cli.launchers.opencode:launch_kilo",
+                legacy_alias=False,
+                help_text="Launch Kilo CLI through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='run "<prompt>"',
+                        help_text="Run Kilo non-interactively on one prompt",
+                    ),
+                    HarnessInvocation(
+                        arguments="models mcc",
+                        help_text="List the models MCC published to Kilo",
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="opencode",
+            filename="kilo-config.json",
+            config_env_var="KILO_CONFIG",
+        ),
+        passthrough_flags=frozenset({"--help", "-h", "--version", "-v"}),
+        summary=(
+            "Kilo CLI, a fork of OpenCode that reads the same config schema "
+            "through its own KILO_CONFIG variable."
+        ),
+        tagline="Kilo CLI, served through this proxy.",
     ),
 )
 
@@ -276,6 +477,60 @@ def harness_commands() -> tuple[HarnessCommand, ...]:
     """Return every console script the registry owns, across all harnesses."""
 
     return tuple(entry for spec in HARNESS_SPECS for entry in spec.commands)
+
+
+def harness_command_lines(spec: HarnessSpec) -> tuple[HarnessCommandLine, ...]:
+    """Return every command line a user can type for one harness.
+
+    Generated, never written out: the Coding agents page, the docs and the
+    installer summary all render this, so an argument form documented in one
+    place cannot go missing from the other two. The order is the order a
+    reader wants it -- the bare command, then its documented arguments, then
+    the legacy alias, then the token-optimizer toggles.
+    """
+
+    lines: list[HarnessCommandLine] = []
+    for command in spec.commands:
+        lines.append(
+            HarnessCommandLine(
+                command=command.command,
+                help_text=command.help_text,
+                kind="primary" if command.primary else "flag",
+            )
+        )
+        lines.extend(
+            HarnessCommandLine(
+                command=f"{command.command} {invocation.arguments}".rstrip(),
+                help_text=invocation.help_text,
+                kind="flag",
+            )
+            for invocation in command.invocations
+        )
+    lines.extend(
+        HarnessCommandLine(
+            command=legacy,
+            help_text=f"Legacy alias for {command.command}",
+            kind="legacy",
+        )
+        for command in spec.commands
+        if (legacy := command.legacy_command) is not None
+    )
+    if spec.rtk_agent:
+        lines.append(
+            HarnessCommandLine(
+                command=f"mcc-rtk enable {spec.id}",
+                help_text=f"Wrap {spec.display_name}'s shell tool with the token optimizer",
+                kind="rtk",
+            )
+        )
+        lines.append(
+            HarnessCommandLine(
+                command=f"mcc-rtk disable {spec.id}",
+                help_text=f"Remove the token optimizer from {spec.display_name}",
+                kind="rtk",
+            )
+        )
+    return tuple(lines)
 
 
 def catalogue_specs() -> tuple[HarnessSpec, ...]:

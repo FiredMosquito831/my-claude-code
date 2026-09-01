@@ -469,21 +469,77 @@ Codex reads a model catalog that MCC generates, so its own picker works normally
   <img src="../assets/codex.png" alt="Codex CLI running through My Claude Code" width="720">
 </div>
 
+### OpenCode, OpenCode 2 and Kilo
+
+```bash
+mcc-opencode    # OpenCode, against MCC's Anthropic Messages route
+mcc-opencode2   # the OpenCode 2 preview (installs beside v1, binary opencode2)
+mcc-kilo        # Kilo CLI, a fork of OpenCode with the same config schema
+```
+
+These three read their provider configuration from a **file**, which is the
+first time an MCC launcher has needed something other than an ephemeral flag
+list. MCC does not edit yours. Each CLI documents an environment variable that
+names an *extra* config file, merged into its precedence chain rather than
+replacing it — `OPENCODE_CONFIG` for OpenCode
+([docs](https://opencode.ai/docs/config/)) and `KILO_CONFIG` for Kilo
+([docs](https://kilo.ai/docs/code-with-ai/platforms/cli)) — so MCC writes a
+document of its own under `~/.fcc` and hands the launched process its path:
+
+| Command | File MCC owns | Variable it is handed with |
+| --- | --- | --- |
+| `mcc-opencode` | `~/.fcc/opencode-config.json` | `OPENCODE_CONFIG` |
+| `mcc-opencode2` | `~/.fcc/opencode2-config.json` | `OPENCODE_CONFIG` |
+| `mcc-kilo` | `~/.fcc/kilo-config.json` | `KILO_CONFIG` |
+
+Your `~/.config/opencode/opencode.json` is never read, never written and never
+backed up. Stop launching through MCC and the file you wrote is the file you
+have. The file is created on your first `mcc-opencode` run — MCC does not
+scatter config for a CLI you never launch — and refreshed on every model or
+capability change thereafter.
+
+**Your proxy token is not in the file.** The generated document writes
+`options.apiKey` as OpenCode's own `{env:MCC_OPENCODE_API_KEY}` substitution,
+and the launcher sets that variable in the launched process only.
+
+MCC appears inside these CLIs as the provider `mcc`, so its models are
+addressed as `mcc/<provider>/<model>`:
+
+```bash
+mcc-opencode models mcc            # what MCC published, with real limits
+mcc-opencode run "say ok"          # one prompt, non-interactively
+mcc-opencode -m mcc/openrouter/anthropic/claude-sonnet-4.5
+```
+
+**OpenCode 2 caveat, measured.** v2 runs a background service that keeps the
+configuration it started with, so a config MCC refreshed after that service
+started does not reach it. Pass `--standalone` to run in a private server that
+reads the current one:
+
+```bash
+mcc-opencode2 run --standalone "say ok"
+```
+
+Everything else you type is passed through unchanged; `opencode upgrade`,
+`opencode uninstall` and `--version` reach the CLI without MCC configuring
+anything or requiring a running proxy.
+
 ### What MCC tells an agent about a model
 
 The catalogue MCC generates for an agent carries each model's **real**
 metadata, as MCC's resolution ladder resolved it, translated into that CLI's
 own schema:
 
-| What the ladder resolves | Where it lands in Codex | Where it lands in Pi |
-| --- | --- | --- |
-| context window | `context_window` / `max_context_window` | `contextWindow` |
-| output ceiling | *(Codex has no field)* | `maxTokens` |
-| vision support | `input_modalities` | `input` |
-| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* |
-| reasoning support | `supports_reasoning_summaries` | `reasoning` |
-| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* |
-| prices | *(Codex has no field)* | `cost.input` / `cost.output` |
+| What the ladder resolves | Where it lands in Codex | Where it lands in Pi | Where it lands in OpenCode / Kilo |
+| --- | --- | --- | --- |
+| context window | `context_window` / `max_context_window` | `contextWindow` | `limit.context` |
+| output ceiling | *(Codex has no field)* | `maxTokens` | `limit.output` |
+| vision support | `input_modalities` | `input` | `attachment` + `modalities.input` |
+| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* | `tool_call` |
+| reasoning support | `supports_reasoning_summaries` | `reasoning` | `reasoning` |
+| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* | `variants.<rung>`, clamped to OpenCode's own rungs |
+| prices | *(Codex has no field)* | `cost.input` / `cost.output` | `cost.input` / `cost.output` |
+| pinned parameters | *(Codex has no field)* | *(Pi has no field)* | `options` |
 
 A model with a 32k window is advertised as 32k. A model that publishes only
 `low` and `high` gets exactly those two rungs in Codex's picker — `xhigh`

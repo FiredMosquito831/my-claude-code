@@ -327,6 +327,37 @@
                 </li>
                 <li class="claude-launcher">
                   <div class="claude-launcher-info">
+                    <h4>OpenCode</h4>
+                    <p>
+                      The OpenCode agent, served through this proxy. It reads an
+                      MCC-owned config file, so your own
+                      <code>opencode.json</code> is never edited.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-opencode</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
+                    <h4>OpenCode 2</h4>
+                    <p>
+                      The OpenCode 2 preview, which installs beside v1 under its own
+                      <code>opencode2</code> binary.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-opencode2</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
+                    <h4>Kilo CLI</h4>
+                    <p>
+                      Kilo CLI, a fork of OpenCode that reads the same config schema
+                      through its own <code>KILO_CONFIG</code> variable.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-kilo</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
                     <h4>Previous Claude Code build</h4>
                     <p>
                       Launches the older Claude Code you had installed before, for
@@ -1707,13 +1738,29 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
 
                 <h3 id="guide-other">Point another CLI here</h3>
                 <pre><code>mcc-codex
-mcc-pi</code></pre>
+mcc-pi
+mcc-opencode
+mcc-opencode2
+mcc-kilo</code></pre>
                 <p>
                   The <strong>Coding agents</strong> page lists every CLI this proxy can
-                  launch: whether its binary is on your <code>PATH</code>, the command to
-                  copy, the protocol it will speak, and the catalogue this proxy generates
-                  for it. Nothing here installs a coding agent &mdash; a missing one is
-                  reported with that agent's own install command.
+                  launch: whether its binary is on your <code>PATH</code>,
+                  <strong>every command and flag it answers to</strong> with a copy
+                  button each, the protocol it will speak, and the catalogue this proxy
+                  generates for it. Nothing here installs a coding agent &mdash; a
+                  missing one is reported with that agent's own install command.
+                </p>
+                <p>
+                  <strong>OpenCode, OpenCode 2 and Kilo read a config file</strong>
+                  rather than command-line flags, and this proxy does not edit yours.
+                  Each of them documents a variable naming an <em>extra</em> config file
+                  &mdash; <code>OPENCODE_CONFIG</code> and <code>KILO_CONFIG</code>
+                  &mdash; so the launcher writes a file of its own under
+                  <code>~/.fcc</code> and hands over its path. Your proxy token is not in
+                  that file either: it is written as OpenCode's own
+                  <code>{env:...}</code> substitution and supplied to the launched
+                  process only. Inside those CLIs the models appear under the provider
+                  <code>mcc</code>, as <code>mcc/&lt;provider&gt;/&lt;model&gt;</code>.
                 </p>
                 <img class="guide-shot" src="/admin/img/codex-model-picker.png"
                      alt="Codex model picker with the generated MCC catalog" loading="lazy">

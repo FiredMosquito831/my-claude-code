@@ -19,7 +19,7 @@ There are three runtime surfaces:
 
 - HTTP proxy: FastAPI routes expose Anthropic-compatible, Responses-compatible,
   health, model-listing, stop, and admin endpoints.
-- CLI launchers: wrapper entrypoints prepare Claude Code, Codex, and Pi sessions
+- CLI launchers: wrapper entrypoints prepare Claude Code, Codex, Pi, OpenCode, OpenCode 2 and Kilo sessions
   so they target the local proxy.
 - Messaging bridge: optional Discord or Telegram adapters turn chat messages
   into managed client CLI sessions.
@@ -215,6 +215,10 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
 - `fcc-claude-old` calls `my_claude_code.cli.launchers.claude:launch_legacy`.
 - `fcc-codex` calls `my_claude_code.cli.launchers.codex:launch`.
 - `fcc-pi` calls `my_claude_code.cli.launchers.pi:launch`.
+- `mcc-opencode` / `mcc-opencode2` / `mcc-kilo` call
+  `my_claude_code.cli.launchers.opencode:launch` / `:launch_v2` / `:launch_kilo`.
+  These three have no `fcc-` alias: no installed copy of MCC ever published
+  one, so inventing it would ship a command that never had users.
 - `mcc-desktop` (legacy alias `fcc-desktop`) calls `my_claude_code.cli.desktop_entrypoint:main`;
   [cli/desktop.py](src/my_claude_code/cli/desktop.py) is the controller that owns the `mcc-server`
   child process — spawn, health check, restart, stop — while
@@ -331,9 +335,13 @@ source detection for startup warnings also belongs to `src/my_claude_code/config
 
 - config directory: `~/.fcc`;
 - managed env file: `~/.fcc/.env`;
-- generated harness model catalogues: `~/.fcc/<harness>-model-catalog.json`,
-  resolved through `harness_catalogue_path()`; today only
-  `~/.fcc/codex-model-catalog.json`;
+- generated harness catalogues and configs, resolved through
+  `harness_catalogue_path()`: `~/.fcc/codex-model-catalog.json`,
+  `~/.fcc/opencode-config.json`, `~/.fcc/opencode2-config.json` and
+  `~/.fcc/kilo-config.json`. Each is created by its own `mcc-<id>` launcher on
+  first run (the Codex one also at server startup, because the Codex *App*
+  reads it and has no launcher) and refreshed by the fan-out publisher
+  thereafter;
 - messaging state directory: `~/.fcc/agent_workspace`;
 - server log: `~/.fcc/logs/server.log`.
 
@@ -1324,6 +1332,21 @@ helper parameterized by env builder:
   preserving the previous `fcc-claude` behavior under a new name; it does not
   gain the `--discover-models` flag since gateway model discovery is already
   always on for it.
+
+[cli/launchers/opencode.py](src/my_claude_code/cli/launchers/opencode.py) owns
+`mcc-opencode`, `mcc-opencode2` and `mcc-kilo`. These three CLIs read provider
+configuration from a **file** rather than from argv, which is the first MCC
+harness needing something other than an ephemeral flag list. MCC does not merge
+into the user's document: each CLI publishes an environment variable naming an
+*extra* config file that joins its precedence chain rather than replacing it
+(`OPENCODE_CONFIG`, `KILO_CONFIG`), so the launcher writes an MCC-owned file
+under `~/.fcc` and hands over its path. `~/.config/opencode/opencode.json` is
+never read, written or backed up. The proxy token stays off disk as well: the
+generated document writes `options.apiKey` as OpenCode's own
+`{env:MCC_OPENCODE_API_KEY}` substitution and the launcher sets that variable in
+the child process only. The two variable names live in `config/harnesses.py`
+because the serialiser writes the placeholder and the launcher supplies the
+value, and `cli/` may not import `application/`.
 
 [cli/launchers/codex.py](src/my_claude_code/cli/launchers/codex.py) owns the installed
 `fcc-codex` launcher:

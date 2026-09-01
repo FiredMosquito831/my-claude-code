@@ -48,7 +48,7 @@ Run your coding agents with free, paid, or local models. Choose and validate pro
 
 | Area | What you get |
 | --- | --- |
-| **Coding agents** | Launch Claude Code with `mcc-claude`, Codex with `mcc-codex`, or Pi with `mcc-pi`; Codex and Pi's native model pickers always list the MCC catalog, Claude Code's needs `mcc-claude --discover-models` (or `mcc-claude-old`). Every agent MCC can launch is declared in one registry, and the **Coding agents** dashboard page shows each one's installed state, command, protocol and generated catalogue. Legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases still work. |
+| **Coding agents** | Launch Claude Code with `mcc-claude`, Codex with `mcc-codex`, Pi with `mcc-pi`, OpenCode with `mcc-opencode`, the OpenCode 2 preview with `mcc-opencode2` and Kilo CLI with `mcc-kilo`; every native model picker except Claude Code's lists the MCC catalog on its own, Claude Code's needs `mcc-claude --discover-models` (or `mcc-claude-old`). Every agent MCC can launch is declared in one registry, and the **Coding agents** dashboard page shows each one's installed state, every command and flag it answers to with a copy button, its protocol and its generated catalogue. Legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases still work. |
 | **Real capabilities in every agent catalogue** | The model list MCC generates for an agent carries that model's own context window, output ceiling, vision and tool support and reasoning-effort vocabulary, resolved by MCC's metadata ladder. Where a CLI's schema demands a value nothing published, MCC uses **that CLI's** documented default and says so — in the generated file, in the launcher's output, and on the dashboard card. |
 | **Model providers** | 56 cloud and local providers, including Anthropic's own Claude API, Kimi For Coding, and experimental ChatGPT OAuth. Switch and validate providers from the Admin UI. |
 | **Claude, direct** | `anthropic` speaks Anthropic's native Messages API with a Claude Console API key, billed per token. A separate `anthropic_oauth` provider can use a Pro/Max subscription instead — **which Anthropic does not permit**; read [docs/ANTHROPIC-SUBSCRIPTION.md](docs/ANTHROPIC-SUBSCRIPTION.md) before enabling it. |
@@ -121,9 +121,9 @@ mcc-server --version
 
 1. Installs `uv` (the Python tool runner) if it's missing or too old.
 2. Looks up the **latest** release, downloads its wheel, and **verifies the SHA-256 that GitHub publishes for that asset** — a mismatch aborts rather than running unverified code.
-3. Installs My Claude Code and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex`, and `mcc-pi` on your `PATH` (the legacy `fcc-*` spellings remain as aliases).
+3. Installs My Claude Code and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, and `mcc-kilo` on your `PATH` (the legacy `fcc-*` spellings remain as aliases for the first five).
 
-That's all it does. **It does not install Claude Code, Codex, or Pi** — those are separate third-party tools, and My Claude Code doesn't need any of them to run. Install whichever you actually use, yourself. The `mcc-*` launchers just point an agent you already have at the proxy: when one is missing, the launcher prints that agent's own install command and exits 127 rather than fetching anything. A test in the suite greps both installers for every known agent package name so the rule cannot quietly change.
+That's all it does. **It does not install Claude Code, Codex, Pi, OpenCode or Kilo** — those are separate third-party tools, and My Claude Code doesn't need any of them to run. Install whichever you actually use, yourself. The `mcc-*` launchers just point an agent you already have at the proxy: when one is missing, the launcher prints that agent's own install command and exits 127 rather than fetching anything. A test in the suite greps both installers for every known agent package name so the rule cannot quietly change.
 
 The command always installs the **newest** release, so re-running it is how you update from the command line. To install a specific release instead:
 
@@ -201,7 +201,15 @@ Pi:
 mcc-pi
 ```
 
-All three launchers use the current Admin UI settings. Codex and Pi's native model pickers always list the models MCC exposes; for Claude Code, add `--discover-models` to `mcc-claude` (or use `mcc-claude-old`) to populate its picker the same way — otherwise pick a model tier by name. Normal CLI arguments still work, for example:
+OpenCode, the OpenCode 2 preview, and Kilo CLI:
+
+```bash
+mcc-opencode
+mcc-opencode2
+mcc-kilo
+```
+
+All six launchers use the current Admin UI settings. Every native model picker except Claude Code's lists the models MCC exposes on its own; for Claude Code, add `--discover-models` to `mcc-claude` (or use `mcc-claude-old`) to populate its picker the same way — otherwise pick a model tier by name. Normal CLI arguments still work, for example:
 
 ```bash
 mcc-codex exec "hello"
@@ -209,7 +217,21 @@ mcc-codex exec "hello"
 
 `mcc-pi` registers MCC only for that Pi process; your existing Pi settings, sessions, credentials, and extensions remain unchanged. `mcc-codex` is the same idea one layer down: it passes ephemeral `-c` assignments on the command line, so your own `~/.codex/config.toml` is never rewritten. The legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases behave identically.
 
-The dashboard's **Coding agents** page lists every agent MCC can launch, whether its binary is on your `PATH`, the command to copy, the protocol it will speak, and the catalogue MCC writes for it — including when that catalogue was last written and how many of its models carry a value the CLI supplied rather than a provider.
+The OpenCode family reads its configuration from a file rather than from
+arguments, so MCC writes **its own** file under `~/.fcc` and points the launched
+process at it with the CLI's own documented variable — `OPENCODE_CONFIG` for
+OpenCode and OpenCode 2, `KILO_CONFIG` for Kilo. Your
+`~/.config/opencode/opencode.json` is never read, written or backed up, and your
+proxy token stays out of the generated file: it is written as OpenCode's
+`{env:...}` substitution and supplied to the child process only. Inside those
+CLIs, MCC's models are addressed as `mcc/<provider>/<model>`:
+
+```bash
+mcc-opencode run "hello"
+mcc-opencode models mcc
+```
+
+The dashboard's **Coding agents** page lists every agent MCC can launch, whether its binary is on your `PATH`, **every command and flag it answers to** with a copy button each, the protocol it will speak, and the catalogue MCC writes for it — including when that catalogue was last written and how many of its models carry a value the CLI supplied rather than a provider.
 
 > **A coding agent is not a provider.**
 > The agents above sit **downstream** of MCC: they send requests to it. The names on the Providers page — including `opencode`, `commandcode`, `cline`, `kimi_coding` and `kilo` — are **upstream** gateways MCC buys tokens from. Some names appear in both lists and mean different things, and both can be on at once: you can run a coding agent against MCC while the same-named upstream provider is switched off. In the code the two live in separate namespaces (`harness_id` in `cli/harnesses/` and `config/harnesses.py`, `provider_id` in `providers/` and `config/provider_catalog.py`) and are never joined.
@@ -228,7 +250,7 @@ Where a CLI's schema requires a value and no provider published one, MCC fills i
 | --- | --- |
 | `mcc-server: command not found` right after installing | Your shell's `PATH` is stale. **Close and reopen the terminal.** If it persists, check that `~/.local/bin` (Windows: `%USERPROFILE%\.local\bin`) is on `PATH`. |
 | The install stopped partway with an error about `claude`, `codex`, or `pi` | An old installer tried to install those for you and aborted when one failed. The current installer doesn't touch them at all — just re-run the command above. |
-| I want Claude Code / Codex / Pi installed too | The installer no longer installs them. Install each from its own official installer; then `mcc-claude`, `mcc-codex`, and `mcc-pi` will launch them through the proxy. |
+| I want Claude Code / Codex / Pi / OpenCode / Kilo installed too | The installer no longer installs them. Install each from its own official installer; then `mcc-claude`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, and `mcc-kilo` will launch them through the proxy. |
 | `MCC release wheel checksum mismatch; refusing to install` | The download was corrupted or incomplete. Re-run the command. This check is deliberate: it will not install a wheel it can't verify. |
 | PowerShell refuses to run the script | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then re-run. This only affects the current window. |
 | Admin UI won't open, or settings don't seem to apply | You probably installed in **both** PowerShell and WSL and are editing one config while the server reads the other. Run `mcc-server --version` in each and pick one environment. |

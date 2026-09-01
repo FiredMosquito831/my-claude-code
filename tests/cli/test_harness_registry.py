@@ -32,9 +32,11 @@ from my_claude_code.cli.launchers.pi import (
 from my_claude_code.config.harnesses import (
     HARNESS_SPECS,
     catalogue_specs,
+    harness_command_lines,
     harness_commands,
     harness_ids,
     harness_spec,
+    harness_specs,
     rtk_capable_ids,
 )
 from my_claude_code.config.paths import CODEX_MODEL_CATALOG_FILENAME
@@ -95,7 +97,13 @@ def test_pi_is_the_only_harness_with_a_process_local_catalogue() -> None:
         for spec in catalogue_specs()
         if spec.catalogue is not None
     }
-    assert by_delivery == {"codex": True, "pi": False}
+    assert by_delivery == {
+        "codex": True,
+        "pi": False,
+        "opencode": True,
+        "opencode2": True,
+        "kilo": True,
+    }
 
 
 # ------------------------------------------------------------------- T1 / T2 / T3
@@ -201,3 +209,83 @@ def test_missing_binary_exits_127_with_install_hint(
     error_output = capsys.readouterr().err
     assert f"Could not find {spec.display_name} command: {spec.binary}" in error_output
     assert install_hint(spec) in error_output
+
+
+# --------------------------------------------------- generated user surfaces
+
+
+def _installer_sources() -> dict[str, str]:
+    return {
+        name: (REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
+        for name in ("install.sh", "install.ps1", "uninstall.sh", "uninstall.ps1")
+    }
+
+
+def test_installers_verify_every_registered_harness_command() -> None:
+    """A shim the installer never checks is a shim nobody notices is missing.
+
+    Both installers verify their command list after install and both
+    uninstallers remove it again. A harness added to the registry without an
+    entry in all four ships a console script that is created, never verified,
+    and left behind on uninstall.
+    """
+
+    missing: list[str] = []
+    for command in harness_commands():
+        for name, source in _installer_sources().items():
+            if command.command not in source:
+                missing.append(f"{name}: {command.command}")
+    assert missing == []
+
+
+def test_the_generated_help_lists_every_registered_harness_command() -> None:
+    from my_claude_code.cli.entrypoints import _help_text
+
+    text = _help_text()
+    for command in harness_commands():
+        assert command.command in text, command.command
+
+
+def test_every_command_line_carries_a_sentence_of_its_own() -> None:
+    """The dashboard renders these verbatim; an empty help is a blank row."""
+
+    for spec in harness_specs():
+        lines = harness_command_lines(spec)
+        assert lines, spec.id
+        for line in lines:
+            assert line.help_text, f"{spec.id}: {line.command}"
+            assert line.kind in ("primary", "flag", "legacy", "rtk")
+        assert lines[0].command == spec.command
+
+
+def test_only_harnesses_that_shipped_before_the_registry_have_an_fcc_alias() -> None:
+    """No install in the world carries an ``fcc-opencode``."""
+
+    with_alias = {
+        spec.id
+        for spec in harness_specs()
+        for command in spec.commands
+        if command.legacy_command is not None
+    }
+    assert with_alias == {"claude", "codex", "pi"}
+
+
+def test_a_config_owning_harness_names_the_variable_it_is_pointed_with() -> None:
+    """MCC owns a file only where the CLI documents a way to be handed one.
+
+    Without such a variable the only way to configure these CLIs would be to
+    edit the user's own document, which this project does not do.
+    """
+
+    by_id = {
+        spec.id: spec.catalogue.config_env_var
+        for spec in catalogue_specs()
+        if spec.catalogue is not None
+    }
+    assert by_id == {
+        "codex": None,
+        "pi": None,
+        "opencode": "OPENCODE_CONFIG",
+        "opencode2": "OPENCODE_CONFIG",
+        "kilo": "KILO_CONFIG",
+    }

@@ -39,12 +39,13 @@ from my_claude_code.application.catalogue_model import (
     CatalogueModel,
     build_catalogue_models,
 )
-from my_claude_code.application.catalogues import serialise
+from my_claude_code.application.catalogues import model_entries, serialise
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.atomic_json import json_document_bytes
 from my_claude_code.config.harnesses import (
     PROTOCOL_LABELS,
     HarnessSpec,
+    harness_command_lines,
     harness_specs,
 )
 from my_claude_code.config.paths import harness_catalogue_path
@@ -95,6 +96,13 @@ def _harness_entry(spec: HarnessSpec, rtk_enabled: bool) -> dict[str, Any]:
         "install_hint": spec.install_hint,
         "command": spec.command,
         "commands": [entry.command for entry in spec.commands],
+        # Every command line a user can type for this agent, generated from
+        # the registry so the page cannot list fewer than the shims that were
+        # installed. The dashboard renders one copyable row per entry.
+        "command_lines": [
+            {"command": line.command, "help": line.help_text, "kind": line.kind}
+            for line in harness_command_lines(spec)
+        ],
         "protocol": str(spec.protocol),
         "protocol_label": PROTOCOL_LABELS[spec.protocol],
         "summary": spec.summary,
@@ -111,6 +119,7 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
     if catalogue.filename is None:
         return {
             "format": catalogue.format_id,
+            "config_env_var": None,
             "delivery": "process_local",
             "path": None,
             "exists": True,
@@ -122,6 +131,9 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
     path = harness_catalogue_path(catalogue.filename)
     entry: dict[str, Any] = {
         "format": catalogue.format_id,
+        # The CLI's own variable naming an extra config file. Its presence is
+        # what lets MCC own a document instead of editing the user's.
+        "config_env_var": catalogue.config_env_var,
         "delivery": "file",
         "path": str(path),
         "exists": False,
@@ -134,9 +146,7 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         return entry
     entry["exists"] = True
     entry["updated_at"] = _mtime_iso(path)
-    models = document.get("models")
-    if isinstance(models, list):
-        entry["model_count"] = len(models)
+    entry["model_count"] = len(model_entries(catalogue.format_id, document))
     defaulted = document.get("_mcc_defaulted")
     entry["defaulted_model_count"] = (
         len(defaulted) if isinstance(defaulted, dict) else 0
@@ -179,6 +189,7 @@ def _catalogue_models_payload(services: ApiServices) -> dict[str, Any]:
             "filename": catalogue.filename,
             "document": document,
             "defaulted": defaulted.as_document(),
+            "model_count": len(model_entries(catalogue.format_id, document)),
             "byte_length": len(json_document_bytes(document)),
         }
     return {

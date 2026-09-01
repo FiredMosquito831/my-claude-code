@@ -8,7 +8,7 @@ the two command families are interchangeable entry points.
 import sys
 from collections.abc import Sequence
 
-from my_claude_code.config.harnesses import harness_specs
+from my_claude_code.config.harnesses import harness_command_lines, harness_specs
 from my_claude_code.core.identity import owner_for_invocation
 from my_claude_code.core.version import package_version
 
@@ -29,13 +29,12 @@ def _harness_command_lines() -> str:
 
     lines: list[str] = []
     for spec in harness_specs():
-        for command in spec.commands:
-            lines.append(f"  {command.command:<23} {command.help_text}".rstrip())
-            if spec.id == "claude" and command.primary:
-                lines.append(
-                    "  mcc-claude --discover-models   "
-                    "Also enable the model picker from the catalog"
-                )
+        for line in harness_command_lines(spec):
+            if line.kind not in ("primary", "flag"):
+                # The fcc- aliases have their own paragraph below, and the RTK
+                # toggles belong under "Manage and inspect", not here.
+                continue
+            lines.append(f"  {line.command:<23} {line.help_text}".rstrip())
     lines.append("  mcc-desktop             Open the system tray app (desktop)")
     return "\n".join(lines)
 

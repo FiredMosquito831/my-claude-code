@@ -13,7 +13,11 @@ from pathlib import Path
 import pytest
 
 from my_claude_code.application.catalogue_model import CatalogueModel
-from my_claude_code.application.catalogues import SERIALISERS, serialise
+from my_claude_code.application.catalogues import (
+    SERIALISERS,
+    model_entries,
+    serialise,
+)
 from my_claude_code.application.catalogues.base import DEFAULTED_KEY
 from my_claude_code.application.model_metadata import ModelReasoningCapability
 from my_claude_code.config.harnesses import catalogue_specs
@@ -129,7 +133,7 @@ def test_custom_provider_with_only_tier_five_data_still_serialises(
 
     document, defaulted = serialise(format_id, [model])
 
-    assert document["models"], format_id
+    assert model_entries(format_id, document), format_id
     serialised = str(document)
     assert "131072" in serialised
     if defaulted.by_model:
@@ -146,8 +150,31 @@ def test_a_fully_unknown_model_never_produces_a_zero_limit(format_id: str) -> No
 
     document, defaulted = serialise(format_id, [model])
 
-    entry = document["models"][0]
-    for key, value in entry.items():
+    entry = model_entries(format_id, document)[0]
+    for key, value in _flatten(entry):
+        if key.startswith("cost"):
+            # A price of zero is a real, defensible CLI default -- free is a
+            # number a model can genuinely cost. A *limit* of zero never is.
+            continue
         if LIMIT_KEY_PATTERN.search(key) and isinstance(value, int):
             assert value > 0, f"{format_id}.{key} was zeroed rather than defaulted"
     assert defaulted.model_count == 1
+
+
+def _flatten(entry: object, prefix: str = "") -> list[tuple[str, object]]:
+    """Return every leaf in one model entry, however deeply the CLI nests it.
+
+    Codex keeps its limits at the top level of an entry and OpenCode puts them
+    inside ``limit``; a guard that only looked one level down would pass for
+    OpenCode by never reaching the field it exists to check.
+    """
+
+    pairs: list[tuple[str, object]] = []
+    if isinstance(entry, dict):
+        for key, value in entry.items():
+            name = f"{prefix}{key}"
+            if isinstance(value, dict):
+                pairs.extend(_flatten(value, f"{name}."))
+            else:
+                pairs.append((name, value))
+    return pairs

@@ -12,7 +12,7 @@ FCC_HOME_DIRNAME=".fcc"
 # Must mirror every entry in [project.scripts] + [project.gui-scripts] (the
 # same list as Get-LauncherCommands in scripts/install.ps1); pinned by
 # tests/contracts/test_uninstaller_parity.py.
-FCC_COMMANDS="fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init fcc-chatgpt-oauth-login fcc-compact-log free-claude-code fcc-anthropic-oauth-login fcc-rtk fcc-help fcc-desktop mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-anthropic-oauth-login mcc-rtk mcc-help mcc-desktop my-claude-code"
+FCC_COMMANDS="fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init fcc-chatgpt-oauth-login fcc-compact-log free-claude-code fcc-anthropic-oauth-login fcc-rtk fcc-help fcc-desktop mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi mcc-opencode mcc-opencode2 mcc-kilo mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-anthropic-oauth-login mcc-rtk mcc-help mcc-desktop my-claude-code"
 
 dry_run=0
 uv_tool_bin=""

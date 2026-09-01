@@ -54,6 +54,24 @@ def harness_catalogue(payload: Mapping[str, Any], harness_id: str) -> dict[str, 
     return document
 
 
+def catalogue_model_count(payload: Mapping[str, Any], harness_id: str) -> int:
+    """Return how many models one harness's document carries.
+
+    The count is the server's, not the launcher's: every catalogue format
+    nests its model entries somewhere different, and a launcher that dug the
+    shape out for itself would be the second place a schema is described.
+    """
+
+    catalogues = payload.get("catalogues")
+    if not isinstance(catalogues, Mapping):
+        return 0
+    entry = catalogues.get(harness_id)
+    if not isinstance(entry, Mapping):
+        return 0
+    count = entry.get("model_count")
+    return count if isinstance(count, int) else 0
+
+
 def defaulted_summary_lines(document: Mapping[str, Any]) -> list[str]:
     """Return one line per model whose catalogue entry needed a CLI default.
 

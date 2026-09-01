@@ -6820,6 +6820,55 @@ details.turn-pane > summary:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* Every command line one agent answers to. Each row is its own grid so the
+   copy button keeps a column of its own and a long argument form wraps under
+   the code rather than pushing the button off the card. */
+
+.agent-command-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One column, not two: .guide-copy-button is absolutely positioned at the
+   row's top right, so anything placed in a right-hand column would sit
+   underneath it. The row reserves that corner with padding instead. */
+
+.agent-command-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 74px 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--input);
+}
+
+.agent-command-line {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.agent-command-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.agent-command-help {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 .agent-meta {
   display: grid;
   grid-template-columns: minmax(110px, auto) 1fr;
