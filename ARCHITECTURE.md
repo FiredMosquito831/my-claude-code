@@ -587,6 +587,32 @@ configured-model validation belong to `ProviderRuntimeManager` in the runtime
 package. This separates a single generation's resources from process-lifetime
 state.
 
+### Custom Providers
+
+A user-defined OpenAI-compatible endpoint is not a second kind of provider; it
+is an ordinary descriptor injected from a different source.
+[config/provider_registry.py](src/my_claude_code/config/provider_registry.py)
+persists `CustomProviderEntry` rows in `~/.fcc/custom_providers.json` -- never
+in `.env`, because the static credential travels on the descriptor rather than
+through a settings field -- and `all_descriptors()` merges them with the frozen
+`PROVIDER_CATALOG`. From there
+[providers/runtime/factory.py](src/my_claude_code/providers/runtime/factory.py)
+builds them through `GENERIC_OPENAI_PROFILE`, which deliberately does not
+normalize the base URL: the URL the user typed is the URL called.
+
+A registry mutation is not a settings change, so it commits nothing and only
+republishes the provider generation. That republication is *scoped*: the caller
+names the one provider it changed, `replace()` skips its blanket background
+sweep, and `ProviderRuntimeManager.refresh_provider_models` runs one awaited,
+bounded-retry discovery for that provider alone. The blanket sweep used to race
+the route's own probe -- two concurrent `/models` calls to a host registered one
+second earlier, one of which came back 403 -- and its failure was only logged,
+so a card could report models the catalogue did not have. Discovery outcomes now
+travel back as `ProviderDiscoveryFailure`, and `cache_enriched_model_infos` in
+[providers/runtime/discovery.py](src/my_claude_code/providers/runtime/discovery.py)
+is the single seam through which both discovery and the admin refresh button
+enrich from models.dev and publish the catalogue.
+
 ### Credential Rotation and Key Health
 
 A provider holding several keys asks two independent questions of one failure,

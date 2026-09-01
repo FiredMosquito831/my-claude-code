@@ -1622,3 +1622,31 @@ def test_a_drag_leaves_no_indicator_or_ghost_nodes_behind(rendered) -> None:
     routing = rendered["routing"]
 
     assert routing["strayIndicators"] == 0
+
+
+def test_custom_provider_card_labels_its_refresh_and_updates_the_count(
+    rendered,
+) -> None:
+    """The card's only discovery affordance must be findable and honest.
+
+    It read "Test" while the identical call on a static remote card read
+    "Refresh models", and the count line was written once at render time -- so
+    the card could say "0 models" straight after a refresh that returned three.
+    """
+    card = rendered["customProviders"]
+    assert card["present"] is True
+    assert card["buttonLabel"] == "Refresh models"
+    assert card["detailsBefore"].endswith("0 models")
+    assert card["detailsAfter"].endswith("3 models")
+    assert card["pillAfter"] == "3 models"
+
+
+def test_a_create_with_a_failed_discovery_does_not_render_a_healthy_card(
+    rendered,
+) -> None:
+    card = rendered["customProviders"]
+    assert card["failedPill"] == "PermissionDeniedError"
+    assert "PermissionDeniedError" in card["failedMeta"]
+    assert card["failedDetails"].endswith("0 models")
+    assert "model discovery failed" in card["message"]
+    assert "Refresh models" in card["message"]

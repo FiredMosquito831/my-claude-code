@@ -131,8 +131,30 @@ class ProviderModelInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderDiscoveryFailure:
+    """Why one provider's model-list query failed, in reportable form.
+
+    Discovery used to swallow this into a log line, so a dashboard card could
+    read "healthy" while the catalogue for that provider stayed empty. The
+    failure now travels back to the caller that triggered the refresh.
+    """
+
+    provider_id: str
+    error_type: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderModelRefreshResult:
     """Per-provider outcome of one model-catalog refresh."""
 
     refreshed_provider_ids: tuple[str, ...] = ()
     failed_provider_ids: tuple[str, ...] = ()
+    failures: tuple[ProviderDiscoveryFailure, ...] = ()
+
+    def failure_for(self, provider_id: str) -> ProviderDiscoveryFailure | None:
+        """Return the recorded failure for one provider, if it failed."""
+        for failure in self.failures:
+            if failure.provider_id == provider_id:
+                return failure
+        return None

@@ -980,3 +980,61 @@ def test_a_learned_rejection_reaches_the_manager_through_the_provider() -> None:
         narrow_dialect_by_rejections(learned, {"reasoning_effort": "2026-08-29"})
         == learned
     )
+
+
+@pytest.mark.asyncio
+async def test_replace_only_refreshes_the_mutated_provider_when_scoped() -> None:
+    """A scoped replace must not sweep every provider's /models.
+
+    The blanket sweep raced the caller's own probe: a provider registered one
+    second earlier was asked for its model list twice, concurrently, with the
+    same fresh key, and one of the two came back 403.
+    """
+    factory = RuntimeFactory()
+    manager = ProviderRuntimeManager(
+        _catalog_settings("nvidia_nim/a"), runtime_factory=factory
+    )
+
+    await manager.replace(
+        _catalog_settings("nvidia_nim/b"),
+        commit=lambda: None,
+        reason="custom_provider_change",
+        background_refresh=False,
+    )
+    await asyncio.sleep(0)
+    runtime = factory.runtimes[-1]
+    assert runtime.provider.list_model_infos.await_count == 0
+
+    result = await manager.refresh_provider_models("nvidia_nim", retry_delay=0.0)
+
+    assert result.refreshed_provider_ids == ("nvidia_nim",)
+    assert result.failures == ()
+    assert runtime.provider.list_model_infos.await_count == 1
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_scoped_refresh_retries_once_then_reports_the_failure() -> None:
+    factory = RuntimeFactory()
+    manager = ProviderRuntimeManager(
+        _catalog_settings("nvidia_nim/a"), runtime_factory=factory
+    )
+    await manager.replace(
+        _catalog_settings("nvidia_nim/b"),
+        commit=lambda: None,
+        reason="custom_provider_change",
+        background_refresh=False,
+    )
+    runtime = factory.runtimes[-1]
+    runtime.provider.list_model_infos = AsyncMock(
+        side_effect=PermissionError("upstream refused the key")
+    )
+
+    result = await manager.refresh_provider_models("nvidia_nim", retry_delay=0.0)
+
+    assert result.failed_provider_ids == ("nvidia_nim",)
+    failure = result.failure_for("nvidia_nim")
+    assert failure is not None
+    assert failure.error_type == "PermissionError"
+    assert runtime.provider.list_model_infos.await_count == 2
+    await manager.close()

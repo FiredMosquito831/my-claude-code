@@ -436,6 +436,43 @@ const ROUTES = {
   "/admin/api/claude/settings": { configured: false },
   "/admin/api/claude/config": { entries: [], values: {}, path: "", parsed: true },
   "/admin/api/providers/custom": { providers: [] },
+  "/admin/api/custom-providers": {
+    providers: [
+      {
+        provider_id: "custom_acme",
+        display_name: "Acme",
+        base_url: "https://api.acme.example/v1",
+        key_count: 1,
+        masked_keys: ["sk-acm\u2026bbbb"],
+        credential_rotation: "failover",
+        proxy: null,
+        enabled: true,
+        model_count: 0,
+        status: "configured",
+        models: [],
+        added_at: "2026-01-01T00:00:00Z",
+      },
+      {
+        provider_id: "custom_bad_ai",
+        display_name: "Bad AI",
+        base_url: "https://bad.example/v1",
+        key_count: 1,
+        masked_keys: ["sk-bad\u2026dddd"],
+        credential_rotation: "failover",
+        proxy: null,
+        enabled: true,
+        model_count: 0,
+        status: "configured",
+        models: [],
+        added_at: "2026-01-01T00:00:00Z",
+      },
+    ],
+  },
+  "/admin/api/providers/custom_acme/test": {
+    provider_id: "custom_acme",
+    ok: true,
+    models: ["m1", "m2", "m3"],
+  },
   "/admin/api/models": { models: [] },
   "/admin/api/model-admin": MODEL_ADMIN_PAGE,
   "/admin/api/model-admin/visibility/bulk": BULK_RESULT,
@@ -660,6 +697,24 @@ const PAUSE_KEY_BY_MODEL = {
 const pausedByKey = new Map();
 const fetchUrls = [];
 const fetchBodies = [];
+// POST and GET share /admin/api/custom-providers, so the create response is
+// emulated rather than routed. It starts as the failure shape because the
+// contract under test is that a failed discovery cannot render as a healthy
+// card.
+let customCreateResult = {
+  provider_id: "custom_bad_ai",
+  display_name: "Bad AI",
+  model_count: 0,
+  models: [],
+  test_error: "PermissionDeniedError",
+  discovery: {
+    provider_id: "custom_bad_ai",
+    ok: false,
+    model_count: 0,
+    error_type: "PermissionDeniedError",
+    message: "query failure: PermissionDeniedError",
+  },
+};
 window.fetch = async (url, options = {}) => {
   fetchCalls.push(String(url).split("?")[0]);
   // The query string is the whole point for the analytics filters: which
@@ -676,6 +731,12 @@ window.fetch = async (url, options = {}) => {
     }
   }
   let body = routeFor(url);
+  if (
+    String(url).split("?")[0] === "/admin/api/custom-providers" &&
+    (options.method || "GET").toUpperCase() === "POST"
+  ) {
+    body = customCreateResult;
+  }
   if (String(url).split("?")[0] === "/admin/api/config/route-pause") {
     // Emulated rather than routed: the response has to reflect the request,
     // because the page patches its own state from it instead of refetching
@@ -2445,6 +2506,51 @@ if (routingLink) {
   routing.strayIndicators = doc.querySelectorAll(".route-drop-indicator").length;
 }
 
+/* ------------------------------------------------------ custom providers
+   The card's refresh affordance and its model-count line. jsdom cannot say
+   whether the extra text fits; it can say what the card claims. */
+const customProviders = {};
+{
+  const providersLink = navLinks.find((link) => link.dataset.view === "providers");
+  if (providersLink) providersLink.click();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const card = doc.querySelector('[data-custom-provider="custom_acme"]');
+  customProviders.present = Boolean(card);
+  if (card) {
+    const button = card.querySelector(".test-button");
+    customProviders.buttonLabel = button.textContent;
+    customProviders.detailsBefore = card.querySelector(".cp-details").textContent;
+    button.click();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    customProviders.detailsAfter = card.querySelector(".cp-details").textContent;
+    customProviders.pillAfter = card.querySelector(".status-pill").textContent;
+  }
+
+  // A create whose discovery failed must not settle into a healthy card.
+  doc.getElementById("addCustomProviderButton").click();
+  doc.getElementById("cpDisplayName").value = "Bad AI";
+  doc.getElementById("cpBaseUrl").value = "https://bad.example/v1";
+  doc.getElementById("cpApiKey").value = "sk-test-key";
+  doc
+    .getElementById("customProviderForm")
+    .dispatchEvent(
+      new window.Event("submit", { bubbles: true, cancelable: true }),
+    );
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const failedCard = doc.querySelector('[data-custom-provider="custom_bad_ai"]');
+  customProviders.failedPill = failedCard
+    ? failedCard.querySelector(".status-pill").textContent
+    : null;
+  customProviders.failedMeta = failedCard
+    ? failedCard.querySelector(".provider-meta").textContent
+    : null;
+  customProviders.failedDetails = failedCard
+    ? failedCard.querySelector(".cp-details").textContent
+    : null;
+  const banner = doc.getElementById("messageArea");
+  customProviders.message = banner ? banner.textContent : "";
+}
+
 console.log(
   JSON.stringify(
     {
@@ -2488,6 +2594,7 @@ console.log(
           : "",
         dirtyAfterToggle,
       },
+      customProviders,
       fetched: Array.from(new Set(fetchCalls)).sort(),
     },
     null,

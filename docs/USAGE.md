@@ -22,6 +22,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
 - [6. Tutorial: connect Codex and Pi](#6-tutorial-connect-codex-and-pi)
 - [7. Providers and API keys](#7-providers-and-api-keys)
   - [Using Claude models](#using-claude-models)
+  - [Custom providers](#custom-providers)
 - [8. Model tiers and routing](#8-model-tiers-and-routing)
   - [Tutorial: manage many models](#tutorial-manage-many-models)
 - [9. Web search](#9-web-search)
@@ -517,6 +518,20 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"
 ```
 
 These take no credentials — the key field stays empty and validation just checks reachability.
+
+### Custom providers
+
+Any OpenAI-compatible endpoint that is not one of the 56 built-in cards can be added by hand. Press **Add custom provider** on the **Providers** tab and give it a display name, a base URL and one API key.
+
+**The base URL must include `/v1` (or whatever path segment your gateway uses).** MCC calls the URL you typed, verbatim — it does not append `/v1` for you. `https://api.example.com/v1` is right; `https://api.example.com` produces a 404 on every request with no other diagnostic. Check the gateway's own `curl` example: whatever comes before `/chat/completions` is your base URL.
+
+Creating the provider registers it, hot-reloads the provider runtime and queries `GET <base_url>/models` **once**. What that query returns is what the card reports, what `/v1/models` serves, what the **Models** page counts and what the **Model Config** pickers offer — one discovery, one answer, no restart. If it fails, MCC retries it once and then says so: the card turns red with the upstream's error, and the banner tells you to press Refresh models. A failed discovery never renders as a healthy card.
+
+**Refresh models** on a custom card does exactly what it does on a built-in remote card: re-queries the upstream's model list and republishes the catalogue, including `~/.fcc/codex-model-catalog.json`. Use it after the upstream adds a model, or after a discovery failure you have since fixed. Enabling a provider, adding a key and removing a key each re-run discovery on their own.
+
+Keys for a custom provider live in **`~/.fcc/custom_providers.json`, not `~/.fcc/.env`.** There is no environment variable for them, so the `{ENV}_API_KEY` / `{ENV}_ROTATION` file workflow does not apply — but the pool itself is the same one built-in providers use, so several keys plus a rotation policy work exactly as they do elsewhere.
+
+One caveat on capabilities. models.dev, which supplies context windows, output caps and reasoning-effort vocabularies, is keyed by *its* provider ids — and a provider you invented is not in it. Custom models therefore resolve their limits and reasoning efforts from the cross-provider vote (the same model id as served by other providers) rather than from a bucket of their own, and a generic `/models` payload that publishes only `id`/`object`/`created`/`owned_by` adds nothing. Expect `context_length` and `supported_parameters` to read as unknown on the Models page. Routing, rotation, key health, benching, fallback chains, visibility globs and analytics are all identical to a built-in provider.
 
 ---
 

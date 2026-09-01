@@ -40,6 +40,7 @@ from my_claude_code.messaging.platforms.ports import (
     MessagingRuntime,
 )
 from my_claude_code.messaging.voice import Transcriber
+from my_claude_code.providers.runtime.discovery import cache_enriched_model_infos
 
 from .provider_manager import ProviderRuntimeManager
 
@@ -242,19 +243,47 @@ class ApplicationRuntime:
         """Return cached discovered model ids per provider for admin display."""
         return self.provider_manager.cached_model_ids()
 
-    async def reload_providers(self, reason: str) -> None:
+    async def reload_providers(
+        self, reason: str, *, refresh_provider_id: str | None = None
+    ) -> dict[str, Any]:
         """Republish the provider generation after a non-Settings mutation.
 
         Custom provider registry entries live outside Settings; the mutation is
         already persisted by the caller, so the commit boundary is a no-op and
         only the provider runtime needs a fresh generation.
+
+        ``refresh_provider_id`` names the one provider the caller just changed.
+        It replaces the generation's blanket background sweep with a single
+        scoped, awaited discovery, and returns what that discovery found -- so
+        the caller reports the catalogue, not a second independent probe.
         """
         async with self._config_lock:
             await self.provider_manager.replace(
                 self.settings,
                 commit=lambda: None,
                 reason=reason,
+                background_refresh=refresh_provider_id is None,
             )
+            if refresh_provider_id is None:
+                return {}
+            result = await self.provider_manager.refresh_provider_models(
+                refresh_provider_id
+            )
+            failure = result.failure_for(refresh_provider_id)
+            if failure is not None:
+                return {
+                    "provider_id": refresh_provider_id,
+                    "ok": False,
+                    "model_count": 0,
+                    "error_type": failure.error_type,
+                    "message": failure.message,
+                }
+            cached = self.provider_manager.cached_model_ids()
+            return {
+                "provider_id": refresh_provider_id,
+                "ok": True,
+                "model_count": len(cached.get(refresh_provider_id, frozenset())),
+            }
 
     def admin_status(self) -> dict[str, Any]:
         settings = self.settings
@@ -290,11 +319,13 @@ class ApplicationRuntime:
             }
         finally:
             await lease.release()
-        self.provider_manager.cache_model_infos(provider_id, infos)
+        cached = await cache_enriched_model_infos(
+            provider_id, infos, self.provider_manager.cache_model_infos
+        )
         return {
             "provider_id": provider_id,
             "ok": True,
-            "models": sorted(info.model_id for info in infos),
+            "models": sorted(info.model_id for info in cached),
         }
 
     async def refresh_models(self) -> ProviderModelRefreshResult:

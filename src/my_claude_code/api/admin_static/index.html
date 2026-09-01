@@ -1276,6 +1276,19 @@
                   against the provider's own list before assuming the key is bad.
                 </p>
                 <p>
+                  An OpenAI-compatible endpoint with no card of its own goes in under
+                  <strong>Custom providers</strong> &mdash; a display name, a base URL and a
+                  key. Two things differ from a built-in card. The base URL is used
+                  <strong>verbatim</strong>, so it must already end in <code>/v1</code> (or
+                  whatever the gateway's own <code>curl</code> example puts before
+                  <code>/chat/completions</code>); My Claude Code does not append it. And
+                  its keys live in <code>~/.fcc/custom_providers.json</code>, not
+                  <code>~/.fcc/.env</code>. Creating, enabling or re-keying one reads its
+                  model list once and publishes it everywhere immediately, with no restart;
+                  if that read fails the card says so, and <em>Refresh models</em> retries
+                  on demand.
+                </p>
+                <p>
                   Local backends take a base URL instead of a key, and offer
                   <em>Test connection</em> where remote providers offer Refresh models:
                 </p>

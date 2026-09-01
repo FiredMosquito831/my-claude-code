@@ -6298,6 +6298,14 @@ function renderCustomProviders() {
   });
 }
 
+function customProviderDetailsText(provider) {
+  return (
+    `${provider.key_count} key${provider.key_count === 1 ? "" : "s"} · ` +
+    `${provider.credential_rotation} · ${provider.model_count} models` +
+    (provider.proxy ? ` · proxy ${provider.proxy}` : "")
+  );
+}
+
 function customProviderCard(provider) {
   const card = document.createElement("article");
   card.className = "provider-card";
@@ -6322,10 +6330,7 @@ function customProviderCard(provider) {
 
   const details = document.createElement("div");
   details.className = "cp-details";
-  details.textContent =
-    `${provider.key_count} key${provider.key_count === 1 ? "" : "s"} · ` +
-    `${provider.credential_rotation} · ${provider.model_count} models` +
-    (provider.proxy ? ` · proxy ${provider.proxy}` : "");
+  details.textContent = customProviderDetailsText(provider);
 
   const keyList = document.createElement("div");
   keyList.className = "cp-key-list";
@@ -6367,12 +6372,16 @@ function customProviderCard(provider) {
   const actions = document.createElement("div");
   actions.className = "card-actions";
 
+  // Same endpoint, same label as a static remote provider card. It used to
+  // read "Test", so the one affordance that re-runs discovery was invisible to
+  // anyone hunting for a refresh. A custom provider is always remote, so
+  // "Test connection" -- which stays on local static cards -- never applies.
   const testButton = document.createElement("button");
   testButton.type = "button";
   testButton.className = "test-button";
-  testButton.textContent = "Test";
+  testButton.textContent = "Refresh models";
   testButton.addEventListener("click", () =>
-    testCustomProvider(provider, testButton),
+    refreshCustomProviderModels(provider, testButton),
   );
 
   const editButton = document.createElement("button");
@@ -6394,7 +6403,7 @@ function customProviderCard(provider) {
   return card;
 }
 
-function updateCustomProviderCard(providerId, status, label, metaText) {
+function updateCustomProviderCard(providerId, status, label, metaText, modelCount) {
   const card = document.querySelector(`[data-custom-provider="${providerId}"]`);
   if (!card) return;
   const pill = card.querySelector(".status-pill");
@@ -6403,12 +6412,23 @@ function updateCustomProviderCard(providerId, status, label, metaText) {
   if (metaText) {
     card.querySelector(".provider-meta").textContent = metaText;
   }
+  // The count line used to be written once, at render time, and never again --
+  // so a card could read "0 models" directly under a refresh that had just
+  // returned 44.
+  if (typeof modelCount !== "number") return;
+  const provider = state.customProviders.find(
+    (entry) => entry.provider_id === providerId,
+  );
+  if (!provider) return;
+  provider.model_count = modelCount;
+  const details = card.querySelector(".cp-details");
+  if (details) details.textContent = customProviderDetailsText(provider);
 }
 
-async function testCustomProvider(provider, button) {
+async function refreshCustomProviderModels(provider, button) {
   const original = button.textContent;
   button.disabled = true;
-  button.textContent = "Testing";
+  button.textContent = "Refreshing";
   try {
     const result = await api(
       `/admin/api/providers/${provider.provider_id}/test`,
@@ -6420,6 +6440,7 @@ async function testCustomProvider(provider, button) {
         "reachable",
         `${result.models.length} models`,
         result.models.slice(0, 3).join(", ") || "No models returned",
+        result.models.length,
       );
       setModelOptions([
         ...state.modelOptions,
@@ -6430,7 +6451,8 @@ async function testCustomProvider(provider, button) {
         provider.provider_id,
         "offline",
         result.error_type,
-        result.error_type,
+        result.message || result.error_type,
+        0,
       );
     }
   } catch (error) {
@@ -6524,6 +6546,7 @@ async function submitCustomProviderForm(event) {
   const editingId = state.editingCustomProviderId;
   const button = byId("cpSubmitButton");
   button.disabled = true;
+  let failedDiscovery = null;
   try {
     if (editingId) {
       await api(`/admin/api/custom-providers/${editingId}`, {
@@ -6547,9 +6570,15 @@ async function submitCustomProviderForm(event) {
           proxy: byId("cpProxy").value,
         }),
       });
+      const discovery = result.discovery || {};
+      if (discovery.ok === false) {
+        failedDiscovery = { provider_id: result.provider_id, ...discovery };
+      }
       if (result.test_error) {
         showMessage(
-          `Added ${result.display_name}, but the live test failed: ${result.test_error}`,
+          `Added ${result.display_name}, but model discovery failed: ` +
+            `${discovery.message || result.test_error}. ` +
+            "Press Refresh models on the card to try again.",
           "warn",
         );
       } else {
@@ -6567,6 +6596,18 @@ async function submitCustomProviderForm(event) {
     }
     closeCustomProviderForm();
     await loadCustomProviders();
+    // The list response knows the catalogue is empty but not *why*. Without
+    // this the card comes back looking healthy after a discovery failure --
+    // the exact silent success this change exists to remove.
+    if (failedDiscovery) {
+      updateCustomProviderCard(
+        failedDiscovery.provider_id,
+        "offline",
+        failedDiscovery.error_type,
+        failedDiscovery.message || failedDiscovery.error_type,
+        0,
+      );
+    }
   } catch (error) {
     showMessage(`Could not save custom provider: ${error.message}`, "error");
   } finally {

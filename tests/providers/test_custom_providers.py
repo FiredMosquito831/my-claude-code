@@ -1,29 +1,35 @@
 """Custom providers: settings validation, routing, factory, discovery, cache."""
 
-from unittest.mock import patch
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.application.routing import ModelRouter
 from my_claude_code.config.provider_registry import (
     ProviderRegistry,
     get_provider_registry,
 )
 from my_claude_code.config.settings import Settings
-from my_claude_code.providers.base import ProviderConfig
+from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.openai_chat import (
     GENERIC_OPENAI_PROFILE,
     OpenAIChatProvider,
     create_openai_chat_provider,
 )
+from my_claude_code.providers.runtime import ProviderRuntime, models_dev
 from my_claude_code.providers.runtime.config import build_provider_config
 from my_claude_code.providers.runtime.discovery import (
+    ProviderModelDiscovery,
     model_cache_provider_ids_for_settings,
     model_list_provider_ids_for_settings,
 )
 from my_claude_code.providers.runtime.factory import create_provider
 from my_claude_code.providers.runtime.model_cache import ProviderModelCache
 from my_claude_code.providers.runtime.rotating import RotatingProvider
+from my_claude_code.runtime.application import ApplicationRuntime
+from my_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.providers.support import passthrough_rate_limiter
 
 
@@ -208,3 +214,73 @@ def test_generic_profile_builds_plain_openai_body() -> None:
 
     assert body["model"] == "some-model"
     assert "max_tokens" in body
+
+
+@pytest.mark.asyncio
+async def test_test_provider_caches_models_dev_enriched_infos(monkeypatch) -> None:
+    """The Refresh models button and background discovery share one seam.
+
+    They used to disagree: discovery cached models.dev-enriched infos, the
+    button cached raw ones, so the catalogue's contents depended on which one
+    filled it last.
+    """
+    upstream = MagicMock()
+    upstream.list_model_infos = AsyncMock(
+        return_value=frozenset({ProviderModelInfo("m1")})
+    )
+    upstream.cleanup = AsyncMock()
+    manager = ProviderRuntimeManager(
+        Settings(),
+        runtime_factory=lambda snapshot: ProviderRuntime(
+            snapshot, {"custom_acme_ai": cast(BaseProvider, upstream)}
+        ),
+    )
+    runtime = ApplicationRuntime(manager, transcriber=None)
+
+    async def _enrich(model_infos, path=None, provider_id=None):
+        assert provider_id == "custom_acme_ai"
+        return (ProviderModelInfo("m1", supports_thinking=True),)
+
+    monkeypatch.setattr(models_dev, "enrich_provider_model_infos", _enrich)
+
+    result = await runtime.test_provider("custom_acme_ai")
+
+    assert result == {
+        "provider_id": "custom_acme_ai",
+        "ok": True,
+        "models": ["m1"],
+    }
+    assert manager.cached_model_supports_thinking("custom_acme_ai", "m1") is True
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_discovery_failure_for_one_provider_does_not_evict_others() -> None:
+    cache = ProviderModelCache(("custom_acme_ai", "nvidia_nim"))
+    healthy = MagicMock()
+    healthy.list_model_infos = AsyncMock(
+        return_value=frozenset({ProviderModelInfo("nim-1")})
+    )
+    refusing = MagicMock()
+    refusing.list_model_infos = AsyncMock(
+        side_effect=PermissionError("upstream refused the key")
+    )
+    providers = {"nvidia_nim": healthy, "custom_acme_ai": refusing}
+    discovery = ProviderModelDiscovery(
+        Settings(),
+        lambda provider_id: cast(BaseProvider, providers[provider_id]),
+        cache,
+    )
+
+    assert (await discovery.refresh_provider("nvidia_nim")).refreshed_provider_ids == (
+        "nvidia_nim",
+    )
+    failed = await discovery.refresh_provider("custom_acme_ai")
+
+    assert failed.failed_provider_ids == ("custom_acme_ai",)
+    failure = failed.failure_for("custom_acme_ai")
+    assert failure is not None
+    assert failure.error_type == "PermissionError"
+    assert failure.message
+    # The one that answered keeps its catalogue.
+    assert cache.cached_model_ids() == {"nvidia_nim": frozenset({"nim-1"})}

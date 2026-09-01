@@ -351,6 +351,41 @@ class ProviderRuntimeManager:
             self._publish_model_catalog()
             return result
 
+    async def refresh_provider_models(
+        self,
+        provider_id: str,
+        *,
+        attempts: int = 2,
+        retry_delay: float = 0.25,
+    ) -> ProviderModelRefreshResult:
+        """Refresh exactly one mutated provider, with a bounded retry.
+
+        A provider registered seconds ago is the one most likely to lose its
+        first ``/models`` query -- a gateway that has not finished propagating
+        the key answers 403 once and then serves the list fine. One retry turns
+        that into a non-event; a periodic sweep is deliberately not the answer,
+        because the sweep is what caused the race this replaces.
+        """
+
+        async with self._replace_lock:
+            if self._closing or self._closed:
+                raise ApplicationUnavailableError("Provider runtime is shutting down.")
+            discovery = ProviderModelDiscovery(
+                self._current.settings,
+                self._current.runtime.resolve_provider,
+                self._model_cache,
+                self._connected_provider_ids(),
+            )
+            result = ProviderModelRefreshResult()
+            for attempt in range(max(1, attempts)):
+                if attempt:
+                    await asyncio.sleep(retry_delay)
+                result = await discovery.refresh_provider(provider_id)
+                if not result.failed_provider_ids:
+                    break
+            self._publish_model_catalog()
+            return result
+
     def _ensure_model_catalog(self) -> None:
         publisher = self._model_catalog_publisher
         if publisher is None:
@@ -412,8 +447,16 @@ class ProviderRuntimeManager:
         *,
         commit: CommitConfig,
         reason: str = "admin_apply",
+        background_refresh: bool = True,
     ) -> int:
-        """Prepare, commit, and atomically publish one replacement generation."""
+        """Prepare, commit, and atomically publish one replacement generation.
+
+        ``background_refresh=False`` suppresses the fire-and-forget sweep of
+        *every* provider's ``/models``. A caller that already knows which one
+        provider changed follows the replace with
+        :meth:`refresh_provider_models` instead: the sweep raced that caller's
+        own probe and hit a brand-new upstream twice within the same second.
+        """
         async with self._replace_lock:
             if self._closing or self._closed:
                 raise ApplicationUnavailableError("Provider runtime is shutting down.")
@@ -458,9 +501,12 @@ class ProviderRuntimeManager:
             self._trace_published(candidate, previous=previous, reason=reason)
             self._trace_retired(previous, reason=reason)
 
-            self._refresh_task = asyncio.create_task(
-                self._refresh_generation_in_background(candidate, only_missing=False)
-            )
+            if background_refresh:
+                self._refresh_task = asyncio.create_task(
+                    self._refresh_generation_in_background(
+                        candidate, only_missing=False
+                    )
+                )
             if previous.active_leases == 0:
                 await self._close_generation(previous, forced=False)
             return candidate.generation_id

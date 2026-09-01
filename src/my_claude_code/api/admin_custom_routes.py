@@ -7,6 +7,7 @@ drifted, and the mismatch made *every* create return HTTP 500 while the tests
 stayed green against a fake shaped like the guess.
 """
 
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -165,9 +166,44 @@ def _serialize_entry(
     }
 
 
-async def _reload_provider_runtime(services: ApiServices) -> None:
-    """Republish the provider generation after a registry mutation."""
-    await services.admin.reload_providers(reason=HOT_RELOAD_REASON)
+def _discovery_target(entry: CustomProviderEntry) -> str | None:
+    """Return the id worth probing after a mutation, or ``None``.
+
+    A disabled or keyless entry has no resolvable provider, so asking for its
+    ``/models`` would only manufacture an error to show the user.
+    """
+    if entry.enabled and entry.api_keys:
+        return entry.provider_id
+    return None
+
+
+async def _reload_provider_runtime(
+    services: ApiServices, *, refresh_provider_id: str | None = None
+) -> dict[str, Any]:
+    """Republish the provider generation after a registry mutation.
+
+    Passing ``refresh_provider_id`` swaps the generation's blanket background
+    sweep for one awaited, provider-scoped discovery -- the whole point being
+    that a brand-new upstream is queried exactly once, and that its answer is
+    what the response reports.
+    """
+    return await services.admin.reload_providers(
+        reason=HOT_RELOAD_REASON, refresh_provider_id=refresh_provider_id
+    )
+
+
+def _attach_discovery(
+    result: dict[str, Any], discovery: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Fold one discovery outcome into a serialized entry."""
+    if not discovery:
+        return result
+    result["discovery"] = dict(discovery)
+    if not discovery.get("ok", True):
+        # Kept alongside the richer block: the dashboard has surfaced
+        # ``test_error`` since the card existed.
+        result["test_error"] = str(discovery.get("error_type", "discovery_failed"))
+    return result
 
 
 @router.get("/admin/api/custom-providers")
@@ -220,18 +256,16 @@ async def create_custom_provider(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     provider_id = entry.provider_id
-    await _reload_provider_runtime(services)
-
+    discovery = await _reload_provider_runtime(
+        services, refresh_provider_id=_discovery_target(entry)
+    )
     stored = registry.get(provider_id) or entry
+    # The count and the model list both come from the catalogue the discovery
+    # just filled. They used to come from a *second*, independent probe, which
+    # is how a card could truthfully advertise 44 models while /v1/models, the
+    # Models page and every picker held none.
     result = _serialize_entry(stored, services.admin.cached_model_ids())
-    test = await services.admin.test_provider(provider_id)
-    if test.get("ok"):
-        models = sorted(str(model) for model in test.get("models", []))
-        result["models"] = models
-        result["model_count"] = len(models)
-    else:
-        result["test_error"] = test.get("error_type", "test_failed")
-    return result
+    return _attach_discovery(result, discovery)
 
 
 @router.patch("/admin/api/custom-providers/{provider_id}")
@@ -264,9 +298,13 @@ async def update_custom_provider(
         registry.update(provider_id, **changes)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown custom provider") from exc
-    await _reload_provider_runtime(services)
     stored = _registry_get_or_404(registry, provider_id)
-    return _serialize_entry(stored, services.admin.cached_model_ids())
+    discovery = await _reload_provider_runtime(
+        services, refresh_provider_id=_discovery_target(stored)
+    )
+    stored = _registry_get_or_404(registry, provider_id)
+    result = _serialize_entry(stored, services.admin.cached_model_ids())
+    return _attach_discovery(result, discovery)
 
 
 @router.post("/admin/api/custom-providers/{provider_id}/keys")
@@ -289,9 +327,14 @@ async def add_custom_provider_key(
         registry.update(provider_id, api_keys=tuple(keys))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown custom provider") from exc
-    await _reload_provider_runtime(services)
     stored = _registry_get_or_404(registry, provider_id)
-    result = _serialize_entry(stored, services.admin.cached_model_ids())
+    discovery = await _reload_provider_runtime(
+        services, refresh_provider_id=_discovery_target(stored)
+    )
+    stored = _registry_get_or_404(registry, provider_id)
+    result = _attach_discovery(
+        _serialize_entry(stored, services.admin.cached_model_ids()), discovery
+    )
     result["added"] = _mask_credential_key(api_key)
     return result
 
@@ -315,9 +358,14 @@ async def delete_custom_provider_key(
         registry.update(provider_id, api_keys=tuple(keys))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown custom provider") from exc
-    await _reload_provider_runtime(services)
     stored = _registry_get_or_404(registry, provider_id)
-    result = _serialize_entry(stored, services.admin.cached_model_ids())
+    discovery = await _reload_provider_runtime(
+        services, refresh_provider_id=_discovery_target(stored)
+    )
+    stored = _registry_get_or_404(registry, provider_id)
+    result = _attach_discovery(
+        _serialize_entry(stored, services.admin.cached_model_ids()), discovery
+    )
     result["removed"] = _mask_credential_key(removed)
     return result
 
