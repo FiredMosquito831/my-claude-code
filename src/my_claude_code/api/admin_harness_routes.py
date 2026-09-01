@@ -22,6 +22,7 @@ the server already owns.
 
 import asyncio
 import json
+import os
 import shutil
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -42,6 +43,7 @@ from my_claude_code.application.catalogue_model import (
 from my_claude_code.application.catalogues import model_entries, serialise
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.atomic_json import json_document_bytes
+from my_claude_code.config.harness_config_merge import merge_config_path
 from my_claude_code.config.harnesses import (
     PROTOCOL_LABELS,
     HarnessSpec,
@@ -116,10 +118,11 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
     catalogue = spec.catalogue
     if catalogue is None:
         return None
-    if catalogue.filename is None:
+    if catalogue.delivery == "process_local":
         return {
             "format": catalogue.format_id,
             "config_env_var": None,
+            "merged_key": None,
             "delivery": "process_local",
             "path": None,
             "exists": True,
@@ -128,13 +131,21 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
             "defaulted_model_count": None,
         }
 
-    path = harness_catalogue_path(catalogue.filename)
+    merge = catalogue.merge
+    if merge is not None:
+        path = merge_config_path(merge, os.environ)
+    else:
+        # ``delivery`` narrows this to a file catalogue, which always names one.
+        path = harness_catalogue_path(catalogue.filename or "")
     entry: dict[str, Any] = {
         "format": catalogue.format_id,
         # The CLI's own variable naming an extra config file. Its presence is
         # what lets MCC own a document instead of editing the user's.
         "config_env_var": catalogue.config_env_var,
-        "delivery": "file",
+        # Set instead when the CLI reads only its own document: the one key
+        # MCC writes into a file it does not own.
+        "merged_key": merge.owned_key_label if merge is not None else None,
+        "delivery": catalogue.delivery,
         "path": str(path),
         "exists": False,
         "updated_at": None,
@@ -144,6 +155,13 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
     document = _read_catalogue(path)
     if document is None:
         return entry
+    if merge is not None:
+        # The file is the user's, so its existence says nothing about whether
+        # MCC has ever been launched for this harness. Only MCC's own key does.
+        block = _merged_block(document, merge.owned_key_path)
+        if block is None:
+            return entry
+        document = {**document, "_mcc_defaulted": block.get("_mcc_defaulted")}
     entry["exists"] = True
     entry["updated_at"] = _mtime_iso(path)
     entry["model_count"] = len(model_entries(catalogue.format_id, document))
@@ -152,6 +170,17 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         len(defaulted) if isinstance(defaulted, dict) else 0
     )
     return entry
+
+
+def _merged_block(
+    document: Mapping[str, Any], owned_key_path: tuple[str, ...]
+) -> Mapping[str, Any] | None:
+    node: Any = document
+    for key in owned_key_path:
+        if not isinstance(node, Mapping):
+            return None
+        node = node.get(key)
+    return node if isinstance(node, Mapping) else None
 
 
 def _read_catalogue(path: Path) -> Mapping[str, Any] | None:

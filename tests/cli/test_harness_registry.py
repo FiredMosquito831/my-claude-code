@@ -40,6 +40,7 @@ from my_claude_code.config.harnesses import (
     rtk_capable_ids,
 )
 from my_claude_code.config.paths import CODEX_MODEL_CATALOG_FILENAME
+from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -91,19 +92,38 @@ def test_only_verified_agents_are_marked_rtk_capable() -> None:
     assert rtk_capable_ids() == ("claude", "codex", "pi")
 
 
-def test_pi_is_the_only_harness_with_a_process_local_catalogue() -> None:
+def test_every_catalogue_declares_how_it_reaches_its_agent() -> None:
+    """Three deliveries, and which one a harness uses is a registry decision.
+
+    ``file`` is MCC's own document under ``~/.fcc``; ``process_local`` is Pi's
+    in-memory registration, which leaves nothing behind; ``merge`` is the last
+    resort for a CLI that reads only its own config, and Command Code is the
+    only harness that has ever needed it.
+    """
+
     by_delivery = {
-        spec.id: spec.catalogue.writes_file
+        spec.id: spec.catalogue.delivery
         for spec in catalogue_specs()
         if spec.catalogue is not None
     }
     assert by_delivery == {
-        "codex": True,
-        "pi": False,
-        "opencode": True,
-        "opencode2": True,
-        "kilo": True,
+        "codex": "file",
+        "pi": "process_local",
+        "opencode": "file",
+        "opencode2": "file",
+        "kilo": "file",
+        "commandcode_cli": "merge",
     }
+    assert [
+        spec.id
+        for spec in catalogue_specs()
+        if spec.catalogue is not None and spec.catalogue.writes_file
+    ] == [
+        "codex",
+        "opencode",
+        "opencode2",
+        "kilo",
+    ]
 
 
 # ------------------------------------------------------------------- T1 / T2 / T3
@@ -273,8 +293,9 @@ def test_only_harnesses_that_shipped_before_the_registry_have_an_fcc_alias() -> 
 def test_a_config_owning_harness_names_the_variable_it_is_pointed_with() -> None:
     """MCC owns a file only where the CLI documents a way to be handed one.
 
-    Without such a variable the only way to configure these CLIs would be to
-    edit the user's own document, which this project does not do.
+    Without such a variable the only way to configure a file-reading CLI is to
+    edit the user's own document, which MCC does for exactly one harness and
+    only because that CLI publishes no alternative at all.
     """
 
     by_id = {
@@ -288,4 +309,55 @@ def test_a_config_owning_harness_names_the_variable_it_is_pointed_with() -> None
         "opencode": "OPENCODE_CONFIG",
         "opencode2": "OPENCODE_CONFIG",
         "kilo": "KILO_CONFIG",
+        "commandcode_cli": None,
     }
+
+
+def test_a_merging_harness_never_also_claims_a_config_variable() -> None:
+    """The two are alternatives, and preferring the variable is the rule."""
+
+    for spec in catalogue_specs():
+        catalogue = spec.catalogue
+        assert catalogue is not None
+        if catalogue.merge is not None:
+            assert catalogue.config_env_var is None, spec.id
+            assert catalogue.filename is None, spec.id
+
+
+def test_command_code_merges_one_key_into_the_file_its_cli_actually_reads() -> None:
+    """Read out of Command Code 1.39.0's own bundle, not out of its prose docs.
+
+    ``getUserProvidersConfigPath`` resolves ``$HOME/.commandcode/providers.json``
+    with ``USERPROFILE`` as the fallback, and ``loadProvidersConfig`` reads that
+    document and no other.
+    """
+
+    spec = spec_for("commandcode_cli")
+    assert spec.binary == "command-code"
+    assert spec.binary_aliases == ("cmdc",)
+    assert spec.catalogue is not None
+    merge = spec.catalogue.merge
+    assert merge is not None
+    assert merge.relative_parts == (".commandcode", "providers.json")
+    assert merge.owned_key_path == ("provider", "mcc")
+    assert merge.owned_key_label == "provider.mcc"
+    assert merge.home_env_vars == ("HOME", "USERPROFILE")
+
+
+def test_the_command_code_harness_id_never_collides_with_the_gateway_provider() -> None:
+    """A harness is downstream of MCC; a provider of the same name is upstream.
+
+    Both ship: ``commandcode`` is the gateway MCC can buy tokens from, and
+    ``commandcode_cli`` is the agent MCC serves. The two namespaces are allowed
+    to overlap -- ``opencode`` and ``kilo`` deliberately do, and the README
+    says why -- but the *lookup* must not, and Command Code is the one case
+    where a harness and a provider would otherwise be resolved by the same
+    string in the same release. Hence the suffix.
+    """
+
+    assert "commandcode_cli" in harness_ids()
+    assert "commandcode_cli" not in PROVIDER_CATALOG
+    assert "commandcode" in PROVIDER_CATALOG
+    assert "commandcode" not in harness_ids()
+    # The overlaps that do exist are the documented ones, and no more.
+    assert set(harness_ids()) & set(PROVIDER_CATALOG) == {"opencode", "kilo"}

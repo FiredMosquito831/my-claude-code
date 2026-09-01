@@ -9,7 +9,21 @@ from tests.api.support import create_test_app
 app = create_test_app()
 
 
-def test_proxy_auth_requires_canonical_bearer_header():
+def test_proxy_auth_accepts_the_two_headers_an_anthropic_client_actually_sends():
+    """Bearer authorization or x-api-key, and nothing else.
+
+    Both are how a real Anthropic Messages client authenticates: Claude Code's
+    ``ANTHROPIC_AUTH_TOKEN`` produces ``Authorization: Bearer``, and Anthropic's
+    own documented header -- the one an SDK-built client emits -- is
+    ``x-api-key``. Command Code forced the second to be read: for a provider
+    declared ``api: "anthropic-messages"`` it sends ``x-api-key`` alone, and its
+    ``providers.json`` applies no substitution to a static ``headers`` map, so
+    the only way to have made it send a bearer header would have been to write
+    the proxy token into the user's own config file. ``anthropic-auth-token``
+    stays unread: it is not a header any client sends, and inventing a third
+    accepted spelling widens the surface for nothing.
+    """
+
     client = TestClient(app)
     settings = Settings()
     settings.anthropic_auth_token = "s3cr3t"
@@ -27,30 +41,36 @@ def test_proxy_auth_requires_canonical_bearer_header():
         assert r.headers["request-id"].startswith("req_")
         assert "x-should-retry" not in r.headers
 
-        for headers in (
-            {"X-API-Key": "s3cr3t"},
-            {"anthropic-auth-token": "s3cr3t"},
-        ):
-            r = client.post(
-                "/v1/messages/count_tokens",
-                json=payload,
-                headers=headers,
-            )
-            assert r.status_code == 401
-            assert r.json() == {"detail": "Missing proxy authentication token"}
+        r = client.post(
+            "/v1/messages/count_tokens",
+            json=payload,
+            headers={"anthropic-auth-token": "s3cr3t"},
+        )
+        assert r.status_code == 401
+        assert r.json() == {"detail": "Missing proxy authentication token"}
 
         r = client.post(
             "/v1/messages/count_tokens",
             json=payload,
-            headers={"Authorization": "Bearer s3cr3t"},
+            headers={"X-API-Key": "wrong"},
         )
-        assert r.status_code == 200
-        assert r.json()["input_tokens"] == 1
+        assert r.status_code == 401
+        assert r.json() == {"detail": "Invalid proxy authentication token"}
+
+        for headers in (
+            {"Authorization": "Bearer s3cr3t"},
+            {"X-API-Key": "s3cr3t"},
+        ):
+            r = client.post("/v1/messages/count_tokens", json=payload, headers=headers)
+            assert r.status_code == 200
+            assert r.json()["input_tokens"] == 1
 
     app.dependency_overrides.clear()
 
 
-def test_proxy_auth_ignores_conflicting_legacy_headers():
+def test_authorization_still_wins_when_both_headers_are_present():
+    """A stale upstream key in x-api-key must not rescue a wrong bearer token."""
+
     client = TestClient(app)
     settings = Settings()
     settings.anthropic_auth_token = "b3artoken"

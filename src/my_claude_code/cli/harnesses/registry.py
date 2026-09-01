@@ -14,6 +14,7 @@ bundling agents broke installs once, and the installer's own contract test
 the shell side.
 """
 
+import shutil
 import sys
 
 from my_claude_code.cli.launchers.common import resolve_client_binary
@@ -33,8 +34,18 @@ def install_hint(spec: HarnessSpec, platform: str | None = None) -> str:
 
 
 def resolve_harness_binary(spec: HarnessSpec) -> str:
-    """Resolve a harness executable, or exit 127 with the vendor's own hint."""
+    """Resolve a harness executable, or exit 127 with the vendor's own hint.
 
+    Aliases are consulted only after the canonical name misses, so the error
+    message and the exit code stay exactly what they were for every harness
+    that declares none.
+    """
+
+    if spec.binary_aliases and shutil.which(spec.binary) is None:
+        for alias in spec.binary_aliases:
+            resolved = shutil.which(alias)
+            if resolved is not None:
+                return resolved
     return resolve_client_binary(
         binary_name=spec.binary,
         display_name=spec.display_name,

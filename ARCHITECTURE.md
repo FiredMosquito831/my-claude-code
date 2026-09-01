@@ -217,7 +217,8 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
 - `fcc-pi` calls `my_claude_code.cli.launchers.pi:launch`.
 - `mcc-opencode` / `mcc-opencode2` / `mcc-kilo` call
   `my_claude_code.cli.launchers.opencode:launch` / `:launch_v2` / `:launch_kilo`.
-  These three have no `fcc-` alias: no installed copy of MCC ever published
+- `mcc-commandcode` calls `my_claude_code.cli.launchers.commandcode:launch`.
+  These four have no `fcc-` alias: no installed copy of MCC ever published
   one, so inventing it would ship a command that never had users.
 - `mcc-desktop` (legacy alias `fcc-desktop`) calls `my_claude_code.cli.desktop_entrypoint:main`;
   [cli/desktop.py](src/my_claude_code/cli/desktop.py) is the controller that owns the `mcc-server`
@@ -341,7 +342,9 @@ source detection for startup warnings also belongs to `src/my_claude_code/config
   `~/.fcc/kilo-config.json`. Each is created by its own `mcc-<id>` launcher on
   first run (the Codex one also at server startup, because the Codex *App*
   reads it and has no launcher) and refreshed by the fan-out publisher
-  thereafter;
+  thereafter. Command Code has no file here: it reads only its own
+  `~/.commandcode/providers.json`, so MCC merges one key into that document
+  instead — see the harness registry section;
 - messaging state directory: `~/.fcc/agent_workspace`;
 - server log: `~/.fcc/logs/server.log`.
 
@@ -1347,6 +1350,41 @@ generated document writes `options.apiKey` as OpenCode's own
 the child process only. The two variable names live in `config/harnesses.py`
 because the serialiser writes the placeholder and the launcher supplies the
 value, and `cli/` may not import `application/`.
+
+[cli/launchers/commandcode.py](src/my_claude_code/cli/launchers/commandcode.py)
+owns `mcc-commandcode`, and is the one launcher that edits a document the user
+owns. Command Code 1.39.0 publishes no way out: its bundled `dist/cli.mjs`
+resolves `$HOME/.commandcode/providers.json` (`USERPROFILE` as the fallback)
+in `getUserProvidersConfigPath`, and `loadProvidersConfig` reads that file and
+no other — no `--config` path, no environment variable, no project-local file.
+So the launcher merges a single key, `provider.mcc`, through
+[config/harness_config_merge.py](src/my_claude_code/config/harness_config_merge.py),
+which is the only module in the codebase allowed to write a file MCC did not
+create. Its four guarantees are one owner (every other key read, carried and
+written back byte-for-byte), one backup taken before the first edit and never
+refreshed, an idempotent content-compare, and a reversible
+`mcc-commandcode --disconnect`. The background fan-out additionally keys off
+the *presence of MCC's own key* rather than the file's existence, so a
+`provider.mcc` block can never appear in the config of someone who never ran
+the launcher.
+
+The proxy token stays off disk here too, by a different mechanism: Command Code
+rejects a literal key in `providers.json` and expands a `"$VAR"` reference from
+the environment, so the merged block carries `"$MCC_COMMANDCODE_API_KEY"` and
+the launcher sets that variable in the child process only. The `baseURL` beside
+it is written literally, because Command Code validates that field with
+`new URL(...)` and substitutes nothing into it; the serialiser is a pure
+function of the model records and cannot know this install's port, so it emits
+`COMMANDCODE_BASE_URL_SENTINEL` and the caller — launcher or fan-out publisher,
+both of which know the proxy root — replaces it before the block reaches disk.
+
+That provider block also drove the one change to
+[api/dependencies.py](src/my_claude_code/api/dependencies.py) in this release:
+`require_proxy_auth` now accepts the proxy token in `x-api-key` as well as
+`Authorization: Bearer`. Both are how a real Anthropic Messages client
+authenticates, and Command Code's `authHeadersFor` sends only the former for a
+provider declared `api: "anthropic-messages"`. `Authorization` still wins when
+both are present, and `anthropic-auth-token` is still not read.
 
 [cli/launchers/codex.py](src/my_claude_code/cli/launchers/codex.py) owns the installed
 `fcc-codex` launcher:

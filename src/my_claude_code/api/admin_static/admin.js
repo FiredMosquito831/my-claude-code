@@ -7493,13 +7493,26 @@ function harnessMeta(harness) {
     rows.push(["Model list", "Fetched by the agent itself from /v1/models"]);
   } else if (catalogue.delivery === "process_local") {
     rows.push(["Model list", "Registered in-process at launch; no file on disk"]);
-  } else if (!catalogue.exists) {
-    rows.push(["Catalogue", catalogue.path]);
-    rows.push(["Last written", `Never - written on the first ${harness.command}`]);
   } else {
-    rows.push(["Catalogue", catalogue.path]);
-    rows.push(["Last written", catalogue.updated_at || "unknown"]);
-    rows.push(["Models", String(catalogue.model_count ?? "unknown")]);
+    const isMerge = catalogue.delivery === "merge";
+    rows.push([isMerge ? "Config file" : "Catalogue", catalogue.path]);
+    if (!catalogue.exists) {
+      rows.push(["Last written", `Never - written on the first ${harness.command}`]);
+    } else {
+      rows.push(["Last written", catalogue.updated_at || "unknown"]);
+      rows.push(["Models", String(catalogue.model_count ?? "unknown")]);
+    }
+  }
+
+  if (catalogue && catalogue.merged_key) {
+    // This agent reads only its own config file, so MCC writes one key into
+    // it. Saying which key, and that nothing else is touched, is the whole
+    // difference between an edit a user can audit and one they cannot.
+    rows.push([
+      "Merged key",
+      `${catalogue.merged_key} - the only key MCC writes; every other key is ` +
+        `left byte-for-byte, and your file is backed up before the first edit`,
+    ]);
   }
 
   if (catalogue && catalogue.config_env_var) {

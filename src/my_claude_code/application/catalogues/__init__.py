@@ -14,6 +14,12 @@ from typing import Any
 from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.catalogues.base import DefaultedFields
 from my_claude_code.application.catalogues.codex import build_codex_catalogue
+from my_claude_code.application.catalogues.commandcode import (
+    PROVIDER_ID as COMMANDCODE_PROVIDER_ID,
+)
+from my_claude_code.application.catalogues.commandcode import (
+    build_commandcode_catalogue,
+)
 from my_claude_code.application.catalogues.opencode import (
     PROVIDER_ID as OPENCODE_PROVIDER_ID,
 )
@@ -26,6 +32,7 @@ type CatalogueSerialiser = Callable[
 
 SERIALISERS: dict[str, CatalogueSerialiser] = {
     "codex": build_codex_catalogue,
+    "commandcode": build_commandcode_catalogue,
     "opencode": build_opencode_catalogue,
     "pi": build_pi_catalogue,
 }
@@ -37,6 +44,7 @@ SERIALISERS: dict[str, CatalogueSerialiser] = {
 #: contract tests inspect every format without knowing any of them by name.
 MODEL_ENTRY_PATHS: dict[str, tuple[str, ...]] = {
     "codex": ("models",),
+    "commandcode": ("provider", COMMANDCODE_PROVIDER_ID, "models"),
     "opencode": ("provider", OPENCODE_PROVIDER_ID, "models"),
     "pi": ("models",),
 }

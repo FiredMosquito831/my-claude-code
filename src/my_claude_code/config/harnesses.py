@@ -8,6 +8,16 @@ be on at once: a harness sits downstream of MCC, a provider upstream of it.
 ``harness_id`` and ``provider_id`` are therefore separate namespaces and must
 not be joined.
 
+The sharpest case of that is Command Code, because both halves ship in this
+release. The *provider* ``commandcode`` (``config/provider_catalog.py``) is the
+Command Code gateway MCC sends requests **to**, authenticated with a
+``COMMANDCODE_API_KEY`` the user bought. The *harness* ``commandcode_cli``
+below is the ``command-code`` CLI MCC serves requests **for**, over
+``POST /v1/messages`` on this machine. The ids differ on purpose -- a shared id
+would make one catalogue lookup silently answer for the other -- and a user can
+run ``mcc-commandcode`` routed to ``anthropic`` with the ``commandcode``
+provider switched off entirely.
+
 Everything a harness needs stated once lives here, because the alternative is
 what this module replaced: the same three ids written out by hand in
 ``pyproject.toml``, both installers, ``mcc-help``, the RTK state file, the RTK
@@ -42,6 +52,26 @@ class HarnessProtocol(StrEnum):
 #: ``config`` is the one module both are allowed to agree through.
 OPENCODE_BASE_URL_ENV = "MCC_OPENCODE_BASE_URL"
 OPENCODE_API_KEY_ENV = "MCC_OPENCODE_API_KEY"
+
+#: The variable Command Code's ``providers.json`` refers to as ``"$VAR"``, and
+#: that ``mcc-commandcode`` sets in the launched process only. It is named here
+#: for the same reason as the two above: the serialiser writes the reference
+#: and the launcher supplies the value, and ``cli`` may not import
+#: ``application``, so ``config`` is the one module both may agree through.
+#: Because the merged file *is* the user's own document, this indirection is
+#: what keeps the proxy token off disk entirely.
+COMMANDCODE_API_KEY_ENV = "MCC_COMMANDCODE_API_KEY"
+
+#: Command Code validates ``provider.<id>.baseURL`` with ``new URL(...)`` and
+#: skips the whole provider when it does not parse, and it applies no
+#: substitution to that field -- only ``apiKey`` is expanded. The serialiser is
+#: a pure function of the model records and does not know which port this
+#: install listens on, so it writes this sentinel and the caller replaces it
+#: with the real proxy root before the block reaches disk. It is a valid
+#: absolute URL on purpose: a substitution that somehow did not happen leaves
+#: a provider that fails loudly on connect rather than one Command Code drops
+#: at load time with a warning nobody reads.
+COMMANDCODE_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
 
 
 PROTOCOL_LABELS: dict[HarnessProtocol, str] = {
@@ -110,6 +140,40 @@ class HarnessCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class HarnessConfigMerge:
+    """How MCC edits a CLI that reads exactly one file it owns.
+
+    Declared only for a harness that offers no alternative. Command Code is
+    the first: its bundled ``dist/cli.mjs`` resolves ``providers.json`` from
+    ``$HOME/.commandcode`` (``USERPROFILE`` as fallback) and reads no other
+    document, takes no ``--config`` path and honours no config environment
+    variable. Where that is true, MCC writes one key and leaves every other
+    byte of the user's file alone; the mechanics and their guarantees live in
+    ``config/harness_config_merge.py``.
+    """
+
+    #: Path under the user's home, as the CLI itself spells it.
+    relative_parts: tuple[str, ...]
+    #: The one key MCC owns inside the document, outermost first.
+    owned_key_path: tuple[str, ...]
+    #: How the file is named to a human, on the card and in the docs.
+    display_path: str
+    #: Suffix of the one-time copy taken before MCC's first edit.
+    backup_suffix: str = ".mcc-backup"
+    #: The environment variables the CLI reads to find home, in *its* order.
+    #: Python's ``Path.home()`` prefers ``USERPROFILE`` on Windows while
+    #: Command Code prefers ``HOME``; following the CLI is the only way the
+    #: file MCC writes is the file the CLI reads.
+    home_env_vars: tuple[str, ...] = ("HOME", "USERPROFILE")
+
+    @property
+    def owned_key_label(self) -> str:
+        """Return the owned key as a reader would write it, e.g. ``provider.mcc``."""
+
+        return ".".join(self.owned_key_path)
+
+
+@dataclass(frozen=True, slots=True)
 class HarnessCatalogue:
     """How a harness learns which models MCC can route for it.
 
@@ -136,12 +200,31 @@ class HarnessCatalogue:
     #: then owns a file of its own under ``~/.fcc`` and never edits, merges
     #: into or backs up the document the user wrote.
     config_env_var: str | None = None
+    #: Set only where a CLI publishes neither an extra-config variable nor a
+    #: command-line provider form, so the sole way to declare a provider is to
+    #: edit the document the user wrote. Mutually exclusive with
+    #: ``config_env_var``: a CLI that offers a variable never needs a merge.
+    merge: HarnessConfigMerge | None = None
 
     @property
     def writes_file(self) -> bool:
         """Whether MCC materialises a catalogue file for this harness."""
 
         return self.filename is not None
+
+    @property
+    def delivery(self) -> str:
+        """Return how this harness receives its model list.
+
+        ``file`` -- MCC owns a document under ``~/.fcc`` and the CLI is told
+        its path. ``process_local`` -- registered in memory at launch, nothing
+        on disk. ``merge`` -- the CLI reads only its own document, so MCC owns
+        one key inside it.
+        """
+
+        if self.merge is not None:
+            return "merge"
+        return "file" if self.filename is not None else "process_local"
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +240,12 @@ class HarnessSpec:
     install_hint: str
     #: Platform override for the hint; ``None`` when one line serves both.
     install_hint_windows: str | None = None
+    #: Further names the same executable is published under, tried in order
+    #: when ``binary`` is not on PATH. Command Code installs four shims for
+    #: one entry point and a Windows user may have only ``cmdc`` on PATH;
+    #: printing "install Command Code" for an install that is already there
+    #: is worse than one extra ``shutil.which``.
+    binary_aliases: tuple[str, ...] = ()
     commands: tuple[HarnessCommand, ...] = ()
     catalogue: HarnessCatalogue | None = None
     #: Subcommands and flags that must reach the CLI unchanged, without MCC
@@ -442,6 +531,103 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             "through its own KILO_CONFIG variable."
         ),
         tagline="Kilo CLI, served through this proxy.",
+    ),
+    HarnessSpec(
+        # ``commandcode_cli``, not ``commandcode``: the latter is the upstream
+        # gateway in ``config/provider_catalog.py``. See the module docstring.
+        id="commandcode_cli",
+        display_name="Command Code",
+        binary="command-code",
+        # npm installs four names for the same entry point -- ``cmd``, ``cmdc``,
+        # ``command-code`` and ``commandcode``. ``cmd`` is unusable as a probe
+        # on Windows, where it resolves to the system shell; the other two are
+        # unambiguous, and either satisfies the launcher.
+        binary_aliases=("cmdc",),
+        protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        install_hint="Install Command Code with: npm install -g command-code",
+        commands=(
+            HarnessCommand(
+                suffix="commandcode",
+                target="my_claude_code.cli.launchers.commandcode:launch",
+                legacy_alias=False,
+                help_text="Launch Command Code through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='-p "<prompt>"',
+                        help_text=(
+                            "Run one prompt non-interactively and print the "
+                            "answer (add --output-format json for the event "
+                            "stream)"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="--list-models",
+                        help_text=(
+                            "List every model Command Code can see, MCC's "
+                            "included, with the limits the ladder resolved"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="-m mcc/<provider>/<model>",
+                        help_text="Start on one specific MCC-routed model",
+                    ),
+                    HarnessInvocation(
+                        arguments="--local-only",
+                        help_text=(
+                            "Command Code's own flag: use BYOK providers only, "
+                            "with no Command Code traffic. Note that its "
+                            "headless -p mode still checks you are signed in "
+                            "to Command Code before it runs, whatever model "
+                            "you asked for"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="--disconnect",
+                        help_text=(
+                            "MCC's own flag: remove MCC's provider.mcc key "
+                            "from ~/.commandcode/providers.json and exit, "
+                            "leaving every other key untouched"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="commandcode",
+            # No file of MCC's own: Command Code reads one document and MCC
+            # merges one key into it. The path below is the CLI's, not MCC's.
+            filename=None,
+            merge=HarnessConfigMerge(
+                relative_parts=(".commandcode", "providers.json"),
+                owned_key_path=("provider", "mcc"),
+                display_path="~/.commandcode/providers.json",
+            ),
+        ),
+        passthrough_commands=frozenset(
+            {
+                "info",
+                "status",
+                "help",
+                "whoami",
+                "update",
+                "feedback",
+                "issue",
+                "login",
+                "logout",
+                "mcp",
+                "skills",
+                "mods",
+                "taste",
+                "learn-taste",
+            }
+        ),
+        passthrough_flags=frozenset({"--help", "-h", "--version", "-v"}),
+        summary=(
+            "Command Code, which reads one providers.json and no override "
+            "file, so MCC merges a single provider.mcc key into it and backs "
+            "the document up first."
+        ),
+        tagline="The Command Code agent, served through this proxy.",
     ),
 )
 

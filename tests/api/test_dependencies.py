@@ -122,15 +122,36 @@ def test_require_proxy_auth_rejects_missing_authorization():
     assert exc_info.value.detail == "Missing proxy authentication token"
 
 
-@pytest.mark.parametrize("header_name", ["x-api-key", "anthropic-auth-token"])
-def test_require_proxy_auth_rejects_legacy_header_only(header_name: str):
-    request, settings = _request(headers={header_name: "secret"}, token="secret")
+def test_require_proxy_auth_rejects_a_header_no_client_sends():
+    """``anthropic-auth-token`` is nobody's spelling; reading it buys nothing."""
+
+    request, settings = _request(
+        headers={"anthropic-auth-token": "secret"}, token="secret"
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         require_proxy_auth(request, settings)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "Missing proxy authentication token"
+
+
+def test_require_proxy_auth_accepts_the_anthropic_x_api_key_header():
+    """Anthropic's own documented header, and the only one Command Code sends."""
+
+    request, settings = _request(headers={"x-api-key": "secret"}, token="secret")
+
+    require_proxy_auth(request, settings)
+
+
+def test_require_proxy_auth_rejects_a_wrong_x_api_key_as_invalid_not_missing():
+    request, settings = _request(headers={"x-api-key": "wrong"}, token="secret")
+
+    with pytest.raises(HTTPException) as exc_info:
+        require_proxy_auth(request, settings)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid proxy authentication token"
 
 
 def test_require_proxy_auth_accepts_exact_bearer_token():

@@ -209,3 +209,68 @@ def test_a_model_the_ladder_knows_nothing_about_is_reported_as_defaulted(
     defaulted = body["catalogues"]["codex"]["defaulted"]
     assert "nvidia_nim/configured" in defaulted
     assert "context_window" in defaulted["nvidia_nim/configured"]
+
+
+def test_a_merge_card_names_the_users_own_file_and_the_one_key_mcc_writes(
+    monkeypatch, tmp_path
+):
+    """The card has to say what MCC edited, because MCC does not own the file."""
+
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    providers = tmp_path / ".commandcode" / "providers.json"
+    providers.parent.mkdir(parents=True, exist_ok=True)
+    providers.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "ollama": {"baseURL": "http://x/v1"},
+                    "mcc": {
+                        "models": {"a/b": {}, "a/c": {}},
+                        "_mcc_defaulted": {"a/b": ["maxOutput"]},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    entry = next(item for item in body["harnesses"] if item["id"] == "commandcode_cli")[
+        "catalogue"
+    ]
+    assert entry["delivery"] == "merge"
+    assert entry["config_env_var"] is None
+    assert entry["merged_key"] == "provider.mcc"
+    assert entry["path"].endswith("providers.json")
+    assert entry["exists"] is True
+    assert entry["model_count"] == 2
+    assert entry["defaulted_model_count"] == 1
+
+
+def test_a_users_config_without_mccs_key_reads_as_never_launched(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    providers = tmp_path / ".commandcode" / "providers.json"
+    providers.parent.mkdir(parents=True, exist_ok=True)
+    providers.write_text(
+        json.dumps({"provider": {"ollama": {"baseURL": "http://x/v1"}}}),
+        encoding="utf-8",
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    entry = next(item for item in body["harnesses"] if item["id"] == "commandcode_cli")[
+        "catalogue"
+    ]
+    assert entry["exists"] is False
+    assert entry["model_count"] is None

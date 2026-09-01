@@ -228,3 +228,72 @@ def test_the_default_path_resolves_under_the_fcc_config_directory(
         ("opencode2-config.json",),
         ("kilo-config.json",),
     ]
+
+
+# --------------------------------------------------------------- merge targets
+
+
+def _merge_publisher(path: Path) -> HarnessCatalogueFanoutPublisher:
+    return HarnessCatalogueFanoutPublisher({"commandcode_cli": path})
+
+
+def test_a_users_own_config_is_not_written_into_until_mcc_is_invited(
+    tmp_path: Path,
+) -> None:
+    """The file existing proves nothing: only MCC's own key does.
+
+    A Command Code user who has never run ``mcc-commandcode`` already has a
+    ``providers.json``. Finding a ``provider.mcc`` block appear in it because a
+    provider key rotated on a server they left running would be exactly the
+    behaviour the never-write-for-an-unlaunched-harness rule exists to stop.
+    """
+
+    path = tmp_path / "providers.json"
+    path.write_text(
+        json.dumps({"provider": {"ollama": {"baseURL": "http://x/v1"}}}),
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+
+    _merge_publisher(path).publish(_runtime())
+
+    assert path.read_bytes() == before
+
+
+def test_an_invited_merge_target_is_refreshed_and_keeps_every_other_key(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "providers.json"
+    path.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "ollama": {"baseURL": "http://x/v1"},
+                    "mcc": {"models": {"stale/model": {}}},
+                },
+                "theme": "dark",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _merge_publisher(path).publish(_runtime({"nvidia_nim/configured": 300_000}))
+
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["theme"] == "dark"
+    assert document["provider"]["ollama"] == {"baseURL": "http://x/v1"}
+    models = document["provider"]["mcc"]["models"]
+    assert sorted(models) == ["nvidia_nim/configured", "open_router/discovered"]
+    assert models["nvidia_nim/configured"]["contextWindow"] == 300_000
+    # Written by the server, so the URL is this install's own proxy root and
+    # the token is still only a reference the launcher expands.
+    assert document["provider"]["mcc"]["baseURL"].endswith("/v1")
+    assert document["provider"]["mcc"]["apiKey"] == "$MCC_COMMANDCODE_API_KEY"
+
+
+def test_a_merge_target_is_never_created_at_startup(tmp_path: Path) -> None:
+    path = tmp_path / "providers.json"
+
+    _merge_publisher(path).ensure_exists(_runtime())
+
+    assert not path.exists()

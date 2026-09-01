@@ -428,6 +428,14 @@ With **Model discovery** on, the app populates its picker from MCC's `/v1/models
 > upstream provider is switched off. In the code they are separate namespaces
 > (`harness_id` in `cli/harnesses/` and `config/harnesses.py`, `provider_id` in
 > `providers/` and `config/provider_catalog.py`) and are never joined.
+>
+> **Command Code is the sharpest case, because both halves ship.** The provider
+> `commandcode` is the Command Code *gateway* MCC sends requests to, paid for
+> with a `COMMANDCODE_API_KEY` you bought. `mcc-commandcode` launches the
+> Command Code *CLI*, which sends its requests to MCC. Running the CLI routed
+> to `anthropic` with the `commandcode` provider switched off is an ordinary
+> setup. The registry even gives them different ids — the harness is
+> `commandcode_cli` — so no lookup can resolve one and answer with the other.
 
 Every CLI MCC can launch is declared once, in `config/harnesses.py`. That one
 declaration produces the `mcc-<id>` command, the `mcc-help` line, the
@@ -524,22 +532,76 @@ Everything else you type is passed through unchanged; `opencode upgrade`,
 `opencode uninstall` and `--version` reach the CLI without MCC configuring
 anything or requiring a running proxy.
 
+### Command Code
+
+```bash
+mcc-commandcode
+```
+
+Command Code is the one agent MCC serves by editing a file you own, because it
+gives no alternative. Read out of the installed CLI's own bundle
+(`command-code` 1.39.0, `dist/cli.mjs`), `getUserProvidersConfigPath` resolves
+`$HOME/.commandcode/providers.json` — `USERPROFILE` only as a fallback — and
+`loadProvidersConfig` reads that document and no other. There is no `--config`
+path, no config environment variable, and no project-local file.
+
+So MCC merges **one key**, `provider.mcc`, into it and treats everything else
+as untouchable:
+
+| Guarantee | How |
+| --- | --- |
+| One owner | Only `provider.mcc` is written. Every other key is read, carried through and written back byte-for-byte. |
+| Backed up once | The document is copied to `providers.json.mcc-backup` before MCC's first edit, and that copy is never overwritten — so it is always your pre-MCC file, not yesterday's MCC output. |
+| Idempotent | A refresh that resolves the same numbers writes nothing and does not churn the file's timestamp. |
+| Never uninvited | The background refresh only touches the file when `provider.mcc` is already in it. Having a `providers.json` is not consent; running `mcc-commandcode` is. |
+| Reversible | `mcc-commandcode --disconnect` deletes `provider.mcc` and leaves the rest of the document exactly as it was. |
+
+**Your proxy token is not in the file.** Command Code refuses a literal key
+there — "raw secrets don't belong in providers.json" — and expands a `"$VAR"`
+reference from the process environment instead, so MCC writes
+`"$MCC_COMMANDCODE_API_KEY"` and the launcher supplies the value to the child
+process only. The `baseURL` beside it *is* written literally, because Command
+Code validates that field with `new URL(...)` and substitutes nothing into it;
+it is a loopback address on your own machine, not a credential.
+
+MCC appears inside Command Code as the provider `mcc`:
+
+```bash
+mcc-commandcode --list-models          # what MCC published, with real limits
+mcc-commandcode -p "say ok"            # one prompt, non-interactively
+mcc-commandcode -m mcc/openrouter/anthropic/claude-sonnet-4.5 -p "say ok"
+mcc-commandcode --disconnect           # remove MCC's key again
+```
+
+Maintenance subcommands — `update`, `login`, `logout`, `mcp`, `skills`,
+`status`, `info`, `--version` — reach the CLI untouched and do not need a
+running proxy.
+
+**One thing MCC cannot do anything about, measured on 1.39.0.** Command Code's
+headless `-p` mode checks you are signed in to *Command Code* before it runs a
+turn, whatever model you asked for — `resolvePrintAuthentication` in its own
+bundle — so `mcc-commandcode -p "…"` on a machine that has never run
+`cmdc login` exits with `Error: Not authenticated`, even for an MCC-routed
+model and even with `--local-only`. Sign in once, or set
+`COMMAND_CODE_API_KEY`. MCC will not fake that credential for you: it belongs
+to Command Code's account, not to this proxy.
+
 ### What MCC tells an agent about a model
 
 The catalogue MCC generates for an agent carries each model's **real**
 metadata, as MCC's resolution ladder resolved it, translated into that CLI's
 own schema:
 
-| What the ladder resolves | Where it lands in Codex | Where it lands in Pi | Where it lands in OpenCode / Kilo |
-| --- | --- | --- | --- |
-| context window | `context_window` / `max_context_window` | `contextWindow` | `limit.context` |
-| output ceiling | *(Codex has no field)* | `maxTokens` | `limit.output` |
-| vision support | `input_modalities` | `input` | `attachment` + `modalities.input` |
-| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* | `tool_call` |
-| reasoning support | `supports_reasoning_summaries` | `reasoning` | `reasoning` |
-| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* | `variants.<rung>`, clamped to OpenCode's own rungs |
-| prices | *(Codex has no field)* | `cost.input` / `cost.output` | `cost.input` / `cost.output` |
-| pinned parameters | *(Codex has no field)* | *(Pi has no field)* | `options` |
+| What the ladder resolves | Where it lands in Codex | Where it lands in Pi | Where it lands in OpenCode / Kilo | Where it lands in Command Code |
+| --- | --- | --- | --- | --- |
+| context window | `context_window` / `max_context_window` | `contextWindow` | `limit.context` | `contextWindow` |
+| output ceiling | *(Codex has no field)* | `maxTokens` | `limit.output` | `maxOutput` |
+| vision support | `input_modalities` | `input` | `attachment` + `modalities.input` | *(no field)* |
+| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* | `tool_call` | *(no field)* |
+| reasoning support | `supports_reasoning_summaries` | `reasoning` | `reasoning` | `reasoning` |
+| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* | `variants.<rung>`, clamped to OpenCode's own rungs | `reasoningEfforts[]`, clamped to `low\|medium\|high\|xhigh\|max` |
+| prices | *(Codex has no field)* | `cost.input` / `cost.output` | `cost.input` / `cost.output` | `cost.input` / `cost.output` |
+| pinned parameters | *(Codex has no field)* | *(Pi has no field)* | `options` | `options` |
 
 A model with a 32k window is advertised as 32k. A model that publishes only
 `low` and `high` gets exactly those two rungs in Codex's picker — `xhigh`

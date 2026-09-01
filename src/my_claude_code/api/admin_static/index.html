@@ -358,6 +358,19 @@
                 </li>
                 <li class="claude-launcher">
                   <div class="claude-launcher-info">
+                    <h4>Command Code</h4>
+                    <p>
+                      Command Code, which reads one
+                      <code>~/.commandcode/providers.json</code> and no override
+                      file, so this proxy merges a single
+                      <code>provider.mcc</code> key into it and backs your
+                      document up first.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-commandcode</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
                     <h4>Previous Claude Code build</h4>
                     <p>
                       Launches the older Claude Code you had installed before, for
@@ -1741,7 +1754,8 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
 mcc-pi
 mcc-opencode
 mcc-opencode2
-mcc-kilo</code></pre>
+mcc-kilo
+mcc-commandcode</code></pre>
                 <p>
                   The <strong>Coding agents</strong> page lists every CLI this proxy can
                   launch: whether its binary is on your <code>PATH</code>,
@@ -1761,6 +1775,21 @@ mcc-kilo</code></pre>
                   <code>{env:...}</code> substitution and supplied to the launched
                   process only. Inside those CLIs the models appear under the provider
                   <code>mcc</code>, as <code>mcc/&lt;provider&gt;/&lt;model&gt;</code>.
+                </p>
+                <p>
+                  <strong>Command Code is the one exception, and it says so on its
+                  card.</strong> It reads exactly one document,
+                  <code>~/.commandcode/providers.json</code>, and publishes no flag
+                  or variable naming another &mdash; so this proxy merges a single
+                  <code>provider.mcc</code> key into your file. Every other key is
+                  written back unchanged, your document is copied to
+                  <code>providers.json.mcc-backup</code> before the first edit, a
+                  refresh that resolves the same numbers writes nothing, and
+                  <code>mcc-commandcode --disconnect</code> takes the key back
+                  again. The token still stays off disk: Command Code refuses a
+                  literal key there and expands
+                  <code>$MCC_COMMANDCODE_API_KEY</code> from the launched
+                  process's environment instead.
                 </p>
                 <img class="guide-shot" src="/admin/img/codex-model-picker.png"
                      alt="Codex model picker with the generated MCC catalog" loading="lazy">

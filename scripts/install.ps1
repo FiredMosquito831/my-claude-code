@@ -870,7 +870,7 @@ function Configure-AndConfirmFreeClaudeCode {
     # exist as soon as these do.
     $mccCommands = @(
         "mcc-server", "mcc-claude", "mcc-claude-old", "mcc-codex", "mcc-pi",
-        "mcc-opencode", "mcc-opencode2", "mcc-kilo",
+        "mcc-opencode", "mcc-opencode2", "mcc-kilo", "mcc-commandcode",
         "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log", "mcc-help",
         "mcc-rtk", "mcc-desktop", "my-claude-code"
     )
@@ -911,6 +911,7 @@ function Write-MccCommandReference {
     Write-Host "  mcc-opencode            Launch OpenCode through the proxy"
     Write-Host "  mcc-opencode2           Launch the OpenCode 2 preview through the proxy"
     Write-Host "  mcc-kilo                Launch Kilo CLI through the proxy"
+    Write-Host "  mcc-commandcode         Launch Command Code through the proxy"
     Write-Host "  mcc-desktop             Open the system tray app (desktop)"
     Write-Host ""
     Write-Host "Manage and inspect:"
@@ -951,7 +952,7 @@ function Get-LauncherCommands {
         "free-claude-code",
         "fcc-anthropic-oauth-login", "fcc-rtk", "fcc-help", "fcc-desktop",
         "mcc-server", "mcc-claude", "mcc-claude-old", "mcc-codex", "mcc-pi",
-        "mcc-opencode", "mcc-opencode2", "mcc-kilo",
+        "mcc-opencode", "mcc-opencode2", "mcc-kilo", "mcc-commandcode",
         "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
         "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-desktop",
         "my-claude-code"

@@ -1844,24 +1844,27 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
     agents = rendered["codingAgents"]
 
     assert agents["present"] is True
-    assert agents["cardCount"] == 4
+    assert agents["cardCount"] == 5
     assert [card["id"] for card in agents["cards"]] == [
         "claude",
         "codex",
         "pi",
         "opencode",
+        "commandcode_cli",
     ]
     assert [card["title"] for card in agents["cards"]] == [
         "Claude Code",
         "Codex CLI",
         "Pi",
         "OpenCode",
+        "Command Code",
     ]
     assert [card["command"] for card in agents["cards"]] == [
         "mcc-claude",
         "mcc-codex",
         "mcc-pi",
         "mcc-opencode",
+        "mcc-commandcode",
     ]
 
 
@@ -1906,6 +1909,33 @@ def test_a_config_owning_harness_names_the_variable_it_is_pointed_with(
     assert "opencode-config.json" in opencode["meta"]
     assert 'mcc-opencode run "<prompt>"' in [
         line["command"] for line in opencode["commandLines"]
+    ]
+
+
+def test_a_merging_harness_names_the_users_file_and_the_one_key_mcc_writes(
+    rendered: dict,
+) -> None:
+    """Command Code publishes no override, so its card has to be honest about it.
+
+    The card is the only place a user sees that MCC edited a document they
+    wrote, which key it owns, and that a backup was taken first.
+    """
+
+    card = next(
+        entry
+        for entry in rendered["codingAgents"]["cards"]
+        if entry["id"] == "commandcode_cli"
+    )
+
+    assert "Config file" in card["meta"]
+    assert ".commandcode/providers.json" in card["meta"].replace("\\", "/")
+    assert "provider.mcc" in card["meta"]
+    assert "every other key is left byte-for-byte" in card["meta"]
+    assert "backed up before the first edit" in card["meta"]
+    assert "Models9" in card["meta"]
+    assert card["defaulted"] is not None and "2 model(s)" in card["defaulted"]
+    assert "mcc-commandcode --disconnect" in [
+        line["command"] for line in card["commandLines"]
     ]
 
 
