@@ -327,3 +327,33 @@ def test_a_paused_ladder_records_nothing_and_resumes_afterwards() -> None:
     assert payload["summary"]["probes"] == 1
     assert payload["summary"]["time_sleeping_ms"] == 0.0
     assert [row["source"] for row in payload["tries"]] == ["upstream", "probe"]
+
+
+def test_root_cause_says_credits_rather_than_a_bench_and_a_status() -> None:
+    """ "key 0 benched 45s on 400" is true and sends the reader nowhere useful."""
+    ladder = _ladder_of(
+        [
+            LadderTry(key_index=0, status=400, error_kind="quota"),
+            LadderTry(key_index=1, status=400, error_kind="quota"),
+        ],
+        [
+            CredentialDecision(
+                key_index=0,
+                key_label="cc...0",
+                cls="quota",
+                benched_for_s=45.0,
+                status=400,
+                reason="credits exhausted on key cc...0 -- benched 45s",
+            )
+        ],
+    )
+
+    line = ladder_root_cause(
+        ladder_payload(ladder),
+        attempt_error_kind="quota",
+        attempt_duration_ms=900,
+    )
+
+    assert "credits exhausted on key cc...0 -- benched 45s on 400" in line
+    # The (key, model) footnote must not fire: a credits bench is whole-key.
+    assert "no key charged" not in line

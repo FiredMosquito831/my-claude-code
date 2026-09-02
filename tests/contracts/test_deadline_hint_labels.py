@@ -18,9 +18,11 @@ from my_claude_code.application.deadline_hints import (
     _PAGE_FOR_SECTION,
     _SECTION_FOR_ENV_VAR,
     LIMITS_PAGE_LABEL,
+    PROVIDERS_PAGE_LABEL,
     card_for,
     limit_hint,
     page_for,
+    providers_hint,
 )
 from my_claude_code.config.admin.manifest import FIELDS, SECTIONS
 
@@ -120,3 +122,16 @@ def test_the_page_a_hint_names_claims_the_card_it_names() -> None:
             f"the {section_id} card"
         )
         assert page in limit_hint(env_var)
+
+
+def test_the_credits_pointer_names_a_page_the_nav_ships() -> None:
+    """An exhausted balance sends the reader to Providers, so Providers must exist.
+
+    The pointer names no env var -- there is no number to change, only a key
+    to add or fund -- so it is not in ``_SECTION_FOR_ENV_VAR`` and is pinned
+    here instead.
+    """
+    labels = {label for label, _sections in _view_blocks().values()}
+
+    assert PROVIDERS_PAGE_LABEL in labels
+    assert PROVIDERS_PAGE_LABEL in providers_hint()

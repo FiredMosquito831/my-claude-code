@@ -15,6 +15,7 @@ from my_claude_code.application.execution import route_execution_policy
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.settings import Settings, parse_lockout_tiers
 from my_claude_code.core.credential_rotation import PROVIDER_TUNING
+from my_claude_code.core.failures import FailureKind
 from my_claude_code.core.rate_limit import MAX_RATE_LIMIT_COOLDOWN_SECONDS
 from my_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from my_claude_code.providers.runtime.config import build_provider_config
@@ -136,3 +137,17 @@ def test_a_lockout_ladder_that_cannot_be_walked_is_refused(value: str) -> None:
 def test_a_bad_lockout_ladder_is_refused_at_load() -> None:
     with pytest.raises(ValueError, match="CREDENTIAL_LOCKOUT_TIERS"):
         _settings(CREDENTIAL_LOCKOUT_TIERS="300,nope")
+
+
+def test_quota_is_a_skip_kind_an_operator_can_choose_but_never_inherits() -> None:
+    """The new kind round-trips settings -> policy, and is absent by default.
+
+    An account out of credits ends nothing by default: the next key, then the
+    next model, is exactly what a chain is for. An operator who wants the old
+    abort can still ask for it, and the validator has to accept the name.
+    """
+    default = route_execution_policy(_settings())
+    assert FailureKind.QUOTA not in default.skip_kinds
+
+    chosen = route_execution_policy(_settings(FALLBACK_SKIP_KINDS="quota"))
+    assert chosen.skip_kinds == frozenset({FailureKind.QUOTA})

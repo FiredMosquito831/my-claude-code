@@ -26,6 +26,11 @@ LIMITS_PAGE_LABEL = "Limits & Resilience"
 # sending its reader to Limits & Resilience would be a hint that names a page
 # with no such control on it, which is worse than no hint at all.
 MODEL_CONFIG_PAGE_LABEL = "Model Config"
+# The page a credential is added or replaced on. An exhausted balance is not a
+# limit and not a routing decision: nothing on Limits & Resilience or Model
+# Config tops up an account, and the only action that clears the failure is
+# adding or funding a key, which happens here.
+PROVIDERS_PAGE_LABEL = "Providers"
 
 # Env var -> the manifest section id whose card owns it. The label is looked up
 # from SECTIONS, so it is the same string the page renders.
@@ -66,6 +71,17 @@ def card_for(env_var: str) -> str:
 def page_for(env_var: str) -> str:
     """The dashboard page the card that edits ``env_var`` is rendered on."""
     return _PAGE_FOR_SECTION[_SECTION_FOR_ENV_VAR[env_var]]
+
+
+def providers_hint() -> str:
+    """The trailing pointer on a failure only a new or funded key can fix.
+
+    Not built from ``_SECTION_FOR_ENV_VAR``: there is no env var to name --
+    the operator does not edit a number, they pay a bill or paste a key. Same
+    plain-ASCII shape as :func:`limit_hint` so the two read alike wherever a
+    client prints them side by side.
+    """
+    return f" (add or top up a key on the dashboard under {PROVIDERS_PAGE_LABEL})"
 
 
 def limit_hint(env_var: str) -> str:

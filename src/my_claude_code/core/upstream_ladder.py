@@ -114,8 +114,9 @@ class CredentialDecision:
 
     key_index: int
     key_label: str | None = None
-    #: ``"auth"`` | ``"rate_limit"`` | ``None``. ``None`` means the failure was
-    #: not credential-shaped and the health record did not move at all.
+    #: ``"auth"`` | ``"rate_limit"`` | ``"quota"`` | ``None``. ``None`` means
+    #: the failure was not credential-shaped -- or was a bare ``402`` naming no
+    #: billing phrase -- and the health record did not move at all.
     cls: str | None = None
     #: Seconds the credential is benched for, read back out of the rotation
     #: engine after it decided -- never recomputed from tuning here.
@@ -508,11 +509,34 @@ def format_status_census(counts: Mapping[str, int]) -> str:
     )
 
 
+def _quota_clause(entry: Mapping[str, Any]) -> str:
+    """Say an exhausted balance in the words that name the fix.
+
+    "key 2 benched 60s on 400" is true and sends the reader to the wrong page:
+    nothing about the request, the model or the throttle explains it, and the
+    only thing that clears it is a top-up. So the credits decision gets its own
+    sentence rather than the shared benched/charged one.
+    """
+    label = entry.get("key_label") or entry.get("key_index")
+    text = f"credits exhausted on key {label}"
+    benched = entry.get("benched_for_s")
+    if benched:
+        text += f" -- benched {float(benched):.0f}s"
+    status = entry.get("status")
+    if status is not None:
+        text += f" on {status}"
+    return text
+
+
 def _charged_clause(credentials: list[Mapping[str, Any]]) -> str:
     """Name the credentials whose health actually moved, and by how much."""
     groups: dict[tuple[Any, Any, Any, Any, Any], list[int]] = {}
+    quota: list[Mapping[str, Any]] = []
     for entry in credentials:
         if entry.get("class") is None:
+            continue
+        if entry.get("class") == "quota":
+            quota.append(entry)
             continue
         key = (
             entry.get("status"),
@@ -522,8 +546,11 @@ def _charged_clause(credentials: list[Mapping[str, Any]]) -> str:
             entry.get("model_benched_for_s"),
         )
         groups.setdefault(key, []).append(int(entry["key_index"]))
-    parts: list[str] = []
-    scoped_only = True
+    parts: list[str] = [_quota_clause(entry) for entry in quota]
+    # A credits bench is whole-key by construction, so the "no key charged"
+    # footnote -- which exists to stop a (key, model) bench reading as a
+    # charged key -- must not fire when one is present.
+    scoped_only = not quota
     for (status, benched, retry_after, model, model_benched), indexes in groups.items():
         noun = "keys" if len(indexes) > 1 else "key"
         text = f"{noun} {_join([str(index) for index in sorted(indexes)])}"

@@ -1660,6 +1660,26 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <code>context_length</code> to <code>FALLBACK_SKIP_KINDS</code>, which
                   defaults to <code>invalid_request</code>.
                 </p>
+                <p class="guide-note">
+                  <strong>Neither does running out of credits.</strong> Several
+                  gateways answer an account with no balance left with an HTTP
+                  <strong>400</strong> that calls itself an invalid request
+                  &mdash; one measured on 2026-09-02 said <em>&ldquo;You have
+                  insufficient credits to make this request. Please purchase
+                  more credits to continue using the service.&rdquo;</em> and
+                  six configured fallback models were never tried. That is now
+                  its own kind, <code>quota</code>, matched on the
+                  provider&rsquo;s own words (a 402, or a 400/403 naming an
+                  explicit billing phrase) and never on a bare mention of
+                  &ldquo;credit&rdquo;. MCC rotates to the next key first
+                  &mdash; another key may have credits &mdash; then falls
+                  through to the next model, and benches the empty key for
+                  <code>RATE_LIMIT_COOLDOWN_SECONDS</code>. The Models page
+                  shows it as <em>COOLDOWN &mdash; credits exhausted</em>. If
+                  every model ends this way you are told plainly:
+                  <em>all keys reported exhausted credits</em>, pointing at
+                  <strong>Providers</strong>.
+                </p>
                 <p>
                   <strong>Images are routed separately.</strong> Plenty of fast text models
                   cannot read a screenshot at all. Set a <em>Vision adapter</em> and any
@@ -2850,7 +2870,8 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                     <strong>401/403</strong> from the provider. Those say
                     something about the model. Timeouts (first token, stall,
                     budget), <strong>429</strong>s,
-                    <code>context_length</code> and malformed requests are facts
+                    <code>quota</code>, <code>context_length</code> and malformed
+                    requests are facts
                     about the <em>request</em> — they fail identically on a
                     healthy model — and never bench one. Counting them is how a
                     single oversized prompt used to eject an entire chain.

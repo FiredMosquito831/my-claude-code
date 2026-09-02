@@ -736,11 +736,15 @@ name, so a model that never answered is not read as a broken socket and spent
 against the rest of the pool. Credentials already tried in this request are
 passed to `acquire` as an avoid set, so rotation cannot end with keys untried.
 
-*Charge the credential?* Only the two signals that describe it. A 401/403 walks
-`CREDENTIAL_LOCKOUT_TIERS`; a 429 is benched for exactly the `Retry-After` the
-provider published, carried on `ExecutionFailure.retry_after_seconds`, or for
-`RATE_LIMIT_COOLDOWN_SECONDS` when it published none, under a one-hour cap. No
-bench duration is invented at this layer. That 429 bench is scoped to the
+*Charge the credential?* Only the three signals that describe it. A 401/403
+walks `CREDENTIAL_LOCKOUT_TIERS`; a 429 is benched for exactly the `Retry-After`
+the provider published, carried on `ExecutionFailure.retry_after_seconds`, or
+for `RATE_LIMIT_COOLDOWN_SECONDS` when it published none, under a one-hour cap;
+a `QUOTA` failure whose body named an explicit billing phrase benches the whole
+key for `RATE_LIMIT_COOLDOWN_SECONDS`, carried on the same field, through the
+same fixed window (`RotationEngine.note_rate_limit`). No bench duration is
+invented at this layer, and a bare 402 that named no phrase carries `None` and
+charges nothing. That 429 bench is scoped to the
 **(key, model)** pair -- `PoolSlot.model_benches`, expired lazily by the same
 `refresh()` that expires every other deadline -- and leaves the slot `HEALTHY`,
 because a gateway that limits one model has made no statement about the key's
@@ -1144,6 +1148,16 @@ the *model that was tried* and a larger-window fallback may well serve it. Until
 5.43.0 every 400 aborted the chain, which silently truncated failover for long
 conversations. `FALLBACK_SKIP_KINDS` lists the kinds that abort rather than
 fall through; adding `context_length` to it restores the pre-5.43.0 behaviour.
+
+`FailureKind.QUOTA` (6.34.0) is the same argument one step further out. An
+account with no balance also arrives as a 400 on several gateways, and it is a
+property of neither the request nor the model: another key may have credits and
+another model may be free. It is classified from the provider's own words --
+read through `providers/recovery/complaint.upstream_complaint`, which prefers
+the structured body and prunes the keys under which a validation error echoes
+the submitted request -- and never from a bare token, so a prompt that mentions
+credits cannot produce it. It rotates (`error_justifies_rotation`), it does not
+end the route, and it does not count toward the chain bench.
 
 [providers/failure_policy.py](src/my_claude_code/providers/failure_policy.py)
 owns generic raw OpenAI SDK and `httpx` exception classification,

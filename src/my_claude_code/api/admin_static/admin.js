@@ -3427,9 +3427,23 @@ function keyHealthBadge(health) {
     modelNote = ` — rate-limited for ${benched.map((b) => b.model).join(", ")}`;
   }
 
+  // A bench the pool can name. "COOLDOWN — back in 55s" reads as a throttle
+  // that lifts on its own; an exhausted balance never does, and the operator
+  // has to top up or add a key. The pool publishes the reason only for that
+  // case, so every other bench renders byte-identically.
+  const reason =
+    typeof health.cooldown_reason === "string" ? health.cooldown_reason : "";
+  let benchNote = "";
+  if (reason && state !== "HEALTHY") {
+    badge.textContent = `${state} — ${reason}`;
+    benchNote = remaining > 0
+      ? ` — benched: ${reason}, ${formatSeconds(remaining)} left`
+      : ` — benched: ${reason}`;
+  }
+
   const requests = health.request_count || 0;
   const failures = health.failure_count || 0;
-  badge.title = `${state}${backIn} — ${requests} requests, ${failures} failures${modelNote}`;
+  badge.title = `${state}${backIn}${benchNote} — ${requests} requests, ${failures} failures${modelNote}`;
   return badge;
 }
 

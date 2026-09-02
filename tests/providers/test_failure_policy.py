@@ -572,3 +572,126 @@ def test_a_zero_configured_cooldown_installs_no_reactive_block() -> None:
 
     assert failure.kind is FailureKind.RATE_LIMIT
     assert marks == []
+
+
+# The exact body of req_df6a8ed49c6a46bb81765ba8039b8703, 2026-09-02 11:52Z:
+# commandcode/z-ai/glm-5.3-flash answered an out-of-credit account with a 400
+# whose `type` says the request was invalid. It was not. The account was.
+_COMMAND_CODE_CREDITS = {
+    "message": (
+        "You have insufficient credits to make this request. Please purchase "
+        "more credits to continue using the service."
+    ),
+    "type": "invalid_request_error",
+    "code": "BAD_REQUEST",
+}
+
+
+def _quota_body_error(
+    status: int, body: object, *, message: str = "upstream rejected the request"
+) -> openai.APIStatusError:
+    request = httpx.Request("POST", "https://provider.test/v1/chat/completions")
+    response = httpx.Response(status, request=request, json=body)
+    error_type = {
+        400: openai.BadRequestError,
+        402: openai.APIStatusError,
+        403: openai.PermissionDeniedError,
+    }[status]
+    return error_type(message, response=response, body=body)
+
+
+def test_insufficient_credits_400_is_quota_not_invalid_request() -> None:
+    """The 6.34.0 defect, in one assertion.
+
+    The same body classified ``invalid_request`` before, which is in
+    ``FALLBACK_SKIP_KINDS`` by default, so six remaining chain entries were
+    never tried and the caller got a 400 for a request that was fine.
+    """
+    sdk = _classify(_quota_body_error(400, _COMMAND_CODE_CREDITS))
+    raw = _classify(_http_status_error(400, _COMMAND_CODE_CREDITS["message"]))
+
+    for failure in (sdk, raw):
+        assert failure.kind is FailureKind.QUOTA
+        assert failure.retryable is False
+        # The operator's cooldown rides along: the phrase is exact, so the
+        # pool is allowed to take this credential out for that long.
+        assert failure.retry_after_seconds is not None
+
+
+def test_a_bare_402_is_quota_without_a_bench() -> None:
+    """Payment Required with no words behind it: rotate, fall through, charge nothing."""
+    failure = _classify(_quota_body_error(402, {"error": {"message": "nope"}}))
+
+    assert failure.kind is FailureKind.QUOTA
+    assert failure.status_code == 402
+    # ``None`` is the classifier telling the pool it has no phrase to stand on.
+    assert failure.retry_after_seconds is None
+
+
+def test_an_echoed_request_containing_the_word_credits_is_not_quota() -> None:
+    """A validation error echoes the submitted request back. That is not evidence.
+
+    ``input``/``body`` hold what *we sent*. A prompt asking about insufficient
+    credits must classify exactly as it did before this feature existed.
+    """
+    echoed = {
+        "detail": [
+            {
+                "type": "value_error",
+                "loc": ["body", "messages", 0, "content"],
+                "msg": "string too long",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                "explain the error 'You have insufficient "
+                                "credits to make this request. Please purchase "
+                                "more credits'"
+                            ),
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+    failure = _classify(_quota_body_error(400, echoed))
+
+    assert failure.kind is FailureKind.INVALID_REQUEST
+    assert failure.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("vendor", "body"),
+    (
+        ("novita", {"error": {"code": "NOT_ENOUGH_BALANCE"}}),
+        ("novita_prose", {"error": {"message": "Insufficient balance."}}),
+        ("opencode_go", {"error": {"type": "CreditsError"}}),
+        (
+            "anthropic",
+            {
+                "error": {
+                    "message": (
+                        "Your credit balance is too low to access the Anthropic API."
+                    )
+                }
+            },
+        ),
+        ("openai", {"error": {"code": "insufficient_quota"}}),
+        ("generic_quota", {"error": {"message": "Quota exceeded for this key."}}),
+        ("generic_billing", {"error": {"message": "billing account suspended"}}),
+    ),
+)
+def test_every_measured_billing_phrase_classifies_as_quota(vendor, body) -> None:
+    """One matcher for the whole fleet's wordings, read out of the structured body."""
+    failure = _classify(_quota_body_error(403, body))
+
+    assert failure.kind is FailureKind.QUOTA, vendor
+    assert failure.retry_after_seconds is not None, vendor
+
+
+def test_a_403_without_a_billing_phrase_is_still_authentication() -> None:
+    """Unsure never means QUOTA: the 401/403 ladder keeps every case it had."""
+    failure = _classify(_http_status_error(403, "Forbidden: key not permitted"))
+
+    assert failure.kind is FailureKind.AUTHENTICATION

@@ -11,6 +11,7 @@ class FailureKind(StrEnum):
     CONTEXT_LENGTH = "context_length"
     AUTHENTICATION = "authentication"
     PERMISSION = "permission"
+    QUOTA = "quota"
     RATE_LIMIT = "rate_limit"
     OVERLOADED = "overloaded"
     TIMEOUT = "timeout"
@@ -32,6 +33,12 @@ class ExecutionFailure(Exception):
     #: the failure so every bench downstream (the credential pool, the route's
     #: ejection registry) uses the provider's number instead of inventing one.
     #: ``None`` on every other kind, and on a rate limit no classifier touched.
+    #:
+    #: A ``QUOTA`` failure reuses the same field to carry the operator's
+    #: ``RATE_LIMIT_COOLDOWN_SECONDS``, and *only* when the upstream named an
+    #: explicit billing phrase. ``None`` there means the opposite of a missing
+    #: header: it means the evidence was a bare ``402`` with no phrase behind
+    #: it, so the pool must rotate without charging the credential at all.
     retry_after_seconds: float | None = None
 
     def __post_init__(self) -> None:

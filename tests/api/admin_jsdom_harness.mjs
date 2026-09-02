@@ -402,6 +402,25 @@ const ROUTES = {
       },
     ],
   },
+  /* A pool benched for money rather than for a throttle. Waiting does not
+     clear it, so the badge has to say so on the row. */
+  "/admin/api/credentials/CREDITS_API_KEY/keys": {
+    count: 1,
+    locked: false,
+    keys: ["cc...9fQt"],
+    health: [
+      {
+        index: 0,
+        state: "COOLDOWN",
+        request_count: 4,
+        failure_count: 4,
+        cooldown_remaining: 55,
+        lockout_remaining: 0,
+        cooldown_reason: "credits exhausted",
+        model_benches: [],
+      },
+    ],
+  },
   "/admin/api/credentials/PLAIN_API_KEY/keys": {
     count: 1,
     locked: false,
@@ -2787,6 +2806,7 @@ const keyManager = {};
 for (const [name, key] of [
   ["scoped", "SCOPED_API_KEY"],
   ["plain", "PLAIN_API_KEY"],
+  ["credits", "CREDITS_API_KEY"],
 ]) {
   const panel = doc.createElement("div");
   doc.body.appendChild(panel);

@@ -599,6 +599,9 @@ class Settings(BaseSettings):
     # Comma-separated FailureKind values. Empty means "fall back on every
     # failure", which is the literal reading of what a chain is for; the
     # default excludes only a malformed request, which no model can serve.
+    # ``quota`` is deliberately not in the default: an account out of credits
+    # says nothing about the request, and the next key or the next model may
+    # well answer it.
     fallback_skip_kinds: str = Field(
         default=FALLBACK_SKIP_KINDS_DEFAULT,
         validation_alias="FALLBACK_SKIP_KINDS",

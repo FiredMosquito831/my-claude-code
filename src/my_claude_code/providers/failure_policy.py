@@ -25,6 +25,7 @@ from my_claude_code.core.rate_limit import (
     MAX_RATE_LIMIT_COOLDOWN_SECONDS,
     retry_after_seconds,
 )
+from my_claude_code.providers.recovery import upstream_complaint
 
 MarkRateLimited = Callable[[float], None]
 ProviderFailureOverride = Callable[[Exception], ExecutionFailure | None]
@@ -65,6 +66,118 @@ _CONTEXT_REQUESTED_PATTERN = re.compile(
     r"(?:you requested about|resulted in)\s+(\d+)\s+tokens"
 )
 _OVERLOADED_MESSAGE = "Provider is currently overloaded. Please retry."
+
+_QUOTA_MESSAGE = "Provider account is out of credits."
+#: HTTP statuses on which a billing phrase is read as a quota failure. ``402``
+#: is the status that *means* it and needs no phrase; ``400`` and ``403`` are
+#: what the fleet actually sends -- Command Code answers an out-of-credit
+#: account with a ``400`` whose body says ``invalid_request_error``, and the
+#: request was never the problem.
+_QUOTA_PHRASE_STATUSES = frozenset({400, 403})
+_QUOTA_STATUS = 402
+
+#: Explicit billing phrases, measured from the fleet. Phrases, never bare
+#: words: "credit" alone appears in "credit card required for this model" and
+#: in a prompt echoed back, and a false positive here would rotate a whole key
+#: pool and bench every key on a request that was merely malformed. Each entry
+#: below is a full statement about the *account*, not about the request.
+#:
+#: * ``insufficient credits`` / ``purchase more credits`` -- Command Code and
+#:   the OpenAI-compatible gateways behind it (the 6.34.0 evidence).
+#: * ``insufficient balance`` / ``not enough balance`` / ``not_enough_balance``
+#:   -- Novita, which answers with the machine code in ``code``.
+#: * ``quota exceeded`` / ``insufficient_quota`` -- the OpenAI-compatible
+#:   machine codes.
+#: * ``payment required`` / ``billing`` -- the generic gateway wordings.
+#: * ``out of credits`` / ``credit balance is too low`` -- Anthropic's own.
+#: * ``creditserror`` -- OpenCode Go's error class name, lowercased.
+QUOTA_PHRASES: tuple[str, ...] = (
+    "insufficient credits",
+    "purchase more credits",
+    "insufficient balance",
+    "not enough balance",
+    "not_enough_balance",
+    "quota exceeded",
+    "insufficient_quota",
+    "payment required",
+    "billing",
+    "out of credits",
+    "credit balance is too low",
+    "creditserror",
+)
+
+
+def quota_phrase(exc: BaseException) -> str | None:
+    """The billing phrase the upstream named, or ``None`` if it named none.
+
+    Read through :func:`~my_claude_code.providers.recovery.complaint.upstream_complaint`
+    and nothing else: that reader prefers the *structured* error body and prunes
+    the ``input``/``body``/``ctx`` keys under which a validation error echoes
+    the submitted request back. A prompt containing the words "insufficient
+    credits" is not an account out of credits, and reading the raw response
+    text is exactly how it would become one.
+    """
+    if not isinstance(exc, Exception):
+        return None
+    complaint = upstream_complaint(exc)
+    for phrase in QUOTA_PHRASES:
+        if phrase in complaint:
+            return phrase
+    return None
+
+
+def is_quota_error(exc: BaseException) -> bool:
+    """Whether an upstream rejection is about the account's credits.
+
+    Two shapes, and only two. A ``402`` says so by status alone. A ``400`` or
+    a ``403`` says so only when the structured body names an explicit billing
+    phrase -- if it does not, this answers ``False`` and the failure keeps the
+    kind it has today. Unsure never means ``QUOTA``.
+    """
+    status = _quota_status(exc)
+    if status == _QUOTA_STATUS:
+        return True
+    return status in _QUOTA_PHRASE_STATUSES and quota_phrase(exc) is not None
+
+
+def quota_failure(
+    exc: BaseException,
+    cooldown_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
+) -> ExecutionFailure:
+    """Return the canonical credits-exhausted failure.
+
+    ``retryable`` is False -- the same credential meets the same empty balance
+    -- but the kind is deliberately *not* in ``FALLBACK_SKIP_KINDS``: another
+    key may have credits, and behind the pool another model may be free. The
+    route must keep going.
+
+    ``retry_after_seconds`` carries the operator's ``RATE_LIMIT_COOLDOWN_SECONDS``
+    only when a phrase was matched. A bare ``402`` with no recognisable wording
+    is evidence enough to rotate and to fall through, and not evidence enough
+    to take a credential out of the pool.
+    """
+    phrase = quota_phrase(exc)
+    status = _quota_status(exc) or _QUOTA_STATUS
+    message = _QUOTA_MESSAGE if phrase is None else f"{_QUOTA_MESSAGE} ({phrase})"
+    return _failure(
+        FailureKind.QUOTA,
+        status,
+        message,
+        False,
+        cooldown_seconds if phrase is not None else None,
+    )
+
+
+def _quota_status(exc: BaseException) -> int | None:
+    """The status behind a possible quota failure, across error carriers."""
+    if isinstance(exc, ExecutionFailure):
+        return exc.status_code
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    return status if isinstance(status, int) else None
 
 
 def classify_provider_failure(
@@ -372,6 +485,13 @@ def _classify_provider_failure(
                 )
         return exc
 
+    if is_quota_error(exc):
+        # Before every status branch below: an account out of credits is
+        # answered as a 400, a 402 or a 403 depending on the gateway, and only
+        # the phrase tells the three apart from a malformed body and a revoked
+        # key. Charging a key's lockout ladder for an empty wallet is what the
+        # 401/403 branch would otherwise do.
+        return quota_failure(exc, cooldown_seconds)
     if isinstance(exc, openai.AuthenticationError):
         return _failure(FailureKind.AUTHENTICATION, 401, _AUTHENTICATION_MESSAGE, False)
     if isinstance(exc, openai.RateLimitError):

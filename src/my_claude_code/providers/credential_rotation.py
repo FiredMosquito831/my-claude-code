@@ -8,7 +8,7 @@ layer owns asyncio lock semantics and decides which upstream failures are
 One rule, two questions
 -----------------------
 
-**A key's health changes only on a key-shaped signal.** There are exactly two:
+**A key's health changes only on a key-shaped signal.** There are exactly three:
 
 - ``401``/``403`` -- the credential was rejected. It walks the escalating
   lockout ladder (``CREDENTIAL_LOCKOUT_TIERS``, 5min -> 1h -> 24h by default).
@@ -16,6 +16,12 @@ One rule, two questions
   the provider published in its own ``Retry-After`` / ``x-ratelimit-reset-*``
   header, or for ``RATE_LIMIT_COOLDOWN_SECONDS`` when it published none, capped
   at one hour. No ladder, no tier escalation, no circuit breaker.
+- a ``QUOTA`` failure whose body named an explicit billing phrase -- the
+  account behind the credential is out of credits, which is a fact about the
+  key and about nothing else. Benched for ``RATE_LIMIT_COOLDOWN_SECONDS``
+  through the same fixed window the 429 uses, whole-key rather than scoped to
+  a model: a wallet is not per-model. A *bare* ``402`` naming no phrase rotates
+  and falls through without charging anything -- unsure never benches.
 
 Everything else -- timeouts, 5xx, 410 model gone, overloaded, 400 invalid
 request, context length, transport faults, anything unclassified -- leaves the
@@ -30,14 +36,15 @@ chain moves to the next *model*, not the next key.
 
 **Rotation is a separate question from health.** Trying another credential can
 only help when the failure is about this credential or its connection, so
-rotation happens for auth, for 429, and for transport-level faults -- and for
-nothing else. A timeout, a 5xx, a 410 or any other 4xx raise out of the
+rotation happens for auth, for 429, for an exhausted quota (another key may
+have credits) and for transport-level faults -- and for nothing else. A timeout, a 5xx, a 410 or any other 4xx raise out of the
 rotating loop so the executor advances the fallback chain instead of burning
 the remaining keys on a model that is not answering.
 
 Health model:
   - HEALTHY: serving requests.
-  - COOLDOWN: rate-limited, for exactly as long as the provider asked.
+  - COOLDOWN: rate-limited, or out of credits, for exactly as long as the
+    provider asked or the operator configured.
   - LOCKED_OUT: auth failure (401/403); escalating lockout ladder.
 
 Policies:
@@ -58,8 +65,10 @@ from typing import Any
 import httpx
 import openai
 
+from my_claude_code.core.credential_attribution import current_credential
 from my_claude_code.core.credential_rotation import (
     PROVIDER_TUNING,
+    PoolHealthState,
     RotationEngine,
 )
 from my_claude_code.core.failures import FailureKind, find_execution_failure
@@ -76,6 +85,18 @@ ROTATION_POLICIES = frozenset(
 
 AUTH_STATUS_CODES = (401, 403)
 
+#: The failure class the pool records for an exhausted balance. Distinct from
+#: ``"rate_limit"`` in the record even though it shares the engine's fixed
+#: window: the modal, the export and the root-cause sentence all have to say
+#: *credits*, not *throttle*, or the operator tops up nothing and waits.
+QUOTA_FAILURE_CLASS = "quota"
+
+#: What the engine records as the slot's ``last_error`` when credits bench it.
+#: The pool's own health snapshot is the only place a dashboard can learn *why*
+#: a slot is in COOLDOWN, and "cooldown" alone sends the operator to wait for a
+#: throttle that will never lift on its own.
+QUOTA_BENCH_REASON = "credits exhausted"
+
 #: The only canonical kinds that say anything about the credential that carried
 #: the request. An allow-list on purpose: the previous deny-list grew a new
 #: exemption every time a class of route-shaped failure was found charging
@@ -90,7 +111,14 @@ CREDENTIAL_SHAPED_KINDS = frozenset(
 #: connection: it says nothing about the credential, but another key means
 #: another connection, so the attempt is worth making -- for free, because
 #: rotation and health accounting are separate decisions.
-ROTATING_KINDS = CREDENTIAL_SHAPED_KINDS | {FailureKind.UNAVAILABLE}
+#: ``QUOTA`` rotates but is deliberately absent from
+#: :data:`CREDENTIAL_SHAPED_KINDS`: whether it charges the key depends on the
+#: *evidence*, not on the kind, and :func:`credential_failure_class` is where
+#: that distinction is made.
+ROTATING_KINDS = CREDENTIAL_SHAPED_KINDS | {
+    FailureKind.UNAVAILABLE,
+    FailureKind.QUOTA,
+}
 
 
 def _status_from_error(error: BaseException) -> int | None:
@@ -121,6 +149,8 @@ def _charged_reason(
     model: str | None = None,
     model_benched_for: float | None = None,
     models_throttled: int = 0,
+    key_index: int = 0,
+    key_label: str | None = None,
 ) -> str:
     """What the pool did to this credential, in the pool's own numbers.
 
@@ -130,6 +160,10 @@ def _charged_reason(
     was in hand at all, which is the unscoped 6.18.0 wording, byte for byte.
     """
     named = str(status) if status is not None else failure_class
+    if failure_class == QUOTA_FAILURE_CLASS:
+        # The sentence an operator can act on: the fix is a top-up, not a wait.
+        where = f"key {key_label}" if key_label else f"key {key_index}"
+        return f"credits exhausted on {where} -- benched {benched_for:.0f}s"
     if failure_class == "rate_limit":
         if model is not None and model_benched_for is not None:
             if benched_for <= 0:
@@ -162,6 +196,15 @@ def credential_failure_class(error: BaseException) -> str | None:
     """
     failure = find_execution_failure(error)
     if failure is not None:
+        if failure.kind is FailureKind.QUOTA:
+            # ``retry_after_seconds`` is the classifier's evidence flag: it is
+            # set to the operator's cooldown only when the upstream named an
+            # explicit billing phrase. A bare 402 answers ``None`` here, which
+            # leaves the key untouched -- the pool still rotates, because
+            # rotation and health are separate questions.
+            return (
+                QUOTA_FAILURE_CLASS if failure.retry_after_seconds is not None else None
+            )
         if failure.kind is FailureKind.RATE_LIMIT:
             return "rate_limit"
         if failure.kind in CREDENTIAL_SHAPED_KINDS:
@@ -278,8 +321,9 @@ class CredentialRotationState:
         """Record a failure for one credential; return whether to rotate.
 
         The two answers are independent. Health moves only for a key-shaped
-        signal (401/403, or a 429 and the window the provider asked for).
-        Rotation additionally covers transport faults. Everything else returns
+        signal (401/403, a 429 and the window the provider asked for, or an
+        exhausted balance the upstream named in words). Rotation additionally
+        covers transport faults and a bare 402 that named none. Everything else returns
         ``False`` with the credential untouched, which raises out of the
         rotating loop and lets the fallback chain try the next model -- the
         outcome the user asked for and the one the numbers support.
@@ -314,15 +358,24 @@ class CredentialRotationState:
         # ``None`` means the provider published no Retry-After, which the
         # engine answers with the operator's RATE_LIMIT_COOLDOWN_SECONDS --
         # never with a number invented here.
-        retry_after = (
-            failure.retry_after_seconds
-            if failure_class == "rate_limit" and failure is not None
-            else None
-        )
+        carried = failure.retry_after_seconds if failure is not None else None
+        retry_after = carried if failure_class == "rate_limit" else None
         async with self._lock:
-            self._engine.fail(
-                index, failure_class, retry_after=retry_after, model=model
-            )
+            if failure_class == QUOTA_FAILURE_CLASS:
+                # The 429 mechanism, deliberately unscoped: an empty balance
+                # is a fact about the credential, not about one model on it,
+                # so the whole key leaves the pool for the operator's
+                # RATE_LIMIT_COOLDOWN_SECONDS -- which ``carried`` holds,
+                # placed there by the classifier. ``note_rate_limit`` is the
+                # same fixed window ``escalate_to_key_bench`` already uses; no
+                # second cooldown number is invented for credits.
+                self._engine.note_rate_limit(
+                    index, retry_after=carried, message=QUOTA_BENCH_REASON
+                )
+            else:
+                self._engine.fail(
+                    index, failure_class, retry_after=retry_after, model=model
+                )
             # Read the bench back out of the engine that just decided it. The
             # number is never recomputed from tuning here: an operator cooldown,
             # a published Retry-After and a lockout tier all land in the same
@@ -350,6 +403,8 @@ class CredentialRotationState:
                 model=model,
                 model_benched_for=model_benched_for,
                 models_throttled=models_throttled,
+                key_index=index,
+                key_label=current_credential()[1],
             ),
         )
         return rotate
@@ -426,6 +481,24 @@ class CredentialRotationState:
         async with self._lock:
             return self._engine.shortest_bench_remaining(model)
 
+    def benched_only_for_credits(self) -> bool:
+        """Whether every credential now out of the pool is out of *money*.
+
+        Read by the wrapper so a fully benched pool says which of the two
+        things happened. False the moment one slot is benched for anything
+        else: a mixed pool has no single sentence, and the throttle wording is
+        the safe one.
+        """
+        self._engine.refresh()
+        benched = [
+            slot
+            for slot in self._engine.slots()
+            if slot.state is not PoolHealthState.HEALTHY
+        ]
+        return bool(benched) and all(
+            slot.last_error == QUOTA_BENCH_REASON for slot in benched
+        )
+
     def get_metrics(self) -> list[dict[str, Any]]:
         """Return per-credential health snapshots for dashboards."""
         # Expire elapsed benches first rather than relying on some earlier
@@ -440,6 +513,14 @@ class CredentialRotationState:
                 "auth_failures": slot.auth_failures,
                 "rate_limits": slot.rate_limits,
                 "cooldown_remaining": max(0.0, slot.cooldown_until - now),
+                # Why this slot is benched, when the engine was told. Only the
+                # credits path sets it, so every other bench renders exactly
+                # as it did before.
+                "cooldown_reason": (
+                    slot.last_error
+                    if slot.state is not PoolHealthState.HEALTHY
+                    else None
+                ),
                 "lockout_remaining": max(0.0, slot.lockout_until - now),
                 "model_benches": [
                     {"model": model, "remaining": until - now}

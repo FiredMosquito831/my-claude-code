@@ -411,8 +411,11 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "A malformed request fails identically everywhere, so retrying it "
             "costs a round trip per model to reach the same error. Leave empty "
             "to fall back on every failure. Known kinds: invalid_request, "
-            "context_length, authentication, permission, rate_limit, "
-            "overloaded, timeout, upstream, unavailable."
+            "context_length, authentication, permission, quota, rate_limit, "
+            "overloaded, timeout, upstream, unavailable. Listing quota here "
+            "means an account out of credits ends the route instead of trying "
+            "the next key and the next model, which is almost never what you "
+            "want."
         ),
     ),
     ConfigFieldSpec(
@@ -1104,7 +1107,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "and a provider Retry-After is honoured, and every Eject setting "
             "below becomes live. Only model-shaped failures count towards the "
             "bench -- upstream 5xx, overloaded, and 401/403 from the provider. "
-            "Timeouts, 429s, context-length and malformed-request failures are "
+            "Timeouts, 429s, exhausted credits, context-length and "
+            "malformed-request failures are "
             "the request's problem rather than the model's and never bench "
             "one. The default changed to off in 6.14.0; an install that "
             "already has this written in its .env keeps whatever it says."

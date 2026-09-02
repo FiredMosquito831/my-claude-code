@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import sys
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal, cast
 
@@ -74,7 +74,7 @@ from my_claude_code.core.upstream_ladder import (
 )
 from my_claude_code.core.waiting_clock import waited_seconds
 
-from .deadline_hints import limit_hint
+from .deadline_hints import limit_hint, providers_hint
 from .errors import ModelRateLimited
 from .ports import PooledCredentialPort, ProviderPort, ProviderResolver
 from .route_health import BenchReason, RouteHealthRegistry
@@ -448,6 +448,33 @@ def _all_paused_failure(env_var: str) -> ExecutionFailure:
         message=(
             "Every model on this route is paused, so there is nothing left to "
             f"try.{limit_hint(env_var)}"
+        ),
+        retryable=False,
+    )
+
+
+def _all_quota_failure(failures: Sequence[BaseException]) -> ExecutionFailure | None:
+    """The verdict for a route that ran out of money rather than out of models.
+
+    ``None`` unless *every* failure on the route was a quota failure. A chain
+    where one model was out of credits and the next timed out has two stories,
+    and the last one is the honest headline; a chain where every entry answered
+    "no credits" has exactly one, and the reader who is shown the last model's
+    400 goes looking for a bug in their request.
+
+    The kind is still ``QUOTA``, so nothing downstream has to special-case this
+    sentence: it is the same failure the ladder rows already name.
+    """
+    if not failures:
+        return None
+    if any(failure_kind(exc) is not FailureKind.QUOTA for exc in failures):
+        return None
+    return ExecutionFailure(
+        kind=FailureKind.QUOTA,
+        status_code=402,
+        message=(
+            "Every model on this route failed: all keys reported exhausted "
+            f"credits.{providers_hint()}"
         ),
         retryable=False,
     )
@@ -832,7 +859,7 @@ class ProviderExecutor:
             # Every attempt failed before opening a stream. Raising here keeps
             # the caller's existing synchronous error surface intact.
             ledger.publish()
-            raise failures[-1]
+            raise _all_quota_failure(failures) or failures[-1]
 
         trace_event(
             stage="ingress",
@@ -1300,7 +1327,7 @@ class ProviderExecutor:
                         )
                 if following is None:
                     ledger.publish()
-                    raise uncommitted_failure
+                    raise _all_quota_failure(failures) or uncommitted_failure
                 position, provider = following
 
         async def guarded_provider_body() -> AsyncIterator[str]:

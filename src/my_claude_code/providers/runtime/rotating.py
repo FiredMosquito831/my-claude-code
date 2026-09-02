@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
-from my_claude_code.application.deadline_hints import limit_hint
+from my_claude_code.application.deadline_hints import limit_hint, providers_hint
 from my_claude_code.application.errors import (
     ApplicationUnavailableError,
     ModelRateLimited,
@@ -265,6 +265,14 @@ class RotatingProvider(BaseProvider):
                         f"{request.model}. Retry in {max(1, int(wait))}s, or use "
                         "another model on this provider."
                         f"{limit_hint('RATE_LIMIT_COOLDOWN_SECONDS')}"
+                    )
+                if self._state.benched_only_for_credits():
+                    # Waiting fixes a throttle and fixes nothing here. Say the
+                    # word the operator has to act on, and point at the page
+                    # that acts on it.
+                    raise ApplicationUnavailableError(
+                        "All API keys for this provider reported exhausted "
+                        f"credits.{providers_hint()}"
                     )
                 raise ApplicationUnavailableError(
                     "All API keys for this provider are in cooldown. "

@@ -19,6 +19,10 @@ from my_claude_code.core.openai_responses.errors import (
         (FailureKind.INVALID_REQUEST, "invalid_request_error", "invalid_request_error"),
         (FailureKind.AUTHENTICATION, "authentication_error", "authentication_error"),
         (FailureKind.PERMISSION, "permission_error", "permission_error"),
+        # An account out of credits is a billing fact on both wires, and both
+        # protocols already had the type for it -- it was only ever reachable
+        # through a PERMISSION failure that happened to carry a 402.
+        (FailureKind.QUOTA, "billing_error", "billing_error"),
         (FailureKind.RATE_LIMIT, "rate_limit_error", "rate_limit_error"),
         (FailureKind.OVERLOADED, "overloaded_error", "overloaded_error"),
         # Existing finalized transport timeouts are exposed as api_error; the

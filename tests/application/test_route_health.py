@@ -25,6 +25,7 @@ KIND_BENCHES = {
     FailureKind.PERMISSION: True,
     FailureKind.TIMEOUT: False,
     FailureKind.RATE_LIMIT: False,
+    FailureKind.QUOTA: False,
     FailureKind.CONTEXT_LENGTH: False,
     FailureKind.INVALID_REQUEST: False,
     FailureKind.UNAVAILABLE: False,
@@ -439,3 +440,18 @@ def test_pause_changes_nothing_when_nothing_is_paused() -> None:
     assert registry.usable_indexes(
         ("a/one", "b/two", "c/three"), paused=frozenset()
     ) == (1, 2)
+
+
+def test_quota_does_not_count_toward_the_chain_bench() -> None:
+    """An empty wallet says nothing about the model that was asked.
+
+    The credential pool already benches the key; charging the model as well
+    would eject a healthy chain entry for a billing problem and leave the
+    route shorter once the account is topped up.
+    """
+    registry = _registry([0.0])
+    for _ in range(10):
+        registry.record_failure("broke/model", failure_kind=FailureKind.QUOTA.value)
+
+    assert not registry.is_ejected("broke/model")
+    assert failure_counts_toward_bench(FailureKind.QUOTA) is False

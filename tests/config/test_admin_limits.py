@@ -15,6 +15,7 @@ from my_claude_code.config.admin.persistence import (
 from my_claude_code.config.admin.sources import dotenv_values_from_text
 from my_claude_code.config.admin.validation import settings_from_values
 from my_claude_code.config.admin.values import load_value_state, normalize_for_env
+from my_claude_code.config.constants import FAILURE_KIND_NAMES
 from my_claude_code.config.limits import range_for
 from my_claude_code.config.settings import Settings
 
@@ -155,6 +156,19 @@ def test_log_level_lives_with_the_logging_flags() -> None:
 def test_the_skip_kinds_field_stays_with_the_routes() -> None:
     """A routing decision belongs beside the chains it ends, and renders once."""
     assert FIELD_BY_KEY["FALLBACK_SKIP_KINDS"].section_id == "models"
+
+
+def test_the_skip_kinds_help_lists_every_kind_that_exists() -> None:
+    """The field is free text, so its help is the only list of legal values.
+
+    A kind the classifier can produce and the help does not name is a value an
+    operator has no way to discover -- and one a typo check will accept while
+    the reader believes it is not supported.
+    """
+    description = FIELD_BY_KEY["FALLBACK_SKIP_KINDS"].description
+
+    for name in sorted(FAILURE_KIND_NAMES):
+        assert name in description, name
 
 
 def test_the_moved_fields_left_their_old_sections() -> None:

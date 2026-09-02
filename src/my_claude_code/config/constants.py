@@ -164,6 +164,7 @@ FAILURE_KIND_NAMES: frozenset[str] = frozenset(
         "context_length",
         "authentication",
         "permission",
+        "quota",
         "rate_limit",
         "overloaded",
         "timeout",

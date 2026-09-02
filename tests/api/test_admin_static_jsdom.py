@@ -1451,6 +1451,21 @@ def test_a_key_with_model_benches_renders_the_model_sub_line(rendered) -> None:
     assert rows[1]["benchLine"].startswith("moonshotai/kimi-k3 ")
 
 
+def test_a_key_benched_for_credits_says_so_on_the_row(rendered) -> None:
+    """ "COOLDOWN — back in 55s" reads as a throttle that lifts on its own.
+
+    It does not. The only thing that clears an exhausted balance is a top-up,
+    so the pool publishes the reason and the badge prints it.
+    """
+    rows = rendered["keyManager"]["credits"]
+
+    assert len(rows) == 1
+    assert rows[0]["badge"] == "COOLDOWN — credits exhausted"
+    assert "benched: credits exhausted, 55s left" in rows[0]["badgeTitle"]
+    # Additive: a bench with no published reason is untouched (below).
+    assert rows[0]["benchLine"] == ""
+
+
 def test_a_healthy_key_with_no_model_benches_renders_exactly_as_before(
     rendered,
 ) -> None:

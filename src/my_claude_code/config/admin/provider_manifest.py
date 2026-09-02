@@ -517,10 +517,13 @@ def _rotation_field_specs() -> tuple[dict[str, Any], ...]:
                     "least_used = least-used healthy key first; "
                     "failover = stick to one key until it fails, then move on. "
                     "A key is benched only for what the provider says about the "
-                    "key itself: an escalating lockout on 401/403, and a 429 "
-                    "bench lasting exactly as long as the provider asked. "
-                    "Timeouts, 5xx and 4xx leave every key untouched and move "
-                    "the fallback chain to the next model. Requires restart."
+                    "key itself: an escalating lockout on 401/403, a 429 "
+                    "bench lasting exactly as long as the provider asked, and "
+                    "a RATE_LIMIT_COOLDOWN_SECONDS bench when the provider "
+                    "says in words that the account is out of credits. "
+                    "Timeouts, 5xx and every other 4xx leave every key "
+                    "untouched and move the fallback chain to the next model. "
+                    "Requires restart."
                 ),
             }
         )

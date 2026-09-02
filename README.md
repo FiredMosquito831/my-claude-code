@@ -733,10 +733,13 @@ Policies:
 
 Each key gets its own upstream client and its own rate-limit window, so one key saturating or stalling never throttles the others.
 
-**Health model — a key is only ever judged on signals about the key.** There are exactly two:
+**Health model — a key is only ever judged on signals about the key.** There are exactly three:
 
 - **401/403** — the provider rejected the credential. It is locked out on an escalating ladder (`CREDENTIAL_LOCKOUT_TIERS`, 5 min → 1 h → 24 h by default), on its own counter.
 - **429** — the credential is throttled **for that model**. The (key, model) pair is benched for exactly as long as the provider asked via `Retry-After` / `x-ratelimit-reset-*`, or for `RATE_LIMIT_COOLDOWN_SECONDS` when it sent no header, capped at one hour. The key stays `HEALTHY` and every other model on it keeps serving, because a gateway that limits one model has said nothing about the key's others — measured on NVIDIA NIM, one model 429s on all three keys inside 0.1 s while two other models answer on those same keys in the same second. The key itself is benched only once `CREDENTIAL_MODEL_BENCH_ESCALATION` (default 2) distinct models hold a live bench on it at the same time. No ladder, no escalation beyond that one step.
+- **Exhausted credits** (since 6.34.0) — the provider said in words that the account behind the key has no balance left: HTTP 402, or a 400/403 whose structured error body names an explicit billing phrase (`insufficient credits`, `purchase more credits`, `insufficient balance`, `NOT_ENOUGH_BALANCE`, `quota exceeded`, `insufficient_quota`, `payment required`, `billing`, `out of credits`, `credit balance is too low`, `CreditsError`). The whole key is benched for `RATE_LIMIT_COOLDOWN_SECONDS` — a wallet is not per-model — and the request rotates to the next key, then to the next model. A **bare 402 with no recognisable phrase** rotates and falls through but charges nothing: the matcher reads only the provider's own words, through the same echo-safe reader the recovery ladder uses, so a prompt that happens to contain "insufficient credits" can never bench a key.
+
+Everything else — timeouts, 5xx, 410, and every other 4xx — leaves a key's health untouched.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -852,7 +855,7 @@ Ejection can never empty a chain: if every model on a route is benched, they are
 
 **What benches a model.** `FALLBACK_BENCH_ENABLED` is the master switch, and it **ships off**: every model in the chain is tried every time, so a model failing half its requests is still retried at chain position 0 on every single request. It reads on two pages — **Model Config**, at the top of the routing view, beside the routes it governs, and **Limits & Resilience → Chain benching**, where it gates the tuning below. They are the same setting; changing either changes both. With it off *every* control below is inert. Turn it on and `FALLBACK_BEHAVIOR` picks the evidence:
 
-**Only model-shaped failures count.** With benching on, a failure benches a model only when it says something about the *model*: an upstream 5xx, an overloaded response, or a 401/403 from the provider. Timeouts (first-token, stall, budget), 429s, `context_length` and malformed requests are facts about the *request* — they fail identically on a healthy model and a dead one — and never bench anything. That distinction is why the switch could be turned off by default: the bench used to count everything, so one prompt larger than any model's context window ejected the entire chain and the request was answered by whichever model was left holding the 400.
+**Only model-shaped failures count.** With benching on, a failure benches a model only when it says something about the *model*: an upstream 5xx, an overloaded response, or a 401/403 from the provider. Timeouts (first-token, stall, budget), 429s, exhausted credits, `context_length` and malformed requests are facts about the *request* or the *account* — they fail identically on a healthy model and a dead one — and never bench anything. That distinction is why the switch could be turned off by default: the bench used to count everything, so one prompt larger than any model's context window ejected the entire chain and the request was answered by whichever model was left holding the 400.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -880,7 +883,7 @@ The card keeps the *unselected* mode's fields visible but disabled, each carryin
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `FALLBACK_SKIP_KINDS` | `invalid_request` | Comma-separated failure kinds that abort the chain instead of falling through. Set `FALLBACK_SKIP_KINDS=invalid_request,context_length` to restore the pre-5.43.0 behaviour of giving up on any `400`. |
+| `FALLBACK_SKIP_KINDS` | `invalid_request` | Comma-separated failure kinds that abort the chain instead of falling through. Known kinds: `invalid_request`, `context_length`, `authentication`, `permission`, `quota`, `rate_limit`, `overloaded`, `timeout`, `upstream`, `unavailable`. Set `FALLBACK_SKIP_KINDS=invalid_request,context_length` to restore the pre-5.43.0 behaviour of giving up on any `400`. `quota` is deliberately absent from the default: an account out of credits says nothing about the request, and the next key or the next model may well answer it. |
 
 **Thinking is not answering.** A reasoning model that streams its thoughts and never writes an answer used to commit the route on its very first thought: from that moment no other model could take over, the stall guard never fired because thoughts kept arriving, and the request ran until the whole budget ended it. Measured across 21 days of real traffic, 44 of 499 budget exhaustions were a stream that had only reasoned, and 490 of the 499 never left the first model on the chain.
 

@@ -1357,3 +1357,74 @@ async def test_a_probe_that_429s_promotes_the_pair_bench_to_the_whole_key() -> N
     assert health["cooldown_remaining"] > 0
     # An index the pool does not hold is answered, not raised on.
     assert await provider.escalate_model_bench_to_key(9, "other-model", None) is False
+
+
+def _quota(*, retry_after: float | None, status: int = 400) -> ExecutionFailure:
+    """A provider-classified credits failure.
+
+    ``retry_after`` is the classifier's evidence flag, not a published header:
+    the operator's cooldown when the upstream named a billing phrase, ``None``
+    on a bare 402 that named none.
+    """
+    return ExecutionFailure(
+        kind=FailureKind.QUOTA,
+        status_code=status,
+        message="Provider account is out of credits.",
+        retryable=False,
+        retry_after_seconds=retry_after,
+    )
+
+
+@pytest.mark.asyncio
+async def test_quota_benches_the_key_for_the_rate_limit_cooldown_only_on_an_exact_phrase():
+    """Two failures, one kind, two different answers about the credential.
+
+    The phrase is what separates them. A whole-key bench, not a (key, model)
+    one: a wallet is not per-model, and the same key would answer any model on
+    the provider with the same empty balance.
+    """
+    exact = rotation_state(1, "failover", rate_limit_seconds=45.0)
+    assert await exact.report_failure(0, _quota(retry_after=45.0), model="m") is True
+    metrics = exact.get_metrics()[0]
+    assert metrics["state"] == "COOLDOWN"
+    assert 44.0 < metrics["cooldown_remaining"] <= 45.0
+    assert metrics["cooldown_reason"] == "credits exhausted"
+    assert metrics["model_benches"] == []
+
+    bare = rotation_state(1, "failover", rate_limit_seconds=45.0)
+    assert await bare.report_failure(0, _quota(retry_after=None, status=402)) is True
+    untouched = bare.get_metrics()[0]
+    assert untouched["state"] == "HEALTHY"
+    assert untouched["cooldown_remaining"] == 0.0
+    assert untouched["cooldown_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_quota_rotates_before_falling_to_the_next_model():
+    """Another key may have credits, so the pool tries one before giving up."""
+    state = rotation_state(2, "round_robin", rate_limit_seconds=30.0)
+
+    assert await state.report_failure(0, _quota(retry_after=30.0)) is True
+    # Key 0 is out; the pool still has somewhere to go.
+    assert await state.acquire() == 1
+
+    assert await state.report_failure(1, _quota(retry_after=30.0)) is True
+    # Only now is there nothing left, which is what raises out of the rotating
+    # loop and hands the request to the next model on the chain.
+    assert await state.acquire() == -1
+    assert state.benched_only_for_credits() is True
+
+
+@pytest.mark.asyncio
+async def test_a_mixed_pool_does_not_claim_every_key_ran_out_of_credits():
+    """One throttled key is enough to make the credits sentence a lie."""
+    state = rotation_state(2, "round_robin")
+    await state.report_failure(0, _quota(retry_after=60.0))
+    await state.report_failure(1, _RetryableError())
+
+    assert state.benched_only_for_credits() is False
+
+
+def test_quota_justifies_rotation_with_or_without_a_phrase():
+    assert error_justifies_rotation(_quota(retry_after=60.0)) is True
+    assert error_justifies_rotation(_quota(retry_after=None, status=402)) is True

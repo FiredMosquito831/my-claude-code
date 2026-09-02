@@ -23,6 +23,7 @@ _FAILURE_ERROR_TYPES = {
     FailureKind.CONTEXT_LENGTH: "invalid_request_error",
     FailureKind.AUTHENTICATION: "authentication_error",
     FailureKind.PERMISSION: "permission_error",
+    FailureKind.QUOTA: "billing_error",
     FailureKind.RATE_LIMIT: "rate_limit_error",
     FailureKind.OVERLOADED: "overloaded_error",
     FailureKind.TIMEOUT: "api_error",
