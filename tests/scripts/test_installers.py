@@ -2,10 +2,13 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+
+from my_claude_code.application.release_updates import _deferred_helper_script
 
 FCC_VERSION = "9.9.9"
 FCC_WHEEL_NAME = f"my_claude_code-{FCC_VERSION}-py3-none-any.whl"
@@ -43,10 +46,13 @@ _POWERSHELL_HELPER_NAMES = frozenset(
         "Test-UvVersionAtLeast",
         "New-DesktopShortcut",
         "Get-LauncherCommands",
+        "Get-ManagedShimName",
         "Rename-LauncherShimsAside",
         "Restore-LauncherShim",
         "Remove-StaleShimBackup",
         "Invoke-RenameThenReinstall",
+        "Invoke-StagedInstall",
+        "Update-UvReceiptEntrypoint",
         "Configure-AndConfirmFreeClaudeCode",
     }
 )
@@ -1079,9 +1085,12 @@ def _extract_function_definition(installer_text: str, name: str) -> str:
 # a change to any of them is exercised rather than stubbed.
 _RENAME_DEPENDENCIES = (
     "Get-LauncherCommands",
+    "Get-ManagedShimName",
     "Rename-LauncherShimsAside",
     "Restore-LauncherShim",
     "Remove-StaleShimBackup",
+    "Update-UvReceiptEntrypoint",
+    "Invoke-StagedInstall",
     "Invoke-RenameThenReinstall",
 )
 
@@ -1600,6 +1609,369 @@ def test_installers_allow_install_while_running_and_lead_with_mcc() -> None:
     assert "with fcc-claude, fcc-codex, or fcc-pi" not in powershell
     assert "Use fcc-claude-old instead" not in shell
     assert "Use fcc-claude-old instead" not in powershell
+
+
+def _install_ps1() -> str:
+    return (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
+
+
+def _release_updates_py() -> str:
+    return (
+        _repo_root() / "src" / "my_claude_code" / "application" / "release_updates.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_installer_moves_the_whole_shim_family_aside_not_a_hand_written_list() -> None:
+    """The rename must not depend on one list being complete.
+
+    The list went stale before (mcc-desktop, mcc-rtk, mcc-help and
+    mcc-anthropic-oauth-login were all absent from it at one point), and a shim
+    the installer does not move aside is a shim uv aborts the whole install on.
+    The set is therefore a union of the mcc-/fcc- family pattern, uv's own
+    receipt, and the contract list.
+    """
+    powershell = _install_ps1()
+    discovery = _extract_function_definition(powershell, "Get-ManagedShimName")
+
+    # 1. the family pattern, so a command nobody listed is still covered
+    assert "^(mcc|fcc)-.+\\.exe$" in discovery
+    assert "my-claude-code.exe" in discovery
+    assert "free-claude-code.exe" in discovery
+    # 2. uv's own receipt
+    assert "uv-receipt.toml" in discovery
+    assert "install-path" in discovery
+    # 3. the contract list, which the contract test still holds to pyproject
+    assert "Get-LauncherCommands" in discovery
+
+    rename = _extract_function_definition(powershell, "Rename-LauncherShimsAside")
+    assert "Get-ManagedShimName" in rename
+
+
+def test_installer_records_a_refused_rename_instead_of_swallowing_it() -> None:
+    """A rename Windows refuses must reach the caller, not an empty catch.
+
+    Swallowing it is how a locked ``mcc-desktop.exe`` was handed straight to uv,
+    which aborts its whole entrypoint pass on the first file it cannot write.
+    """
+    rename = _extract_function_definition(_install_ps1(), "Rename-LauncherShimsAside")
+
+    assert "Renamed  = $false" in rename
+    assert "$move.Error = $_.Exception.Message" in rename
+    # The old behaviour was a catch block with nothing but a comment in it.
+    assert "uv will fail on this one shim" not in rename
+
+
+def test_installer_stages_the_install_when_a_shim_cannot_be_moved_aside() -> None:
+    """A refused rename routes to a staged install, never to a hard failure."""
+    powershell = _install_ps1()
+    reinstall = _extract_function_definition(powershell, "Invoke-RenameThenReinstall")
+    staged = _extract_function_definition(powershell, "Invoke-StagedInstall")
+
+    assert "$refusedShims" in reinstall
+    assert "Invoke-StagedInstall" in reinstall
+    # The staged run must reach the fallback both when a rename was refused and
+    # when the direct install failed anyway.
+    assert "$installError" in reinstall
+    assert reinstall.index("Invoke-StagedInstall") < reinstall.index(
+        "My Claude Code install failed"
+    )
+
+    # uv must write into a directory nothing can be holding.
+    assert "UV_TOOL_BIN_DIR" in staged
+    assert "mcc-stage-bin-" in staged
+    # ...and the shims are placed one by one, so one stuck file costs one file.
+    assert "Copy-Item" in staged
+    assert "$keptOld" in staged
+
+
+def test_installer_restores_the_old_shim_when_the_new_one_cannot_be_placed() -> None:
+    """A command must never be left without a launcher."""
+    staged = _extract_function_definition(_install_ps1(), "Invoke-StagedInstall")
+
+    assert "$movedAside" in staged
+    assert "Move-Item -LiteralPath $aside -Destination $target" in staged
+
+
+def test_installer_rewrites_the_receipt_after_a_staged_install() -> None:
+    """uv records install-path under UV_TOOL_BIN_DIR, which was a temp dir.
+
+    Measured with uv 0.11.21: an install run with UV_TOOL_BIN_DIR pointed at a
+    staging directory writes every ``install-path`` under that directory. Left
+    alone, a later ``uv tool uninstall`` or ``upgrade`` would chase a temp path
+    that no longer exists.
+    """
+    powershell = _install_ps1()
+    staged = _extract_function_definition(powershell, "Invoke-StagedInstall")
+    rewrite = _extract_function_definition(powershell, "Update-UvReceiptEntrypoint")
+
+    assert "Update-UvReceiptEntrypoint" in staged
+    assert "uv-receipt.toml" in rewrite
+    # Written through a temp file so a crash cannot leave half a receipt.
+    assert "Move-Item -LiteralPath $temporary" in rewrite
+
+
+def test_installer_never_fails_on_a_locked_file_without_trying_the_fallback() -> None:
+    """Every uv install call has the staged path behind it.
+
+    ``os error 32`` is the failure this whole mechanism exists for, so no code
+    path may report it to the user before the staged install has been tried.
+    """
+    powershell = _install_ps1()
+    install = _extract_function_definition(powershell, "Install-FreeClaudeCode")
+
+    # The plain path (nothing detected as running) also retries around locks:
+    # process detection is a name match and a name match can miss.
+    assert "retrying around locked files" in install
+    assert "Invoke-RenameThenReinstall" in install
+    assert install.count("Invoke-RenameThenReinstall") >= 2
+
+
+def test_installer_reports_kept_shims_as_refreshing_not_as_failures() -> None:
+    """A locked shim is present and runs the new code; it is not an error."""
+    powershell = _install_ps1()
+
+    assert "$script:ShimsKeptInPlace" in powershell
+    assert "will refresh on the next install" in powershell
+    # Still exits non-zero only for a command that is genuinely absent.
+    assert "Installed, but these commands are missing:" in powershell
+
+
+def test_updater_helper_matches_the_installer_rename_and_staged_fallback() -> None:
+    """The dashboard/tray updater gets the same mechanism, not a lesser one."""
+    updater = _release_updates_py()
+
+    # Family-wide discovery: pattern, receipt, entry points.
+    assert "^(mcc|fcc)-.+" in updater
+    assert "install-path" in updater
+    assert "$commandNames" in updater
+    # A refused rename is recorded rather than swallowed.
+    assert "$refused" in updater
+    # Staged fallback with the same shape as the installer's.
+    assert "UV_TOOL_BIN_DIR" in updater
+    assert "mcc-stage-bin-" in updater
+    # Honest receipt: which shims kept the file they had.
+    assert "kept_shims" in updater
+    assert "will refresh on the next install" in updater
+    # And the receipt is repointed at the real bin directory.
+    assert "uv-receipt.toml" in updater
+
+
+def test_updater_helper_script_is_valid_powershell_after_rendering() -> None:
+    """The helper is generated from an f-string; a bad escape would ship."""
+    script = _deferred_helper_script(
+        uv_executable="C:/uv.exe",
+        command=["uv", "tool", "install", "--force", "pkg"],
+        result_path=Path("C:/stage/result.json"),
+        stage_dir=Path("C:/stage"),
+        server_launcher=Path("C:/bin/fcc-server.exe"),
+        working_directory=Path("C:/work"),
+        bin_dir=Path("C:/bin"),
+        tool_dir=Path("C:/tools/my-claude-code"),
+        commands=["mcc-server", "mcc-desktop"],
+    )
+
+    # The regex literals must survive the f-string as PowerShell, not as
+    # Python escapes: "\\.exe$" in the source has to render as "\.exe$".
+    assert "'^(mcc|fcc)-.+\\.exe$'" in script
+    assert '\'install-path\\s*=\\s*"([^"]+)"\'' in script
+    assert "Test-Path Env:\\UV_TOOL_BIN_DIR" in script
+
+
+@pytest.mark.parametrize("powershell", _powershells())
+def test_shim_rename_reports_a_lock_it_cannot_break(
+    tmp_path: Path,
+    powershell: str,
+) -> None:
+    """A file held with FileShare.None comes back as a refusal, not silence."""
+    if os.name != "nt":
+        pytest.skip("shim locking is a Windows behaviour")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("mcc-server.exe", "mcc-desktop.exe", "mcc-brandnew.exe"):
+        (bin_dir / name).write_bytes(b"shim")
+    # Not ours: it must be left alone.
+    (bin_dir / "unrelated.exe").write_bytes(b"other")
+
+    source = _install_ps1()
+    script = tmp_path / "probe.ps1"
+    script.write_text(
+        "Set-StrictMode -Version Latest\n"
+        "$ErrorActionPreference = 'Stop'\n"
+        + _extract_function_definition(source, "Get-LauncherCommands")
+        + "\n"
+        + _extract_function_definition(source, "Get-ManagedShimName")
+        + "\n"
+        + _extract_function_definition(source, "Rename-LauncherShimsAside")
+        + "\n"
+        "$moves = @(Rename-LauncherShimsAside -BinDir $args[0] -Stamp 'probe')\n"
+        "foreach ($move in $moves) {\n"
+        '  Write-Output ("{0}|{1}" -f (Split-Path -Leaf $move.Original), $move.Renamed)\n'
+        "}\n",
+        encoding="utf-8",
+    )
+
+    with (bin_dir / "mcc-desktop.exe").open("rb") as locked:
+        assert locked.readable()
+        result = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+                str(bin_dir),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    assert result.returncode == 0, result.stderr
+    reported = dict(
+        line.split("|", 1) for line in result.stdout.splitlines() if "|" in line
+    )
+    # A command no hand-written list mentions is still covered by the family.
+    assert "mcc-brandnew.exe" in reported
+    assert reported["mcc-brandnew.exe"] == "True"
+    assert reported["mcc-server.exe"] == "True"
+    # Python's open() does not share delete, so this rename must be refused --
+    # and reported as refused rather than silently dropped.
+    assert reported["mcc-desktop.exe"] == "False"
+    assert "unrelated.exe" not in reported
+    assert (bin_dir / "unrelated.exe").is_file()
+    assert (bin_dir / "mcc-desktop.exe").is_file()
+
+
+@pytest.mark.parametrize("powershell", _powershells())
+def test_staged_install_keeps_a_locked_shim_and_repoints_the_receipt(
+    tmp_path: Path,
+    powershell: str,
+) -> None:
+    """The pathological case: one shim nothing can replace, and it is fine.
+
+    The old file stays, the other commands are refreshed, the receipt points at
+    the real bin directory, and the locked one is reported by name rather than
+    counted as a failure.
+    """
+    if os.name != "nt":
+        pytest.skip("shim locking is a Windows behaviour")
+
+    bin_dir = tmp_path / "bin"
+    stage_source = tmp_path / "staged"
+    tool_dir = tmp_path / "tools" / "my-claude-code"
+    for path in (bin_dir, stage_source, tool_dir):
+        path.mkdir(parents=True)
+    for name in ("mcc-server.exe", "mcc-rtk.exe"):
+        (bin_dir / name).write_bytes(b"old shim")
+        (stage_source / name).write_bytes(b"new shim")
+
+    # A stand-in for uv: it copies the staged shims into whatever
+    # UV_TOOL_BIN_DIR names and writes a receipt pointing at that directory,
+    # which is exactly what uv 0.11.21 does.
+    fake_uv = tmp_path / "uv.cmd"
+    fake_uv.write_text(
+        "@echo off\r\n"
+        f'copy /y "{stage_source}\\*.exe" "%UV_TOOL_BIN_DIR%" >nul\r\n'
+        f'> "{tool_dir}\\uv-receipt.toml" echo [tool]\r\n'
+        f'>> "{tool_dir}\\uv-receipt.toml" echo entrypoints = ['
+        "\r\n"
+        f'>> "{tool_dir}\\uv-receipt.toml" echo     {{ name = "mcc-server", '
+        'install-path = "%UV_TOOL_BIN_DIR:\\=/%/mcc-server.exe" },\r\n'
+        f'>> "{tool_dir}\\uv-receipt.toml" echo ]\r\n',
+        encoding="utf-8",
+    )
+
+    source = _install_ps1()
+    script = tmp_path / "stage.ps1"
+    script.write_text(
+        "Set-StrictMode -Version Latest\n"
+        "$ErrorActionPreference = 'Stop'\n"
+        + _extract_function_definition(source, "Format-Argument")
+        + "\n"
+        + _extract_function_definition(source, "Format-Command")
+        + "\n"
+        + _extract_function_definition(source, "Invoke-NativeCommand")
+        + "\n"
+        + _extract_function_definition(source, "Update-UvReceiptEntrypoint")
+        + "\n"
+        + _extract_function_definition(source, "Invoke-StagedInstall")
+        + "\n"
+        "$DryRun = $false\n"
+        "$kept = @(Invoke-StagedInstall -UvPath $args[0] -Arguments @('install') "
+        "-BinDir $args[1] -ToolDir $args[2] -Stamp 'probe')\n"
+        "Write-Output (\"KEPT:\" + ($kept -join ','))\n",
+        encoding="utf-8",
+    )
+
+    # Python's open() shares write access, so it blocks a rename but not an
+    # overwrite. The pathological case needs FileShare.None -- nothing can move
+    # the file and nothing can write it -- which only another process can hold.
+    holder_script = tmp_path / "hold.ps1"
+    holder_script.write_text(
+        "$handle = [IO.File]::Open($args[0], 'Open', 'Read', 'None')\n"
+        "while (Test-Path -LiteralPath $args[1]) { Start-Sleep -Milliseconds 50 }\n"
+        "$handle.Dispose()\n",
+        encoding="utf-8",
+    )
+    sentinel = tmp_path / "hold.flag"
+    sentinel.write_text("held", encoding="utf-8")
+    holder = subprocess.Popen(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(holder_script),
+            str(bin_dir / "mcc-rtk.exe"),
+            str(sentinel),
+        ],
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                (bin_dir / "mcc-rtk.exe").open("rb").close()
+            except OSError:
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("the holder never took the lock")
+
+        result = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+                str(fake_uv),
+                str(bin_dir),
+                str(tool_dir),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    finally:
+        sentinel.unlink()
+        holder.wait(timeout=60)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "KEPT:mcc-rtk" in result.stdout, result.stdout
+    # The unlocked command took the new shim...
+    assert (bin_dir / "mcc-server.exe").read_bytes() == b"new shim"
+    # ...and the locked one kept a working launcher rather than losing one.
+    assert (bin_dir / "mcc-rtk.exe").read_bytes() == b"old shim"
+    # The receipt no longer points into the staging directory.
+    receipt = (tool_dir / "uv-receipt.toml").read_text(encoding="utf-8")
+    assert "mcc-stage-bin-" not in receipt
+    assert str(bin_dir).replace("\\", "/") in receipt
 
 
 def test_readme_install_section_has_no_manual_git_prerequisite() -> None:

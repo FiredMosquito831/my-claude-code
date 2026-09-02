@@ -727,12 +727,13 @@ def test_deferred_helper_writes_the_receipt_without_a_bom(tmp_path) -> None:
 
     ``Set-Content -Encoding utf8`` under PowerShell 5.1 prepends U+FEFF;
     ``[System.IO.File]::WriteAllText`` with ``UTF8Encoding($false)`` does not.
-    Both write sites -- timeout and final result -- must use it, and the
-    outcome must still be recorded before any relaunch attempt.
+    All three write sites -- timeout, final result, and the rewritten uv
+    receipt the staged fallback leaves behind -- must use it, and the outcome
+    must still be recorded before any relaunch attempt.
     """
     script = _deferred_script(tmp_path)
-    assert script.count("[System.IO.File]::WriteAllText") == 2
-    assert script.count("UTF8Encoding($false)") == 2
+    assert script.count("[System.IO.File]::WriteAllText") == 3
+    assert script.count("UTF8Encoding($false)") == 3
     assert "Set-Content" not in script
     first_write = script.index("[System.IO.File]::WriteAllText")
     launch = script.index("Start-Process -FilePath")

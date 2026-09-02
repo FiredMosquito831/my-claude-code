@@ -30,6 +30,12 @@ $script:Deferred = $false
 # Set by Invoke-RenameThenReinstall when the update completed immediately while
 # launchers were open (old tool env renamed aside, fresh install in place).
 $script:RenamedWhileRunning = $false
+# Set by Invoke-StagedInstall: the commands whose shim was locked hard enough
+# that the new launcher could not be placed. The OLD launcher stays, which is
+# safe -- a uv shim is a version-agnostic stub that execs the interpreter at the
+# canonical tool-dir path, and that path now holds the NEW install -- so these
+# are reported as "refresh on the next install", never as failures.
+$script:ShimsKeptInPlace = @()
 $script:EnableRtk = $Rtk.IsPresent
 $script:EnableDesktop = $Desktop.IsPresent
 # Set by New-DesktopShortcut so the closing message reports what actually
@@ -605,7 +611,30 @@ function Install-FreeClaudeCode {
     }
 
     try {
-        Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments
+        try {
+            Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments
+        }
+        catch {
+            # Nothing of ours looked like it was running, yet uv could not write.
+            # Process detection is a name match and a name match can miss (a
+            # launcher started from a copy, a shim held by a scanner rather than
+            # by us), so never let "os error 32" out of here without trying the
+            # path built for locked files. Only a failure of THAT is a failure.
+            Write-Host "The install did not finish ($($_.Exception.Message)); retrying around locked files."
+            $toolDir = Get-UvToolDir -UvPath $uvPath
+            if ($null -eq $toolDir) {
+                throw
+            }
+            $renamed = Invoke-RenameThenReinstall `
+                -UvPath $uvPath `
+                -Arguments $arguments `
+                -WheelPath $wheelPath `
+                -ToolDir $toolDir `
+                -Version $release.Version
+            if (-not $renamed) {
+                throw
+            }
+        }
     }
     finally {
         Remove-Item -LiteralPath (Split-Path -Parent $wheelPath) -Recurse -Force -ErrorAction SilentlyContinue
@@ -651,58 +680,92 @@ function Invoke-RenameThenReinstall {
     # free paths and exits 0. Measured on a scratch UV_TOOL_BIN_DIR with a live
     # launcher: 17 shims renamed, 0 refused, uv exit 0, 33 shims present.
     $binDir = Invoke-NativeCapture -FilePath $UvPath -Arguments @("tool", "dir", "--bin")
+    $canStage = -not [string]::IsNullOrWhiteSpace($binDir)
     $shimBackups = @()
-    if (-not [string]::IsNullOrWhiteSpace($binDir)) {
+    if ($canStage) {
         Remove-StaleShimBackup -BinDir $binDir
-        $shimBackups = @(Rename-LauncherShimsAside -BinDir $binDir -Stamp $stamp)
+        $shimBackups = @(Rename-LauncherShimsAside -BinDir $binDir -Stamp $stamp -ToolDir $ToolDir)
     }
+    # A rename can be REFUSED even for a shim whose only user is the process
+    # running it: something else on the machine (an antivirus scan, the search
+    # indexer, the shell reading the icon) can hold the file without
+    # FILE_SHARE_DELETE for a moment. Measured: `mcc-desktop.exe` at 16:30 on
+    # 2026-09-02 -- the tool-dir rename had already succeeded, so this function
+    # was running, and uv still died with "failed to copy ... mcc-desktop.exe:
+    # The process cannot access the file because it is being used by another
+    # process (os error 32)". The refusal used to be swallowed and uv was let
+    # loose on the locked path anyway; that is what turned one stuck shim into a
+    # whole failed install. Now a refusal routes to the staged install below,
+    # where uv never writes to a canonical path at all.
+    $refusedShims = @($shimBackups | Where-Object { -not $_.Renamed })
 
-    if (-not (Test-Path -LiteralPath $ToolDir -PathType Container)) {
-        # Nothing to rename: a first install with a running launcher. Just
-        # install directly (the fresh env is created from scratch); the shims
-        # are already out of uv's way.
+    $renamed = ""
+    if (Test-Path -LiteralPath $ToolDir -PathType Container) {
+        # Best-effort sweep of stale .old-* dirs whose rename-lock is gone. A
+        # dir still held open by a live window fails to delete; ignore it.
+        Get-ChildItem -Path (Split-Path -Parent $ToolDir) -Directory -Filter "my-claude-code.old-*" -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+
+        $renamed = "$ToolDir.old-$stamp"
         try {
-            Invoke-NativeCommand -FilePath $UvPath -Arguments $Arguments
+            Rename-Item -LiteralPath $ToolDir -NewName (Split-Path -Leaf $renamed) -ErrorAction Stop
         }
         catch {
+            # The rename was refused (a process holds the dir without
+            # share-delete). This is the one lock we cannot work around
+            # in-process, so fall back to the deferred install rather than risk a
+            # broken env. Put the shims back first: nothing was installed, so the
+            # old ones are still the right ones.
             Restore-LauncherShim -Backups $shimBackups
-            throw
+            return $false
         }
-        Remove-StaleShimBackup -BinDir $binDir
-        return $true
     }
 
-    # Best-effort sweep of stale .old-* dirs whose rename-lock is gone. A
-    # dir still held open by a live window fails to delete; ignore it.
-    Get-ChildItem -Path (Split-Path -Parent $ToolDir) -Directory -Filter "my-claude-code.old-*" -ErrorAction SilentlyContinue |
-        ForEach-Object {
-            Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    # With the tool dir out of the way, uv installs into a clean canonical path.
+    # It may still trip over a shim, so treat the direct run as the fast path and
+    # the staged run as the one that cannot collide.
+    $installed = $false
+    $installError = ""
+    if (($refusedShims.Count -eq 0) -or (-not $canStage)) {
+        try {
+            Invoke-NativeCommand -FilePath $UvPath -Arguments $Arguments
+            $installed = $true
         }
-
-    $renamed = "$ToolDir.old-$stamp"
-    try {
-        Rename-Item -LiteralPath $ToolDir -NewName (Split-Path -Leaf $renamed) -ErrorAction Stop
+        catch {
+            $installError = $_.Exception.Message
+        }
     }
-    catch {
-        # The rename was refused (a process holds the dir without share-delete).
-        # This is the one lock we cannot work around in-process, so fall back to
-        # the deferred install rather than risk a broken env. Put the shims back
-        # first: nothing was installed, so the old ones are still the right ones.
-        Restore-LauncherShim -Backups $shimBackups
-        return $false
+    else {
+        foreach ($move in $refusedShims) {
+            Write-Host "Could not move $(Split-Path -Leaf $move.Original) aside: $($move.Error)"
+        }
+        $installError = "$($refusedShims.Count) launcher shim(s) could not be moved aside"
     }
 
-    # With both the tool dir and every shim out of the way, uv has a clean set
-    # of paths to write. Any failure now is a real failure: roll the old install
-    # back (dir and shims) so the user is never left without a working tool, and
-    # report it rather than pretending the install succeeded.
-    try {
-        Invoke-NativeCommand -FilePath $UvPath -Arguments $Arguments
+    if ((-not $installed) -and $canStage) {
+        Write-Host "Installing through a staging directory instead ($installError)."
+        try {
+            $script:ShimsKeptInPlace = @(Invoke-StagedInstall `
+                -UvPath $UvPath `
+                -Arguments $Arguments `
+                -BinDir $binDir `
+                -ToolDir $ToolDir `
+                -Stamp $stamp)
+            $installed = $true
+        }
+        catch {
+            $installError = $_.Exception.Message
+        }
     }
-    catch {
-        $installError = $_.Exception.Message
+
+    if (-not $installed) {
+        # Everything was tried. Roll the old install back (dir and shims) so the
+        # user is never left without a working tool, and report it rather than
+        # pretending the install succeeded.
         Remove-Item -LiteralPath $ToolDir -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path -LiteralPath $renamed -PathType Container) {
+        if ((-not [string]::IsNullOrWhiteSpace($renamed)) -and (Test-Path -LiteralPath $renamed -PathType Container)) {
             Rename-Item -LiteralPath $renamed -NewName (Split-Path -Leaf $ToolDir) -ErrorAction SilentlyContinue
         }
         Restore-LauncherShim -Backups $shimBackups
@@ -713,39 +776,225 @@ function Invoke-RenameThenReinstall {
     # be held open by a live window; remove them best-effort. Whatever is still
     # locked stays behind as orphaned garbage that the sweeps above reap on a
     # later install.
-    Remove-Item -LiteralPath $renamed -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-StaleShimBackup -BinDir $binDir
+    if (-not [string]::IsNullOrWhiteSpace($renamed)) {
+        Remove-Item -LiteralPath $renamed -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($canStage) {
+        Remove-StaleShimBackup -BinDir $binDir
+    }
     $script:RenamedWhileRunning = $true
     return $true
 }
 
-function Rename-LauncherShimsAside {
-    # Rename every launcher shim in the uv tool bin dir to "<name>.old-<stamp>"
-    # so uv can write a fresh one at the canonical path even while a launcher is
-    # running from it. Returns the moves made, so a failed install can undo them.
+function Invoke-StagedInstall {
+    # Install without ever letting uv write to a canonical shim path, then place
+    # the shims ourselves. Returns the command names whose shim stayed as it was.
+    #
+    # uv aborts the whole install on the first entrypoint it cannot write, and
+    # leaves no receipt behind, so a single locked .exe loses every command that
+    # sorts after it. Point UV_TOOL_BIN_DIR at a fresh directory and that class
+    # of failure disappears: uv writes all the shims and a complete receipt into
+    # a place nothing can be holding. Copying them into the real bin directory
+    # afterwards is per-file, so one stuck file costs exactly that one file.
     param(
+        [Parameter(Mandatory = $true)] [string] $UvPath,
+        [Parameter(Mandatory = $true)] [string[]] $Arguments,
         [Parameter(Mandatory = $true)] [string] $BinDir,
+        [Parameter(Mandatory = $true)] [string] $ToolDir,
         [Parameter(Mandatory = $true)] [string] $Stamp
     )
 
+    $stageBin = Join-Path ([IO.Path]::GetTempPath()) ("mcc-stage-bin-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stageBin | Out-Null
+    $hadBinDirVariable = Test-Path Env:\UV_TOOL_BIN_DIR
+    $previousBinDir = if ($hadBinDirVariable) { $env:UV_TOOL_BIN_DIR } else { "" }
+    try {
+        $env:UV_TOOL_BIN_DIR = $stageBin
+        Invoke-NativeCommand -FilePath $UvPath -Arguments $Arguments
+    }
+    finally {
+        if ($hadBinDirVariable) {
+            $env:UV_TOOL_BIN_DIR = $previousBinDir
+        }
+        else {
+            Remove-Item Env:\UV_TOOL_BIN_DIR -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Place each staged shim. A destination that is still locked keeps the file
+    # it already has: an old shim is a stub that execs the interpreter under the
+    # canonical tool directory, and that directory now holds the new install, so
+    # the old stub runs the new code. It is stale only in the sense that a
+    # command ADDED by this release would be missing, which the verification
+    # step reports honestly.
+    $keptOld = @()
+    foreach ($staged in @(Get-ChildItem -Path $stageBin -Filter "*.exe" -ErrorAction SilentlyContinue)) {
+        $target = Join-Path $BinDir $staged.Name
+        $asideName = $staged.Name + ".old-$Stamp-staged"
+        $aside = Join-Path $BinDir $asideName
+        $movedAside = $false
+        if (Test-Path -LiteralPath $target -PathType Leaf) {
+            foreach ($attempt in 1..4) {
+                try {
+                    Rename-Item -LiteralPath $target -NewName $asideName -ErrorAction Stop
+                    $movedAside = $true
+                    break
+                }
+                catch {
+                    Start-Sleep -Milliseconds (150 * $attempt)
+                }
+            }
+        }
+        try {
+            Copy-Item -LiteralPath $staged.FullName -Destination $target -Force -ErrorAction Stop
+        }
+        catch {
+            # Could not place the new shim. Put the old one back so the command
+            # keeps working, and report it as refreshed-next-time.
+            if ($movedAside -and (Test-Path -LiteralPath $aside -PathType Leaf)) {
+                Move-Item -LiteralPath $aside -Destination $target -Force -ErrorAction SilentlyContinue
+            }
+            $keptOld += [IO.Path]::GetFileNameWithoutExtension($staged.Name)
+        }
+    }
+
+    # Assigned away: this function's output IS the kept-shim list, and a stray
+    # boolean on the pipeline would be reported to the user as a command name.
+    $null = Update-UvReceiptEntrypoint -ToolDir $ToolDir -StageBinDir $stageBin -BinDir $BinDir
+    Remove-Item -LiteralPath $stageBin -Recurse -Force -ErrorAction SilentlyContinue
+
+    foreach ($name in $keptOld) {
+        $name
+    }
+}
+
+function Update-UvReceiptEntrypoint {
+    # Point the receipt's entrypoints back at the real bin directory.
+    #
+    # Measured with uv 0.11.21: an install run with UV_TOOL_BIN_DIR set records
+    # `install-path` under THAT directory, so a receipt left as uv wrote it
+    # would send a later `uv tool uninstall`/`upgrade` at a temp path that no
+    # longer exists. uv writes these paths with forward slashes; the rewrite is
+    # a plain prefix substitution and lands through a temp file + Move-Item so a
+    # crash can never leave a half-written receipt.
+    param(
+        [Parameter(Mandatory = $true)] [string] $ToolDir,
+        [Parameter(Mandatory = $true)] [string] $StageBinDir,
+        [Parameter(Mandatory = $true)] [string] $BinDir
+    )
+
+    $receipt = Join-Path $ToolDir "uv-receipt.toml"
+    if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) {
+        return $false
+    }
+    $realPrefix = $BinDir.Replace("\", "/").TrimEnd("/")
+    $text = [IO.File]::ReadAllText($receipt)
+    $updated = $text
+    # Match whichever separator uv echoed back, so the rewrite does not depend
+    # on how the staging path happened to be spelled.
+    $backslashPrefix = $StageBinDir.Replace("/", "\").TrimEnd("\")
+    foreach ($stagePrefix in @(
+            $StageBinDir.Replace("\", "/").TrimEnd("/"),
+            $backslashPrefix.Replace("\", "\\"),
+            $backslashPrefix
+        )) {
+        $updated = $updated.Replace($stagePrefix, $realPrefix)
+    }
+    if ($updated -eq $text) {
+        return $false
+    }
+    $temporary = "${receipt}.new"
+    [IO.File]::WriteAllText(
+        $temporary,
+        $updated,
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+    Move-Item -LiteralPath $temporary -Destination $receipt -Force
+    return $true
+}
+
+function Get-ManagedShimName {
+    # Every ".exe" in the uv tool bin dir that belongs to this tool.
+    #
+    # Deliberately NOT driven by Get-LauncherCommands alone. That list is a
+    # hand-written contract, and a hand-written list is exactly what fell behind
+    # before (mcc-desktop, mcc-rtk, mcc-help, mcc-anthropic-oauth-login were all
+    # missing from it once). A shim we fail to move aside is a shim uv dies on,
+    # so the set is built as a UNION of three independent sources and a new
+    # command can never be missed by all three:
+    #   1. the family pattern -- anything named mcc-*.exe / fcc-*.exe, plus the
+    #      two distribution-named commands;
+    #   2. whatever uv's OWN receipt for the tool calls an entrypoint;
+    #   3. the Get-LauncherCommands contract list (which the contract test still
+    #      holds equal to pyproject.toml -- the rename just no longer depends on
+    #      it being right).
+    param(
+        [Parameter(Mandatory = $true)] [string] $BinDir,
+        [string] $ToolDir = ""
+    )
+
     $names = @{}
+    $distributionCommands = @("my-claude-code.exe", "free-claude-code.exe")
+    foreach ($file in @(Get-ChildItem -Path $BinDir -Filter "*.exe" -ErrorAction SilentlyContinue)) {
+        if (($file.Name -match "^(mcc|fcc)-.+\.exe$") -or ($distributionCommands -contains $file.Name.ToLowerInvariant())) {
+            $names[$file.Name] = $true
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ToolDir)) {
+        $receipt = Join-Path $ToolDir "uv-receipt.toml"
+        if (Test-Path -LiteralPath $receipt -PathType Leaf) {
+            foreach ($match in [regex]::Matches([IO.File]::ReadAllText($receipt), 'install-path\s*=\s*"([^"]+)"')) {
+                $leaf = Split-Path -Leaf $match.Groups[1].Value
+                if ($leaf -like "*.exe") {
+                    $names[$leaf] = $true
+                }
+            }
+        }
+    }
+
     foreach ($commandName in Get-LauncherCommands) {
         $names["$commandName.exe"] = $true
     }
+
+    foreach ($name in ($names.Keys | Sort-Object)) {
+        $name
+    }
+}
+
+function Rename-LauncherShimsAside {
+    # Rename every shim this tool owns to "<name>.old-<stamp>" so uv can write a
+    # fresh one at the canonical path even while a launcher is running from it.
+    # Returns one record per shim -- including the ones that would NOT move, so
+    # the caller can stage the install instead of walking into uv's abort.
+    param(
+        [Parameter(Mandatory = $true)] [string] $BinDir,
+        [Parameter(Mandatory = $true)] [string] $Stamp,
+        [string] $ToolDir = ""
+    )
+
     $moves = @()
-    Get-ChildItem -Path $BinDir -Filter "*.exe" -ErrorAction SilentlyContinue |
-        Where-Object { $names.ContainsKey($_.Name) } |
-        ForEach-Object {
-            $target = Join-Path $BinDir ($_.Name + ".old-$Stamp")
-            try {
-                Rename-Item -LiteralPath $_.FullName -NewName ($_.Name + ".old-$Stamp") -ErrorAction Stop
-                $moves += [pscustomobject]@{ Original = $_.FullName; Backup = $target }
-            }
-            catch {
-                # Leave it: uv will fail on this one shim and we report it as a
-                # missing command rather than silently shipping a broken set.
-            }
+    foreach ($fileName in @(Get-ManagedShimName -BinDir $BinDir -ToolDir $ToolDir)) {
+        $source = Join-Path $BinDir $fileName
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            continue
         }
+        $backupName = $fileName + ".old-$Stamp"
+        $move = [pscustomobject]@{
+            Original = $source
+            Backup   = (Join-Path $BinDir $backupName)
+            Renamed  = $false
+            Error    = ""
+        }
+        try {
+            Rename-Item -LiteralPath $source -NewName $backupName -ErrorAction Stop
+            $move.Renamed = $true
+        }
+        catch {
+            $move.Error = $_.Exception.Message
+        }
+        $moves += $move
+    }
     foreach ($move in $moves) {
         $move
     }
@@ -756,6 +1005,9 @@ function Restore-LauncherShim {
     param([object[]] $Backups = @())
 
     foreach ($move in $Backups) {
+        if (-not $move.Renamed) {
+            continue
+        }
         if (Test-Path -LiteralPath $move.Backup -PathType Leaf) {
             Move-Item -LiteralPath $move.Backup -Destination $move.Original -Force -ErrorAction SilentlyContinue
         }
@@ -1206,6 +1458,15 @@ if ($script:RenamedWhileRunning) {
     Write-Host "New sessions and restarted servers use the new version."
     Write-Host "Already-open windows keep running the previous version until they are"
     Write-Host "closed or restarted."
+    if ($script:ShimsKeptInPlace.Count -gt 0) {
+        # Not a failure and not a warning to act on: the launcher is a stub that
+        # runs the interpreter in the canonical tool directory, which now holds
+        # the new install, so these commands already run the new code.
+        Write-Host ""
+        Write-Host "These launchers were locked and kept the file they had:"
+        Write-Host "  $($script:ShimsKeptInPlace -join ', ')"
+        Write-Host "These keep working and will refresh on the next install."
+    }
     Write-MccCommandReference
 }
 elseif ($script:Deferred) {

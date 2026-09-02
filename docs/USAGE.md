@@ -2034,8 +2034,13 @@ Provider API keys are never sent to your agent, never written to the analytics s
 **`mcc-server: command not found` right after installing.**
 Close and reopen your terminal. The installer extends `PATH`; an existing shell won't see it. This is the single most common install issue.
 
+**Windows: installing while MCC is running.**
+Supported, and it is the normal path. The installer renames the old tool environment *and* every `mcc-*` / `fcc-*` launcher aside, then lets uv write a complete new set. Running sessions — the server, the tray, an open `mcc-claude` window — keep the old version until they are restarted; anything started afterwards uses the new one. Nothing needs to be closed.
+
+If Windows refuses to move a launcher aside (an antivirus scan, the search indexer, or the shell can hold an `.exe` for a moment), the installer does not give up: it re-runs uv with `UV_TOOL_BIN_DIR` pointed at a staging directory, so uv writes every shim and a complete receipt somewhere nothing is holding, then places the shims one at a time. A shim that still cannot be replaced keeps the file it had and is listed by name as *"these keep working and will refresh on the next install"* — that is not a failure. A uv launcher is a version-agnostic stub that runs the interpreter inside the tool directory, and that directory now holds the new install, so the old stub already runs the new code.
+
 **Windows: the installer says a command is missing.**
-Installing while an `mcc-claude` window or the tray is open now works: the installer renames the old tool environment *and* every launcher `.exe` aside before it installs, so uv writes a complete set of commands and your open windows keep running until you close them. If a command is still reported missing, close the `mcc-claude` window(s) and re-run the install command. The installer exits non-zero in that case — it never reports "verified" for a command that does not exist.
+That means a command the release publishes is genuinely absent, not merely stale. Close the `mcc-claude` window(s) and the tray, then re-run the install command. The installer exits non-zero in that case — it never reports "verified" for a command that does not exist.
 
 **Two configs on Windows.**
 If you installed under both PowerShell and WSL you have `C:\Users\<you>\.fcc` *and* `~/.fcc` inside WSL. The server prints which config directory it is using at startup — check that against the one you've been editing.

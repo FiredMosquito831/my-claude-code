@@ -295,6 +295,23 @@ def _uv_tool_dir(uv_executable: str | None = None) -> Path | None:
     return Path(path) if completed.returncode == 0 and path else None
 
 
+def _installed_tool_dir() -> Path | None:
+    """The tool environment this process runs from, found without calling uv.
+
+    ``sys.executable`` inside a uv tool environment is ``<tool dir>/Scripts/
+    python.exe`` (``bin/python`` on POSIX), and uv keeps ``uv-receipt.toml``
+    in that same ``<tool dir>``. Deriving it this way matters: the deferred
+    upgrade path must not run uv at all while the server is still alive, which
+    is the whole reason it defers. Returns None when this is not a uv tool
+    environment (a development checkout, say), and the helper then falls back
+    to the family pattern and the entry points alone.
+    """
+    candidate = Path(sys.executable).resolve().parent.parent
+    if (candidate / "uv-receipt.toml").is_file():
+        return candidate
+    return None
+
+
 def _uv_tool_bin_dir(uv_executable: str | None = None) -> Path | None:
     """Return the stable executable directory outside a uv tool environment."""
     uv = uv_executable or shutil.which("uv")
@@ -526,6 +543,7 @@ def _deferred_helper_script(
     server_launcher: Path,
     working_directory: Path,
     bin_dir: Path | None = None,
+    tool_dir: Path | None = None,
     commands: list[str] | None = None,
 ) -> str:
     """PowerShell that waits for this process to exit, then installs.
@@ -544,6 +562,7 @@ def _deferred_helper_script(
     names = commands if commands is not None else _published_commands()
     quoted_names = ", ".join(_powershell_literal(name) for name in names)
     bin_dir_literal = _powershell_literal(str(bin_dir) if bin_dir else "")
+    tool_dir_literal = _powershell_literal(str(tool_dir) if tool_dir else "")
     return f"""$ErrorActionPreference = 'Stop'
 $parent = {os.getpid()}
 # Windows recycles process ids quickly, so a bare Get-Process -Id would happily
@@ -596,24 +615,123 @@ $ErrorActionPreference = 'Continue'
 # Windows refuses to DELETE a running image but happily RENAMES one, and the
 # process keeps executing from the renamed file. So move every shim aside first
 # and let uv write a complete fresh set at the canonical paths.
+#
+# The shim set is a UNION of the mcc-*/fcc-* family pattern, uv's own receipt,
+# and the distribution's entry points, so a command added by a release can never
+# be missed by all three -- and a rename that is REFUSED is recorded rather than
+# swallowed. A swallowed refusal is what let uv walk into a locked
+# `mcc-desktop.exe` and abort an entire install.
 $binDir = {bin_dir_literal}
+$toolDir = {tool_dir_literal}
 $commandNames = @({quoted_names})
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$managed = @{{}}
+$refused = @()
 if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
-    foreach ($name in $commandNames) {{
-        $shim = Join-Path $binDir ($name + '.exe')
-        if (Test-Path -LiteralPath $shim -PathType Leaf) {{
-            Rename-Item -LiteralPath $shim -NewName ($name + '.exe.old-' + $stamp) -ErrorAction SilentlyContinue
+    foreach ($file in @(Get-ChildItem -Path $binDir -Filter '*.exe' -ErrorAction SilentlyContinue)) {{
+        if (($file.Name -match '^(mcc|fcc)-.+\\.exe$') -or (@('my-claude-code.exe', 'free-claude-code.exe') -contains $file.Name.ToLowerInvariant())) {{
+            $managed[$file.Name] = $true
+        }}
+    }}
+    if ($toolDir) {{
+        $receiptPath = Join-Path $toolDir 'uv-receipt.toml'
+        if (Test-Path -LiteralPath $receiptPath -PathType Leaf) {{
+            foreach ($hit in [regex]::Matches([IO.File]::ReadAllText($receiptPath), 'install-path\\s*=\\s*"([^"]+)"')) {{
+                $leaf = Split-Path -Leaf $hit.Groups[1].Value
+                if ($leaf -like '*.exe') {{ $managed[$leaf] = $true }}
+            }}
+        }}
+    }}
+    foreach ($name in $commandNames) {{ $managed[($name + '.exe')] = $true }}
+    foreach ($fileName in ($managed.Keys | Sort-Object)) {{
+        $shim = Join-Path $binDir $fileName
+        if (-not (Test-Path -LiteralPath $shim -PathType Leaf)) {{ continue }}
+        try {{
+            Rename-Item -LiteralPath $shim -NewName ($fileName + '.old-' + $stamp) -ErrorAction Stop
+        }}
+        catch {{
+            $refused += $fileName
         }}
     }}
 }}
 $delays = @(0, 5, 10, 20, 30)
-foreach ($wait in $delays) {{
-    if ($wait -gt 0) {{ Start-Sleep -Seconds $wait }}
-    $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 | Out-String
-    $code = $LASTEXITCODE
-    $attempts = $delays.IndexOf($wait) + 1
-    if ($code -eq 0) {{ break }}
+$code = 1
+$attempts = 0
+$output = ''
+if ($refused.Count -eq 0) {{
+    foreach ($wait in $delays) {{
+        if ($wait -gt 0) {{ Start-Sleep -Seconds $wait }}
+        $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 | Out-String
+        $code = $LASTEXITCODE
+        $attempts = $delays.IndexOf($wait) + 1
+        if ($code -eq 0) {{ break }}
+    }}
+}}
+# Staged fallback: uv writes every shim and a complete receipt into a directory
+# nothing can be holding, and the shims are placed one at a time afterwards, so
+# one stuck file costs exactly that one file instead of the whole install.
+$kept = @()
+if (($code -ne 0) -and $binDir) {{
+    $stageBin = Join-Path ([IO.Path]::GetTempPath()) ('mcc-stage-bin-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $stageBin | Out-Null
+    $hadBin = Test-Path Env:\\UV_TOOL_BIN_DIR
+    $previousBin = if ($hadBin) {{ $env:UV_TOOL_BIN_DIR }} else {{ '' }}
+    $env:UV_TOOL_BIN_DIR = $stageBin
+    foreach ($wait in $delays) {{
+        if ($wait -gt 0) {{ Start-Sleep -Seconds $wait }}
+        $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 | Out-String
+        $code = $LASTEXITCODE
+        $attempts = $attempts + 1
+        if ($code -eq 0) {{ break }}
+    }}
+    if ($hadBin) {{ $env:UV_TOOL_BIN_DIR = $previousBin }} else {{ Remove-Item Env:\\UV_TOOL_BIN_DIR -ErrorAction SilentlyContinue }}
+    if ($code -eq 0) {{
+        foreach ($staged in @(Get-ChildItem -Path $stageBin -Filter '*.exe' -ErrorAction SilentlyContinue)) {{
+            $target = Join-Path $binDir $staged.Name
+            $asideName = $staged.Name + '.old-' + $stamp + '-staged'
+            $aside = Join-Path $binDir $asideName
+            $movedAside = $false
+            if (Test-Path -LiteralPath $target -PathType Leaf) {{
+                foreach ($attempt in 1..4) {{
+                    try {{ Rename-Item -LiteralPath $target -NewName $asideName -ErrorAction Stop; $movedAside = $true; break }}
+                    catch {{ Start-Sleep -Milliseconds (150 * $attempt) }}
+                }}
+            }}
+            try {{
+                Copy-Item -LiteralPath $staged.FullName -Destination $target -Force -ErrorAction Stop
+            }}
+            catch {{
+                # Keep the old launcher. It is a version-agnostic stub that execs
+                # the interpreter under the canonical tool directory, and that
+                # directory now holds the new install, so the command already
+                # runs the new code.
+                if ($movedAside -and (Test-Path -LiteralPath $aside -PathType Leaf)) {{
+                    Move-Item -LiteralPath $aside -Destination $target -Force -ErrorAction SilentlyContinue
+                }}
+                $kept += [IO.Path]::GetFileNameWithoutExtension($staged.Name)
+            }}
+        }}
+        # uv records install-path under whatever UV_TOOL_BIN_DIR was set to, so a
+        # receipt left as written would send a later uninstall or upgrade at a
+        # temp path that no longer exists.
+        if ($toolDir) {{
+            $receiptPath = Join-Path $toolDir 'uv-receipt.toml'
+            if (Test-Path -LiteralPath $receiptPath -PathType Leaf) {{
+                $receiptText = [IO.File]::ReadAllText($receiptPath)
+                $realPrefix = $binDir.Replace('\\', '/').TrimEnd('/')
+                $backslashPrefix = $stageBin.Replace('/', '\\').TrimEnd('\\')
+                $rewritten = $receiptText
+                foreach ($stagePrefix in @($stageBin.Replace('\\', '/').TrimEnd('/'), $backslashPrefix.Replace('\\', '\\\\'), $backslashPrefix)) {{
+                    $rewritten = $rewritten.Replace($stagePrefix, $realPrefix)
+                }}
+                if ($rewritten -ne $receiptText) {{
+                    [System.IO.File]::WriteAllText(($receiptPath + '.new'), $rewritten, (New-Object System.Text.UTF8Encoding($false)))
+                    Move-Item -LiteralPath ($receiptPath + '.new') -Destination $receiptPath -Force
+                }}
+            }}
+        }}
+    }}
+    Remove-Item -LiteralPath $stageBin -Recurse -Force -ErrorAction SilentlyContinue
 }}
 $ErrorActionPreference = 'Stop'
 # Report every command that is not there, rather than trusting the exit code.
@@ -631,13 +749,18 @@ if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
     Get-ChildItem -Path $binDir -Filter '*.exe.old-*' -ErrorAction SilentlyContinue |
         ForEach-Object {{ Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }}
 }}
+# A shim that could not be replaced is NOT a failure: the command is present and
+# already runs the new code through the canonical tool directory. Report it as
+# refreshing on the next install and keep ok = true.
 $ok = ($code -eq 0) -and ($missing.Count -eq 0)
+$keptNote = if ($kept.Count -gt 0) {{ ' These launchers were locked and kept the file they had: ' + ($kept -join ', ') + '. They keep working and will refresh on the next install.' }} else {{ '' }}
 $result = @{{
     ok = $ok
     exit_code = $code
     attempts = $attempts
     missing_commands = $missing
-    message = if ($ok) {{ 'Deferred install completed.' }} elseif ($missing.Count -gt 0) {{ 'Installed, but these commands are missing: ' + ($missing -join ', ') + '. Close the mcc-claude window(s) and re-run the install command.' }} else {{ 'Deferred install failed after ' + $attempts + ' attempt(s).' }}
+    kept_shims = $kept
+    message = if ($ok) {{ 'Deferred install completed.' + $keptNote }} elseif ($missing.Count -gt 0) {{ 'Installed, but these commands are missing: ' + ($missing -join ', ') + '. Close the mcc-claude window(s) and re-run the install command.' }} else {{ 'Deferred install failed after ' + $attempts + ' attempt(s).' }}
     output = $output
 }}
 [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
@@ -699,6 +822,11 @@ def _spawn_deferred_upgrade(
                 # IS that directory -- no second `uv tool dir --bin` call while
                 # the server is still alive.
                 bin_dir=server_launcher.parent,
+                # The staged fallback rewrites the receipt's entrypoint paths
+                # back to the real bin directory, so it needs the owner's dir.
+                # Derived from sys.executable, not from `uv tool dir`: no uv
+                # may run while the server is alive.
+                tool_dir=_installed_tool_dir(),
                 commands=_published_commands(),
             ),
             encoding="utf-8",
