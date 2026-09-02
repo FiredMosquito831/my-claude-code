@@ -1321,6 +1321,7 @@
                 <a href="#guide-cli">Claude Code</a>
                 <a href="#guide-desktop">Claude Desktop</a>
                 <a href="#guide-other">Point another CLI here</a>
+                <a href="#guide-openai-clients">Connect any OpenAI-compatible client</a>
                 <a href="#guide-websearch">Search the web</a>
                 <a href="#guide-analytics">See what happened</a>
                 <a href="#guide-deploy">Desktop &amp; RTK</a>
@@ -1912,6 +1913,66 @@ mcc-crush</code></pre>
                 <p>
                   Editor integrations work the same way &mdash; Claude Code and Codex in VS
                   Code, or Claude Code through JetBrains ACP.
+                </p>
+
+                <h3 id="guide-openai-clients">Connect any OpenAI-compatible client</h3>
+                <p>
+                  Anything that speaks the OpenAI API can point at this proxy without a
+                  plugin or an adapter. Give it these three, and nothing else:
+                </p>
+                <table class="guide-table">
+                  <tbody>
+                    <tr>
+                      <td>Base URL</td>
+                      <td><code>http://127.0.0.1:8082/v1</code></td>
+                    </tr>
+                    <tr>
+                      <td>API key</td>
+                      <td>
+                        your <code>ANTHROPIC_AUTH_TOKEN</code>, sent as
+                        <code>Authorization: Bearer &lt;token&gt;</code>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>Model</td>
+                      <td>
+                        any id from <code>GET /v1/models</code>, for example
+                        <code>anthropic/claude-sonnet-4-5</code>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p>
+                  Two OpenAI request shapes are served.
+                  <strong><code>POST /v1/chat/completions</code></strong> is the one
+                  almost every client sends &mdash; the OpenAI SDKs, the IDE plugins,
+                  the agent frameworks &mdash; with streaming, tool calls, images and
+                  <code>reasoning_effort</code>. <strong><code>POST
+                  /v1/responses</code></strong> is the newer shape Codex speaks. Both
+                  run through the same routing, fallback chain, reasoning gating and
+                  request log as <code>/v1/messages</code>, so a request costs and
+                  behaves the same whichever door it arrives through.
+                </p>
+                <pre><code>curl http://127.0.0.1:8082/v1/chat/completions \
+  -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "anthropic/claude-sonnet-4-5", "stream": true,
+       "messages": [{"role": "user", "content": "hello"}]}'</code></pre>
+                <p>
+                  <code>GET /v1/models</code> answers in the OpenAI list shape, so a
+                  client with a model dropdown fills it from this proxy. Thinking is
+                  streamed as <code>delta.reasoning_content</code>, which is the field
+                  the clients that display reasoning actually read. The
+                  <strong>Requests</strong> page labels each of these rows
+                  <code>openai_chat</code> in its Protocol row, so you can tell at a
+                  glance which door a request came through.
+                </p>
+                <p class="guide-note">
+                  <code>n</code> above 1 is refused with a 400 rather than served
+                  quietly as one choice. <code>seed</code>, <code>logprobs</code> and
+                  the frequency and presence penalties have no equivalent upstream and
+                  are dropped &mdash; the request still runs, and the drop is recorded
+                  in the server log rather than being silent.
                 </p>
 
                 <h3 id="guide-websearch">Search the web</h3>

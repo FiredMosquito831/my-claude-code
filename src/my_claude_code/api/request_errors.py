@@ -1,6 +1,6 @@
 """Shared API request validation and safe error logging."""
 
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -16,12 +16,12 @@ from my_claude_code.core.diagnostics import (
     redacted_exception_traceback,
     safe_exception_message,
 )
-from my_claude_code.core.openai_responses import (
+from my_claude_code.core.openai_common import (
     openai_error_payload,
     openai_error_type_for_failure,
 )
 
-WireApi = Literal["messages", "responses"]
+from .wire_surfaces import WireApi, is_openai_shaped
 
 
 def require_non_empty_messages(messages: list[Any]) -> None:
@@ -36,7 +36,7 @@ def ordinary_application_error_response(
     request_id: str,
 ) -> JSONResponse:
     """Serialize a deterministic application error without terminal headers."""
-    if wire_api == "responses":
+    if is_openai_shaped(wire_api):
         return JSONResponse(
             status_code=error.status_code,
             content=openai_error_payload(

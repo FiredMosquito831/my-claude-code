@@ -55,6 +55,13 @@ class HarnessProtocol(StrEnum):
 
     ANTHROPIC_MESSAGES = "anthropic_messages"
     OPENAI_RESPONSES = "openai_responses"
+    #: The oldest OpenAI surface and the one every "OpenAI-compatible" client
+    #: speaks. No harness in this registry targets it yet -- MCC serves it so
+    #: that the clients which only speak it (IDE plugins, Cline, Aider, Goose)
+    #: can be pointed here at all -- but the member exists because the Coding
+    #: agents page names each harness's protocol from this enum, and a harness
+    #: added later must not have to invent the word.
+    OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
 
 
 #: The two variables the OpenCode-family generated config refers to through
@@ -139,6 +146,9 @@ QWEN_SETTINGS_VERSION = 4
 PROTOCOL_LABELS: dict[HarnessProtocol, str] = {
     HarnessProtocol.ANTHROPIC_MESSAGES: "Anthropic Messages (POST /v1/messages)",
     HarnessProtocol.OPENAI_RESPONSES: "OpenAI Responses (POST /v1/responses)",
+    HarnessProtocol.OPENAI_CHAT_COMPLETIONS: (
+        "OpenAI Chat Completions (POST /v1/chat/completions)"
+    ),
 }
 
 

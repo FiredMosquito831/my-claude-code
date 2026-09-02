@@ -31,6 +31,8 @@ from my_claude_code.cli.launchers.pi import (
 )
 from my_claude_code.config.harnesses import (
     HARNESS_SPECS,
+    PROTOCOL_LABELS,
+    HarnessProtocol,
     catalogue_specs,
     harness_command_lines,
     harness_commands,
@@ -77,6 +79,26 @@ def test_binary_names_are_unique_across_specs() -> None:
     binaries = [spec.binary for spec in HARNESS_SPECS]
     assert len(binaries) == len(set(binaries))
     assert len(harness_ids()) == len(set(harness_ids()))
+
+
+def test_every_protocol_has_the_label_the_coding_agents_page_renders() -> None:
+    """``PROTOCOL_LABELS[spec.protocol]`` is an unguarded lookup.
+
+    ``admin_harness_routes`` reads the label for every listed harness with no
+    fallback, so a protocol added to the enum and not to the label map takes
+    the whole Coding agents page down with a KeyError rather than degrading.
+    """
+    assert set(PROTOCOL_LABELS) == set(HarnessProtocol)
+    for protocol, label in PROTOCOL_LABELS.items():
+        assert label.strip(), protocol
+        # Each label names the route it means, which is the fact a reader on
+        # that page is actually looking for.
+        assert "POST /v1/" in label
+
+
+def test_every_spec_declares_a_protocol_that_has_a_label() -> None:
+    for spec in HARNESS_SPECS:
+        assert spec.protocol in PROTOCOL_LABELS
 
 
 def test_catalogue_filename_matches_the_published_path_constant() -> None:

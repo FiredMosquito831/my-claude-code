@@ -1,5 +1,6 @@
 """Public commit-boundary behavior for canonical execution failures."""
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -84,6 +85,15 @@ def _responses_payload() -> dict[str, object]:
     }
 
 
+def _chat_completions_payload(*, stream: bool = True) -> dict[str, object]:
+    return {
+        "model": "nvidia_nim/test-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "max_tokens": 32,
+        "stream": stream,
+    }
+
+
 def _partial_anthropic_stream(*, close_block: bool) -> list[str]:
     chunks = [
         format_sse_event("message_start", {"type": "message_start", "message": {}}),
@@ -149,6 +159,11 @@ def _grouped_rate_limit_provider(chunks: list[str]) -> CanonicalFailureProvider:
     [
         ("/v1/messages", _messages_payload(stream=True), "rate_limit_error"),
         ("/v1/responses", _responses_payload(), "rate_limit_error"),
+        (
+            "/v1/chat/completions",
+            _chat_completions_payload(),
+            "rate_limit_error",
+        ),
     ],
 )
 def test_grouped_pre_start_execution_failure_keeps_canonical_wire_error(
@@ -179,16 +194,18 @@ def test_grouped_pre_start_execution_failure_keeps_canonical_wire_error(
     assert trace["failure_kind"] == "rate_limit"
 
 
-@pytest.mark.parametrize("path", ["/v1/messages", "/v1/responses"])
+@pytest.mark.parametrize(
+    "path", ["/v1/messages", "/v1/responses", "/v1/chat/completions"]
+)
 def test_grouped_post_start_execution_failure_keeps_canonical_terminal_event(
     path: str,
 ) -> None:
     provider = _grouped_rate_limit_provider(_partial_anthropic_stream(close_block=True))
-    payload = (
-        _messages_payload(stream=True)
-        if path == "/v1/messages"
-        else _responses_payload()
-    )
+    payload = {
+        "/v1/messages": _messages_payload(stream=True),
+        "/v1/responses": _responses_payload(),
+        "/v1/chat/completions": _chat_completions_payload(),
+    }[path]
     resolver_patch, client = _client_for(provider)
 
     with (
@@ -209,6 +226,17 @@ def test_grouped_post_start_execution_failure_keeps_canonical_terminal_event(
         # non-streaming shape, which the rest of this module pins.
         assert events[-1].event == "message_stop"
         assert events[-2].data["delta"]["stop_reason"] == "max_tokens"
+        return
+    if path == "/v1/chat/completions":
+        # Chat Completions has no failed-response envelope: an OpenAI SDK
+        # stream reader raises on an ``error`` object inside the body, and
+        # then the stream is terminated the only way that protocol can.
+        frames = response.text.split("\n\n")
+        assert frames[-2] == "data: [DONE]"
+        error = json.loads(frames[-3].removeprefix("data: "))["error"]
+        assert error["type"] == "rate_limit_error"
+        assert error["message"] == f"upstream is busy\n\nRequest ID: {request_id}"
+        assert _terminal_trace(trace_mock)["failure_kind"] == "rate_limit"
         return
     assert events[-1].event == "response.failed"
     error = events[-1].data["response"]["error"]
@@ -301,6 +329,96 @@ def test_responses_pre_start_execution_failure_is_correlated_terminal_json() -> 
         }
     }
     assert provider.stream_kwargs[0]["request_id"] == request_id
+
+
+def test_chat_completions_pre_start_failure_is_correlated_terminal_json() -> None:
+    provider = CanonicalFailureProvider(
+        [],
+        kind=FailureKind.OVERLOADED,
+        status_code=529,
+        message="provider overloaded",
+        retryable=True,
+    )
+    resolver_patch, client = _client_for(provider)
+
+    with resolver_patch, client:
+        response = client.post("/v1/chat/completions", json=_chat_completions_payload())
+
+    request_id = response.headers["request-id"]
+    assert response.status_code == 529
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.headers["x-should-retry"] == "false"
+    assert response.headers["x-request-id"] == request_id
+    assert response.json() == {
+        "error": {
+            "message": f"provider overloaded\n\nRequest ID: {request_id}",
+            "type": "overloaded_error",
+            "param": None,
+            "code": None,
+        }
+    }
+    assert provider.stream_kwargs[0]["request_id"] == request_id
+
+
+def test_chat_completions_stream_false_discards_partial_content() -> None:
+    provider = CanonicalFailureProvider(
+        _partial_anthropic_stream(close_block=False),
+        kind=FailureKind.RATE_LIMIT,
+        status_code=429,
+        message="upstream is busy",
+        retryable=True,
+    )
+    resolver_patch, client = _client_for(provider)
+
+    with resolver_patch, client:
+        response = client.post(
+            "/v1/chat/completions",
+            json=_chat_completions_payload(stream=False),
+        )
+
+    assert response.status_code == 429
+    assert response.headers["x-should-retry"] == "false"
+    assert response.json()["error"]["type"] == "rate_limit_error"
+    assert _PARTIAL_CONTENT not in response.text
+
+
+def test_chat_completions_post_start_failure_traces_its_own_wire_api() -> None:
+    provider = CanonicalFailureProvider(
+        _partial_anthropic_stream(close_block=True),
+        kind=FailureKind.RATE_LIMIT,
+        status_code=429,
+        message="upstream is busy",
+        retryable=True,
+    )
+    resolver_patch, client = _client_for(provider)
+
+    with (
+        resolver_patch,
+        patch("my_claude_code.api.response_streams.trace_event") as trace_mock,
+        client,
+    ):
+        response = client.post("/v1/chat/completions", json=_chat_completions_payload())
+
+    request_id = response.headers["request-id"]
+    assert response.status_code == 200
+    assert response.headers["x-request-id"] == request_id
+    assert "x-should-retry" not in response.headers
+    # The partial answer already sent is kept; the failure is reported after it.
+    assert _PARTIAL_CONTENT in response.text
+    assert response.text.endswith("data: [DONE]\n\n")
+    assert _terminal_trace(trace_mock) == {
+        "stage": "egress",
+        "event": "my_claude_code.api.response.terminal_execution_error",
+        "source": "api",
+        "wire_api": "chat_completions",
+        "request_id": request_id,
+        "status_code": 429,
+        "error_type": "rate_limit_error",
+        "client_should_retry": False,
+        "exc_type": "ExecutionFailure",
+        "failure_kind": "rate_limit",
+        "provider_retryable": True,
+    }
 
 
 def test_messages_post_start_execution_failure_ends_the_message() -> None:

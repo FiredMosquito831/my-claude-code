@@ -33,6 +33,15 @@ _PRODUCT_REQUESTS = (
             "input": "hello",
         },
     ),
+    (
+        "chat_completions",
+        "/v1/chat/completions",
+        {
+            "model": "open_router/test-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        },
+    ),
 )
 
 
@@ -60,7 +69,7 @@ def _assert_ordinary_protocol_error(
 
     request_id = response.headers["request-id"]
     assert request_id.startswith("req_")
-    if wire_api == "responses":
+    if wire_api in {"responses", "chat_completions"}:
         assert response.headers["x-request-id"] == request_id
         assert response.json() == {
             "error": {
@@ -93,7 +102,7 @@ def test_application_errors_share_one_protocol_neutral_base(
 @pytest.mark.parametrize(
     ("wire_api", "path", "payload"),
     _PRODUCT_REQUESTS,
-    ids=("messages", "responses"),
+    ids=("messages", "responses", "chat_completions"),
 )
 def test_missing_provider_credential_is_protocol_specific_503_without_terminal_header(
     wire_api: str,
@@ -126,7 +135,7 @@ def test_missing_provider_credential_is_protocol_specific_503_without_terminal_h
 @pytest.mark.parametrize(
     ("wire_api", "path", "payload"),
     _PRODUCT_REQUESTS,
-    ids=("messages", "responses"),
+    ids=("messages", "responses", "chat_completions"),
 )
 def test_runtime_acquisition_failure_is_protocol_specific_503_without_terminal_header(
     wire_api: str,
@@ -156,7 +165,7 @@ def test_runtime_acquisition_failure_is_protocol_specific_503_without_terminal_h
 @pytest.mark.parametrize(
     ("wire_api", "path", "payload"),
     _PRODUCT_REQUESTS,
-    ids=("messages", "responses"),
+    ids=("messages", "responses", "chat_completions"),
 )
 def test_unknown_provider_is_protocol_specific_400_without_terminal_header(
     wire_api: str,
@@ -187,7 +196,7 @@ def test_unknown_provider_is_protocol_specific_400_without_terminal_header(
 @pytest.mark.parametrize(
     ("wire_api", "path", "payload"),
     _PRODUCT_REQUESTS,
-    ids=("messages", "responses"),
+    ids=("messages", "responses", "chat_completions"),
 )
 def test_preflight_rejection_is_protocol_specific_400_without_terminal_header(
     wire_api: str,
@@ -221,7 +230,7 @@ def test_preflight_rejection_is_protocol_specific_400_without_terminal_header(
 @pytest.mark.parametrize(
     ("wire_api", "path", "payload"),
     _PRODUCT_REQUESTS,
-    ids=("messages", "responses"),
+    ids=("messages", "responses", "chat_completions"),
 )
 @pytest.mark.parametrize(
     ("headers", "detail"),
@@ -252,7 +261,7 @@ def test_proxy_auth_preserves_ingress_detail_contract(
     assert "x-should-retry" not in response.headers
     request_id = response.headers["request-id"]
     assert request_id.startswith("req_")
-    if wire_api == "responses":
+    if wire_api in {"responses", "chat_completions"}:
         assert response.headers["x-request-id"] == request_id
     else:
         assert "x-request-id" not in response.headers

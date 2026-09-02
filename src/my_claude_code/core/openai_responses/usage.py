@@ -1,35 +1,11 @@
-"""Usage helpers for OpenAI Responses payloads."""
+"""Usage helpers for OpenAI Responses payloads.
 
-from typing import Protocol
+The estimator moved to ``core.openai_common.usage`` when Chat Completions
+needed the identical calculation for its own ``reasoning_tokens`` field. It
+stays importable from here because that is where this package's streaming
+ledger has always read it from.
+"""
 
-_DISALLOWED_SPECIAL: tuple[str, ...] = ()
+from my_claude_code.core.openai_common import estimate_text_tokens
 
-
-class _TokenEncoder(Protocol):
-    def encode(
-        self, text: str, *, disallowed_special: tuple[str, ...]
-    ) -> list[int]: ...
-
-
-def _load_encoder() -> _TokenEncoder | None:
-    try:
-        import tiktoken
-    except ImportError:
-        return None
-
-    try:
-        return tiktoken.get_encoding("cl100k_base")
-    except ValueError:
-        return None
-
-
-_ENCODER = _load_encoder()
-
-
-def estimate_text_tokens(text: str) -> int:
-    """Return a best-effort token estimate for Responses usage details."""
-    if not text:
-        return 0
-    if _ENCODER is not None:
-        return len(_ENCODER.encode(text, disallowed_special=_DISALLOWED_SPECIAL))
-    return max(1, len(text) // 4)
+__all__ = ["estimate_text_tokens"]

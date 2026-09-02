@@ -60,7 +60,10 @@ from my_claude_code.core.wire_capture import (
     install_wire_trace,
 )
 
-WireProtocol = Literal["anthropic", "openai_responses"]
+#: The inbound wire protocol a logged request arrived on. Stored verbatim in
+#: the request log's ``protocol`` column, shown in the request detail pane, and
+#: exported as-is, so a value added here becomes a user-visible vocabulary word.
+WireProtocol = Literal["anthropic", "openai_responses", "openai_chat"]
 
 
 class RequestCapture:
@@ -700,15 +703,22 @@ def build_capture(
     endpoint: str,
     protocol: WireProtocol,
     headers: Mapping[str, str] | None = None,
+    stream: bool | None = None,
 ) -> RequestCapture:
-    """Create the capture for one request; inert when logging is disabled."""
+    """Create the capture for one request; inert when logging is disabled.
+
+    ``stream`` overrides what the internal request says. The Anthropic request
+    this capture describes is always streaming -- MCC's pipeline has no other
+    mode -- so a surface that also serves a complete JSON body has to say which
+    of the two its client actually asked for, or every row would read "stream".
+    """
     store = store_from_settings(settings)
     return RequestCapture(
         store,
         request_id=request_id,
         endpoint=endpoint,
         protocol=protocol,
-        stream=bool(request.stream),
+        stream=bool(request.stream) if stream is None else stream,
         requested_model=request.model,
         input_text=extract_input_text(request),
         params=extract_request_params(request),

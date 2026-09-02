@@ -1,6 +1,7 @@
-"""OpenAI Responses API product flow for Codex clients."""
+"""OpenAI Chat Completions API product flow for OpenAI-compatible clients."""
 
-from collections.abc import Mapping
+import asyncio
+from collections.abc import AsyncIterator, Mapping
 
 from fastapi.responses import JSONResponse
 
@@ -16,6 +17,7 @@ from my_claude_code.api.response_streams import (
     terminal_execution_error_response,
     trace_terminal_execution_error,
 )
+from my_claude_code.api.wire_surfaces import CHAT_COMPLETIONS_ENDPOINT
 from my_claude_code.application.errors import ApplicationError, InvalidRequestError
 from my_claude_code.application.execution import (
     ProviderExecutor,
@@ -25,19 +27,32 @@ from my_claude_code.application.execution import (
 from my_claude_code.application.ports import ProviderResolver
 from my_claude_code.application.routing import ModelRouter
 from my_claude_code.config.settings import Settings
-from my_claude_code.core.anthropic import MessagesRequest
+from my_claude_code.core.anthropic import (
+    MessagesRequest,
+    aggregate_anthropic_sse_to_message,
+)
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import ExecutionFailure, find_execution_failure
-from my_claude_code.core.openai_responses import (
-    OpenAIResponsesAdapter,
-    OpenAIResponsesRequest,
+from my_claude_code.core.openai_chat_completions import (
+    OpenAIChatCompletionRequest,
+    OpenAIChatCompletionsAdapter,
     openai_error_type_for_failure,
     openai_failure_payload,
 )
 
 
-class ResponsesHandler:
-    """Handle streaming OpenAI Responses-compatible requests."""
+class ChatCompletionsHandler:
+    """Handle OpenAI Chat Completions requests, streaming and not.
+
+    A near twin of :class:`ResponsesHandler` by design: both translate an
+    OpenAI-shaped request into one ``MessagesRequest`` and hand it to the same
+    :class:`ProviderExecutor`, so routing, fallback, pause, reasoning gating,
+    output budgets, wire capture, the upstream ladder, the request log and the
+    optimizer rules apply to all three inbound surfaces identically. The one
+    real difference is that this protocol has a non-streaming form, which is
+    served the way ``/v1/messages`` serves its own: by assembling the internal
+    SSE stream at this boundary rather than by running a second pipeline.
+    """
 
     def __init__(
         self,
@@ -45,13 +60,13 @@ class ResponsesHandler:
         provider_resolver: ProviderResolver,
         *,
         model_router: ModelRouter | None = None,
-        responses_adapter: OpenAIResponsesAdapter | None = None,
+        chat_adapter: OpenAIChatCompletionsAdapter | None = None,
         provider_executor: ProviderExecutor | None = None,
         generation_id: int | None = None,
     ) -> None:
         self._settings = settings
         self._model_router = model_router or ModelRouter(settings)
-        self._responses_adapter = responses_adapter or OpenAIResponsesAdapter()
+        self._chat_adapter = chat_adapter or OpenAIChatCompletionsAdapter()
 
         self._provider_executor = provider_executor or ProviderExecutor(
             provider_resolver,
@@ -73,74 +88,76 @@ class ResponsesHandler:
         except Exception:
             return None
         try:
-            # No model in hand at this point: the answer is the pool's best
-            # case over all models, which is what a header can honestly say.
             return provider.throttle_remaining()
         except Exception:
             return None
 
     async def create(
         self,
-        request_data: OpenAIResponsesRequest,
+        request_data: OpenAIChatCompletionRequest,
         *,
         request_id: str | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> object:
-        """Create a streaming OpenAI Responses-compatible response."""
+        """Create a Chat Completions response, streamed or complete."""
         request_id = request_id or new_request_id()
         request_payload = request_data.model_dump(mode="json", exclude_none=True)
-        if request_data.stream is False:
-            raise InvalidRequestError(
-                "MCC /v1/responses supports streaming only; omit stream or set stream=true."
-            )
+        completion_id = self._chat_adapter.new_completion_id()
+        wants_stream = bool(request_data.stream)
 
         capture: RequestCapture | None = None
         try:
-            anthropic_payload = self._responses_adapter.to_anthropic_payload(
-                request_data
-            )
-            response_request = MessagesRequest(**anthropic_payload)
+            anthropic_payload = self._chat_adapter.to_anthropic_payload(request_data)
+            chat_request = MessagesRequest(**anthropic_payload)
             capture = build_capture(
                 self._settings,
-                response_request,
+                chat_request,
                 request_id=request_id,
-                endpoint="/v1/responses",
-                protocol="openai_responses",
+                endpoint=CHAT_COMPLETIONS_ENDPOINT,
+                protocol="openai_chat",
                 headers=headers,
+                stream=wants_stream,
             )
-            require_non_empty_messages(response_request.messages)
-            plan = self._model_router.resolve_messages_plan(response_request)
+            require_non_empty_messages(chat_request.messages)
+            plan = self._model_router.resolve_messages_plan(chat_request)
             capture.set_plan(plan)
             capture.set_routing(plan.primary)
 
             streamed = capture.wrap(
                 self._provider_executor.stream(
                     plan,
-                    wire_api="responses",
-                    raw_log_label="FULL_RESPONSES_PAYLOAD",
+                    wire_api="chat_completions",
+                    raw_log_label="FULL_CHAT_COMPLETIONS_PAYLOAD",
                     raw_log_payload=request_payload,
                     request_id=request_id,
                     on_attempt=capture.set_routing,
                     on_attempt_result=capture.record_attempt_result,
                 )
             )
-            return await openai_sse_streaming_response(
-                self._responses_adapter.iter_sse_from_anthropic(
+            if not wants_stream:
+                return await self._complete_response(
                     streamed,
                     request_data,
+                    completion_id=completion_id,
+                    request_id=request_id,
+                )
+            return await openai_sse_streaming_response(
+                self._chat_adapter.iter_sse_from_anthropic(
+                    streamed,
+                    request_data,
+                    completion_id=completion_id,
                     on_post_start_terminal_failure=lambda exc: (
                         self._trace_post_start_terminal_failure(
-                            exc,
-                            request_id=request_id,
+                            exc, request_id=request_id
                         )
                     ),
                 ),
-                headers=self._responses_adapter.sse_headers,
+                headers=self._chat_adapter.sse_headers,
                 pre_start_error_response=lambda exc: self._pre_start_error_response(
                     exc, request_id=request_id
                 ),
             )
-        except OpenAIResponsesAdapter.ConversionError as exc:
+        except OpenAIChatCompletionsAdapter.ConversionError as exc:
             raise InvalidRequestError(str(exc)) from exc
         except ApplicationError as exc:
             if capture is not None:
@@ -159,15 +176,81 @@ class ResponsesHandler:
             log_unexpected_api_exception(
                 self._settings,
                 exc,
-                context="CREATE_RESPONSE_ERROR",
+                context="CREATE_CHAT_COMPLETION_ERROR",
             )
             return JSONResponse(
                 status_code=http_status_for_unexpected_api_exception(exc),
-                content=self._responses_adapter.error_payload(
+                content=self._chat_adapter.error_payload(
                     message=safe_exception_message(exc),
                     error_type="api_error",
                 ),
             )
+
+    async def _complete_response(
+        self,
+        streamed: AsyncIterator[str],
+        request_data: OpenAIChatCompletionRequest,
+        *,
+        completion_id: str,
+        request_id: str,
+    ) -> object:
+        """Assemble the internal SSE stream into one ``chat.completion``.
+
+        A failure here is terminal for the whole request, not a partial body:
+        a client that asked for JSON must never be handed the half of an answer
+        that arrived before the provider dropped.
+        """
+        try:
+            message, error = await aggregate_anthropic_sse_to_message(streamed)
+        except GeneratorExit:
+            raise
+        except asyncio.CancelledError:
+            raise
+        except ExecutionFailure as exc:
+            return self._execution_failure_response(exc, request_id=request_id)
+        except BaseExceptionGroup as exc:
+            failure = find_execution_failure(exc)
+            if failure is not None:
+                return self._execution_failure_response(failure, request_id=request_id)
+            return self._unexpected_terminal_response(exc, request_id=request_id)
+        except Exception as exc:
+            return self._unexpected_terminal_response(exc, request_id=request_id)
+
+        if error is not None:
+            return self._stream_error_response(error, request_id=request_id)
+        return JSONResponse(
+            content=self._chat_adapter.completion_from_anthropic_message(
+                message, request_data, completion_id=completion_id
+            )
+        )
+
+    def _stream_error_response(
+        self, error: Mapping[str, object], *, request_id: str
+    ) -> JSONResponse:
+        raw_type = error.get("type")
+        error_type = (
+            raw_type.strip()
+            if isinstance(raw_type, str) and raw_type.strip()
+            else "api_error"
+        )
+        raw_message = error.get("message")
+        message = (
+            raw_message.strip()
+            if isinstance(raw_message, str) and raw_message.strip()
+            else "Provider request failed unexpectedly."
+        )
+        trace_terminal_execution_error(
+            wire_api="chat_completions",
+            request_id=request_id,
+            status_code=500,
+            error_type=error_type,
+        )
+        return terminal_execution_error_response(
+            status_code=500,
+            content=self._chat_adapter.error_payload(
+                message=message, error_type=error_type
+            ),
+        )
 
     def _pre_start_error_response(
         self, exc: BaseException, *, request_id: str
@@ -175,15 +258,28 @@ class ResponsesHandler:
         failure = find_execution_failure(exc)
         if failure is not None:
             return self._execution_failure_response(failure, request_id=request_id)
+        return self._unexpected_terminal_response(
+            exc,
+            request_id=request_id,
+            context="CREATE_CHAT_COMPLETION_STREAM_START_ERROR",
+        )
+
+    def _unexpected_terminal_response(
+        self,
+        exc: BaseException,
+        *,
+        request_id: str,
+        context: str = "CREATE_CHAT_COMPLETION_ERROR",
+    ) -> JSONResponse:
         log_unexpected_api_exception(
             self._settings,
             exc,
-            context="CREATE_RESPONSE_STREAM_START_ERROR",
+            context=context,
             request_id=request_id,
         )
         status_code = http_status_for_unexpected_api_exception(exc)
         trace_terminal_execution_error(
-            wire_api="responses",
+            wire_api="chat_completions",
             request_id=request_id,
             status_code=status_code,
             error_type="api_error",
@@ -191,7 +287,7 @@ class ResponsesHandler:
         )
         return terminal_execution_error_response(
             status_code=status_code,
-            content=self._responses_adapter.error_payload(
+            content=self._chat_adapter.error_payload(
                 message=safe_exception_message(exc),
                 error_type="api_error",
             ),
@@ -205,7 +301,7 @@ class ResponsesHandler:
     ) -> JSONResponse:
         error_type = openai_error_type_for_failure(failure)
         trace_terminal_execution_error(
-            wire_api="responses",
+            wire_api="chat_completions",
             request_id=request_id,
             status_code=failure.status_code,
             error_type=error_type,
@@ -224,7 +320,7 @@ class ResponsesHandler:
     ) -> None:
         failure = find_execution_failure(exc)
         trace_terminal_execution_error(
-            wire_api="responses",
+            wire_api="chat_completions",
             request_id=request_id,
             status_code=failure.status_code if failure is not None else 500,
             error_type=(

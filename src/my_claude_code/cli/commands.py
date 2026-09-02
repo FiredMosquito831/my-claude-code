@@ -32,6 +32,7 @@ from my_claude_code.config.paths import (
     legacy_env_paths,
     managed_env_path,
 )
+from my_claude_code.config.proxy_auth import open_proxy_without_auth_error
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.process_handoff import external_upgrade_helper_pending
@@ -237,6 +238,15 @@ def _run_supervised_server(
     settings: Settings, *, open_admin_browser: bool
 ) -> ServerExitAction:
     """Run once; act only after the old ownership graph fully closes."""
+
+    if refusal := open_proxy_without_auth_error(
+        host=settings.host, auth_token=settings.anthropic_auth_token
+    ):
+        # Before the socket, not after: an exposed proxy that has already
+        # answered one request has already leaked whatever that request cost.
+        logger.error(refusal)
+        print(refusal, file=sys.stderr)
+        raise SystemExit(1)
 
     requested = ServerExitAction.STOP
     server_holder: dict[str, uvicorn.Server] = {}

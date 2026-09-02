@@ -34,6 +34,7 @@ README_FEATURES: tuple[str, ...] = (
     "zero_cost_provider_access",
     "drop_in_claude_code_replacement",
     "drop_in_codex_replacement",
+    "openai_compatible_clients",
     "pi_cli_integration",
     "provider_matrix",
     "per_model_mapping",
@@ -98,6 +99,24 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         ("api", "providers"),
         ("configured provider credentials or local provider endpoint",),
         "missing providers are missing_env unless FCC_ALLOW_NO_PROVIDER_SMOKE=1",
+    ),
+    FeatureCoverage(
+        "openai_compatible_clients",
+        "OpenAI Chat Completions ingress serves any OpenAI-compatible client",
+        "readme",
+        (
+            "tests/api/test_openai_chat_completions.py",
+            "tests/core/openai_chat_completions/test_chat_sse.py",
+            "tests/core/openai_chat_completions/test_chat_input.py",
+        ),
+        (),
+        (),
+        (),
+        (),
+        "no provider credential is required: every test drives a stub upstream",
+        "the surface is a protocol translation over the executor path the "
+        "Messages and Responses e2e smokes already exercise live; a third "
+        "live run would prove the provider, not the translation",
     ),
     FeatureCoverage(
         "pi_cli_integration",

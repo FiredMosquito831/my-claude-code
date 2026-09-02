@@ -133,6 +133,8 @@ def test_probe_endpoints_return_204_with_allow_headers(client: TestClient):
         client.options("/v1/messages"),
         client.head("/v1/messages/count_tokens"),
         client.options("/v1/messages/count_tokens"),
+        client.head("/v1/chat/completions"),
+        client.options("/v1/chat/completions"),
     ]
 
     for response in responses:

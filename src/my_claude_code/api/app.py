@@ -14,7 +14,7 @@ from my_claude_code.core.diagnostics import (
     redacted_exception_traceback,
     safe_exception_message,
 )
-from my_claude_code.core.openai_responses import openai_error_payload
+from my_claude_code.core.openai_common import openai_error_payload
 from my_claude_code.core.trace import (
     extract_claude_session_id_from_headers,
     trace_event,
@@ -37,6 +37,7 @@ from .request_ids import (
 )
 from .routes import router
 from .validation_log import summarize_request_validation_body
+from .wire_surfaces import is_openai_shaped, wire_api_for_path
 
 
 def create_app(services: ApiServices) -> FastAPI:
@@ -82,9 +83,7 @@ def create_app(services: ApiServices) -> FastAPI:
         """Serialize defensive application failures in the selected wire protocol."""
         return ordinary_application_error_response(
             exc,
-            wire_api=(
-                "responses" if request.url.path == "/v1/responses" else "messages"
-            ),
+            wire_api=wire_api_for_path(request.url.path),
             request_id=get_request_id(request),
         )
 
@@ -111,7 +110,7 @@ def create_app(services: ApiServices) -> FastAPI:
                     type(exc).__name__,
                 )
             message = safe_exception_message(exc)
-            if request.url.path == "/v1/responses":
+            if is_openai_shaped(wire_api_for_path(request.url.path)):
                 content = openai_error_payload(message=message, error_type="api_error")
             else:
                 content = anthropic_error_payload(

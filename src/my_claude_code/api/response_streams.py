@@ -31,7 +31,7 @@ PreStartErrorResponse = Callable[[BaseException], Response]
 TerminalFrameEmitter = Callable[[BaseException], str]
 TerminalFailureObserver = Callable[[BaseException], None]
 ReleaseResponseResource = Callable[[], Awaitable[None]]
-WireApi = Literal["messages", "responses"]
+WireApi = Literal["messages", "responses", "chat_completions"]
 
 
 class EmptyStreamError(RuntimeError):
@@ -370,13 +370,20 @@ def _trace_anthropic_terminal_failure(
     )
 
 
-async def openai_responses_sse_streaming_response(
+async def openai_sse_streaming_response(
     body: AsyncIterator[str],
     *,
     headers: Mapping[str, str],
     pre_start_error_response: PreStartErrorResponse,
 ) -> Response:
-    """Return a streaming response for OpenAI Responses-style SSE."""
+    """Return a streaming response for either OpenAI-shaped SSE dialect.
+
+    Neither OpenAI surface gets a terminal frame emitter: both adapters already
+    own how their own stream ends after a post-start failure -- Responses with
+    ``response.failed``, Chat Completions with an ``error`` object followed by
+    ``[DONE]`` -- and a second, protocol-blind ending appended here would
+    contradict the one they wrote.
+    """
     return await _first_chunk_streaming_response(
         body,
         headers=headers,

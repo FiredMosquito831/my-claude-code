@@ -90,7 +90,39 @@ TokenCounter = Callable[
     [list[Message], str | list[SystemContent] | None, list[Tool] | None],
     int,
 ]
-WireApi = Literal["messages", "responses"]
+WireApi = Literal["messages", "responses", "chat_completions"]
+
+#: Trace event names per inbound surface. Three surfaces make a chain of
+#: ternaries unreadable, and an unnamed surface would silently borrow the
+#: Messages names and make two products indistinguishable in the log.
+_TRACE_EVENT_NAMESPACES: dict[WireApi, str] = {
+    "messages": "my_claude_code.api",
+    "responses": "my_claude_code.api.responses",
+    "chat_completions": "my_claude_code.api.chat_completions",
+}
+
+
+#: Stream lifecycle events sit under a different prefix again for the Messages
+#: surface (``...api.response``, singular) than its request event does. The two
+#: maps exist because those published names are what dashboards and log filters
+#: already match on; unifying them would be a silent breaking change.
+_STREAM_TRACE_NAMESPACES: dict[WireApi, str] = {
+    "messages": "my_claude_code.api.response",
+    "responses": "my_claude_code.api.responses",
+    "chat_completions": "my_claude_code.api.chat_completions",
+}
+
+
+def _trace_event_name(wire_api: WireApi, suffix: str) -> str:
+    """Return the trace event name this surface publishes for ``suffix``."""
+    return f"{_TRACE_EVENT_NAMESPACES[wire_api]}.{suffix}"
+
+
+def _stream_trace_event(wire_api: WireApi, suffix: str) -> str:
+    """Return the stream-lifecycle trace event name for this surface."""
+    return f"{_STREAM_TRACE_NAMESPACES[wire_api]}.{suffix}"
+
+
 AttemptObserver = Callable[[RoutedMessagesRequest, int], None]
 
 
@@ -802,11 +834,7 @@ class ProviderExecutor:
 
         trace_event(
             stage="ingress",
-            event=(
-                "my_claude_code.api.responses.request.received"
-                if wire_api == "responses"
-                else "my_claude_code.api.request.received"
-            ),
+            event=_trace_event_name(wire_api, "request.received"),
             source="api",
             message_count=len(plan.primary.request.messages),
             snapshot=anthropic_request_snapshot(plan.primary.request),
@@ -1307,16 +1335,8 @@ class ProviderExecutor:
             guarded_provider_body(),
             stage="egress",
             source="api",
-            complete_event=(
-                "my_claude_code.api.responses.stream_completed"
-                if wire_api == "responses"
-                else "my_claude_code.api.response.stream_completed"
-            ),
-            interrupted_event=(
-                "my_claude_code.api.responses.stream_interrupted"
-                if wire_api == "responses"
-                else "my_claude_code.api.response.stream_interrupted"
-            ),
+            complete_event=_stream_trace_event(wire_api, "stream_completed"),
+            interrupted_event=_stream_trace_event(wire_api, "stream_interrupted"),
             chunk_event=None,
             extra=stream_trace,
         )
@@ -1982,8 +2002,8 @@ class ProviderExecutor:
         if attempt_count > 1:
             route_trace["attempt"] = attempt
             route_trace["attempt_count"] = attempt_count
-        if wire_api == "responses":
-            route_trace["wire_api"] = "responses"
+        if wire_api != "messages":
+            route_trace["wire_api"] = wire_api
         if self._generation_id is not None:
             route_trace["generation_id"] = self._generation_id
         trace_event(**route_trace)

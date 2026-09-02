@@ -15,6 +15,7 @@ from my_claude_code.core.anthropic import (
     TokenCountRequest,
     get_token_count,
 )
+from my_claude_code.core.openai_chat_completions import OpenAIChatCompletionRequest
 from my_claude_code.core.openai_responses import OpenAIResponsesRequest
 from my_claude_code.core.trace import trace_event
 
@@ -24,12 +25,18 @@ from .dependencies import (
     require_proxy_auth,
     resolve_provider,
 )
-from .handlers import MessagesHandler, ResponsesHandler, TokenCountHandler
+from .handlers import (
+    ChatCompletionsHandler,
+    MessagesHandler,
+    ResponsesHandler,
+    TokenCountHandler,
+)
 from .model_catalog import ModelsListResponse, build_models_list_response
 from .ports import ApiServices
 from .request_errors import ordinary_application_error_response
 from .request_ids import get_request_id
 from .response_streams import bind_response_lifetime
+from .wire_surfaces import CHAT_COMPLETIONS_ENDPOINT
 
 router = APIRouter()
 
@@ -122,6 +129,41 @@ async def _create_responses_response(
     return await bind_response_lifetime(response, lease.release)
 
 
+async def _create_chat_completion_response(
+    services: ApiServices,
+    request_data: OpenAIChatCompletionRequest,
+    *,
+    request_id: str,
+    headers: Mapping[str, str] | None = None,
+) -> object:
+    lease: RequestRuntimeLease | None = None
+    try:
+        lease = await services.requests.acquire()
+        handler = ChatCompletionsHandler(
+            lease.settings,
+            provider_resolver=_provider_resolver(lease),
+            model_router=_model_router(services, lease),
+            generation_id=lease.generation_id,
+        )
+        response = await handler.create(
+            request_data, request_id=request_id, headers=headers
+        )
+    except ApplicationError as exc:
+        if lease is not None:
+            await lease.release()
+        return ordinary_application_error_response(
+            exc,
+            wire_api="chat_completions",
+            request_id=request_id,
+        )
+    except BaseException:
+        if lease is not None:
+            await lease.release()
+        raise
+    assert lease is not None
+    return await bind_response_lifetime(response, lease.release)
+
+
 def _probe_response(allow: str) -> Response:
     return Response(status_code=204, headers={"Allow": allow})
 
@@ -165,6 +207,27 @@ async def create_response(
 
 @router.api_route("/v1/responses", methods=["HEAD", "OPTIONS"])
 async def probe_responses(_auth=Depends(require_proxy_auth)):
+    return _probe_response("POST, HEAD, OPTIONS")
+
+
+@router.post(CHAT_COMPLETIONS_ENDPOINT)
+async def create_chat_completion(
+    request: Request,
+    request_data: OpenAIChatCompletionRequest,
+    services: ApiServices = Depends(get_services),
+    _auth=Depends(require_proxy_auth),
+):
+    """Create an OpenAI Chat Completions-compatible response through this proxy."""
+    return await _create_chat_completion_response(
+        services,
+        request_data,
+        request_id=get_request_id(request),
+        headers=request.headers,
+    )
+
+
+@router.api_route(CHAT_COMPLETIONS_ENDPOINT, methods=["HEAD", "OPTIONS"])
+async def probe_chat_completions(_auth=Depends(require_proxy_auth)):
     return _probe_response("POST, HEAD, OPTIONS")
 
 

@@ -11,6 +11,12 @@ from my_claude_code.core.anthropic import (
     TokenCountResponse,
 )
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.openai_chat_completions import (
+    OpenAIChatCompletionRequest as PublicOpenAIChatCompletionRequest,
+)
+from my_claude_code.core.openai_chat_completions.models import (
+    OpenAIChatCompletionRequest,
+)
 from my_claude_code.core.openai_responses import (
     OpenAIResponsesRequest as PublicOpenAIResponsesRequest,
 )
@@ -48,6 +54,23 @@ def test_responses_request_model_is_core_owned_and_permissive() -> None:
     assert request.model_extra == {"provider_extension": {"enabled": True}}
 
 
+def test_chat_completions_request_model_is_core_owned_and_permissive() -> None:
+    request = OpenAIChatCompletionRequest.model_validate(
+        {
+            "model": "provider-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "provider_extension": {"enabled": True},
+        }
+    )
+
+    assert (
+        OpenAIChatCompletionRequest.__module__
+        == "my_claude_code.core.openai_chat_completions.models"
+    )
+    assert PublicOpenAIChatCompletionRequest is OpenAIChatCompletionRequest
+    assert request.model_extra == {"provider_extension": {"enabled": True}}
+
+
 def test_anthropic_response_models_are_protocol_owned() -> None:
     assert MessagesResponse.__module__ == "my_claude_code.core.anthropic.models"
     assert TokenCountResponse.__module__ == "my_claude_code.core.anthropic.models"
@@ -61,6 +84,19 @@ def test_protocol_facades_are_import_order_independent() -> None:
         ),
         (
             "my_claude_code.core.openai_responses",
+            "my_claude_code.core.anthropic",
+        ),
+        (
+            "my_claude_code.core.openai_chat_completions",
+            "my_claude_code.core.openai_responses",
+            "my_claude_code.core.anthropic",
+        ),
+        (
+            "my_claude_code.core.anthropic",
+            "my_claude_code.core.openai_chat_completions",
+        ),
+        (
+            "my_claude_code.core.openai_chat_completions",
             "my_claude_code.core.anthropic",
         ),
     )

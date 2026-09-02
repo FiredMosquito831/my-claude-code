@@ -77,6 +77,21 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
     ),
     CapabilityContract(
         "api_compatibility",
+        "chat_completions_api",
+        "openai_compatible_clients",
+        "my_claude_code.api.handlers.chat_completions.ChatCompletionsHandler",
+        "OpenAI Chat Completions requests from any OpenAI-compatible client",
+        "chat.completion.chunk SSE or one chat.completion object",
+        "OpenAI-shaped error or conversion error",
+        (
+            "tests/api/test_openai_chat_completions.py",
+            "tests/core/openai_chat_completions/test_chat_sse.py",
+            "tests/core/openai_chat_completions/test_chat_input.py",
+        ),
+        ("test_probe_and_models_routes",),
+    ),
+    CapabilityContract(
+        "api_compatibility",
         "client_extensions",
         "vscode_extension",
         "my_claude_code.api.handlers.messages.MessagesHandler",
