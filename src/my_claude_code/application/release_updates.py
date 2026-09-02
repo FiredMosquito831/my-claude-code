@@ -28,6 +28,7 @@ import tomllib
 from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError
+from importlib.metadata import distribution as installed_distribution
 from importlib.metadata import version as installed_version
 from pathlib import Path
 from typing import Any
@@ -496,6 +497,26 @@ def _powershell_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _published_commands() -> list[str]:
+    """Every console and GUI command this distribution installs as a shim.
+
+    Read from the installed distribution's entry points rather than a
+    hand-written list, so it cannot drift from ``pyproject.toml``.
+    """
+
+    try:
+        entry_points = installed_distribution(PACKAGE_NAME).entry_points
+    except PackageNotFoundError:
+        return []
+    return sorted(
+        {
+            entry.name
+            for entry in entry_points
+            if entry.group in {"console_scripts", "gui_scripts"}
+        }
+    )
+
+
 def _deferred_helper_script(
     *,
     uv_executable: str,
@@ -504,6 +525,8 @@ def _deferred_helper_script(
     stage_dir: Path,
     server_launcher: Path,
     working_directory: Path,
+    bin_dir: Path | None = None,
+    commands: list[str] | None = None,
 ) -> str:
     """PowerShell that waits for this process to exit, then installs.
 
@@ -518,6 +541,9 @@ def _deferred_helper_script(
     """
 
     quoted_args = ", ".join(_powershell_literal(arg) for arg in command[1:])
+    names = commands if commands is not None else _published_commands()
+    quoted_names = ", ".join(_powershell_literal(name) for name in names)
+    bin_dir_literal = _powershell_literal(str(bin_dir) if bin_dir else "")
     return f"""$ErrorActionPreference = 'Stop'
 $parent = {os.getpid()}
 # Windows recycles process ids quickly, so a bare Get-Process -Id would happily
@@ -559,6 +585,28 @@ $ErrorActionPreference = 'Continue'
 # environment, which is precisely the broken install this whole path exists to
 # avoid, so retry with backoff: a later attempt succeeds because the earlier
 # one already removed whatever it could.
+# uv writes the launcher shims into the uv tool bin directory in ASCII order of
+# the file name including its ".exe" suffix, and ABORTS THE WHOLE INSTALL on the
+# first one it cannot overwrite. A launcher window the user still has open (an
+# `mcc-claude` session, say) holds its own .exe without FILE_SHARE_DELETE, so
+# every entrypoint alphabetically after it is never written and uv leaves no
+# receipt -- `uv tool list` then calls the tool malformed. Waiting for the
+# server does not help: those are different processes.
+#
+# Windows refuses to DELETE a running image but happily RENAMES one, and the
+# process keeps executing from the renamed file. So move every shim aside first
+# and let uv write a complete fresh set at the canonical paths.
+$binDir = {bin_dir_literal}
+$commandNames = @({quoted_names})
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
+    foreach ($name in $commandNames) {{
+        $shim = Join-Path $binDir ($name + '.exe')
+        if (Test-Path -LiteralPath $shim -PathType Leaf) {{
+            Rename-Item -LiteralPath $shim -NewName ($name + '.exe.old-' + $stamp) -ErrorAction SilentlyContinue
+        }}
+    }}
+}}
 $delays = @(0, 5, 10, 20, 30)
 foreach ($wait in $delays) {{
     if ($wait -gt 0) {{ Start-Sleep -Seconds $wait }}
@@ -568,12 +616,28 @@ foreach ($wait in $delays) {{
     if ($code -eq 0) {{ break }}
 }}
 $ErrorActionPreference = 'Stop'
-$ok = $code -eq 0
+# Report every command that is not there, rather than trusting the exit code.
+# A version check cannot substitute: the shims are version-agnostic launchers,
+# so an OLD shim reports the NEW version and "verified" would be a lie.
+$missing = @()
+if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
+    foreach ($name in $commandNames) {{
+        if (-not (Test-Path -LiteralPath (Join-Path $binDir ($name + '.exe')) -PathType Leaf)) {{
+            $missing += $name
+        }}
+    }}
+    # Reap the shims we moved aside. One still held by a live window refuses to
+    # delete; it is left for the next install to sweep.
+    Get-ChildItem -Path $binDir -Filter '*.exe.old-*' -ErrorAction SilentlyContinue |
+        ForEach-Object {{ Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }}
+}}
+$ok = ($code -eq 0) -and ($missing.Count -eq 0)
 $result = @{{
     ok = $ok
     exit_code = $code
     attempts = $attempts
-    message = if ($ok) {{ 'Deferred install completed.' }} else {{ 'Deferred install failed after ' + $attempts + ' attempt(s).' }}
+    missing_commands = $missing
+    message = if ($ok) {{ 'Deferred install completed.' }} elseif ($missing.Count -gt 0) {{ 'Installed, but these commands are missing: ' + ($missing -join ', ') + '. Close the mcc-claude window(s) and re-run the install command.' }} else {{ 'Deferred install failed after ' + $attempts + ' attempt(s).' }}
     output = $output
 }}
 [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
@@ -631,6 +695,11 @@ def _spawn_deferred_upgrade(
                 stage_dir=stage_dir,
                 server_launcher=server_launcher,
                 working_directory=Path.cwd(),
+                # The launcher lives in the uv tool bin directory, so its parent
+                # IS that directory -- no second `uv tool dir --bin` call while
+                # the server is still alive.
+                bin_dir=server_launcher.parent,
+                commands=_published_commands(),
             ),
             encoding="utf-8",
         )

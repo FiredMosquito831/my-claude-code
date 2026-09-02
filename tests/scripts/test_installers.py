@@ -42,6 +42,12 @@ _POWERSHELL_HELPER_NAMES = frozenset(
         "Convert-UvVersionOutput",
         "Test-UvVersionAtLeast",
         "New-DesktopShortcut",
+        "Get-LauncherCommands",
+        "Rename-LauncherShimsAside",
+        "Restore-LauncherShim",
+        "Remove-StaleShimBackup",
+        "Invoke-RenameThenReinstall",
+        "Configure-AndConfirmFreeClaudeCode",
     }
 )
 
@@ -168,9 +174,11 @@ if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
     for name in mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi \
         mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi \
         mcc-qwen mcc-crush \
-        mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-help mcc-rtk \
+        mcc-init mcc-chatgpt-oauth-login mcc-anthropic-oauth-login \
+        mcc-compact-log mcc-help mcc-rtk \
         mcc-desktop my-claude-code fcc-server fcc-claude fcc-claude-old fcc-pi \
-        fcc-init fcc-chatgpt-oauth-login fcc-compact-log free-claude-code \
+        fcc-init fcc-chatgpt-oauth-login fcc-anthropic-oauth-login \
+        fcc-compact-log fcc-help fcc-rtk fcc-desktop free-claude-code \
         fcc-codex; do
         cp "$FAKE_FIXTURES/fcc-command.sh" "$FAKE_TOOL_BIN/$name"
     done
@@ -943,13 +951,18 @@ def test_install_ps1_voice_flags_only_change_fcc_spec(
 
 def test_install_ps1_deferred_helper_invokes_uv_as_command() -> None:
     # The deferred (app running) path hands a detached helper that must run
-    # `uv tool install`. It must call uv through the call operator on an array,
-    # never by placing a command string at statement position: PowerShell treats
-    # a statement-position string as a command NAME and never executes it, so uv
-    # would not run and the staged update would create no mcc-* commands.
+    # `uv tool install`. It must call uv through the call operator and SPLAT the
+    # argument array. Two ways to get this wrong, both silent:
+    #   * a command built as a single string at statement position is treated as
+    #     a command NAME and never executed;
+    #   * `@$installArgs` is NOT splatting -- the splat sigil replaces the `$`,
+    #     so `@$installArgs` array-subexpressions the value and passes the whole
+    #     array as ONE argument. uv then reports an unknown command and the
+    #     staged update creates no mcc-* commands.
     powershell = (_repo_root() / "scripts" / "install.ps1").read_text(encoding="utf-8")
 
-    assert "& $uvPath @$installArgs" in powershell
+    assert "& `$uvPath @installArgs" in powershell
+    assert "@`$installArgs" not in powershell
     assert "$argumentsLiteral" not in powershell
 
 
@@ -974,8 +987,22 @@ def test_install_ps1_deferred_helper_runs_uv(
     stub_dir.mkdir(parents=True)
     uv_log = stub_dir / "uv-calls.log"
     stub_uv = stub_dir / "stub-uv.cmd"
+    # Log every argument on its OWN line. `%*` alone would look identical
+    # whether the helper splatted the array or collapsed it into one argument,
+    # so the previous stub could not see the `@$installArgs` bug at all. With
+    # one line per argv entry, a collapsed call logs a single line holding
+    # everything and the arg-count assertion below fails.
     stub_uv.write_text(
-        '@echo off\r\necho uv:%*>>"' + str(uv_log) + '"\r\nexit /b 0\r\n',
+        "@echo off\r\n"
+        'echo ARGV-START>>"' + str(uv_log) + '"\r\n'
+        ":loop\r\n"
+        'if "%~1"=="" goto done\r\n'
+        'echo ARG:%~1>>"' + str(uv_log) + '"\r\n'
+        "shift\r\n"
+        "goto loop\r\n"
+        ":done\r\n"
+        'echo ARGV-END>>"' + str(uv_log) + '"\r\n'
+        "exit /b 0\r\n",
         encoding="utf-8",
     )
 
@@ -998,8 +1025,21 @@ Start-DeferredInstall -UvPath $uvPath -Arguments $arguments -WheelPath $wheelPat
 $deadline = (Get-Date).AddSeconds(25)
 while ((Get-Date) -lt $deadline) {{
     if (Test-Path -LiteralPath "{(uv_log.as_posix())}") {{
-        $c = Get-Content -LiteralPath "{(uv_log.as_posix())}" -Raw
-        if ($c -match "tool install") {{ Write-Host "DEFERRED_UV_OK"; exit 0 }}
+        $lines = @(Get-Content -LiteralPath "{(uv_log.as_posix())}")
+        if ($lines -contains "ARGV-END") {{
+            $uvArgs = @($lines | Where-Object {{ $_ -like "ARG:*" }})
+            # 8 arguments went in; a collapsed `@$installArgs` delivers 1.
+            if ($uvArgs.Count -ne 8) {{
+                Write-Host "DEFERRED_UV_COLLAPSED count=$($uvArgs.Count) $($uvArgs -join '|')"
+                exit 3
+            }}
+            if ($uvArgs[0] -ne "ARG:tool" -or $uvArgs[1] -ne "ARG:install") {{
+                Write-Host "DEFERRED_UV_WRONG_ARGS $($uvArgs -join '|')"
+                exit 4
+            }}
+            Write-Host "DEFERRED_UV_OK"
+            exit 0
+        }}
     }}
     Start-Sleep -Milliseconds 500
 }}
@@ -1032,6 +1072,31 @@ def _extract_function_definition(installer_text: str, name: str) -> str:
     return f"function {name} {{\n{body}\n}}\n"
 
 
+# Invoke-RenameThenReinstall moves the launcher shims aside before calling uv,
+# so a runner that dot-sources it needs the shim helpers and the command list
+# too. Extracting them from the real installer keeps the runtime tests honest:
+# a change to any of them is exercised rather than stubbed.
+_RENAME_DEPENDENCIES = (
+    "Get-LauncherCommands",
+    "Rename-LauncherShimsAside",
+    "Restore-LauncherShim",
+    "Remove-StaleShimBackup",
+    "Invoke-RenameThenReinstall",
+)
+
+
+def _rename_functions_file(installer_text: str, path: Path) -> Path:
+    """Write every function Invoke-RenameThenReinstall needs to one file."""
+    path.write_text(
+        "".join(
+            _extract_function_definition(installer_text, name)
+            for name in _RENAME_DEPENDENCIES
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_install_ps1_rename_reinstall_renames_tool_dir_and_runs_uv(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,
@@ -1043,10 +1108,8 @@ def test_install_ps1_rename_reinstall_renames_tool_dir_and_runs_uv(
     installer_text = (_repo_root() / "scripts" / "install.ps1").read_text(
         encoding="utf-8"
     )
-    func_file = tmp_path / "RenameThenReinstall.ps1"
-    func_file.write_text(
-        _extract_function_definition(installer_text, "Invoke-RenameThenReinstall"),
-        encoding="utf-8",
+    func_file = _rename_functions_file(
+        installer_text, tmp_path / "RenameThenReinstall.ps1"
     )
 
     stub_dir = tmp_path / "stubuv"
@@ -1136,10 +1199,8 @@ def test_install_ps1_rename_reinstall_restores_old_dir_on_failed_install(
     installer_text = (_repo_root() / "scripts" / "install.ps1").read_text(
         encoding="utf-8"
     )
-    func_file = tmp_path / "RenameThenReinstall.ps1"
-    func_file.write_text(
-        _extract_function_definition(installer_text, "Invoke-RenameThenReinstall"),
-        encoding="utf-8",
+    func_file = _rename_functions_file(
+        installer_text, tmp_path / "RenameThenReinstall.ps1"
     )
 
     stub_dir = tmp_path / "stubuv"
@@ -1218,44 +1279,52 @@ Write-Host "RENAME_ROLLBACK_OK"
     assert "RENAME_ROLLBACK_OK" in result.stdout, result.stdout + result.stderr
 
 
-def test_install_ps1_rename_keeps_install_when_running_shim_is_locked(
+def test_install_ps1_renames_every_launcher_shim_before_uv_install(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,
 ) -> None:
-    # A running launcher's own shim cannot be overwritten (os error 32 /
-    # "being used by another process"). That failure is EXPECTED: the tool dir
-    # and free shims already updated, and the shim is version-agnostic. The
-    # rename path must keep the new install, report success, and flag that a
-    # detached helper finishes the locked shim after the window closes -- NOT
-    # roll back and NOT treat it as fatal.
+    """Every launcher shim must be out of uv's way before `uv tool install`.
+
+    uv writes the entrypoint shims in ASCII order of the file name *including*
+    the ".exe" suffix, and aborts the whole install on the first one it cannot
+    overwrite. A running launcher holds its own .exe, so with a live
+    `mcc-claude` uv stopped at `mcc-claude.exe` and never wrote the sixteen
+    entrypoints that sort after it -- and left no uv-receipt.toml, so
+    `uv tool list` called the tool malformed. Windows allows RENAMING a running
+    image, so the fix is to move every shim aside first.
+
+    This asserts on the state of the bin directory AT THE MOMENT uv runs, which
+    is the only thing that decides whether uv aborts.
+    """
     installer_text = (_repo_root() / "scripts" / "install.ps1").read_text(
         encoding="utf-8"
     )
-    func_file = tmp_path / "RenameThenReinstall.ps1"
-    func_file.write_text(
-        _extract_function_definition(installer_text, "Invoke-RenameThenReinstall"),
-        encoding="utf-8",
+    func_file = _rename_functions_file(
+        installer_text, tmp_path / "RenameThenReinstall.ps1"
     )
+
+    bin_dir = tmp_path / "toolbin"
+    bin_dir.mkdir(parents=True)
+    shims = ("mcc-claude", "mcc-server", "mcc-desktop", "fcc-help", "my-claude-code")
+    for name in shims:
+        (bin_dir / f"{name}.exe").write_text("shim", encoding="utf-8")
+    # Not ours: a neighbour tool in the same shared bin directory. Renaming it
+    # would break somebody else's install.
+    (bin_dir / "ruff.exe").write_text("neighbour", encoding="utf-8")
+    # Left over from an earlier interrupted install; the sweep must reap it.
+    (bin_dir / "mcc-kilo.exe.old-19990101-000000").write_text("stale", encoding="utf-8")
 
     stub_dir = tmp_path / "stubuv"
     stub_dir.mkdir(parents=True)
-    uv_log = stub_dir / "uv-calls.log"
-    locked_uv = stub_dir / "locked-uv.cmd"
-    # uv succeeds on the tool env (recreates the dir + installs the package
-    # dist-info, proving the fresh install landed) but fails copying a shim that
-    # a running launcher holds -> os error 32.
-    locked_uv.write_text(
-        '@echo off\r\necho uv:%*>>"' + str(uv_log) + '"\r\n'
-        'if "%1"=="tool" if "%2"=="dir" if "%3"=="--bin" echo %FAKE_TOOL_ROOT%& exit /b 0\r\n'
+    snapshot = stub_dir / "bin-at-install-time.txt"
+    stub_uv = stub_dir / "stub-uv.cmd"
+    stub_uv.write_text(
+        "@echo off\r\n"
+        'if "%1"=="tool" if "%2"=="dir" if "%3"=="--bin" echo %FAKE_BIN%& exit /b 0\r\n'
         'if "%1"=="tool" if "%2"=="dir" echo %FAKE_TOOL_ROOT%& exit /b 0\r\n'
+        'dir /b "%FAKE_BIN%" > "' + str(snapshot) + '"\r\n'
         'if not "%FAKE_TOOL_ROOT%"=="" mkdir "%FAKE_TOOL_ROOT%\\my-claude-code" 2>nul\r\n'
-        'if not "%FAKE_TOOL_ROOT%"=="" mkdir "%FAKE_TOOL_ROOT%\\my-claude-code\\Lib" 2>nul\r\n'
-        'if not "%FAKE_TOOL_ROOT%"=="" mkdir "%FAKE_TOOL_ROOT%\\my-claude-code\\Lib\\site-packages" 2>nul\r\n'
-        'if not "%FAKE_TOOL_ROOT%"=="" mkdir "%FAKE_TOOL_ROOT%\\my-claude-code\\Lib\\site-packages\\my_claude_code-%FAKE_INSTALL_VERSION%.dist-info" 2>nul\r\n'
-        ">&2 echo Failed to install entrypoint\r\n"
-        ">&2 echo Caused by: failed to copy file from ...\r\n"
-        ">&2 echo ...being used by another process. (os error 32)\r\n"
-        "exit /b 2\r\n",
+        "exit /b 0\r\n",
         encoding="utf-8",
     )
 
@@ -1270,7 +1339,7 @@ def test_install_ps1_rename_keeps_install_when_running_shim_is_locked(
     tool_dir.mkdir()
     (tool_dir / "marker.txt").write_text("old", encoding="utf-8")
 
-    runner = tmp_path / "run-locked.ps1"
+    runner = tmp_path / "run-shim-rename.ps1"
     runner.write_text(
         f"""Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -1288,18 +1357,12 @@ function Invoke-NativeCapture {{
     return ($out | Out-String).Trim()
 }}
 $script:RenamedWhileRunning = $false
-$script:NeedDeferredFinish = $false
 . "{(func_file.as_posix())}"
-$uvPath = "{(locked_uv.as_posix())}"
+$uvPath = "{(stub_uv.as_posix())}"
 $arguments = @("tool", "install", "--force", "--refresh-package", "my-claude-code", "--python", "3.14.0", "my-claude-code @ file:///{(wheel.as_posix())}")
-$wheelPath = "{(wheel.as_posix())}"
-$toolDir = "{(tool_dir.as_posix())}"
-$ok = Invoke-RenameThenReinstall -UvPath $uvPath -Arguments $arguments -WheelPath $wheelPath -ToolDir $toolDir -Version "5.3.3"
-if ($ok -ne $true) {{ throw "expected success despite locked shim, got: $ok" }}
-if ($script:NeedDeferredFinish -ne $true) {{ throw "expected NeedDeferredFinish to be set" }}
-if ($script:RenamedWhileRunning -ne $true) {{ throw "expected RenamedWhileRunning to be set" }}
-if (-not (Test-Path -LiteralPath "{(tool_dir.as_posix())}" -PathType Container)) {{ throw "fresh tool dir not kept" }}
-Write-Host "LOCKED_SHIM_OK"
+$ok = Invoke-RenameThenReinstall -UvPath $uvPath -Arguments $arguments -WheelPath "{(wheel.as_posix())}" -ToolDir "{(tool_dir.as_posix())}" -Version "6.30.1"
+if ($ok -ne $true) {{ throw "expected rename+reinstall to succeed, got: $ok" }}
+Write-Host "SHIM_RENAME_DONE"
 """,
         encoding="utf-8",
     )
@@ -1317,102 +1380,127 @@ Write-Host "LOCKED_SHIM_OK"
         capture_output=True,
         text=True,
         env=powershell_harness.env
-        | {"FAKE_TOOL_ROOT": str(tool_root), "FAKE_INSTALL_VERSION": "5.3.3"},
+        | {"FAKE_TOOL_ROOT": str(tool_root), "FAKE_BIN": str(bin_dir)},
     )
-    assert "LOCKED_SHIM_OK" in result.stdout, result.stdout + result.stderr
+    assert "SHIM_RENAME_DONE" in result.stdout, result.stdout + result.stderr
+
+    at_install = snapshot.read_text(encoding="utf-8", errors="replace").split()
+    for name in shims:
+        assert f"{name}.exe" not in at_install, (
+            f"{name}.exe was still at its canonical path when uv ran; uv would "
+            f"abort on it if a launcher held it open. Saw: {at_install}"
+        )
+        assert any(entry.startswith(f"{name}.exe.old-") for entry in at_install), (
+            f"{name}.exe was not renamed aside before uv ran. Saw: {at_install}"
+        )
+    assert "ruff.exe" in at_install, (
+        "the installer renamed a command it does not own out of the shared uv "
+        f"tool bin directory. Saw: {at_install}"
+    )
+
+    left = sorted(entry.name for entry in bin_dir.iterdir())
+    assert not [name for name in left if ".old-" in name], (
+        f"renamed-aside shims were not swept after a successful install: {left}"
+    )
+    assert "ruff.exe" in left
 
 
-def test_install_ps1_configure_confirm_tolerates_deferred_finish(
+def test_install_ps1_never_reports_verified_with_missing_commands(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,
 ) -> None:
-    # A deferred finish means uv aborted partway through the shim writes because
-    # a running launcher's own shim could not be overwritten (os error 32), so
-    # mcc-rtk / mcc-desktop were never created. Configure-AndConfirmFreeClaudeCode
-    # must NOT throw "did not create 'mcc-rtk'" in that state: it verifies only
-    # mcc-server when it landed, and reports "staged" when even mcc-server is
-    # missing instead of failing the whole install.
+    """A command that does not exist must never be reported as verified.
+
+    The installer used to skip the command check entirely whenever a shim could
+    not be replaced, and verify the install with `mcc-server --version` alone.
+    That check cannot fail: the shims are version-agnostic launchers, so an OLD
+    shim reports the NEW version. A user was told "installed and verified"
+    while seven of their commands did not exist at all.
+    """
     installer_text = (_repo_root() / "scripts" / "install.ps1").read_text(
         encoding="utf-8"
     )
     func_file = tmp_path / "ConfigureAndConfirm.ps1"
     func_file.write_text(
-        _extract_function_definition(
+        _extract_function_definition(installer_text, "Get-LauncherCommands")
+        + _extract_function_definition(
             installer_text, "Configure-AndConfirmFreeClaudeCode"
         ),
         encoding="utf-8",
     )
 
-    runner = tmp_path / "run-configure-confirm.ps1"
+    tool_bin = tmp_path / "tool-bin"
+    tool_bin.mkdir(parents=True, exist_ok=True)
+
+    runner = tmp_path / "run-verify.ps1"
     runner.write_text(
         f"""Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$toolBin = "{(tool_bin.as_posix())}"
 function Get-ApplicationCommand {{
     param([string] $Name)
     if ($Name -eq "uv") {{ return [pscustomobject]@{{ Source = "C:\\fake\\uv.exe" }} }}
-    if ($Name -eq "mcc-server" -and $env:FAKE_MCC_SERVER -eq "present") {{
-        return [pscustomobject]@{{ Source = "C:\\fake\\tool-bin\\mcc-server.cmd" }}
-    }}
-    return $null
+    if (($env:FAKE_MISSING -split ",") -contains $Name) {{ return $null }}
+    return [pscustomobject]@{{ Source = (Join-Path $toolBin ($Name + ".exe")) }}
 }}
-function Invoke-NativeCommand {{
-    param([string] $FilePath, [string[]] $Arguments = @())
-}}
+function Invoke-NativeCommand {{ param([string] $FilePath, [string[]] $Arguments = @()) }}
 function Invoke-NativeCapture {{
     param([string] $FilePath, [string[]] $Arguments = @())
-    if ($FilePath -eq "C:\\fake\\uv.exe") {{ return "C:\\fake\\tool-bin" }}
-    if ($Arguments -contains "--version") {{ return "my-claude-code 5.3.3" }}
-    return ""
+    if ($FilePath -eq "C:\\fake\\uv.exe") {{ return $toolBin }}
+    return "my-claude-code 6.30.1"
 }}
 function Add-PathEntry {{ param([string] $PathEntry) }}
-$script:NeedDeferredFinish = $true
 $DryRun = $false
 . "{(func_file.as_posix())}"
-Configure-AndConfirmFreeClaudeCode -ExpectedVersion "5.3.3"
-Write-Host "CONFIGURE_CONFIRM_OK"
+Configure-AndConfirmFreeClaudeCode -ExpectedVersion "6.30.1"
+Write-Host "My Claude Code 6.30.1 is installed and verified."
 """,
         encoding="utf-8",
     )
 
-    # mcc-server landed: verify succeeds via mcc-server --version, no throw for
-    # the missing mcc-rtk / mcc-desktop shims.
-    result = subprocess.run(
-        [
-            powershell_harness.powershell,
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(runner),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=powershell_harness.env | {"FAKE_MCC_SERVER": "present"},
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "CONFIGURE_CONFIRM_OK" in result.stdout
-    assert "did not create" not in result.stdout
+    def run(missing: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                powershell_harness.powershell,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(runner),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=powershell_harness.env | {"FAKE_MISSING": missing},
+        )
 
-    # mcc-server itself missing (deeper failure): report staged, still no throw.
-    result = subprocess.run(
-        [
-            powershell_harness.powershell,
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(runner),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=powershell_harness.env | {"FAKE_MCC_SERVER": "missing"},
+    # Exactly the shape of the reported defect: uv aborted alphabetically at
+    # mcc-claude.exe, so everything after it was never written.
+    missing = "mcc-commandcode,mcc-crush,mcc-kilo,mcc-kimi,mcc-opencode,mcc-opencode2,mcc-qwen"
+    result = run(missing)
+    assert result.returncode != 0, (
+        "the installer exited 0 with seven commands missing:\n"
+        + result.stdout
+        + result.stderr
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "CONFIGURE_CONFIRM_OK" in result.stdout
-    assert "staged" in result.stdout
-    assert "did not create" not in result.stdout
+    assert "verified" not in result.stdout, (
+        "the installer claimed verification for commands that do not exist:\n"
+        + result.stdout
+    )
+    assert "Installed, but these commands are missing:" in result.stdout, result.stdout
+    for name in missing.split(","):
+        assert name in result.stdout, f"{name} was missing but not reported"
+    assert (
+        "Close the mcc-claude window(s) and re-run the install command."
+        in result.stdout
+    )
+
+    # Nothing missing: the full check passes and the caller reaches its own
+    # "installed and verified" line.
+    complete = run("")
+    assert complete.returncode == 0, complete.stdout + complete.stderr
+    assert "Installed, but these commands are missing" not in complete.stdout
+    assert "is installed and verified." in complete.stdout
 
 
 def test_installers_use_native_clients_and_single_python_selection() -> None:

@@ -672,13 +672,30 @@ configure_and_verify_my_claude_code() {
     # name shim, exactly as the post-install reference leads with. The legacy
     # fcc-* aliases resolve through the same distribution, so they exist as soon
     # as these do.
+    # Report EVERY missing command at once, not just the first. The Windows
+    # installer used to stop at the first miss (and, worse, skip the check
+    # altogether in one branch) and so reported "verified" for commands that did
+    # not exist. Same honest accounting here keeps the two installers saying the
+    # same thing.
+    missing_commands=""
     for command_name in mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi \
         mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi \
         mcc-qwen mcc-crush \
-        mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-help mcc-rtk \
+        mcc-init mcc-chatgpt-oauth-login mcc-anthropic-oauth-login \
+        mcc-compact-log mcc-help mcc-rtk \
         mcc-desktop my-claude-code; do
-        [ -x "$tool_bin/$command_name" ] || fail "My Claude Code installation did not create $tool_bin/$command_name."
+        if [ ! -x "$tool_bin/$command_name" ]; then
+            if [ -z "$missing_commands" ]; then
+                missing_commands="$command_name"
+            else
+                missing_commands="$missing_commands, $command_name"
+            fi
+        fi
     done
+    if [ -n "$missing_commands" ]; then
+        printf 'Installed, but these commands are missing: %s\n' "$missing_commands" >&2
+        fail "Re-run the install command."
+    fi
 
     print_command "$tool_bin/mcc-server" --version
     if installed_version=$("$tool_bin/mcc-server" --version); then

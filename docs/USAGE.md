@@ -1725,6 +1725,9 @@ Provider API keys are never sent to your agent, never written to the analytics s
 **`mcc-server: command not found` right after installing.**
 Close and reopen your terminal. The installer extends `PATH`; an existing shell won't see it. This is the single most common install issue.
 
+**Windows: the installer says a command is missing.**
+Installing while an `mcc-claude` window or the tray is open now works: the installer renames the old tool environment *and* every launcher `.exe` aside before it installs, so uv writes a complete set of commands and your open windows keep running until you close them. If a command is still reported missing, close the `mcc-claude` window(s) and re-run the install command. The installer exits non-zero in that case — it never reports "verified" for a command that does not exist.
+
 **Two configs on Windows.**
 If you installed under both PowerShell and WSL you have `C:\Users\<you>\.fcc` *and* `~/.fcc` inside WSL. The server prints which config directory it is using at startup — check that against the one you've been editing.
 

@@ -559,6 +559,83 @@ def test_deferred_helper_script_quotes_hostile_arguments(tmp_path) -> None:
     assert "'it''s; rm -rf /'" in script
 
 
+def test_release_updates_renames_shims_before_reinstall(tmp_path) -> None:
+    """The dashboard updater hits the same shim lock as the install script.
+
+    uv writes the launcher shims in ASCII order of the file name including the
+    ".exe" suffix and aborts the whole install on the first one it cannot
+    overwrite, leaving every entrypoint after it unwritten and no receipt.
+    Waiting for the server to exit does not help: an `mcc-claude` window the
+    user still has open is a different process holding a different shim. So the
+    helper must move every shim aside -- Windows refuses to delete a running
+    image but happily renames one -- before it calls uv.
+    """
+
+    bin_dir = tmp_path / "bin"
+    script = release_updates._deferred_helper_script(
+        uv_executable=r"C:\tools\uv.exe",
+        command=[r"C:\tools\uv.exe", "tool", "install", "--force", "pkg"],
+        result_path=tmp_path / "result.json",
+        stage_dir=tmp_path,
+        server_launcher=bin_dir / "fcc-server.exe",
+        working_directory=tmp_path / "cwd",
+        bin_dir=bin_dir,
+        commands=["mcc-claude", "mcc-server", "mcc-desktop"],
+    )
+
+    rename = script.index("Rename-Item -LiteralPath $shim")
+    install = script.index(r"& 'C:\tools\uv.exe'")
+    assert rename < install, (
+        "the helper calls uv before moving the shims aside, so a launcher "
+        "window still open aborts the install exactly as before"
+    )
+    assert str(bin_dir) in script
+    for name in ("mcc-claude", "mcc-server", "mcc-desktop"):
+        assert f"'{name}'" in script
+    # Renamed aside, never deleted: the shim of a live window must keep working.
+    assert "Remove-Item -LiteralPath $shim" not in script
+    assert ".exe.old-" in script
+
+
+def test_release_updates_receipt_lists_missing_commands(tmp_path) -> None:
+    """A zero exit code is not proof that the commands exist.
+
+    The shims are version-agnostic launchers, so an OLD shim reports the NEW
+    version -- a version check can never catch a missing command. The helper
+    must enumerate them and say which ones are absent.
+    """
+
+    script = release_updates._deferred_helper_script(
+        uv_executable="uv",
+        command=["uv", "tool", "install", "--force", "pkg"],
+        result_path=tmp_path / "result.json",
+        stage_dir=tmp_path,
+        server_launcher=tmp_path / "bin" / "fcc-server.exe",
+        working_directory=tmp_path / "cwd",
+        bin_dir=tmp_path / "bin",
+        commands=["mcc-claude", "mcc-rtk"],
+    )
+
+    assert "$missing = @()" in script
+    assert "missing_commands = $missing" in script
+    assert "Installed, but these commands are missing: " in script
+    assert "Close the mcc-claude window(s) and re-run the install command." in script
+    # ok is not the exit code alone.
+    assert "$ok = ($code -eq 0) -and ($missing.Count -eq 0)" in script
+
+
+def test_published_commands_covers_every_entry_point() -> None:
+    """The shim list is read from the distribution, so it cannot drift."""
+
+    commands = release_updates._published_commands()
+
+    assert "mcc-claude" in commands
+    assert "mcc-server" in commands
+    # gui-scripts count too: a running tray holds its shim like any other.
+    assert "mcc-desktop" in commands
+    assert commands == sorted(commands)
+
+
 def test_upgrade_stages_instead_of_installing_on_windows(monkeypatch, tmp_path) -> None:
     """On Windows the install is handed to a helper, never run in place."""
 
@@ -675,9 +752,10 @@ def test_deferred_helper_survives_native_stderr(tmp_path) -> None:
     # The native call must run with Continue in effect, not Stop.
     preference_before = script.rfind("$ErrorActionPreference = 'Continue'", 0, invoke)
     assert preference_before != -1, "native call must drop back to Continue"
-    # Success is judged by exit code captured immediately after the call.
+    # Success is judged by the exit code captured immediately after the call --
+    # and, since 6.30.1, by every published command actually being there.
     assert "$code = $LASTEXITCODE" in script
-    assert "$ok = $code -eq 0" in script
+    assert "$ok = ($code -eq 0) -and ($missing.Count -eq 0)" in script
 
 
 def test_deferred_helper_pins_parent_identity_not_just_pid(tmp_path) -> None:
