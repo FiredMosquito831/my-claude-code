@@ -48,7 +48,7 @@ Run your coding agents with free, paid, or local models. Choose and validate pro
 
 | Area | What you get |
 | --- | --- |
-| **Coding agents** | Launch Claude Code with `mcc-claude`, Codex with `mcc-codex`, Pi with `mcc-pi`, OpenCode with `mcc-opencode`, the OpenCode 2 preview with `mcc-opencode2`, Kilo CLI with `mcc-kilo`, Command Code with `mcc-commandcode` and Kimi Code with `mcc-kimi`; every native model picker except Claude Code's lists the MCC catalog on its own, Claude Code's needs `mcc-claude --discover-models` (or `mcc-claude-old`). Every agent MCC can launch is declared in one registry, and the **Coding agents** dashboard page shows each one's installed state, every command and flag it answers to with a copy button, its protocol and its generated catalogue. Legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases still work. |
+| **Coding agents** | Launch Claude Code with `mcc-claude`, Codex with `mcc-codex`, Pi with `mcc-pi`, OpenCode with `mcc-opencode`, the OpenCode 2 preview with `mcc-opencode2`, Kilo CLI with `mcc-kilo`, Command Code with `mcc-commandcode`, Kimi Code with `mcc-kimi`, Qwen Code with `mcc-qwen` and Crush with `mcc-crush`; every native model picker except Claude Code's lists the MCC catalog on its own, Claude Code's needs `mcc-claude --discover-models` (or `mcc-claude-old`). Every agent MCC can launch is declared in one registry, and the **Coding agents** dashboard page shows each one's installed state, every command and flag it answers to with a copy button, its protocol and its generated catalogue. Legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases still work. |
 | **Real capabilities in every agent catalogue** | The model list MCC generates for an agent carries that model's own context window, output ceiling, vision and tool support and reasoning-effort vocabulary, resolved by MCC's metadata ladder. Where a CLI's schema demands a value nothing published, MCC uses **that CLI's** documented default and says so — in the generated file, in the launcher's output, and on the dashboard card. |
 | **Model providers** | 56 cloud and local providers, including Anthropic's own Claude API, Kimi For Coding, and experimental ChatGPT OAuth. Switch and validate providers from the Admin UI. |
 | **Claude, direct** | `anthropic` speaks Anthropic's native Messages API with a Claude Console API key, billed per token. A separate `anthropic_oauth` provider can use a Pro/Max subscription instead — **which Anthropic does not permit**; read [docs/ANTHROPIC-SUBSCRIPTION.md](docs/ANTHROPIC-SUBSCRIPTION.md) before enabling it. |
@@ -121,7 +121,7 @@ mcc-server --version
 
 1. Installs `uv` (the Python tool runner) if it's missing or too old.
 2. Looks up the **latest** release, downloads its wheel, and **verifies the SHA-256 that GitHub publishes for that asset** — a mismatch aborts rather than running unverified code.
-3. Installs My Claude Code and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, and `mcc-kimi` on your `PATH` (the legacy `fcc-*` spellings remain as aliases for the first five).
+3. Installs My Claude Code and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, `mcc-kimi`, `mcc-qwen`, and `mcc-crush` on your `PATH` (the legacy `fcc-*` spellings remain as aliases for the first five).
 
 That's all it does. **It does not install Claude Code, Codex, Pi, OpenCode, Kilo or Command Code** — those are separate third-party tools, and My Claude Code doesn't need any of them to run. Install whichever you actually use, yourself. The `mcc-*` launchers just point an agent you already have at the proxy: when one is missing, the launcher prints that agent's own install command and exits 127 rather than fetching anything. A test in the suite greps both installers for every known agent package name so the rule cannot quietly change.
 
@@ -298,10 +298,75 @@ mcc-kimi --print -p "hello"
 mcc-kimi --quiet -p "hello"
 ```
 
+Qwen Code:
+
+```bash
+mcc-qwen
+```
+
+Qwen Code is Alibaba's `qwen` CLI (`npm install -g @qwen-code/qwen-code`). It
+publishes `QWEN_CODE_SYSTEM_SETTINGS_PATH`, a variable naming a settings
+document it reads, so MCC writes one of its own under `~/.fcc` and points the
+launch at it. **Your own `~/.qwen/settings.json` is never read for MCC's sake,
+never written and never backed up.** The document carries a
+`modelProviders.anthropic` array — every routable model with the context
+window MCC's ladder resolved for it — and an `envKey` naming
+`MCC_QWEN_API_KEY` rather than the token itself, so the proxy token never
+lands on disk.
+
+The auth type is selected with `--auth-type anthropic` on the command line
+rather than by environment variable. That is not a style choice: Qwen resolves
+the auth type as `argv || settings.security.auth.selectedType || environment`,
+so an auth type you once picked in Qwen's own UI would silently outrank
+anything MCC put in the environment. The flag outranks both, and nothing under
+`~/.qwen` is written to say so. The one trade is that Qwen declares
+`modelProviders` a *replace* key, so for the length of an `mcc-qwen` session
+MCC's provider list is the whole list; every other setting you have still
+applies.
+
+```bash
+mcc-qwen "hello"
+mcc-qwen -m anthropic/openrouter/gpt-5
+mcc-qwen -o json "hello"
+```
+
+Crush:
+
+```bash
+mcc-crush
+```
+
+Crush is Charm's `crush` CLI (`npm install -g @charmland/crush`, or the Go
+binary from its releases). It publishes `CRUSH_GLOBAL_CONFIG`, a variable
+naming its global config **directory**, so MCC owns `~/.fcc/crush/` and writes
+one `crush.json` into it. **Your own `~/.config/crush` is never read for a
+provider, written or backed up** — and neither is your data directory, so every
+session, log and statistic Crush has stays where it was. The trade is that the
+variable moves the whole global layer, so an `mcc-crush` session takes Crush's
+own defaults for the LSP servers, MCP servers and permissions you set
+*globally*; a project-local `crush.json` still applies.
+
+The token stays off disk here too: Crush's own documented reference form is
+`"api_key": "$MCC_CRUSH_API_KEY"`, expanded from the launched process's
+environment. Crush is also the one agent whose schema makes ten per-model
+fields **required**, so a capability nobody published cannot be omitted and
+becomes Crush's own number instead — every one of those is listed in the file's
+`_mcc_defaulted` block, on the launcher's stderr and on the Coding agents card.
+Model discovery is switched off deliberately: with it on Crush asks
+`GET <base_url>/models`, which is not a route MCC serves.
+
+```bash
+mcc-crush run "hello"
+mcc-crush models
+mcc-crush dirs
+```
+
 The dashboard's **Coding agents** page lists every agent MCC can launch, whether its binary is on your `PATH`, **every command and flag it answers to** with a copy button each, the protocol it will speak, and the catalogue MCC writes for it — including when that catalogue was last written and how many of its models carry a value the CLI supplied rather than a provider.
 
 > **A coding agent is not a provider.**
 > The agents above sit **downstream** of MCC: they send requests to it. The names on the Providers page — including `opencode`, `commandcode`, `cline`, `kimi_coding` and `kilo` — are **upstream** gateways MCC buys tokens from. Some names appear in both lists and mean different things, and both can be on at once: you can run a coding agent against MCC while the same-named upstream provider is switched off. In the code the two live in separate namespaces (`harness_id` in `cli/harnesses/` and `config/harnesses.py`, `provider_id` in `providers/` and `config/provider_catalog.py`) and are never joined.
+>
+> **Qwen Code is a third pair.** The providers `qwencloud` and `qwencloud_coding` on the Providers page are Alibaba endpoints MCC sends requests *to*, paid for with a DashScope key. `mcc-qwen` launches Alibaba's Qwen Code *CLI*, which sends its requests to MCC — and needs neither of those providers switched on. Its registry id is `qwen_code`, deliberately not `qwen`. `crush` collides with nothing today, and the id is spelled out in the registry so a future `crush` gateway cannot quietly take it over.
 >
 > **Kimi Code is the pair most likely to be misread, because the two halves do not even share a spelling.** The providers `kimi` and `kimi_coding` on the Providers page are Moonshot endpoints MCC sends requests *to*, paid for with a Moonshot key. `mcc-kimi` launches Moonshot's Kimi Code *CLI* (`kimi`, published on PyPI as `kimi-cli`), which sends its requests to MCC — and needs no Moonshot account, no Moonshot key and neither of those providers switched on. Its registry id is `kimi_code`, deliberately not `kimi`.
 >
@@ -321,7 +386,7 @@ Where a CLI's schema requires a value and no provider published one, MCC fills i
 | --- | --- |
 | `mcc-server: command not found` right after installing | Your shell's `PATH` is stale. **Close and reopen the terminal.** If it persists, check that `~/.local/bin` (Windows: `%USERPROFILE%\.local\bin`) is on `PATH`. |
 | The install stopped partway with an error about `claude`, `codex`, or `pi` | An old installer tried to install those for you and aborted when one failed. The current installer doesn't touch them at all — just re-run the command above. |
-| I want Claude Code / Codex / Pi / OpenCode / Kilo / Command Code / Kimi Code installed too | The installer no longer installs them. Install each from its own official installer (Kimi Code is a Python tool: `uv tool install kimi-cli`); then `mcc-claude`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, and `mcc-kimi` will launch them through the proxy. |
+| I want Claude Code / Codex / Pi / OpenCode / Kilo / Command Code / Kimi Code / Qwen Code / Crush installed too | The installer no longer installs them. Install each from its own official installer (Kimi Code is a Python tool: `uv tool install kimi-cli`); then `mcc-claude`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, `mcc-kimi`, `mcc-qwen`, and `mcc-crush` will launch them through the proxy. |
 | `MCC release wheel checksum mismatch; refusing to install` | The download was corrupted or incomplete. Re-run the command. This check is deliberate: it will not install a wheel it can't verify. |
 | PowerShell refuses to run the script | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then re-run. This only affects the current window. |
 | Admin UI won't open, or settings don't seem to apply | You probably installed in **both** PowerShell and WSL and are editing one config while the server reads the other. Run `mcc-server --version` in each and pick one environment. |

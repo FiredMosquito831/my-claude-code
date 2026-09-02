@@ -383,6 +383,32 @@
                 </li>
                 <li class="claude-launcher">
                   <div class="claude-launcher-info">
+                    <h4>Qwen Code</h4>
+                    <p>
+                      Alibaba's Qwen Code CLI, pointed at a settings document
+                      this proxy owns through Qwen's own
+                      <code>QWEN_CODE_SYSTEM_SETTINGS_PATH</code> variable, with
+                      <code>--auth-type anthropic</code> passed on the command
+                      line, so your <code>~/.qwen/settings.json</code> is never
+                      edited.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-qwen</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
+                    <h4>Crush</h4>
+                    <p>
+                      Charm's Crush CLI, pointed at a <code>crush.json</code>
+                      this proxy owns through Crush's own
+                      <code>CRUSH_GLOBAL_CONFIG</code> variable, so your
+                      <code>~/.config/crush</code> is never edited.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-crush</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
                     <h4>Previous Claude Code build</h4>
                     <p>
                       Launches the older Claude Code you had installed before, for
@@ -1768,7 +1794,9 @@ mcc-opencode
 mcc-opencode2
 mcc-kilo
 mcc-commandcode
-mcc-kimi</code></pre>
+mcc-kimi
+mcc-qwen
+mcc-crush</code></pre>
                 <p>
                   The <strong>Coding agents</strong> page lists every CLI this proxy can
                   launch: whether its binary is on your <code>PATH</code>,
@@ -1820,6 +1848,44 @@ mcc-kimi</code></pre>
                   so this is the one generated file that holds the proxy token
                   &mdash; mode <code>0600</code>, under <code>~/.fcc</code>, beside
                   the <code>.env</code> that already holds the same value.
+                </p>
+                <p>
+                  <strong>Qwen Code and Crush each publish a variable naming a
+                  whole config document, so neither file of yours is
+                  touched.</strong> Qwen Code reads
+                  <code>QWEN_CODE_SYSTEM_SETTINGS_PATH</code> and this proxy
+                  writes <code>~/.fcc/qwen-code-settings.json</code>: a
+                  <code>modelProviders.anthropic</code> array carrying every
+                  routable model with its real context window, and an
+                  <code>envKey</code> naming <code>MCC_QWEN_API_KEY</code>
+                  rather than the token itself. The auth type comes from
+                  <code>--auth-type anthropic</code> on the command line,
+                  which outranks anything saved in your settings, so nothing
+                  under <code>~/.qwen</code> is read for it or written to.
+                  Crush reads <code>CRUSH_GLOBAL_CONFIG</code>, which names a
+                  config <em>directory</em>, so this proxy owns
+                  <code>~/.fcc/crush/</code> and writes one
+                  <code>crush.json</code> into it with
+                  <code>"api_key": "$MCC_CRUSH_API_KEY"</code> &mdash; Crush's
+                  own documented reference form. Your
+                  <code>~/.config/crush</code> is never read for a provider,
+                  written or backed up.
+                </p>
+                <p>
+                  Both trades are on their cards. A Qwen session takes this
+                  proxy's <code>modelProviders</code> list as the whole list,
+                  because Qwen declares that key <em>replace</em> rather than
+                  merge; every other setting you have still applies. A Crush
+                  session takes Crush's own defaults for the LSP servers, MCP
+                  servers and permissions you set <em>globally</em>, because
+                  the variable moves the whole global layer &mdash; your
+                  project-local <code>crush.json</code> still applies and your
+                  sessions, logs and statistics are untouched, since the data
+                  directory is not moved. Crush is also the one catalogue
+                  where an unknown cannot be omitted: ten of its per-model
+                  fields are required, so anything the ladder did not resolve
+                  becomes Crush's own number and is listed under
+                  <code>_mcc_defaulted</code> and on the card.
                 </p>
                 <img class="guide-shot" src="/admin/img/codex-model-picker.png"
                      alt="Codex model picker with the generated MCC catalog" loading="lazy">

@@ -429,6 +429,14 @@ With **Model discovery** on, the app populates its picker from MCC's `/v1/models
 > (`harness_id` in `cli/harnesses/` and `config/harnesses.py`, `provider_id` in
 > `providers/` and `config/provider_catalog.py`) and are never joined.
 >
+> **Qwen Code is a third pair.** The providers `qwencloud` and
+> `qwencloud_coding` are Alibaba endpoints MCC sends requests *to*, paid for
+> with a DashScope key. `mcc-qwen` launches Alibaba's Qwen Code *CLI*, which
+> sends its requests to MCC — and needs neither of those providers switched
+> on. Its harness id is `qwen_code`, deliberately not `qwen`. `crush` collides
+> with nothing today; the id is still spelled out in the registry so a future
+> `crush` gateway cannot quietly take it over.
+>
 > **Kimi Code is the pair most likely to be misread**, because the two halves
 > do not even share a spelling. The providers `kimi` and `kimi_coding` are
 > Moonshot endpoints MCC sends requests *to*, paid for with a Moonshot key.
@@ -654,22 +662,129 @@ Maintenance subcommands — `login`, `logout`, `info`, `export`, `mcp`,
 need a running proxy. `acp`, `term` and `web` are not passed through: they run
 an agent, so they get MCC's provider like any other session.
 
+### Qwen Code
+
+```bash
+mcc-qwen
+```
+
+Qwen Code is Alibaba's `qwen` CLI: `npm install -g @qwen-code/qwen-code`. MCC
+never installs it — a missing binary prints Alibaba's own line and exits 127.
+The version everything below was read against is **0.15.11**, out of the
+installed package's `cli.js` and then confirmed on the wire, because two things
+the survey expected turned out to be wrong in MCC's favour:
+
+| What you might expect | What Qwen Code 0.15.11 actually does |
+| --- | --- |
+| `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY` + `ANTHROPIC_MODEL` is how you point it at a proxy | It works, but it is the *lowest*-precedence source. `loadCliConfig` resolves `argv.authType \|\| settings.security.auth.selectedType \|\| getAuthTypeFromEnv()`, so an auth type you once picked in Qwen's UI silently outranks the environment. |
+| Selecting the `anthropic` auth type needs a `security.auth.selectedType` write | It does not. `--auth-type anthropic` is a real flag whose `choices` include it, and it outranks both the settings key and the environment. MCC writes nothing under `~/.qwen`. |
+| The Anthropic route carries one model, from `ANTHROPIC_MODEL` | `settings.modelProviders.anthropic` is an **array** of `{id, name, baseUrl, envKey, generationConfig}` records — the shape Qwen's own provider wizard writes — so MCC publishes the whole ladder with real context windows. |
+
+**Your `~/.qwen/settings.json` is never read for MCC's sake, never written and
+never backed up.** Qwen publishes `QWEN_CODE_SYSTEM_SETTINGS_PATH`, so MCC
+writes `~/.fcc/qwen-code-settings.json` and names it in the launched process's
+environment only.
+
+**The proxy token is not in that file.** `envKey` names an environment
+variable and Qwen reads `process.env[envKey]` at request time, so the file
+holds `"envKey": "MCC_QWEN_API_KEY"` and the launcher supplies the value.
+
+The trade, stated rather than hidden: Qwen declares `modelProviders` a
+**replace** key and the scope that variable selects is the highest-precedence
+one, so for the length of an `mcc-qwen` session MCC's provider list is the
+whole list — your own `modelProviders` entries are not merged in. Every other
+setting you have deep-merges as usual, because the document MCC writes contains
+nothing else.
+
+MCC's models appear under their full gateway ids, which is what Qwen sends on
+the wire. Qwen Code has **no model-list subcommand**; `/model` lists what MCC
+wrote:
+
+```bash
+mcc-qwen "say ok"                                # one prompt, non-interactively
+mcc-qwen -m anthropic/openrouter/gpt-5           # start on one model
+mcc-qwen -o json "say ok"                        # machine-readable
+```
+
+Maintenance subcommands — `mcp`, `extensions`, `auth`, `hooks`, `channel` —
+and `--help` / `--version` / `--list-extensions` reach the CLI untouched and do
+not need a running proxy. `review` is not passed through: it runs an agent.
+
+### Crush
+
+```bash
+mcc-crush
+```
+
+Crush is Charm's `crush` CLI: `npm install -g @charmland/crush`, or the Go
+binary from its GitHub releases. MCC never installs it. The version everything
+below was read against is **v0.92.0**, from its own published JSON schema
+(`crush schema` — an undocumented command, not in `--help`) and then measured
+on the wire, because the survey's picture of it was out of date:
+
+| What you might expect | What Crush v0.92.0 actually does |
+| --- | --- |
+| `crush.json` is deprecated; `crushrc` (a Bash script) is the format | Both load, and `crush schema` still publishes the full JSON schema. If a directory has both they merge, with `crushrc` winning. |
+| You configure a provider with `crush provider add …` | There is no `provider` command in `--help`. |
+| There is no config override, so MCC must merge into your file | `CRUSH_GLOBAL_CONFIG` replaces the global config **directory**, so MCC owns `~/.fcc/crush/` and writes one `crush.json` into it. No merge, no backup file. |
+| `discover_models` will find MCC's models | It asks `GET <base_url>/models` — not `/v1/models` — so it finds nothing against a root base URL, and the `/v1` base URL that would reach it breaks `POST /v1/messages`. MCC sets `discover_models: false`. |
+
+**Your `~/.config/crush` is never read for a provider, written or backed up.**
+Neither is your data directory: every session, log and statistic Crush has
+stays exactly where it was, and only `crush dirs`' first line changes.
+
+**The proxy token is not in that file.** Crush's schema gives
+`"$OPENAI_API_KEY"` as the example for `providers.<id>.api_key`, so MCC writes
+`"$MCC_CRUSH_API_KEY"` and the launcher sets that variable in the child process
+only. Measured: the outgoing request carried the variable's value as
+`x-api-key`.
+
+The trade, stated rather than hidden: the variable moves the whole global
+layer, so an `mcc-crush` session takes Crush's own defaults for the LSP
+servers, MCP servers, permissions and theme you set *globally*. Project-local
+configuration — `.crushrc`, `crushrc`, `.crush.json`, `crush.json` in or above
+the working directory — is a separate layer and still applies.
+
+**Crush is the harness where "unknown stays unknown" costs the most.** Ten of
+its per-model fields are *required*, so a capability nobody published cannot be
+omitted and becomes Crush's own value instead. Every one of those is listed in
+the file's `_mcc_defaulted` block, on the launcher's stderr and on the Coding
+agents card. Two of the numbers were measured rather than assumed: with
+`default_max_tokens: 0` Crush's agent request goes out with `max_tokens: 4096`
+while its title request goes out with `0`, so MCC writes 4096; `context_window:
+0` loads, runs and reaches no request body, so it is written as is.
+
+MCC appears inside Crush as the provider `mcc`, and its models as
+`mcc/anthropic/<provider>/<model>`:
+
+```bash
+mcc-crush run "say ok"                  # one prompt, non-interactively
+mcc-crush models                        # every model Crush can see
+mcc-crush dirs                          # which config directory this launch uses
+```
+
+Maintenance subcommands — `completion`, `help`, `login`, `logout`, `logs`,
+`projects`, `update-providers` — and `--help` / `--version` reach the CLI
+untouched and do not need a running proxy. `run`, `models`, `session` and
+`dirs` are not passed through: the first three need MCC's provider and the
+last should report the directory this launch actually uses.
+
 ### What MCC tells an agent about a model
 
 The catalogue MCC generates for an agent carries each model's **real**
 metadata, as MCC's resolution ladder resolved it, translated into that CLI's
 own schema:
 
-| What the ladder resolves | Where it lands in Codex | Where it lands in Pi | Where it lands in OpenCode / Kilo | Where it lands in Command Code | Where it lands in Kimi Code |
-| --- | --- | --- | --- | --- | --- |
-| context window | `context_window` / `max_context_window` | `contextWindow` | `limit.context` | `contextWindow` | `max_context_size` |
-| output ceiling | *(Codex has no field)* | `maxTokens` | `limit.output` | `maxOutput` | *(Kimi has no field)* |
-| vision support | `input_modalities` | `input` | `attachment` + `modalities.input` | *(no field)* | `capabilities: ["image_in"]` |
-| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* | `tool_call` | *(no field)* | *(Kimi has no field)* |
-| reasoning support | `supports_reasoning_summaries` | `reasoning` | `reasoning` | `reasoning` | `capabilities: ["thinking"]`, plus `"always_thinking"` when it cannot be turned off |
-| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* | `variants.<rung>`, clamped to OpenCode's own rungs | `reasoningEfforts[]`, clamped to `low\|medium\|high\|xhigh\|max` | *(Kimi has no field)* |
-| prices | *(Codex has no field)* | `cost.input` / `cost.output` | `cost.input` / `cost.output` | `cost.input` / `cost.output` | *(Kimi has no field)* |
-| pinned parameters | *(Codex has no field)* | *(Pi has no field)* | `options` | `options` | *(Kimi has no field)* |
+| What the ladder resolves | Where it lands in Codex | Where it lands in Pi | Where it lands in OpenCode / Kilo | Where it lands in Command Code | Where it lands in Kimi Code | Where it lands in Qwen Code | Where it lands in Crush |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| context window | `context_window` / `max_context_window` | `contextWindow` | `limit.context` | `contextWindow` | `max_context_size` | `contextWindowSize` | `context_window` |
+| output ceiling | *(Codex has no field)* | `maxTokens` | `limit.output` | `maxOutput` | *(Kimi has no field)* | *(Qwen has no field)* | `default_max_tokens` |
+| vision support | `input_modalities` | `input` | `attachment` + `modalities.input` | *(no field)* | `capabilities: ["image_in"]` | `modalities.image` | `supports_attachments` |
+| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* | `tool_call` | *(no field)* | *(Kimi has no field)* | *(Qwen has no field)* | *(Crush has no field)* |
+| reasoning support | `supports_reasoning_summaries` | `reasoning` | `reasoning` | `reasoning` | `capabilities: ["thinking"]`, plus `"always_thinking"` when it cannot be turned off | `reasoning: false` when known absent | `can_reason` |
+| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* | `variants.<rung>`, clamped to OpenCode's own rungs | `reasoningEfforts[]`, clamped to `low\|medium\|high\|xhigh\|max` | *(Kimi has no field)* | `reasoning.effort`, one starting rung clamped to `low\|medium\|high` | `reasoning_levels[]` + `default_reasoning_effort`, clamped to `low\|medium\|high` |
+| prices | *(Codex has no field)* | `cost.input` / `cost.output` | `cost.input` / `cost.output` | `cost.input` / `cost.output` | *(Kimi has no field)* | *(Qwen has no field)* | `cost_per_1m_in` / `cost_per_1m_out` |
+| pinned parameters | *(Codex has no field)* | *(Pi has no field)* | `options` | `options` | *(Kimi has no field)* | *(Qwen has no field)* | `options` |
 
 A model with a 32k window is advertised as 32k. A model that publishes only
 `low` and `high` gets exactly those two rungs in Codex's picker — `xhigh`

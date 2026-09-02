@@ -674,6 +674,7 @@ configure_and_verify_my_claude_code() {
     # as these do.
     for command_name in mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi \
         mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi \
+        mcc-qwen mcc-crush \
         mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-help mcc-rtk \
         mcc-desktop my-claude-code; do
         [ -x "$tool_bin/$command_name" ] || fail "My Claude Code installation did not create $tool_bin/$command_name."
@@ -728,6 +729,8 @@ else
     printf '  mcc-kilo                Launch Kilo CLI through the proxy\n'
     printf '  mcc-commandcode         Launch Command Code through the proxy\n'
     printf '  mcc-kimi                Launch Kimi Code through the proxy\n'
+    printf '  mcc-qwen                Launch Qwen Code through the proxy\n'
+    printf '  mcc-crush               Launch Crush through the proxy\n'
     printf '  mcc-desktop             Open the system tray app (desktop)\n'
     printf '\nManage and inspect:\n'
     printf '  mcc-init                Create or repair ~/.fcc/.env\n'

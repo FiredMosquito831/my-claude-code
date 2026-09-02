@@ -1844,7 +1844,7 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
     agents = rendered["codingAgents"]
 
     assert agents["present"] is True
-    assert agents["cardCount"] == 6
+    assert agents["cardCount"] == 8
     assert [card["id"] for card in agents["cards"]] == [
         "claude",
         "codex",
@@ -1852,6 +1852,8 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "opencode",
         "commandcode_cli",
         "kimi_code",
+        "qwen_code",
+        "crush",
     ]
     assert [card["title"] for card in agents["cards"]] == [
         "Claude Code",
@@ -1860,6 +1862,8 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "OpenCode",
         "Command Code",
         "Kimi Code",
+        "Qwen Code",
+        "Crush",
     ]
     assert [card["command"] for card in agents["cards"]] == [
         "mcc-claude",
@@ -1868,6 +1872,8 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "mcc-opencode",
         "mcc-commandcode",
         "mcc-kimi",
+        "mcc-qwen",
+        "mcc-crush",
     ]
 
 
@@ -2023,6 +2029,52 @@ def test_the_coding_agents_page_separates_a_harness_from_a_provider(
     assert "A coding agent is not a provider." in note
     assert "downstream" in note
     assert "upstream" in note
+
+
+def test_a_variable_owning_harness_names_the_document_mcc_owns(
+    rendered: dict,
+) -> None:
+    """Qwen Code and Crush both take a variable, and neither edits a user file.
+
+    Qwen's variable names a settings *file*; Crush's names a config
+    *directory*. Both cards have to say the same thing OpenCode's does -- MCC
+    owns a document of its own -- because that is the guarantee, not the
+    mechanism.
+    """
+
+    cards = {card["id"]: card for card in rendered["codingAgents"]["cards"]}
+
+    qwen = cards["qwen_code"]
+    assert "QWEN_CODE_SYSTEM_SETTINGS_PATH" in qwen["meta"]
+    assert "your own config file is never edited" in qwen["meta"]
+    assert "qwen-code-settings.json" in qwen["meta"]
+    assert 'mcc-qwen "<prompt>"' in [line["command"] for line in qwen["commandLines"]]
+
+    crush = cards["crush"]
+    assert "CRUSH_GLOBAL_CONFIG" in crush["meta"]
+    assert "your own config file is never edited" in crush["meta"]
+    assert 'mcc-crush run "<prompt>"' in [
+        line["command"] for line in crush["commandLines"]
+    ]
+
+
+def test_a_harness_whose_binary_is_missing_still_renders(rendered: dict) -> None:
+    """Crush is not installed in the fixture, and its card must survive that.
+
+    A not-installed harness is the common case for a new one, so the card has
+    to render its commands and print that CLI's own install line rather than
+    disappearing or throwing.
+    """
+
+    crush = next(
+        card for card in rendered["codingAgents"]["cards"] if card["id"] == "crush"
+    )
+
+    assert crush["installed"] is False
+    assert crush["command"] == "mcc-crush"
+    assert crush["installHint"] is not None
+    assert "@charmland/crush" in crush["installHint"]
+    assert len(crush["commandLines"]) == 3
 
 
 def test_rtk_checkboxes_render_from_harness_list(rendered: dict) -> None:

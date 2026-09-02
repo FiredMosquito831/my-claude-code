@@ -106,6 +106,35 @@ COMMANDCODE_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
 KIMI_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
 KIMI_API_KEY_SENTINEL = "mcc-proxy-token-placeholder"
 
+#: Qwen Code names an *environment variable* in its settings document --
+#: ``modelProviders.anthropic[].envKey`` -- and reads ``process.env[envKey]``
+#: at request time without ever storing the value. ``mcc-qwen`` sets this
+#: variable in the launched process only, so the proxy token never lands on
+#: disk even though MCC owns the settings file it points Qwen at.
+QWEN_API_KEY_ENV = "MCC_QWEN_API_KEY"
+
+#: Crush's own documented secret reference is the ``$VAR`` form -- its schema
+#: gives ``"$OPENAI_API_KEY"`` as the example for ``providers.<id>.api_key``.
+#: Same guarantee as Qwen's: the value exists only in the child process.
+CRUSH_API_KEY_ENV = "MCC_CRUSH_API_KEY"
+
+#: Base-URL placeholders for the two harnesses whose documents MCC owns whole.
+#: Neither CLI substitutes anything into its base-URL field, and neither
+#: serialiser knows which port this install listens on, so the sentinel is
+#: written and ``config/harness_base_url.with_root_base_url`` resolves it on
+#: the way to disk. They carry ``/v1`` on purpose: a substitution that somehow
+#: did not happen leaves a URL that fails loudly on connect rather than one
+#: the CLI quietly treats as a real host.
+QWEN_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
+CRUSH_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
+
+#: ``$version`` in a Qwen settings document. Qwen migrates and *rewrites* any
+#: settings file older than its own ``SETTINGS_VERSION``, and MCC's catalogue
+#: is a file it would happily rewrite. Declaring the version keeps the
+#: generated document exactly as generated -- observed: without it, Qwen Code
+#: 0.15.11 rewrote MCC's file on first read.
+QWEN_SETTINGS_VERSION = 4
+
 
 PROTOCOL_LABELS: dict[HarnessProtocol, str] = {
     HarnessProtocol.ANTHROPIC_MESSAGES: "Anthropic Messages (POST /v1/messages)",
@@ -252,6 +281,13 @@ class HarnessCatalogue:
     #: edit the document the user wrote. Mutually exclusive with
     #: ``config_env_var``: a CLI that offers a variable never needs a merge.
     merge: HarnessConfigMerge | None = None
+    #: The placeholder the serialiser writes wherever the CLI wants MCC's base
+    #: URL, for a harness whose config format substitutes nothing of its own.
+    #: ``config/harness_base_url.with_root_base_url`` replaces it with the
+    #: proxy root -- no ``/v1`` -- on the way to disk. ``None`` for a harness
+    #: that names an environment variable instead, as the OpenCode family
+    #: does, or that has no base URL in its document at all.
+    base_url_sentinel: str | None = None
 
     @property
     def writes_file(self) -> bool:
@@ -754,6 +790,152 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             "--config-file flag so ~/.kimi/config.toml is never edited."
         ),
         tagline="Moonshot's Kimi Code CLI, served through this proxy.",
+    ),
+    HarnessSpec(
+        # ``qwen_code``, not ``qwen``: ``qwencloud`` and ``qwencloud_coding``
+        # in ``config/provider_catalog.py`` are upstream Alibaba gateways MCC
+        # sends requests **to**. This is the ``qwen`` CLI MCC serves requests
+        # **for**. See the module docstring.
+        id="qwen_code",
+        display_name="Qwen Code",
+        binary="qwen",
+        protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        install_hint=("Install Qwen Code with: npm install -g @qwen-code/qwen-code"),
+        commands=(
+            HarnessCommand(
+                suffix="qwen",
+                target="my_claude_code.cli.launchers.qwen:launch",
+                legacy_alias=False,
+                help_text="Launch Qwen Code through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='"<prompt>"',
+                        help_text=(
+                            "Run one prompt non-interactively. Qwen Code's "
+                            "positional query is one-shot by default; add "
+                            "-i to stay interactive afterwards"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="-m anthropic/<provider>/<model>",
+                        help_text=(
+                            "Start on one specific MCC-routed model. Qwen "
+                            "Code has no model-list subcommand; /model lists "
+                            "everything MCC wrote into its settings"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments='-o json "<prompt>"',
+                        help_text=(
+                            "Same run, machine-readable (stream-json is also accepted)"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="mcp",
+                        help_text=(
+                            "Passed straight to Qwen Code: MCC injects no "
+                            "provider for a non-session command"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="qwen",
+            filename="qwen-code-settings.json",
+            config_env_var="QWEN_CODE_SYSTEM_SETTINGS_PATH",
+            base_url_sentinel=QWEN_BASE_URL_SENTINEL,
+        ),
+        passthrough_commands=frozenset(
+            {"mcp", "extensions", "auth", "hooks", "hook", "channel"}
+        ),
+        passthrough_flags=frozenset(
+            {"--help", "-h", "--version", "-v", "--list-extensions", "-l"}
+        ),
+        summary=(
+            "Qwen Code, pointed at an MCC-owned settings document through its "
+            "own QWEN_CODE_SYSTEM_SETTINGS_PATH variable, with the auth type "
+            "selected by --auth-type so ~/.qwen/settings.json is never read "
+            "for it and never written."
+        ),
+        tagline="Alibaba's Qwen Code CLI, served through this proxy.",
+    ),
+    HarnessSpec(
+        # ``crush`` collides with nothing: MCC has no upstream provider of
+        # that name. The id is still spelled out here rather than derived, so
+        # that a future ``crush`` gateway cannot silently take it over.
+        id="crush",
+        display_name="Crush",
+        binary="crush",
+        protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        install_hint=(
+            "Install Crush with: npm install -g @charmland/crush "
+            "(or: brew install charmbracelet/tap/crush)"
+        ),
+        commands=(
+            HarnessCommand(
+                suffix="crush",
+                target="my_claude_code.cli.launchers.crush:launch",
+                legacy_alias=False,
+                help_text="Launch Crush through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='run "<prompt>"',
+                        help_text=(
+                            "Run one prompt non-interactively and exit "
+                            "(--quiet hides the spinner)"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="models",
+                        help_text=(
+                            "List every model Crush can see; MCC's appear as "
+                            "mcc/anthropic/<provider>/<model>"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="dirs",
+                        help_text=(
+                            "Show which config directory this launch uses -- "
+                            "MCC's own, not ~/.config/crush"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="update-providers",
+                        help_text=(
+                            "Passed straight to Crush: MCC injects no "
+                            "provider for a non-session command"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="crush",
+            # A directory of MCC's own, because CRUSH_GLOBAL_CONFIG names a
+            # *directory* and Crush looks for ``crush.json`` inside it.
+            filename="crush/crush.json",
+            config_env_var="CRUSH_GLOBAL_CONFIG",
+            base_url_sentinel=CRUSH_BASE_URL_SENTINEL,
+        ),
+        passthrough_commands=frozenset(
+            {
+                "completion",
+                "help",
+                "login",
+                "logout",
+                "logs",
+                "projects",
+                "update-providers",
+            }
+        ),
+        passthrough_flags=frozenset({"--help", "-h", "--version", "-v"}),
+        summary=(
+            "Crush, pointed at an MCC-owned crush.json through its own "
+            "CRUSH_GLOBAL_CONFIG variable, so ~/.config/crush is never read "
+            "for a provider and never written."
+        ),
+        tagline="Charm's Crush CLI, served through this proxy.",
     ),
 )
 

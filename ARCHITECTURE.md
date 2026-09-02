@@ -219,7 +219,9 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
   `my_claude_code.cli.launchers.opencode:launch` / `:launch_v2` / `:launch_kilo`.
 - `mcc-commandcode` calls `my_claude_code.cli.launchers.commandcode:launch`.
 - `mcc-kimi` calls `my_claude_code.cli.launchers.kimi:launch`.
-  These five have no `fcc-` alias: no installed copy of MCC ever published
+- `mcc-qwen` calls `my_claude_code.cli.launchers.qwen:launch`.
+- `mcc-crush` calls `my_claude_code.cli.launchers.crush:launch`.
+  These seven have no `fcc-` alias: no installed copy of MCC ever published
   one, so inventing it would ship a command that never had users.
 - `mcc-desktop` (legacy alias `fcc-desktop`) calls `my_claude_code.cli.desktop_entrypoint:main`;
   [cli/desktop.py](src/my_claude_code/cli/desktop.py) is the controller that owns the `mcc-server`
@@ -1392,6 +1394,54 @@ same atomic write-if-changed contract as `config/atomic_json.py` over a narrow
 deterministic TOML emitter — `tomllib` reads TOML and does not write it, and
 what MCC emits is far narrower than TOML. `HarnessCatalogue.document_format`
 selects between the two writers in the launcher and in the fan-out publisher.
+
+[cli/launchers/qwen.py](src/my_claude_code/cli/launchers/qwen.py) and
+[cli/launchers/crush.py](src/my_claude_code/cli/launchers/crush.py) own
+`mcc-qwen` and `mcc-crush`. Both CLIs publish a variable naming a whole
+document, so both get an MCC-owned file and neither user config is read,
+written or backed up: Qwen Code 0.15.11 reads
+`QWEN_CODE_SYSTEM_SETTINGS_PATH` (a settings *file*) and Crush v0.92.0
+reads `CRUSH_GLOBAL_CONFIG` (a config *directory*, which is why the
+registry spells that catalogue's filename `crush/crush.json` — the
+directory has to be MCC's alone). Crush is the one harness whose
+`config_env_var` therefore carries the catalogue's *parent* rather than
+the catalogue path.
+
+Neither CLI substitutes anything of its own into a base-URL field, and a
+serialiser is a pure function of the model records that cannot know which
+port an install listens on, so both write a sentinel that
+[config/harness_base_url.py](src/my_claude_code/config/harness_base_url.py)
+resolves on the way to disk — in the launcher and in the fan-out
+publisher, through the same function. `HarnessCatalogue.base_url_sentinel`
+is what selects that step. **The value written is the proxy root, with no
+`/v1`.** Both CLIs reach MCC through an official Anthropic SDK
+(`@anthropic-ai/sdk` for Qwen, `anthropic-sdk-go` for Crush) and both
+append `/v1/messages` themselves; appending `/v1` here — as Command
+Code's `@ai-sdk/anthropic` requires — would produce `/v1/v1/messages`.
+Verified on the wire for both.
+
+Qwen Code needs **no** settings write for its auth type, which the
+original survey assumed it would. `loadCliConfig` resolves
+`argv.authType || settings.security.auth.selectedType ||
+getAuthTypeFromEnv()`, so the documented environment route is the
+*lowest*-precedence source and a saved `selectedType` would outrank it.
+`--auth-type anthropic` is a real flag and outranks both, so the launcher
+passes it and writes nothing under `~/.qwen`. Because the host is not
+`*.anthropic.com`, Qwen's `AnthropicContentGenerator` sets
+`useProxyIdentity` and sends `Authorization: Bearer`; Crush sends
+`x-api-key`. `api/dependencies.py` already accepts both.
+
+**Crush is the harness where "unknown stays unknown" costs the most.**
+Its published schema (`crush schema`) marks ten per-model fields
+required, so an unresolved capability cannot be omitted and becomes
+Crush's own value, recorded per model under `_mcc_defaulted`. Two of
+those values were measured rather than assumed: `default_max_tokens: 0`
+leaks `max_tokens: 0` into Crush's title request while its agent request
+falls back to 4096, so 4096 is what MCC writes; `context_window: 0` loads
+and runs and reaches no request body, so it is written as is. The
+generated provider also sets `discover_models: false`, because Crush's
+discovery asks `GET <base_url>/models` — a route MCC does not serve, and
+one the `/v1` base URL that would reach it cannot be combined with.
 
 **Kimi is the one harness whose generated file carries the proxy token, and the
 reason is a property of its schema.** `LLMProvider.api_key` is a plain

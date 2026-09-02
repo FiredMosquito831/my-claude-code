@@ -871,6 +871,7 @@ function Configure-AndConfirmFreeClaudeCode {
     $mccCommands = @(
         "mcc-server", "mcc-claude", "mcc-claude-old", "mcc-codex", "mcc-pi",
         "mcc-opencode", "mcc-opencode2", "mcc-kilo", "mcc-commandcode", "mcc-kimi",
+        "mcc-qwen", "mcc-crush",
         "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log", "mcc-help",
         "mcc-rtk", "mcc-desktop", "my-claude-code"
     )
@@ -913,6 +914,8 @@ function Write-MccCommandReference {
     Write-Host "  mcc-kilo                Launch Kilo CLI through the proxy"
     Write-Host "  mcc-commandcode         Launch Command Code through the proxy"
     Write-Host "  mcc-kimi                Launch Kimi Code through the proxy"
+    Write-Host "  mcc-qwen                Launch Qwen Code through the proxy"
+    Write-Host "  mcc-crush               Launch Crush through the proxy"
     Write-Host "  mcc-desktop             Open the system tray app (desktop)"
     Write-Host ""
     Write-Host "Manage and inspect:"
@@ -954,6 +957,7 @@ function Get-LauncherCommands {
         "fcc-anthropic-oauth-login", "fcc-rtk", "fcc-help", "fcc-desktop",
         "mcc-server", "mcc-claude", "mcc-claude-old", "mcc-codex", "mcc-pi",
         "mcc-opencode", "mcc-opencode2", "mcc-kilo", "mcc-commandcode", "mcc-kimi",
+        "mcc-qwen", "mcc-crush",
         "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
         "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-desktop",
         "my-claude-code"

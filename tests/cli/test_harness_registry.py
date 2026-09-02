@@ -119,6 +119,8 @@ def test_every_catalogue_declares_how_it_reaches_its_agent() -> None:
         "kilo": "file",
         "commandcode_cli": "merge",
         "kimi_code": "file",
+        "qwen_code": "file",
+        "crush": "file",
     }
     assert [
         spec.id
@@ -130,6 +132,8 @@ def test_every_catalogue_declares_how_it_reaches_its_agent() -> None:
         "opencode2",
         "kilo",
         "kimi_code",
+        "qwen_code",
+        "crush",
     ]
 
 
@@ -319,6 +323,8 @@ def test_a_config_owning_harness_names_the_variable_it_is_pointed_with() -> None
         "kilo": ("KILO_CONFIG", None),
         "commandcode_cli": (None, None),
         "kimi_code": (None, "--config-file"),
+        "qwen_code": ("QWEN_CODE_SYSTEM_SETTINGS_PATH", None),
+        "crush": ("CRUSH_GLOBAL_CONFIG", None),
     }
 
     for spec in catalogue_specs():

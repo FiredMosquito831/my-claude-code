@@ -46,6 +46,7 @@ from my_claude_code.application.catalogue_model import (
 from my_claude_code.application.catalogues import serialise
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.atomic_json import write_json_document_atomically_if_changed
+from my_claude_code.config.harness_base_url import with_root_base_url
 from my_claude_code.config.harness_config_merge import (
     merge_config_path,
     merge_owned_block,
@@ -165,6 +166,14 @@ class HarnessCatalogueFanoutPublisher:
                     ),
                 )
             else:
+                if catalogue.base_url_sentinel is not None:
+                    # Qwen Code and Crush substitute nothing of their own into
+                    # a base-URL field, and the document is MCC's own file
+                    # rather than one key inside the user's, so the real proxy
+                    # root is written wherever the sentinel sits.
+                    document = with_root_base_url(
+                        document, catalogue.base_url_sentinel, proxy_root_url
+                    )
                 write_json_document_atomically_if_changed(path, document)
         except Exception as exc:
             logger.warning(

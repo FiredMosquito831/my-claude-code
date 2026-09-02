@@ -20,12 +20,18 @@ from my_claude_code.application.catalogues.commandcode import (
 from my_claude_code.application.catalogues.commandcode import (
     build_commandcode_catalogue,
 )
+from my_claude_code.application.catalogues.crush import (
+    PROVIDER_ID as CRUSH_PROVIDER_ID,
+)
+from my_claude_code.application.catalogues.crush import build_crush_catalogue
 from my_claude_code.application.catalogues.kimi import build_kimi_catalogue
 from my_claude_code.application.catalogues.opencode import (
     PROVIDER_ID as OPENCODE_PROVIDER_ID,
 )
 from my_claude_code.application.catalogues.opencode import build_opencode_catalogue
 from my_claude_code.application.catalogues.pi import build_pi_catalogue
+from my_claude_code.application.catalogues.qwen import AUTH_TYPE as QWEN_AUTH_TYPE
+from my_claude_code.application.catalogues.qwen import build_qwen_catalogue
 
 type CatalogueSerialiser = Callable[
     [Iterable[CatalogueModel]], tuple[dict[str, Any], DefaultedFields]
@@ -34,24 +40,29 @@ type CatalogueSerialiser = Callable[
 SERIALISERS: dict[str, CatalogueSerialiser] = {
     "codex": build_codex_catalogue,
     "commandcode": build_commandcode_catalogue,
+    "crush": build_crush_catalogue,
     "kimi": build_kimi_catalogue,
     "opencode": build_opencode_catalogue,
     "pi": build_pi_catalogue,
+    "qwen": build_qwen_catalogue,
 }
 
 #: Where each format keeps its per-model entries. Two shapes exist and both
 #: are the CLI's own: Codex and Pi take a list under ``models``, OpenCode a
 #: mapping nested under the provider key it was told to write. Kimi Code is a
 #: third: a mapping at the document root, keyed by the whole model id, because
-#: that is what ``Config.models`` is. Stating the path once is what lets a
-#: launcher check "did I get any models?" and the contract tests inspect every
-#: format without knowing any of them by name.
+#: that is what ``Config.models`` is. Crush and Qwen Code are lists again, one
+#: nested under a provider key and one under an auth-type key. Stating the
+#: path once is what lets a launcher check "did I get any models?" and the
+#: contract tests inspect every format without knowing any of them by name.
 MODEL_ENTRY_PATHS: dict[str, tuple[str, ...]] = {
     "codex": ("models",),
     "commandcode": ("provider", COMMANDCODE_PROVIDER_ID, "models"),
+    "crush": ("providers", CRUSH_PROVIDER_ID, "models"),
     "kimi": ("models",),
     "opencode": ("provider", OPENCODE_PROVIDER_ID, "models"),
     "pi": ("models",),
+    "qwen": ("modelProviders", QWEN_AUTH_TYPE),
 }
 
 

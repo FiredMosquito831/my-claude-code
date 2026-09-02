@@ -230,6 +230,8 @@ def test_the_default_path_resolves_under_the_fcc_config_directory(
         ("opencode2-config.json",),
         ("kilo-config.json",),
         ("kimi-code-config.toml",),
+        ("qwen-code-settings.json",),
+        ("crush/crush.json",),
     ]
 
 
