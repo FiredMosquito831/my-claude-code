@@ -437,6 +437,14 @@ With **Model discovery** on, the app populates its picker from MCC's `/v1/models
 > with nothing today; the id is still spelled out in the registry so a future
 > `crush` gateway cannot quietly take it over.
 >
+> **Cline is a pair too.** The provider `cline` on the Providers page is
+> the Cline *gateway* MCC sends requests to. `mcc-cline` launches the Cline
+> *CLI*, which sends its requests to MCC, and needs that provider switched
+> on for nothing. Its harness id is `cline_cli`, deliberately not `cline`.
+> `goose`, `aider` and `droid` collide with nothing today, and each id is
+> spelled out in the registry so a future gateway of that name cannot
+> quietly take it over.
+>
 > **Kimi Code is the pair most likely to be misread**, because the two halves
 > do not even share a spelling. The providers `kimi` and `kimi_coding` are
 > Moonshot endpoints MCC sends requests *to*, paid for with a Moonshot key.
@@ -769,22 +777,208 @@ untouched and do not need a running proxy. `run`, `models`, `session` and
 `dirs` are not passed through: the first three need MCC's provider and the
 last should report the directory this launch actually uses.
 
+### Cline
+
+```bash
+mcc-cline
+```
+
+Cline is the `cline` CLI: `npm install -g cline`. MCC never installs it.
+Everything below was read against **3.0.61** and then measured on the wire,
+because the survey's picture of it was wrong in two ways:
+
+| What you might expect | What Cline 3.0.61 actually does |
+| --- | --- |
+| Configure it by running `cline auth --provider openai-native …` against `~/.cline` | `cline --config <dir>` moves the whole configuration directory, and Cline derives its data directory from the settings file inside it. MCC owns `~/.fcc/cline/` and passes the flag. |
+| `openai-native` is the OpenAI-compatible provider | It is OpenAI's own hosted entry. `openai` is an alias that normalises to `openai-compatible`, which is the one described as "OpenAI-compatible chat completions endpoint", takes an arbitrary `baseUrl`, and has no `modelsSourceUrl` — so it makes no discovery call to a route MCC does not serve under that id. |
+| Writing the provider block is enough | It is not. With the block written but not selected, Cline fell back to its own hosted `cline` provider and failed with "Unauthorized … re-authenticate your Cline account". MCC passes `-P openai-compatible` on every session launch. |
+| Leave `apiKey` out and export `OPENAI_API_KEY` | Cline does have that fallback, and on 3.0.61 it neither authenticated nor terminated — the run hung. With the key in the document the same run answered in 885 ms. |
+
+**Your `~/.cline` is never read for a provider, written or backed up.** The
+base URL is `<root>/v1`: `@ai-sdk/openai-compatible` appends `chat/completions`
+and nothing else.
+
+**This is one of two generated files that carries the proxy token literally.**
+It is MCC's own file under `~/.fcc/cline/`, mode `0600`, beside the `.env` that
+already holds the same value — the same treatment, and the same justification,
+as Kimi Code's `config.toml`.
+
+**Cline's schema carries limits for one model at a time.** There is no
+per-model array in `providers.json`: the provider entry holds `contextWindow`
+and `maxTokens` for the model it names. So MCC records every routable model's
+resolved limits in an inert `_mcc_models` block and promotes the one named by
+`-m` / `--model` into the provider block before the file reaches disk. Verified:
+with that in place, Cline's own run result echoed back
+`info: {contextWindow: 131072, …}` — the ladder's figure for that ref.
+
+```bash
+mcc-cline "say ok"                       # headless; -p is --plan, not --print
+mcc-cline --json "say ok"                # the same run as JSON events
+mcc-cline -m anthropic/<provider>/<model>
+mcc-cline -i                             # Cline's interactive TUI
+mcc-cline config                         # which configuration this launch uses
+```
+
+Maintenance subcommands — `doctor`, `plugin`, `skill`, `mcp`, `schedule`,
+`hook`, `connect` — and `--help` / `--version` / `--update` reach the CLI
+untouched and do not need a running proxy.
+
+### Goose
+
+```bash
+mcc-goose
+```
+
+Goose is Block's `goose` binary, from its GitHub releases. MCC never installs
+it. Read against **1.48.0**.
+
+**Goose is the one agent MCC configures without writing a file anywhere.** That
+is a decision, not a gap. Goose 1.48.0 does have a declared-model mechanism —
+a JSON file under `<config dir>/custom_providers/` whose `models[]` carry
+`context_limit` and per-token costs — but the config directory is Goose's own
+(`%APPDATA%\Block\goose\config` on Windows, `~/.config/goose` elsewhere), it
+holds the user's own settings, and Goose publishes no variable or flag moving
+the config file alone. Writing there would put an MCC-owned document inside a
+directory MCC does not own, which is the one thing every launcher here exists
+to avoid.
+
+Everything Goose needs comes from the environment, set in the launched process
+only:
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `OPENAI_HOST` | the proxy root | Goose joins host and path with RFC 3986 rules |
+| `OPENAI_BASE_PATH` | `v1/chat/completions` | Goose's own default, no leading slash — the pair resolves to `<root>/v1/chat/completions` |
+| `OPENAI_API_KEY` | your proxy token | sent as `Authorization: Bearer` |
+| `GOOSE_PROVIDER` | `openai` | selects the provider with no `config.yaml` |
+| `GOOSE_MODEL` | the model this session runs on | your own `--model` outranks it |
+| `GOOSE_CONTEXT_LIMIT` | that model's resolved context window | the one place Goose accepts a resolved capability |
+| `GOOSE_DISABLE_KEYRING` | `1` | so a locked or absent keyring never prompts for a credential this session does not use |
+
+Measured with an empty config directory: Goose ran straight through and its own
+`config.yaml` stayed "missing (can create)". Model discovery still works —
+Goose's OpenAI provider fetches `<host>/v1/models` for its picker, which is a
+route MCC serves, so `goose configure` lists exactly what `GET /v1/models`
+publishes.
+
+```bash
+mcc-goose run -t "say ok" --no-session   # one prompt, nothing left behind
+mcc-goose session                        # interactive
+mcc-goose run --model anthropic/<provider>/<model> -t "say ok"
+mcc-goose info -v                        # provider, model and context limit
+mcc-goose configure                      # Goose's own wizard, listing MCC models
+```
+
+Maintenance subcommands — `update`, `completion`, `help`, `recipe`, `plugin`,
+`local-models` — and `--help` / `--version` reach the CLI untouched.
+
+### Aider
+
+```bash
+mcc-aider
+```
+
+Aider is the `aider` command from the `aider-chat` PyPI package:
+`uv tool install aider-chat`. MCC never installs it. Read against **0.86.2**.
+
+**Aider reads two model documents, and looks for each of them in the working
+directory, the git root *and* your home directory** — so simply writing them
+would mean writing into your `~`. Both have a flag, so MCC owns both files:
+
+| Flag | MCC's file | What it carries |
+| --- | --- | --- |
+| `--model-metadata-file` | `~/.fcc/aider-model-metadata.json` | LiteLLM's `model_cost` schema: `max_input_tokens`, `max_output_tokens`, `max_tokens`, `input_cost_per_token`, `output_cost_per_token`, `supports_vision`, `litellm_provider`, `mode` |
+| `--model-settings-file` | `~/.fcc/aider-model-settings.yml` | a list of `ModelSettings` records: `accepts_settings` (`reasoning_effort`, `thinking_tokens`) and `use_temperature` |
+
+The split is not arbitrary. The first says *what the model is*; the second says
+*what it accepts*, which is what decides whether `--reasoning-effort` is
+honoured at all. The second is loaded with `ModelSettings(**entry)`, so an
+unrecognised key raises — which is why the `_mcc_defaulted` record lives only
+in the first, a plain `dict.update` that tolerates it. The settings file is
+written as JSON, which `yaml.safe_load` parses identically, so there is one
+atomic writer rather than two encoders to keep in step.
+
+**The metadata file is merged over LiteLLM's own registry, not instead of it**,
+and an exact hit short-circuits LiteLLM's price-table fetch from GitHub — so a
+generated entry also stops Aider phoning out for a model it would never find
+there.
+
+**The proxy token is not on disk.** `OPENAI_BASE_URL` (LiteLLM's preferred
+name) and `OPENAI_API_BASE` (its fallback) are both set to `<root>/v1`, and
+`OPENAI_API_KEY` carries the token, all in the launched process only. The `/v1`
+matters: LiteLLM's `get_complete_url` appends `chat/completions` and inserts no
+version segment of its own.
+
+Models appear as `openai/anthropic/<provider>/<model>`. The `openai/` prefix
+selects LiteLLM's OpenAI handler and is stripped before the request body; the
+metadata file is keyed by the whole prefixed string, because that is the exact
+key `Model.get_model_info` looks up.
+
+```bash
+mcc-aider --message "say ok"             # one prompt, non-interactively
+mcc-aider --model openai/anthropic/<provider>/<model>
+mcc-aider --list-models openai/anthropic # every MCC-routed model Aider can see
+mcc-aider --exit --verbose               # resolve everything, send nothing
+```
+
+### Droid
+
+```bash
+mcc-droid
+```
+
+Droid is Factory's `droid` binary, from `app.factory.ai/cli`. MCC never
+installs it. Read against **0.210.0**.
+
+**Droid does not use the chat-completions door, and that is the finding.** The
+survey grouped it with the OpenAI-only CLIs and expected a
+`generic-chat-completion-api` custom model. Measured, `provider: "anthropic"`
+accepts an arbitrary `baseUrl`, instantiates the bundled `@anthropic-ai/sdk`
+against it and reaches `POST <baseUrl>/v1/messages` — MCC's own native
+protocol, with no translation between the agent and the router. The request log
+row read `endpoint=/v1/messages protocol=anthropic status=success`. So that is
+what MCC declares, and `baseUrl` is the proxy **root** with no `/v1`, because
+the Anthropic SDK appends `/v1/messages` itself.
+
+| What you might expect | What Droid 0.210.0 actually does |
+| --- | --- |
+| MCC must merge into `~/.factory/config.json` | `--settings <path>` is a runtime settings overlay, merged into the same hierarchy for that process only. MCC owns `~/.fcc/droid-settings.json`. (The persistent file is `settings.json` in current versions; `config.json` is a legacy snake_case fallback. MCC touches neither.) |
+| A custom model needs a Factory login | It does not. With a fresh home and no login, `droid exec --model custom:…` logged "Invalid auth", classified the model `isByok`, made no `whoami` call and went straight to the custom base URL. |
+| The `apiKey` must be a literal | Droid documents `${VAR}` and expands it from the process environment. MCC writes `${MCC_DROID_API_KEY}` and the launcher supplies the value. |
+
+`authMode: "bearer"` switches the Anthropic SDK from its default `x-api-key` to
+`Authorization: Bearer`; MCC accepts both, and Bearer is the header the rest of
+this document names.
+
+Models appear as `custom:anthropic/<provider>/<model>` — the `custom:` prefix
+is part of the id you type, and not part of the `model` field in the document.
+
+```bash
+mcc-droid exec "say ok"                  # one prompt, non-interactively
+mcc-droid exec --model custom:anthropic/<provider>/<model> "say ok"
+mcc-droid exec --output-format json "say ok"
+mcc-droid doctor                         # config, connectivity and auth state
+```
+
+Maintenance subcommands — `update`, `mcp`, `plugin`, `computer`, `doctor`,
+`help`, `search` — and `--help` / `--version` reach the CLI untouched.
+
 ### What MCC tells an agent about a model
 
 The catalogue MCC generates for an agent carries each model's **real**
 metadata, as MCC's resolution ladder resolved it, translated into that CLI's
 own schema:
 
-| What the ladder resolves | Where it lands in Codex | Where it lands in Pi | Where it lands in OpenCode / Kilo | Where it lands in Command Code | Where it lands in Kimi Code | Where it lands in Qwen Code | Where it lands in Crush |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| context window | `context_window` / `max_context_window` | `contextWindow` | `limit.context` | `contextWindow` | `max_context_size` | `contextWindowSize` | `context_window` |
-| output ceiling | *(Codex has no field)* | `maxTokens` | `limit.output` | `maxOutput` | *(Kimi has no field)* | *(Qwen has no field)* | `default_max_tokens` |
-| vision support | `input_modalities` | `input` | `attachment` + `modalities.input` | *(no field)* | `capabilities: ["image_in"]` | `modalities.image` | `supports_attachments` |
-| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* | `tool_call` | *(no field)* | *(Kimi has no field)* | *(Qwen has no field)* | *(Crush has no field)* |
-| reasoning support | `supports_reasoning_summaries` | `reasoning` | `reasoning` | `reasoning` | `capabilities: ["thinking"]`, plus `"always_thinking"` when it cannot be turned off | `reasoning: false` when known absent | `can_reason` |
-| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* | `variants.<rung>`, clamped to OpenCode's own rungs | `reasoningEfforts[]`, clamped to `low\|medium\|high\|xhigh\|max` | *(Kimi has no field)* | `reasoning.effort`, one starting rung clamped to `low\|medium\|high` | `reasoning_levels[]` + `default_reasoning_effort`, clamped to `low\|medium\|high` |
-| prices | *(Codex has no field)* | `cost.input` / `cost.output` | `cost.input` / `cost.output` | `cost.input` / `cost.output` | *(Kimi has no field)* | *(Qwen has no field)* | `cost_per_1m_in` / `cost_per_1m_out` |
-| pinned parameters | *(Codex has no field)* | *(Pi has no field)* | `options` | `options` | *(Kimi has no field)* | *(Qwen has no field)* | `options` |
+| What the ladder resolves | Where it lands in Codex | Where it lands in Pi | Where it lands in OpenCode / Kilo | Where it lands in Command Code | Where it lands in Kimi Code | Where it lands in Qwen Code | Where it lands in Crush | Where it lands in Cline | Where it lands in Aider | Where it lands in Droid |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| context window | `context_window` / `max_context_window` | `contextWindow` | `limit.context` | `contextWindow` | `max_context_size` | `contextWindowSize` | `context_window`  `contextWindow` | `max_input_tokens` | `maxContextLimit` |
+| output ceiling | *(Codex has no field)* | `maxTokens` | `limit.output` | `maxOutput` | *(Kimi has no field)* | *(Qwen has no field)* | `default_max_tokens`  `maxTokens` | `max_output_tokens` + `max_tokens` | `maxOutputTokens` |
+| vision support | `input_modalities` | `input` | `attachment` + `modalities.input` | *(no field)* | `capabilities: ["image_in"]` | `modalities.image` | `supports_attachments`  *(no field)* | `supports_vision` | `noImageSupport` |
+| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* | `tool_call` | *(no field)* | *(Kimi has no field)* | *(Qwen has no field)* | *(Crush has no field)*  *(no field)* | `supports_function_calling` | *(no field)* |
+| reasoning support | `supports_reasoning_summaries` | `reasoning` | `reasoning` | `reasoning` | `capabilities: ["thinking"]`, plus `"always_thinking"` when it cannot be turned off | `reasoning: false` when known absent | `can_reason`  *(no field)* | *(via settings)* | `enableThinking` |
+| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* | `variants.<rung>`, clamped to OpenCode's own rungs | `reasoningEfforts[]`, clamped to `low\|medium\|high\|xhigh\|max` | *(Kimi has no field)* | `reasoning.effort`, one starting rung clamped to `low\|medium\|high` | `reasoning_levels[]` + `default_reasoning_effort`, clamped to `low\|medium\|high`  *(no field)* | `accepts_settings: [reasoning_effort]` | *(no field)* |
+| prices | *(Codex has no field)* | `cost.input` / `cost.output` | `cost.input` / `cost.output` | `cost.input` / `cost.output` | *(Kimi has no field)* | *(Qwen has no field)* | `cost_per_1m_in` / `cost_per_1m_out`  *(no field)* | `input_cost_per_token` / `output_cost_per_token` | *(no field)* |
+| pinned parameters | *(Codex has no field)* | *(Pi has no field)* | `options` | `options` | *(Kimi has no field)* | *(Qwen has no field)* | `options`  *(no field)* | `use_temperature: false` | *(no field)* |
 
 A model with a 32k window is advertised as 32k. A model that publishes only
 `low` and `high` gets exactly those two rungs in Codex's picker — `xhigh`

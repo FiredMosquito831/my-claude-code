@@ -87,3 +87,36 @@ def defaulted_summary_lines(document: Mapping[str, Any]) -> list[str]:
         if isinstance(fields, list):
             lines.append(f"  {model_id}: {', '.join(str(name) for name in fields)}")
     return lines
+
+
+def harness_sidecar(payload: Mapping[str, Any], harness_id: str) -> list[Any] | None:
+    """Return one harness's *second* generated document, when it has one.
+
+    Aider is the only harness that reads two files: limits and prices go in the
+    LiteLLM-shaped metadata JSON, and what the model *accepts* goes in the
+    model-settings YAML. ``None`` for every other harness.
+    """
+
+    catalogues = payload.get("catalogues")
+    if not isinstance(catalogues, Mapping):
+        return None
+    entry = catalogues.get(harness_id)
+    if not isinstance(entry, Mapping):
+        return None
+    document = entry.get("sidecar_document")
+    return document if isinstance(document, list) else None
+
+
+def catalogue_model_summaries(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return the neutral records, for a harness MCC configures through the env.
+
+    Goose has no generated file at all -- see ``cli/launchers/goose.py`` -- but
+    it still needs a model to start on and a context limit to gauge against,
+    and both are environment variables. This is the one accessor that reaches
+    past the per-CLI documents to the records they were all built from.
+    """
+
+    models = payload.get("models")
+    if not isinstance(models, list):
+        return []
+    return [model for model in models if isinstance(model, dict)]

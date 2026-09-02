@@ -41,7 +41,11 @@ from my_claude_code.application.catalogue_model import (
     CatalogueModel,
     build_catalogue_models,
 )
-from my_claude_code.application.catalogues import model_entries, serialise
+from my_claude_code.application.catalogues import (
+    model_entries,
+    serialise,
+    serialise_sidecar,
+)
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.atomic_json import json_document_bytes
 from my_claude_code.config.harness_config_merge import merge_config_path
@@ -235,7 +239,7 @@ def _catalogue_models_payload(services: ApiServices) -> dict[str, Any]:
         if catalogue is None:
             continue
         document, defaulted = serialise(catalogue.format_id, models)
-        catalogues[spec.id] = {
+        entry: dict[str, Any] = {
             "format": catalogue.format_id,
             "filename": catalogue.filename,
             "document": document,
@@ -243,6 +247,14 @@ def _catalogue_models_payload(services: ApiServices) -> dict[str, Any]:
             "model_count": len(model_entries(catalogue.format_id, document)),
             "byte_length": len(json_document_bytes(document)),
         }
+        # The second document, for the one harness that reads two. Absent
+        # rather than null for every other, so a launcher asking for it gets
+        # the same "this harness has none" answer whichever way it checks.
+        sidecar = serialise_sidecar(catalogue.format_id, models)
+        if sidecar is not None:
+            entry["sidecar_filename"] = catalogue.sidecar_filename
+            entry["sidecar_document"] = sidecar
+        catalogues[spec.id] = entry
     return {
         "models": [_model_payload(model) for model in models],
         "catalogues": catalogues,

@@ -63,3 +63,31 @@ def _walk(node: Any, sentinel: str, value: str) -> Any:
     if isinstance(node, Sequence) and not isinstance(node, str | bytes):
         return [_walk(item, sentinel, value) for item in node]
     return node
+
+
+def v1_base_url(proxy_root_url: str) -> str:
+    """Return the proxy root in the form an OpenAI SDK expects.
+
+    The OpenAI SDKs -- and every client built on them -- append
+    ``chat/completions`` to whatever ``baseURL`` they were given and insert no
+    ``/v1`` of their own. So the value here carries it: Cline's
+    ``openai-compatible`` provider, LiteLLM's ``OPENAI_BASE_URL`` and Goose's
+    ``OPENAI_HOST`` + ``OPENAI_BASE_PATH`` pair all resolve to
+    ``<root>/v1/chat/completions`` and never ``<root>/v1/v1/...``.
+
+    Idempotent: a root that already ends in ``/v1`` is returned unchanged, so a
+    caller cannot double the segment by resolving twice.
+    """
+
+    return f"{root_base_url(proxy_root_url)}/v1"
+
+
+def with_v1_base_url(
+    document: Mapping[str, Any], sentinel: str, proxy_root_url: str
+) -> dict[str, Any]:
+    """Return the document with every occurrence of ``sentinel`` resolved to ``<root>/v1``."""
+
+    resolved = _walk(document, sentinel, v1_base_url(proxy_root_url))
+    if not isinstance(resolved, dict):  # pragma: no cover - documents are mappings
+        raise TypeError("harness catalogue document must be a mapping")
+    return resolved

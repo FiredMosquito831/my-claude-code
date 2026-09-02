@@ -221,7 +221,11 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
 - `mcc-kimi` calls `my_claude_code.cli.launchers.kimi:launch`.
 - `mcc-qwen` calls `my_claude_code.cli.launchers.qwen:launch`.
 - `mcc-crush` calls `my_claude_code.cli.launchers.crush:launch`.
-  These seven have no `fcc-` alias: no installed copy of MCC ever published
+- `mcc-cline` calls `my_claude_code.cli.launchers.cline:launch`.
+- `mcc-goose` calls `my_claude_code.cli.launchers.goose:launch`.
+- `mcc-aider` calls `my_claude_code.cli.launchers.aider:launch`.
+- `mcc-droid` calls `my_claude_code.cli.launchers.droid:launch`.
+  These eleven have no `fcc-` alias: no installed copy of MCC ever published
   one, so inventing it would ship a command that never had users.
 - `mcc-desktop` (legacy alias `fcc-desktop`) calls `my_claude_code.cli.desktop_entrypoint:main`;
   [cli/desktop.py](src/my_claude_code/cli/desktop.py) is the controller that owns the `mcc-server`
@@ -1442,6 +1446,104 @@ and runs and reaches no request body, so it is written as is. The
 generated provider also sets `discover_models: false`, because Crush's
 discovery asks `GET <base_url>/models` — a route MCC does not serve, and
 one the `/v1` base URL that would reach it cannot be combined with.
+
+[cli/launchers/cline.py](src/my_claude_code/cli/launchers/cline.py),
+[cli/launchers/goose.py](src/my_claude_code/cli/launchers/goose.py),
+[cli/launchers/aider.py](src/my_claude_code/cli/launchers/aider.py) and
+[cli/launchers/droid.py](src/my_claude_code/cli/launchers/droid.py) own the four
+harnesses that arrived with the inbound `POST /v1/chat/completions` surface.
+Three of them use it; the fourth turned out not to need it.
+
+**Cline** publishes `--config`, which moves its whole configuration
+*directory* — and Cline derives its data directory back out of the settings
+file inside it, so one flag is enough. MCC owns `~/.fcc/cline/` and writes
+`data/settings/providers.json`, which is why that catalogue's `filename` spells
+the whole tree. The declared provider is `openai-compatible`, not the
+`openai-native` the survey proposed: `openai-native` is OpenAI's own hosted
+entry, `openai` is an alias normalising to `openai-compatible`, and only
+`openai-compatible` both takes an arbitrary `baseUrl` and carries no
+`modelsSourceUrl` — so it issues no discovery call to a route MCC does not
+serve under that id. `-P openai-compatible` is passed on every session launch
+because a provider block written but not selected leaves Cline falling back to
+its own hosted account.
+
+Cline's `baseUrl` is `<root>/v1`, because `@ai-sdk/openai-compatible` appends
+`chat/completions` and nothing else. That is the first harness whose sentinel
+resolves to the `/v1` form rather than the root, which is what
+`HarnessCatalogue.base_url_shape` selects between:
+`config/harness_base_url.with_v1_base_url` for an OpenAI SDK,
+`with_root_base_url` for an Anthropic one. Getting it wrong produces
+`/v1/v1/chat/completions` or `POST /chat/completions`, and both fail after a
+launch rather than before one.
+
+**Cline is the second generated file that carries the proxy token, and the
+reason is measured rather than structural.** Cline *does* fall back to
+`process.env.OPENAI_API_KEY` when `apiKey` is absent — and on 3.0.61 that path
+neither authenticated nor terminated, while the same run with the key in the
+document answered in 885 ms. The file is MCC's own under `~/.fcc/cline`, mode
+`0600`, in the same directory tree as the `.env` that already holds the
+identical value; nothing is written into `~/.cline`.
+
+**Cline's schema also has no per-model array**, which is a shape no other
+harness has. One provider entry carries `contextWindow` and `maxTokens` for the
+model it names. So the serialiser records every routable model's resolved
+limits in an inert `_mcc_models` block and
+[config/harness_cline.py](src/my_claude_code/config/harness_cline.py) promotes
+the one named by `-m`/`--model` into the provider block on the way to disk —
+clearing the previous model's keys first, so a model with no published limits
+cannot inherit another's. The background fan-out preserves whichever model is
+already on disk rather than reverting a running session to the default.
+
+**Goose gets no file at all**, and that is the whole design rather than an
+omission. Goose 1.48.0 *does* have a declared-model mechanism —
+`<config dir>/custom_providers/<id>.json`, whose `models[]` carry
+`context_limit` and per-token costs — but that directory is Goose's own, holds
+the user's settings, and Goose publishes no variable or flag moving the config
+file alone. Writing there would put an MCC-owned document inside a directory
+MCC does not own. Everything is environment instead: `OPENAI_HOST` +
+`OPENAI_BASE_PATH=v1/chat/completions` (Goose joins them with RFC 3986 rules
+and the path carries no leading slash by its own default), `OPENAI_API_KEY`,
+`GOOSE_PROVIDER`, `GOOSE_MODEL`, `GOOSE_CONTEXT_LIMIT` and
+`GOOSE_DISABLE_KEYRING`. `GOOSE_CONTEXT_LIMIT` is the one place Goose accepts a
+resolved capability, and it is the only reason `mcc-goose` reads the catalogue
+route at all — its `HarnessSpec.catalogue` is `None`. Model discovery still
+works, because Goose's OpenAI provider fetches `<host>/v1/models`, which MCC
+serves.
+
+**Aider is the only harness that reads two documents**, so
+`HarnessCatalogue` grew `sidecar_filename` and `sidecar_config_flag`, and
+`application/catalogues/__init__.py` grew a `SIDECAR_SERIALISERS` table beside
+`SERIALISERS`. `--model-metadata-file` takes LiteLLM's `model_cost` schema —
+what the model *is* — and `--model-settings-file` takes a list of
+`ModelSettings` records — what it *accepts*, which is what decides whether
+`--reasoning-effort` is honoured. The second is constructed with
+`ModelSettings(**entry)`, so an unknown key raises; the `_mcc_defaulted` record
+therefore lives only in the first, which is a plain `dict.update`. The sidecar
+is written as JSON, which `yaml.safe_load` parses identically, so there is one
+atomic writer rather than a second encoder. Aider's own file discovery searches
+cwd, the git root *and* `~`, which is exactly why both flags are passed.
+
+Aider's metadata file is keyed by the whole `openai/<gateway id>` string,
+because `Model.get_model_info` looks the model up by the exact argument given
+to `--model`. Prices are converted from the ladder's USD-per-million to
+LiteLLM's per-token. The base URL is `<root>/v1` in `OPENAI_BASE_URL` *and*
+`OPENAI_API_BASE`, set in the launched process only — both, because LiteLLM
+prefers the first and falls back to the second, and leaving an inherited second
+in place would let another gateway answer.
+
+**Droid speaks Anthropic Messages, and that is the finding of this batch.** The
+survey grouped it with the OpenAI-only CLIs. Measured on 0.210.0,
+`customModels[].provider: "anthropic"` accepts an arbitrary `baseUrl`,
+instantiates the bundled `@anthropic-ai/sdk` against it and reaches
+`POST <baseUrl>/v1/messages`, so `HarnessProtocol.ANTHROPIC_MESSAGES` is what
+its spec declares and its base URL is the proxy root. `--settings` is a runtime
+overlay merged into Droid's settings hierarchy for that process only, so MCC
+owns `~/.fcc/droid-settings.json` and neither `~/.factory/settings.json` nor
+its legacy `config.json` is read, merged into or backed up. The key is Droid's
+own documented `${VAR}` reference, expanded by its `expandSettingsEnvVarRefs`
+pass from the launched environment, and `authMode: "bearer"` moves the SDK off
+its default `x-api-key`. No Factory account is required: a custom model is
+classified `isByok` and the login check does not gate it.
 
 **Kimi is the one harness whose generated file carries the proxy token, and the
 reason is a property of its schema.** `LLMProvider.api_key` is a plain

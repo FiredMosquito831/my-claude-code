@@ -135,6 +135,65 @@ CRUSH_API_KEY_ENV = "MCC_CRUSH_API_KEY"
 QWEN_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
 CRUSH_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
 
+#: Cline's own secret reference does not exist: ``providers.json`` stores a
+#: plain ``apiKey`` string, and the runtime fallback to ``$OPENAI_API_KEY``
+#: only fires when the key is *absent* -- which, measured on 3.0.61, leaves the
+#: CLI blocking indefinitely rather than authenticating. So the value is
+#: literal, and ``ARCHITECTURE.md`` records why that is acceptable here for the
+#: same reason it is for Kimi Code: the document is MCC's own file under
+#: ``~/.fcc/cline``, in the same directory tree as ``~/.fcc/.env``, which
+#: already holds the identical ``ANTHROPIC_AUTH_TOKEN`` in clear. Nothing is
+#: written into a file the user owns -- ``~/.cline`` is never read or touched,
+#: because ``cline --config`` moves the whole configuration directory.
+CLINE_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
+CLINE_API_KEY_SENTINEL = "mcc-proxy-token-placeholder"
+
+#: The provider id MCC declares inside Cline's ``providers.json``. Cline's own
+#: registry publishes ``openai-compatible`` as "OpenAI-compatible chat
+#: completions endpoint" with no ``modelsSourceUrl``, which is exactly the
+#: shape MCC needs: an arbitrary ``baseUrl`` and no discovery call to a route
+#: this proxy does not serve under that provider. ``openai-native`` was the
+#: spec's suggestion and is the wrong one -- it is OpenAI's own hosted
+#: provider entry, and ``openai`` is merely an alias that normalises to
+#: ``openai-compatible`` anyway.
+CLINE_PROVIDER_ID = "openai-compatible"
+
+#: The variables ``mcc-goose`` sets in the launched process, and nothing else.
+#: Goose is the one harness in this release with no generated file at all:
+#: its configuration directory is ``%APPDATA%\Block\goose\config`` (or
+#: ``~/.config/goose``), it publishes no variable or flag that moves the config
+#: file alone, and the only file-shaped mechanism -- a declarative provider
+#: under ``custom_providers/`` -- would put an MCC-owned document *inside* the
+#: user's own directory, beside their sessions and secrets. That is the one
+#: thing this project does not do. Goose takes everything it needs from the
+#: environment instead, so ``mcc-goose`` writes nothing anywhere.
+GOOSE_PROVIDER_VALUE = "openai"
+GOOSE_BASE_PATH_VALUE = "v1/chat/completions"
+
+#: Aider takes its base URL and key from LiteLLM's own OpenAI variables. Both
+#: are set in the launched process only, so the proxy token never lands on
+#: disk even though MCC owns the two documents it points Aider at.
+#: ``OPENAI_BASE_URL`` outranks ``OPENAI_API_BASE`` in LiteLLM's resolution
+#: order, so both are written to the same value rather than one being left to
+#: a stale inherited value.
+AIDER_BASE_URL_ENV = "OPENAI_BASE_URL"
+AIDER_LEGACY_BASE_URL_ENV = "OPENAI_API_BASE"
+AIDER_API_KEY_ENV = "OPENAI_API_KEY"
+
+#: Droid's own documented secret reference is the ``${VAR}`` form -- its BYOK
+#: page gives it for ``customModels[].apiKey`` and the bundle carries an
+#: ``expandSettingsEnvVarRefs`` pass with the matching regex. MCC writes the
+#: reference and ``mcc-droid`` sets the variable in the child process only, so
+#: the proxy token never lands on disk.
+DROID_API_KEY_ENV = "MCC_DROID_API_KEY"
+DROID_API_KEY_REFERENCE = "${MCC_DROID_API_KEY}"
+
+#: Droid's base-URL placeholder. Resolved to the proxy **root** with no
+#: ``/v1``: MCC's Droid entry declares ``provider: "anthropic"``, which
+#: instantiates the bundled ``@anthropic-ai/sdk`` client, and that appends
+#: ``/v1/messages`` itself.
+DROID_BASE_URL_SENTINEL = "https://base-url.mcc.invalid"
+
 #: ``$version`` in a Qwen settings document. Qwen migrates and *rewrites* any
 #: settings file older than its own ``SETTINGS_VERSION``, and MCC's catalogue
 #: is a file it would happily rewrite. Declaring the version keeps the
@@ -298,6 +357,22 @@ class HarnessCatalogue:
     #: that names an environment variable instead, as the OpenCode family
     #: does, or that has no base URL in its document at all.
     base_url_sentinel: str | None = None
+    #: Which form the sentinel resolves to. ``root`` is the proxy root with no
+    #: ``/v1``, which is what an Anthropic SDK wants because it appends
+    #: ``/v1/messages`` itself. ``v1`` is ``<root>/v1``, which is what every
+    #: OpenAI SDK wants because it appends ``chat/completions`` and nothing
+    #: else. Getting this wrong produces ``/v1/v1/...`` or ``/messages``, both
+    #: of which fail loudly rather than quietly -- but only after a launch.
+    base_url_shape: str = "root"
+    #: A second document the same harness reads, for a CLI that splits its
+    #: model facts across two files. Aider is the only one: limits and prices
+    #: go in the LiteLLM-shaped ``--model-metadata-file`` JSON, while what the
+    #: model *accepts* -- reasoning effort, thinking tokens, whether
+    #: ``temperature`` may be sent -- goes in the ``--model-settings-file``
+    #: YAML. Two flags, two schemas, one set of records.
+    sidecar_filename: str | None = None
+    #: The CLI's own option naming that second document.
+    sidecar_config_flag: str | None = None
 
     @property
     def writes_file(self) -> bool:
@@ -946,6 +1021,311 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             "for a provider and never written."
         ),
         tagline="Charm's Crush CLI, served through this proxy.",
+    ),
+    HarnessSpec(
+        # ``cline_cli``, not ``cline``: the latter is an upstream gateway in
+        # ``config/provider_catalog.py``. See the module docstring.
+        id="cline_cli",
+        display_name="Cline",
+        binary="cline",
+        protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        install_hint="Install Cline with: npm install -g cline",
+        commands=(
+            HarnessCommand(
+                suffix="cline",
+                target="my_claude_code.cli.launchers.cline:launch",
+                legacy_alias=False,
+                help_text="Launch Cline through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='"<prompt>"',
+                        help_text=(
+                            "Run one prompt non-interactively. Cline's bare "
+                            "positional argument is its headless form -- note "
+                            "that -p is --plan, not --print"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments='--json "<prompt>"',
+                        help_text="Same run, as a stream of JSON events",
+                    ),
+                    HarnessInvocation(
+                        arguments="-m anthropic/<provider>/<model>",
+                        help_text=(
+                            "Start on one specific MCC-routed model, with the "
+                            "context window and output ceiling the ladder "
+                            "resolved for it"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="-i",
+                        help_text="Open Cline's interactive terminal UI",
+                    ),
+                    HarnessInvocation(
+                        arguments="config",
+                        help_text=(
+                            "Show the configuration this launch uses -- MCC's "
+                            "own directory, not ~/.cline"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="doctor",
+                        help_text=(
+                            "Passed straight to Cline: MCC injects no provider "
+                            "for a non-session command"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="cline",
+            # ``cline --config`` names a *directory*, and Cline derives its
+            # data directory from the settings file inside it, so the
+            # filename spells the whole tree MCC owns.
+            filename="cline/data/settings/providers.json",
+            config_flag="--config",
+            base_url_sentinel=CLINE_BASE_URL_SENTINEL,
+            base_url_shape="v1",
+        ),
+        passthrough_commands=frozenset(
+            {"doctor", "plugin", "skill", "mcp", "schedule", "hook", "connect"}
+        ),
+        passthrough_flags=frozenset({"--help", "-h", "--version", "-V", "--update"}),
+        summary=(
+            "Cline, pointed at a configuration directory this proxy owns "
+            "through its own --config flag, so ~/.cline is never read for a "
+            "provider and never written."
+        ),
+        tagline="The Cline agent, served through this proxy.",
+    ),
+    HarnessSpec(
+        id="goose",
+        display_name="Goose",
+        binary="goose",
+        protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        install_hint=(
+            "Install Goose with: curl -fsSL "
+            "https://github.com/block/goose/releases/download/stable/download_cli.sh | bash"
+        ),
+        install_hint_windows=(
+            "Install Goose from https://github.com/block/goose/releases "
+            "(goose-x86_64-pc-windows-msvc.zip)"
+        ),
+        commands=(
+            HarnessCommand(
+                suffix="goose",
+                target="my_claude_code.cli.launchers.goose:launch",
+                legacy_alias=False,
+                help_text="Launch Goose through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='run -t "<prompt>" --no-session',
+                        help_text=(
+                            "Run one prompt non-interactively and leave no "
+                            "session behind (-q hides the spinner)"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="session",
+                        help_text="Start an interactive Goose session",
+                    ),
+                    HarnessInvocation(
+                        arguments='run --model anthropic/<provider>/<model> -t "<prompt>"',
+                        help_text=(
+                            "Run on one specific MCC-routed model. Goose's own "
+                            "--model outranks the GOOSE_MODEL this launcher sets"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="info -v",
+                        help_text=(
+                            "Show the provider, model and context limit this "
+                            "launch resolved, and the config file Goose would "
+                            "read -- which MCC leaves alone"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="configure",
+                        help_text=(
+                            "Goose's own setup wizard. Its model picker lists "
+                            "what GET /v1/models publishes, because Goose asks "
+                            "the host it was pointed at"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="update",
+                        help_text=(
+                            "Passed straight to Goose: MCC injects no provider "
+                            "for a non-session command"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        # Nothing on disk, and nothing in process either: Goose takes the
+        # host, the path, the key, the provider, the model and the context
+        # limit from environment variables this launcher sets, and discovers
+        # the model list from GET /v1/models itself.
+        catalogue=None,
+        passthrough_commands=frozenset(
+            {"update", "completion", "help", "recipe", "plugin", "local-models"}
+        ),
+        passthrough_flags=frozenset({"--help", "-h", "--version", "-V"}),
+        summary=(
+            "Goose, pointed here with six environment variables and no file "
+            "at all, because its only file-shaped mechanism would put an "
+            "MCC-owned document inside Goose's own config directory."
+        ),
+        tagline="Block's Goose agent, served through this proxy.",
+    ),
+    HarnessSpec(
+        id="aider",
+        display_name="Aider",
+        binary="aider",
+        protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        install_hint=(
+            "Install Aider with: uv tool install aider-chat "
+            "(or: python -m pip install aider-chat)"
+        ),
+        commands=(
+            HarnessCommand(
+                suffix="aider",
+                target="my_claude_code.cli.launchers.aider:launch",
+                legacy_alias=False,
+                help_text="Launch Aider through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='--message "<prompt>"',
+                        help_text=(
+                            "Run one prompt non-interactively and exit "
+                            "(--yes-always accepts every confirmation)"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="--model openai/anthropic/<provider>/<model>",
+                        help_text=(
+                            "Start on one specific MCC-routed model. The "
+                            "openai/ prefix is LiteLLM's provider selector, "
+                            "not part of the model id"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="--list-models openai/anthropic",
+                        help_text=(
+                            "List every MCC-routed model Aider can see, out of "
+                            "the metadata file this proxy generates"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="--exit --verbose",
+                        help_text=(
+                            "Start, print the resolved configuration and exit "
+                            "without sending anything"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="--version",
+                        help_text=(
+                            "Passed straight to Aider: MCC injects no provider "
+                            "for a non-session command"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="aider",
+            filename="aider-model-metadata.json",
+            config_flag="--model-metadata-file",
+            sidecar_filename="aider-model-settings.yml",
+            sidecar_config_flag="--model-settings-file",
+        ),
+        passthrough_flags=frozenset(
+            {"--help", "-h", "--version", "--just-check-update", "--upgrade"}
+        ),
+        summary=(
+            "Aider, pointed at a LiteLLM-shaped metadata file and a model "
+            "settings file this proxy owns, through Aider's own two flags, so "
+            "no .aider.model.* file of yours is read or written."
+        ),
+        tagline="Aider, served through this proxy.",
+    ),
+    HarnessSpec(
+        id="droid",
+        display_name="Droid",
+        # Droid reaches MCC over Anthropic Messages, not Chat Completions.
+        # The brief expected ``generic-chat-completion-api``; measured on
+        # 0.210.0, ``provider: "anthropic"`` accepts an arbitrary ``baseUrl``
+        # and instantiates the bundled ``@anthropic-ai/sdk`` against it, so
+        # MCC's own native protocol is the one used. See the launcher.
+        binary="droid",
+        protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        install_hint=("Install Droid with: curl -fsSL https://app.factory.ai/cli | sh"),
+        install_hint_windows=(
+            'Install Droid with: powershell -c "irm https://app.factory.ai/cli/windows | iex"'
+        ),
+        commands=(
+            HarnessCommand(
+                suffix="droid",
+                target="my_claude_code.cli.launchers.droid:launch",
+                legacy_alias=False,
+                help_text="Launch Droid through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='exec "<prompt>"',
+                        help_text=(
+                            "Run one prompt non-interactively. No Factory "
+                            "account is needed for an MCC-routed model: Droid "
+                            "classifies it as BYOK and does not gate on login"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments='exec --model custom:anthropic/<provider>/<model> "<prompt>"',
+                        help_text=(
+                            "Run on one specific MCC-routed model. Droid names "
+                            "a custom model custom:<model>, so the prefix is "
+                            "part of the id you type"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments='exec --output-format json "<prompt>"',
+                        help_text="Same run, machine-readable",
+                    ),
+                    HarnessInvocation(
+                        arguments="doctor",
+                        help_text=(
+                            "Show the configuration, connectivity and auth "
+                            "state of this launch, including which settings "
+                            "file the overlay came from"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="update",
+                        help_text=(
+                            "Passed straight to Droid: MCC injects no provider "
+                            "for a non-session command"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="droid",
+            filename="droid-settings.json",
+            config_flag="--settings",
+            base_url_sentinel=DROID_BASE_URL_SENTINEL,
+        ),
+        passthrough_commands=frozenset(
+            {"update", "mcp", "plugin", "computer", "doctor", "help", "search", "find"}
+        ),
+        passthrough_flags=frozenset({"--help", "-h", "--version", "-v"}),
+        summary=(
+            "Factory's Droid, pointed at a runtime settings overlay this proxy "
+            "owns through Droid's own --settings flag, so ~/.factory is never "
+            "edited. It speaks Anthropic Messages, not Chat Completions."
+        ),
+        tagline="Factory's Droid agent, served through this proxy.",
     ),
 )
 

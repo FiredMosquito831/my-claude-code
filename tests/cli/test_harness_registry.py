@@ -143,6 +143,9 @@ def test_every_catalogue_declares_how_it_reaches_its_agent() -> None:
         "kimi_code": "file",
         "qwen_code": "file",
         "crush": "file",
+        "cline_cli": "file",
+        "aider": "file",
+        "droid": "file",
     }
     assert [
         spec.id
@@ -156,7 +159,53 @@ def test_every_catalogue_declares_how_it_reaches_its_agent() -> None:
         "kimi_code",
         "qwen_code",
         "crush",
+        "cline_cli",
+        "aider",
+        "droid",
     ]
+
+
+def test_only_aider_declares_a_second_document() -> None:
+    """Two files is a shape, not a habit, and it needs a reason each time.
+
+    Aider is the only CLI in the registry that splits its model facts across
+    two documents with two flags: limits and prices in the LiteLLM-shaped
+    metadata JSON, and what the model *accepts* in the settings YAML. Anything
+    else declaring a sidecar should have to justify it here first.
+    """
+
+    sidecars = {
+        spec.id: (spec.catalogue.sidecar_filename, spec.catalogue.sidecar_config_flag)
+        for spec in catalogue_specs()
+        if spec.catalogue is not None and spec.catalogue.sidecar_filename is not None
+    }
+
+    assert sidecars == {
+        "aider": ("aider-model-settings.yml", "--model-settings-file"),
+    }
+
+
+def test_base_url_shape_is_declared_per_sdk_not_guessed() -> None:
+    """``/v1`` or not is the difference between a 404 and a session.
+
+    An Anthropic SDK appends ``/v1/messages`` to whatever base URL it is given,
+    so its harness gets the proxy root. An OpenAI SDK appends
+    ``chat/completions`` and nothing else, so its harness gets ``<root>/v1``.
+    Every sentinel-bearing catalogue therefore has to say which it is.
+    """
+
+    shapes = {
+        spec.id: spec.catalogue.base_url_shape
+        for spec in catalogue_specs()
+        if spec.catalogue is not None and spec.catalogue.base_url_sentinel is not None
+    }
+
+    assert shapes == {
+        "qwen_code": "root",
+        "crush": "root",
+        "cline_cli": "v1",
+        "droid": "root",
+    }
 
 
 # ------------------------------------------------------------------- T1 / T2 / T3
@@ -347,6 +396,9 @@ def test_a_config_owning_harness_names_the_variable_it_is_pointed_with() -> None
         "kimi_code": (None, "--config-file"),
         "qwen_code": ("QWEN_CODE_SYSTEM_SETTINGS_PATH", None),
         "crush": ("CRUSH_GLOBAL_CONFIG", None),
+        "cline_cli": (None, "--config"),
+        "aider": (None, "--model-metadata-file"),
+        "droid": (None, "--settings"),
     }
 
     for spec in catalogue_specs():

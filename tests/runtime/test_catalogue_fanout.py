@@ -232,7 +232,37 @@ def test_the_default_path_resolves_under_the_fcc_config_directory(
         ("kimi-code-config.toml",),
         ("qwen-code-settings.json",),
         ("crush/crush.json",),
+        ("cline/data/settings/providers.json",),
+        ("aider-model-metadata.json",),
+        ("droid-settings.json",),
     ]
+
+
+def test_aiders_second_document_is_published_beside_its_first(
+    tmp_path: Path,
+) -> None:
+    """Aider reads two files, so a refresh has to rewrite both.
+
+    The settings document says what each model *accepts* -- whether
+    ``--reasoning-effort`` is honoured, whether ``temperature`` may be sent --
+    and those are ladder facts like any other. Leaving it behind on a refresh
+    would let the two documents disagree about the same model.
+    """
+
+    metadata_path = tmp_path / "aider-model-metadata.json"
+    sidecar_path = tmp_path / "aider-model-settings.yml"
+    publisher = HarnessCatalogueFanoutPublisher({"aider": metadata_path})
+    metadata_path.write_text("{}", encoding="utf-8")
+
+    with patch(
+        "my_claude_code.runtime.harness_catalogues.harness_catalogue_path",
+        return_value=sidecar_path,
+    ):
+        publisher.publish(_runtime())
+
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))
+    # A list, not a mapping: Aider constructs one ``ModelSettings`` per entry.
+    assert isinstance(json.loads(sidecar_path.read_text(encoding="utf-8")), list)
 
 
 # --------------------------------------------------------------- merge targets

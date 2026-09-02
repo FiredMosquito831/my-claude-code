@@ -1844,7 +1844,7 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
     agents = rendered["codingAgents"]
 
     assert agents["present"] is True
-    assert agents["cardCount"] == 8
+    assert agents["cardCount"] == 12
     assert [card["id"] for card in agents["cards"]] == [
         "claude",
         "codex",
@@ -1854,6 +1854,10 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "kimi_code",
         "qwen_code",
         "crush",
+        "cline_cli",
+        "goose",
+        "aider",
+        "droid",
     ]
     assert [card["title"] for card in agents["cards"]] == [
         "Claude Code",
@@ -1864,6 +1868,10 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "Kimi Code",
         "Qwen Code",
         "Crush",
+        "Cline",
+        "Goose",
+        "Aider",
+        "Droid",
     ]
     assert [card["command"] for card in agents["cards"]] == [
         "mcc-claude",
@@ -1874,6 +1882,10 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "mcc-kimi",
         "mcc-qwen",
         "mcc-crush",
+        "mcc-cline",
+        "mcc-goose",
+        "mcc-aider",
+        "mcc-droid",
     ]
 
 
@@ -2075,6 +2087,64 @@ def test_a_harness_whose_binary_is_missing_still_renders(rendered: dict) -> None
     assert crush["installHint"] is not None
     assert "@charmland/crush" in crush["installHint"]
     assert len(crush["commandLines"]) == 3
+
+
+def test_a_chat_completions_harness_names_that_protocol_on_its_card(
+    rendered: dict,
+) -> None:
+    """Three of the four newest agents arrive through a different door.
+
+    The card is where a user finds out which one, and it matters: the
+    Requests page labels those rows ``openai_chat`` rather than ``anthropic``.
+    """
+
+    cards = {card["id"]: card for card in rendered["codingAgents"]["cards"]}
+
+    for harness_id in ("cline_cli", "goose", "aider"):
+        assert "chat/completions" in cards[harness_id]["meta"], harness_id
+    # Droid is the exception and its card has to say so, or the page would
+    # imply a translation layer that is not there.
+    assert "/v1/messages" in cards["droid"]["meta"]
+
+
+def test_a_flag_owning_openai_harness_names_the_flag_and_the_file(
+    rendered: dict,
+) -> None:
+    cards = {card["id"]: card for card in rendered["codingAgents"]["cards"]}
+
+    cline = cards["cline_cli"]
+    assert "--config" in cline["meta"]
+    assert "your own config file is never edited" in cline["meta"]
+    assert "providers.json" in cline["meta"]
+
+    aider = cards["aider"]
+    assert "--model-metadata-file" in aider["meta"]
+    assert "aider-model-metadata.json" in aider["meta"]
+
+    droid = cards["droid"]
+    assert "--settings" in droid["meta"]
+    assert "droid-settings.json" in droid["meta"]
+
+
+def test_a_harness_with_no_catalogue_at_all_still_renders(rendered: dict) -> None:
+    """Goose has no generated file, and the card must not imply one.
+
+    ``catalogue: null`` used to mean only "the agent fetches its own model
+    list" (Claude Code). Goose is the first harness where it also means "MCC
+    writes nothing anywhere", so the card has to render without a path, a
+    timestamp or a model count -- and without throwing.
+    """
+
+    goose = next(
+        card for card in rendered["codingAgents"]["cards"] if card["id"] == "goose"
+    )
+
+    assert goose["installed"] is False
+    assert goose["command"] == "mcc-goose"
+    assert goose["installHint"] is not None
+    assert "github.com/block/goose" in goose["installHint"]
+    assert len(goose["commandLines"]) == 3
+    assert goose["defaulted"] is None
 
 
 def test_rtk_checkboxes_render_from_harness_list(rendered: dict) -> None:

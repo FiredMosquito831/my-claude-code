@@ -48,7 +48,7 @@ Run your coding agents with free, paid, or local models. Choose and validate pro
 
 | Area | What you get |
 | --- | --- |
-| **Coding agents** | Launch Claude Code with `mcc-claude`, Codex with `mcc-codex`, Pi with `mcc-pi`, OpenCode with `mcc-opencode`, the OpenCode 2 preview with `mcc-opencode2`, Kilo CLI with `mcc-kilo`, Command Code with `mcc-commandcode`, Kimi Code with `mcc-kimi`, Qwen Code with `mcc-qwen` and Crush with `mcc-crush`; every native model picker except Claude Code's lists the MCC catalog on its own, Claude Code's needs `mcc-claude --discover-models` (or `mcc-claude-old`). Every agent MCC can launch is declared in one registry, and the **Coding agents** dashboard page shows each one's installed state, every command and flag it answers to with a copy button, its protocol and its generated catalogue. Legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases still work. |
+| **Coding agents** | Launch Claude Code with `mcc-claude`, Codex with `mcc-codex`, Pi with `mcc-pi`, OpenCode with `mcc-opencode`, the OpenCode 2 preview with `mcc-opencode2`, Kilo CLI with `mcc-kilo`, Command Code with `mcc-commandcode`, Kimi Code with `mcc-kimi`, Qwen Code with `mcc-qwen`, Crush with `mcc-crush`, Cline with `mcc-cline`, Goose with `mcc-goose`, Aider with `mcc-aider` and Droid with `mcc-droid`; every native model picker except Claude Code's lists the MCC catalog on its own, Claude Code's needs `mcc-claude --discover-models` (or `mcc-claude-old`). Every agent MCC can launch is declared in one registry, and the **Coding agents** dashboard page shows each one's installed state, every command and flag it answers to with a copy button, its protocol and its generated catalogue. Legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases still work. |
 | **Real capabilities in every agent catalogue** | The model list MCC generates for an agent carries that model's own context window, output ceiling, vision and tool support and reasoning-effort vocabulary, resolved by MCC's metadata ladder. Where a CLI's schema demands a value nothing published, MCC uses **that CLI's** documented default and says so — in the generated file, in the launcher's output, and on the dashboard card. |
 | **Model providers** | 56 cloud and local providers, including Anthropic's own Claude API, Kimi For Coding, and experimental ChatGPT OAuth. Switch and validate providers from the Admin UI. |
 | **Claude, direct** | `anthropic` speaks Anthropic's native Messages API with a Claude Console API key, billed per token. A separate `anthropic_oauth` provider can use a Pro/Max subscription instead — **which Anthropic does not permit**; read [docs/ANTHROPIC-SUBSCRIPTION.md](docs/ANTHROPIC-SUBSCRIPTION.md) before enabling it. |
@@ -122,7 +122,7 @@ mcc-server --version
 
 1. Installs `uv` (the Python tool runner) if it's missing or too old.
 2. Looks up the **latest** release, downloads its wheel, and **verifies the SHA-256 that GitHub publishes for that asset** — a mismatch aborts rather than running unverified code.
-3. Installs My Claude Code and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, `mcc-kimi`, `mcc-qwen`, and `mcc-crush` on your `PATH` (the legacy `fcc-*` spellings remain as aliases for the first five).
+3. Installs My Claude Code and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, `mcc-kimi`, `mcc-qwen`, `mcc-crush`, `mcc-cline`, `mcc-goose`, `mcc-aider`, and `mcc-droid` on your `PATH` (the legacy `fcc-*` spellings remain as aliases for the first five).
 
 That's all it does. **It does not install Claude Code, Codex, Pi, OpenCode, Kilo or Command Code** — those are separate third-party tools, and My Claude Code doesn't need any of them to run. Install whichever you actually use, yourself. The `mcc-*` launchers just point an agent you already have at the proxy: when one is missing, the launcher prints that agent's own install command and exits 127 rather than fetching anything. A test in the suite greps both installers for every known agent package name so the rule cannot quietly change.
 
@@ -362,6 +362,73 @@ mcc-crush models
 mcc-crush dirs
 ```
 
+Cline, Goose, Aider and Droid:
+
+```bash
+mcc-cline
+mcc-goose
+mcc-aider
+mcc-droid
+```
+
+These four were unreachable until MCC grew an inbound
+`POST /v1/chat/completions`, and three of them use it. Each takes a different
+lever, and none of them is a file you own.
+
+**Cline** (`npm install -g cline`) publishes `--config`, which moves its whole
+configuration *directory*. MCC owns `~/.fcc/cline/` and writes one
+`providers.json` into it declaring the `openai-compatible` provider — the entry
+that takes an arbitrary base URL and makes no model-discovery call. (The
+`openai-native` the survey suggested is OpenAI's own hosted entry; `openai` is
+just an alias for `openai-compatible`.) `-P openai-compatible` is passed on
+every launch, because a provider block that is written but not selected leaves
+Cline falling back to its own hosted account. **Your `~/.cline` is never read
+for a provider or written.** Cline's schema carries limits for *one* model at a
+time, so `mcc-cline -m <model>` is what moves the resolved context window and
+output ceiling onto the model you asked for. It is also the second generated
+file that holds the proxy token literally, and for a measured reason: with
+`apiKey` absent and `OPENAI_API_KEY` set, a headless run did not authenticate
+and did not terminate. Same treatment as Kimi Code's — mode `0600`, under
+`~/.fcc`, beside the `.env` that already holds the same value.
+
+**Goose** (Block, from its GitHub releases) is the one agent MCC configures
+without writing anything, anywhere. `OPENAI_HOST` plus
+`OPENAI_BASE_PATH=v1/chat/completions` compose the endpoint, `OPENAI_API_KEY`
+carries the token, `GOOSE_PROVIDER` and `GOOSE_MODEL` pick the session and
+`GOOSE_CONTEXT_LIMIT` carries that model's real context window. Goose *does*
+have a declared-model file — `custom_providers/<id>.json` with per-model
+`context_limit` — but it lives inside Goose's own config directory beside your
+settings, and Goose publishes no variable that moves the config file alone. So
+MCC uses none of it. Model discovery still works: Goose asks
+`<host>/v1/models`, which is a route MCC serves.
+
+**Aider** (`uv tool install aider-chat`) reads two documents and publishes a
+flag for each. `--model-metadata-file` takes a LiteLLM `model_cost` map with
+every model's context window, output ceiling, per-token prices and vision
+support; `--model-settings-file` takes a list saying what each model *accepts*
+— whether `--reasoning-effort` and `--thinking-tokens` will be honoured,
+whether `temperature` may be sent at all. MCC owns both under `~/.fcc`, so no
+`.aider.model.*` file of yours is read or written. `OPENAI_BASE_URL` and
+`OPENAI_API_KEY` are set in the launched process only, so the token is in
+neither file. Models appear as `openai/anthropic/<provider>/<model>` — the
+`openai/` prefix selects LiteLLM's handler and is stripped before the request.
+
+**Droid** (Factory) turned out not to need the chat-completions door at all.
+Its `customModels[].provider: "anthropic"` accepts an arbitrary `baseUrl`, so
+`mcc-droid` talks to MCC in MCC's own native Anthropic Messages protocol with
+no translation in between. `--settings` is a runtime overlay merged for that
+process only, so MCC owns `~/.fcc/droid-settings.json` and **`~/.factory` is
+never edited**. The key is written as Droid's own `${MCC_DROID_API_KEY}`
+reference and supplied to the launched process, so it never lands on disk. No
+Factory account is needed for a model MCC routes.
+
+```bash
+mcc-cline "hello"                        # headless (-p is --plan, not --print)
+mcc-goose run -t "hello" --no-session
+mcc-aider --message "hello"
+mcc-droid exec "hello"
+```
+
 The dashboard's **Coding agents** page lists every agent MCC can launch, whether its binary is on your `PATH`, **every command and flag it answers to** with a copy button each, the protocol it will speak, and the catalogue MCC writes for it — including when that catalogue was last written and how many of its models carry a value the CLI supplied rather than a provider.
 
 > **A coding agent is not a provider.**
@@ -387,7 +454,7 @@ Where a CLI's schema requires a value and no provider published one, MCC fills i
 | --- | --- |
 | `mcc-server: command not found` right after installing | Your shell's `PATH` is stale. **Close and reopen the terminal.** If it persists, check that `~/.local/bin` (Windows: `%USERPROFILE%\.local\bin`) is on `PATH`. |
 | The install stopped partway with an error about `claude`, `codex`, or `pi` | An old installer tried to install those for you and aborted when one failed. The current installer doesn't touch them at all — just re-run the command above. |
-| I want Claude Code / Codex / Pi / OpenCode / Kilo / Command Code / Kimi Code / Qwen Code / Crush installed too | The installer no longer installs them. Install each from its own official installer (Kimi Code is a Python tool: `uv tool install kimi-cli`); then `mcc-claude`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, `mcc-kimi`, `mcc-qwen`, and `mcc-crush` will launch them through the proxy. |
+| I want Claude Code / Codex / Pi / OpenCode / Kilo / Command Code / Kimi Code / Qwen Code / Crush / Cline / Goose / Aider / Droid installed too | The installer no longer installs them. Install each from its own official installer (Kimi Code is a Python tool: `uv tool install kimi-cli`); then `mcc-claude`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, `mcc-kimi`, `mcc-qwen`, `mcc-crush`, `mcc-cline`, `mcc-goose`, `mcc-aider`, and `mcc-droid` will launch them through the proxy. |
 | `MCC release wheel checksum mismatch; refusing to install` | The download was corrupted or incomplete. Re-run the command. This check is deliberate: it will not install a wheel it can't verify. |
 | Windows: `Installed, but these commands are missing: ...` | Installing while a launcher window is open now works — the installer moves the old launchers aside so uv can write a complete new set. If a command is still reported missing, something held its `.exe` beyond a normal running process: close that window and re-run the install command. The installer exits non-zero and never reports "verified" when a command is absent. |
 | PowerShell refuses to run the script | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then re-run. This only affects the current window. |

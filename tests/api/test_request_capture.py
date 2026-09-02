@@ -196,6 +196,78 @@ async def test_client_disconnect_records_cancelled(store: RequestLogStore) -> No
 
 
 @pytest.mark.asyncio
+async def test_a_reader_that_stops_after_message_stop_is_not_a_cancellation(
+    store: RequestLogStore,
+) -> None:
+    """Both OpenAI adapters stop reading the moment they translate the end.
+
+    ``iter_sse_from_anthropic`` returns as soon as its assembler goes terminal,
+    which closes this wrapper while it is suspended on its last ``yield`` and
+    used to record ``cancelled``. The consequence was visible on the Requests
+    page: every successful ``/v1/chat/completions`` and ``/v1/responses``
+    request read as abandoned, while the identical request to ``/v1/messages``
+    -- whose reader drains the stream -- read as a success. The terminal event
+    is what tells "the answer finished" from "the reader gave up".
+    """
+
+    closed = asyncio.Event()
+
+    async def body() -> AsyncIterator[str]:
+        try:
+            yield _events(("message_start", {"type": "message_start", "message": {}}))[
+                0
+            ]
+            yield _events(("message_stop", {"type": "message_stop"}))[0]
+            await asyncio.sleep(60)
+            yield "never"
+        finally:
+            closed.set()
+
+    capture = _make_capture(store)
+    stream = capture.wrap(body())
+    await anext(stream)
+    await anext(stream)
+    assert isinstance(stream, AsyncCloseable)
+    await stream.aclose()
+    store.close()
+
+    assert closed.is_set()
+    row = _final_row(store)
+    assert row["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_an_error_before_the_reader_stopped_still_records_error(
+    store: RequestLogStore,
+) -> None:
+    """The terminal-event rule must not launder a mid-stream failure."""
+
+    async def body() -> AsyncIterator[str]:
+        yield _events(("message_start", {"type": "message_start", "message": {}}))[0]
+        yield _events(
+            (
+                "error",
+                {
+                    "type": "error",
+                    "error": {"type": "overloaded_error", "message": "busy"},
+                },
+            )
+        )[0]
+        await asyncio.sleep(60)
+        yield "never"
+
+    capture = _make_capture(store)
+    stream = capture.wrap(body())
+    await anext(stream)
+    await anext(stream)
+    assert isinstance(stream, AsyncCloseable)
+    await stream.aclose()
+    store.close()
+
+    assert _final_row(store)["status"] == "error"
+
+
+@pytest.mark.asyncio
 async def test_task_cancellation_records_cancelled(store: RequestLogStore) -> None:
     async def body() -> AsyncIterator[str]:
         yield _events(("message_start", {"type": "message_start", "message": {}}))[0]

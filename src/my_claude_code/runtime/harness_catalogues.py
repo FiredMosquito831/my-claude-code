@@ -33,6 +33,7 @@ every catalogue -- which was not true of the old publisher and is the point of
 the exercise.
 """
 
+import json
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -43,10 +44,15 @@ from my_claude_code.application.catalogue_model import (
     CatalogueModel,
     build_catalogue_models,
 )
-from my_claude_code.application.catalogues import serialise
+from my_claude_code.application.catalogues import serialise, serialise_sidecar
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.atomic_json import write_json_document_atomically_if_changed
-from my_claude_code.config.harness_base_url import with_root_base_url
+from my_claude_code.config.harness_base_url import with_root_base_url, with_v1_base_url
+from my_claude_code.config.harness_cline import (
+    strip_mcc_keys,
+    with_api_key,
+    with_selected_model,
+)
 from my_claude_code.config.harness_config_merge import (
     merge_config_path,
     merge_owned_block,
@@ -58,7 +64,12 @@ from my_claude_code.config.harness_toml import (
     with_kimi_credentials,
     write_toml_document_atomically_if_changed,
 )
-from my_claude_code.config.harnesses import HarnessSpec, harness_specs
+from my_claude_code.config.harnesses import (
+    CLINE_PROVIDER_ID,
+    HarnessCatalogue,
+    HarnessSpec,
+    harness_specs,
+)
 from my_claude_code.config.paths import harness_catalogue_path
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
@@ -167,14 +178,39 @@ class HarnessCatalogueFanoutPublisher:
                 )
             else:
                 if catalogue.base_url_sentinel is not None:
-                    # Qwen Code and Crush substitute nothing of their own into
-                    # a base-URL field, and the document is MCC's own file
-                    # rather than one key inside the user's, so the real proxy
-                    # root is written wherever the sentinel sits.
-                    document = with_root_base_url(
+                    # Qwen Code, Crush and Droid substitute nothing of their
+                    # own into a base-URL field, and the document is MCC's own
+                    # file rather than one key inside the user's, so the real
+                    # proxy URL is written wherever the sentinel sits. Which
+                    # shape it takes is the harness's own: an Anthropic SDK
+                    # appends ``/v1/messages`` to a root, an OpenAI one
+                    # appends ``chat/completions`` to ``<root>/v1``.
+                    resolve = (
+                        with_v1_base_url
+                        if catalogue.base_url_shape == "v1"
+                        else with_root_base_url
+                    )
+                    document = resolve(
                         document, catalogue.base_url_sentinel, proxy_root_url
                     )
+                if spec.id == CLINE_HARNESS_ID:
+                    # Cline stores a literal key and carries the selected
+                    # model's limits in the provider block. A background
+                    # refresh cannot know which model the next session will
+                    # ask for, so it preserves the one already on disk.
+                    document = with_api_key(
+                        document,
+                        CLINE_PROVIDER_ID,
+                        proxy_auth_token(settings.anthropic_auth_token),
+                    )
+                    document = with_selected_model(
+                        document, CLINE_PROVIDER_ID, _selected_model_on_disk(path)
+                    )
+                    # Cline discards the whole file on any unrecognised root
+                    # key, so MCC's bookkeeping never reaches disk.
+                    document = strip_mcc_keys(document)
                 write_json_document_atomically_if_changed(path, document)
+                self._publish_sidecar(catalogue, models)
         except Exception as exc:
             logger.warning(
                 "Harness catalogue publication failed: harness={} exc_type={}",
@@ -189,6 +225,20 @@ class HarnessCatalogueFanoutPublisher:
                 defaulted.model_count,
             )
 
+    def _publish_sidecar(
+        self, catalogue: HarnessCatalogue, models: tuple[CatalogueModel, ...]
+    ) -> None:
+        """Write the second document, for the one harness that reads two."""
+
+        if catalogue.sidecar_filename is None:
+            return
+        sidecar = serialise_sidecar(catalogue.format_id, models)
+        if sidecar is None:
+            return
+        write_json_document_atomically_if_changed(
+            harness_catalogue_path(catalogue.sidecar_filename), sidecar
+        )
+
     def _path_for(self, spec: HarnessSpec) -> Path | None:
         catalogue = spec.catalogue
         if catalogue is None:
@@ -201,3 +251,36 @@ class HarnessCatalogueFanoutPublisher:
         if catalogue.filename is None:
             return None
         return harness_catalogue_path(catalogue.filename)
+
+
+#: The harness whose generated document carries both a literal credential and
+#: a per-session model selection. Named here rather than imported as a
+#: launcher constant because ``runtime`` may not depend on ``cli``.
+CLINE_HARNESS_ID = "cline_cli"
+
+
+def _selected_model_on_disk(path: Path) -> str | None:
+    """Return the model the last ``mcc-cline`` launch selected, if any.
+
+    A background refresh must not silently move a running session onto a
+    different model's limits, so the model already in the file wins over the
+    serialiser's "first routable" default.
+    """
+
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return None
+    if not isinstance(document, Mapping):
+        return None
+    providers = document.get("providers")
+    if not isinstance(providers, Mapping):
+        return None
+    entry = providers.get(CLINE_PROVIDER_ID)
+    if not isinstance(entry, Mapping):
+        return None
+    settings = entry.get("settings")
+    if not isinstance(settings, Mapping):
+        return None
+    model = settings.get("model")
+    return model if isinstance(model, str) and model else None

@@ -122,6 +122,11 @@ class RequestCapture:
         self._tokens_out: int | None = None
         self._primary_model_ref: str | None = None
         self._error: tuple[str | None, str | None] | None = None
+        # Whether the upstream stream reached its own terminal event. It is
+        # what separates "the reader stopped reading after the answer was
+        # complete" from "the reader gave up mid-answer", and only the second
+        # is a cancellation. See ``_observe``.
+        self._saw_terminal_event = False
         self._finalized = False
         # The rotating provider writes the credential it picks into this slot
         # from deep in the call stack; it is read back at finalize time.
@@ -464,12 +469,21 @@ class RequestCapture:
                 self._error = ("empty_stream", "Stream ended before any content.")
                 status = "error"
         except GeneratorExit:
-            status = "cancelled"
+            # The consumer stopped reading. Whether that is a *cancellation*
+            # depends on whether the answer had already finished: both OpenAI
+            # adapters return as soon as they translate the terminal event,
+            # which closes this generator while it is suspended on its last
+            # ``yield``. Recording that as "cancelled" made every successful
+            # ``/v1/chat/completions`` and ``/v1/responses`` request read as
+            # abandoned on the Requests page, while the identical request to
+            # ``/v1/messages`` -- whose reader drains the stream -- read as a
+            # success. The terminal event is the fact that tells them apart.
+            status = self._status_after_consumer_stopped()
             self._finalize(status)
             await try_close_async_iterator(body)
             raise
         except asyncio.CancelledError:
-            status = "cancelled"
+            status = self._status_after_consumer_stopped()
             self._finalize(status)
             raise
         except BaseException as exc:
@@ -483,6 +497,20 @@ class RequestCapture:
         finally:
             if status != "cancelled":
                 self._finalize(status)
+
+    def _status_after_consumer_stopped(
+        self,
+    ) -> Literal["success", "error", "cancelled"]:
+        """Return the status for a stream whose reader stopped before it did.
+
+        A stream that already emitted its terminal event produced a complete
+        answer, and the row should say so. Anything else really was abandoned
+        part-way, which is the case the "cancelled" status exists to record.
+        """
+
+        if self._error is not None:
+            return "error"
+        return "success" if self._saw_terminal_event else "cancelled"
 
     def _consume_buffer(self, buffer: str) -> str:
         """Parse complete SSE frames from the buffer; return the remainder."""
@@ -537,6 +565,8 @@ class RequestCapture:
                 # arrive here. Reading both is what makes the figure appear for
                 # OpenRouter, DeepSeek and the rest.
                 self._read_cache_usage(usage)
+        elif event_type == "message_stop":
+            self._saw_terminal_event = True
         elif event_type == "error":
             error = payload.get("error")
             if isinstance(error, dict):

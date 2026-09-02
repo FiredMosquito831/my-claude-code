@@ -409,6 +409,53 @@
                 </li>
                 <li class="claude-launcher">
                   <div class="claude-launcher-info">
+                    <h4>Cline</h4>
+                    <p>
+                      The Cline agent, pointed at a configuration directory this
+                      proxy owns through Cline's own <code>--config</code> flag,
+                      so your <code>~/.cline</code> is never read for a provider
+                      or written.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-cline</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
+                    <h4>Goose</h4>
+                    <p>
+                      Block's Goose, pointed here with six environment variables
+                      and no file at all &mdash; the one agent this proxy
+                      configures without writing anything, anywhere.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-goose</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
+                    <h4>Aider</h4>
+                    <p>
+                      Aider, handed a LiteLLM-shaped model metadata file and a
+                      model settings file this proxy owns, through Aider's own
+                      two flags, so no <code>.aider.model.*</code> file of yours
+                      is read or written.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-aider</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
+                    <h4>Droid</h4>
+                    <p>
+                      Factory's Droid, pointed at a runtime settings overlay this
+                      proxy owns through Droid's own <code>--settings</code>
+                      flag, so <code>~/.factory</code> is never edited. It speaks
+                      Anthropic Messages, not Chat Completions.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-droid</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
                     <h4>Previous Claude Code build</h4>
                     <p>
                       Launches the older Claude Code you had installed before, for
@@ -1797,7 +1844,11 @@ mcc-kilo
 mcc-commandcode
 mcc-kimi
 mcc-qwen
-mcc-crush</code></pre>
+mcc-crush
+mcc-cline
+mcc-goose
+mcc-aider
+mcc-droid</code></pre>
                 <p>
                   The <strong>Coding agents</strong> page lists every CLI this proxy can
                   launch: whether its binary is on your <code>PATH</code>,
@@ -1888,6 +1939,69 @@ mcc-crush</code></pre>
                   becomes Crush's own number and is listed under
                   <code>_mcc_defaulted</code> and on the card.
                 </p>
+                <p>
+                  <strong>Cline, Goose and Aider reach this proxy over
+                  <code>POST /v1/chat/completions</code></strong>, which is why
+                  they could not be served before. Each takes a different lever
+                  and none of them is your own config file. <strong>Cline</strong>
+                  publishes <code>--config</code>, which moves its whole
+                  configuration <em>directory</em>, so this proxy owns
+                  <code>~/.fcc/cline/</code> and writes one
+                  <code>providers.json</code> into it declaring the
+                  <code>openai-compatible</code> provider &mdash; the one entry
+                  that takes an arbitrary base URL and makes no discovery call.
+                  <code>-P openai-compatible</code> is passed on every launch,
+                  because a provider block that is written but not selected
+                  leaves Cline falling back to its own hosted account.
+                  <strong>Goose</strong> is configured entirely from the
+                  environment: <code>OPENAI_HOST</code> plus
+                  <code>OPENAI_BASE_PATH=v1/chat/completions</code> compose the
+                  endpoint, <code>GOOSE_PROVIDER</code> and
+                  <code>GOOSE_MODEL</code> pick the session, and
+                  <code>GOOSE_CONTEXT_LIMIT</code> carries that model's real
+                  context window. Nothing is written to disk at all &mdash;
+                  Goose's only file mechanism would put this proxy's document
+                  inside Goose's own config directory, beside your settings,
+                  which is the one thing none of these launchers do.
+                  <strong>Aider</strong> reads two documents and publishes a flag
+                  for each: <code>--model-metadata-file</code> takes a LiteLLM
+                  <code>model_cost</code> map with every model's context window,
+                  output ceiling, per-token prices and vision support, and
+                  <code>--model-settings-file</code> takes a list saying what each
+                  model <em>accepts</em> &mdash; whether
+                  <code>--reasoning-effort</code> will be honoured, whether
+                  <code>temperature</code> may be sent. The proxy token is in
+                  neither: <code>OPENAI_BASE_URL</code> and
+                  <code>OPENAI_API_KEY</code> are set in the launched process
+                  only.
+                </p>
+                <p>
+                  <strong>Droid is the odd one out, and in your favour.</strong>
+                  It was expected to need the chat-completions door too, but
+                  Factory's <code>customModels[].provider: "anthropic"</code>
+                  accepts an arbitrary <code>baseUrl</code> &mdash; so
+                  <code>mcc-droid</code> talks to this proxy in its own native
+                  Anthropic Messages protocol, with no translation in between.
+                  Its <code>--settings</code> flag is a runtime overlay merged
+                  for that process only, so this proxy owns
+                  <code>~/.fcc/droid-settings.json</code> and
+                  <code>~/.factory</code> is never edited. The key is written as
+                  Droid's own <code>${MCC_DROID_API_KEY}</code> reference and
+                  supplied to the launched process, so it never lands on disk.
+                  No Factory account is needed for a model this proxy routes.
+                </p>
+                <p class="guide-note">
+                  Cline is the second generated file that holds the proxy token
+                  literally, for a measured reason: its environment fallback for
+                  a missing <code>apiKey</code> does not authenticate a headless
+                  run. Like Kimi Code's, that file is mode <code>0600</code>
+                  under <code>~/.fcc</code>, beside the <code>.env</code> that
+                  already holds the same value. Cline also carries limits for
+                  <em>one</em> model at a time &mdash; its schema has no
+                  per-model array &mdash; so <code>mcc-cline -m &lt;model&gt;</code>
+                  is what moves the context window and output ceiling onto the
+                  model you actually asked for.
+                </p>
                 <img class="guide-shot" src="/admin/img/codex-model-picker.png"
                      alt="Codex model picker with the generated MCC catalog" loading="lazy">
                 <p>
@@ -1966,6 +2080,24 @@ mcc-crush</code></pre>
                   <strong>Requests</strong> page labels each of these rows
                   <code>openai_chat</code> in its Protocol row, so you can tell at a
                   glance which door a request came through.
+                </p>
+                <p>
+                  <strong>Four coding agents reach this proxy through that door,
+                  and each has a launcher of its own.</strong>
+                  <code>mcc-cline</code> writes an
+                  <code>openai-compatible</code> provider into a configuration
+                  directory this proxy owns.
+                  <code>mcc-goose</code> sets <code>OPENAI_HOST</code> and
+                  <code>OPENAI_BASE_PATH=v1/chat/completions</code> and writes no
+                  file at all.
+                  <code>mcc-aider</code> sets <code>OPENAI_BASE_URL</code> to the
+                  <code>/v1</code> form above and hands Aider two generated model
+                  documents.
+                  <code>mcc-droid</code> is the exception: Factory's Droid takes
+                  an arbitrary base URL on its <code>anthropic</code> provider, so
+                  it uses <code>POST /v1/messages</code> instead. See
+                  <strong>Coding agents</strong> for every command each one
+                  answers to.
                 </p>
                 <p class="guide-note">
                   <code>n</code> above 1 is refused with a 400 rather than served
