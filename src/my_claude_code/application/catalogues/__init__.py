@@ -33,6 +33,12 @@ from my_claude_code.application.catalogues.droid import (
     CUSTOM_MODELS_KEY as DROID_MODELS_KEY,
 )
 from my_claude_code.application.catalogues.droid import build_droid_catalogue
+from my_claude_code.application.catalogues.gemini_cli import (
+    CUSTOM_ALIASES_PATH as GEMINI_CLI_ALIASES_PATH,
+)
+from my_claude_code.application.catalogues.gemini_cli import (
+    build_gemini_cli_catalogue,
+)
 from my_claude_code.application.catalogues.kimi import build_kimi_catalogue
 from my_claude_code.application.catalogues.opencode import (
     PROVIDER_ID as OPENCODE_PROVIDER_ID,
@@ -53,6 +59,7 @@ SERIALISERS: dict[str, CatalogueSerialiser] = {
     "commandcode": build_commandcode_catalogue,
     "crush": build_crush_catalogue,
     "droid": build_droid_catalogue,
+    "gemini_cli": build_gemini_cli_catalogue,
     "kimi": build_kimi_catalogue,
     "opencode": build_opencode_catalogue,
     "pi": build_pi_catalogue,
@@ -64,9 +71,12 @@ SERIALISERS: dict[str, CatalogueSerialiser] = {
 #: mapping nested under the provider key it was told to write. Kimi Code is a
 #: third: a mapping at the document root, keyed by the whole model id, because
 #: that is what ``Config.models`` is. Crush and Qwen Code are lists again, one
-#: nested under a provider key and one under an auth-type key. Stating the
-#: path once is what lets a launcher check "did I get any models?" and the
-#: contract tests inspect every format without knowing any of them by name.
+#: nested under a provider key and one under an auth-type key. Gemini CLI is a
+#: mapping keyed by model id again -- ``modelConfigs.customAliases`` -- because
+#: that CLI runs one model at a time and what it stores per model is a preset
+#: rather than a provider entry. Stating the path once is what lets a launcher
+#: check "did I get any models?" and the contract tests inspect every format
+#: without knowing any of them by name.
 MODEL_ENTRY_PATHS: dict[str, tuple[str, ...]] = {
     "aider": (),
     "cline": ("providers",),
@@ -74,6 +84,7 @@ MODEL_ENTRY_PATHS: dict[str, tuple[str, ...]] = {
     "commandcode": ("provider", COMMANDCODE_PROVIDER_ID, "models"),
     "crush": ("providers", CRUSH_PROVIDER_ID, "models"),
     "droid": (DROID_MODELS_KEY,),
+    "gemini_cli": GEMINI_CLI_ALIASES_PATH,
     "kimi": ("models",),
     "opencode": ("provider", OPENCODE_PROVIDER_ID, "models"),
     "pi": ("models",),

@@ -681,7 +681,7 @@ configure_and_verify_my_claude_code() {
     for command_name in mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi \
         mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi \
         mcc-qwen mcc-crush \
-        mcc-cline mcc-goose mcc-aider mcc-droid \
+        mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini \
         mcc-init mcc-chatgpt-oauth-login mcc-anthropic-oauth-login \
         mcc-compact-log mcc-help mcc-rtk \
         mcc-desktop my-claude-code; do
@@ -753,6 +753,7 @@ else
     printf '  mcc-goose               Launch Goose through the proxy\n'
     printf '  mcc-aider               Launch Aider through the proxy\n'
     printf '  mcc-droid               Launch Droid through the proxy\n'
+    printf '  mcc-gemini              Launch Gemini CLI through the proxy\n'
     printf '  mcc-desktop             Open the system tray app (desktop)\n'
     printf '\nManage and inspect:\n'
     printf '  mcc-init                Create or repair ~/.fcc/.env\n'

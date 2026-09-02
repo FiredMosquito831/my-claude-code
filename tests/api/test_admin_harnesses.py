@@ -55,6 +55,40 @@ def test_harnesses_route_lists_every_registered_harness(monkeypatch, tmp_path):
     assert by_id["codex"]["rtk_enabled"] is False
 
 
+def test_an_unservable_harness_is_listed_with_its_dated_reason(monkeypatch, tmp_path):
+    """Antigravity is in the registry precisely so the answer is on the page.
+
+    It is measured and cannot be served, and the card renders the reason
+    verbatim -- with the version and the date it was measured on it, so a
+    reader can re-check it rather than trust it. It publishes no command.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    by_id = {entry["id"]: entry for entry in body["harnesses"]}
+    antigravity = by_id["antigravity"]
+    assert antigravity["available"] is False
+    assert antigravity["command_lines"] == []
+    assert antigravity["command"] == ""
+    assert antigravity["catalogue"] is None
+    assert "verified 2026-09-02" in antigravity["unavailable_reason"]
+    assert "agy 1.0.14" in antigravity["unavailable_reason"]
+    assert "cloudcode-pa.googleapis.com" in antigravity["unavailable_reason"]
+
+    gemini = by_id["gemini_cli"]
+    assert gemini["available"] is True
+    assert gemini["command"] == "mcc-gemini"
+    assert gemini["protocol_label"].startswith("Google Gemini")
+    assert gemini["catalogue"]["config_env_var"] == "GEMINI_CLI_SYSTEM_SETTINGS_PATH"
+
+
 def test_a_missing_binary_reports_the_vendor_install_hint_and_nothing_else(
     monkeypatch, tmp_path
 ):

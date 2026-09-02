@@ -118,6 +118,7 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
 }
 
 FACADE_ONLY_BOUNDARIES = {
+    "my_claude_code.core.gemini_api",
     "my_claude_code.core.openai_chat_completions",
     "my_claude_code.core.openai_responses",
     "my_claude_code.core.identity",

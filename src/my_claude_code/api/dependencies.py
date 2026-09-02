@@ -63,7 +63,16 @@ def require_proxy_auth(
     layers rejected it. Reading both headers costs one lookup and removes an
     entire class of that failure.
 
-    ``Authorization`` still wins when both are present, so nothing about an
+    Gemini clients are the third form and the reason this list grew again.
+    ``@google/genai`` -- the SDK Gemini CLI bundles -- sends the key as
+    ``x-goog-api-key`` and never as a bearer token
+    (``NodeAuth.addKeyHeader``, read out of Gemini CLI 0.49.0's own bundle),
+    while Google's REST documentation and every ``curl`` example put it in the
+    ``key`` query parameter instead. Both are read, and the query form last of
+    all: a token on a URL lands in access logs and shell history, so it is
+    accepted for compatibility and never preferred over a header.
+
+    ``Authorization`` still wins when several are present, so nothing about an
     existing client's behaviour changes.
     """
     anthropic_auth_token = settings.anthropic_auth_token.strip()
@@ -105,4 +114,27 @@ def _presented_proxy_token(request: Request) -> str | None:
     api_key = request.headers.get("x-api-key")
     if api_key is not None:
         return api_key.strip()
+
+    goog_api_key = request.headers.get("x-goog-api-key")
+    if goog_api_key is not None:
+        return goog_api_key.strip()
+
+    query_key = _query_key(request)
+    if query_key is not None:
+        return query_key.strip()
     return None
+
+
+def _query_key(request: Request) -> str | None:
+    """Return the ``key`` query parameter, or None when there is no query.
+
+    Guarded because ``request.query_params`` reads ``scope["query_string"]``
+    directly and raises ``KeyError`` on a scope that omits it. Every real ASGI
+    server sets it; a hand-built ``Request`` in a unit test need not, and a
+    header-only auth check must not depend on the shape of a scope it never
+    reads.
+    """
+
+    if "query_string" not in request.scope:
+        return None
+    return request.query_params.get("key")

@@ -39,6 +39,7 @@ from my_claude_code.config.harnesses import (
     harness_ids,
     harness_spec,
     harness_specs,
+    launchable_specs,
     rtk_capable_ids,
 )
 from my_claude_code.config.paths import CODEX_MODEL_CATALOG_FILENAME
@@ -92,8 +93,10 @@ def test_every_protocol_has_the_label_the_coding_agents_page_renders() -> None:
     for protocol, label in PROTOCOL_LABELS.items():
         assert label.strip(), protocol
         # Each label names the route it means, which is the fact a reader on
-        # that page is actually looking for.
-        assert "POST /v1/" in label
+        # that page is actually looking for. Not ``POST /v1/``: Google's
+        # surface is versioned ``/v1beta`` in the path, which is Google's
+        # spelling and not something MCC gets to normalise.
+        assert "POST /v1" in label
 
 
 def test_every_spec_declares_a_protocol_that_has_a_label() -> None:
@@ -146,6 +149,7 @@ def test_every_catalogue_declares_how_it_reaches_its_agent() -> None:
         "cline_cli": "file",
         "aider": "file",
         "droid": "file",
+        "gemini_cli": "file",
     }
     assert [
         spec.id
@@ -162,6 +166,7 @@ def test_every_catalogue_declares_how_it_reaches_its_agent() -> None:
         "cline_cli",
         "aider",
         "droid",
+        "gemini_cli",
     ]
 
 
@@ -349,9 +354,13 @@ def test_the_generated_help_lists_every_registered_harness_command() -> None:
 
 
 def test_every_command_line_carries_a_sentence_of_its_own() -> None:
-    """The dashboard renders these verbatim; an empty help is a blank row."""
+    """The dashboard renders these verbatim; an empty help is a blank row.
 
-    for spec in harness_specs():
+    Scoped to the launchable harnesses: an entry MCC has measured and cannot
+    serve publishes no command at all, and its card says so instead.
+    """
+
+    for spec in launchable_specs():
         lines = harness_command_lines(spec)
         assert lines, spec.id
         for line in lines:
@@ -395,6 +404,7 @@ def test_a_config_owning_harness_names_the_variable_it_is_pointed_with() -> None
         "commandcode_cli": (None, None),
         "kimi_code": (None, "--config-file"),
         "qwen_code": ("QWEN_CODE_SYSTEM_SETTINGS_PATH", None),
+        "gemini_cli": ("GEMINI_CLI_SYSTEM_SETTINGS_PATH", None),
         "crush": ("CRUSH_GLOBAL_CONFIG", None),
         "cline_cli": (None, "--config"),
         "aider": (None, "--model-metadata-file"),

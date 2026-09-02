@@ -6810,6 +6810,27 @@ details.turn-pane > summary:focus-visible {
   border-color: var(--accent-border);
 }
 
+/* "Not servable" is a different fact from "Not installed": nothing the user
+   does to their machine changes it, so it reads as a warning rather than as a
+   neutral state waiting to be resolved. */
+.agent-state.unavailable {
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+}
+
+.coding-agent-card .agent-unavailable-reason {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
 .coding-agent-card .agent-command {
   display: block;
   padding: 8px 10px;

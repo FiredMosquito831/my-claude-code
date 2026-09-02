@@ -42,7 +42,57 @@ _PRODUCT_REQUESTS = (
             "stream": True,
         },
     ),
+    (
+        "gemini",
+        "/v1beta/models/open_router/test-model:streamGenerateContent",
+        {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
+    ),
 )
+
+#: Neutral failure kind -> the ``error.status`` a Gemini client reads. Only
+#: the three an ordinary-phase failure can produce are listed; the full map
+#: lives in ``core/gemini_api/errors.py`` and is pinned in
+#: ``tests/core/test_gemini_translation.py``.
+_GEMINI_STATUSES = {
+    "api_error": "UNAVAILABLE",
+    "invalid_request_error": "INVALID_ARGUMENT",
+}
+
+
+class _PatchedResolveProvider:
+    """Patch ``resolve_provider`` in every route module that imported it.
+
+    ``api/routes.py`` and ``api/gemini_routes.py`` each bind the dependency by
+    name, so patching one leaves the other calling the real resolver -- which
+    would make the Gemini parametrisation of these tests pass for the wrong
+    reason.
+    """
+
+    def __init__(
+        self,
+        *,
+        return_value: object = None,
+        side_effect: BaseException | None = None,
+    ) -> None:
+        self._patches = [
+            patch(
+                target,
+                return_value=return_value,
+                side_effect=side_effect,
+            )
+            for target in (
+                "my_claude_code.api.routes.resolve_provider",
+                "my_claude_code.api.gemini_routes.resolve_provider",
+            )
+        ]
+
+    def __enter__(self) -> None:
+        for entry in self._patches:
+            entry.start()
+
+    def __exit__(self, *exc: object) -> None:
+        for entry in reversed(self._patches):
+            entry.stop()
 
 
 def _settings(**updates: object) -> Settings:
@@ -69,6 +119,19 @@ def _assert_ordinary_protocol_error(
 
     request_id = response.headers["request-id"]
     assert request_id.startswith("req_")
+    if wire_api == "gemini":
+        # Google's envelope repeats the HTTP status inside the body and names
+        # the canonical code, which is the string Gemini CLI branches on.
+        assert "x-request-id" not in response.headers
+        assert response.json() == {
+            "error": {
+                "code": status_code,
+                "message": message,
+                "status": _GEMINI_STATUSES[error_type],
+            }
+        }
+        return
+
     if wire_api in {"responses", "chat_completions"}:
         assert response.headers["x-request-id"] == request_id
         assert response.json() == {
@@ -102,7 +165,7 @@ def test_application_errors_share_one_protocol_neutral_base(
 @pytest.mark.parametrize(
     ("wire_api", "path", "payload"),
     _PRODUCT_REQUESTS,
-    ids=("messages", "responses", "chat_completions"),
+    ids=("messages", "responses", "chat_completions", "gemini"),
 )
 def test_missing_provider_credential_is_protocol_specific_503_without_terminal_header(
     wire_api: str,
@@ -135,7 +198,7 @@ def test_missing_provider_credential_is_protocol_specific_503_without_terminal_h
 @pytest.mark.parametrize(
     ("wire_api", "path", "payload"),
     _PRODUCT_REQUESTS,
-    ids=("messages", "responses", "chat_completions"),
+    ids=("messages", "responses", "chat_completions", "gemini"),
 )
 def test_runtime_acquisition_failure_is_protocol_specific_503_without_terminal_header(
     wire_api: str,
@@ -165,7 +228,7 @@ def test_runtime_acquisition_failure_is_protocol_specific_503_without_terminal_h
 @pytest.mark.parametrize(
     ("wire_api", "path", "payload"),
     _PRODUCT_REQUESTS,
-    ids=("messages", "responses", "chat_completions"),
+    ids=("messages", "responses", "chat_completions", "gemini"),
 )
 def test_unknown_provider_is_protocol_specific_400_without_terminal_header(
     wire_api: str,
@@ -176,10 +239,7 @@ def test_unknown_provider_is_protocol_specific_400_without_terminal_header(
     app = create_test_app(_settings())
 
     with (
-        patch(
-            "my_claude_code.api.routes.resolve_provider",
-            side_effect=UnknownProviderError(message),
-        ),
+        _PatchedResolveProvider(side_effect=UnknownProviderError(message)),
         TestClient(app) as client,
     ):
         response = client.post(path, json=payload)
@@ -196,7 +256,7 @@ def test_unknown_provider_is_protocol_specific_400_without_terminal_header(
 @pytest.mark.parametrize(
     ("wire_api", "path", "payload"),
     _PRODUCT_REQUESTS,
-    ids=("messages", "responses", "chat_completions"),
+    ids=("messages", "responses", "chat_completions", "gemini"),
 )
 def test_preflight_rejection_is_protocol_specific_400_without_terminal_header(
     wire_api: str,
@@ -208,13 +268,7 @@ def test_preflight_rejection_is_protocol_specific_400_without_terminal_header(
     provider.preflight_stream.side_effect = InvalidRequestError(message)
     app = create_test_app(_settings())
 
-    with (
-        patch(
-            "my_claude_code.api.routes.resolve_provider",
-            return_value=provider,
-        ),
-        TestClient(app) as client,
-    ):
+    with _PatchedResolveProvider(return_value=provider), TestClient(app) as client:
         response = client.post(path, json=payload)
 
     provider.stream_response.assert_not_called()
@@ -230,7 +284,7 @@ def test_preflight_rejection_is_protocol_specific_400_without_terminal_header(
 @pytest.mark.parametrize(
     ("wire_api", "path", "payload"),
     _PRODUCT_REQUESTS,
-    ids=("messages", "responses", "chat_completions"),
+    ids=("messages", "responses", "chat_completions", "gemini"),
 )
 @pytest.mark.parametrize(
     ("headers", "detail"),
@@ -256,7 +310,16 @@ def test_proxy_auth_preserves_ingress_detail_contract(
         response = client.post(path, json=payload, headers=headers)
 
     assert response.status_code == 401
-    assert response.json() == {"detail": detail}
+    if wire_api == "gemini":
+        # The one surface whose 401 body is reshaped, and only because
+        # ``@google/genai`` parses a non-2xx body as Google's error envelope
+        # and reports "unknown error" for anything else. The other three keep
+        # FastAPI's ``detail`` body their clients have always received.
+        assert response.json() == {
+            "error": {"code": 401, "message": detail, "status": "UNAUTHENTICATED"}
+        }
+    else:
+        assert response.json() == {"detail": detail}
     assert response.headers["content-type"].startswith("application/json")
     assert "x-should-retry" not in response.headers
     request_id = response.headers["request-id"]

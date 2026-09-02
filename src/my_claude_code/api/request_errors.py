@@ -16,12 +16,16 @@ from my_claude_code.core.diagnostics import (
     redacted_exception_traceback,
     safe_exception_message,
 )
+from my_claude_code.core.gemini_api import (
+    gemini_error_payload,
+    gemini_status_for_failure,
+)
 from my_claude_code.core.openai_common import (
     openai_error_payload,
     openai_error_type_for_failure,
 )
 
-from .wire_surfaces import WireApi, is_openai_shaped
+from .wire_surfaces import WireApi, is_gemini_shaped, is_openai_shaped
 
 
 def require_non_empty_messages(messages: list[Any]) -> None:
@@ -36,6 +40,15 @@ def ordinary_application_error_response(
     request_id: str,
 ) -> JSONResponse:
     """Serialize a deterministic application error without terminal headers."""
+    if is_gemini_shaped(wire_api):
+        return JSONResponse(
+            status_code=error.status_code,
+            content=gemini_error_payload(
+                message=error.message,
+                code=error.status_code,
+                status=gemini_status_for_failure(error.kind),
+            ),
+        )
     if is_openai_shaped(wire_api):
         return JSONResponse(
             status_code=error.status_code,

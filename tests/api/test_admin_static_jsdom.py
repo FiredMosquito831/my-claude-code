@@ -1844,7 +1844,7 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
     agents = rendered["codingAgents"]
 
     assert agents["present"] is True
-    assert agents["cardCount"] == 12
+    assert agents["cardCount"] == 14
     assert [card["id"] for card in agents["cards"]] == [
         "claude",
         "codex",
@@ -1858,6 +1858,8 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "goose",
         "aider",
         "droid",
+        "gemini_cli",
+        "antigravity",
     ]
     assert [card["title"] for card in agents["cards"]] == [
         "Claude Code",
@@ -1872,6 +1874,8 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "Goose",
         "Aider",
         "Droid",
+        "Gemini CLI",
+        "Antigravity",
     ]
     assert [card["command"] for card in agents["cards"]] == [
         "mcc-claude",
@@ -1886,7 +1890,53 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "mcc-goose",
         "mcc-aider",
         "mcc-droid",
+        "mcc-gemini",
+        # Antigravity publishes no command at all, and the card says so rather
+        # than printing one that does not exist.
+        None,
     ]
+
+
+def test_a_gemini_harness_names_googles_protocol_on_its_card(
+    rendered: dict,
+) -> None:
+    """The third door, and the card is where a user finds out which one.
+
+    It matters for the same reason the chat-completions cards do: the Requests
+    page labels these rows ``gemini`` rather than ``anthropic``, and the
+    endpoint it shows is a path with a model in it.
+    """
+
+    cards = {card["id"]: card for card in rendered["codingAgents"]["cards"]}
+
+    assert "/v1beta/models" in cards["gemini_cli"]["meta"]
+    assert "GEMINI_CLI_SYSTEM_SETTINGS_PATH" in cards["gemini_cli"]["meta"]
+    assert cards["gemini_cli"]["unavailable"] is False
+    assert cards["gemini_cli"]["state"] == "Installed"
+
+
+def test_an_unservable_harness_states_the_reason_and_offers_no_command(
+    rendered: dict,
+) -> None:
+    """ "Not servable" is a different fact from "Not installed".
+
+    One is something a user fixes by installing the CLI; the other is
+    something MCC measured and cannot fix. Printing an ``mcc-`` command for
+    the second would be a lie the page cannot walk back, so the card carries
+    the dated reason instead and says the launcher does not exist.
+    """
+
+    cards = {card["id"]: card for card in rendered["codingAgents"]["cards"]}
+    antigravity = cards["antigravity"]
+
+    assert antigravity["state"] == "Not servable"
+    assert antigravity["unavailable"] is True
+    assert antigravity["command"] is None
+    assert antigravity["commandLines"] == []
+    assert antigravity["installHint"] is None
+    assert "verified 2026-09-02" in antigravity["unavailableReason"]
+    assert "agy 1.0.14" in antigravity["unavailableReason"]
+    assert "MCC publishes no command" in antigravity["meta"]
 
 
 def test_coding_agents_card_lists_every_command_with_a_copy_button(

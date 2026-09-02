@@ -59,7 +59,8 @@ Run your coding agents with free, paid, or local models. Choose and validate pro
 | **Web search** | Claude Code's official `web_search` server tool fulfilled at the proxy level by 14 search providers, with 66 advanced per-provider options, full-page-text retrieval, domain filtering, rich result digests, and zero-config keyless fallback. |
 | **Limits & Resilience** | Deadlines, output budgets, chain benching, provider retries and credential health on one page, each field with a stated cost and an enforced range — plus a calculator that tells you what each model on *your* chains actually gets, which is rarely the number in the box. |
 | **Observability** | Persistent local request and web-search analytics with consistent filters, range-aware rollups, provider/key health, latency, errors, known spend, export, and auto-refresh. |
-| **Any OpenAI-compatible client** | `POST /v1/chat/completions` serves the OpenAI request shape every IDE plugin, SDK and agent framework already speaks — streaming, tool calls, image parts, `reasoning_effort` and `stream_options.include_usage` — alongside `POST /v1/responses` for Codex and `POST /v1/messages` for Claude Code. Point any of them at `http://127.0.0.1:8082/v1` with your `ANTHROPIC_AUTH_TOKEN` as the API key; all three doors share one router, fallback chain and request log. |
+| **Any OpenAI-compatible client** | `POST /v1/chat/completions` serves the OpenAI request shape every IDE plugin, SDK and agent framework already speaks — streaming, tool calls, image parts, `reasoning_effort` and `stream_options.include_usage` — alongside `POST /v1/responses` for Codex and `POST /v1/messages` for Claude Code. Point any of them at `http://127.0.0.1:8082/v1` with your `ANTHROPIC_AUTH_TOKEN` as the API key; all the doors share one router, fallback chain and request log. |
+| **Any Gemini client** | `POST /v1beta/models/{model}:generateContent` and `:streamGenerateContent?alt=sse` serve Google's own request shape — `contents`, `systemInstruction`, `generationConfig` including `thinkingConfig` and `responseSchema`, `tools`, `toolConfig`, inline images and function calls. Gemini CLI and the `google-genai` SDKs speak this protocol and no other, so this is the only door they can use. Point them at `http://127.0.0.1:8082` (the root — the SDKs append `/v1beta` themselves) with your `ANTHROPIC_AUTH_TOKEN` as `x-goog-api-key`. |
 | **Editor integrations** | Claude Code and Codex in VS Code, or Claude Code through JetBrains ACP. |
 | **Messaging** | Optionally run Claude Code sessions through Discord or Telegram with voice-note transcription. |
 | **Version & updates** | The dashboard shows the running version, announces new releases, and installs them for you with checksum verification. |
@@ -369,9 +370,39 @@ mcc-cline
 mcc-goose
 mcc-aider
 mcc-droid
+mcc-gemini
 ```
 
-These four were unreachable until MCC grew an inbound
+**Gemini CLI** (`npm install -g @google/gemini-cli`) speaks Google's protocol
+and no other — not Anthropic Messages, not either OpenAI shape — so MCC grew a
+third inbound surface for it: `POST /v1beta/models/{model}:generateContent`.
+`mcc-gemini` sets `GOOGLE_GEMINI_BASE_URL` and `GEMINI_API_KEY` in the launched
+process and hands the CLI a settings document MCC owns, through Gemini CLI's own
+`GEMINI_CLI_SYSTEM_SETTINGS_PATH` variable. **Your `~/.gemini/settings.json` is
+never written and never read for authentication**, and the OAuth tokens beside
+it are never read at all.
+
+The document exists because the obvious configuration *fails*: with only the two
+variables set, Gemini CLI infers the auth type `gateway` and its own
+`validateAuthMethod` refuses that value before a request leaves the machine. One
+key — `security.auth.selectedType: "gemini-api-key"` — short-circuits the
+inference. The same document turns Google's usage telemetry off, because a
+session routed through a local proxy has no business reporting itself to Google
+and there is no environment variable for that switch. Gemini CLI runs one model
+at a time and builds its picker from a list compiled into the binary, so MCC
+writes the session default and prints every routable id on startup; `-m <id>`
+reaches any of them.
+
+**Google's Antigravity CLI (`agy`) cannot be served, and the Coding agents page
+says so with a date on it.** Verified 2026-09-02 against `agy` 1.0.14: every
+credential path in the binary ends in a Google OAuth token — there is no
+API-key entry point and no `GEMINI_API_KEY`, `GOOGLE_API_KEY` or
+`GOOGLE_GEMINI_BASE_URL` anywhere in it — and it speaks the private Gemini Code
+Assist protocol (`/v1internal:generateContent` on `cloudcode-pa.googleapis.com`)
+rather than the public Gemini API. It is listed as **Not servable** rather than
+omitted, so the question has an answer instead of being re-asked.
+
+The four before it were unreachable until MCC grew an inbound
 `POST /v1/chat/completions`, and three of them use it. Each takes a different
 lever, and none of them is a file you own.
 

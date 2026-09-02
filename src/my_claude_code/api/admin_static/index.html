@@ -456,6 +456,21 @@
                 </li>
                 <li class="claude-launcher">
                   <div class="claude-launcher-info">
+                    <h4>Gemini CLI</h4>
+                    <p>
+                      Google's Gemini CLI, which speaks Google's protocol and no
+                      other &mdash; so this proxy serves that protocol too. The
+                      launcher sets <code>GOOGLE_GEMINI_BASE_URL</code> and
+                      <code>GEMINI_API_KEY</code> for the launched process and
+                      hands the CLI a settings document this proxy owns, so
+                      <code>~/.gemini/settings.json</code> is never written and
+                      the OAuth tokens beside it are never read.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-gemini</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
                     <h4>Previous Claude Code build</h4>
                     <p>
                       Launches the older Claude Code you had installed before, for
@@ -1369,6 +1384,7 @@
                 <a href="#guide-desktop">Claude Desktop</a>
                 <a href="#guide-other">Point another CLI here</a>
                 <a href="#guide-openai-clients">Connect any OpenAI-compatible client</a>
+                <a href="#guide-gemini-clients">Connect a Gemini client</a>
                 <a href="#guide-websearch">Search the web</a>
                 <a href="#guide-analytics">See what happened</a>
                 <a href="#guide-deploy">Desktop &amp; RTK</a>
@@ -1848,7 +1864,8 @@ mcc-crush
 mcc-cline
 mcc-goose
 mcc-aider
-mcc-droid</code></pre>
+mcc-droid
+mcc-gemini</code></pre>
                 <p>
                   The <strong>Coding agents</strong> page lists every CLI this proxy can
                   launch: whether its binary is on your <code>PATH</code>,
@@ -2105,6 +2122,99 @@ mcc-droid</code></pre>
                   the frequency and presence penalties have no equivalent upstream and
                   are dropped &mdash; the request still runs, and the drop is recorded
                   in the server log rather than being silent.
+                </p>
+
+                <h3 id="guide-gemini-clients">Connect a Gemini client</h3>
+                <p>
+                  Gemini CLI and everything built on Google&rsquo;s
+                  <code>google-genai</code> SDKs speak one protocol and no other:
+                  they cannot be pointed at an OpenAI-shaped endpoint at any
+                  price. So this proxy serves Google&rsquo;s own request shape as
+                  a third door. Give a Gemini client these three:
+                </p>
+                <table class="guide-table">
+                  <tbody>
+                    <tr>
+                      <td>Base URL</td>
+                      <td>
+                        <code>http://127.0.0.1:8082</code> &mdash; the root, with
+                        no <code>/v1</code> and no <code>/v1beta</code>: the
+                        Google SDKs append
+                        <code>/v1beta/models/&hellip;</code> themselves
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>API key</td>
+                      <td>
+                        your <code>ANTHROPIC_AUTH_TOKEN</code>, sent as
+                        <code>x-goog-api-key</code> (what the SDKs send) or
+                        <code>?key=</code> (what Google&rsquo;s own curl examples
+                        use). A bearer <code>Authorization</code> header is
+                        accepted too and still outranks both.
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>Model</td>
+                      <td>
+                        any id from <code>GET /v1beta/models</code>, for example
+                        <code>anthropic/openrouter/qwen/qwen3-coder</code>.
+                        Slashes are legal in the path and survive the wire.
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p>
+                  <strong><code>POST
+                  /v1beta/models/{model}:generateContent</code></strong> answers
+                  with one <code>GenerateContentResponse</code>;
+                  <strong><code>:streamGenerateContent</code></strong> answers
+                  with Google&rsquo;s <code>alt=sse</code> stream &mdash; bare
+                  <code>data:</code> frames and no <code>[DONE]</code> sentinel,
+                  which is OpenAI&rsquo;s convention and would break a Gemini
+                  client. <code>:countTokens</code> is served too.
+                  <code>systemInstruction</code>, <code>generationConfig</code>
+                  (including <code>thinkingConfig</code> and
+                  <code>responseSchema</code>), <code>tools</code> and
+                  <code>toolConfig</code> are all translated, and inline images
+                  and function-call round trips work. All of it runs through the
+                  same routing, fallback chain, reasoning gating and request log
+                  as <code>/v1/messages</code>.
+                </p>
+                <pre><code>curl "http://127.0.0.1:8082/v1beta/models/anthropic/claude-sonnet-4-5:generateContent" \
+  -H "x-goog-api-key: $ANTHROPIC_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}'</code></pre>
+                <p>
+                  The <strong>Requests</strong> page labels these rows
+                  <code>gemini</code> in their Protocol row, and their Endpoint
+                  row carries the model and the method &mdash; the path
+                  <em>is</em> the model on this surface, so collapsing it to a
+                  constant would hide which model a row was for.
+                </p>
+                <p>
+                  <strong>One coding agent reaches this proxy through that
+                  door.</strong> <code>mcc-gemini</code> sets
+                  <code>GOOGLE_GEMINI_BASE_URL</code> and
+                  <code>GEMINI_API_KEY</code> in the launched process and hands
+                  Gemini CLI a settings document this proxy owns, through the
+                  CLI&rsquo;s own
+                  <code>GEMINI_CLI_SYSTEM_SETTINGS_PATH</code> variable. Your
+                  <code>~/.gemini/settings.json</code> is never written, and the
+                  OAuth tokens beside it are never read. See <strong>Coding
+                  agents</strong> for every command it answers to &mdash;
+                  including why a headless run needs
+                  <code>--skip-trust</code>.
+                </p>
+                <p class="guide-note">
+                  <code>candidateCount</code> above 1 is refused with a 400
+                  rather than served quietly as one candidate.
+                  <code>safetySettings</code> and <code>cachedContent</code> have
+                  no equivalent upstream and are dropped, as are Google-hosted
+                  tools such as <code>googleSearch</code> &mdash; the request
+                  still runs, and every drop is recorded in the server log rather
+                  than being silent. Thought parts are returned only when the
+                  request asked for them with
+                  <code>thinkingConfig.includeThoughts</code>.
                 </p>
 
                 <h3 id="guide-websearch">Search the web</h3>

@@ -460,6 +460,16 @@ With **Model discovery** on, the app populates its picker from MCC's `/v1/models
 > to `anthropic` with the `commandcode` provider switched off is an ordinary
 > setup. The registry even gives them different ids — the harness is
 > `commandcode_cli` — so no lookup can resolve one and answer with the other.
+>
+> **Gemini is the newest pair, and the one where the word means three things.**
+> The provider `gemini` on the Providers page is Google's own
+> OpenAI-compatible endpoint MCC sends requests *to*, paid for with a Google
+> AI Studio key. `mcc-gemini` launches Google's Gemini *CLI*, which sends its
+> requests to MCC over the Gemini protocol — and needs that provider switched
+> on for nothing. And `POST /v1beta/models/{model}:generateContent` is MCC's
+> own *inbound* Gemini surface, which is what the CLI talks to. Three
+> different things, one word: the harness id is `gemini_cli`, deliberately not
+> `gemini`.
 
 Every CLI MCC can launch is declared once, in `config/harnesses.py`. That one
 declaration produces the `mcc-<id>` command, the `mcc-help` line, the
@@ -963,22 +973,117 @@ mcc-droid doctor                         # config, connectivity and auth state
 Maintenance subcommands — `update`, `mcp`, `plugin`, `computer`, `doctor`,
 `help`, `search` — and `--help` / `--version` reach the CLI untouched.
 
+### Gemini CLI
+
+```bash
+mcc-gemini                                     # interactive
+mcc-gemini -p "say ok"                         # one prompt, non-interactively
+mcc-gemini -m anthropic/<provider>/<model> -p "say ok"
+mcc-gemini -o json -p "say ok"                 # machine-readable
+mcc-gemini --skip-trust -p "say ok"            # see the note on trusted folders
+mcc-gemini mcp                                 # passed straight through
+```
+
+Gemini CLI is Google's `gemini`, and it is the only agent in this list that
+speaks **neither** Anthropic Messages nor an OpenAI shape. It speaks Google's
+own protocol and nothing else, which is why MCC now serves a third inbound
+surface — `POST /v1beta/models/{model}:generateContent` — described under
+[Connect a Gemini client](#connect-a-gemini-client) below.
+
+**What `mcc-gemini` sets, and what it never touches.** Two environment
+variables in the launched process only — `GOOGLE_GEMINI_BASE_URL` pointing at
+this proxy and `GEMINI_API_KEY` carrying your `ANTHROPIC_AUTH_TOKEN` — plus one
+MCC-owned settings document at `~/.fcc/gemini-cli-settings.json`, handed to the
+CLI through its own `GEMINI_CLI_SYSTEM_SETTINGS_PATH` variable. **Your
+`~/.gemini/settings.json` is never written and never read for authentication**,
+and the OAuth tokens beside it are never read at all: the API-key path returns
+before Gemini CLI's Code Assist client is ever constructed. Everything in your
+own settings that MCC does not name — your theme, your MCP servers, your memory
+settings — still applies, because Gemini CLI merges the *system* scope last and
+MCC's document contains only three keys.
+
+**Why a file at all.** Setting only the two variables does not work, and it
+fails in a way that looks like a bug in MCC. Gemini CLI infers its auth type
+from the environment, and the presence of `GOOGLE_GEMINI_BASE_URL` makes it
+infer `gateway` — a value its own `validateAuthMethod` then refuses with
+"Invalid auth method selected." before a single request leaves the machine. The
+one settings key `security.auth.selectedType: "gemini-api-key"` short-circuits
+that inference entirely. The same document also sets
+`privacy.usageStatisticsEnabled: false`, because a session routed through a
+local proxy has no business reporting itself to Google and there is no
+environment variable for that switch.
+
+**The model list.** Gemini CLI runs one model at a time and builds its `/model`
+picker from a list of Google models compiled into the binary — MCC cannot add
+entries to it. So the generated document sets `model.name` to your primary
+routed model, `mcc-gemini` prints the full list of routable ids on startup, and
+`-m <id>` reaches any of them. Each id also gets an entry under
+`modelConfigs.customAliases`, which is where its output ceiling and reasoning
+level land; that key merges with Gemini CLI's built-in presets rather than
+replacing them.
+
+**Trusted folders.** Gemini CLI refuses a headless run in a directory it has
+not been told to trust, and answers with its own message naming `--skip-trust`
+and `GEMINI_CLI_TRUST_WORKSPACE`. MCC does not set either for you: trusting a
+working directory is your security decision, not a launcher's.
+
+`mcp`, `extensions`, `budget`, `--help` and `--version` reach the CLI
+untouched.
+
+### Antigravity: checked, and not possible
+
+Google's Antigravity CLI (`agy`) appears on the **Coding agents** page marked
+**Not servable**, with the reason on the card. It is listed rather than omitted
+so the question has a dated answer instead of being re-asked every quarter.
+
+**Verified 2026-09-02 against `agy` 1.0.14.** Two independent blockers, either
+of which alone is fatal:
+
+* **Every credential path ends in a Google OAuth token.** The binary's auth
+  chain is keyring, browser OAuth, Application Default Credentials and a
+  corporate login — there is no API-key entry point, and the strings
+  `GEMINI_API_KEY`, `GOOGLE_API_KEY` and `GOOGLE_GEMINI_BASE_URL` do not appear
+  in it at all. Without a Google sign-in it stops at "You are currently not
+  signed in."
+* **It does not speak the public Gemini API.** It calls
+  `/v1internal:generateContent`, `:loadCodeAssist`, `:onboardUser` and
+  `:fetchAvailableModels` on `cloudcode-pa.googleapis.com` — the private Gemini
+  Code Assist service — and never `/v1beta/models/{model}:generateContent`. Its
+  model list is server-supplied, so `--model` cannot name an MCC route either.
+
+`CLOUD_CODE_URL` does redirect the backend host, so a proxy in front of an
+already-signed-in session is technically reachable. That would mean
+reimplementing a private Google protocol and would still require your Google
+account, which is a different product from the one this proxy is.
+
+### Other CLIs that were checked and cannot be served
+
+| CLI | Checked | Why not |
+| --- | --- | --- |
+| **Antigravity** (`agy` 1.0.14) | 2026-09-02 | Google OAuth only, and speaks the private Gemini Code Assist protocol rather than the public Gemini API. See above. |
+| **Cursor CLI** | 2026-09-01 | No published base-URL or API-key override: the CLI authenticates against Cursor's own account service and routes every request through it. |
+| **Amp** (`@sourcegraph/amp`) | 2026-09-01 | Server-side agent. The CLI is a thin client for Sourcegraph's hosted service and has no setting that moves the inference endpoint. |
+| **Roo Code CLI** | 2026-09-01 | Ships as a VS Code extension host; its provider configuration lives in the editor's own storage with no file or variable a launcher can point at. |
+
+If one of these publishes a base-URL override, the work is small — every
+harness in this section is one entry in `config/harnesses.py` plus a launcher.
+
 ### What MCC tells an agent about a model
 
 The catalogue MCC generates for an agent carries each model's **real**
 metadata, as MCC's resolution ladder resolved it, translated into that CLI's
 own schema:
 
-| What the ladder resolves | Where it lands in Codex | Where it lands in Pi | Where it lands in OpenCode / Kilo | Where it lands in Command Code | Where it lands in Kimi Code | Where it lands in Qwen Code | Where it lands in Crush | Where it lands in Cline | Where it lands in Aider | Where it lands in Droid |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| context window | `context_window` / `max_context_window` | `contextWindow` | `limit.context` | `contextWindow` | `max_context_size` | `contextWindowSize` | `context_window`  `contextWindow` | `max_input_tokens` | `maxContextLimit` |
-| output ceiling | *(Codex has no field)* | `maxTokens` | `limit.output` | `maxOutput` | *(Kimi has no field)* | *(Qwen has no field)* | `default_max_tokens`  `maxTokens` | `max_output_tokens` + `max_tokens` | `maxOutputTokens` |
-| vision support | `input_modalities` | `input` | `attachment` + `modalities.input` | *(no field)* | `capabilities: ["image_in"]` | `modalities.image` | `supports_attachments`  *(no field)* | `supports_vision` | `noImageSupport` |
-| tool support | `supports_parallel_tool_calls` | *(Pi has no field)* | `tool_call` | *(no field)* | *(Kimi has no field)* | *(Qwen has no field)* | *(Crush has no field)*  *(no field)* | `supports_function_calling` | *(no field)* |
-| reasoning support | `supports_reasoning_summaries` | `reasoning` | `reasoning` | `reasoning` | `capabilities: ["thinking"]`, plus `"always_thinking"` when it cannot be turned off | `reasoning: false` when known absent | `can_reason`  *(no field)* | *(via settings)* | `enableThinking` |
-| reasoning efforts | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* | `variants.<rung>`, clamped to OpenCode's own rungs | `reasoningEfforts[]`, clamped to `low\|medium\|high\|xhigh\|max` | *(Kimi has no field)* | `reasoning.effort`, one starting rung clamped to `low\|medium\|high` | `reasoning_levels[]` + `default_reasoning_effort`, clamped to `low\|medium\|high`  *(no field)* | `accepts_settings: [reasoning_effort]` | *(no field)* |
-| prices | *(Codex has no field)* | `cost.input` / `cost.output` | `cost.input` / `cost.output` | `cost.input` / `cost.output` | *(Kimi has no field)* | *(Qwen has no field)* | `cost_per_1m_in` / `cost_per_1m_out`  *(no field)* | `input_cost_per_token` / `output_cost_per_token` | *(no field)* |
-| pinned parameters | *(Codex has no field)* | *(Pi has no field)* | `options` | `options` | *(Kimi has no field)* | *(Qwen has no field)* | `options`  *(no field)* | `use_temperature: false` | *(no field)* |
+| What the ladder resolves | Where it lands in Gemini CLI | Where it lands in Codex | Where it lands in Pi | Where it lands in OpenCode / Kilo | Where it lands in Command Code | Where it lands in Kimi Code | Where it lands in Qwen Code | Where it lands in Crush | Where it lands in Cline | Where it lands in Aider | Where it lands in Droid |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| context window | *(one model at a time; no field)* | `context_window` / `max_context_window` | `contextWindow` | `limit.context` | `contextWindow` | `max_context_size` | `contextWindowSize` | `context_window`  `contextWindow` | `max_input_tokens` | `maxContextLimit` |
+| output ceiling | `generateContentConfig.maxOutputTokens` | *(Codex has no field)* | `maxTokens` | `limit.output` | `maxOutput` | *(Kimi has no field)* | *(Qwen has no field)* | `default_max_tokens`  `maxTokens` | `max_output_tokens` + `max_tokens` | `maxOutputTokens` |
+| vision support | *(no field)* | `input_modalities` | `input` | `attachment` + `modalities.input` | *(no field)* | `capabilities: ["image_in"]` | `modalities.image` | `supports_attachments`  *(no field)* | `supports_vision` | `noImageSupport` |
+| tool support | *(no field)* | `supports_parallel_tool_calls` | *(Pi has no field)* | `tool_call` | *(no field)* | *(Kimi has no field)* | *(Qwen has no field)* | *(Crush has no field)*  *(no field)* | `supports_function_calling` | *(no field)* |
+| reasoning support | `thinkingConfig.thinkingBudget: 0` when known absent | `supports_reasoning_summaries` | `reasoning` | `reasoning` | `reasoning` | `capabilities: ["thinking"]`, plus `"always_thinking"` when it cannot be turned off | `reasoning: false` when known absent | `can_reason`  *(no field)* | *(via settings)* | `enableThinking` |
+| reasoning efforts | `thinkingConfig.thinkingLevel`, one starting rung clamped to `LOW\|MEDIUM\|HIGH` | `supported_reasoning_levels`, clamped to Codex's own rungs | *(Pi has no field)* | `variants.<rung>`, clamped to OpenCode's own rungs | `reasoningEfforts[]`, clamped to `low\|medium\|high\|xhigh\|max` | *(Kimi has no field)* | `reasoning.effort`, one starting rung clamped to `low\|medium\|high` | `reasoning_levels[]` + `default_reasoning_effort`, clamped to `low\|medium\|high`  *(no field)* | `accepts_settings: [reasoning_effort]` | *(no field)* |
+| prices | *(no field)* | *(Codex has no field)* | `cost.input` / `cost.output` | `cost.input` / `cost.output` | `cost.input` / `cost.output` | *(Kimi has no field)* | *(Qwen has no field)* | `cost_per_1m_in` / `cost_per_1m_out`  *(no field)* | `input_cost_per_token` / `output_cost_per_token` | *(no field)* |
+| pinned parameters | *(inherited from the `chat-base` preset)* | *(Codex has no field)* | *(Pi has no field)* | `options` | `options` | *(Kimi has no field)* | *(Qwen has no field)* | `options`  *(no field)* | `use_temperature: false` | *(no field)* |
 
 A model with a 32k window is advertised as 32k. A model that publishes only
 `low` and `high` gets exactly those two rungs in Codex's picker — `xhigh`

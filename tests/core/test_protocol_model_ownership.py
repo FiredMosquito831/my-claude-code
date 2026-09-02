@@ -11,6 +11,10 @@ from my_claude_code.core.anthropic import (
     TokenCountResponse,
 )
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.gemini_api import (
+    GeminiGenerateContentRequest as PublicGeminiGenerateContentRequest,
+)
+from my_claude_code.core.gemini_api.models import GeminiGenerateContentRequest
 from my_claude_code.core.openai_chat_completions import (
     OpenAIChatCompletionRequest as PublicOpenAIChatCompletionRequest,
 )
@@ -71,6 +75,36 @@ def test_chat_completions_request_model_is_core_owned_and_permissive() -> None:
     assert request.model_extra == {"provider_extension": {"enabled": True}}
 
 
+def test_gemini_request_model_is_core_owned_and_permissive() -> None:
+    request = GeminiGenerateContentRequest.model_validate(
+        {
+            "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+            "provider_extension": {"enabled": True},
+        }
+    )
+
+    assert (
+        GeminiGenerateContentRequest.__module__
+        == "my_claude_code.core.gemini_api.models"
+    )
+    assert PublicGeminiGenerateContentRequest is GeminiGenerateContentRequest
+    assert request.model_extra == {"provider_extension": {"enabled": True}}
+
+
+def test_the_gemini_model_is_bound_from_the_path_not_the_body() -> None:
+    """``model`` is the ``{model}`` path segment on this surface.
+
+    A body field of that name would be a second, silently-losing source of
+    truth: Google's own request schema has no ``model`` in the body at all.
+    """
+
+    request = GeminiGenerateContentRequest.model_validate(
+        {"contents": "hi", "model": "from-the-body"}
+    )
+
+    assert request.with_model("from/the/path").model == "from/the/path"
+
+
 def test_anthropic_response_models_are_protocol_owned() -> None:
     assert MessagesResponse.__module__ == "my_claude_code.core.anthropic.models"
     assert TokenCountResponse.__module__ == "my_claude_code.core.anthropic.models"
@@ -97,6 +131,20 @@ def test_protocol_facades_are_import_order_independent() -> None:
         ),
         (
             "my_claude_code.core.openai_chat_completions",
+            "my_claude_code.core.anthropic",
+        ),
+        (
+            "my_claude_code.core.gemini_api",
+            "my_claude_code.core.anthropic",
+        ),
+        (
+            "my_claude_code.core.anthropic",
+            "my_claude_code.core.gemini_api",
+        ),
+        (
+            "my_claude_code.core.gemini_api",
+            "my_claude_code.core.openai_chat_completions",
+            "my_claude_code.core.openai_responses",
             "my_claude_code.core.anthropic",
         ),
     )

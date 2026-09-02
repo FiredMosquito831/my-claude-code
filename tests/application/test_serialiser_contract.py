@@ -107,6 +107,17 @@ def test_every_registered_catalogue_format_has_a_serialiser() -> None:
     assert formats <= set(SERIALISERS)
 
 
+#: Formats whose CLI publishes no per-model context window, so a resolved
+#: context length has nowhere honest to go. Named rather than skipped: the
+#: list is the record of which agents cannot show a context gauge for an
+#: MCC-routed model, and adding to it should require saying why.
+#:
+#: ``gemini_cli`` -- Gemini CLI 0.49.0's ``tokenLimit(model)`` is a hardcoded
+#: switch over Google's own model ids returning a hardcoded 1,048,576 default,
+#: and no settings key overrides it.
+FORMATS_WITHOUT_A_CONTEXT_FIELD = frozenset({"gemini_cli"})
+
+
 @pytest.mark.parametrize("format_id", sorted(SERIALISERS))
 def test_custom_provider_with_only_tier_five_data_still_serialises(
     format_id: str,
@@ -136,7 +147,15 @@ def test_custom_provider_with_only_tier_five_data_still_serialises(
 
     assert model_entries(format_id, document), format_id
     serialised = str(document)
-    assert "131072" in serialised
+    # Every format carries at least one of the two resolved limits. Which one
+    # is a fact about that CLI's schema, not about the ladder: Gemini CLI has
+    # no context-window field at all -- its ``tokenLimit(model)`` is a
+    # hardcoded switch over Google's own model ids with a hardcoded default,
+    # and no settings key overrides it -- so the output ceiling is the only
+    # resolved number it has a home for.
+    assert "131072" in serialised or "16384" in serialised, format_id
+    if format_id not in FORMATS_WITHOUT_A_CONTEXT_FIELD:
+        assert "131072" in serialised, format_id
     if defaulted.by_model:
         assert DEFAULTED_KEY in document
 

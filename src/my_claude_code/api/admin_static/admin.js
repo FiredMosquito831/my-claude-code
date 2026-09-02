@@ -7406,8 +7406,20 @@ function harnessCard(harness) {
   const title = document.createElement("h4");
   title.textContent = harness.display_name;
   const badge = document.createElement("span");
-  badge.className = harness.installed ? "agent-state installed" : "agent-state";
-  badge.textContent = harness.installed ? "Installed" : "Not installed";
+  const servable = harness.available !== false;
+  // "Not servable" is a different fact from "Not installed" and must not be
+  // told with the same word: one is something the user can fix by installing
+  // the CLI, the other is something MCC measured and cannot fix at all.
+  badge.className = servable
+    ? harness.installed
+      ? "agent-state installed"
+      : "agent-state"
+    : "agent-state unavailable";
+  badge.textContent = servable
+    ? harness.installed
+      ? "Installed"
+      : "Not installed"
+    : "Not servable";
   heading.append(title, badge);
   card.append(heading);
 
@@ -7416,6 +7428,17 @@ function harnessCard(harness) {
     summary.className = "agent-summary";
     summary.textContent = harness.summary;
     card.append(summary);
+  }
+
+  if (!servable) {
+    // The evidence, verbatim from the registry, with the version and the date
+    // it was measured on it. No command block: there is no command.
+    const reason = document.createElement("p");
+    reason.className = "agent-unavailable-reason";
+    reason.textContent = harness.unavailable_reason || "";
+    card.append(reason);
+    card.append(harnessMeta(harness));
+    return card;
   }
 
   const command = document.createElement("code");
@@ -7488,6 +7511,20 @@ function harnessMeta(harness) {
   meta.className = "agent-meta";
   const rows = [["Protocol", harness.protocol_label]];
   const catalogue = harness.catalogue;
+
+  if (harness.available === false) {
+    // No catalogue, no launcher, nothing written: the only two facts left are
+    // which protocol it would have spoken and that MCC publishes no command.
+    rows.push(["Launcher", "None - MCC publishes no command for this agent"]);
+    rows.forEach(([label, value]) => {
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const detail = document.createElement("dd");
+      detail.textContent = value;
+      meta.append(term, detail);
+    });
+    return meta;
+  }
 
   if (!catalogue) {
     rows.push(["Model list", "Fetched by the agent itself from /v1/models"]);

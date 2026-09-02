@@ -235,6 +235,7 @@ def test_the_default_path_resolves_under_the_fcc_config_directory(
         ("cline/data/settings/providers.json",),
         ("aider-model-metadata.json",),
         ("droid-settings.json",),
+        ("gemini-cli-settings.json",),
     ]
 
 

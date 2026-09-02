@@ -62,6 +62,11 @@ class HarnessProtocol(StrEnum):
     #: agents page names each harness's protocol from this enum, and a harness
     #: added later must not have to invent the word.
     OPENAI_CHAT_COMPLETIONS = "openai_chat_completions"
+    #: Google's own protocol. The clients that speak it speak nothing else --
+    #: Gemini CLI, everything built on ``@google/genai`` -- which is the whole
+    #: reason MCC serves it: an OpenAI-shaped endpoint is not an option for
+    #: them at any price.
+    GEMINI = "gemini"
 
 
 #: The two variables the OpenCode-family generated config refers to through
@@ -202,11 +207,52 @@ DROID_BASE_URL_SENTINEL = "https://base-url.mcc.invalid"
 QWEN_SETTINGS_VERSION = 4
 
 
+#: Why ``mcc-antigravity`` does not exist, stated with the version and the
+#: date it was measured so a reader can re-check it rather than trust it.
+#:
+#: Read out of ``agy.exe`` 1.0.14 itself and confirmed against a live run with
+#: ``HOME``/``APPDATA`` redirected to a scratch directory. Two independent
+#: blockers, either of which alone is fatal:
+#:
+#: * **Every credential path ends in a Google OAuth token.** ``auth.ChainedAuth``
+#:   composes ``keyringAuth``, ``oauthMethod``, ``adcAuth``, ``externalCorpLoginAuth``
+#:   and ``cliFileTokenStorage``; ``CLIAuthProvider`` exposes ``GetTokenSource``,
+#:   ``GetEntitlement`` and ``GetCAICProject`` and no API-key entry point at
+#:   all. The binary contains no ``GEMINI_API_KEY``, no ``GOOGLE_API_KEY`` and
+#:   no ``GOOGLE_GEMINI_BASE_URL``. Without a login it stops at
+#:   "You are currently not signed in."
+#: * **The wire format is not the public Gemini API.** It calls
+#:   ``/v1internal:generateContent``, ``:loadCodeAssist``, ``:onboardUser``,
+#:   ``:fetchAvailableModels`` and ``:listExperiments`` on
+#:   ``cloudcode-pa.googleapis.com`` -- the private Gemini Code Assist service,
+#:   proto package ``google.internal.cloud.code.v1internal.CloudCode`` -- and
+#:   never ``/v1beta/models/{model}:generateContent``. Its model list is
+#:   server-supplied, so ``--model`` cannot name an MCC route either.
+#:
+#: ``CLOUD_CODE_URL`` does redirect the backend host, so a proxy in front of an
+#: already-signed-in session is technically reachable. That is a different
+#: product from what MCC does -- it would require reimplementing a private
+#: Google protocol and would still need the user's Google account -- and it is
+#: not what this entry promises.
+ANTIGRAVITY_UNAVAILABLE_REASON = (
+    "Antigravity is locked to Google auth -- verified 2026-09-02 against agy "
+    "1.0.14. Every credential path in the binary ends in a Google OAuth token "
+    "(auth.ChainedAuth: keyring, oauth, ADC, corp login) and it carries no "
+    "GEMINI_API_KEY, GOOGLE_API_KEY or GOOGLE_GEMINI_BASE_URL at all. It also "
+    "speaks the private Gemini Code Assist protocol -- /v1internal:generateContent "
+    "on cloudcode-pa.googleapis.com -- not the public /v1beta Gemini API this "
+    "proxy serves."
+)
+
+
 PROTOCOL_LABELS: dict[HarnessProtocol, str] = {
     HarnessProtocol.ANTHROPIC_MESSAGES: "Anthropic Messages (POST /v1/messages)",
     HarnessProtocol.OPENAI_RESPONSES: "OpenAI Responses (POST /v1/responses)",
     HarnessProtocol.OPENAI_CHAT_COMPLETIONS: (
         "OpenAI Chat Completions (POST /v1/chat/completions)"
+    ),
+    HarnessProtocol.GEMINI: (
+        "Google Gemini (POST /v1beta/models/{model}:generateContent)"
     ),
 }
 
@@ -434,15 +480,25 @@ class HarnessSpec:
     summary: str = ""
     #: Short line for the Get Started card.
     tagline: str = ""
+    #: Whether MCC can actually serve this CLI. ``False`` is for a client MCC
+    #: has *tried* and found unservable, and it is a deliberate registry entry
+    #: rather than an omission: the question "can I use Antigravity through
+    #: this?" gets asked, and an answer with a date and a version on it is
+    #: worth more than silence. An unavailable harness publishes no console
+    #: script, no launcher and no catalogue.
+    available: bool = True
+    #: Why not, stated so a reader can check it. Rendered verbatim on the
+    #: Coding agents card. Required when ``available`` is False.
+    unavailable_reason: str = ""
 
     @property
     def command(self) -> str:
-        """Return the harness's headline ``mcc-`` command."""
+        """Return the harness's headline ``mcc-`` command, or "" if it has none."""
 
         for entry in self.commands:
             if entry.primary:
                 return entry.command
-        return f"mcc-{self.id}"
+        return "" if not self.commands else f"mcc-{self.id}"
 
     def install_hint_for(self, platform: str) -> str:
         """Return the install hint appropriate to one ``sys.platform`` value."""
@@ -1327,6 +1383,95 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         ),
         tagline="Factory's Droid agent, served through this proxy.",
     ),
+    HarnessSpec(
+        # ``gemini_cli``, not ``gemini``: ``gemini`` is an upstream gateway in
+        # ``config/provider_catalog.py`` -- Google's own OpenAI-compatible
+        # endpoint, which MCC buys tokens *from*. This entry is the CLI MCC
+        # serves requests *for*, over its own Gemini surface on this machine.
+        # See the module docstring; the two namespaces must not be joined.
+        id="gemini_cli",
+        display_name="Gemini CLI",
+        binary="gemini",
+        protocol=HarnessProtocol.GEMINI,
+        install_hint=("Install Gemini CLI with: npm install -g @google/gemini-cli"),
+        commands=(
+            HarnessCommand(
+                suffix="gemini",
+                target="my_claude_code.cli.launchers.gemini:launch",
+                legacy_alias=False,
+                help_text="Launch Gemini CLI through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments='-p "<prompt>"',
+                        help_text=(
+                            "Run one prompt non-interactively and exit; add "
+                            "-i to stay interactive afterwards"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="-m anthropic/<provider>/<model>",
+                        help_text=(
+                            "Start on one specific MCC-routed model. Gemini "
+                            "CLI's own picker lists Google's models only, so "
+                            "-m is how MCC's are reached"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments='-o json -p "<prompt>"',
+                        help_text=(
+                            "Same run, machine-readable (stream-json is also accepted)"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments='--skip-trust -p "<prompt>"',
+                        help_text=(
+                            "Gemini CLI refuses a headless run in a folder it "
+                            "has not been told to trust; --skip-trust is its "
+                            "own opt-out and MCC never sets it for you"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="mcp",
+                        help_text=(
+                            "Passed straight to Gemini CLI: MCC injects no "
+                            "provider for a non-session command"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="gemini_cli",
+            filename="gemini-cli-settings.json",
+            config_env_var="GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+        ),
+        passthrough_commands=frozenset({"mcp", "extensions", "budget"}),
+        passthrough_flags=frozenset(
+            {"--help", "-h", "--version", "-v", "--list-extensions", "-l"}
+        ),
+        summary=(
+            "Gemini CLI, pointed at an MCC-owned settings document through its "
+            "own GEMINI_CLI_SYSTEM_SETTINGS_PATH variable and at this proxy "
+            "through GOOGLE_GEMINI_BASE_URL, so ~/.gemini/settings.json is "
+            "never written and the OAuth tokens beside it are never read."
+        ),
+        tagline="Google's Gemini CLI, served through this proxy.",
+    ),
+    HarnessSpec(
+        id="antigravity",
+        display_name="Antigravity",
+        binary="agy",
+        protocol=HarnessProtocol.GEMINI,
+        install_hint="Install Antigravity from https://antigravity.google",
+        available=False,
+        unavailable_reason=ANTIGRAVITY_UNAVAILABLE_REASON,
+        summary=(
+            "Google's Antigravity CLI speaks a private Gemini Code Assist "
+            "protocol behind a Google login, not the public Gemini API this "
+            "proxy serves. The entry exists so the answer is on the page."
+        ),
+        tagline="Not servable: locked to Google sign-in.",
+    ),
 )
 
 
@@ -1421,3 +1566,14 @@ def catalogue_specs() -> tuple[HarnessSpec, ...]:
     """Return the harnesses MCC generates a model catalogue for."""
 
     return tuple(spec for spec in HARNESS_SPECS if spec.catalogue is not None)
+
+
+def launchable_specs() -> tuple[HarnessSpec, ...]:
+    """Return every harness MCC can actually launch.
+
+    The one place that filters on availability, so a consumer that installs
+    shims, prints help or wires the tray cannot accidentally publish a command
+    for a client this proxy has measured and cannot serve.
+    """
+
+    return tuple(spec for spec in HARNESS_SPECS if spec.available)

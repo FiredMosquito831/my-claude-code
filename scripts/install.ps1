@@ -953,6 +953,7 @@ function Write-MccCommandReference {
     Write-Host "  mcc-goose               Launch Goose through the proxy"
     Write-Host "  mcc-aider               Launch Aider through the proxy"
     Write-Host "  mcc-droid               Launch Droid through the proxy"
+    Write-Host "  mcc-gemini              Launch Gemini CLI through the proxy"
     Write-Host "  mcc-desktop             Open the system tray app (desktop)"
     Write-Host ""
     Write-Host "Manage and inspect:"
@@ -995,7 +996,7 @@ function Get-LauncherCommands {
         "mcc-server", "mcc-claude", "mcc-claude-old", "mcc-codex", "mcc-pi",
         "mcc-opencode", "mcc-opencode2", "mcc-kilo", "mcc-commandcode", "mcc-kimi",
         "mcc-qwen", "mcc-crush",
-        "mcc-cline", "mcc-goose", "mcc-aider", "mcc-droid",
+        "mcc-cline", "mcc-goose", "mcc-aider", "mcc-droid", "mcc-gemini",
         "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
         "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-desktop",
         "my-claude-code"

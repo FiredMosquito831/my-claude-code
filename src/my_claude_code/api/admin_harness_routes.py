@@ -113,6 +113,11 @@ def _harness_entry(spec: HarnessSpec, rtk_enabled: bool) -> dict[str, Any]:
         "protocol": str(spec.protocol),
         "protocol_label": PROTOCOL_LABELS[spec.protocol],
         "summary": spec.summary,
+        # A harness MCC has measured and cannot serve is still listed, with
+        # the reason and the date on it. The question gets asked; an answer
+        # somebody can re-check is worth more than the entry's absence.
+        "available": spec.available,
+        "unavailable_reason": spec.unavailable_reason,
         "rtk_agent": spec.rtk_agent,
         "rtk_enabled": rtk_enabled,
         "catalogue": _catalogue_entry(spec),

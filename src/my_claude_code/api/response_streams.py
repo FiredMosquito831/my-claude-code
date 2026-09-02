@@ -31,7 +31,7 @@ PreStartErrorResponse = Callable[[BaseException], Response]
 TerminalFrameEmitter = Callable[[BaseException], str]
 TerminalFailureObserver = Callable[[BaseException], None]
 ReleaseResponseResource = Callable[[], Awaitable[None]]
-WireApi = Literal["messages", "responses", "chat_completions"]
+WireApi = Literal["messages", "responses", "chat_completions", "gemini"]
 
 
 class EmptyStreamError(RuntimeError):

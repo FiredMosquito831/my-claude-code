@@ -63,7 +63,7 @@ from my_claude_code.core.wire_capture import (
 #: The inbound wire protocol a logged request arrived on. Stored verbatim in
 #: the request log's ``protocol`` column, shown in the request detail pane, and
 #: exported as-is, so a value added here becomes a user-visible vocabulary word.
-WireProtocol = Literal["anthropic", "openai_responses", "openai_chat"]
+WireProtocol = Literal["anthropic", "openai_responses", "openai_chat", "gemini"]
 
 
 class RequestCapture:

@@ -85,6 +85,20 @@ def _responses_payload() -> dict[str, object]:
     }
 
 
+#: The Gemini surface takes its model from the path and its streaming
+#: decision from the method, so there is one payload and two paths rather than
+#: one path and a ``stream`` field.
+_GEMINI_STREAM_PATH = "/v1beta/models/nvidia_nim/test-model:streamGenerateContent"
+_GEMINI_UNARY_PATH = "/v1beta/models/nvidia_nim/test-model:generateContent"
+
+
+def _gemini_payload() -> dict[str, object]:
+    return {
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "generationConfig": {"maxOutputTokens": 32},
+    }
+
+
 def _chat_completions_payload(*, stream: bool = True) -> dict[str, object]:
     return {
         "model": "nvidia_nim/test-model",
@@ -125,11 +139,40 @@ def _partial_anthropic_stream(*, close_block: bool) -> list[str]:
 
 
 def _client_for(provider: CanonicalFailureProvider):
+    """Patch the resolver in *both* route modules, then hand back a client.
+
+    ``api/routes.py`` and ``api/gemini_routes.py`` each bind
+    ``resolve_provider`` by name at import, so patching one leaves the other
+    calling the real resolver -- and the Gemini parametrisations below would
+    pass for the wrong reason.
+    """
+
     app = create_test_app()
     return (
-        patch("my_claude_code.api.routes.resolve_provider", return_value=provider),
+        _BothResolvers(provider),
         TestClient(app),
     )
+
+
+class _BothResolvers:
+    """One context manager over the two module-level resolver bindings."""
+
+    def __init__(self, provider: object) -> None:
+        self._patches = (
+            patch("my_claude_code.api.routes.resolve_provider", return_value=provider),
+            patch(
+                "my_claude_code.api.gemini_routes.resolve_provider",
+                return_value=provider,
+            ),
+        )
+
+    def __enter__(self) -> None:
+        for entry in self._patches:
+            entry.start()
+
+    def __exit__(self, *exc: object) -> None:
+        for entry in reversed(self._patches):
+            entry.stop()
 
 
 def _terminal_trace(trace_mock: MagicMock) -> dict[str, Any]:
@@ -164,6 +207,7 @@ def _grouped_rate_limit_provider(chunks: list[str]) -> CanonicalFailureProvider:
             _chat_completions_payload(),
             "rate_limit_error",
         ),
+        (_GEMINI_STREAM_PATH, _gemini_payload(), "RESOURCE_EXHAUSTED"),
     ],
 )
 def test_grouped_pre_start_execution_failure_keeps_canonical_wire_error(
@@ -185,17 +229,25 @@ def test_grouped_pre_start_execution_failure_keeps_canonical_wire_error(
     assert response.status_code == 429
     assert response.headers["x-should-retry"] == "false"
     error = response.json()["error"]
-    assert error["type"] == expected_type
+    # Google names the canonical code in ``status`` where OpenAI names an
+    # error family in ``type``; both are derived from the same FailureKind.
+    assert error.get("status", error.get("type")) == expected_type
     assert error["message"] == f"upstream is busy\n\nRequest ID: {request_id}"
     trace = _terminal_trace(trace_mock)
     assert trace["status_code"] == 429
-    assert trace["error_type"] == "rate_limit_error"
+    assert trace["error_type"] in ("rate_limit_error", "RESOURCE_EXHAUSTED")
     assert trace["exc_type"] == "ExecutionFailure"
     assert trace["failure_kind"] == "rate_limit"
 
 
 @pytest.mark.parametrize(
-    "path", ["/v1/messages", "/v1/responses", "/v1/chat/completions"]
+    "path",
+    [
+        "/v1/messages",
+        "/v1/responses",
+        "/v1/chat/completions",
+        _GEMINI_STREAM_PATH,
+    ],
 )
 def test_grouped_post_start_execution_failure_keeps_canonical_terminal_event(
     path: str,
@@ -205,6 +257,7 @@ def test_grouped_post_start_execution_failure_keeps_canonical_terminal_event(
         "/v1/messages": _messages_payload(stream=True),
         "/v1/responses": _responses_payload(),
         "/v1/chat/completions": _chat_completions_payload(),
+        _GEMINI_STREAM_PATH: _gemini_payload(),
     }[path]
     resolver_patch, client = _client_for(provider)
 
@@ -226,6 +279,27 @@ def test_grouped_post_start_execution_failure_keeps_canonical_terminal_event(
         # non-streaming shape, which the rest of this module pins.
         assert events[-1].event == "message_stop"
         assert events[-2].data["delta"]["stop_reason"] == "max_tokens"
+        return
+    if path == _GEMINI_STREAM_PATH:
+        # Google publishes no in-band error convention for ``alt=sse``, so the
+        # last frame carries both halves of the truth: the ``error`` envelope a
+        # client that looks for one will read, and a candidate whose
+        # ``finishReason`` is ``OTHER`` so a client that only reads candidates
+        # sees an abnormal end rather than a clean ``STOP``. There is no
+        # ``[DONE]``: that is OpenAI's convention and @google/genai would try
+        # to parse it.
+        assert "[DONE]" not in response.text
+        frames = [
+            frame for frame in response.text.split("\n\n") if frame.startswith("data: ")
+        ]
+        last = json.loads(frames[-1].removeprefix("data: "))
+        assert last["error"] == {
+            "code": 429,
+            "message": f"upstream is busy\n\nRequest ID: {request_id}",
+            "status": "RESOURCE_EXHAUSTED",
+        }
+        assert last["candidates"][0]["finishReason"] == "OTHER"
+        assert _terminal_trace(trace_mock)["failure_kind"] == "rate_limit"
         return
     if path == "/v1/chat/completions":
         # Chat Completions has no failed-response envelope: an OpenAI SDK
@@ -414,6 +488,91 @@ def test_chat_completions_post_start_failure_traces_its_own_wire_api() -> None:
         "request_id": request_id,
         "status_code": 429,
         "error_type": "rate_limit_error",
+        "client_should_retry": False,
+        "exc_type": "ExecutionFailure",
+        "failure_kind": "rate_limit",
+        "provider_retryable": True,
+    }
+
+
+def test_gemini_pre_start_failure_is_correlated_terminal_json() -> None:
+    provider = CanonicalFailureProvider(
+        [],
+        kind=FailureKind.OVERLOADED,
+        status_code=529,
+        message="provider overloaded",
+        retryable=True,
+    )
+    resolver_patch, client = _client_for(provider)
+
+    with resolver_patch, client:
+        response = client.post(_GEMINI_STREAM_PATH, json=_gemini_payload())
+
+    request_id = response.headers["request-id"]
+    assert response.status_code == 529
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.headers["x-should-retry"] == "false"
+    assert response.json() == {
+        "error": {
+            "code": 529,
+            "message": f"provider overloaded\n\nRequest ID: {request_id}",
+            "status": "UNAVAILABLE",
+        }
+    }
+    assert provider.stream_kwargs[0]["request_id"] == request_id
+
+
+def test_gemini_unary_discards_partial_content_on_execution_failure() -> None:
+    """A client that asked for JSON never gets half an answer."""
+
+    provider = CanonicalFailureProvider(
+        _partial_anthropic_stream(close_block=False),
+        kind=FailureKind.RATE_LIMIT,
+        status_code=429,
+        message="upstream is busy",
+        retryable=True,
+    )
+    resolver_patch, client = _client_for(provider)
+
+    with resolver_patch, client:
+        response = client.post(_GEMINI_UNARY_PATH, json=_gemini_payload())
+
+    assert response.status_code == 429
+    assert response.headers["x-should-retry"] == "false"
+    assert response.json()["error"]["status"] == "RESOURCE_EXHAUSTED"
+    assert _PARTIAL_CONTENT not in response.text
+
+
+def test_gemini_post_start_failure_traces_its_own_wire_api() -> None:
+    provider = CanonicalFailureProvider(
+        _partial_anthropic_stream(close_block=True),
+        kind=FailureKind.RATE_LIMIT,
+        status_code=429,
+        message="upstream is busy",
+        retryable=True,
+    )
+    resolver_patch, client = _client_for(provider)
+
+    with (
+        resolver_patch,
+        patch("my_claude_code.api.response_streams.trace_event") as trace_mock,
+        client,
+    ):
+        response = client.post(_GEMINI_STREAM_PATH, json=_gemini_payload())
+
+    request_id = response.headers["request-id"]
+    assert response.status_code == 200
+    assert "x-should-retry" not in response.headers
+    # The partial answer already sent is kept; the failure is reported after it.
+    assert _PARTIAL_CONTENT in response.text
+    assert _terminal_trace(trace_mock) == {
+        "stage": "egress",
+        "event": "my_claude_code.api.response.terminal_execution_error",
+        "source": "api",
+        "wire_api": "gemini",
+        "request_id": request_id,
+        "status_code": 429,
+        "error_type": "RESOURCE_EXHAUSTED",
         "client_should_retry": False,
         "exc_type": "ExecutionFailure",
         "failure_kind": "rate_limit",

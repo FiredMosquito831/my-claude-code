@@ -90,15 +90,16 @@ TokenCounter = Callable[
     [list[Message], str | list[SystemContent] | None, list[Tool] | None],
     int,
 ]
-WireApi = Literal["messages", "responses", "chat_completions"]
+WireApi = Literal["messages", "responses", "chat_completions", "gemini"]
 
-#: Trace event names per inbound surface. Three surfaces make a chain of
+#: Trace event names per inbound surface. Four surfaces make a chain of
 #: ternaries unreadable, and an unnamed surface would silently borrow the
 #: Messages names and make two products indistinguishable in the log.
 _TRACE_EVENT_NAMESPACES: dict[WireApi, str] = {
     "messages": "my_claude_code.api",
     "responses": "my_claude_code.api.responses",
     "chat_completions": "my_claude_code.api.chat_completions",
+    "gemini": "my_claude_code.api.gemini",
 }
 
 
@@ -110,6 +111,7 @@ _STREAM_TRACE_NAMESPACES: dict[WireApi, str] = {
     "messages": "my_claude_code.api.response",
     "responses": "my_claude_code.api.responses",
     "chat_completions": "my_claude_code.api.chat_completions",
+    "gemini": "my_claude_code.api.gemini",
 }
 
 

@@ -416,11 +416,31 @@ and non-local origins.
 
 - `POST /v1/messages`: Anthropic Messages-compatible streaming requests.
 - `POST /v1/responses`: OpenAI Responses-compatible requests.
+- `POST /v1/chat/completions`: OpenAI Chat Completions-compatible requests.
 - `POST /v1/messages/count_tokens`: Anthropic token counting.
 - `GET /v1/models`: gateway and Claude-compatible model listing.
 - `GET /health`: health check.
 - `POST /stop`: stop CLI sessions and pending tasks.
 - `HEAD` and `OPTIONS` probes for compatibility on supported endpoints.
+
+[api/gemini_routes.py](src/my_claude_code/api/gemini_routes.py) exposes the
+Google Gemini surface, in a module of its own because its path shape is unlike
+every other route here:
+
+- `POST /v1beta/models/{model}:generateContent`
+- `POST /v1beta/models/{model}:streamGenerateContent` (`?alt=sse`)
+- `POST /v1beta/models/{model}:countTokens`
+- `GET /v1beta/models` and `GET /v1beta/models/{model}`
+
+Google puts the method in the path after a colon and the model before it, and
+MCC's routable ids contain slashes, so the model segment is
+`anthropic/openrouter/gpt-5` rather than one path component. Both survive the
+wire unescaped -- the bundled `@google/genai` client joins the path as a plain
+string and hands it to `new URL()`, which percent-encodes neither `/` nor `:`
+in a path. The route therefore matches the whole tail greedily and splits it in
+`core/gemini_api/paths.py`, from the right. Route order in that module is
+load-bearing: the exact `GET /v1beta/models` collection route is declared before
+the greedy describe route that would otherwise swallow it.
 
 Admin routes live beside these in [api/admin_routes.py](src/my_claude_code/api/admin_routes.py).
 
@@ -1001,6 +1021,56 @@ Anthropic content-block ledger, SSE serialization, continuation request
 transformations, and tool JSON repair. It does not import `httpx` or the OpenAI
 SDK and does not decide whether an upstream failure is retryable.
 
+[src/my_claude_code/core/gemini_api/](src/my_claude_code/core/gemini_api/) is
+the third inbound protocol adapter, and the first that is neither Anthropic nor
+OpenAI-shaped. It exists because a whole family of clients speaks Google's
+protocol and no other -- Gemini CLI, everything built on the `google-genai`
+SDKs -- and none of them can be pointed at an OpenAI-shaped endpoint at any
+price. Like the two OpenAI packages it only translates: the request becomes one
+`MessagesRequest` and runs through the same `ProviderExecutor`, router, fallback
+chain, reasoning gating, wire capture and request log as every other surface.
+
+Three structural differences from the OpenAI adapters drive its shape.
+
+**Gemini does not stream function arguments.** Anthropic sends a `tool_use`
+block start and a run of `input_json_delta` fragments; a Gemini `functionCall`
+part is whole or absent, and every client `JSON.parse`s `args` on arrival. So
+`assembler.py` buffers a tool call until its `content_block_stop` and emits it
+once, complete -- which is why two interleaved calls appear in the order they
+*finished*.
+
+**Thought parts are opt-in.** `thinkingConfig.includeThoughts` defaults to false
+in Google's own schema, and a client that did not ask renders a `thought` part
+it did not expect as ordinary answer text. The flag is carried out of request
+conversion and into the assembler rather than being assumed.
+
+**The prompt token count includes the cache.** Anthropic's `input_tokens`
+excludes what the prompt cache served; Google's `promptTokenCount` includes it
+and reports the served part separately in `cachedContentTokenCount`. A straight
+rename would under-report the prompt of every cached request, which is most of
+them for a coding agent, and Gemini CLI renders that number as its context
+gauge.
+
+The error envelope is Google's: `{"error": {"code", "message", "status"}}`,
+where `status` is a `google.rpc.Code` name mapped from MCC's neutral
+`FailureKind` -- never from an upstream SDK's own vocabulary, exactly as
+`core/openai_common/errors.py` does for the two OpenAI surfaces. Gemini CLI
+branches on that *string* when it decides whether to retry, so a body missing it
+does not merely read badly, it changes what the client does. Because the SDKs
+parse a non-2xx body as that envelope and report "unknown error" for anything
+else, `api/app.py` also reshapes `HTTPException` bodies -- and only on this
+surface, so the other three keep the `{"detail": ...}` body their clients have
+always received.
+
+There is deliberately no `[DONE]` sentinel on the Gemini stream: that is
+OpenAI's convention, and `@google/genai` would try to `JSON.parse` it.
+
+**The outbound `gemini` provider is a different thing entirely.**
+`providers/gemini` is a gateway MCC buys tokens *from*, over Google's
+OpenAI-compatible endpoint; `core/gemini_api` is a protocol MCC answers *in*.
+They share a word and nothing else, and their ids live in separate namespaces
+(`provider_id` and `harness_id`/`WireProtocol`) that are never joined.
+
 [core/failures.py](src/my_claude_code/core/failures.py) defines the immutable,
 protocol-neutral `FailureKind` and `ExecutionFailure`. The exception is the
 value propagated through async iterators; its semantic fields are immutable,
@@ -1453,6 +1523,47 @@ one the `/v1` base URL that would reach it cannot be combined with.
 [cli/launchers/droid.py](src/my_claude_code/cli/launchers/droid.py) own the four
 harnesses that arrived with the inbound `POST /v1/chat/completions` surface.
 Three of them use it; the fourth turned out not to need it.
+
+[cli/launchers/gemini.py](src/my_claude_code/cli/launchers/gemini.py) owns the
+one harness that arrived with the inbound Gemini surface, and it is the only
+launcher whose *obvious* configuration actively fails. Gemini CLI publishes one
+variable for the endpoint -- `GOOGLE_GEMINI_BASE_URL` -- and setting it alone
+makes `getAuthTypeFromEnv` infer the auth type `gateway`, which the CLI's own
+`validateAuthMethod` then refuses with "Invalid auth method selected." before a
+request is made. One settings key, `security.auth.selectedType:
+"gemini-api-key"`, short-circuits that inference; everything else stays in the
+environment. That key lives in a document MCC owns under `~/.fcc`, handed over
+through the CLI's own `GEMINI_CLI_SYSTEM_SETTINGS_PATH`, because
+`mergeSettings` merges the *system* scope last -- so MCC's three keys win while
+the user's `~/.gemini/settings.json` still supplies everything MCC does not
+name. It is never written and never read for auth, and the OAuth tokens beside
+it are never read at all: the API-key path returns before the Code Assist client
+is constructed.
+
+The base URL is the proxy **root**, with neither `/v1` nor `/v1beta`: the
+bundled SDK's `constructUrl` joins `httpOptions.baseUrl` with the API version,
+whose default is `v1beta`. That is why this catalogue declares no
+`base_url_sentinel` at all -- the CLI publishes a variable for the value, so the
+serialiser stays a pure function of the model records with nothing left to
+resolve on the way to disk.
+
+The model list is the one place Gemini CLI gives less than the others. It runs
+one model at a time and builds its picker from a list compiled into the binary,
+so MCC writes `model.name` for the session default and one
+`modelConfigs.customAliases` entry per routable id -- `customAliases`, not
+`aliases`, because the latter's schema default *is* the built-in preset chain
+and naming it would replace it. `getResolvedConfig({model, ...})` is called
+unconditionally on the CLI's main chat path, so an alias keyed by MCC's gateway
+id really does supply that model's `generateContentConfig`.
+
+**Antigravity is the registry's first `available=False` entry.** `agy` 1.0.14
+was measured and cannot be served: every credential path in the binary ends in a
+Google OAuth token, and it speaks the private Gemini Code Assist protocol
+(`/v1internal:generateContent` on `cloudcode-pa.googleapis.com`) rather than the
+public Gemini API. It is listed rather than omitted so the question has a dated
+answer on the Coding agents page; an unavailable harness publishes no console
+script, no launcher and no catalogue, and `launchable_specs()` is the one place
+that filters on the flag.
 
 **Cline** publishes `--config`, which moves its whole configuration
 *directory* — and Cline derives its data directory back out of the settings
@@ -2053,6 +2164,30 @@ when maintainers want branch-level assurance.
    line, and `test_installers_never_install_a_third_party_cli` enforces it.
 6. Add tests under [tests/cli/](tests/cli/) and
    [tests/application/](tests/application/), plus a jsdom case for the card.
+
+### Add An Inbound Protocol
+
+1. Add a package under [core/](src/my_claude_code/core/) that translates that
+   protocol's request into `MessagesRequest` and MCC's internal Anthropic SSE
+   back into that protocol's response. It may not import `application`.
+2. Add it to `FACADE_ONLY_BOUNDARIES` in
+   [tests/contracts/test_import_boundaries.py](tests/contracts/test_import_boundaries.py)
+   so nothing reaches past its `__init__`.
+3. Add a handler under [api/handlers/](src/my_claude_code/api/handlers/) that
+   builds the capture with a new `protocol` value, and extend `WireProtocol` in
+   [api/request_capture.py](src/my_claude_code/api/request_capture.py), `WireApi`
+   in [application/execution.py](src/my_claude_code/application/execution.py) and
+   [api/response_streams.py](src/my_claude_code/api/response_streams.py), and the
+   two trace-namespace maps beside `WireApi`.
+4. Add the surface to [api/wire_surfaces.py](src/my_claude_code/api/wire_surfaces.py)
+   so every error boundary can ask which envelope it owes, and wire that answer
+   into `ordinary_application_error_response` and `api/app.py`.
+5. Extend `require_proxy_auth` for that protocol's credential form only if the
+   clients genuinely send a different one; keep the constant-time compare and
+   leave `Authorization` outranking everything.
+6. Add the equivalents of `tests/api/test_execution_failure_contract.py`,
+   `test_ordinary_error_phases.py` and `tests/core/test_protocol_model_ownership.py`
+   for the new surface, and say so in the Guide.
 
 ### Add Or Change A Client Surface
 
