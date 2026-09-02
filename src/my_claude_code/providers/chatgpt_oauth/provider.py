@@ -22,13 +22,16 @@ from my_claude_code.core.diagnostics import (
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
+    ReasoningAdaptationKind,
     ReasoningDialect,
     ReasoningEffort,
     ReasoningPolicy,
+    narrow_dialect_by_rejections,
 )
 from my_claude_code.core.trace import trace_event
 from my_claude_code.core.version import package_version
 from my_claude_code.core.wire_capture import (
+    record_reasoning_adaptation,
     record_response_shape,
     record_wire_request,
     start_response_shape,
@@ -37,6 +40,11 @@ from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.model_listing import model_infos_from_ids
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.recovery import (
+    ReasoningStripRecovery,
+    RecoveryLadder,
+    RecoveryMemory,
+)
 from my_claude_code.providers.runtime.models_dev import (
     models_dev_provider_model_ids,
 )
@@ -156,8 +164,39 @@ class ChatGPTOAuthProvider(BaseProvider):
     """ChatGPT/Codex OAuth provider using the Responses API."""
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
-        """See :data:`CHATGPT_OAUTH_REASONING_DIALECT`."""
-        return CHATGPT_OAUTH_REASONING_DIALECT
+        """See :data:`CHATGPT_OAUTH_REASONING_DIALECT`, minus what was refused.
+
+        The endpoint has retired reasoning-shaped fields before. A model that
+        answers a ``reasoning`` block with a 400 has said so itself, and that
+        outranks the declaration above for that model.
+        """
+        rejections = self._recovery_memory.rejections_for(model_id)
+        if not rejections:
+            return CHATGPT_OAUTH_REASONING_DIALECT
+        return narrow_dialect_by_rejections(CHATGPT_OAUTH_REASONING_DIALECT, rejections)
+
+    def _remember_reasoning_rejection(self, body: dict[str, Any], field: str) -> None:
+        """Record that this model refused a reasoning field, once it is proven.
+
+        Reached only after the stripped body was actually accepted, so the
+        strip is what fixed it.
+        """
+        model = body.get("model")
+        if not isinstance(model, str):
+            return
+        if not self._recovery_memory.remember_rejection(model, field):
+            return
+        record_reasoning_adaptation(
+            ReasoningAdaptationKind.SUPPRESSED,
+            f"CHATGPT_OAUTH rejected {field!r} for {model}; the request was "
+            f"retried without it and this model will not be sent it again.",
+        )
+        logger.warning(
+            "CHATGPT_OAUTH_STREAM: {!r} learned as rejected for {} -- "
+            "later requests omit it",
+            field,
+            model,
+        )
 
     def __init__(
         self,
@@ -173,6 +212,14 @@ class ChatGPTOAuthProvider(BaseProvider):
         self._api_key = config.api_key
         self._proxy = config.proxy
         self._session_id = str(uuid.uuid4())
+        # What this endpoint has taught this process about itself. Only the
+        # reasoning half is wired: the Responses encoder emits no output-token
+        # field at all, so there is no budget for a host to cap and an
+        # output-cap rung here would be a rung that can never fire.
+        self._recovery_memory = RecoveryMemory()
+        self._recovery_ladder = RecoveryLadder(
+            (ReasoningStripRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),)
+        )
         self._client = httpx.AsyncClient(
             proxy=config.proxy if config.proxy else None,
             timeout=httpx.Timeout(
@@ -304,38 +351,69 @@ class ChatGPTOAuthProvider(BaseProvider):
                     active_credentials = credentials
                     active_headers = headers
                     refreshed_after_unauthorized = False
-                    # Commit boundary: the body is final once it is handed
-                    # to the sender. Headers are not recorded -- they carry the
-                    # bearer token.
-                    record_wire_request(body)
-                    response = await self._rate_limiter.execute_with_retry(
-                        self._send_stream_request,
-                        provider_failure_override=self._provider_failure_override,
-                        url=url,
-                        headers=active_headers,
-                        body=body,
-                    )
-                    if (
-                        response.status_code == 401
-                        and active_credentials.source_name == "fcc-managed"
-                    ):
-                        await response.aclose()
+                    # Per attempt chain: a rung fires at most once, and the
+                    # refusal is only written down once the retry is accepted.
+                    used_retry_kinds: set[str] = set()
+                    stripped_reasoning: str | None = None
+                    # A local of this generator, not the enclosing function's
+                    # body: a recovery rewrites what goes on the wire for this
+                    # attempt only.
+                    attempt_body = body
+                    while True:
+                        # Commit boundary: the body is final once it is handed
+                        # to the sender. Headers are not recorded -- they carry
+                        # the bearer token.
+                        record_wire_request(attempt_body)
                         try:
-                            active_credentials = await asyncio.to_thread(
-                                force_refresh_managed_chatgpt_oauth_credentials
+                            response = await self._rate_limiter.execute_with_retry(
+                                self._send_stream_request,
+                                provider_failure_override=(
+                                    self._provider_failure_override
+                                ),
+                                url=url,
+                                headers=active_headers,
+                                body=attempt_body,
                             )
-                        except ChatGPTOAuthError as exc:
-                            raise ApplicationUnavailableError(str(exc)) from exc
-                        active_headers = _build_headers(
-                            active_credentials, self._session_id
-                        )
-                        refreshed_after_unauthorized = True
-                        response = await self._rate_limiter.execute_with_retry(
-                            self._send_stream_request,
-                            provider_failure_override=self._provider_failure_override,
-                            url=url,
-                            headers=active_headers,
-                            body=body,
+                            if (
+                                response.status_code == 401
+                                and active_credentials.source_name == "fcc-managed"
+                            ):
+                                await response.aclose()
+                                try:
+                                    active_credentials = await asyncio.to_thread(
+                                        force_refresh_managed_chatgpt_oauth_credentials
+                                    )
+                                except ChatGPTOAuthError as exc:
+                                    raise ApplicationUnavailableError(str(exc)) from exc
+                                active_headers = _build_headers(
+                                    active_credentials, self._session_id
+                                )
+                                refreshed_after_unauthorized = True
+                                response = await self._rate_limiter.execute_with_retry(
+                                    self._send_stream_request,
+                                    provider_failure_override=(
+                                        self._provider_failure_override
+                                    ),
+                                    url=url,
+                                    headers=active_headers,
+                                    body=attempt_body,
+                                )
+                        except ApplicationUnavailableError:
+                            raise
+                        except Exception as error:
+                            recovered = self._recovery_ladder.next_body(
+                                error, attempt_body, used_retry_kinds
+                            )
+                            if recovered.body is None:
+                                raise
+                            if recovered.stripped_reasoning_field is not None:
+                                stripped_reasoning = recovered.stripped_reasoning_field
+                            attempt_body = recovered.body
+                            continue
+                        break
+                    if stripped_reasoning is not None:
+                        self._remember_reasoning_rejection(
+                            attempt_body, stripped_reasoning
                         )
                     try:
                         if response.status_code >= 400:

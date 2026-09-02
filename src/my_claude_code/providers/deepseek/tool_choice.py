@@ -10,11 +10,10 @@ and produces a retry body that keeps the "must call some tool" half of the
 caller's intent by downgrading to ``"required"``.
 """
 
-import json
 from copy import deepcopy
 from typing import Any
 
-import openai
+from my_claude_code.providers.recovery import is_bad_request, upstream_complaint
 
 _REJECTION_HINTS = (
     "tool_choice",
@@ -33,35 +32,24 @@ _UNSUPPORTED_WORDS = (
 def is_deepseek_tool_choice_rejection(error: Exception) -> bool:
     """Return whether an upstream error rejects a forced ``tool_choice``.
 
-    Matches narrowly: the error must be an HTTP 400 (DeepSeek's documented
-    status for request-shape rejections) AND the error text must mention
-    ``tool_choice`` (or "tool choice") together with an unsupported/rejection
-    word (e.g. "does not support", "invalid", "not allowed"). Requiring both
-    keeps this from firing on unrelated 400s such as context-length-exceeded
-    or bad-schema errors, which never mention tool_choice at all.
+    Matches narrowly: the error must be a request-validation rejection AND the
+    provider's own words must mention ``tool_choice`` (or "tool choice")
+    together with an unsupported/rejection word (e.g. "does not support",
+    "invalid", "not allowed"). Requiring both keeps this from firing on
+    unrelated 400s such as context-length-exceeded or bad-schema errors, which
+    never mention tool_choice at all.
+
+    Echo-safe since 6.33.0: the words come from the fleet-wide matcher, which
+    prunes the keys under which a validation error echoes the submitted request
+    back. Reading that echo made every forced-tool request its own evidence --
+    the body it sent contains ``tool_choice`` by definition, and one unrelated
+    "invalid" anywhere in the same 400 was enough to complete the pair.
     """
-    status_code = getattr(error, "status_code", None)
-    if not isinstance(error, openai.BadRequestError) and status_code != 400:
+    if not is_bad_request(error):
         return False
-
-    text_parts = [str(error)]
-
-    error_body = getattr(error, "body", None)
-    if error_body is not None:
-        text_parts.append(json.dumps(error_body, default=str))
-
-    response = getattr(error, "response", None)
-    if response is not None:
-        try:
-            response_text = response.text
-        except Exception:
-            response_text = None
-        if response_text:
-            text_parts.append(response_text)
-
-    combined = " ".join(text_parts).lower()
-    mentions_tool_choice = any(hint in combined for hint in _REJECTION_HINTS)
-    mentions_rejection = any(word in combined for word in _UNSUPPORTED_WORDS)
+    complaint = upstream_complaint(error)
+    mentions_tool_choice = any(hint in complaint for hint in _REJECTION_HINTS)
+    mentions_rejection = any(word in complaint for word in _UNSUPPORTED_WORDS)
     return mentions_tool_choice and mentions_rejection
 
 

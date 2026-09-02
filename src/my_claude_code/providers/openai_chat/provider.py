@@ -5,7 +5,6 @@ import sys
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
-from datetime import date
 from typing import Any
 
 import httpx
@@ -65,6 +64,13 @@ from my_claude_code.providers.model_listing import (
     validate_model_list_page,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.recovery import (
+    OutputCapRecovery,
+    ProviderRecovery,
+    ReasoningStripRecovery,
+    RecoveryLadder,
+    RecoveryMemory,
+)
 from my_claude_code.providers.stream_recovery import (
     MIDSTREAM_RECOVERY_ATTEMPTS,
     RecoveryController,
@@ -73,17 +79,7 @@ from my_claude_code.providers.stream_recovery import (
     is_retryable_stream_error,
 )
 
-from .complaint import (
-    complaint_evidence_snippet,
-    sampling_parameter_evidence,
-    upstream_complaint,
-)
-from .output_cap import clamp_output_tokens, parse_output_token_cap
 from .profiles import OpenAIChatProfile
-from .reasoning_reject import (
-    clone_body_without_reasoning_field,
-    rejected_reasoning_field,
-)
 from .request_policy import build_openai_chat_request_body
 from .tool_calls import (
     OpenAIToolCallAssembler,
@@ -131,16 +127,32 @@ class OpenAIChatProvider(BaseProvider):
             )
         self._api_key = config.api_key
         self._base_url = profile.base_url(config.base_url).rstrip("/")
-        # Learned per-model output-token caps from upstream 400 rejections, so
-        # later requests clamp proactively instead of paying the 400 each time.
-        self._model_output_caps: dict[str, int] = {}
-        # Reasoning fields a host refused for a given model, learned from its
-        # own 400. Same shape and lifetime as ``_model_output_caps`` above: per
-        # provider instance, keyed by the bare model id, so a gateway that
-        # takes ``reasoning_effort`` on one model and rejects it on another --
-        # which the OpenCode probe showed is real -- learns per model. The ISO
-        # date is what the Models page shows.
-        self._rejected_reasoning_fields: dict[str, dict[str, str]] = {}
+        # What this host has taught this process about itself: per-model output
+        # caps it stated, and reasoning fields it refused. Per provider
+        # instance and keyed by the bare model id, so a gateway that takes
+        # ``reasoning_effort`` on one model and rejects it on another -- which
+        # the OpenCode probe showed is real -- learns per model. The ISO date
+        # is what the Models page shows.
+        self._recovery_memory = RecoveryMemory()
+        log_tag = f"{profile.provider_name}_STREAM"
+        self._output_cap_recovery = OutputCapRecovery(
+            self._recovery_memory, log_tag=log_tag
+        )
+        # Narrowest-and-most-certain first, generic reasoning strip last. See
+        # ``providers/recovery/ladder.py`` for why that order is the whole
+        # point of having a ladder rather than a chain of ``if``s.
+        self._recovery_ladder = RecoveryLadder(
+            (
+                self._output_cap_recovery.rung(),
+                ProviderRecovery(
+                    kind="stream_usage", rewrite=self._rewrite_without_stream_usage
+                ).rung(),
+                ProviderRecovery(
+                    kind="provider_specific", rewrite=self._get_retry_request_body
+                ).rung(),
+                ReasoningStripRecovery(log_tag=log_tag).rung(),
+            )
+        )
         self._rate_limiter = rate_limiter
         http_client = None
         if config.proxy:
@@ -167,6 +179,16 @@ class OpenAIChatProvider(BaseProvider):
             http_client=http_client,
         )
 
+    @property
+    def _model_output_caps(self) -> dict[str, int]:
+        """The learned output caps, under the name this family has always used."""
+        return self._recovery_memory.output_caps
+
+    @property
+    def _rejected_reasoning_fields(self) -> dict[str, dict[str, str]]:
+        """The learned reasoning refusals, under this family's long-standing name."""
+        return self._recovery_memory.rejected_reasoning_fields
+
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
         """What this profile's encoder can put on the wire, for this model.
 
@@ -181,7 +203,7 @@ class OpenAIChatProvider(BaseProvider):
         order.
         """
         dialect = self._profile.reasoning.dialect
-        rejections = self._rejected_reasoning_fields.get(model_id)
+        rejections = self._recovery_memory.rejections_for(model_id)
         if not rejections:
             return dialect
         return narrow_dialect_by_rejections(dialect, rejections)
@@ -362,7 +384,7 @@ class OpenAIChatProvider(BaseProvider):
 
     async def _create_stream(self, body: dict) -> tuple[Any, dict]:
         """Create a streaming chat completion with bounded request fallbacks."""
-        body = self._apply_learned_output_cap(body)
+        body = self._output_cap_recovery.apply_learned(body)
         used_retry_kinds: set[str] = set()
         # Per attempt-chain, deliberately a local rather than instance state:
         # concurrent requests share this provider, and unlike the monotonic
@@ -390,145 +412,34 @@ class OpenAIChatProvider(BaseProvider):
                     self._remember_reasoning_rejection(body, stripped_reasoning)
                 return stream, body
             except Exception as error:
-                retry_body, stripped = self._next_create_retry_body(
+                decision = self._recovery_ladder.next_body(
                     error, body, used_retry_kinds
                 )
-                if retry_body is None:
+                if decision.body is None:
                     raise
-                if stripped is not None:
-                    stripped_reasoning = stripped
-                body = retry_body
+                if decision.stripped_reasoning_field is not None:
+                    stripped_reasoning = decision.stripped_reasoning_field
+                body = decision.body
 
-    def _next_create_retry_body(
-        self,
-        error: Exception,
-        body: dict,
-        used_retry_kinds: set[str],
-    ) -> tuple[dict | None, str | None]:
-        """Return the next downgraded body, and the reasoning field it dropped.
-
-        Rung order is narrowest-and-most-certain first: the output cap is a
-        number the provider stated, ``stream_usage`` is a shape the SDK names,
-        and the provider hook knows this gateway.
-
-        The generic reasoning strip is deliberately **last**. Where a provider
-        has its own reasoning recovery it is strictly the better one -- Mistral
-        strips the rejected field *and* the replayed thinking blocks its models
-        refuse alongside it, and NIM removes the chat-template pair that is its
-        actual reasoning control. Firing the generic rung first would answer a
-        400 by removing one field, succeed at nothing, and burn the budget that
-        the complete recovery needed. So this is the net under everyone else,
-        which is what it was written to be.
-
-        Each rung fires at most once per create, so a request never strips two
-        reasoning fields in a chain.
-        """
-        retry_body = self._retry_body_for_output_cap(error, body)
-        if retry_body is not None:
-            return retry_body, None
-
-        if "stream_usage" not in used_retry_kinds and is_stream_usage_rejection(error):
-            retry_body = clone_without_stream_usage(body)
-            if retry_body is not None:
-                used_retry_kinds.add("stream_usage")
-                logger.warning(
-                    "{}_STREAM: retrying without stream_options.include_usage "
-                    "after upstream rejection",
-                    self._provider_name,
-                )
-                return retry_body, None
-
-        if "provider_specific" not in used_retry_kinds:
-            retry_body = self._get_retry_request_body(error, body)
-            if retry_body is not None:
-                used_retry_kinds.add("provider_specific")
-                return retry_body, None
-
-        if "reasoning_field" not in used_retry_kinds:
-            retry_body, stripped = self._retry_body_without_rejected_reasoning(
-                error, body
-            )
-            if retry_body is not None:
-                used_retry_kinds.add("reasoning_field")
-                return retry_body, stripped
-
-        return None, None
-
-    def _apply_learned_output_cap(self, body: dict) -> dict:
-        """Clamp output tokens to a previously learned cap for this model.
-
-        This runs after the routed budget has already been sized from the
-        model's published limit, and it only ever lowers -- which is what makes
-        it the deciding word. A cap learned from the provider's own 400 is
-        ground truth about this deployment; a catalogue limit is a published
-        claim, and where a gateway resells a model on a smaller deployment the
-        claim is the one that is wrong. It never raises the budget: the 400
-        says "at most N", which does not contradict a catalogue value below N.
-        """
-        model = body.get("model")
-        if not isinstance(model, str):
-            return body
-        cap = self._model_output_caps.get(model)
-        if cap is None:
-            return body
-        clamped = clamp_output_tokens(body, cap)
-        return clamped if clamped is not None else body
-
-    def _retry_body_for_output_cap(self, error: Exception, body: dict) -> dict | None:
-        """Learn an upstream output-token cap from a 400 and clamp for one retry."""
-        cap = parse_output_token_cap(error)
-        if cap is None:
-            return None
-        model = body.get("model")
-        if isinstance(model, str):
-            previous = self._model_output_caps.get(model)
-            cap = cap if previous is None else min(previous, cap)
-            self._model_output_caps[model] = cap
-        clamped = clamp_output_tokens(body, cap)
-        if clamped is None:
-            return None
-        logger.warning(
-            "{}_STREAM: clamping output tokens to {} after upstream cap rejection",
-            self._provider_name,
-            cap,
-        )
-        return clamped
-
-    def _retry_body_without_rejected_reasoning(
+    def _rewrite_without_stream_usage(
         self, error: Exception, body: dict
-    ) -> tuple[dict | None, str | None]:
-        """Strip, for one retry, the reasoning field this 400 named.
+    ) -> dict | None:
+        """Drop ``stream_options.include_usage`` when the SDK names that shape.
 
-        Nothing is remembered here. A rejection is an inference, not a stated
-        fact the way an output cap is, so the table is written only once the
-        stripped request has actually been accepted -- otherwise a request that
-        would have failed anyway teaches the process to stop asking for
-        thinking on a model that was never the problem.
+        A rung of this provider's ladder rather than a matcher of its own: the
+        judgement is the OpenAI SDK's, not a reading of the host's words.
         """
-        field = rejected_reasoning_field(error, body)
-        if field is None:
-            complaint = upstream_complaint(error)
-            sampling = sampling_parameter_evidence(complaint)
-            if sampling is not None:
-                logger.warning(
-                    "{}_STREAM: 400 names sampling parameter {!r}, not a "
-                    "reasoning field -- failing rather than silently dropping "
-                    "thinking: {}",
-                    self._provider_name,
-                    sampling,
-                    complaint_evidence_snippet(complaint),
-                )
-            return None, None
-        retry_body = clone_body_without_reasoning_field(body, field)
+        if not is_stream_usage_rejection(error):
+            return None
+        retry_body = clone_without_stream_usage(body)
         if retry_body is None:
-            return None, None
+            return None
         logger.warning(
-            "{}_STREAM: retrying without {!r} -- upstream named it: {}",
+            "{}_STREAM: retrying without stream_options.include_usage "
+            "after upstream rejection",
             self._provider_name,
-            field,
-            complaint_evidence_snippet(upstream_complaint(error)),
         )
-        return retry_body, field
+        return retry_body
 
     def _remember_reasoning_rejection(self, body: dict, field: str) -> None:
         """Record that this model refused a reasoning field, once it is proven.
@@ -541,10 +452,8 @@ class OpenAIChatProvider(BaseProvider):
         model = body.get("model")
         if not isinstance(model, str):
             return
-        rejections = self._rejected_reasoning_fields.setdefault(model, {})
-        if field in rejections:
+        if not self._recovery_memory.remember_rejection(model, field):
             return
-        rejections[field] = date.today().isoformat()
         record_reasoning_adaptation(
             ReasoningAdaptationKind.SUPPRESSED,
             f"{self._provider_name} rejected {field!r} for {model}; the request "

@@ -124,6 +124,7 @@ FACADE_ONLY_BOUNDARIES = {
     "my_claude_code.core.identity",
     "my_claude_code.messaging.trees",
     "my_claude_code.providers.openai_chat",
+    "my_claude_code.providers.recovery",
 }
 
 OPTIONAL_IMPORT_OWNERS = {

@@ -1700,6 +1700,19 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   and the Models page relabels the dialect as learned. A 400 about
                   anything else still fails visibly.
                 </p>
+                <p class="guide-note">
+                  <strong>Every provider learns this way, not just the
+                  OpenAI-compatible ones.</strong> An Anthropic-protocol host that
+                  refuses a <code>thinking</code> object, and a Responses host that
+                  refuses a <code>reasoning</code> block, are read by the same matcher
+                  and relabelled the same way. The same 400 also teaches the
+                  <strong>output cap</strong> a host states for itself &mdash;
+                  <code>max_tokens: 100000 &gt; 64000, which is the maximum allowed
+                  number of output tokens for &hellip;</code> &mdash; and later requests
+                  clamp to it without paying the rejection again. Both memories are lost
+                  on a restart or a config reload, on purpose: a host that was briefly
+                  broken heals by itself.
+                </p>
                 <p>
                   <strong>A rung you ask for is a rung you get.</strong> An effort you
                   name that the host cannot spell is clamped to the nearest rung it can,

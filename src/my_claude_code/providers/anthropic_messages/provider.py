@@ -6,16 +6,20 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import httpx
+from loguru import logger
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
+    ReasoningAdaptationKind,
     ReasoningDialect,
     ReasoningPolicy,
+    narrow_dialect_by_rejections,
 )
 from my_claude_code.core.trace import trace_event
 from my_claude_code.core.wire_capture import (
+    record_reasoning_adaptation,
     record_response_shape,
     record_wire_request,
     start_response_shape,
@@ -25,6 +29,13 @@ from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import close_provider_stream
 from my_claude_code.providers.model_listing import model_infos_from_ids
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.recovery import (
+    ANTHROPIC_OUTPUT_FIELDS,
+    OutputCapRecovery,
+    ReasoningStripRecovery,
+    RecoveryLadder,
+    RecoveryMemory,
+)
 from my_claude_code.providers.stream_recovery import (
     RecoveryController,
     RecoveryFailureAction,
@@ -54,8 +65,18 @@ class AnthropicMessagesProvider(BaseProvider):
     """Provider for upstream APIs implementing native Anthropic Messages SSE."""
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
-        """See :data:`ANTHROPIC_REASONING_DIALECT`."""
-        return ANTHROPIC_REASONING_DIALECT
+        """See :data:`ANTHROPIC_REASONING_DIALECT`, minus what this host refused.
+
+        An Anthropic-protocol gateway is not always Anthropic. Command Code,
+        Bedrock-style relays and self-hosted bridges all answer ``/messages``
+        and none of them is obliged to parse ``thinking``; where one says so in
+        its own 400 the declaration above is simply wrong for that model, and a
+        rejection the host itself sent outranks it.
+        """
+        rejections = self._recovery_memory.rejections_for(model_id)
+        if not rejections:
+            return ANTHROPIC_REASONING_DIALECT
+        return narrow_dialect_by_rejections(ANTHROPIC_REASONING_DIALECT, rejections)
 
     def __init__(
         self,
@@ -77,6 +98,23 @@ class AnthropicMessagesProvider(BaseProvider):
         # Applied to the serialized body just before it goes upstream, for
         # upstreams whose wire format differs from the canonical one.
         self._body_transform = body_transform
+        # What this host has taught this process about itself. Same two tables,
+        # same lifetime and the same matchers as the OpenAI-chat family's --
+        # only the body keys differ, because this dialect spells the output
+        # budget ``max_tokens`` and its reasoning instruction ``thinking``.
+        self._recovery_memory = RecoveryMemory()
+        log_tag = f"{provider_name}_STREAM"
+        self._output_cap_recovery = OutputCapRecovery(
+            self._recovery_memory,
+            log_tag=log_tag,
+            fields=ANTHROPIC_OUTPUT_FIELDS,
+        )
+        self._recovery_ladder = RecoveryLadder(
+            (
+                self._output_cap_recovery.rung(),
+                ReasoningStripRecovery(log_tag=log_tag).rung(),
+            )
+        )
         self._rate_limiter = rate_limiter
         self._client = httpx.AsyncClient(
             proxy=config.proxy or None,
@@ -131,6 +169,31 @@ class AnthropicMessagesProvider(BaseProvider):
             )
         return response
 
+    def _remember_reasoning_rejection(self, body: dict[str, Any], field: str) -> None:
+        """Record that this model refused a reasoning field, once it is proven.
+
+        Reached only after the stripped body was actually accepted, so the
+        strip is what fixed it. Later requests skip the field without paying
+        the 400: the dialect this provider reports no longer claims it (see
+        :meth:`reasoning_dialect`), so gating never asks the encoder for it.
+        """
+        model = body.get("model")
+        if not isinstance(model, str):
+            return
+        if not self._recovery_memory.remember_rejection(model, field):
+            return
+        record_reasoning_adaptation(
+            ReasoningAdaptationKind.SUPPRESSED,
+            f"{self._provider_name} rejected {field!r} for {model}; the request "
+            f"was retried without it and this model will not be sent it again.",
+        )
+        logger.warning(
+            "{}_STREAM: {!r} learned as rejected for {} -- later requests omit it",
+            self._provider_name,
+            field,
+            model,
+        )
+
     def stream_response(
         self,
         request: MessagesRequest,
@@ -158,6 +221,7 @@ class AnthropicMessagesProvider(BaseProvider):
         body = build_anthropic_messages_body(request, reasoning=reasoning)
         if self._body_transform is not None:
             body = self._body_transform(body)
+        body = self._output_cap_recovery.apply_learned(body)
         trace_event(
             stage="provider",
             event="provider.request.sent",
@@ -185,6 +249,11 @@ class AnthropicMessagesProvider(BaseProvider):
             midstream_recovery_attempts=0,
         )
 
+        # Per attempt chain, deliberately locals: concurrent requests share
+        # this provider, and both values are consumed once a retry is accepted.
+        used_retry_kinds: set[str] = set()
+        stripped_reasoning: str | None = None
+
         async with self._rate_limiter.concurrency_slot():
             while True:
                 response: httpx.Response | None = None
@@ -198,6 +267,8 @@ class AnthropicMessagesProvider(BaseProvider):
                         body,
                     )
                     stream_opened = True
+                    if stripped_reasoning is not None:
+                        self._remember_reasoning_rejection(body, stripped_reasoning)
                     recovery.upstream_opened()
                     shape = start_response_shape()
                     async for event in iter_anthropic_sse_frames(
@@ -212,6 +283,15 @@ class AnthropicMessagesProvider(BaseProvider):
                 except asyncio.CancelledError, GeneratorExit:
                     raise
                 except Exception as error:
+                    if not stream_opened:
+                        recovered = self._recovery_ladder.next_body(
+                            error, body, used_retry_kinds
+                        )
+                        if recovered.body is not None:
+                            if recovered.stripped_reasoning_field is not None:
+                                stripped_reasoning = recovered.stripped_reasoning_field
+                            body = recovered.body
+                            continue
                     decision = recovery.advance_failure(
                         error,
                         stream_opened=stream_opened,

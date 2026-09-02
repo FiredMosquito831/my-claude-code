@@ -1,15 +1,18 @@
 """Mistral La Plateforme reasoning compatibility helpers."""
 
-import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
 
-import openai
-
 from my_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
 from my_claude_code.providers.http import maybe_await_aclose
+from my_claude_code.providers.recovery import (
+    is_bad_request,
+    is_echo_key,
+    upstream_complaint,
+    upstream_error_payload,
+)
 
 # Mistral's OpenAPI spec declares ``reasoning_effort`` as
 # ``enum: [high, none]`` and nothing else -- "high" enables comprehensive
@@ -84,31 +87,21 @@ def clone_body_without_mistral_reasoning(
 
 
 def is_mistral_reasoning_rejection(error: Exception) -> bool:
-    """Return whether an upstream error rejects Mistral reasoning request fields."""
-    status_code = getattr(error, "status_code", None)
-    if not isinstance(error, openai.BadRequestError) and status_code not in (400, 422):
+    """Return whether an upstream error rejects Mistral reasoning request fields.
+
+    Echo-safe since 6.33.0. This used to walk the whole error object and then
+    fall back to a flat dump of it, which meant a pydantic validation error
+    echoing the submitted request under ``input``/``body``/``ctx`` answered
+    "yes" purely because the request it echoed contained ``reasoning_effort``.
+    The evidence is now taken through the fleet-wide matcher, which prunes
+    those keys first. The rejection-phrase requirement below is unchanged, and
+    it is what keeps an unrelated 400 from costing the request its thinking.
+    """
+    if not is_bad_request(error):
         return False
-
-    error_body = getattr(error, "body", None)
-    if _contains_reasoning_rejection(error_body):
+    if _contains_reasoning_rejection(upstream_error_payload(error)):
         return True
-
-    error_text_parts = [str(error)]
-    response = getattr(error, "response", None)
-    if response is not None:
-        try:
-            response_text = response.text
-        except Exception:
-            response_text = None
-        if response_text:
-            if _contains_reasoning_rejection(_json_payload(response_text)):
-                return True
-            error_text_parts.append(response_text)
-
-    if error_body is not None:
-        error_text_parts.append(json.dumps(error_body, default=str))
-
-    return _reasoning_rejection_text(" ".join(error_text_parts))
+    return _reasoning_rejection_text(upstream_complaint(error))
 
 
 def normalize_mistral_stream(stream: Any) -> AsyncIterator[Any]:
@@ -273,6 +266,10 @@ def _contains_reasoning_rejection(value: Any) -> bool:
     if isinstance(value, Mapping):
         for key, item in value.items():
             key_text = str(key).lower()
+            # The echoed request names fields *we sent*, never one the host
+            # objected to, so it is not evidence and must not be walked.
+            if is_echo_key(key_text):
+                continue
             if key_text in _REASONING_FIELD_NAMES:
                 return True
             if key_text in {"loc", "param"} and _is_reasoning_field_path(item):
@@ -339,13 +336,6 @@ def _reasoning_rejection_text(value: str) -> bool:
             'param "thinking"',
         )
     )
-
-
-def _json_payload(value: str) -> Any:
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError:
-        return None
 
 
 def _thinking_chunk(reasoning: str) -> dict[str, Any]:

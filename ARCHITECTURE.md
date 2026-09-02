@@ -68,7 +68,9 @@ The installable wheel packages are declared in [pyproject.toml](pyproject.toml):
   support.
 - [src/my_claude_code/providers/](src/my_claude_code/providers/) owns provider construction, the shared OpenAI-chat
   provider, specialized adapters, SDK/HTTP failure classification, retry and
-  recovery policy, rate limiting, model listing, and concrete provider adapters.
+  recovery policy (including the fleet-wide upstream recovery ladder in
+  [providers/recovery/](src/my_claude_code/providers/recovery/)), rate limiting, model
+  listing, and concrete provider adapters.
 - [src/my_claude_code/runtime/](src/my_claude_code/runtime/) is the process composition root. It owns application
   startup and shutdown, provider generations, Admin runtime operations, and the
   concrete wiring between API, providers, messaging, and managed CLI sessions.
@@ -958,6 +960,60 @@ API key, so the catalog leaves `credential_env` unset and requires the project
 id instead. The connected-account `openai` catalog entry is an alias of the
 `chatgpt_oauth` Responses-API provider in
 [providers/chatgpt_oauth/](src/my_claude_code/providers/chatgpt_oauth/) — the same adapter constructs both IDs.
+
+### Upstream Recovery Ladder
+
+[providers/recovery/](src/my_claude_code/providers/recovery/) owns the two
+safety nets that answer an upstream's own request rejection, for every provider
+and every dialect. Until 6.33.0 both lived inside
+[providers/openai_chat/](src/my_claude_code/providers/openai_chat/), so the
+Anthropic Messages family, ChatGPT OAuth and Command Code's Claude half
+bypassed them entirely.
+
+The package is protocol-neutral by construction: the body keys a dialect uses
+are arguments, and the matchers read a rejection the same way whether it arrived
+as an `openai.BadRequestError` with a parsed `body` or as an
+`httpx.HTTPStatusError` carrying the words in its response.
+
+- `complaint.py` extracts the host's **own words**, pruning the keys under
+  which a validation error echoes the submitted request back
+  (`input`, `body`, `ctx`, `value`, …). Reading that echo is what makes a rung
+  fire on the request it just sent, which is why the pruning lives in one place
+  and `is_echo_key` is public for the two provider-specific detectors
+  (`mistral/reasoning.py`, `deepseek/tool_choice.py`) that walk a structured
+  error themselves.
+- `output_cap.py` parses the maximum a host **stated** and clamps to it.
+- `reasoning_reject.py` decides which reasoning field a 400 **named**, using
+  `core.wire_capture.is_reasoning_key` as the candidate set, so a new encoder
+  field is covered fleet-wide the day that key is added.
+- `memory.py` holds what one provider instance has learned: per-model caps and
+  per-model refused reasoning fields. Per process and per instance on purpose —
+  nothing is persisted, so a config reload forgets it.
+- `ladder.py` is the ordered set of rungs a provider's retry loop consults.
+
+Rung order is narrowest-and-most-certain first, and the generic reasoning strip
+is deliberately **last**: where a provider has its own reasoning recovery it is
+strictly the better one, and firing the generic rung first would answer the 400
+by removing one field, succeed at nothing, and burn the budget the complete
+recovery needed. A rejection no rung recognises is raised — an unrecognised 400
+fails visibly rather than being answered with a guess.
+
+| Dialect | Seam | Output-cap field(s) | Reasoning field |
+| --- | --- | --- | --- |
+| OpenAI Chat Completions | `openai_chat/provider.py` `_create_stream` | `max_completion_tokens`, `max_tokens` | any `is_reasoning_key` top-level or `extra_body` key |
+| Anthropic Messages | `anthropic_messages/provider.py` `_stream_response` | `max_tokens` | `thinking` |
+| OpenAI Responses | `chatgpt_oauth/provider.py` `_stream()` | none emitted | `reasoning` |
+
+`AnthropicProvider`, `AnthropicOAuthProvider` and Command Code's Claude half all
+delegate their stream to `AnthropicMessagesProvider`, so one seam covers four
+provider ids. `RotatingProvider` forwards `stream_response` to a real
+sub-provider per credential, so each key's provider learns its own host.
+
+Every try is already a row in `core/upstream_ladder.py`, written by
+`providers/rate_limit.py`, so a recovered request shows the 400 and the retry
+that followed it in the request-detail modal; a learned refusal additionally
+records a `ReasoningAdaptation` through `core/wire_capture.py`, which is what
+relabels the Models page to *learned from the host's own rejection*.
 
 ### Adding A Provider
 
