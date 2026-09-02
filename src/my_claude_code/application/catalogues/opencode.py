@@ -23,16 +23,41 @@ the ``Authorization`` header are written as OpenCode's own
 ``{env:VARIABLE_NAME}`` substitutions and the launcher sets those two variables
 in the child process only.
 
-**Unknown stays unknown**, in OpenCode's own vocabulary. Every per-model field
-here is optional in the schema, and OpenCode's fallback for an absent one is
-recorded in :data:`CLI_DOCUMENTED_DEFAULTS` -- measured against the real
-binary, not guessed. A ``limit.context`` OpenCode fills in itself reads ``0``,
-which is exactly how models.dev (OpenCode's own model database) spells "not
-applicable or unknown" and how MCC's own models.dev parser already reads it.
-So an unknown limit is omitted rather than invented, and every omission is
-recorded under ``_mcc_defaulted`` so the Coding agents card and the launcher's
-stderr summary can say which numbers nobody published. Read
-``application/catalogues/base.py`` before changing anything here.
+**Unknown stays unknown**, in OpenCode's own vocabulary -- but ``limit`` and
+``cost`` are all-or-nothing objects and that changes what "omit" may mean.
+Read out of the published schema and reproduced against the shipped binary,
+the model struct is::
+
+    limit: optional({context: REQUIRED, input: optional, output: REQUIRED})
+    cost:  optional({input: REQUIRED, output: REQUIRED,
+                     cache_read: optional, cache_write: optional})
+
+So the object may be absent, but a *present* one must carry both required
+members. An earlier version of this module emitted whichever half it knew, and
+OpenCode answered every such entry with
+``Missing key provider.mcc.models.<id>.limit.context`` and refused the **whole
+document** -- not the entry, the document. On a real install that was 54 of
+142 models and the launch produced zero. The rule this module now obeys is:
+emit ``limit`` with both keys, or not at all.
+
+Which half to keep is not a free choice either. ``0`` is OpenCode's own
+documented unknown marker -- its coercion reads an absent ``limit.context`` as
+``0``, which is exactly how models.dev (OpenCode's own model database) spells
+"not applicable or unknown" and how MCC's own models.dev parser already reads
+it -- so filling the missing half with ``0`` invents nothing, while dropping
+the object would throw away a real ceiling MCC does know. A model with
+**neither** half known gets no ``limit`` at all, because an all-zero object
+states nothing an absent one does not, and an absent ``limit`` loads fine.
+
+``cost`` keeps the mirror-image rule and does **not** fill: a half-known price
+genuinely is no price, and OpenCode publishes no documented spelling for an
+unknown price the way it does for an unknown window. The asymmetry is
+deliberate.
+
+Every substitution and every omission is recorded under ``_mcc_defaulted`` so
+the Coding agents card and the launcher's stderr summary can say which numbers
+nobody published. Read ``application/catalogues/base.py`` before changing
+anything here.
 """
 
 from collections.abc import Iterable
@@ -86,6 +111,16 @@ OPENCODE_VARIANT_BY_REASONING_EFFORT: dict[ReasoningEffort, str] = {
     ReasoningEffort.XHIGH: "max",
     ReasoningEffort.MAX: "max",
 }
+
+#: Keys the CLI refuses a model entry without. Empty for OpenCode: read out
+#: of the published schema (vendored at ``tests/fixtures/schemas/``), the model
+#: object declares **no** ``required`` array at all, so every key here is
+#: optional. What is *not* optional is the shape of two of them --
+#: ``limit.required = ["context", "output"]`` and
+#: ``cost.required = ["input", "output"]`` -- and a present-but-partial object
+#: is refused document-wide. That rule is enforced by the schema contract test
+#: rather than by a key list, because it is a rule about members, not keys.
+CLI_REQUIRED_KEYS: frozenset[str] = frozenset()
 
 #: What OpenCode itself fills in when a per-model key is absent, measured
 #: against ``opencode models --verbose`` on 1.18.25 with a model declaring
@@ -163,7 +198,7 @@ def _entry(
     entry: dict[str, Any] = {"name": model.display_name}
 
     limit = _limit(model, model_id, defaulted)
-    if limit:
+    if limit is not None:
         entry["limit"] = limit
 
     reasons = can_reason(model.reasoning)
@@ -208,16 +243,36 @@ def _entry(
 
 def _limit(
     model: CatalogueModel, model_id: str, defaulted: DefaultedFields
-) -> dict[str, int]:
+) -> dict[str, int] | None:
+    """Return OpenCode's limit block with BOTH keys, or None when it knows none.
+
+    A present ``limit`` must carry ``context`` and ``output`` together or the
+    whole document is rejected, so the object is never half-populated. The
+    unknown half is filled from :data:`CLI_DOCUMENTED_DEFAULTS` -- ``0``, which
+    is OpenCode's own marker for an unknown window -- and recorded, so the
+    known half survives instead of being discarded to satisfy a schema.
+
+    ``None`` only when neither half is known: an all-zero object asserts
+    nothing an absent one does not, and an absent ``limit`` loads.
+    """
+
+    context = model.context_length
+    output = model.max_output_tokens
+    if context is None and output is None:
+        defaulted.record(model_id, "limit.context")
+        defaulted.record(model_id, "limit.output")
+        return None
     limit: dict[str, int] = {}
-    if model.context_length is None:
+    if context is None:
+        limit["context"] = CLI_DOCUMENTED_DEFAULTS["limit"]["context"]
         defaulted.record(model_id, "limit.context")
     else:
-        limit["context"] = model.context_length
-    if model.max_output_tokens is None:
+        limit["context"] = context
+    if output is None:
+        limit["output"] = CLI_DOCUMENTED_DEFAULTS["limit"]["output"]
         defaulted.record(model_id, "limit.output")
     else:
-        limit["output"] = model.max_output_tokens
+        limit["output"] = output
     return limit
 
 
@@ -227,17 +282,32 @@ def _cost(
     """Return OpenCode's cost block, or None when nobody published prices.
 
     OpenCode's schema requires ``input`` and ``output`` together inside
-    ``cost``, so a half-known price is no price at all. The two cache rates
-    are left to OpenCode: MCC's ladder resolves none, and deriving them from
-    the uncached rate would be inventing a number.
+    ``cost``, so a half-known price is no price at all -- and unlike
+    ``limit.context`` there is no OpenCode-documented spelling for an unknown
+    *price* to fill the gap with honestly.
+
+    The two cache rates are genuinely optional inside ``cost``. They are
+    emitted when the ladder resolved them and recorded as OpenCode's own
+    default when it did not; they are never derived from the uncached rate,
+    which would be inventing a number.
     """
 
     if model.input_price is None or model.output_price is None:
         defaulted.record(model_id, "cost")
         return None
-    defaulted.record(model_id, "cost.cache_read")
-    defaulted.record(model_id, "cost.cache_write")
-    return {"input": model.input_price, "output": model.output_price}
+    cost: dict[str, float] = {
+        "input": model.input_price,
+        "output": model.output_price,
+    }
+    for key, value in (
+        ("cache_read", model.cache_read_price),
+        ("cache_write", model.cache_write_price),
+    ):
+        if value is None:
+            defaulted.record(model_id, f"cost.{key}")
+        else:
+            cost[key] = value
+    return cost
 
 
 def _options(model: CatalogueModel) -> dict[str, Any]:

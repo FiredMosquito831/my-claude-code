@@ -69,6 +69,11 @@ CHAT_MODE = "chat"
 #: models.dev and the gateways publish. LiteLLM's schema is per **token**.
 TOKENS_PER_PRICE_UNIT = 1_000_000
 
+#: LiteLLM's two mandatory keys: without ``litellm_provider`` no lookup is
+#: possible, and without ``mode`` ``--list-models`` skips the entry entirely.
+#: Every limit and price key is optional, which is why an unknown is omitted.
+CLI_REQUIRED_KEYS: frozenset[str] = frozenset({"litellm_provider", "mode"})
+
 #: What Aider itself does when a metadata key is absent, read out of 0.86.2.
 #: MCC writes none of these; it omits the key and records the omission. This
 #: dict is the one place in this module allowed to hold a literal limit, and
@@ -86,6 +91,10 @@ CLI_DOCUMENTED_DEFAULTS: dict[str, Any] = {
     # written as a zero that would read as "free".
     "input_cost_per_token": None,
     "output_cost_per_token": None,
+    # LiteLLM's two cached-token rates. Optional exactly like the uncached
+    # pair, and read by the same cost reporter, so an unknown is omitted.
+    "cache_read_input_token_cost": None,
+    "cache_creation_input_token_cost": None,
     # With no ``supports_vision`` Aider refuses to attach an image to the chat
     # and says so. That is the conservative behaviour and the correct one for
     # a model nobody has published an answer for.
@@ -169,6 +178,16 @@ def _metadata_entry(
 
     _record_price(entry, "input_cost_per_token", model.input_price, name, defaulted)
     _record_price(entry, "output_cost_per_token", model.output_price, name, defaulted)
+    _record_price(
+        entry, "cache_read_input_token_cost", model.cache_read_price, name, defaulted
+    )
+    _record_price(
+        entry,
+        "cache_creation_input_token_cost",
+        model.cache_write_price,
+        name,
+        defaulted,
+    )
 
     if model.supports_vision is None:
         defaulted.record(name, "supports_vision")

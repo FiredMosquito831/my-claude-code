@@ -140,6 +140,7 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
             "updated_at": None,
             "model_count": None,
             "defaulted_model_count": None,
+            "defaulted_record_in_document": True,
         }
 
     merge = catalogue.merge
@@ -166,6 +167,9 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         "updated_at": None,
         "model_count": None,
         "defaulted_model_count": None,
+        # False only where the CLI refuses unknown root keys, so the
+        # generated file cannot carry MCC's own record of what it guessed.
+        "defaulted_record_in_document": catalogue.carries_defaulted_record,
     }
     document = _read_catalogue(path, catalogue.document_format)
     if document is None:
@@ -180,6 +184,12 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
     entry["exists"] = True
     entry["updated_at"] = _mtime_iso(path)
     entry["model_count"] = len(model_entries(catalogue.format_id, document))
+    if not catalogue.carries_defaulted_record:
+        # The file cannot hold the record -- see ``catalogues/kilo.py`` -- so
+        # reporting ``0`` here would be a measurement MCC never took. ``None``
+        # says "not recorded in the file"; the card names the other homes.
+        entry["defaulted_model_count"] = None
+        return entry
     defaulted = document.get("_mcc_defaulted")
     entry["defaulted_model_count"] = (
         len(defaulted) if isinstance(defaulted, dict) else 0
@@ -308,12 +318,15 @@ def _model_payload(model: CatalogueModel) -> dict[str, Any]:
         "provider_id": model.provider_id,
         "display_name": model.display_name,
         "force_no_thinking": model.force_no_thinking,
+        "is_primary_route": model.is_primary_route,
         "context_length": model.context_length,
         "max_output_tokens": model.max_output_tokens,
         "supports_vision": model.supports_vision,
         "supports_tool_calls": model.supports_tool_calls,
         "input_price": model.input_price,
         "output_price": model.output_price,
+        "cache_read_price": model.cache_read_price,
+        "cache_write_price": model.cache_write_price,
         "supported_parameters": (
             None
             if model.supported_parameters is None

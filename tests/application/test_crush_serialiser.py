@@ -254,7 +254,14 @@ def test_unknown_reasoning_becomes_crushs_false_and_is_recorded() -> None:
     assert "can_reason" in defaulted.by_model["anthropic/openrouter/sonnet"]
 
 
-def test_the_no_thinking_variant_states_reasoning_off() -> None:
+def test_a_surviving_no_thinking_twin_is_listed_under_its_plain_ref() -> None:
+    """A twin that survives is not a second model -- it is a model whose
+    provider said it cannot think, so the normal variant was never emitted.
+    ``visible_entries`` re-projects it onto its plain ref: the
+    ``claude-3-freecc-no-thinking/`` prefix is a Claude Code heuristic and
+    means nothing to a CLI that reads ``reasoning: false`` instead.
+    """
+
     document, _ = build_crush_catalogue(
         [
             _model(
@@ -265,7 +272,7 @@ def test_the_no_thinking_variant_states_reasoning_off() -> None:
     )
 
     entry = _entry(document)
-    assert entry["id"] == "claude-3-freecc-no-thinking/openrouter/sonnet"
+    assert entry["id"] == "anthropic/openrouter/sonnet"
     assert entry["can_reason"] is False
 
 

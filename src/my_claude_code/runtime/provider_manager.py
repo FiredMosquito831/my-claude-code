@@ -26,7 +26,11 @@ from my_claude_code.providers.runtime.discovery import (
 )
 from my_claude_code.providers.runtime.model_cache import ProviderModelCache
 from my_claude_code.providers.runtime.models_dev import (
+    model_context_length_tiered,
     model_output_limit_tiered,
+    model_prices_tiered,
+    model_tool_call_tiered,
+    model_vision_tiered,
     resolve_model_reasoning_capability,
 )
 from my_claude_code.providers.runtime.validation import ConfiguredModelValidator
@@ -292,6 +296,73 @@ class ProviderRuntimeManager:
         from it would not fit.
         """
         return self._model_cache.cached_model_context_length(provider_id, model_id)
+
+    def model_context_length_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[int | None, ResolutionTier | None]:
+        """The context window down the same ten rungs the output limit walks.
+
+        A sibling of :meth:`model_output_limit_tiered`, not a replacement for
+        :meth:`model_context_length`. The two answer different questions and
+        both are needed: the output budget must only ever be derived from the
+        *routed deployment's own* window, because a gateway serving a 262k
+        model on a 32k deployment would have its real window overstated and
+        the budget would not fit -- so :meth:`model_context_length` stays
+        provider-only and ``application/output_tokens`` keeps reading it.
+
+        What a *catalogue* publishes is the other question. A CLI picker shown
+        no window at all does not fall back to a smaller number; it falls back
+        to its own invented one, or refuses the document. There the honest
+        ordering is the full ladder: the deployment's own answer still wins
+        outright, and only where nothing was published at all does models.dev
+        get to speak -- tagged with the rung, so an approximate answer is
+        visibly approximate.
+        """
+        found = self._model_cache.cached_model_info_tiered(provider_id, model_id)
+        if found is not None and found[0].context_length is not None:
+            return found[0].context_length, found[1]
+        return model_context_length_tiered(provider_id, model_id)
+
+    def model_vision_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]:
+        """Image-input support down the same ladder, provider first."""
+        found = self._model_cache.cached_model_info_tiered(provider_id, model_id)
+        if found is not None and found[0].supports_vision is not None:
+            return found[0].supports_vision, found[1]
+        return model_vision_tiered(provider_id, model_id)
+
+    def model_tool_call_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]:
+        """models.dev's ``tool_call`` boolean, tiers 3-10 only.
+
+        No provider rung: a gateway states tool support through its
+        ``supported_parameters`` list, which ``derive_supports_tool_calls``
+        reads and which stays the first and preferred answer. This is only
+        consulted where that list was never published.
+        """
+        return model_tool_call_tiered(provider_id, model_id)
+
+    def model_prices_tiered(
+        self, provider_id: str, model_id: str
+    ) -> dict[str, tuple[float | None, ResolutionTier | None]]:
+        """The four published rates, each down the same ladder.
+
+        ``ProviderModelInfo`` carries only the two uncached rates, so the
+        provider rung answers those and the cache rates resolve from tier 3
+        down or stay unknown.
+        """
+        resolved = model_prices_tiered(provider_id, model_id)
+        found = self._model_cache.cached_model_info_tiered(provider_id, model_id)
+        if found is None:
+            return resolved
+        info, tier = found
+        if info.input_price is not None:
+            resolved["input_price"] = (info.input_price, tier)
+        if info.output_price is not None:
+            resolved["output_price"] = (info.output_price, tier)
+        return resolved
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._model_cache.cached_prefixed_model_infos()

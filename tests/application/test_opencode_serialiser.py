@@ -47,8 +47,15 @@ def test_limit_context_and_output_come_from_ladder() -> None:
     assert "limit.context" not in defaulted.by_model.get("openrouter/sonnet", [])
 
 
-def test_optional_unknown_fields_are_omitted_not_zeroed() -> None:
-    """OpenCode fills an absent key with 0; MCC must not write the 0 itself."""
+def test_genuinely_optional_unknown_fields_are_omitted_not_zeroed() -> None:
+    """OpenCode fills an absent key with 0; MCC must not write the 0 itself.
+
+    Narrowed to the keys that really are optional on their own. ``limit`` is
+    not one of them: it is an optional *object with required members*, so
+    "omit the key" applies to the whole object and never to half of it. That
+    distinction is what this test used to blur, and blurring it is how the
+    defect passed review.
+    """
 
     document, _ = build_opencode_catalogue([_model()])
 
@@ -58,6 +65,9 @@ def test_optional_unknown_fields_are_omitted_not_zeroed() -> None:
     assert "reasoning" not in entry
     assert "tool_call" not in entry
     assert "attachment" not in entry
+    assert "modalities" not in entry
+    assert "options" not in entry
+    assert "variants" not in entry
     assert document[DEFAULTED_KEY]["openrouter/sonnet"] == [
         "limit.context",
         "limit.output",
@@ -66,6 +76,35 @@ def test_optional_unknown_fields_are_omitted_not_zeroed() -> None:
         "attachment",
         "cost",
     ]
+
+
+def test_a_half_known_limit_is_never_shipped() -> None:
+    """The exact regression: OpenCode refuses the whole document over it.
+
+    ``Missing key provider.mcc.models.<id>.limit.context`` was 52 of 142
+    entries on a real install, and the launch listed zero models. The twin of
+    ``test_a_half_known_price_is_no_price_at_all``, which existed; this one
+    did not.
+    """
+
+    known_output, _ = build_opencode_catalogue([_model(max_output_tokens=131072)])
+    known_context, _ = build_opencode_catalogue([_model(context_length=1048576)])
+
+    for document in (known_output, known_context):
+        limit = _models(document)["openrouter/sonnet"]["limit"]
+        assert set(limit) == {"context", "output"}
+
+
+def test_opencode_always_emits_both_limits_and_records_the_substitution() -> None:
+    """The known half survives; the unknown half is OpenCode's own ``0``."""
+
+    document, defaulted = build_opencode_catalogue([_model(max_output_tokens=131072)])
+
+    entry = _models(document)["openrouter/sonnet"]
+    assert entry["limit"] == {"context": 0, "output": 131072}
+    recorded = defaulted.by_model["openrouter/sonnet"]
+    assert "limit.context" in recorded
+    assert "limit.output" not in recorded
 
 
 def test_a_half_known_price_is_no_price_at_all() -> None:
@@ -83,9 +122,34 @@ def test_prices_are_carried_in_the_units_opencode_reads() -> None:
 
     entry = _models(document)["openrouter/sonnet"]
     assert entry["cost"] == {"input": 3.0, "output": 15.0}
-    # The two cache rates stay OpenCode's, because MCC resolves none and
-    # deriving them from the uncached rate would be inventing a number.
+    # The two cache rates are optional inside ``cost``, so an unresolved one is
+    # omitted and recorded rather than derived from the uncached rate.
     assert "cost.cache_read" in defaulted.by_model["openrouter/sonnet"]
+
+
+def test_resolved_cache_rates_reach_the_cost_block() -> None:
+    """models.dev publishes both, and now the ladder carries them."""
+
+    document, defaulted = build_opencode_catalogue(
+        [
+            _model(
+                input_price=3.0,
+                output_price=15.0,
+                cache_read_price=0.3,
+                cache_write_price=3.75,
+            )
+        ]
+    )
+
+    assert _models(document)["openrouter/sonnet"]["cost"] == {
+        "input": 3.0,
+        "output": 15.0,
+        "cache_read": 0.3,
+        "cache_write": 3.75,
+    }
+    assert "openrouter/sonnet" not in defaulted.by_model or (
+        "cost.cache_read" not in defaulted.by_model["openrouter/sonnet"]
+    )
 
 
 def test_vision_sets_both_attachment_and_the_input_modalities() -> None:
@@ -138,7 +202,14 @@ def test_a_model_with_no_effort_knob_gets_reasoning_on_and_no_variants() -> None
     assert "variants" not in entry
 
 
-def test_the_no_thinking_variant_declares_reasoning_off_under_its_gateway_id() -> None:
+def test_a_surviving_no_thinking_twin_is_listed_under_its_plain_ref() -> None:
+    """A twin that survives is not a second model -- it is a model whose
+    provider said it cannot think, so the normal variant was never emitted.
+    ``visible_entries`` re-projects it onto its plain ref: the
+    ``claude-3-freecc-no-thinking/`` prefix is a Claude Code heuristic and
+    means nothing to a CLI that reads ``reasoning: false`` instead.
+    """
+
     document, _ = build_opencode_catalogue(
         [
             _model(
@@ -149,7 +220,8 @@ def test_the_no_thinking_variant_declares_reasoning_off_under_its_gateway_id() -
         ]
     )
 
-    entry = _models(document)["claude-3-freecc-no-thinking/openrouter/sonnet"]
+    assert list(_models(document)) == ["openrouter/sonnet"]
+    entry = _models(document)["openrouter/sonnet"]
     assert entry["reasoning"] is False
     assert "variants" not in entry
 

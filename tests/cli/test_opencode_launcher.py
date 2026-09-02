@@ -11,6 +11,10 @@ its path. These tests pin that, and pin the token staying out of the file.
 
 from pathlib import Path
 
+from my_claude_code.cli.harnesses.catalogue_client import (
+    catalogue_defaulted,
+    print_defaulted_summary,
+)
 from my_claude_code.cli.launchers.opencode import (
     build_opencode_launcher_env,
     is_passthrough,
@@ -86,3 +90,57 @@ def test_maintenance_commands_reach_the_cli_without_a_running_proxy() -> None:
     assert is_passthrough(spec, ["--version"])
     assert not is_passthrough(spec, ["run", "hello"])
     assert not is_passthrough(spec, [])
+
+
+def test_the_launch_summary_is_one_line_unless_verbose(capsys) -> None:
+    """142 lines of stderr before the agent has said anything is not read.
+
+    The user who reported the launch failure quoted six of those lines and
+    could not tell that the seventh said the document had been refused. The
+    default is now one line with the field histogram; the per-model detail is
+    behind ``MCC_CATALOGUE_VERBOSE=1`` and has two other homes -- the
+    generated file's own ``_mcc_defaulted`` block and the Coding agents card.
+    """
+
+    defaulted = {
+        "custom_b_ai/glm-5.3-flash": ["limit.context", "cost"],
+        "chatgpt_oauth/gpt-5.5": ["cost"],
+    }
+
+    print_defaulted_summary("OpenCode", defaulted, environ={})
+    quiet = capsys.readouterr().err.strip().splitlines()
+
+    assert len(quiet) == 1
+    assert "2 model(s)" in quiet[0]
+    assert "cost x2" in quiet[0]
+    assert "limit.context x1" in quiet[0]
+    assert "MCC_CATALOGUE_VERBOSE=1" in quiet[0]
+    assert "custom_b_ai/glm-5.3-flash" not in quiet[0]
+
+    print_defaulted_summary(
+        "OpenCode", defaulted, environ={"MCC_CATALOGUE_VERBOSE": "1"}
+    )
+    verbose = capsys.readouterr().err.strip().splitlines()
+
+    assert len(verbose) == 3
+    assert verbose[1].strip().startswith("chatgpt_oauth/gpt-5.5:")
+    assert verbose[2].strip().startswith("custom_b_ai/glm-5.3-flash:")
+
+
+def test_nothing_is_printed_when_the_ladder_answered_everything(capsys) -> None:
+    print_defaulted_summary("OpenCode", {}, environ={})
+
+    assert capsys.readouterr().err == ""
+
+
+def test_the_defaulted_record_is_read_from_the_payload_not_the_document() -> None:
+    """Kilo's document cannot carry it, and its stderr must still report it."""
+
+    payload = {
+        "catalogues": {
+            "kilo": {"document": {}, "defaulted": {"a/b": ["limit.context"]}},
+        }
+    }
+
+    assert catalogue_defaulted(payload, "kilo") == {"a/b": ["limit.context"]}
+    assert catalogue_defaulted(payload, "not_a_harness") == {}

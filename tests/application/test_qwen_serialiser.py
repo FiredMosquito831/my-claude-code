@@ -174,7 +174,14 @@ def test_a_reasoning_model_with_no_knob_gets_an_empty_block_not_an_effort() -> N
     assert _entry(document)["generationConfig"]["reasoning"] == {}
 
 
-def test_the_no_thinking_variant_states_reasoning_off() -> None:
+def test_a_surviving_no_thinking_twin_is_listed_under_its_plain_ref() -> None:
+    """A twin that survives is not a second model -- it is a model whose
+    provider said it cannot think, so the normal variant was never emitted.
+    ``visible_entries`` re-projects it onto its plain ref: the
+    ``claude-3-freecc-no-thinking/`` prefix is a Claude Code heuristic and
+    means nothing to a CLI that reads ``reasoning: false`` instead.
+    """
+
     document, _ = build_qwen_catalogue(
         [
             _model(
@@ -185,7 +192,7 @@ def test_the_no_thinking_variant_states_reasoning_off() -> None:
     )
 
     entry = _entry(document)
-    assert entry["id"] == "claude-3-freecc-no-thinking/openrouter/sonnet"
+    assert entry["id"] == "anthropic/openrouter/sonnet"
     assert entry["generationConfig"]["reasoning"] is False
 
 

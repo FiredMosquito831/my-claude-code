@@ -1090,14 +1090,74 @@ A model with a 32k window is advertised as 32k. A model that publishes only
 disappears rather than being offered and rejected. A model that cannot reason
 gets no effort list at all.
 
+**Every one of those values walks the same ten-rung ladder.** The routed
+deployment's own `/models` payload wins outright; only where it published
+nothing does MCC consult models.dev — that provider's own bucket, then the
+OpenRouter reference catalogue, then a guarded cross-provider vote — and the
+rung that answered is recorded and shown beside the number on the **Models**
+page. One resolver feeds the Models page, `/admin/api/catalogue-models`, every
+generated catalogue and `GET /v1beta/models`, so those surfaces cannot
+disagree about a number or about where it came from.
+
 **Unknown stays unknown.** Where a CLI's schema makes a field optional and no
-provider published a value, MCC omits the key rather than writing a zero. Where
-the schema *requires* a value, MCC uses **that CLI's own documented default** —
-never a number MCC invented — and records the substitution in three places: a
-`_mcc_defaulted` block in the generated file, a line on the launcher's stderr
-when it starts, and a count on the agent's card in **Coding agents**. So you can
-always tell which figures are the CLI's guess from which are your provider's
-answer.
+source anywhere published a value, MCC omits the key rather than writing a
+zero. Where the schema *requires* a value, MCC uses **that CLI's own documented
+default** — never a number MCC invented — and records the substitution. So you
+can always tell which figures are the CLI's guess from which are your
+provider's answer.
+
+The record has three homes, and which ones you get depends on the CLI:
+
+* a `_mcc_defaulted` block in the generated file — for every agent except Kilo
+  CLI, whose config validator rejects unknown top-level keys outright;
+* **one line** on the launcher's stderr when it starts, naming how many models
+  and which fields (`limit.context ×4, cost ×8`). Set `MCC_CATALOGUE_VERBOSE=1`
+  for the full per-model list, which used to print on every launch;
+* the agent's card in **Coding agents**, which is where the Kilo record lives.
+
+What "that CLI's own default" means, per agent:
+
+| Agent | Required-and-unknown becomes | Optional-and-unknown |
+| --- | --- | --- |
+| OpenCode / OpenCode 2 / Kilo | `limit.context` or `limit.output` → `0`, OpenCode's own unknown marker. The object is all-or-nothing: a `limit` carrying only one of the two makes OpenCode reject the **whole file**, so the known half is kept and the unknown half filled. A model with neither known gets no `limit` at all. | omitted (`cost`, `reasoning`, `tool_call`, `attachment`, `modalities`, `options`, `variants`) |
+| Codex CLI | nothing — `context_window` is **optional** in 0.151.0, so an unknown window is omitted, not written as `200000` | omitted (`context_window`, `max_context_window`, `input_modalities`) |
+| Pi | `contextWindow` → `128000`, `maxTokens` → `16384`, all four `cost` rates → `0` | omitted |
+| Crush | all ten required fields, including `context_window` → `0` and the four `cost_per_1m_*` → `0.0` | omitted (`reasoning_levels`, `default_reasoning_effort`) |
+| Kimi Code | `max_context_size` → `0`, Kimi's own marker | omitted (`capabilities`) |
+| Qwen Code | nothing required | omitted — but note Qwen then uses its own `DEFAULT_TOKEN_LIMIT = 131072`, not "no gauge" |
+| Command Code, Aider, Cline, Droid, Gemini CLI | nothing required beyond identity | omitted |
+
+`0` is a real answer in three of those CLIs and MCC uses it only where the CLI
+itself documents it as "unknown" — OpenCode's `limit` coercion, Kimi's
+`compute_max_completion_tokens` branch on `<= 0`, Crush's Go zero value. It is
+never written as a context window MCC believes in.
+
+**`:batch` refs are excluded from every agent catalogue.** A `:batch` route is
+an asynchronous pricing tier of a model you already have, not a second
+interactive model, so it doubles a picker for nothing. They remain in
+`GET /v1/models`, which answers "what ids may I send?" rather than "what should
+I pick". On a real install that is 142 entries down to 82.
+
+**The catalogue obeys `MODEL_VISIBILITY_ALLOW` / `MODEL_VISIBILITY_DENY`**
+exactly as `/v1/models` does — same two glob lists, same filter — so a model
+hidden on the **Models** page is absent from every agent's catalogue too.
+
+**Three agents have to pin one model to open a session at all** (Cline, Crush
+and Goose). They start on the route named by `MODEL`; if that is not among the
+visible entries, on the first entry that is not a free tier. Taking the first
+entry outright is what they used to do, and on a real install that selected a
+free tier the provider had withdrawn, so every session opened on a model that
+answered 404.
+
+**Aider is launched with `--no-gitignore`.** Without it Aider appends `.aider*`
+to the working tree's `.gitignore`, and `git init`s a directory that is not a
+repository — silent edits to your tree that nothing asked for. Pass
+`--gitignore` after the command if you want the old behaviour; Aider keeps the
+last occurrence.
+
+**Gemini CLI needs `--skip-trust` for a headless run.** MCC does not set it:
+workspace trust is the user's decision, not the proxy's. `mcc-gemini -p "..."`
+in an untrusted directory exits 55; `mcc-gemini --skip-trust -p "..."` runs.
 
 Kimi Code is the clearest illustration of what "that CLI's own default" means.
 `max_context_size` is a *required* integer there, so a model whose context
@@ -1419,6 +1479,8 @@ Two independent facts decide what actually goes on the wire: what the **model** 
 Every OpenAI-compatible host declares the standard `reasoning_effort` field unless it was probed speaking something else; a host that refuses it answers with a 400, is retried once without it, and is not asked again for that model. Since 6.33.0 that is true of **every** provider, whichever protocol it speaks: an Anthropic Messages host that refuses a `thinking` object and a Responses host that refuses a `reasoning` block are learned from the same way, by the same matcher. Your own model-parameter override is applied **after** every postprocessor, so setting `reasoning_effort` explicitly — or to null — on a model always wins over the default dialect.
 
 The Models page shows the two side by side: what the model can do, with the resolution tier each field came from, and what the host parses, labelled **default OpenAI dialect**, **declared by this provider**, or **learned from the host's own rejection** — never a vote.
+
+Since 6.35.0 the tier is shown for **every** resolved field, not only the output ceiling: the context window, vision support, tool support and all four price rates each walk the same ten rungs and each name the one that answered. Where the routed deployment's own `/models` payload supplied the value the badge reads *provider /models or models.dev* with no tier, because the enrichment step that merged them keeps no record of which won; where the ladder supplied it, the rung is exact — down to *cross-provider, bare model*, which is a vote across strangers who merely share a name and is badged **approximate** accordingly. The Models page and every generated agent catalogue read that from the same resolver, so they cannot disagree about a number or about where it came from.
 
 #### What "learned from the host's own rejection" means
 

@@ -2065,8 +2065,25 @@ mcc-gemini</code></pre>
                 <p>
                   Where a CLI's own format demands a number nothing published, the proxy
                   uses <em>that CLI's</em> documented default and says so &mdash; on the
-                  agent's card, in the launcher's output, and in a
-                  <code>_mcc_defaulted</code> block inside the generated file.
+                  agent's card, in a one-line summary on the launcher's output
+                  (<code>MCC_CATALOGUE_VERBOSE=1</code> for the per-model list), and in a
+                  <code>_mcc_defaulted</code> block inside the generated file. Kilo CLI is
+                  the exception on that last one: its config validator rejects unknown
+                  top-level keys, so its file carries no such block and its card says so.
+                </p>
+                <p>
+                  These catalogues are pickers rather than protocol surfaces, so they list
+                  fewer entries than <code>/v1/models</code> deliberately:
+                  <code>:batch</code> refs are an asynchronous pricing tier of a model you
+                  already have and are left out, and every model appears once under its
+                  plain id. Hiding a model on the <strong>Models</strong> page removes it
+                  from every agent's catalogue too.
+                </p>
+                <p>
+                  Cline, Crush and Goose have to be given one model up front to open a
+                  session at all. They start on the route named by <code>MODEL</code>, or
+                  on the first entry that is not a free tier when that route is hidden
+                  &mdash; not simply on whatever happens to be listed first.
                 </p>
                 <p class="guide-note">
                   A coding agent is not a provider. The CLIs here sit downstream of this

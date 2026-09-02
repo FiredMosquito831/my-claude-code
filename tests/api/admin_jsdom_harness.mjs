@@ -571,6 +571,38 @@ const ROUTES = {
           updated_at: null,
           model_count: null,
           defaulted_model_count: null,
+          defaulted_record_in_document: true,
+        },
+      },
+      {
+        id: "kilo",
+        display_name: "Kilo CLI",
+        binary: "kilo",
+        installed: false,
+        binary_path: null,
+        install_hint: "Install Kilo CLI with: npm install -g @kilocode/cli",
+        command: "mcc-kilo",
+        commands: ["mcc-kilo"],
+        command_lines: [
+          { command: "mcc-kilo", help: "Launch Kilo CLI through the proxy", kind: "primary" },
+        ],
+        protocol: "anthropic_messages",
+        protocol_label: "Anthropic Messages (POST /v1/messages)",
+        summary: "Kilo CLI, a fork of OpenCode that reads the same config schema.",
+        rtk_agent: false,
+        rtk_enabled: false,
+        catalogue: {
+          format: "kilo",
+          config_env_var: "KILO_CONFIG",
+          delivery: "file",
+          path: "/home/u/.fcc/kilo-config.json",
+          exists: true,
+          updated_at: "2026-09-02T09:12:44Z",
+          model_count: 82,
+          // Kilo's validator refuses unknown root keys, so the generated file
+          // carries no ``_mcc_defaulted`` block to count.
+          defaulted_model_count: null,
+          defaulted_record_in_document: false,
         },
       },
       {

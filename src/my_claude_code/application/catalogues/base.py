@@ -25,10 +25,15 @@ context/limit/token-shaped key outside that dict. It is the test that stops
 """
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.model_metadata import ModelReasoningCapability
+from my_claude_code.core.catalogue_refs import (
+    is_excluded_ref,
+    select_starting_index,
+)
+from my_claude_code.core.gateway_model_ids import gateway_model_id
 from my_claude_code.core.reasoning import ReasoningEffort
 
 #: Key carrying the defaulted-field record inside a generated catalogue.
@@ -80,23 +85,73 @@ class DefaultedFields:
 
 
 def visible_entries(models: Iterable[CatalogueModel]) -> list[CatalogueModel]:
-    """Drop the no-thinking variant of any ref whose normal variant is present.
+    """The entries a CLI picker should list, deduplicated and un-prefixed.
 
-    The two ids exist so Claude Code's client-side heuristic can be used to
-    turn thinking off. Every other CLI picks the model from a list, so
-    offering both would double the list for no gain; the no-thinking entry is
-    kept only when it is the *only* way to reach that ref.
+    Three rules, in order:
+
+    1. Drop every ref whose suffix names a pricing tier rather than a model
+       (:data:`EXCLUDED_REF_SUFFIXES`).
+    2. Drop the ``claude-3-freecc-no-thinking/`` variant of any ref whose
+       normal variant is present. The two ids exist so Claude Code's
+       client-side heuristic can be used to turn thinking off; every other CLI
+       picks from a list, so offering both would double it for no gain.
+    3. Re-project whatever no-thinking entry survives onto its **plain** ref.
+       A surviving twin is not a second model: it is a model whose provider
+       reported ``supports_thinking is False``, so the normal variant was never
+       emitted at all. The prefix is a Claude Code heuristic and means nothing
+       to OpenCode or Crush, which read ``reasoning: false`` instead -- and
+       that is exactly what the re-projected record states, from the same
+       provider statement that suppressed the normal variant. The plain ref
+       routes identically; only the id the picker shows changes.
     """
 
-    entries = list(models)
+    entries = [
+        entry for entry in models if not is_excluded_ref(entry.provider_model_ref)
+    ]
     normal_refs = {
         entry.provider_model_ref for entry in entries if not entry.force_no_thinking
     }
     return [
-        entry
+        entry if not entry.force_no_thinking else _as_plain_ref(entry)
         for entry in entries
         if not (entry.force_no_thinking and entry.provider_model_ref in normal_refs)
     ]
+
+
+def _as_plain_ref(entry: CatalogueModel) -> CatalogueModel:
+    """Return the surviving no-thinking twin under its own plain id.
+
+    ``reasoning`` is restated rather than left ``None``: the record only exists
+    because the provider said this model does not think, and "known not to
+    reason" is a fact the CLI can act on, where ``None`` would make every
+    serialiser fall back to its own default and record a substitution for
+    something MCC was actually told.
+    """
+
+    return replace(
+        entry,
+        gateway_id=gateway_model_id(entry.provider_model_ref),
+        display_name=entry.provider_model_ref,
+        force_no_thinking=False,
+        reasoning=ModelReasoningCapability(can_reason=False),
+    )
+
+
+def starting_model(entries: Sequence[CatalogueModel]) -> CatalogueModel | None:
+    """The model a CLI that must pin one should open its session on.
+
+    The rule and its reasoning live in
+    :func:`~my_claude_code.core.catalogue_refs.select_starting_index`, because
+    a launcher that configures a CLI through the environment rather than a
+    file has to apply the identical rule and may not import this package.
+    """
+
+    found = select_starting_index(
+        entries,
+        lambda entry: entry.provider_model_ref,
+        lambda entry: entry.is_primary_route,
+    )
+    return None if found is None else entries[found[0]]
 
 
 def clamp_efforts(

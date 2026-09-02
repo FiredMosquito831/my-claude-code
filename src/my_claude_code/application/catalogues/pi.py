@@ -24,6 +24,10 @@ from my_claude_code.application.catalogues.base import (
     visible_entries,
 )
 
+#: Pi's bundled extension reads all three unconditionally, so an unknown one
+#: becomes Pi's own documented value rather than an omission.
+CLI_REQUIRED_KEYS: frozenset[str] = frozenset({"contextWindow", "maxTokens", "cost"})
+
 #: The values Pi's own extension surface uses when a provider states nothing.
 #: They are Pi's numbers, not MCC's: every use is recorded under
 #: ``_mcc_defaulted`` so a reader can see which figure is a guess. This dict is
@@ -108,14 +112,20 @@ def _cost(
     if model.input_price is None or model.output_price is None:
         defaulted.record(model_id, "cost")
         return dict(CLI_DOCUMENTED_DEFAULTS["cost"])
-    # Pi has no separate cached-token rates and MCC resolves none, so the two
-    # cache figures stay at Pi's own default rather than being invented from
-    # the uncached rate.
-    defaulted.record(model_id, "cost.cacheRead")
-    defaulted.record(model_id, "cost.cacheWrite")
-    return {
+    cost: dict[str, float] = {
         "input": model.input_price,
         "output": model.output_price,
         "cacheRead": CLI_DOCUMENTED_DEFAULTS["cost"]["cacheRead"],
         "cacheWrite": CLI_DOCUMENTED_DEFAULTS["cost"]["cacheWrite"],
     }
+    # All four are required together, so an unresolved cache rate becomes Pi's
+    # own ``0`` and is recorded. It is never derived from the uncached rate.
+    for key, value in (
+        ("cacheRead", model.cache_read_price),
+        ("cacheWrite", model.cache_write_price),
+    ):
+        if value is None:
+            defaulted.record(model_id, f"cost.{key}")
+        else:
+            cost[key] = value
+    return cost

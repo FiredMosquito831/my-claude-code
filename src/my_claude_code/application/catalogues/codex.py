@@ -8,9 +8,33 @@ and that payload carries no capability fields at all. A 32k deployment and a
 1M-token model were advertised to Codex's picker as identical.
 
 Now every field that has a ladder answer carries it, and every field that does
-not is filled from :data:`CLI_DOCUMENTED_DEFAULTS` -- Codex's own numbers, not
-MCC's -- and recorded in the file's ``_mcc_defaulted`` block so the guess is
+not is either omitted (where Codex's schema makes it optional) or filled from
+:data:`CLI_DOCUMENTED_DEFAULTS` -- Codex's own numbers, not MCC's -- with the
+substitution recorded in the file's ``_mcc_defaulted`` block so the guess is
 visible. Read ``application/catalogues/base.py`` before changing anything here.
+
+**Three keys this module used to write are gone**, all three read out of the
+0.151.0 binary rather than inferred:
+
+* ``context_window`` / ``max_context_window`` are ``Option<i64>`` with
+  ``#[serde(default)]`` -- optional. Writing ``200000`` for an unknown window
+  was the very literal this module was created to remove, and it was doing it
+  for 54 of 142 models on a real install. Now omitted and recorded.
+* ``reasoning_required`` **does not exist in 0.151.0 at all** (``grep -a -c``
+  over the binary returns 0, and it is absent from the ``ModelInfo`` serde
+  field list). Emitting it protected nothing: a model whose thinking cannot be
+  turned off was never actually protected in Codex, and a key the CLI ignores
+  is worse than no key, because it reads as a guarantee.
+* ``supports_parallel_tool_calls`` exists in the binary but on
+  ``RawMcpServerConfig`` and the MCP tool-info struct, **not on ``ModelInfo``**
+  (byte evidence: ``tool_timeout_secrequiredsupports_parallel_tool_calls
+  omit_tools_from...struct RawMcpServerConfig with 28 elements``). It was the
+  single largest defaulted field in the generated document -- 63 of 142
+  models -- reporting substitutions into a key Codex does not read.
+
+Where a capability MCC knows has no ``ModelInfo`` field to carry it, the
+honest answer is to write nothing and say so, not to write into a field name
+that looks right.
 """
 
 from collections.abc import Iterable, Mapping
@@ -22,7 +46,6 @@ from my_claude_code.application.catalogues.base import (
     DefaultedFields,
     can_reason,
     clamp_efforts,
-    reasoning_is_mandatory,
     visible_entries,
 )
 from my_claude_code.core.reasoning import ReasoningEffort
@@ -55,6 +78,30 @@ CODEX_BASE_INSTRUCTIONS = (
     "tools when needed, and communicate concise progress and verification."
 )
 
+#: Keys Codex refuses a catalogue entry without, read out of the 0.151.0
+#: binary's ``ModelInfo`` serde field list (a serde field with no
+#: ``#[serde(default)]`` is a ``missing field`` parse error when absent).
+#: ``context_window`` is deliberately NOT here: it carries
+#: ``#[serde(default, skip_serializing_if = "Option::is_none")]``, so it is
+#: optional and an unknown window is omitted rather than invented.
+CLI_REQUIRED_KEYS: frozenset[str] = frozenset(
+    {
+        "slug",
+        "display_name",
+        "description",
+        "supported_reasoning_levels",
+        "shell_type",
+        "visibility",
+        "supported_in_api",
+        "priority",
+        "support_verbosity",
+        "default_verbosity",
+        "apply_patch_tool_type",
+        "truncation_policy",
+        "experimental_supported_tools",
+    }
+)
+
 #: Codex's own numbers. Two kinds live here and both belong to Codex rather
 #: than to MCC: the values applied where Codex's schema requires something
 #: MCC's ladder could not supply (every such use is recorded under
@@ -62,12 +109,10 @@ CODEX_BASE_INSTRUCTIONS = (
 #: not model capabilities at all. This dict is the one place in the package
 #: allowed to hold a literal limit; the static guard test keys off its name.
 CLI_DOCUMENTED_DEFAULTS: dict[str, Any] = {
-    "context_window": 200000,
     "truncation_policy": {"mode": "tokens", "limit": 10000},
     "supported_reasoning_levels": ("low", "medium", "high", "xhigh"),
     "default_reasoning_level": "medium",
     "supports_reasoning_summaries": True,
-    "supports_parallel_tool_calls": True,
     "input_modalities": ("text",),
 }
 
@@ -112,12 +157,6 @@ def _entry(
     priority: int,
     defaulted: DefaultedFields,
 ) -> dict[str, Any]:
-    context_window = model.context_length
-    if context_window is None:
-        context_window = CLI_DOCUMENTED_DEFAULTS["context_window"]
-        defaulted.record(slug, "context_window")
-        defaulted.record(slug, "max_context_window")
-
     entry: dict[str, Any] = {
         "slug": slug,
         "display_name": model.display_name,
@@ -136,17 +175,39 @@ def _entry(
         "web_search_tool_type": "text_and_image",
         "truncation_policy": dict(CLI_DOCUMENTED_DEFAULTS["truncation_policy"]),
         "supports_image_detail_original": True,
-        "context_window": context_window,
-        "max_context_window": context_window,
         "effective_context_window_percent": 95,
         "experimental_supported_tools": [],
         "input_modalities": _input_modalities(model, slug, defaulted),
         "supports_search_tool": True,
         "use_responses_lite": False,
+        **_context_fields(model, slug, defaulted),
         **_reasoning_fields(model, slug, defaulted),
-        **_tool_fields(model, slug, defaulted),
     }
     return entry
+
+
+def _context_fields(
+    model: CatalogueModel, slug: str, defaulted: DefaultedFields
+) -> Mapping[str, Any]:
+    """Return Codex's two context keys, or neither when nobody published one.
+
+    ``context_window`` and ``max_context_window`` are both
+    ``#[serde(default, skip_serializing_if = "Option::is_none")] Option<i64>``
+    in 0.151.0 -- **optional**, and Codex supplies its own when they are
+    absent. So the rule in ``base.py`` says omit, and this module used to
+    write ``200000`` instead: the exact literal its own docstring was written
+    to eliminate, reinstated one field over. It is gone, and the omission is
+    recorded like every other.
+    """
+
+    if model.context_length is None:
+        defaulted.record(slug, "context_window")
+        defaulted.record(slug, "max_context_window")
+        return {}
+    return {
+        "context_window": model.context_length,
+        "max_context_window": model.context_length,
+    }
 
 
 def _input_modalities(
@@ -157,16 +218,6 @@ def _input_modalities(
     if model.supports_vision is None:
         defaulted.record(slug, "input_modalities")
     return list(CLI_DOCUMENTED_DEFAULTS["input_modalities"])
-
-
-def _tool_fields(
-    model: CatalogueModel, slug: str, defaulted: DefaultedFields
-) -> Mapping[str, Any]:
-    supports_tools = model.supports_tool_calls
-    if supports_tools is None:
-        defaulted.record(slug, "supports_parallel_tool_calls")
-        supports_tools = CLI_DOCUMENTED_DEFAULTS["supports_parallel_tool_calls"]
-    return {"supports_parallel_tool_calls": supports_tools}
 
 
 def _reasoning_fields(
@@ -212,10 +263,6 @@ def _reasoning_fields(
     else:
         fields["supports_reasoning_summaries"] = reasons
 
-    if reasoning_is_mandatory(reasoning):
-        # The model cannot run with thinking disabled, so Codex must not offer
-        # an "off" choice it would only get a 400 back from.
-        fields["reasoning_required"] = True
     return fields
 
 

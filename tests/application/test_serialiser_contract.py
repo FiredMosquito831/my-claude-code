@@ -19,7 +19,11 @@ from my_claude_code.application.catalogues import (
     model_entries,
     serialise,
 )
-from my_claude_code.application.catalogues.base import DEFAULTED_KEY
+from my_claude_code.application.catalogues.base import (
+    DEFAULTED_KEY,
+    starting_model,
+    visible_entries,
+)
 from my_claude_code.application.model_metadata import ModelReasoningCapability
 from my_claude_code.config.harnesses import catalogue_specs
 from my_claude_code.core.reasoning import ReasoningEffort
@@ -118,6 +122,15 @@ def test_every_registered_catalogue_format_has_a_serialiser() -> None:
 FORMATS_WITHOUT_A_CONTEXT_FIELD = frozenset({"gemini_cli"})
 
 
+#: Formats whose CLI refuses unknown root keys, so the generated document
+#: cannot carry MCC's own record of what it had to guess. Kilo CLI is the only
+#: one: its validator runs an excess-key check against the root document and
+#: throws ``Unrecognized key: _mcc_defaulted``. The record still reaches the
+#: launcher's summary and the dashboard card, which read it from
+#: ``GET /admin/api/catalogue-models`` rather than from the file.
+FORMATS_WITHOUT_A_DEFAULTED_RECORD = frozenset({"kilo"})
+
+
 @pytest.mark.parametrize("format_id", sorted(SERIALISERS))
 def test_custom_provider_with_only_tier_five_data_still_serialises(
     format_id: str,
@@ -156,7 +169,7 @@ def test_custom_provider_with_only_tier_five_data_still_serialises(
     assert "131072" in serialised or "16384" in serialised, format_id
     if format_id not in FORMATS_WITHOUT_A_CONTEXT_FIELD:
         assert "131072" in serialised, format_id
-    if defaulted.by_model:
+    if defaulted.by_model and format_id not in FORMATS_WITHOUT_A_DEFAULTED_RECORD:
         assert DEFAULTED_KEY in document
 
 
@@ -218,3 +231,69 @@ def _flatten(entry: object, prefix: str = "") -> list[tuple[str, object]]:
             else:
                 pairs.append((name, value))
     return pairs
+
+
+def test_a_surviving_no_thinking_twin_is_re_projected_onto_its_plain_ref() -> None:
+    """``visible_entries`` is where the prefix stops.
+
+    A twin only survives the collapse when the normal variant was never
+    emitted -- which happens exactly when the provider reported the model
+    cannot think. That statement is carried through as ``can_reason=False``
+    rather than dropped, so a serialiser writes the CLI's own "reasoning off"
+    spelling instead of recording a substitution for something MCC was told.
+    """
+
+    twin = CatalogueModel(
+        gateway_id="claude-3-freecc-no-thinking/open_router/plain",
+        provider_model_ref="open_router/plain",
+        display_name="open_router/plain (no thinking)",
+        force_no_thinking=True,
+    )
+
+    entries = visible_entries([twin])
+
+    assert len(entries) == 1
+    assert entries[0].gateway_id == "anthropic/open_router/plain"
+    assert entries[0].force_no_thinking is False
+    assert entries[0].reasoning == ModelReasoningCapability(can_reason=False)
+
+
+def test_a_batch_ref_never_reaches_a_picker_but_is_not_rewritten() -> None:
+    """``:batch`` is a pricing tier, not a second interactive model."""
+
+    interactive = CatalogueModel(
+        gateway_id="anthropic/open_router/m",
+        provider_model_ref="open_router/m",
+        display_name="open_router/m",
+    )
+    batched = CatalogueModel(
+        gateway_id="anthropic/open_router/m:batch",
+        provider_model_ref="open_router/m:batch",
+        display_name="open_router/m:batch",
+    )
+
+    assert visible_entries([interactive, batched]) == [interactive]
+
+
+def test_the_starting_model_is_the_configured_route_then_the_first_paid_one() -> None:
+    free = CatalogueModel(
+        gateway_id="anthropic/open_router/free-one",
+        provider_model_ref="open_router/free-one:free",
+        display_name="open_router/free-one:free",
+    )
+    paid = CatalogueModel(
+        gateway_id="anthropic/open_router/paid",
+        provider_model_ref="open_router/paid",
+        display_name="open_router/paid",
+    )
+    configured = CatalogueModel(
+        gateway_id="anthropic/open_router/configured",
+        provider_model_ref="open_router/configured:free",
+        display_name="open_router/configured:free",
+        is_primary_route=True,
+    )
+
+    assert starting_model([free, paid, configured]) is configured
+    assert starting_model([free, paid]) is paid
+    assert starting_model([free]) is free
+    assert starting_model([]) is None

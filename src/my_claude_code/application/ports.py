@@ -6,6 +6,7 @@ from typing import Protocol, runtime_checkable
 
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import MessagesRequest
+from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.reasoning import ReasoningDialect, ReasoningPolicy
 
 from .model_metadata import ModelReasoningCapability, ProviderModelInfo
@@ -130,6 +131,22 @@ class RequestRuntimePort(Protocol):
     def model_output_limit(self, provider_id: str, model_id: str) -> int | None: ...
 
     def model_context_length(self, provider_id: str, model_id: str) -> int | None: ...
+
+    def model_context_length_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[int | None, ResolutionTier | None]: ...
+
+    def model_vision_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]: ...
+
+    def model_tool_call_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]: ...
+
+    def model_prices_tiered(
+        self, provider_id: str, model_id: str
+    ) -> dict[str, tuple[float | None, ResolutionTier | None]]: ...
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]: ...
 

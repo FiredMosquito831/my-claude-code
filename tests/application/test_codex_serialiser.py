@@ -124,7 +124,17 @@ def test_a_toggle_only_model_reasons_with_no_effort_list() -> None:
     assert "default_reasoning_level" not in entry
 
 
-def test_mandatory_reasoning_model_has_no_off_option() -> None:
+def test_a_mandatory_reasoning_model_gets_no_key_codex_does_not_read() -> None:
+    """``reasoning_required`` does not exist in Codex 0.151.0.
+
+    ``grep -a -c reasoning_required codex.exe`` returns 0 and the name is
+    absent from the ``ModelInfo`` serde field list, so writing it protected
+    nothing: a model whose thinking cannot be turned off was never actually
+    protected in Codex. Emitting a key the CLI ignores is worse than emitting
+    none, because it reads as a guarantee. What Codex does read is the effort
+    vocabulary, and that still comes from the model's own.
+    """
+
     capability = ModelReasoningCapability(
         can_reason=True,
         supports_effort_control=True,
@@ -136,7 +146,7 @@ def test_mandatory_reasoning_model_has_no_off_option() -> None:
         "open_router/always-thinks"
     ]
 
-    assert entry["reasoning_required"] is True
+    assert "reasoning_required" not in entry
     assert [rung["effort"] for rung in entry["supported_reasoning_levels"]] == [
         "medium"
     ]
@@ -146,7 +156,11 @@ def test_defaulted_fields_are_recorded_in_the_file() -> None:
     document, defaulted = build_codex_catalogue([_model("open_router/unknown")])
 
     entry = document["models"][0]
-    assert entry["context_window"] == CLI_DOCUMENTED_DEFAULTS["context_window"]
+    # Optional in 0.151.0, so an unknown window is omitted -- never the
+    # ``200000`` this module exists to have removed -- and still recorded.
+    assert "context_window" not in entry
+    assert "max_context_window" not in entry
+    assert "context_window" not in CLI_DOCUMENTED_DEFAULTS
     recorded = document["_mcc_defaulted"]["open_router/unknown"]
     assert "context_window" in recorded
     assert "max_context_window" in recorded
@@ -170,11 +184,17 @@ def test_known_vision_and_tool_support_are_not_recorded_as_defaults() -> None:
 
     entry = document["models"][0]
     assert entry["input_modalities"] == ["text", "image"]
-    assert entry["supports_parallel_tool_calls"] is True
+    # ``supports_parallel_tool_calls`` lives on ``RawMcpServerConfig`` and the
+    # MCP tool-info struct in 0.151.0, not on ``ModelInfo``. It was the single
+    # largest defaulted field in the generated document -- 63 of 142 models --
+    # reporting substitutions into a key Codex does not read for a model.
+    assert "supports_parallel_tool_calls" not in entry
     assert "_mcc_defaulted" not in document
 
 
-def test_no_thinking_variant_keeps_its_full_gateway_id_as_the_slug() -> None:
+def test_a_surviving_no_thinking_twin_is_listed_under_its_plain_ref() -> None:
+    """The prefix is a Claude Code heuristic; Codex reads the effort list."""
+
     no_thinking = CatalogueModel(
         gateway_id="claude-3-freecc-no-thinking/open_router/m",
         provider_model_ref="open_router/m",
@@ -185,9 +205,9 @@ def test_no_thinking_variant_keeps_its_full_gateway_id_as_the_slug() -> None:
 
     document, _ = build_codex_catalogue([no_thinking])
 
-    assert document["models"][0]["slug"] == (
-        "claude-3-freecc-no-thinking/open_router/m"
-    )
+    entry = document["models"][0]
+    assert entry["slug"] == "open_router/m"
+    assert entry["supported_reasoning_levels"] == []
 
 
 def test_the_no_thinking_variant_is_dropped_when_the_normal_one_is_present() -> None:

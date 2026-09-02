@@ -1150,3 +1150,105 @@ def test_a_hidden_model_is_still_listed_and_still_routes_after_a_bulk_hide(
 
     assert body["visibility"]["deny"] == ["open_router/*"]
     assert {row["visible"] for row in body["results"]} == {False}
+
+
+def test_capability_payload_carries_the_context_tier(monkeypatch):
+    """A context window off the ladder now names the rung that answered it.
+
+    Live, before this change: ``provenance.context_length.tier_label`` was
+    ``null`` for 128 of 128 records, including the 74 that had a value. The
+    page and the catalogue both read it from ``capability_payload``, so
+    neither could say where a number came from.
+    """
+
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.models_dev_describes_provider",
+        lambda provider_id: False,
+    )
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.model_context_length_tiered",
+        lambda provider_id, model_id: (1_310_720, ResolutionTier.OPENROUTER_EXACT),
+    )
+
+    payload = capability_payload("custom_b_ai", "glm-5.3-flash", None)
+
+    context = payload["context_length"]
+    assert context["value"] == 1_310_720
+    assert context["source"] == "models_dev"
+    assert context["tier"] == 5
+    assert context["tier_label"] == "OpenRouter catalogue, exact id"
+    assert context["approximate"] is False
+
+
+def test_the_cached_row_still_wins_the_context_window(monkeypatch):
+    """The routed deployment's own answer outranks every models.dev rung."""
+
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.model_context_length_tiered",
+        lambda provider_id, model_id: (1_310_720, ResolutionTier.OPENROUTER_EXACT),
+    )
+
+    payload = capability_payload(
+        "open_router", "m", ProviderModelInfo("m", context_length=32768)
+    )
+
+    assert payload["context_length"]["value"] == 32768
+    assert payload["context_length"]["source"] == "provider_or_models_dev"
+
+
+def test_capability_payload_reports_tool_calls_and_every_price(monkeypatch):
+    """Three fields the page never carried, so the catalogue stood alone.
+
+    ``supports_tool_calls`` and the prices were catalogue-only, which is
+    exactly the shape of divergence ``capability_provenance`` exists to make
+    impossible: the page could not corroborate a number a generated file
+    published.
+    """
+
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.models_dev_describes_provider",
+        lambda provider_id: False,
+    )
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.model_tool_call_tiered",
+        lambda provider_id, model_id: (True, ResolutionTier.OPENROUTER_EXACT),
+    )
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.model_prices_tiered",
+        lambda provider_id, model_id: {
+            "input_price": (3.0, ResolutionTier.OPENROUTER_EXACT),
+            "output_price": (15.0, ResolutionTier.OPENROUTER_EXACT),
+            "cache_read_price": (0.3, ResolutionTier.MODELS_DEV_BUCKET_EXACT),
+            "cache_write_price": (None, None),
+        },
+    )
+
+    payload = capability_payload("custom_b_ai", "glm-5.3-flash", None)
+
+    assert payload["supports_tool_calls"]["value"] is True
+    assert payload["supports_tool_calls"]["tier"] == 5
+    assert payload["input_price"]["value"] == 3.0
+    assert payload["output_price"]["value"] == 15.0
+    assert payload["cache_read_price"]["value"] == 0.3
+    assert payload["cache_read_price"]["tier"] == 3
+    assert payload["cache_write_price"]["value"] is None
+    assert payload["cache_write_price"]["source"] == "unknown"
+
+
+def test_a_published_parameter_list_still_decides_tool_support(monkeypatch):
+    """The gateway's own list is the first answer, exactly as the catalogue's
+    ``derive_supports_tool_calls`` is. Only silence reaches models.dev."""
+
+    monkeypatch.setattr(
+        "my_claude_code.api.model_admin.model_tool_call_tiered",
+        lambda provider_id, model_id: (True, ResolutionTier.OPENROUTER_EXACT),
+    )
+
+    payload = capability_payload(
+        "open_router",
+        "m",
+        ProviderModelInfo("m", supported_parameters=frozenset({"top_p"})),
+    )
+
+    assert payload["supports_tool_calls"]["value"] is False
+    assert payload["supports_tool_calls"]["source"] == "provider"

@@ -64,6 +64,7 @@ from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.catalogues.base import (
     DEFAULTED_KEY,
     DefaultedFields,
+    starting_model,
     visible_entries,
 )
 from my_claude_code.config.harnesses import (
@@ -100,6 +101,14 @@ TOKEN_SOURCE = "manual"
 #: promote the model a user named with ``-m`` into ``settings``.
 MODELS_KEY = "_mcc_models"
 
+#: What Cline's zod guard requires of one provider entry, recovered from the
+#: 3.0.61 bundle: ``z.object({settings: ..., updatedAt: z.string().datetime(),
+#: tokenSource: z.enum([...]).default("manual")})``. Inside ``settings`` only
+#: ``provider`` is required. Unknown keys are silently stripped rather than
+#: rejected (plain ``z.object``, not ``.strict()``), which is why
+#: ``strip_mcc_keys`` exists.
+CLI_REQUIRED_KEYS: frozenset[str] = frozenset({"settings", "updatedAt"})
+
 #: What Cline itself does when one of these keys is absent, read out of
 #: 3.0.61. MCC writes none of these; it omits the key and records the
 #: omission. This dict is the one place in this module allowed to hold a
@@ -123,10 +132,12 @@ def build_cline_catalogue(
     defaulted = DefaultedFields()
     entries: dict[str, Any] = {}
 
+    listed: list[CatalogueModel] = []
     for model in visible_entries(models):
         model_id = model.gateway_id
         if model_id in entries:
             continue
+        listed.append(model)
         entries[model_id] = _model_record(model, model_id, defaulted)
 
     settings: dict[str, Any] = {
@@ -134,15 +145,15 @@ def build_cline_catalogue(
         "apiKey": CLINE_API_KEY_SENTINEL,
         "baseUrl": CLINE_BASE_URL_SENTINEL,
     }
-    # The first routable model is the session default, and it is the first for
-    # a reason a user can predict: this list is the same order, and the same
-    # visibility filter, that ``GET /v1/models`` publishes -- their own chain
-    # order. ``mcc-cline -m <id>`` replaces it, which is what the dashboard
-    # card documents.
-    if entries:
-        first_id = next(iter(entries))
-        settings["model"] = first_id
-        settings.update(entries[first_id])
+    # Cline opens on exactly one model, so which one is a decision rather
+    # than an enumeration artefact: ``starting_model`` names MCC's own
+    # configured route where it is visible, and otherwise the first entry that
+    # is not a free tier. ``mcc-cline -m <id>`` replaces it, which is what the
+    # dashboard card documents.
+    chosen = starting_model(listed)
+    if chosen is not None:
+        settings["model"] = chosen.gateway_id
+        settings.update(entries[chosen.gateway_id])
 
     document: dict[str, Any] = {
         "version": DOCUMENT_VERSION,

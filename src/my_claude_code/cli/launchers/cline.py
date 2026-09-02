@@ -59,14 +59,15 @@ import contextlib
 import os
 import stat
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 
 from my_claude_code.cli.harnesses.catalogue_client import (
+    catalogue_defaulted,
     catalogue_model_count,
-    defaulted_summary_lines,
     fetch_catalogue_models,
     harness_catalogue,
+    print_defaulted_summary,
 )
 from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
 from my_claude_code.config.atomic_json import (
@@ -220,7 +221,9 @@ def write_harness_config(
         # Last, and never earlier: Cline discards the whole document on any
         # unrecognised root key, so MCC's own bookkeeping is reported to the
         # user here and dropped on the way to disk.
-        _print_defaulted_summary(spec, document)
+        print_defaulted_summary(
+            spec.display_name, catalogue_defaulted(payload, spec.id)
+        )
         write_json_document_atomically_if_changed(config_path, strip_mcc_keys(document))
         restrict_permissions(config_path)
     except Exception as exc:
@@ -244,18 +247,3 @@ def restrict_permissions(path: Path) -> None:
 
     with contextlib.suppress(OSError):
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-
-
-def _print_defaulted_summary(spec: HarnessSpec, document: Mapping[str, object]) -> None:
-    """Say which figures nobody published, where the user is already looking."""
-
-    lines = defaulted_summary_lines(document)
-    if not lines:
-        return
-    print(
-        f"My Claude Code: {len(lines)} model(s) publish no value for one or more "
-        f"fields, so {spec.display_name} falls back to its own default:",
-        file=sys.stderr,
-    )
-    for line in lines:
-        print(line, file=sys.stderr)

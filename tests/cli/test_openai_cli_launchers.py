@@ -201,6 +201,10 @@ def test_aider_is_handed_both_of_its_documents() -> None:
 
     assert command == [
         "/bin/aider",
+        # Launching a coding agent must not edit the tree it is launched in:
+        # without this Aider appends ``.aider*`` to the repo's ``.gitignore``
+        # and ``git init``s a directory that is not a repository.
+        "--no-gitignore",
         "--model-metadata-file",
         str(Path("/home/u/.fcc/aider-model-metadata.json")),
         "--model-settings-file",
@@ -213,6 +217,7 @@ def test_aider_is_handed_both_of_its_documents() -> None:
 def test_aider_launches_bare_when_no_documents_could_be_written() -> None:
     assert aider.build_aider_command("/bin/aider", AIDER_SPEC, None, ["hi"]) == [
         "/bin/aider",
+        "--no-gitignore",
         "hi",
     ]
 

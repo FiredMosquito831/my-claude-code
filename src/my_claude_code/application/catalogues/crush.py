@@ -52,7 +52,7 @@ itself does with each zero value is written down in
 changing anything here.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from my_claude_code.application.catalogue_model import CatalogueModel
@@ -62,6 +62,7 @@ from my_claude_code.application.catalogues.base import (
     can_reason,
     clamp_efforts,
     reasoning_is_mandatory,
+    starting_model,
     visible_entries,
 )
 from my_claude_code.config.harnesses import (
@@ -104,6 +105,26 @@ CRUSH_EFFORT_BY_REASONING_EFFORT: dict[ReasoningEffort, str] = {
     ReasoningEffort.MAX: "high",
 }
 
+#: Crush's own required per-model list, taken verbatim from ``crush schema``
+#: -> ``$defs.Model.required`` on v0.92.0 (vendored at
+#: ``tests/fixtures/schemas/crush.schema.json``). Ten keys, every one of which
+#: must carry a value even when nobody published one -- which is why this is
+#: the harness where an unknown costs the most.
+CLI_REQUIRED_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "name",
+        "cost_per_1m_in",
+        "cost_per_1m_out",
+        "cost_per_1m_in_cached",
+        "cost_per_1m_out_cached",
+        "context_window",
+        "default_max_tokens",
+        "can_reason",
+        "supports_attachments",
+    }
+)
+
 #: Crush's own values for the required fields, and what each one costs.
 #: Measured against v0.92.0 rather than assumed. This dict is the one place in
 #: this module allowed to hold a literal limit, and the static guard test keys
@@ -138,6 +159,7 @@ def build_crush_catalogue(
 
     defaulted = DefaultedFields()
     entries: list[dict[str, Any]] = []
+    listed: list[CatalogueModel] = []
     seen: set[str] = set()
 
     for model in visible_entries(models):
@@ -145,6 +167,7 @@ def build_crush_catalogue(
         if model_id in seen:
             continue
         seen.add(model_id)
+        listed.append(model)
         entries.append(_entry(model, model_id, defaulted))
 
     document: dict[str, Any] = {
@@ -162,7 +185,7 @@ def build_crush_catalogue(
             }
         },
     }
-    selected = _selected_models(entries)
+    selected = _selected_models(listed)
     if selected:
         document["models"] = selected
     if defaulted.by_model:
@@ -170,21 +193,22 @@ def build_crush_catalogue(
     return document, defaulted
 
 
-def _selected_models(entries: list[dict[str, Any]]) -> dict[str, Any]:
+def _selected_models(models: Sequence[CatalogueModel]) -> dict[str, Any]:
     """Name the model Crush's large and small agents start on.
 
     Crush refuses to open a session with no ``models.large``, so leaving this
-    out would produce a document that lists every MCC model and cannot run
-    any of them. The first entry is used for both roles: MCC states no
-    ordering beyond the one ``GET /v1/models`` already applies, and inventing
-    a "small" model by matching on a name would be MCC guessing which of the
-    user's routes is cheap.
+    out would produce a document that lists every MCC model and cannot run any
+    of them. :func:`starting_model` chooses it -- MCC's own configured route
+    first -- and the same model fills both roles: inventing a "small" model by
+    matching on a name would be MCC guessing which of the user's routes is
+    cheap.
     """
 
-    if not entries:
+    chosen = starting_model(models)
+    if chosen is None:
         return {}
-    first = {"model": entries[0]["id"], "provider": PROVIDER_ID}
-    return {"large": dict(first), "small": dict(first)}
+    selected = {"model": _model_id(chosen), "provider": PROVIDER_ID}
+    return {"large": dict(selected), "small": dict(selected)}
 
 
 def _model_id(model: CatalogueModel) -> str:
@@ -246,18 +270,18 @@ def _costs(
 ) -> dict[str, float]:
     """Return Crush's four required cost fields, in USD per million tokens.
 
-    That is already MCC's unit, so the two the ladder resolves pass straight
-    through. The two cache rates are always Crush's default: the ladder
-    resolves neither, and deriving one from the uncached rate would be
-    inventing a number.
+    That is already MCC's unit, so every rate the ladder resolves passes
+    straight through -- the two cache rates included, now that they walk the
+    same rungs. All four are required, so any one that stays unknown becomes
+    Crush's own ``0.0`` and is recorded; none is ever derived from another.
     """
 
     costs: dict[str, float] = {}
     for field_name, value in (
         ("cost_per_1m_in", model.input_price),
         ("cost_per_1m_out", model.output_price),
-        ("cost_per_1m_in_cached", None),
-        ("cost_per_1m_out_cached", None),
+        ("cost_per_1m_in_cached", model.cache_read_price),
+        ("cost_per_1m_out_cached", model.cache_write_price),
     ):
         if value is None:
             defaulted.record(model_id, field_name)

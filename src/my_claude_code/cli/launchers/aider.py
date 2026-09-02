@@ -46,11 +46,12 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from my_claude_code.cli.harnesses.catalogue_client import (
+    catalogue_defaulted,
     catalogue_model_count,
-    defaulted_summary_lines,
     fetch_catalogue_models,
     harness_catalogue,
     harness_sidecar,
+    print_defaulted_summary,
 )
 from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
 from my_claude_code.config.atomic_json import (
@@ -132,6 +133,13 @@ def is_passthrough(spec: HarnessSpec, argv: Sequence[str]) -> bool:
     )
 
 
+#: Aider's own opt-out from writing ``.aider*`` into the working tree's
+#: ``.gitignore``. Passed on every MCC launch; a user who passes
+#: ``--gitignore`` after it overrides it, because Aider keeps the last
+#: occurrence.
+AIDER_NO_GITIGNORE_FLAG = "--no-gitignore"
+
+
 def build_aider_command(
     binary_path: str,
     spec: HarnessSpec,
@@ -140,15 +148,27 @@ def build_aider_command(
 ) -> list[str]:
     """Return the argv Aider is launched with.
 
-    Both flags go ahead of the user's arguments; Aider's parser keeps the last
-    occurrence, so a user who passes their own file still wins.
+    Every flag MCC adds goes ahead of the user's arguments; Aider's parser
+    keeps the last occurrence, so a user who passes their own value still
+    wins -- including ``--gitignore``, which is how somebody who *wants* the
+    old behaviour asks for it.
+
+    ``--no-gitignore`` is one of those flags because launching a coding agent
+    must not edit the repository it is launched in. Run without it, Aider
+    appends ``.aider*`` to the working tree's ``.gitignore`` -- and in a
+    directory that is not a repository at all, ``git init``s one. Both are
+    silent, both are commits waiting to happen in somebody else's diff, and
+    neither is anything a user asked MCC for when they typed ``mcc-aider``.
+    Aider's own ``--git``/``--no-git`` is deliberately left alone: MCC has no
+    opinion on whether Aider uses git, only on whether launching it writes to
+    the user's tree.
     """
 
     catalogue = spec.catalogue
     if paths is None or catalogue is None:
-        return [binary_path, *argv]
+        return [binary_path, AIDER_NO_GITIGNORE_FLAG, *argv]
     metadata_path, settings_path = paths
-    command = [binary_path]
+    command = [binary_path, AIDER_NO_GITIGNORE_FLAG]
     if catalogue.config_flag is not None:
         command += [catalogue.config_flag, str(metadata_path)]
     if catalogue.sidecar_config_flag is not None:
@@ -209,7 +229,9 @@ def write_harness_config(
         )
         restrict_permissions(metadata_path)
         restrict_permissions(settings_path)
-        _print_defaulted_summary(spec, document)
+        print_defaulted_summary(
+            spec.display_name, catalogue_defaulted(payload, spec.id)
+        )
     except Exception as exc:
         print(
             f"My Claude Code warning: could not prepare the {spec.display_name} "
@@ -232,18 +254,3 @@ def restrict_permissions(path: Path) -> None:
 
     with contextlib.suppress(OSError):
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-
-
-def _print_defaulted_summary(spec: HarnessSpec, document: Mapping[str, object]) -> None:
-    """Say which figures nobody published, where the user is already looking."""
-
-    lines = defaulted_summary_lines(document)
-    if not lines:
-        return
-    print(
-        f"My Claude Code: {len(lines)} model(s) publish no value for one or more "
-        f"fields, so {spec.display_name} falls back to its own default:",
-        file=sys.stderr,
-    )
-    for line in lines:
-        print(line, file=sys.stderr)

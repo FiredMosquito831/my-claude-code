@@ -100,6 +100,13 @@ COMMANDCODE_EFFORT_BY_REASONING_EFFORT: dict[ReasoningEffort, str] = {
     ReasoningEffort.MAX: "max",
 }
 
+#: Empty: ``parseModel`` keeps any subset and drops what it does not
+#: recognise, so no per-model key is required. What *is* required lives one
+#: level up -- a provider with no ``baseURL`` is dropped, and a provider with
+#: zero models is dropped entirely -- and both are structural rather than
+#: per-entry.
+CLI_REQUIRED_KEYS: frozenset[str] = frozenset()
+
 #: What Command Code itself does when a per-model key is absent, read out of
 #: ``moduleFor`` and ``parseModel`` in its own 1.39.0 bundle. MCC writes none
 #: of these; it omits the key and records the omission, because writing a
@@ -247,9 +254,9 @@ def _cost(
     ``parseCost`` keeps any subset of ``input``/``output``/``cacheRead``/
     ``cacheWrite`` and drops the block entirely when all four are absent, and
     its units are models.dev's -- USD per million tokens -- which is where
-    MCC's own ``input_price`` and ``output_price`` come from. The two cache
-    rates are left to Command Code: the ladder resolves none, and deriving one
-    from the uncached rate would be inventing a number.
+    MCC's own ``input_price`` and ``output_price`` come from, and the two
+    cache rates now resolve down the same ladder. Any one of the four that
+    stays unknown is omitted and recorded; none is ever derived from another.
     """
 
     if model.input_price is None and model.output_price is None:
@@ -264,8 +271,14 @@ def _cost(
         defaulted.record(model_id, "cost.output")
     else:
         cost["output"] = model.output_price
-    defaulted.record(model_id, "cost.cacheRead")
-    defaulted.record(model_id, "cost.cacheWrite")
+    for key, value in (
+        ("cacheRead", model.cache_read_price),
+        ("cacheWrite", model.cache_write_price),
+    ):
+        if value is None:
+            defaulted.record(model_id, f"cost.{key}")
+        else:
+            cost[key] = value
     return cost
 
 

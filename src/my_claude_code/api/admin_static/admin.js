@@ -7602,6 +7602,20 @@ function harnessMeta(harness) {
       `${catalogue.defaulted_model_count} model(s) carry a value ` +
       `${harness.display_name} supplied because no provider published one`;
     meta.append(term, detail);
+  } else if (catalogue && catalogue.defaulted_record_in_document === false) {
+    // The launcher prints the counts either way -- it reads them from
+    // /admin/api/catalogue-models, not from the file -- but the card is built
+    // from what is on disk, and for this one agent that is nothing. Saying
+    // "0 models" would be a measurement MCC never took.
+    const term = document.createElement("dt");
+    term.textContent = "CLI defaults";
+    const detail = document.createElement("dd");
+    detail.className = "agent-defaulted";
+    detail.textContent =
+      `${harness.display_name} rejects unknown keys in its config, so the ` +
+      "record of what it filled in is not written into the file; the launch " +
+      "summary on stderr reports it instead";
+    meta.append(term, detail);
   }
 
   if (harness.rtk_agent) {

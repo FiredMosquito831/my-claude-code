@@ -6,9 +6,10 @@ import sys
 from collections.abc import Mapping, Sequence
 
 from my_claude_code.cli.harnesses.catalogue_client import (
-    defaulted_summary_lines,
+    catalogue_defaulted,
     fetch_catalogue_models,
     harness_catalogue,
+    print_defaulted_summary,
 )
 from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
 from my_claude_code.config.atomic_json import (
@@ -143,7 +144,7 @@ def codex_model_catalog_config_args(
             return []
         catalog_path = codex_model_catalog_path()
         write_json_document_atomically_if_changed(catalog_path, catalog)
-        _print_defaulted_summary(catalog)
+        print_defaulted_summary("Codex", catalogue_defaulted(payload, HARNESS_ID))
     except Exception as exc:
         print(
             "My Claude Code warning: could not prepare Codex model catalog "
@@ -153,21 +154,6 @@ def codex_model_catalog_config_args(
         return []
 
     return build_model_catalog_config_args(str(catalog_path))
-
-
-def _print_defaulted_summary(catalog: Mapping[str, object]) -> None:
-    """Say which figures are Codex's own default rather than a provider's."""
-
-    lines = defaulted_summary_lines(catalog)
-    if not lines:
-        return
-    print(
-        f"My Claude Code: {len(lines)} model(s) use Codex's own defaults where "
-        "no provider published a value:",
-        file=sys.stderr,
-    )
-    for line in lines:
-        print(line, file=sys.stderr)
 
 
 def build_model_catalog_config_args(catalog_path: str) -> list[str]:

@@ -11,6 +11,7 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.reasoning import ReasoningEffort
 
 
@@ -27,6 +28,8 @@ class FakeRuntime(RequestRuntimePort):
         vision: dict[str, bool] | None = None,
         thinking: dict[str, bool] | None = None,
         reasoning: dict[str, ModelReasoningCapability] | None = None,
+        tool_calls: dict[str, bool] | None = None,
+        prices: dict[str, dict[str, float]] | None = None,
     ) -> None:
         self._settings = settings
         self._cached_infos = cached_infos
@@ -35,6 +38,8 @@ class FakeRuntime(RequestRuntimePort):
         self._vision = vision or {}
         self._thinking = thinking or {}
         self._reasoning = reasoning or {}
+        self._tool_calls = tool_calls or {}
+        self._prices = prices or {}
 
     async def acquire(self) -> RequestRuntimeLease:
         raise AssertionError("Catalogue building must not acquire a provider lease.")
@@ -62,6 +67,35 @@ class FakeRuntime(RequestRuntimePort):
 
     def model_context_length(self, provider_id: str, model_id: str) -> int | None:
         return self._context_lengths.get(f"{provider_id}/{model_id}")
+
+    def model_context_length_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[int | None, ResolutionTier | None]:
+        return self._context_lengths.get(f"{provider_id}/{model_id}"), None
+
+    def model_vision_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]:
+        return self._vision.get(f"{provider_id}/{model_id}"), None
+
+    def model_tool_call_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]:
+        return self._tool_calls.get(f"{provider_id}/{model_id}"), None
+
+    def model_prices_tiered(
+        self, provider_id: str, model_id: str
+    ) -> dict[str, tuple[float | None, ResolutionTier | None]]:
+        rates = self._prices.get(f"{provider_id}/{model_id}", {})
+        return {
+            name: (rates.get(name), None)
+            for name in (
+                "input_price",
+                "output_price",
+                "cache_read_price",
+                "cache_write_price",
+            )
+        }
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._cached_infos
@@ -199,3 +233,54 @@ def test_catalogue_models_and_v1_models_agree_on_visible_refs() -> None:
 
     assert catalogue_ids == listing_ids
     assert not any("hidden" in model_id for model_id in catalogue_ids)
+
+
+def test_the_catalogue_is_filtered_by_model_visibility() -> None:
+    """The same two glob lists ``/v1/models`` obeys, and nothing asserted it.
+
+    Live proof it already worked: 1,115 discovered rows, 142 visible on the
+    Models page, 142 entries in every generated document. Pinned here so a
+    future enumeration change cannot quietly publish a hidden model to a CLI.
+    """
+
+    runtime = FakeRuntime(
+        settings=_settings(
+            model="open_router/kept", model_visibility_deny="open_router/hidden*"
+        ),
+        cached_infos=(
+            ProviderModelInfo("open_router/kept"),
+            ProviderModelInfo("open_router/hidden-one"),
+        ),
+    )
+
+    refs = {
+        model.provider_model_ref
+        for model in build_catalogue_models(runtime.current_settings(), runtime)
+    }
+
+    assert refs == {"open_router/kept"}
+
+
+def test_the_configured_primary_route_is_marked_on_its_record() -> None:
+    """Three CLIs must pin one model to open a session at all.
+
+    Taking the first entry is an enumeration artefact: on a real install it
+    picked a free tier the provider had withdrawn, so every Cline, Crush and
+    Goose session opened on a model that answered 404.
+    """
+
+    runtime = FakeRuntime(
+        settings=_settings(model="open_router/primary"),
+        cached_infos=(
+            ProviderModelInfo("open_router/other"),
+            ProviderModelInfo("open_router/primary"),
+        ),
+    )
+
+    primary = {
+        model.provider_model_ref
+        for model in build_catalogue_models(runtime.current_settings(), runtime)
+        if model.is_primary_route
+    }
+
+    assert primary == {"open_router/primary"}

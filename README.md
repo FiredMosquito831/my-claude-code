@@ -353,7 +353,9 @@ The token stays off disk here too: Crush's own documented reference form is
 environment. Crush is also the one agent whose schema makes ten per-model
 fields **required**, so a capability nobody published cannot be omitted and
 becomes Crush's own number instead — every one of those is listed in the file's
-`_mcc_defaulted` block, on the launcher's stderr and on the Coding agents card.
+`_mcc_defaulted` block, in a one-line summary on the launcher's stderr
+(`MCC_CATALOGUE_VERBOSE=1` for the full per-model list) and on the Coding
+agents card.
 Model discovery is switched off deliberately: with it on Crush asks
 `GET <base_url>/models`, which is not a route MCC serves.
 
@@ -461,6 +463,17 @@ mcc-droid exec "hello"
 ```
 
 The dashboard's **Coding agents** page lists every agent MCC can launch, whether its binary is on your `PATH`, **every command and flag it answers to** with a copy button each, the protocol it will speak, and the catalogue MCC writes for it — including when that catalogue was last written and how many of its models carry a value the CLI supplied rather than a provider.
+
+Those catalogues are pickers, not protocol surfaces: they exclude `:batch`
+pricing tiers (`/v1/models` still lists them), obey `MODEL_VISIBILITY_ALLOW` /
+`MODEL_VISIBILITY_DENY` exactly as `/v1/models` does, and list every model once
+under its plain id. Every capability in them — the context window, vision, tool
+support and all four price rates — is resolved through the same ten-rung ladder
+the output limit already used, and the rung that answered is shown beside the
+value on the **Models** page. Where a CLI must be given something and nobody
+published one, MCC writes *that CLI's own documented default* and says so; it
+never invents a number. See [docs/USAGE.md](docs/USAGE.md#what-mcc-tells-an-agent-about-a-model)
+for the per-agent table.
 
 > **A coding agent is not a provider.**
 > The agents above sit **downstream** of MCC: they send requests to it. The names on the Providers page — including `opencode`, `commandcode`, `cline`, `kimi_coding` and `kilo` — are **upstream** gateways MCC buys tokens from. Some names appear in both lists and mean different things, and both can be on at once: you can run a coding agent against MCC while the same-named upstream provider is switched off. In the code the two live in separate namespaces (`harness_id` in `cli/harnesses/` and `config/harnesses.py`, `provider_id` in `providers/` and `config/provider_catalog.py`) and are never joined.

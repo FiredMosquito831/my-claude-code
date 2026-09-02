@@ -41,6 +41,8 @@ def _model(
     reasoning: ModelReasoningCapability | None = None,
     input_price: float | None = None,
     output_price: float | None = None,
+    cache_read_price: float | None = None,
+    cache_write_price: float | None = None,
     default_parameters: tuple[tuple[str, Any], ...] | None = None,
 ) -> CatalogueModel:
     return CatalogueModel(
@@ -55,6 +57,8 @@ def _model(
         reasoning=reasoning,
         input_price=input_price,
         output_price=output_price,
+        cache_read_price=cache_read_price,
+        cache_write_price=cache_write_price,
         default_parameters=default_parameters,
     )
 
@@ -78,6 +82,8 @@ def test_limits_come_from_the_ladder_not_a_placeholder() -> None:
                 max_output_tokens=4_096,
                 input_price=1.0,
                 output_price=2.0,
+                cache_read_price=0.5,
+                cache_write_price=3.0,
                 supports_vision=True,
             )
         ]
@@ -112,6 +118,8 @@ def test_optional_unknown_fields_are_omitted_not_zeroed() -> None:
         "max_output_tokens",
         "input_cost_per_token",
         "output_cost_per_token",
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
         "supports_vision",
     ):
         assert key not in entry, f"{key} was written for a model nobody published"
@@ -120,6 +128,8 @@ def test_optional_unknown_fields_are_omitted_not_zeroed() -> None:
         "max_output_tokens",
         "input_cost_per_token",
         "output_cost_per_token",
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
         "supports_vision",
     ]
 
@@ -238,6 +248,8 @@ def test_the_documented_defaults_say_what_aider_does_instead() -> None:
         "max_output_tokens",
         "input_cost_per_token",
         "output_cost_per_token",
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
         "supports_vision",
     }
     assert all(value is None for value in CLI_DOCUMENTED_DEFAULTS.values())

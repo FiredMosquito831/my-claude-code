@@ -13,14 +13,20 @@ here substitutes a number. See ``application/catalogues/base.py`` for the rule
 and why it is load-bearing.
 
 The listing is built from the same enumeration and the same visibility filter
-as ``/v1/models``, so a model can never appear on one surface and not the
-other -- except for the eight fixed Claude protocol aliases, which are protocol
-names rather than routable refs and which a Gemini client has no use for.
+as ``/v1/models``, and then through the same
+:func:`~my_claude_code.application.catalogues.base.visible_entries` collapse
+every generated harness catalogue uses. That last step is the difference
+between this route and ``/v1/models``, and it is deliberate: a Gemini client
+is a picker, not a protocol surface, so it gets the picker's list -- one entry
+per model under its plain id, no ``claude-3-freecc-no-thinking/`` twin and no
+``:batch`` pricing tier. The eight fixed Claude protocol aliases are absent
+from both, being protocol names rather than routable refs.
 """
 
 from typing import Any
 
 from my_claude_code.application.catalogue_model import build_catalogue_models
+from my_claude_code.application.catalogues.base import visible_entries
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.gemini_api import gemini_model_entry, gemini_models_payload
@@ -38,7 +44,7 @@ def build_gemini_models_payload(
             input_token_limit=model.context_length,
             output_token_limit=model.max_output_tokens,
         )
-        for model in build_catalogue_models(settings, runtime)
+        for model in visible_entries(build_catalogue_models(settings, runtime))
     ]
     return gemini_models_payload(models)
 
@@ -54,7 +60,7 @@ def find_gemini_model_entry(
     resolve for this ref", and an alias has no ref of its own.
     """
 
-    for model in build_catalogue_models(settings, runtime):
+    for model in visible_entries(build_catalogue_models(settings, runtime)):
         if model.gateway_id == model_id:
             return gemini_model_entry(
                 model.gateway_id,

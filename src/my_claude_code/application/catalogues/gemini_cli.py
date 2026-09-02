@@ -103,6 +103,12 @@ GEMINI_LEVEL_BY_REASONING_EFFORT: dict[ReasoningEffort, str] = {
     ReasoningEffort.MAX: "HIGH",
 }
 
+#: Empty: every field of Gemini CLI's settings schema carries
+#: ``default: void 0``, so the schema requires nothing and enforcement lives in
+#: ``validateAuthMethod`` instead. What MCC writes per model is an alias
+#: preset, and an alias with no preset keys is still a valid alias.
+CLI_REQUIRED_KEYS: frozenset[str] = frozenset()
+
 #: What Gemini CLI itself does when a ``generateContentConfig`` key is absent,
 #: read out of its own 0.49.0 bundle. MCC writes none of these; it omits the
 #: key and records the omission. This dict is the one place in this module

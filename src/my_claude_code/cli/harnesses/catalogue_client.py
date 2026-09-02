@@ -13,6 +13,8 @@ refresh.
 """
 
 import json
+import os
+import sys
 from collections.abc import Mapping
 from typing import Any
 from urllib.request import Request, urlopen
@@ -72,21 +74,98 @@ def catalogue_model_count(payload: Mapping[str, Any], harness_id: str) -> int:
     return count if isinstance(count, int) else 0
 
 
-def defaulted_summary_lines(document: Mapping[str, Any]) -> list[str]:
-    """Return one line per model whose catalogue entry needed a CLI default.
+#: Set to ``1`` to get the full per-model breakdown on stderr instead of the
+#: one-line summary. Named for what it verbosifies, not for the whole product:
+#: a launch already prints other things, and this switch governs exactly one
+#: of them.
+VERBOSE_ENV_VAR = "MCC_CATALOGUE_VERBOSE"
 
-    Printed to stderr at launch so the numbers a CLI guessed are visible where
-    the user is already looking, not only in the dashboard.
+
+def catalogue_defaulted(
+    payload: Mapping[str, Any], harness_id: str
+) -> Mapping[str, list[str]]:
+    """Return the record of what one harness's serialiser had to guess.
+
+    Read from the *payload* rather than from the written document, because one
+    harness's document cannot carry it: Kilo CLI rejects unknown root keys, so
+    its file has no ``_mcc_defaulted`` block and reading the file back would
+    report nothing guessed for the harness that guesses exactly as much as
+    OpenCode does. The payload always has it.
     """
 
-    defaulted = document.get("_mcc_defaulted")
+    catalogues = payload.get("catalogues")
+    if not isinstance(catalogues, Mapping):
+        return {}
+    entry = catalogues.get(harness_id)
+    if not isinstance(entry, Mapping):
+        return {}
+    defaulted = entry.get("defaulted")
     if not isinstance(defaulted, Mapping):
-        return []
-    lines: list[str] = []
-    for model_id, fields in sorted(defaulted.items()):
-        if isinstance(fields, list):
-            lines.append(f"  {model_id}: {', '.join(str(name) for name in fields)}")
-    return lines
+        return {}
+    return {
+        str(model_id): [str(name) for name in fields]
+        for model_id, fields in defaulted.items()
+        if isinstance(fields, list)
+    }
+
+
+def defaulted_summary(
+    defaulted: Mapping[str, list[str]],
+) -> tuple[int, list[tuple[str, int]]]:
+    """Return ``(models affected, [(field, models) ...])``, commonest first."""
+
+    counts: dict[str, int] = {}
+    for fields in defaulted.values():
+        for name in fields:
+            counts[name] = counts.get(name, 0) + 1
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return len(defaulted), ranked
+
+
+def defaulted_summary_lines(defaulted: Mapping[str, list[str]]) -> list[str]:
+    """Return one line per model whose catalogue entry needed a CLI default."""
+
+    return [
+        f"  {model_id}: {', '.join(fields)}"
+        for model_id, fields in sorted(defaulted.items())
+    ]
+
+
+def print_defaulted_summary(
+    display_name: str,
+    defaulted: Mapping[str, list[str]],
+    environ: Mapping[str, str] | None = None,
+) -> None:
+    """Say what the CLI had to guess -- in one line, unless asked for more.
+
+    This used to print one line per affected model on every launch. On a real
+    install that is 142 lines of stderr before the agent has said anything,
+    every time, and a wall that long is not read: the user who reported it
+    quoted six of the lines and could not tell that the seventh said the
+    document had been refused.
+
+    So the default is one line with the field histogram, and the per-model
+    detail moves behind :data:`VERBOSE_ENV_VAR`. Nothing is lost by it -- the
+    detail has two other homes, the generated file's own ``_mcc_defaulted``
+    block and the Coding agents card -- and the one line still names the
+    fields, which is the part that tells a user whether to care.
+    """
+
+    model_count, ranked = defaulted_summary(defaulted)
+    if not model_count:
+        return
+    fields = ", ".join(f"{name} x{count}" for name, count in ranked)
+    print(
+        f"My Claude Code: {model_count} model(s) carry a value {display_name} "
+        f"supplied because no provider published one ({fields}). Details: the "
+        "Coding agents page, or set MCC_CATALOGUE_VERBOSE=1.",
+        file=sys.stderr,
+    )
+    source = os.environ if environ is None else environ
+    if source.get(VERBOSE_ENV_VAR, "").strip() not in {"1", "true", "yes", "on"}:
+        return
+    for line in defaulted_summary_lines(defaulted):
+        print(line, file=sys.stderr)
 
 
 def harness_sidecar(payload: Mapping[str, Any], harness_id: str) -> list[Any] | None:

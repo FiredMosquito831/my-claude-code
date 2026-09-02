@@ -1177,7 +1177,12 @@ def test_launch_codex_passes_responses_config_and_child_env(
     # The window is the server's answer for that model, not a launcher literal.
     assert catalog["models"][0]["context_window"] == 262144
     error_output = capsys.readouterr().err
-    assert "use Codex's own defaults" in error_output
+    # One line, not one per model: the per-model detail is behind
+    # MCC_CATALOGUE_VERBOSE=1 and has two other homes.
+    assert "carry a value Codex supplied because no provider published one" in (
+        error_output
+    )
+    assert "MCC_CATALOGUE_VERBOSE=1" in error_output
     child_env = popen.call_args.kwargs["env"]
     assert child_env["FCC_CODEX_API_KEY"] == "proxy-token"
     assert child_env["CODEX_HOME"] == "keep-home"

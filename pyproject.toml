@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "6.34.0"
+version = "6.35.0"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 requires-python = ">=3.14.0"
@@ -120,6 +120,10 @@ explicit = true
 
 [dependency-groups]
 dev = [
+    # The catalogue schema contract test validates a generated document
+    # against each CLI's own published JSON Schema, vendored under
+    # tests/fixtures/schemas/. Test-only: nothing at runtime reads a schema.
+    "jsonschema>=4.26.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",

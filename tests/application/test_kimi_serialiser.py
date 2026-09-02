@@ -164,7 +164,7 @@ def test_a_no_thinking_variant_never_gets_a_thinking_capability() -> None:
     document, _ = build_kimi_catalogue(
         [
             _model(
-                gateway_id="anthropic/openrouter/sonnet-nothinking",
+                gateway_id="claude-3-freecc-no-thinking/openrouter/sonnet",
                 force_no_thinking=True,
                 context_length=200_000,
                 supports_vision=True,
@@ -173,9 +173,10 @@ def test_a_no_thinking_variant_never_gets_a_thinking_capability() -> None:
         ]
     )
 
-    entry = document["models"]["mcc/anthropic/openrouter/sonnet-nothinking"]
+    assert list(document["models"]) == ["mcc/openrouter/sonnet"]
+    entry = document["models"]["mcc/openrouter/sonnet"]
     assert entry["capabilities"] == ["image_in"]
-    assert entry["model"] == "anthropic/openrouter/sonnet-nothinking"
+    assert entry["model"] == "openrouter/sonnet"
 
 
 def test_video_is_never_claimed_because_nothing_upstream_publishes_it() -> None:

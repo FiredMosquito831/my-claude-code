@@ -140,18 +140,27 @@ def test_a_model_known_not_to_reason_gets_a_zero_budget() -> None:
     assert config["thinkingConfig"] == {"thinkingBudget": 0}
 
 
-def test_the_no_thinking_variant_states_a_zero_budget_as_a_fact() -> None:
+def test_a_surviving_no_thinking_twin_states_a_zero_budget_under_its_plain_ref() -> (
+    None
+):
+    """The prefix is a Claude Code heuristic; Gemini CLI reads the budget."""
+
     document, defaulted = build_gemini_cli_catalogue(
-        [_model("claude-3-freecc-no-thinking/p/m", force_no_thinking=True)]
+        [
+            CatalogueModel(
+                gateway_id="claude-3-freecc-no-thinking/p/m",
+                provider_model_ref="p/m",
+                display_name="p/m (no thinking)",
+                force_no_thinking=True,
+            )
+        ]
     )
 
-    config = document["modelConfigs"]["customAliases"][
-        "claude-3-freecc-no-thinking/p/m"
-    ]["modelConfig"]["generateContentConfig"]
+    aliases = document["modelConfigs"]["customAliases"]
+    assert list(aliases) == ["anthropic/p/m"]
+    config = aliases["anthropic/p/m"]["modelConfig"]["generateContentConfig"]
     assert config["thinkingConfig"] == {"thinkingBudget": 0}
-    assert "thinkingConfig" not in defaulted.by_model.get(
-        "claude-3-freecc-no-thinking/p/m", []
-    )
+    assert "thinkingConfig" not in defaulted.by_model.get("anthropic/p/m", [])
 
 
 def test_an_unknown_reasoning_capability_omits_the_key_and_records_it() -> None:

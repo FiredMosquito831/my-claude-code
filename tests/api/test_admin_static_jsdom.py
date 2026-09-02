@@ -1859,12 +1859,13 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
     agents = rendered["codingAgents"]
 
     assert agents["present"] is True
-    assert agents["cardCount"] == 14
+    assert agents["cardCount"] == 15
     assert [card["id"] for card in agents["cards"]] == [
         "claude",
         "codex",
         "pi",
         "opencode",
+        "kilo",
         "commandcode_cli",
         "kimi_code",
         "qwen_code",
@@ -1881,6 +1882,7 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "Codex CLI",
         "Pi",
         "OpenCode",
+        "Kilo CLI",
         "Command Code",
         "Kimi Code",
         "Qwen Code",
@@ -1897,6 +1899,7 @@ def test_coding_agents_view_renders_one_card_per_harness(rendered: dict) -> None
         "mcc-codex",
         "mcc-pi",
         "mcc-opencode",
+        "mcc-kilo",
         "mcc-commandcode",
         "mcc-kimi",
         "mcc-qwen",
@@ -2232,3 +2235,25 @@ def test_a_fresh_install_renders_the_coding_agents_page_empty_not_broken(
     assert fresh_install["codingAgents"]["cardCount"] == 0
     assert fresh_install["rtkToggles"] == []
     assert fresh_install["scriptErrors"] == []
+
+
+def test_a_harness_whose_file_cannot_carry_the_record_says_so_on_its_card(
+    rendered: dict,
+) -> None:
+    """Kilo CLI's validator rejects unknown top-level keys.
+
+    So its generated config carries no ``_mcc_defaulted`` block, and a card
+    built from what is on disk would otherwise report "0 models defaulted" --
+    a measurement MCC never took. The card names the real reason and points at
+    the launch summary, which reads the counts from the catalogue route rather
+    than from the file.
+    """
+
+    cards = {card["id"]: card for card in rendered["codingAgents"]["cards"]}
+
+    assert "rejects unknown keys" in cards["kilo"]["defaulted"]
+    assert "launch summary on stderr" in cards["kilo"]["defaulted"]
+    # The agent that *can* carry it still reports the count, not the excuse.
+    assert cards["codex"]["defaulted"] == (
+        "3 model(s) carry a value Codex CLI supplied because no provider published one"
+    )

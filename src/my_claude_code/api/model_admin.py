@@ -52,8 +52,12 @@ from my_claude_code.core.reasoning import (
 )
 from my_claude_code.providers.runtime.models_dev import (
     cross_provider_match,
+    model_context_length_tiered,
     model_output_limit_tiered,
+    model_prices_tiered,
     model_reasoning_capability_tiered,
+    model_tool_call_tiered,
+    model_vision_tiered,
     models_dev_describes_provider,
 )
 
@@ -134,8 +138,9 @@ HIDE_ONLY_NOTICE = (
     "still resolves and still serves requests."
 )
 CONTEXT_LENGTH_SOURCE_NOTE = (
-    "Context length is filled in from models.dev only when the provider left "
-    "it unset, and the merged value keeps no record of which one won."
+    "The routed deployment's own /models payload wins outright. Where it "
+    "published nothing, the value comes off the same ten-rung ladder the "
+    "output limit walks, and the tier beside it names the rung."
 )
 
 
@@ -162,6 +167,42 @@ def _sourced(
     }
     field.update(extra)
     return field
+
+
+def _laddered(
+    cached_value: Any,
+    cached_source: str,
+    cached_tier: ResolutionTier | None,
+    resolved: tuple[Any, ResolutionTier | None],
+    **extra: Any,
+) -> dict[str, Any]:
+    """One field the ladder resolves, tagged with the rung that answered it.
+
+    The cached ``ProviderModelInfo`` wins outright, because that is the routed
+    deployment's own record. Only where it holds nothing does models.dev
+    speak, and then the rung is exact and reported: an answer off the
+    approximate cross-provider tier is badged ``approximate`` exactly as the
+    output limit's already is, so a page and a generated catalogue can never
+    describe the same number differently.
+
+    ``cached_source`` is the caller's, because the cached record is not one
+    source for every field. ``supported_parameters`` is the gateway's alone,
+    while ``context_length`` and the two uncached prices have already had
+    models.dev merged into them by ``enrich_model_infos`` -- which records no
+    rung, so that path honestly reports none.
+    """
+
+    if cached_value is not None:
+        return _sourced(cached_value, cached_source, cached_tier, **extra)
+    value, tier = resolved
+    if value is None:
+        return _sourced(None, SOURCE_UNKNOWN, **extra)
+    source = (
+        SOURCE_APPROXIMATE
+        if tier is not None and tier.is_approximate
+        else SOURCE_MODELS_DEV
+    )
+    return _sourced(value, source, tier, **extra)
 
 
 def _reasoning_field_value(capability: ModelReasoningCapability, name: str) -> Any:
@@ -323,22 +364,64 @@ def capability_payload(
             extra = {"match_count": match.match_count}
         reasoning[name] = _sourced(value, source, tier, **extra)
 
-    context_length = info.context_length if info is not None else None
-    supports_vision = info.supports_vision if info is not None else None
     supported = info.supported_parameters if info is not None else None
     defaults = info.default_parameters if info is not None else None
+    context = _laddered(
+        info.context_length if info is not None else None,
+        SOURCE_PROVIDER_OR_MODELS_DEV,
+        None,
+        model_context_length_tiered(provider_id, model_id),
+        note=CONTEXT_LENGTH_SOURCE_NOTE,
+    )
+    vision = _laddered(
+        info.supports_vision if info is not None else None,
+        SOURCE_PROVIDER_OR_MODELS_DEV,
+        None,
+        model_vision_tiered(provider_id, model_id),
+    )
+    # Tool support is derived from the gateway's own parameter list first --
+    # ``derive_supports_tool_calls`` is the catalogue's copy of the same rule
+    # -- and only then from models.dev's ``tool_call`` boolean. A gateway that
+    # published no list has not said "no".
+    derived_tools = (
+        None
+        if supported is None
+        else bool(supported & frozenset({"tools", "tool_choice"}))
+    )
+    tool_calls = _laddered(
+        derived_tools,
+        SOURCE_PROVIDER,
+        provider_tier,
+        model_tool_call_tiered(provider_id, model_id),
+    )
+    prices = model_prices_tiered(provider_id, model_id)
     return {
         "max_output_tokens": output,
-        "context_length": _sourced(
-            context_length,
-            SOURCE_UNKNOWN if context_length is None else SOURCE_PROVIDER_OR_MODELS_DEV,
-            note=CONTEXT_LENGTH_SOURCE_NOTE,
+        "context_length": context,
+        "supports_vision": vision,
+        # Three fields the page never carried at all, which is why a catalogue
+        # could publish one and the page could not corroborate it.
+        "supports_tool_calls": tool_calls,
+        "input_price": _laddered(
+            info.input_price if info is not None else None,
+            SOURCE_PROVIDER_OR_MODELS_DEV,
+            None,
+            prices["input_price"],
         ),
-        "supports_vision": _sourced(
-            supports_vision,
-            SOURCE_UNKNOWN
-            if supports_vision is None
-            else SOURCE_PROVIDER_OR_MODELS_DEV,
+        "output_price": _laddered(
+            info.output_price if info is not None else None,
+            SOURCE_PROVIDER_OR_MODELS_DEV,
+            None,
+            prices["output_price"],
+        ),
+        # No provider ``/models`` payload publishes a cache rate and
+        # ``ProviderModelInfo`` has no field for one, so these two have no
+        # cached rung at all and come off models.dev or not at all.
+        "cache_read_price": _laddered(
+            None, SOURCE_UNKNOWN, None, prices["cache_read_price"]
+        ),
+        "cache_write_price": _laddered(
+            None, SOURCE_UNKNOWN, None, prices["cache_write_price"]
         ),
         # Only a gateway publishes these two; models.dev has no equivalent, so
         # there is no second tier they could have come from.

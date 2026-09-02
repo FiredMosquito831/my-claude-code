@@ -172,7 +172,14 @@ def test_the_provider_block_authenticates_by_reference_never_by_value() -> None:
     assert provider["baseURL"] == BASE_URL_SENTINEL
 
 
-def test_the_no_thinking_variant_keeps_its_prefix_and_declares_no_reasoning() -> None:
+def test_a_surviving_no_thinking_twin_is_listed_under_its_plain_ref() -> None:
+    """A twin that survives is not a second model -- it is a model whose
+    provider said it cannot think, so the normal variant was never emitted.
+    ``visible_entries`` re-projects it onto its plain ref: the
+    ``claude-3-freecc-no-thinking/`` prefix is a Claude Code heuristic and
+    means nothing to a CLI that reads ``reasoning: false`` instead.
+    """
+
     document, _ = build_commandcode_catalogue(
         [
             _model(
@@ -183,7 +190,8 @@ def test_the_no_thinking_variant_keeps_its_prefix_and_declares_no_reasoning() ->
         ]
     )
 
-    entry = _models(document)["claude-3-freecc-no-thinking/openrouter/sonnet"]
+    assert list(_models(document)) == ["openrouter/sonnet"]
+    entry = _models(document)["openrouter/sonnet"]
     assert entry["reasoning"] is False
 
 

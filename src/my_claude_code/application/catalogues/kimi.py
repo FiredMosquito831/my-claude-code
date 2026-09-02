@@ -96,6 +96,12 @@ KIMI_CAPABILITIES: tuple[str, ...] = (
     "always_thinking",
 )
 
+#: ``max_context_size`` is a required int: Kimi branches on ``<= 0`` to fall
+#: back to its own budget, so an unknown is written as ``0`` -- Kimi's own
+#: marker -- rather than omitted. ``provider`` and ``model`` are what make the
+#: entry routable at all.
+CLI_REQUIRED_KEYS: frozenset[str] = frozenset({"provider", "model", "max_context_size"})
+
 #: What Kimi Code itself does when a value is absent, read out of its own
 #: 1.50.0 source. MCC writes only the first of these; the rest are here so the
 #: consequence of an omission is stated where a reader will look for it. This

@@ -93,6 +93,12 @@ class CatalogueModel:
     #: True for the ``claude-3-freecc-no-thinking/`` variant, which exists to
     #: trip Claude Code's client-side "claude-3- means no thinking" heuristic.
     force_no_thinking: bool = False
+    #: True for the ref named by ``MODEL`` -- the route MCC itself starts on.
+    #: A CLI that must pin one model to open a session (Cline, Crush, Goose)
+    #: should pin this one: it is the route the operator chose and the one
+    #: MCC's own default chain is built around, where "the first entry" is an
+    #: enumeration artefact that can just as easily be a dead free tier.
+    is_primary_route: bool = False
 
     # -- capabilities: every one None means "the ladder does not know" -----
     context_length: int | None = None
@@ -102,6 +108,11 @@ class CatalogueModel:
     reasoning: ModelReasoningCapability | None = None
     input_price: float | None = None
     output_price: float | None = None
+    # The two cached rates, which no provider ``/models`` payload publishes:
+    # they reach the record from models.dev alone, down the same ladder. A CLI
+    # with a cache-rate field used to be told nothing for every model.
+    cache_read_price: float | None = None
+    cache_write_price: float | None = None
     supported_parameters: frozenset[str] | None = None
     default_parameters: ModelDefaultParameters | None = None
 
@@ -154,6 +165,7 @@ def build_catalogue_models(
     visibility = ModelVisibility.from_raw(
         settings.model_visibility_allow, settings.model_visibility_deny
     )
+    primary_ref = settings.model.strip()
     infos_by_ref: dict[str, ProviderModelInfo] = {}
     for info in runtime.cached_prefixed_model_infos():
         infos_by_ref.setdefault(info.model_id, info)
@@ -168,6 +180,7 @@ def build_catalogue_models(
             models,
             seen,
             ref.model_ref,
+            primary_ref=primary_ref,
             runtime=runtime,
             info=infos_by_ref.get(ref.model_ref),
             provenance=provenance,
@@ -180,6 +193,7 @@ def build_catalogue_models(
             models,
             seen,
             info.model_id,
+            primary_ref=primary_ref,
             runtime=runtime,
             info=info,
             provenance=provenance,
@@ -193,6 +207,7 @@ def _append_variants(
     seen: set[str],
     provider_model_ref: str,
     *,
+    primary_ref: str,
     runtime: RequestRuntimePort,
     info: ProviderModelInfo | None,
     provenance: CapabilityProvenanceLookup | None,
@@ -219,6 +234,7 @@ def _append_variants(
                 gateway_id=gateway_model_id(provider_model_ref),
                 display_name=provider_model_ref,
                 force_no_thinking=False,
+                is_primary_route=provider_model_ref == primary_ref,
             ),
         )
     _append_unique(
@@ -229,6 +245,7 @@ def _append_variants(
             gateway_id=no_thinking_gateway_model_id(provider_model_ref),
             display_name=f"{provider_model_ref} (no thinking)",
             force_no_thinking=True,
+            is_primary_route=provider_model_ref == primary_ref,
         ),
     )
 
@@ -248,12 +265,14 @@ def _variant(
     gateway_id: str,
     display_name: str,
     force_no_thinking: bool,
+    is_primary_route: bool,
 ) -> CatalogueModel:
     return CatalogueModel(
         gateway_id=gateway_id,
         provider_model_ref=resolved.provider_model_ref,
         display_name=display_name,
         force_no_thinking=force_no_thinking,
+        is_primary_route=is_primary_route,
         context_length=resolved.context_length,
         max_output_tokens=resolved.max_output_tokens,
         supports_vision=resolved.supports_vision,
@@ -264,10 +283,25 @@ def _variant(
         reasoning=None if force_no_thinking else resolved.reasoning,
         input_price=resolved.input_price,
         output_price=resolved.output_price,
+        cache_read_price=resolved.cache_read_price,
+        cache_write_price=resolved.cache_write_price,
         supported_parameters=resolved.supported_parameters,
         default_parameters=resolved.default_parameters,
         field_provenance=resolved.field_provenance,
     )
+
+
+def _first_stated[T](cached: T | None, resolved: T | None) -> T | None:
+    """The routed deployment's own record first, the ladder only after it.
+
+    Stated once here rather than at four call sites, and stated the same way
+    ``api/model_admin._laddered`` states it for the Models page, because these
+    are the two surfaces that must never answer the same question differently.
+    ``False`` and ``0.0`` are stated answers and are kept; only ``None`` --
+    nobody said -- defers.
+    """
+
+    return resolved if cached is None else cached
 
 
 def _resolve(
@@ -283,17 +317,40 @@ def _resolve(
         provider_id, model_id
     )
     supported = info.supported_parameters if info is not None else None
+    # Every field below walks the same ten rungs the output limit already
+    # walked, through the same runtime port, so a catalogue and the Models
+    # page cannot answer the same question differently. ``derive_supports_
+    # tool_calls`` still speaks first and ``None`` still means "nobody said":
+    # only a published statement, on any rung, can produce ``False``.
+    tool_calls = derive_supports_tool_calls(supported)
+    if tool_calls is None:
+        tool_calls = runtime.model_tool_call_tiered(provider_id, model_id)[0]
+    prices = runtime.model_prices_tiered(provider_id, model_id)
     return CatalogueModel(
         gateway_id=gateway_model_id(provider_model_ref),
         provider_model_ref=provider_model_ref,
         display_name=provider_model_ref,
-        context_length=runtime.model_context_length(provider_id, model_id),
+        context_length=_first_stated(
+            None if info is None else info.context_length,
+            runtime.model_context_length_tiered(provider_id, model_id)[0],
+        ),
         max_output_tokens=runtime.model_output_limit(provider_id, model_id),
-        supports_vision=runtime.cached_model_supports_vision(provider_id, model_id),
-        supports_tool_calls=derive_supports_tool_calls(supported),
+        supports_vision=_first_stated(
+            None if info is None else info.supports_vision,
+            runtime.model_vision_tiered(provider_id, model_id)[0],
+        ),
+        supports_tool_calls=tool_calls,
         reasoning=reasoning,
-        input_price=info.input_price if info is not None else None,
-        output_price=info.output_price if info is not None else None,
+        input_price=_first_stated(
+            None if info is None else info.input_price, prices["input_price"][0]
+        ),
+        output_price=_first_stated(
+            None if info is None else info.output_price, prices["output_price"][0]
+        ),
+        # No provider row carries a cache rate, so these two have no first
+        # answer to prefer.
+        cache_read_price=prices["cache_read_price"][0],
+        cache_write_price=prices["cache_write_price"][0],
         supported_parameters=supported,
         default_parameters=info.default_parameters if info is not None else None,
         field_provenance=(

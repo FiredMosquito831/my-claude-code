@@ -321,6 +321,32 @@ Codex App reads persistent `~/.codex` config and has no launcher to create it.
 Because the records come from the ladder rather than from
 `build_models_list_response()`, a capability change with no change to the model
 list still re-emits every catalogue.
+
+**One resolver, four surfaces.** `context_length`, `supports_vision`,
+`supports_tool_calls` and the four price rates each resolve through
+`model_*_tiered` in
+[providers/runtime/models_dev.py](src/my_claude_code/providers/runtime/models_dev.py)
+— siblings of `model_output_limit_tiered`, walking the same ten rungs in the
+same order under the same minimum-sample guards, and each reporting the rung
+that answered. `capability_payload` (the **Models** page) and
+`catalogue_model._resolve` (every generated catalogue, `/admin/api/catalogue-models`
+and `GET /v1beta/models`) both consult them, with the routed deployment's own
+`ProviderModelInfo` winning outright either way, so a number in a generated
+file and the same number on the Models page cannot disagree — about the value
+or about its provenance.
+
+`ProviderManager.model_context_length` is deliberately **not** one of them and
+stays provider-only. It feeds `application/output_tokens.py`, where the
+question is different: an output budget derived from a resold model's
+originating window would not fit the deployment actually serving it. What a
+picker publishes and what a budget is computed from are two questions, and
+conflating them is what the provider-only rule was written to prevent.
+
+`application/catalogues/base.py::visible_entries` is where a catalogue stops
+being a protocol surface and becomes a picker: it drops `:batch` pricing tiers,
+collapses the `claude-3-freecc-no-thinking/` twin, and re-projects a twin that
+survives onto its plain ref. `GET /v1beta/models` goes through it too, because
+a Gemini client picks from a list.
 Startup publishes only when no prior catalog exists; model-inventory changes
 republish it.
 

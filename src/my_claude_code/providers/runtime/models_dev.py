@@ -1611,6 +1611,326 @@ def model_output_limit_tiered(
     return (None, None) if found is None else found
 
 
+# --------------------------------------------------------------- field ladder
+#
+# Siblings of :func:`model_output_limit_tiered`, one per remaining models.dev
+# field the catalogue publishes. They walk the SAME ten rungs in the SAME
+# order with the SAME quorum guards; nothing above is modified. The output
+# limit keeps its own hand-written index because it is also the field the
+# cross-provider vote was built around, and rewriting it in terms of these
+# generics would change the code that currently answers 124 of 128 models.
+#
+# Why the whole ladder rather than the flat ``enrich_model_infos`` match: that
+# match is provider-blind and un-tiered, so a model whose own provider has no
+# models.dev bucket, or whose id carries a routing tag, resolves to nothing at
+# all. Those are exactly the models a gateway resells, and a catalogue that
+# says "unknown" for them is what a CLI turns into its own invented default.
+#
+# The enrichment path still answers first everywhere: these lookups are only
+# consulted where the provider's own record left the field ``None``.
+
+type _MetadataReader[T] = Callable[[Mapping[str, Any]], T | None]
+
+
+@dataclass(frozen=True, slots=True)
+class _LadderField[T]:
+    """One models.dev field, and how the ladder is allowed to answer it.
+
+    ``tie_break`` is applied descending by :func:`_modal` exactly as the output
+    limit's is, so a split vote resolves toward the more capable reading rather
+    than the one that would shrink a model below its declared capability
+    (WORKING-NOTES 54). Prices are the one field where "more capable" has no
+    meaning, so their tie-break points at the *lower* number: between two
+    equally-attested rates, MCC must not be the source that overstates a cost.
+    """
+
+    name: str
+    reader: _MetadataReader[T]
+    tie_break: Callable[[T], Any]
+    minimum: int
+
+
+def _models_dev_context_length(metadata: Mapping[str, Any]) -> int | None:
+    limit = metadata.get("limit")
+    if not isinstance(limit, Mapping):
+        return None
+    return _positive_int_or_none(limit.get("context"))
+
+
+def _models_dev_tool_call(metadata: Mapping[str, Any]) -> bool | None:
+    """Read models.dev's own per-model ``tool_call`` boolean, or None.
+
+    A row that omits the key has not said "no"; only a published ``false``
+    can produce ``False``, exactly as :func:`derive_supports_tool_calls`
+    treats an absent ``supported_parameters`` list.
+    """
+
+    value = metadata.get("tool_call")
+    return value if isinstance(value, bool) else None
+
+
+def _models_dev_price(key: str) -> _MetadataReader[float]:
+    def read(metadata: Mapping[str, Any]) -> float | None:
+        cost = metadata.get("cost")
+        if not isinstance(cost, Mapping):
+            return None
+        return _float_or_none(cost.get(key))
+
+    return read
+
+
+CONTEXT_LENGTH_FIELD: _LadderField[int] = _LadderField(
+    name="context_length",
+    reader=_models_dev_context_length,
+    tie_break=lambda value: value,
+    minimum=MIN_APPROXIMATE_NUMERIC_REPORTERS,
+)
+VISION_FIELD: _LadderField[bool] = _LadderField(
+    name="supports_vision",
+    reader=_accepts_image_input,
+    tie_break=lambda value: value,
+    minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
+)
+TOOL_CALL_FIELD: _LadderField[bool] = _LadderField(
+    name="tool_call",
+    reader=_models_dev_tool_call,
+    tie_break=lambda value: value,
+    minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
+)
+
+#: The four price rates, in the catalogue's own vocabulary. models.dev
+#: publishes all four under ``cost``; ``ProviderModelInfo`` carries only the
+#: first two, so the cache rates have no provider rung and resolve from
+#: tier 3 down or not at all.
+PRICE_FIELDS: tuple[_LadderField[float], ...] = tuple(
+    _LadderField(
+        name=name,
+        reader=_models_dev_price(key),
+        tie_break=lambda value: -value,
+        minimum=MIN_APPROXIMATE_NUMERIC_REPORTERS,
+    )
+    for name, key in (
+        ("input_price", "input"),
+        ("output_price", "output"),
+        ("cache_read_price", "cache_read"),
+        ("cache_write_price", "cache_write"),
+    )
+)
+
+
+def _build_field_index[T](
+    index: Mapping[str, Any], reader: _MetadataReader[T]
+) -> dict[str, dict[str, T]]:
+    """``{models.dev provider id: {normalized model id: value}}`` for one field.
+
+    Shaped exactly like :func:`_build_output_limit_index`: a model that does
+    not state the field is simply absent, which every caller reads as
+    "unknown", never as a stated absence.
+    """
+
+    built: dict[str, dict[str, T]] = {}
+    for provider_id, bucket in index.items():
+        if not isinstance(provider_id, str) or not isinstance(bucket, Mapping):
+            continue
+        models = bucket.get("models")
+        if not isinstance(models, Mapping):
+            continue
+        per_model: dict[str, T] = {}
+        for model_id, metadata in models.items():
+            if not isinstance(model_id, str) or not isinstance(metadata, Mapping):
+                continue
+            value = reader(metadata)
+            if value is None:
+                continue
+            for candidate in normalize_candidates(model_id):
+                per_model.setdefault(candidate, value)
+        if per_model:
+            built[provider_id] = per_model
+    return built
+
+
+def _build_field_cross_index[T](
+    index: Mapping[str, Any], reader: _MetadataReader[T]
+) -> dict[str, tuple[T, ...]]:
+    """Every stated value per normalized model id, across all providers.
+
+    The denominator of the cross-provider vote for one field, built the same
+    way :func:`_build_cross_provider_index` builds the reasoning one. Only
+    stated values are kept, because the guard counts *reporters* and a silent
+    row is not one.
+    """
+
+    built: dict[str, list[T]] = {}
+    for bucket in index.values():
+        if not isinstance(bucket, Mapping):
+            continue
+        models = bucket.get("models")
+        if not isinstance(models, Mapping):
+            continue
+        for model_id, metadata in models.items():
+            if not isinstance(model_id, str) or not isinstance(metadata, Mapping):
+                continue
+            value = reader(metadata)
+            if value is None:
+                continue
+            for candidate in normalize_candidates(model_id):
+                built.setdefault(candidate, []).append(value)
+    return {candidate: tuple(values) for candidate, values in built.items()}
+
+
+_field_index_lock = threading.Lock()
+_field_index_cache: dict[tuple[Path, str], tuple[float, dict[str, dict[str, Any]]]] = {}
+_field_cross_index_cache: dict[
+    tuple[Path, str], tuple[float, dict[str, tuple[Any, ...]]]
+] = {}
+
+
+def _cached_field_index[T](
+    field: _LadderField[T], path: Path | None
+) -> dict[str, dict[str, T]]:
+    cache_path = path if path is not None else models_dev_cache_path()
+    key = (cache_path, field.name)
+    try:
+        mtime = cache_path.stat().st_mtime
+    except OSError:
+        return {}
+    with _field_index_lock:
+        cached = _field_index_cache.get(key)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+    cache = read_models_dev_cache(cache_path)
+    built = _build_field_index(cache.index, field.reader) if cache is not None else {}
+    with _field_index_lock:
+        _field_index_cache[key] = (mtime, built)
+    return built
+
+
+def _cached_field_cross_index[T](
+    field: _LadderField[T], path: Path | None
+) -> dict[str, tuple[T, ...]]:
+    cache_path = path if path is not None else models_dev_cache_path()
+    key = (cache_path, field.name)
+    try:
+        mtime = cache_path.stat().st_mtime
+    except OSError:
+        return {}
+    with _field_index_lock:
+        cached = _field_cross_index_cache.get(key)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+    cache = read_models_dev_cache(cache_path)
+    built = (
+        _build_field_cross_index(cache.index, field.reader) if cache is not None else {}
+    )
+    with _field_index_lock:
+        _field_cross_index_cache[key] = (mtime, built)
+    return built
+
+
+def _field_cross_vote[T: Hashable](
+    field: _LadderField[T], model_id: str, path: Path | None
+) -> tuple[T, ResolutionTier] | None:
+    """Tiers 7-10 for one field: the modal value, guarded by the same quorum.
+
+    Walks :func:`candidate_ladder` tightest rung first and answers from the
+    first rung whose reporters clear ``field.minimum``, which is the rule
+    :func:`_vote_across_rungs` applies to the reasoning fields and the output
+    limit. Below the quorum the answer stays unknown; it never becomes a guess.
+    """
+
+    index = _cached_field_cross_index(field, path)
+    for tier, candidate in candidate_ladder(model_id):
+        reported = index.get(candidate)
+        if not reported:
+            continue
+        vote = _modal(reported, field.tie_break, field.minimum)
+        if vote is not None:
+            return vote.value, tier
+    return None
+
+
+def _model_field_tiered[T: Hashable](
+    field: _LadderField[T], provider_id: str, model_id: str, path: Path | None
+) -> tuple[T | None, ResolutionTier | None]:
+    """One field, resolved down the same rungs :func:`model_output_limit_tiered` walks.
+
+    Rung for rung: this provider's own models.dev bucket exact (tier 3) and
+    tag-stripped (tier 4); failing a bucket of its own, the OpenRouter
+    reference catalogue (tiers 5-6); failing that, the approximate
+    cross-provider vote (tiers 7-10). A provider that HAS a bucket is never
+    allowed to read outside it, so a wrong same-name row cannot override its
+    own catalogue's answer.
+    """
+
+    field_index = _cached_field_index(field, path)
+    bucket = field_index.get(provider_id)
+    if bucket is None:
+        alias = PROVIDER_ID_ALIASES.get(provider_id)
+        if alias is not None:
+            bucket = field_index.get(alias)
+    if bucket is None:
+        if _has_models_dev_bucket(_cached_raw_index(path), provider_id):
+            return None, None
+        reference = _reference_bucket(field_index, provider_id)
+        found = (
+            None
+            if reference is None
+            else _lookup_in_reference_bucket(reference, model_id)
+        )
+        if found is not None:
+            return found
+        vote = _field_cross_vote(field, model_id, path)
+        return (None, None) if vote is None else vote
+    found = _lookup_in_bucket_tiered(bucket, model_id)
+    return (None, None) if found is None else found
+
+
+def model_context_length_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[int | None, ResolutionTier | None]:
+    """models.dev's context window for one model, plus the rung it came from.
+
+    A published ``limit.context`` of ``0`` reads as absent, exactly as it does
+    everywhere else here: models.dev's schema permits it and means "not
+    applicable or unknown" by it, never a window of zero tokens.
+    """
+
+    return _model_field_tiered(CONTEXT_LENGTH_FIELD, provider_id, model_id, path)
+
+
+def model_vision_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[bool | None, ResolutionTier | None]:
+    """models.dev's image-input support for one model, plus its rung."""
+
+    return _model_field_tiered(VISION_FIELD, provider_id, model_id, path)
+
+
+def model_tool_call_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[bool | None, ResolutionTier | None]:
+    """models.dev's ``tool_call`` boolean for one model, plus its rung."""
+
+    return _model_field_tiered(TOOL_CALL_FIELD, provider_id, model_id, path)
+
+
+def model_prices_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> dict[str, tuple[float | None, ResolutionTier | None]]:
+    """The four published rates for one model, each with its own rung.
+
+    Per field, not per source, for the same reason the reasoning capability is
+    resolved per field: a bucket that publishes ``input``/``output`` but no
+    cache rates has answered two of the four, and forcing the other two down
+    to the same rung would either invent them or discard the two it did state.
+    """
+
+    return {
+        field.name: _model_field_tiered(field, provider_id, model_id, path)
+        for field in PRICE_FIELDS
+    }
+
+
 def merge_reasoning_capabilities(
     primary: ModelReasoningCapability | None,
     secondary: ModelReasoningCapability | None,

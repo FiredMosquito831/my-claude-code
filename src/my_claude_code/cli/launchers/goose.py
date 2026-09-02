@@ -57,6 +57,10 @@ from my_claude_code.config.harnesses import (
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import get_settings
+from my_claude_code.core.catalogue_refs import (
+    STARTING_MODEL_REASONS,
+    select_starting_index,
+)
 
 from .common import preflight_proxy, run_client_process
 
@@ -160,10 +164,13 @@ def resolve_model(
 ) -> tuple[str | None, int | None]:
     """Return the model this session runs on and its resolved context window.
 
-    The user's own ``--model`` wins; otherwise the first routable model is the
-    default, for the same reason it is everywhere else in this project -- the
-    list is the order and the visibility filter ``GET /v1/models`` publishes,
-    which is their own chain order.
+    The user's own ``--model`` wins; otherwise
+    :func:`~my_claude_code.core.catalogue_refs.select_starting_index` chooses,
+    on the same rule every other harness that must pin a model applies: MCC's
+    own configured ``MODEL`` first, then the first entry that is not a free
+    tier. Taking the first entry outright is what this used to do, and on a
+    real install that opened every Goose session on a free tier the provider
+    had withdrawn.
 
     Every failure degrades to launching with no ``GOOSE_MODEL`` and no
     ``GOOSE_CONTEXT_LIMIT``, leaving whatever the user configured for
@@ -191,7 +198,23 @@ def resolve_model(
         )
         return requested, None
 
-    chosen = requested or _string_or_none(models[0].get("gateway_id"))
+    chosen = requested
+    if chosen is None:
+        found = select_starting_index(
+            models,
+            lambda entry: str(entry.get("provider_model_ref") or ""),
+            lambda entry: bool(entry.get("is_primary_route")),
+        )
+        # ``models`` is non-empty here, so ``found`` is never None; the
+        # guard is for the reader, not for a case that can occur.
+        if found is not None:
+            index, reason = found
+            chosen = _string_or_none(models[index].get("gateway_id"))
+            print(
+                f"My Claude Code: Goose starts on {chosen} "
+                f"({STARTING_MODEL_REASONS[reason]}).",
+                file=sys.stderr,
+            )
     for model in models:
         if model.get("gateway_id") == chosen:
             limit = model.get("context_length")

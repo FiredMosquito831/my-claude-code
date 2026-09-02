@@ -402,6 +402,29 @@ def test_the_model_listing_publishes_the_ladders_own_limits() -> None:
         assert entry.get("outputTokenLimit") != 0
 
 
+def test_the_model_listing_is_a_picker_not_a_protocol_surface() -> None:
+    """``/v1beta/models`` goes through the same collapse the CLIs get.
+
+    ``api/gemini_model_catalog`` used to enumerate ``build_catalogue_models``
+    raw, so this route published both the normal record and its
+    ``claude-3-freecc-no-thinking/`` twin for every ref while every generated
+    harness catalogue dropped the twin -- an undocumented asymmetry between
+    two surfaces built from the same records. A Gemini client is a picker, so
+    it gets the picker's list: one entry per model, under its plain id, with
+    no ``:batch`` pricing tier.
+    """
+
+    app = create_test_app(Settings(model="nvidia_nim/first-model"))
+    with TestClient(app) as client:
+        models = client.get("/v1beta/models").json()["models"]
+
+    names = [entry["name"] for entry in models]
+    assert names
+    assert len(names) == len(set(names))
+    assert not any("claude-3-freecc-no-thinking" in name for name in names)
+    assert not any(name.endswith(":batch") for name in names)
+
+
 def test_one_model_can_be_described_and_an_unknown_one_is_a_404() -> None:
     app = create_test_app(Settings(model="nvidia_nim/first-model"))
     with TestClient(app) as client:

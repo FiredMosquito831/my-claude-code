@@ -73,6 +73,10 @@ AUTH_MODE = "bearer"
 #: the CLI, and *not* part of the ``model`` field in the document.
 MODEL_ID_PREFIX = "custom:"
 
+#: Without all three the model either never appears in Droid's picker or
+#: never dispatches. Every capability key beside them is optional.
+CLI_REQUIRED_KEYS: frozenset[str] = frozenset({"model", "provider", "baseUrl"})
+
 #: What Droid itself does when one of these keys is absent, read out of
 #: 0.210.0. MCC writes none of these; it omits the key and records the
 #: omission. This dict is the one place in this module allowed to hold a

@@ -95,14 +95,29 @@ QWEN_EFFORT_BY_REASONING_EFFORT: dict[ReasoningEffort, str] = {
     ReasoningEffort.MAX: "high",
 }
 
+#: Qwen Code's model provider entry is addressed by ``id``; every
+#: ``generationConfig`` key under it is optional, which is why an unknown is
+#: omitted and recorded rather than defaulted.
+CLI_REQUIRED_KEYS: frozenset[str] = frozenset({"id", "name"})
+
 #: What Qwen Code itself does when a ``generationConfig`` key is absent, read
 #: out of its own 0.15.11 bundle. MCC writes none of these; it omits the key
 #: and records the omission. This dict is the one place in this module allowed
 #: to hold a literal limit, and the static guard test keys off its name.
 CLI_DOCUMENTED_DEFAULTS: dict[str, Any] = {
-    # No contextWindowSize means Qwen shows no context gauge for the model and
-    # never triggers its own compression pass early; it relies on the server
-    # to refuse an over-long request.
+    # No contextWindowSize means Qwen falls back to its own hardcoded
+    # ``DEFAULT_TOKEN_LIMIT``, read out of the 0.15.11 bundle:
+    #
+    #     function tokenLimit(model, type = "input") {
+    #       return knownTokenLimit(model, type) ??
+    #         (type === "output" ? DEFAULT_OUTPUT_TOKEN_LIMIT : DEFAULT_TOKEN_LIMIT) }
+    #     DEFAULT_TOKEN_LIMIT = 131072;  DEFAULT_OUTPUT_TOKEN_LIMIT = 32e3;
+    #
+    # So the gauge is not absent -- it is 131,072, which for a 1M-token model
+    # is wrong by an order of magnitude and for a 32k deployment is wrong the
+    # dangerous way. That does not change the policy (the key is optional, so
+    # an unknown is omitted and recorded), but it does change what the
+    # omission costs, and the previous comment here claimed the opposite.
     "contextWindowSize": None,
     # No modalities block means Qwen offers text only for the model.
     "modalities": None,

@@ -3,7 +3,7 @@
 import json
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -16,6 +16,7 @@ from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntime
 from my_claude_code.config.harnesses import harness_specs
 from my_claude_code.config.proxy_auth import PROXY_NO_AUTH_SENTINEL
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.runtime.harness_catalogues import HarnessCatalogueFanoutPublisher
 
 
@@ -59,6 +60,41 @@ class FakeRuntime(RequestRuntimePort):
 
     def model_output_limit(self, provider_id: str, model_id: str) -> int | None:
         return None
+
+    # Nothing in this module exercises the tiered rungs; the fan-out is
+    # about which files get written, not about what the ladder resolved.
+    _vision: ClassVar[dict[str, bool]] = {}
+    _tool_calls: ClassVar[dict[str, bool]] = {}
+    _prices: ClassVar[dict[str, dict[str, float]]] = {}
+
+    def model_context_length_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[int | None, ResolutionTier | None]:
+        return self._context_lengths.get(f"{provider_id}/{model_id}"), None
+
+    def model_vision_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]:
+        return self._vision.get(f"{provider_id}/{model_id}"), None
+
+    def model_tool_call_tiered(
+        self, provider_id: str, model_id: str
+    ) -> tuple[bool | None, ResolutionTier | None]:
+        return self._tool_calls.get(f"{provider_id}/{model_id}"), None
+
+    def model_prices_tiered(
+        self, provider_id: str, model_id: str
+    ) -> dict[str, tuple[float | None, ResolutionTier | None]]:
+        rates = self._prices.get(f"{provider_id}/{model_id}", {})
+        return {
+            name: (rates.get(name), None)
+            for name in (
+                "input_price",
+                "output_price",
+                "cache_read_price",
+                "cache_write_price",
+            )
+        }
 
     def cached_prefixed_model_infos(self) -> tuple[ProviderModelInfo, ...]:
         return self._cached_infos

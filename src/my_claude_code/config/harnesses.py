@@ -386,6 +386,14 @@ class HarnessCatalogue:
     #: thing MCC has any business moving. Mutually exclusive with ``merge``
     #: for the same reason ``config_env_var`` is.
     config_flag: str | None = None
+    #: Whether the generated document carries MCC's ``_mcc_defaulted`` record
+    #: at its root. True everywhere but Kilo CLI, whose config validator
+    #: rejects unknown root keys outright -- so for that one harness the record
+    #: has to reach the launcher's summary and the dashboard card from
+    #: ``GET /admin/api/catalogue-models`` instead of from the file. Stated
+    #: here so the card can say the file carries no record rather than
+    #: reporting a count of zero it did not measure.
+    carries_defaulted_record: bool = True
     #: How the generated document is encoded. ``json`` for every harness that
     #: reads JSON; ``toml`` for Kimi Code, whose ``config.toml`` is parsed with
     #: ``tomlkit``. It is a property of the *file format*, not of the
@@ -745,9 +753,10 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             ),
         ),
         catalogue=HarnessCatalogue(
-            format_id="opencode",
+            format_id="kilo",
             filename="kilo-config.json",
             config_env_var="KILO_CONFIG",
+            carries_defaulted_record=False,
         ),
         passthrough_flags=frozenset({"--help", "-h", "--version", "-v"}),
         summary=(
