@@ -3421,6 +3421,65 @@ const rtkToggles = rtkToggleContainer
     )
   : null;
 
+// The Claude subscription card renders from the /sources endpoint, so its
+// two interesting states are driven by data rather than by a gesture: a live
+// credential with observed usage windows, and a credential MCC has never seen
+// a rate-limit header for. Both go through the same renderer.
+const anthropicOAuthCard = (() => {
+  const render = (sources) => {
+    const list = doc.createElement("dl");
+    window.eval("renderAnthropicOAuthDetails")(list, sources);
+    return {
+      hidden: list.hidden,
+      text: (list.textContent || "").replace(/\s+/g, " ").trim(),
+      expired: Array.from(list.querySelectorAll(".value-expired")).map((node) =>
+        (node.textContent || "").trim(),
+      ),
+    };
+  };
+  const live = render({
+    claude_code: { available: false },
+    mcc: {
+      available: true,
+      subscription_type: "max",
+      rate_limit_tier: "default_claude_max_5x",
+      source: "mcc",
+      expires_at: Math.round(Date.now() / 1000) + 3600,
+      refresh_token_expires_at: Math.round(Date.now() / 1000) + 259200,
+      scopes: ["user:inference", "user:profile"],
+      has_inference_scope: true,
+    },
+    windows: {
+      observed: true,
+      status: "session-limit-reached",
+      five_hour_utilization: "1.0",
+      five_hour_reset: "1788393000",
+      weekly_utilization: "0.41",
+      weekly_reset: "1788433200",
+      overage_status: "rejected",
+      reset: "not yet observed",
+    },
+  });
+  const unobserved = render({
+    claude_code: { available: false },
+    mcc: {
+      available: true,
+      subscription_type: "max",
+      source: "mcc",
+      expires_at: Math.round(Date.now() / 1000) - 3600,
+      scopes: ["user:profile"],
+      has_inference_scope: false,
+    },
+    windows: { observed: false },
+  });
+  const absent = render({
+    claude_code: { available: false },
+    mcc: { available: false },
+    windows: { observed: false },
+  });
+  return { live, unobserved, absent };
+})();
+
 console.log(
   JSON.stringify(
     {
@@ -3467,6 +3526,7 @@ console.log(
       customProviders,
       codingAgents,
       rtkToggles,
+      anthropicOAuthCard,
       fetched: Array.from(new Set(fetchCalls)).sort(),
     },
     null,

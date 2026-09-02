@@ -27,6 +27,7 @@ from my_claude_code.core.anthropic import (
     request_image_inputs,
 )
 from my_claude_code.core.async_iterators import try_close_async_iterator
+from my_claude_code.core.client_fingerprint import install_fingerprint
 from my_claude_code.core.credential_attribution import install_attribution
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import failure_kind_name, find_execution_failure
@@ -743,6 +744,12 @@ def build_capture(
     of the two its client actually asked for, or every row would read "stream".
     """
     store = store_from_settings(settings)
+    # Every inbound surface funnels its raw headers through here, so this is
+    # the one place that can tell a provider what the client said about
+    # itself. Installed unconditionally, before the request log's own switch:
+    # a provider that has to mirror the client's user-agent upstream must not
+    # start lying the moment request logging is turned off.
+    install_fingerprint(headers)
     return RequestCapture(
         store,
         request_id=request_id,

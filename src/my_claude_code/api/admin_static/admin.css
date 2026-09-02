@@ -7008,3 +7008,45 @@ details.turn-pane > summary:focus-visible {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* Claude subscription card: the credential's own facts, and the usage
+   windows Anthropic reported on a real response. */
+.anthropic-oauth-details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.anthropic-oauth-details dt {
+  color: var(--muted);
+}
+
+.anthropic-oauth-details dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.anthropic-oauth-details dd.value-expired {
+  color: var(--error);
+}
+
+.anthropic-oauth-paste {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+
+.anthropic-oauth-paste p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.anthropic-oauth-paste input {
+  flex: 1 1 260px;
+  min-width: 0;
+}

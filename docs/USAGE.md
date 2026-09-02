@@ -1209,7 +1209,9 @@ One thing to know: the override for the upstream address is `ANTHROPIC_UPSTREAM_
 
 Their published terms state that plan OAuth credentials are for Claude Code and Claude.ai only, and that third-party products may not route requests through them. There is no "inside Claude Code" exemption, because once MCC is interposed it is MCC that presents your credential upstream. Anthropic may enforce without notice, and **the risk is to your Claude account**.
 
-If you enable it anyway, MCC refuses by default to use the subscription for anything that did not come from the Claude Code CLI — it reads the `cc_entrypoint=cli` marker Claude Code puts in the request body, so an Agent SDK script pointed at your proxy is refused rather than silently billed to your plan.
+If you enable it anyway, MCC refuses by default to use the subscription for anything that did not come from **Claude Code or the Claude Agent SDK** — it reads the `cc_entrypoint` marker Claude Code puts in the request body, so another harness pointed at your proxy is refused rather than silently billed to your plan. Since 6.36.0 the admitted set is `cli`, `cli-bg`, `sdk-cli`, `sdk-py` and `sdk-ts`; before that it was `cli` alone, which refused Anthropic's own SDK.
+
+The Claude subscription card on the **Providers** page reports the plan and rate-limit tier, when the access and refresh tokens expire, the scopes (flagged if `user:inference` is missing, without which the credential cannot answer at all), and the 5-hour and weekly usage windows. Those windows are read from Anthropic's own `anthropic-ratelimit-unified-*` response headers and are never computed: until a real response has carried one, the card says *not yet observed* rather than guessing.
 
 **Read [ANTHROPIC-SUBSCRIPTION.md](ANTHROPIC-SUBSCRIPTION.md) first.** It is the full disclaimer, the settings, and the credential handling.
 

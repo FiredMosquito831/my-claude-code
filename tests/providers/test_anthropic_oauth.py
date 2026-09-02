@@ -17,30 +17,28 @@ from my_claude_code.providers.anthropic_oauth import (
     AnthropicOAuthProvider,
     AnthropicOAuthUnavailableError,
     OAuthTokens,
-    apply_tool_prefix,
     detect_client_version,
     detect_entrypoint,
     is_claude_code_cli,
+    is_claude_code_client,
     load_claude_code_tokens,
     load_tokens,
     store_tokens,
 )
 from my_claude_code.providers.anthropic_oauth import credentials as creds
 from my_claude_code.providers.anthropic_oauth.constants import (
-    ANTHROPIC_OAUTH_BETAS,
+    ANTHROPIC_OAUTH_BETA_FLOOR,
     CLAUDE_CODE_APP,
     CLAUDE_CODE_USER_AGENT,
-)
-from my_claude_code.providers.anthropic_oauth.tool_names import (
-    strip_tool_prefix_from_frame,
 )
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 _TOKEN = "sk-ant-oat-user-secret"
 
-CLI_MARKER = "x-anthropic-billing-header: cc_version=2.1.235.2db; cc_entrypoint=cli;"
-SDK_MARKER = "x-anthropic-billing-header: cc_version=2.1.223.4c0; cc_entrypoint=sdk-py;"
+CLI_MARKER = "x-anthropic-billing-header: cc_version=2.1.258; cc_entrypoint=cli;"
+SDK_MARKER = "x-anthropic-billing-header: cc_version=2.1.223; cc_entrypoint=sdk-py;"
+OTHER_MARKER = "x-anthropic-billing-header: cc_version=2.1.258; cc_entrypoint=opencode;"
 
 
 def _request(system: Any = None) -> MessagesRequest:
@@ -82,21 +80,37 @@ def test_detects_cli_entrypoint_from_a_real_marker() -> None:
     request = _request(f"{CLI_MARKER}\nYou are Claude Code, Anthropic's official CLI.")
 
     assert detect_entrypoint(request) == "cli"
-    assert detect_client_version(request) == "2.1.235.2db"
+    assert detect_client_version(request) == "2.1.258"
     assert is_claude_code_cli(request) is True
+    assert is_claude_code_client(request) is True
 
 
-def test_agent_sdk_is_not_treated_as_the_cli() -> None:
-    """sdk-py is the case Anthropic's policy names explicitly."""
+def test_the_agent_sdk_is_an_anthropic_client_but_not_the_terminal() -> None:
+    """The Agent SDK drives the Claude Code binary, so the gate admits it.
+
+    Anthropic's policy names Claude Code *and* the Claude Agent SDK, and this
+    entrypoint is 64% of the operator's measured traffic. Before 6.36.0 the
+    gate refused all of it, which is why the distinction now has two names:
+    ``is_claude_code_cli`` still answers "was this the terminal?", while
+    ``is_claude_code_client`` is what the gate asks.
+    """
     request = _request(f"{SDK_MARKER}\nYou are a Claude agent.")
 
     assert detect_entrypoint(request) == "sdk-py"
     assert is_claude_code_cli(request) is False
+    assert is_claude_code_client(request) is True
+
+
+def test_a_third_party_harness_is_not_an_anthropic_client() -> None:
+    request = _request(f"{OTHER_MARKER}\nyou are opencode")
+
+    assert is_claude_code_client(request) is False
 
 
 @pytest.mark.parametrize("system", [None, "", "no marker at all", "cc_entrypoint="])
 def test_unmarked_requests_are_not_the_cli(system: Any) -> None:
     assert is_claude_code_cli(_request(system)) is False
+    assert is_claude_code_client(_request(system)) is False
 
 
 def test_marker_is_found_in_block_shaped_system_prompts() -> None:
@@ -112,15 +126,24 @@ def test_marker_is_found_in_block_shaped_system_prompts() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_gate_refuses_agent_sdk_traffic() -> None:
+def test_gate_refuses_a_third_party_harness() -> None:
     provider = _provider()
 
     with pytest.raises(InvalidRequestError) as excinfo:
-        provider.preflight_stream(_request(f"{SDK_MARKER}\nagent"))
+        provider.preflight_stream(_request(f"{OTHER_MARKER}\nopencode"))
 
     message = str(excinfo.value)
-    assert "sdk-py" in message
+    assert "opencode" in message
     assert "anthropic" in message  # points at the supported provider
+
+
+def test_refusal_message_names_the_setting_that_controls_the_gate() -> None:
+    provider = _provider()
+
+    with pytest.raises(InvalidRequestError) as excinfo:
+        provider.preflight_stream(_request("unmarked"))
+
+    assert "ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE" in str(excinfo.value)
 
 
 def test_gate_admits_real_cli_traffic() -> None:
@@ -130,10 +153,17 @@ def test_gate_admits_real_cli_traffic() -> None:
     provider.preflight_stream(_request(f"{CLI_MARKER}\nclaude code"))
 
 
+def test_gate_admits_agent_sdk_traffic() -> None:
+    """The widened gate: the SDK is Anthropic's own client too."""
+    provider = _provider()
+
+    provider.preflight_stream(_request(f"{SDK_MARKER}\nagent"))
+
+
 def test_gate_can_be_disabled_explicitly() -> None:
     provider = _provider(require_claude_code_cli=False)
 
-    provider.preflight_stream(_request(f"{SDK_MARKER}\nagent"))
+    provider.preflight_stream(_request(f"{OTHER_MARKER}\nopencode"))
 
 
 @pytest.mark.asyncio
@@ -165,56 +195,26 @@ async def test_gate_refuses_before_the_stream_opens() -> None:
 
 @pytest.mark.asyncio
 async def test_oauth_headers_are_the_claude_code_set() -> None:
+    """Rewritten in 6.36.0, deliberately.
+
+    This test used to assert ``headers["x-api-key"] == _TOKEN``, which is the
+    assertion that locked in the bug: Claude Code 2.1.258 puts an OAuth token
+    in ``Authorization: Bearer`` and explicitly nulls ``X-Api-Key`` (binary
+    offsets 187124317 / 181109007), and ``opencode-anthropic-auth@0.0.13``
+    deletes ``x-api-key`` for the same reason. The provider had served zero
+    successful requests in its whole life; this is the most likely reason.
+    """
     headers = await AnthropicOAuthAuth(
         OAuthTokens(access_token=_TOKEN, source="test")
     ).headers()
 
-    assert headers["x-api-key"] == _TOKEN
+    assert headers["Authorization"] == f"Bearer {_TOKEN}"
+    assert "x-api-key" not in {name.lower() for name in headers}
     assert headers["anthropic-version"] == ANTHROPIC_API_VERSION
-    assert headers["anthropic-beta"] == ANTHROPIC_OAUTH_BETAS
+    assert headers["anthropic-beta"] == ",".join(ANTHROPIC_OAUTH_BETA_FLOOR)
     assert "oauth-2025-04-20" in headers["anthropic-beta"]
     assert headers["x-app"] == CLAUDE_CODE_APP
     assert headers["user-agent"] == CLAUDE_CODE_USER_AGENT
-
-
-# ---------------------------------------------------------------------------
-# Tool-name prefixing
-# ---------------------------------------------------------------------------
-
-
-def test_tool_prefix_covers_every_name_position() -> None:
-    body = {
-        "tools": [{"name": "Read"}, {"name": "Bash"}],
-        "tool_choice": {"type": "tool", "name": "Edit"},
-        "messages": [
-            {
-                "role": "assistant",
-                "content": [{"type": "tool_use", "id": "t1", "name": "Grep"}],
-            }
-        ],
-    }
-
-    out = apply_tool_prefix(body)
-
-    assert [tool["name"] for tool in out["tools"]] == ["cc_Read", "cc_Bash"]
-    assert out["tool_choice"]["name"] == "cc_Edit"
-    assert out["messages"][0]["content"][0]["name"] == "cc_Grep"
-    # The caller's body must not be mutated -- it is also what gets logged.
-    assert body["tools"][0]["name"] == "Read"
-
-
-def test_tool_prefix_is_idempotent() -> None:
-    once = apply_tool_prefix({"tools": [{"name": "Read"}]})
-    twice = apply_tool_prefix(once)
-
-    assert twice["tools"][0]["name"] == "cc_Read"
-
-
-def test_response_frames_are_normalised_back() -> None:
-    frame = 'event: content_block_start\ndata: {"type":"tool_use","name":"cc_Read"}'
-
-    assert '"name":"Read"' in strip_tool_prefix_from_frame(frame)
-    assert "cc_Read" not in strip_tool_prefix_from_frame(frame)
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +296,12 @@ def test_stored_credential_is_not_world_readable(
 
 
 def test_expiry_leeway_triggers_refresh_before_actual_expiry() -> None:
+    """Retuned to the 120 s leeway 6.36.0 ships.
+
+    Claude Code's bundled SDK refreshes 30 s out (offset 180979163) and
+    OpenCode refreshes at zero; 120 s survives a slow token endpoint without
+    burning a refresh on a credential that still has most of an hour left.
+    """
     nearly = OAuthTokens(
         access_token=_TOKEN, refresh_token="r", expires_at=int(time.time()) + 60
     )

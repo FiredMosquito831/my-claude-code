@@ -620,7 +620,7 @@ def _anthropic_oauth_login_field_specs() -> tuple[dict[str, Any], ...]:
         },
         {
             "key": "ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE",
-            "label": "Only Serve The Claude Code CLI",
+            "label": "Only Serve Claude Code And The Agent SDK",
             "section_id": "providers",
             "provider": "anthropic_oauth",
             "field_type": "boolean",
@@ -628,10 +628,11 @@ def _anthropic_oauth_login_field_specs() -> tuple[dict[str, Any], ...]:
             "default": "true",
             "restart_required": True,
             "description": (
-                "On (the default), any request that did not come from the "
-                "Claude Code CLI is refused. Turning it off routes Agent SDK "
-                "and other harness traffic onto the subscription credential, "
-                "which is the case Anthropic's policy names explicitly -- read "
+                "On (the default), any request that did not come from "
+                "Anthropic's own clients -- the Claude Code CLI or the Claude "
+                "Agent SDK -- is refused. Turning it off routes every other "
+                "harness onto the subscription credential, which is the case "
+                "Anthropic's policy names explicitly -- read "
                 "docs/ANTHROPIC-SUBSCRIPTION.md first."
             ),
         },

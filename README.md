@@ -1518,12 +1518,16 @@ There is **no "inside Claude Code" exemption**. Once MCC is interposed, Claude C
 **What MCC does to limit it.** Claude Code stamps an attribution line at the head of the system prompt, inside the request body:
 
 ```
-x-anthropic-billing-header: cc_version=2.1.235.2db; cc_entrypoint=cli;
+x-anthropic-billing-header: cc_version=2.1.258; cc_entrypoint=cli;
 ```
 
-The terminal CLI reports `cc_entrypoint=cli`; the Python Agent SDK reports `sdk-py`. Because the marker travels in the body, a proxy can neither forge it nor strip it. **By default this provider refuses any request that does not report `cli`**, and points it at the `anthropic` provider instead — so the Agent SDK, other harnesses, and bare API calls never touch the subscription credential. Set `ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE=false` to remove that protection — also settable as **Only Serve The Claude Code CLI** on the Claude subscription card of the **Providers** page (restart required).
+**The subscription credential may serve requests from Anthropic's own clients only — the Claude Code CLI and the Claude Agent SDK.** Those are the entrypoints `cli`, `cli-bg`, `sdk-cli`, `sdk-py` and `sdk-ts`; every other harness routed through MCC — OpenCode, Cline, Crush, a bare API call — is refused and pointed at the `anthropic` provider instead. Because the marker travels in the body, a proxy can neither forge it for traffic it did not receive nor strip it from traffic it did; it is still a good-faith attribution field rather than an authenticator, since its value is `CLAUDE_CODE_ENTRYPOINT`. Set `ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE=false` to remove that protection — also settable as **Only Serve Claude Code And The Agent SDK** on the Claude subscription card of the **Providers** page (restart required). Until 6.36.0 the gate admitted `cli` alone and refused the Agent SDK, which Anthropic's policy names alongside Claude Code.
 
-MCC's own credential lives at `~/.fcc/anthropic_oauth.json` (mode `0600`). Claude Code's file is read-only to MCC and is never refreshed in place — rotating it would log out your real client. A raw `ANTHROPIC_OAUTH_ACCESS_TOKEN` works as an override but cannot be refreshed.
+Since 6.36.0 the upstream request is Claude Code's own shape: the token goes in `Authorization: Bearer` (never `x-api-key`), `anthropic-beta` is MCC's floor unioned with the client's own list, and `user-agent`, `x-app` and `anthropic-version` are mirrored from the inbound request. Tool names go out verbatim. Before 6.36.0 this provider had never produced a successful request.
+
+MCC's own credential lives at `~/.fcc/anthropic_oauth.json` (mode `0600`). Claude Code's file is read-only to MCC and is never refreshed in place — rotating it would log out your real client. The access token is refreshed ahead of expiry in the background, single-flight per credential file, and a 401 refreshes once and retries once. A raw `ANTHROPIC_OAUTH_ACCESS_TOKEN` works as a single-value override but cannot be refreshed, and a comma-separated list of them is rejected.
+
+The Claude subscription card on the **Providers** page reports the plan, the rate-limit tier, both token expiries, the scopes, and the 5-hour/weekly usage windows — the last of these only when a real Anthropic response carried the header, and otherwise the literal *not yet observed*.
 
 **The supported alternative is already here:** the `anthropic` provider with a [Claude Console API key](https://platform.claude.com/settings/keys), billed per token. Claude models also arrive through `bedrock`, `vertex`, and several gateways. And the two-door pattern still works — native `claude` for your subscription, `mcc-claude` for everything else.
 

@@ -2,7 +2,7 @@
 
 import asyncio
 import sys
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any
 
 import httpx
@@ -98,6 +98,20 @@ class AnthropicMessagesProvider(BaseProvider):
         # Applied to the serialized body just before it goes upstream, for
         # upstreams whose wire format differs from the canonical one.
         self._body_transform = body_transform
+        # Optional, installed by a subclass after construction. Both default to
+        # off, so every provider in this family behaves exactly as before
+        # unless it opts in.
+        #
+        # ``_response_observer`` sees the *response* headers of every upstream
+        # call. Anthropic reports a subscription's 5-hour and weekly windows
+        # only there, and MCC read them nowhere.
+        #
+        # ``_auth_retry`` is asked, once, whether a 4xx was a stale credential
+        # worth refreshing. Returning True re-sends the same body with freshly
+        # built headers, once. It sits inside one upstream attempt on purpose:
+        # a rejected token must cost one retry, not a new rung on the ladder.
+        self._response_observer: Callable[[Mapping[str, str], int], None] | None = None
+        self._auth_retry: Callable[[int], Awaitable[bool]] | None = None
         # What this host has taught this process about itself. Same two tables,
         # same lifetime and the same matchers as the OpenAI-chat family's --
         # only the body keys differ, because this dialect spells the output
@@ -126,6 +140,16 @@ class AnthropicMessagesProvider(BaseProvider):
             ),
         )
 
+    def set_response_observer(
+        self, observer: Callable[[Mapping[str, str], int], None] | None
+    ) -> None:
+        """Watch every upstream response's headers. See ``__init__``."""
+        self._response_observer = observer
+
+    def set_auth_retry(self, retry: Callable[[int], Awaitable[bool]] | None) -> None:
+        """Let a credential refresh itself once on an auth rejection."""
+        self._auth_retry = retry
+
     def throttle_remaining(self, model: str | None = None) -> float:
         return self._rate_limiter.remaining_wait()
 
@@ -147,6 +171,27 @@ class AnthropicMessagesProvider(BaseProvider):
         build_anthropic_messages_body(request, reasoning=reasoning)
 
     async def _send_stream_request(self, body: dict[str, Any]) -> httpx.Response:
+        response, request = await self._open_stream(body)
+        if response.status_code >= 400 and self._auth_retry is not None:
+            status = response.status_code
+            await response.aread()
+            await response.aclose()
+            if await self._auth_retry(status):
+                response, request = await self._open_stream(body)
+        if response.status_code >= 400:
+            if not response.is_closed:
+                await response.aread()
+                await response.aclose()
+            raise httpx.HTTPStatusError(
+                f"{self._provider_name} Messages API error {response.status_code}",
+                request=request,
+                response=response,
+            )
+        return response
+
+    async def _open_stream(
+        self, body: dict[str, Any]
+    ) -> tuple[httpx.Response, httpx.Request]:
         headers = {"Content-Type": "application/json"}
         headers.update(self._extra_headers)
         # Resolved per request: a short-lived credential may refresh between
@@ -159,15 +204,9 @@ class AnthropicMessagesProvider(BaseProvider):
             json=body,
         )
         response = await self._client.send(request, stream=True)
-        if response.status_code >= 400:
-            await response.aread()
-            await response.aclose()
-            raise httpx.HTTPStatusError(
-                f"{self._provider_name} Messages API error {response.status_code}",
-                request=request,
-                response=response,
-            )
-        return response
+        if self._response_observer is not None:
+            self._response_observer(response.headers, response.status_code)
+        return response, request
 
     def _remember_reasoning_rejection(self, body: dict[str, Any], field: str) -> None:
         """Record that this model refused a reasoning field, once it is proven.

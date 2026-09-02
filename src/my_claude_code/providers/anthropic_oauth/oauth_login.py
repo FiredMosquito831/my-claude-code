@@ -21,6 +21,8 @@ import httpx
 from .constants import (
     AUTHORIZE_URL,
     CLAUDE_CODE_CLIENT_ID,
+    LEGACY_TOKEN_URL,
+    OAUTH_REFRESH_BETA,
     OAUTH_SCOPES,
     PKCE_METHOD,
     REDIRECT_URI,
@@ -31,7 +33,12 @@ from .credentials import OAuthTokens, _tokens_from_payload, store_tokens
 
 
 class AnthropicOAuthLoginError(RuntimeError):
-    """Raised when the authorization-code exchange fails."""
+    """Raised when the authorization-code exchange fails.
+
+    ``detail`` is for text MCC wrote. A token endpoint's response body is
+    never passed here: it can echo the code, the verifier or a freshly issued
+    token, and this message reaches logs and an HTTP error response.
+    """
 
     def __init__(self, status_code: int, detail: str = "") -> None:
         self.status_code = status_code
@@ -99,17 +106,28 @@ async def exchange_code(
     code: str, verifier: str, state: str | None = None
 ) -> OAuthTokens:
     """Exchange an authorization code for a credential and store it."""
+    payload = _exchange_payload(code, verifier, state)
+    headers = {
+        "Content-Type": "application/json",
+        # Offset 180990503: the token endpoint receives this beta and no other.
+        "anthropic-beta": OAUTH_REFRESH_BETA,
+        "User-Agent": TOKEN_ENDPOINT_USER_AGENT,
+    }
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            TOKEN_URL,
-            json=_exchange_payload(code, verifier, state),
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": TOKEN_ENDPOINT_USER_AGENT,
-            },
-        )
+        response = await client.post(TOKEN_URL, json=payload, headers=headers)
+        if response.status_code in (301, 308, 404) and LEGACY_TOKEN_URL != TOKEN_URL:
+            # The 2.1.258 host migration, with the old host as the documented
+            # fallback. See ``constants.LEGACY_TOKEN_URL``.
+            response = await client.post(
+                LEGACY_TOKEN_URL, json=payload, headers=headers
+            )
     if response.status_code >= 400:
-        raise AnthropicOAuthLoginError(response.status_code, response.text[:200])
+        # Deliberately not the response body: see AnthropicOAuthLoginError.
+        raise AnthropicOAuthLoginError(
+            response.status_code,
+            "the pasted code was rejected -- it is single-use and short-lived, "
+            "so start the sign-in again and paste a fresh one",
+        )
 
     tokens = _tokens_from_payload(response.json(), source="mcc")
     if tokens is None:

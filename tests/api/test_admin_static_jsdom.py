@@ -2308,3 +2308,60 @@ def test_a_harness_whose_file_cannot_carry_the_record_says_so_on_its_card(
     assert cards["codex"]["defaulted"] == (
         "3 model(s) carry a value Codex CLI supplied because no provider published one"
     )
+
+
+# ---------------------------------------------------------------------------
+# The Claude subscription card
+# ---------------------------------------------------------------------------
+
+
+def test_subscription_card_reports_the_plan_and_both_expiries(
+    rendered: dict,
+) -> None:
+    live = rendered["anthropicOAuthCard"]["live"]
+
+    assert live["hidden"] is False
+    # ``textContent`` runs each term straight into its value, so these read as
+    # one word: the point is that the term and its value are both present and
+    # adjacent, which is what the definition list renders.
+    assert "Planmax" in live["text"]
+    assert "Rate-limit tierdefault_claude_max_5x" in live["text"]
+    assert "Refresh token expires" in live["text"]
+    assert "5-hour window used1.0" in live["text"]
+    # A reset arrives as unix seconds; the card shows the instant and keeps the
+    # raw value beside it, so nothing is silently reinterpreted.
+    assert "(1788393000)" in live["text"]
+
+
+def test_subscription_card_repeats_anthropics_own_limit_message(
+    rendered: dict,
+) -> None:
+    """Only ever repeated from a header Anthropic actually sent."""
+    live = rendered["anthropicOAuthCard"]["live"]
+
+    assert "You hit your 5-hour window" in live["text"]
+    assert any("5-hour window" in value for value in live["expired"])
+
+
+def test_subscription_card_says_not_yet_observed_before_any_response(
+    rendered: dict,
+) -> None:
+    unobserved = rendered["anthropicOAuthCard"]["unobserved"]
+
+    assert "not yet observed" in unobserved["text"]
+    assert "5-hour window used" not in unobserved["text"]
+    assert (
+        "no Anthropic response has carried a rate-limit header yet"
+        in (unobserved["text"])
+    )
+    # An expired access token and a credential without user:inference are both
+    # flagged rather than merely printed.
+    assert len(unobserved["expired"]) >= 2
+    assert "cannot answer requests" in unobserved["text"]
+
+
+def test_subscription_card_hides_itself_when_there_is_no_credential(
+    rendered: dict,
+) -> None:
+    assert rendered["anthropicOAuthCard"]["absent"]["hidden"] is True
+    assert rendered["anthropicOAuthCard"]["absent"]["text"] == ""

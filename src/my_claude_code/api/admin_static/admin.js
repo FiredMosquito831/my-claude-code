@@ -4388,13 +4388,18 @@ function buildAnthropicOAuthControl(wrapper) {
   warningText.textContent =
     "Anthropic does not permit routing requests through Free, Pro, or Max " +
     "plan credentials in third-party tools, and this provider additionally " +
-    "refuses any request that does not report cc_entrypoint=cli. Read " +
-    "docs/ANTHROPIC-SUBSCRIPTION.md before using either option below.";
+    "refuses any request that did not come from Claude Code or the Claude " +
+    "Agent SDK. Read docs/ANTHROPIC-SUBSCRIPTION.md before using either " +
+    "option below.";
   warning.appendChild(warningText);
 
   const status = document.createElement("div");
   status.className = "field-description";
   status.textContent = "Checking for available credentials...";
+
+  const details = document.createElement("dl");
+  details.className = "anthropic-oauth-details";
+  details.hidden = true;
 
   const importButton = document.createElement("button");
   importButton.type = "button";
@@ -4409,20 +4414,175 @@ function buildAnthropicOAuthControl(wrapper) {
 
   const buttons = [importButton, loginButton];
   importButton.addEventListener("click", () => {
-    importAnthropicOAuthClaudeCode(importButton, buttons, status);
+    importAnthropicOAuthClaudeCode(importButton, buttons, status, details);
   });
   loginButton.addEventListener("click", () => {
-    startAnthropicOAuthLogin(loginButton, buttons, status);
+    startAnthropicOAuthLogin(loginButton, buttons, status, details, paste);
   });
 
-  wrapper.append(warning, status, importButton, loginButton);
-  refreshAnthropicOAuthSources(importButton, status);
+  const paste = buildAnthropicOAuthPasteField();
+
+  wrapper.append(warning, status, details, importButton, loginButton, paste.root);
+  refreshAnthropicOAuthSources(importButton, status, details);
   return wrapper;
 }
 
-async function refreshAnthropicOAuthSources(importButton, status) {
+// The sign-in code used to be collected with a modal window prompt, which some
+// browsers suppress outright and which cannot show the warning the paste is
+// consenting to. An inline field can.
+function buildAnthropicOAuthPasteField() {
+  const root = document.createElement("div");
+  root.className = "anthropic-oauth-paste";
+  root.hidden = true;
+
+  const note = document.createElement("p");
+  note.className = "field-description";
+  note.textContent =
+    "Pasting this code stores a Claude subscription credential in MCC and " +
+    "uses it for Claude Code traffic, which Anthropic's terms do not permit " +
+    "for third-party tools. See docs/ANTHROPIC-SUBSCRIPTION.md.";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.placeholder = "Paste the code Anthropic showed (code#state)";
+
+  const submit = document.createElement("button");
+  submit.type = "button";
+  submit.className = "primary-button";
+  submit.textContent = "Finish sign-in";
+
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "secondary-button";
+  cancel.textContent = "Cancel";
+
+  root.append(note, input, submit, cancel);
+  return { root, note, input, submit, cancel };
+}
+
+function formatOAuthInstant(seconds) {
+  if (seconds === null || seconds === undefined) return null;
+  const when = new Date(seconds * 1000);
+  if (Number.isNaN(when.getTime())) return null;
+  const deltaMs = when.getTime() - Date.now();
+  const minutes = Math.round(Math.abs(deltaMs) / 60000);
+  const relative =
+    minutes < 60
+      ? `${minutes} min`
+      : `${Math.round(minutes / 60)} h`;
+  const suffix = deltaMs < 0 ? `${relative} ago` : `in ${relative}`;
+  return { text: `${when.toLocaleString()} (${suffix})`, expired: deltaMs < 0 };
+}
+
+// Anthropic sends the reset headers as unix seconds. Rendering the number
+// verbatim would be honest and unreadable; rendering the same instant in the
+// viewer's own clock is the same fact, legible. Anything that is not a bare
+// integer is printed exactly as it arrived.
+function formatOAuthReset(value) {
+  if (typeof value !== "string" || !/^\d{9,13}$/.test(value)) return value;
+  const seconds = value.length > 10 ? Number(value) / 1000 : Number(value);
+  const when = new Date(seconds * 1000);
+  if (Number.isNaN(when.getTime())) return value;
+  return `${when.toLocaleString()} (${value})`;
+}
+
+function appendOAuthDetail(list, term, value, options) {
+  const dt = document.createElement("dt");
+  dt.textContent = term;
+  const dd = document.createElement("dd");
+  dd.textContent = value;
+  if (options && options.warn) dd.className = "value-expired";
+  list.append(dt, dd);
+}
+
+// Never invents a window. Every figure below is either a string Anthropic sent
+// on a real response or the literal "not yet observed".
+function renderAnthropicOAuthDetails(details, sources) {
+  details.replaceChildren();
+  const tokens = sources.mcc.available ? sources.mcc : sources.claude_code;
+  if (!tokens || !tokens.available) {
+    details.hidden = true;
+    return;
+  }
+  details.hidden = false;
+
+  appendOAuthDetail(details, "Plan", tokens.subscription_type || "unknown");
+  if (tokens.rate_limit_tier) {
+    appendOAuthDetail(details, "Rate-limit tier", tokens.rate_limit_tier);
+  }
+  appendOAuthDetail(details, "Credential source", tokens.source || "unknown");
+
+  const access = formatOAuthInstant(tokens.expires_at);
+  if (access) {
+    appendOAuthDetail(details, "Access token expires", access.text, {
+      warn: access.expired,
+    });
+  }
+  const refresh = formatOAuthInstant(tokens.refresh_token_expires_at);
+  if (refresh) {
+    appendOAuthDetail(details, "Refresh token expires", refresh.text, {
+      warn: refresh.expired,
+    });
+  }
+  if (tokens.scopes && tokens.scopes.length) {
+    appendOAuthDetail(details, "Scopes", tokens.scopes.join(" "), {
+      warn: !tokens.has_inference_scope,
+    });
+    if (!tokens.has_inference_scope) {
+      appendOAuthDetail(
+        details,
+        "Warning",
+        "This credential is missing user:inference and cannot answer requests.",
+        { warn: true },
+      );
+    }
+  }
+
+  const windows = sources.windows || {};
+  if (!windows.observed) {
+    appendOAuthDetail(
+      details,
+      "Usage windows",
+      "not yet observed -- no Anthropic response has carried a rate-limit header yet",
+    );
+    return;
+  }
+  appendOAuthDetail(details, "5-hour window used", windows.five_hour_utilization);
+  appendOAuthDetail(details, "5-hour window resets", formatOAuthReset(windows.five_hour_reset));
+  appendOAuthDetail(details, "Weekly window used", windows.weekly_utilization);
+  appendOAuthDetail(details, "Weekly window resets", formatOAuthReset(windows.weekly_reset));
+  appendOAuthDetail(details, "Overage", windows.overage_status);
+  if (windows.reset && windows.reset !== "not yet observed") {
+    appendOAuthDetail(details, "Unified reset", formatOAuthReset(windows.reset));
+  }
+  const limited =
+    windows.status === "session-limit-reached" ||
+    windows.status === "weekly-limit-reached";
+  if (limited) {
+    const which =
+      windows.status === "session-limit-reached" ? "5-hour" : "weekly";
+    const resets = formatOAuthReset(
+      windows.status === "session-limit-reached"
+        ? windows.five_hour_reset
+        : windows.weekly_reset,
+    );
+    appendOAuthDetail(
+      details,
+      "Anthropic says",
+      `You hit your ${which} window; it resets at ${resets}.`,
+      { warn: true },
+    );
+  } else if (windows.status && windows.status !== "not yet observed") {
+    appendOAuthDetail(details, "Anthropic says", windows.status);
+  }
+}
+
+async function refreshAnthropicOAuthSources(importButton, status, details) {
   try {
     const sources = await api("/admin/api/anthropic-oauth/sources");
+    if (details) renderAnthropicOAuthDetails(details, sources);
     const mccNote = sources.mcc.available
       ? `An MCC credential is already stored (${sources.mcc.masked_token}).`
       : "No credential stored in MCC yet.";
@@ -4442,7 +4602,7 @@ async function refreshAnthropicOAuthSources(importButton, status) {
   }
 }
 
-async function importAnthropicOAuthClaudeCode(button, buttons, status) {
+async function importAnthropicOAuthClaudeCode(button, buttons, status, details) {
   buttons.forEach((candidate) => {
     candidate.disabled = true;
   });
@@ -4466,11 +4626,11 @@ async function importAnthropicOAuthClaudeCode(button, buttons, status) {
     buttons.forEach((candidate) => {
       candidate.disabled = false;
     });
-    refreshAnthropicOAuthSources(buttons[0], status);
+    refreshAnthropicOAuthSources(buttons[0], status, details);
   }
 }
 
-async function startAnthropicOAuthLogin(button, buttons, status) {
+async function startAnthropicOAuthLogin(button, buttons, status, details, paste) {
   buttons.forEach((candidate) => {
     candidate.disabled = true;
   });
@@ -4484,20 +4644,18 @@ async function startAnthropicOAuthLogin(button, buttons, status) {
     window.open(initiate.authorize_url, "_blank", "noopener");
     showMessage(
       "Anthropic OAuth: approve access in the new tab, then paste the code " +
-        "it shows back here.",
+        "it shows into the field below.",
       "warn",
     );
-    const pasted = window.prompt(
-      "Paste the code Anthropic showed after you approved access:",
-    );
-    if (!pasted || !pasted.trim()) {
+    const pasted = await promptForAnthropicOAuthCode(paste);
+    if (!pasted) {
       status.textContent = "Sign-in cancelled: no code entered.";
       return;
     }
     const result = await api("/admin/api/anthropic-oauth/complete", {
       method: "POST",
       body: JSON.stringify({
-        pasted_code: pasted.trim(),
+        pasted_code: pasted,
         verifier: initiate.verifier,
       }),
     });
@@ -4514,8 +4672,29 @@ async function startAnthropicOAuthLogin(button, buttons, status) {
     buttons.forEach((candidate) => {
       candidate.disabled = false;
     });
-    refreshAnthropicOAuthSources(buttons[0], status);
+    refreshAnthropicOAuthSources(buttons[0], status, details);
   }
+}
+
+function promptForAnthropicOAuthCode(paste) {
+  if (!paste) return Promise.resolve(null);
+  paste.root.hidden = false;
+  paste.input.value = "";
+  paste.input.focus();
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      paste.root.hidden = true;
+      paste.submit.onclick = null;
+      paste.cancel.onclick = null;
+      paste.input.onkeydown = null;
+      resolve(value);
+    };
+    paste.submit.onclick = () => finish(paste.input.value.trim() || null);
+    paste.cancel.onclick = () => finish(null);
+    paste.input.onkeydown = (event) => {
+      if (event.key === "Enter") finish(paste.input.value.trim() || null);
+    };
+  });
 }
 
 async function importChatGPTOAuthCodexTokens(button) {

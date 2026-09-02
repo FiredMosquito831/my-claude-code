@@ -129,6 +129,9 @@ from my_claude_code.core.request_log import (
     RequestLogStore,
     store_from_settings,
 )
+from my_claude_code.providers.anthropic_oauth.constants import (
+    INFERENCE_SCOPE as ANTHROPIC_INFERENCE_SCOPE,
+)
 from my_claude_code.providers.anthropic_oauth.credentials import (
     OAuthTokens,
     claude_credentials_path,
@@ -146,6 +149,9 @@ from my_claude_code.providers.anthropic_oauth.oauth_login import (
 )
 from my_claude_code.providers.anthropic_oauth.oauth_login import (
     exchange_code as exchange_anthropic_oauth_code,
+)
+from my_claude_code.providers.anthropic_oauth.rate_limit_headers import (
+    OBSERVER as ANTHROPIC_RATE_LIMIT_OBSERVER,
 )
 from my_claude_code.providers.chatgpt_oauth.browser_login import (
     ChatGPTOAuthBrowserUnavailableError,
@@ -1856,16 +1862,53 @@ async def chatgpt_oauth_import_codex(request: Request):
     )
 
 
+# The literal the card prints wherever a rate-limit window has no observed
+# value. "You hit your 5-hour limit" is a claim MCC may only repeat from a
+# header Anthropic actually sent; where no response has carried one, the honest
+# answer is that nobody has measured, and it is spelled the same way every time
+# so nothing downstream has to guess whether a blank meant zero.
+NOT_YET_OBSERVED = "not yet observed"
+
+
 class _AnthropicOAuthSourceInfo(BaseModel):
     available: bool
     masked_token: str = ""
     expires_at: int | None = None
     subscription_type: str | None = None
+    # Parsed away by every release before 6.36.0, and both are exactly what
+    # the card needs: one says whether a refresh can still save this
+    # credential, the other names the plan's rate-limit tier.
+    refresh_token_expires_at: int | None = None
+    rate_limit_tier: str | None = None
+    scopes: list[str] = []
+    has_inference_scope: bool = False
+    source: str = ""
+
+
+class _AnthropicOAuthWindows(BaseModel):
+    """Anthropic's unified rate-limit headers, as last received.
+
+    Every field is either a string Anthropic sent or :data:`NOT_YET_OBSERVED`.
+    Nothing here is computed from a clock.
+    """
+
+    observed: bool = False
+    observed_at: float | None = None
+    status: str = NOT_YET_OBSERVED
+    reset: str = NOT_YET_OBSERVED
+    five_hour_utilization: str = NOT_YET_OBSERVED
+    five_hour_reset: str = NOT_YET_OBSERVED
+    weekly_utilization: str = NOT_YET_OBSERVED
+    weekly_reset: str = NOT_YET_OBSERVED
+    overage_status: str = NOT_YET_OBSERVED
+    overage_reset: str = NOT_YET_OBSERVED
+    usage_limit: str = NOT_YET_OBSERVED
 
 
 class _AnthropicOAuthSourcesResponse(BaseModel):
     claude_code: _AnthropicOAuthSourceInfo
     mcc: _AnthropicOAuthSourceInfo
+    windows: _AnthropicOAuthWindows = _AnthropicOAuthWindows()
 
 
 def _anthropic_oauth_source_info(
@@ -1878,6 +1921,38 @@ def _anthropic_oauth_source_info(
         masked_token=mask_credential_label(tokens.access_token),
         expires_at=tokens.expires_at,
         subscription_type=tokens.subscription_type,
+        refresh_token_expires_at=tokens.refresh_token_expires_at,
+        rate_limit_tier=tokens.rate_limit_tier,
+        scopes=list(tokens.scopes),
+        # Offset 183645139 of Claude Code 2.1.258: this is the scope its own
+        # gate reads before it will send an inference request at all.
+        has_inference_scope=ANTHROPIC_INFERENCE_SCOPE in tokens.scopes,
+        source=tokens.source,
+    )
+
+
+def _anthropic_oauth_windows() -> _AnthropicOAuthWindows:
+    """Report the last observed rate-limit headers, or that there are none."""
+    snapshot = ANTHROPIC_RATE_LIMIT_OBSERVER.latest
+    if snapshot is None:
+        return _AnthropicOAuthWindows()
+    values = snapshot.values
+
+    def read(name: str) -> str:
+        return values.get(name, NOT_YET_OBSERVED)
+
+    return _AnthropicOAuthWindows(
+        observed=True,
+        observed_at=snapshot.observed_at,
+        status=read("anthropic-ratelimit-unified-status"),
+        reset=read("anthropic-ratelimit-unified-reset"),
+        five_hour_utilization=read("anthropic-ratelimit-unified-5h-utilization"),
+        five_hour_reset=read("anthropic-ratelimit-unified-5h-reset"),
+        weekly_utilization=read("anthropic-ratelimit-unified-7d-utilization"),
+        weekly_reset=read("anthropic-ratelimit-unified-7d-reset"),
+        overage_status=read("anthropic-ratelimit-unified-overage-status"),
+        overage_reset=read("anthropic-ratelimit-unified-overage-reset"),
+        usage_limit=read("anthropic-usage-limit"),
     )
 
 
@@ -1893,6 +1968,7 @@ async def anthropic_oauth_sources(request: Request):
     return _AnthropicOAuthSourcesResponse(
         claude_code=_anthropic_oauth_source_info(claude_code_tokens),
         mcc=_anthropic_oauth_source_info(mcc_tokens),
+        windows=_anthropic_oauth_windows(),
     )
 
 

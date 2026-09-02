@@ -72,6 +72,22 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     ),
     (
         "my_claude_code.api.admin_routes",
+        "my_claude_code.providers.anthropic_oauth.constants",
+    ): (
+        "Owner: admin dashboard Anthropic subscription card. "
+        "Reason: the card flags a credential missing user:inference, and the "
+        "name of that scope belongs to the provider that reads it."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
+        "my_claude_code.providers.anthropic_oauth.rate_limit_headers",
+    ): (
+        "Owner: admin dashboard Anthropic subscription card. "
+        "Reason: the card reports the usage windows Anthropic sent on a real "
+        "response, and the provider is what observed them."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
         "my_claude_code.providers.anthropic_oauth.oauth_login",
     ): (
         "Owner: admin dashboard Anthropic subscription OAuth login API. "

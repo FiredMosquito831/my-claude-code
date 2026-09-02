@@ -266,10 +266,11 @@ class Settings(BaseSettings):
     anthropic_oauth_base_url: str = Field(
         default="", validation_alias="ANTHROPIC_OAUTH_UPSTREAM_BASE_URL"
     )
-    # Refuse any request that did not come from the Claude Code CLI. Turning
-    # this off routes Agent SDK and other harness traffic onto the
-    # subscription credential, which is the case Anthropic's policy names
-    # explicitly. See docs/ANTHROPIC-SUBSCRIPTION.md.
+    # Refuse any request that did not come from one of Anthropic's own
+    # clients -- the Claude Code CLI or the Claude Agent SDK. Turning this off
+    # routes every other harness onto the subscription credential, which is
+    # the case Anthropic's policy names explicitly. See
+    # docs/ANTHROPIC-SUBSCRIPTION.md.
     anthropic_oauth_require_claude_code: bool = Field(
         default=True, validation_alias="ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE"
     )
