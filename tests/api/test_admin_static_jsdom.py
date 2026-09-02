@@ -1729,6 +1729,57 @@ def test_the_status_panel_offers_undo_after_a_pause(rendered) -> None:
     assert routing["resumeSentence"].startswith("Resumed ")
 
 
+def test_a_failed_pause_announces_a_failure_in_the_route_status_panel(
+    rendered,
+) -> None:
+    """A refused pause used to be silent where the operator was looking.
+
+    ``showMessage`` writes into #messageArea at the top of the page; the pause
+    control speaks through #routeStatus beside the rail. Reporting only into
+    the first left the row snapping back with no explanation at all.
+    """
+    routing = rendered["routing"]
+
+    assert routing["refusedPauseWasPausedBefore"] is False
+    assert routing["refusedPauseSentence"].startswith("Could not pause ")
+    assert "nothing changed" in routing["refusedPauseSentence"]
+    assert "read-only" in routing["refusedPauseSentence"]
+    # No Undo: nothing happened, so there is nothing to undo.
+    assert routing["refusedPausePanelButtons"] == ["Dismiss"]
+    # The top-of-page message area still gets it too.
+    assert "read-only" in routing["refusedPauseMessageArea"]
+
+
+def test_a_failed_pause_leaves_the_row_in_its_previous_state(rendered) -> None:
+    """The row tells the truth about the server, both ways it can fail."""
+    routing = rendered["routing"]
+
+    assert routing["refusedPauseRowStillUnpaused"] is True
+    assert routing["refusedPauseButtonLabel"] == "Pause"
+    assert routing["refusedPauseButtonDisabled"] is False
+
+    assert routing["failedPauseSentence"].startswith("Could not pause ")
+    assert "the server is restarting" in routing["failedPauseSentence"]
+    assert routing["failedPausePanelButtons"] == ["Dismiss"]
+    assert routing["failedPauseRowStillUnpaused"] is True
+    assert routing["failedPauseButtonLabel"] == "Pause"
+
+
+def test_undo_disables_the_row_control_while_it_is_in_flight(rendered) -> None:
+    """Undo used to pass ``button: null``, leaving the row's toggle live.
+
+    Two writes for the same ref could then be in flight together and land in
+    either order -- the exact race the first click's disable guard exists to
+    prevent.
+    """
+    routing = rendered["routing"]
+
+    assert routing["beforeUndoRowPaused"] is True
+    assert routing["rowToggleDisabledDuringUndo"] is True
+    assert routing["rowToggleEnabledAfterUndo"] is False
+    assert routing["afterUndoRowPaused"] is False
+
+
 def test_the_deadline_calculator_stops_counting_a_paused_model(rendered) -> None:
     """The calculator claims to reproduce the server for your own routes."""
     routing = rendered["routing"]

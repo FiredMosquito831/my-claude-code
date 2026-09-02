@@ -1456,6 +1456,7 @@ async function toggleRoutePause(modelKey, ref, paused, button) {
       body: JSON.stringify({ model_key: modelKey, model_ref: ref, paused }),
     });
     if ((result.errors || []).length) {
+      announceRoutePauseFailure(modelKey, ref, paused, result.errors.join("; "));
       showMessage(result.errors.join("; "), "error");
       return;
     }
@@ -1470,14 +1471,35 @@ async function toggleRoutePause(modelKey, ref, paused, button) {
         ? `Paused ${ref} on the ${routeLabelFor(modelKey)} route. It is skipped without spending an attempt, and still shows in the request log as not tried.`
         : `Resumed ${ref} on the ${routeLabelFor(modelKey)} route.`,
       "Undo",
-      () => toggleRoutePause(modelKey, ref, !paused, null),
+      // The Undo POST must disable the row's own toggle exactly as the first
+      // click did: passing null left it live, so a click on the row could
+      // race the Undo and the two writes could land in either order.
+      () => toggleRoutePause(modelKey, ref, !paused, button),
     );
   } catch (error) {
+    announceRoutePauseFailure(modelKey, ref, paused, error.message);
     showMessage(error.message, "error");
   } finally {
     if (button) button.disabled = false;
     syncRoutePauseUi();
   }
+}
+
+/** Say a failed pause failed, in the panel the pause control speaks through.
+ *
+ * The failure used to go only to #messageArea, at the top of the page: the
+ * pause panel said nothing, so the row simply snapped back to its old state
+ * with no explanation. No Undo button -- there is nothing to undo, because
+ * nothing reached the file; the `finally` repaint has already put the row
+ * back into its true state.
+ */
+function announceRoutePauseFailure(modelKey, ref, paused, reason) {
+  const verb = paused ? "pause" : "resume";
+  const detail = (reason || "").trim();
+  announceRoute(
+    `Could not ${verb} ${ref} on the ${routeLabelFor(modelKey)} route -- nothing changed.${detail ? ` ${detail}` : ""}`,
+    null,
+  );
 }
 
 /** One live region for the whole Model Config page: drag and pause both.

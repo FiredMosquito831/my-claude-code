@@ -13,7 +13,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from my_claude_code.application.route_health import RouteHealthRegistry
+from my_claude_code.application.routing import ModelRouter
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.anthropic.models import MessagesRequest
 from tests.api.support import create_test_app
 
 PAUSE_ENDPOINT = "/admin/api/config/route-pause"
@@ -263,3 +266,65 @@ def test_a_paused_ref_is_pruned_when_it_leaves_the_chain(monkeypatch, tmp_path):
     # look for a live line rather than for the key anywhere in the text.
     lines = (tmp_path / ".fcc" / ".env").read_text(encoding="utf-8").splitlines()
     assert not [row for row in lines if row.startswith("MODEL_OPUS_PAUSED=")]
+
+
+def test_the_next_plan_after_a_pause_apply_honours_it(monkeypatch, tmp_path):
+    """The whole point of the immediate write, asserted end to end.
+
+    The POST is not allowed to return until the paused set the router reads is
+    the new one: ``replace`` publishes the generation synchronously before it
+    schedules anything, so a plan resolved after the response has seen it.
+    This is also the guard on the 6.35.1 speed fix -- suppressing the provider
+    sweep must not suppress the generation swap that makes a pause visible.
+    """
+
+    _isolated_home(monkeypatch, tmp_path)
+    app = _app()
+    client = _local_client(app)
+    manager = app.state.services.admin.provider_manager
+    request = MessagesRequest.model_validate(
+        {"model": "claude-opus-4", "messages": [{"role": "user", "content": "hi"}]}
+    )
+
+    # The route has to live in the managed env file, not just in the Settings
+    # object this app was built with: every apply rebuilds Settings from disk,
+    # so an in-memory-only chain would vanish on the first write.
+    applied = client.post(
+        "/admin/api/config/apply",
+        json={
+            "values": {
+                "OPENROUTER_API_KEY": "open-router-key",
+                "MODEL_OPUS": "open_router/opus-primary",
+                "MODEL_OPUS_FALLBACKS": "open_router/one,open_router/two",
+            }
+        },
+    )
+    assert applied.json()["errors"] == []
+
+    before = ModelRouter(manager.current_settings()).resolve_messages_plan(request)
+    assert before.model_refs() == (
+        "open_router/opus-primary",
+        "open_router/one",
+        "open_router/two",
+    )
+    assert before.paused_refs == frozenset()
+
+    response = client.post(
+        PAUSE_ENDPOINT,
+        json={
+            "model_key": "MODEL_OPUS",
+            "model_ref": "open_router/one",
+            "paused": True,
+        },
+    )
+
+    assert response.status_code == 200
+    plan = ModelRouter(manager.current_settings()).resolve_messages_plan(request)
+
+    # The ref keeps its place in the chain -- that is what makes it reportable.
+    assert "open_router/one" in plan.model_refs()
+    assert plan.paused_refs == frozenset({"open_router/one"})
+    # And it is not offered to the executor.
+    refs = plan.model_refs()
+    usable = RouteHealthRegistry().usable_indexes(refs, paused=plan.paused_refs)
+    assert refs.index("open_router/one") not in usable

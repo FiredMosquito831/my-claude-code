@@ -16,6 +16,7 @@ import my_claude_code.messaging.workflow as messaging_workflow_module
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.ports import StopResult
+from my_claude_code.config.admin.manifest import update_affects_providers
 from my_claude_code.config.admin.persistence import (
     PreparedAdminUpdate,
     commit_prepared_admin_update,
@@ -235,10 +236,16 @@ class ApplicationRuntime:
         def commit() -> None:
             result.update(self._commit_admin_update(prepared))
 
+        # A routing-only write -- a pause is the whole of it today -- cannot
+        # change a provider client or its catalogue, so it must not pay for a
+        # rebuild of every provider and a full /models sweep. The generation
+        # swap itself is kept: it costs under a millisecond and it is what
+        # makes the new paused set visible to the very next plan.
         await self.provider_manager.replace(
             prepared.settings,
             commit=commit,
             reason="admin_apply",
+            background_refresh=update_affects_providers(updates),
         )
         self._pending_fields = []
         result["restart"] = self._restart_metadata((), prepared.settings)

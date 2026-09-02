@@ -1631,8 +1631,11 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   request log under <em>not tried</em> with the reason
                   <em>paused</em> &mdash; so a paused route is still readable. A pause
                   takes effect immediately, with no <em>Apply</em>, and the panel at the
-                  top of this page offers an <em>Undo</em>. Pausing is scoped to one
-                  route: the same model paused on Opus keeps serving Sonnet.
+                  top of this page offers an <em>Undo</em>. If it fails, that same panel
+                  says so and the row returns to the state it was really in.
+                  <strong>Pausing an entry on one route does not pause the same model on
+                  other routes.</strong> A ref that appears in two chains is two entries;
+                  pause it on each route you want it off.
                   <strong>Pausing is not hiding.</strong> Hiding a model on the Models
                   page only changes what appears in listings and never changes routing;
                   pausing only changes routing and never changes listings.

@@ -1234,6 +1234,10 @@ const PAUSE_KEY_BY_MODEL = {
 const pausedByKey = new Map();
 const fetchUrls = [];
 const fetchBodies = [];
+// Pause-route fault injection. Null means the route behaves normally.
+let pauseRefusal = null;
+let pauseHttpFailure = null;
+let pauseGate = null;
 // POST and GET share /admin/api/custom-providers, so the create response is
 // emulated rather than routed. It starts as the failure shape because the
 // contract under test is that a failed discovery cannot render as a healthy
@@ -1275,6 +1279,29 @@ window.fetch = async (url, options = {}) => {
     body = customCreateResult;
   }
   if (String(url).split("?")[0] === "/admin/api/config/route-pause") {
+    // Held open on request, so the in-flight state of the row's own toggle is
+    // observable rather than inferred from the order of two awaits.
+    if (pauseGate) await pauseGate;
+    // A refusal the server states in the response body: applied is false and
+    // nothing reached the file, so the row must go back to what it was.
+    if (pauseRefusal) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ applied: false, errors: [pauseRefusal] }),
+        text: async () => "",
+      };
+    }
+    // A transport-level failure: `api()` throws, so this is the catch path.
+    if (pauseHttpFailure) {
+      return {
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error",
+        json: async () => ({ detail: pauseHttpFailure }),
+        text: async () => pauseHttpFailure,
+      };
+    }
     // Emulated rather than routed: the response has to reflect the request,
     // because the page patches its own state from it instead of refetching
     // the whole config payload.
@@ -3190,6 +3217,63 @@ if (routingLink) {
     .dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   await settle();
   routing.haikuPrimaryResumed = !haikuPrimaryNode.classList.contains("is-paused");
+
+  // --- a refused pause says so in the pause panel, not only at the top of
+  //     the page, and the row goes back to the state it was really in
+  const opusToggle = () => nodeFor(opusFirstRow).querySelector(".route-pause-toggle");
+  const messageArea = doc.getElementById("messageArea");
+  routing.refusedPauseWasPausedBefore = nodeFor(opusFirstRow).classList.contains(
+    "is-paused",
+  );
+  pauseRefusal = "MODEL_OPUS_PAUSED: the managed env file is read-only.";
+  opusToggle().dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await settle();
+  routing.refusedPauseSentence = statusText();
+  routing.refusedPausePanelButtons = Array.from(
+    statusPanel.querySelectorAll("button"),
+  ).map((button) => button.textContent.trim());
+  routing.refusedPauseMessageArea = messageArea.textContent.trim();
+  routing.refusedPauseRowStillUnpaused = !nodeFor(opusFirstRow).classList.contains(
+    "is-paused",
+  );
+  routing.refusedPauseButtonLabel = opusToggle().textContent.trim();
+  routing.refusedPauseButtonDisabled = opusToggle().disabled;
+  pauseRefusal = null;
+
+  // --- and so does a pause that fails in transport
+  pauseHttpFailure = "the server is restarting";
+  opusToggle().dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await settle();
+  routing.failedPauseSentence = statusText();
+  routing.failedPausePanelButtons = Array.from(
+    statusPanel.querySelectorAll("button"),
+  ).map((button) => button.textContent.trim());
+  routing.failedPauseRowStillUnpaused = !nodeFor(opusFirstRow).classList.contains(
+    "is-paused",
+  );
+  routing.failedPauseButtonLabel = opusToggle().textContent.trim();
+  pauseHttpFailure = null;
+
+  // --- Undo disables the row's own toggle for the whole of its POST
+  opusToggle().dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await settle();
+  routing.beforeUndoRowPaused = nodeFor(opusFirstRow).classList.contains("is-paused");
+  const undoAgain = Array.from(statusPanel.querySelectorAll("button")).find(
+    (button) => button.textContent.trim() === "Undo",
+  );
+  let releaseUndo = () => {};
+  pauseGate = new Promise((resolve) => {
+    releaseUndo = resolve;
+  });
+  undoAgain.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  await settle();
+  // Still in flight: the gate has not been released.
+  routing.rowToggleDisabledDuringUndo = opusToggle().disabled;
+  releaseUndo();
+  pauseGate = null;
+  await settle();
+  routing.rowToggleEnabledAfterUndo = opusToggle().disabled;
+  routing.afterUndoRowPaused = nodeFor(opusFirstRow).classList.contains("is-paused");
 
 
   // --- the panel is toggled by `hidden`, never by style.display

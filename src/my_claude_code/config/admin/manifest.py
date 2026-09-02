@@ -206,6 +206,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "listings and never changes routing. Written by the Pause "
             "button on Model Config rather than typed here."
         ),
+        affects_providers=False,
     ),
     ConfigFieldSpec(
         "MODEL_FABLE",
@@ -237,6 +238,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "listings and never changes routing. Written by the Pause "
             "button on Model Config rather than typed here."
         ),
+        affects_providers=False,
     ),
     ConfigFieldSpec(
         "MODEL_OPUS",
@@ -268,6 +270,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "listings and never changes routing. Written by the Pause "
             "button on Model Config rather than typed here."
         ),
+        affects_providers=False,
     ),
     ConfigFieldSpec(
         "MODEL_SONNET",
@@ -299,6 +302,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "listings and never changes routing. Written by the Pause "
             "button on Model Config rather than typed here."
         ),
+        affects_providers=False,
     ),
     ConfigFieldSpec(
         "MODEL_HAIKU",
@@ -330,6 +334,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "listings and never changes routing. Written by the Pause "
             "button on Model Config rather than typed here."
         ),
+        affects_providers=False,
     ),
     ConfigFieldSpec(
         "MODEL_VISION",
@@ -361,6 +366,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "listings and never changes routing. Written by the Pause "
             "button on Model Config rather than typed here."
         ),
+        affects_providers=False,
     ),
     ConfigFieldSpec(
         "MODEL_VISIBILITY_ALLOW",
@@ -1813,6 +1819,30 @@ FIELDS: tuple[ConfigFieldSpec, ...] = tuple(
     )
 )
 FIELD_BY_KEY = {field.key: field for field in FIELDS}
+
+
+def update_affects_providers(updates: Iterable[str]) -> bool:
+    """Whether an admin update can change a provider client or its catalogue.
+
+    Read off the manifest, never a key list written here: each field declares
+    ``affects_providers`` beside its own label and help text, so a key added
+    later is classified where it is defined. A key the manifest does not own
+    answers ``True`` -- the expensive answer is the safe one.
+
+    The six ``MODEL_*_PAUSED`` keys are the only fields that answer ``False``
+    today. A pause is read off ``Settings`` at plan time and never reaches
+    ``create_provider``, so rebuilding every provider and re-querying every
+    ``/models`` for one cannot change what the pause does; it only made the
+    click cost seconds.
+    """
+
+    keys = tuple(updates)
+    if not keys:
+        return False
+    return any(
+        FIELD_BY_KEY[key].affects_providers if key in FIELD_BY_KEY else True
+        for key in keys
+    )
 
 
 def field_input_key(field: ConfigFieldSpec) -> str | None:

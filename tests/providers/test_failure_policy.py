@@ -18,7 +18,12 @@ from my_claude_code.core.diagnostics import (
 )
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.openai_responses.errors import openai_error_type_for_failure
-from my_claude_code.providers.failure_policy import classify_provider_failure
+from my_claude_code.providers.failure_policy import (
+    QUOTA_PHRASES,
+    classify_provider_failure,
+    is_quota_error,
+    quota_phrase,
+)
 
 
 def _openai_status_error(
@@ -679,7 +684,6 @@ def test_an_echoed_request_containing_the_word_credits_is_not_quota() -> None:
         ),
         ("openai", {"error": {"code": "insufficient_quota"}}),
         ("generic_quota", {"error": {"message": "Quota exceeded for this key."}}),
-        ("generic_billing", {"error": {"message": "billing account suspended"}}),
     ),
 )
 def test_every_measured_billing_phrase_classifies_as_quota(vendor, body) -> None:
@@ -695,3 +699,25 @@ def test_a_403_without_a_billing_phrase_is_still_authentication() -> None:
     failure = _classify(_http_status_error(403, "Forbidden: key not permitted"))
 
     assert failure.kind is FailureKind.AUTHENTICATION
+
+
+def test_the_bare_word_billing_is_not_a_quota_phrase() -> None:
+    """The 6.34.0 list carried the bare word ``billing``. It had to go.
+
+    The condition on this classifier was no false positives, and one bare word
+    cannot meet it: a provider that points at its own documentation in an
+    ordinary rejection uses the word without saying anything at all about the
+    account's balance. Classifying that as ``quota`` would bench the whole key
+    pool for a request that was merely malformed.
+    """
+    body = {
+        "error": {
+            "message": "Unsupported parameter. See our billing documentation for limits.",
+            "type": "invalid_request_error",
+        }
+    }
+
+    assert quota_phrase(_quota_body_error(400, body)) is None
+    assert is_quota_error(_quota_body_error(400, body)) is False
+    assert _classify(_quota_body_error(400, body)).kind is FailureKind.INVALID_REQUEST
+    assert "billing" not in QUOTA_PHRASES

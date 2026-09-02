@@ -156,6 +156,14 @@ class ProviderModelDiscovery:
         failures: list[ProviderDiscoveryFailure] = []
         tasks: dict[str, asyncio.Task[frozenset[ProviderModelInfo]]] = {}
         for provider_id in provider_ids:
+            # Resolving a provider builds an SSL context and an HTTP client --
+            # tens of milliseconds each, entirely synchronous. Without a
+            # suspension point the whole loop is one uninterruptible block on
+            # the event loop: /v1/messages stalls behind it, and the
+            # ``task.cancel()`` in ProviderRuntimeManager._cancel_refresh
+            # cannot land until it finishes, so the next config apply waits
+            # out a sweep it already asked to abandon.
+            await asyncio.sleep(0)
             try:
                 provider = self._provider_resolver(provider_id)
             except Exception as exc:

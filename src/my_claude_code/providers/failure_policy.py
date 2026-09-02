@@ -88,9 +88,17 @@ _QUOTA_STATUS = 402
 #:   -- Novita, which answers with the machine code in ``code``.
 #: * ``quota exceeded`` / ``insufficient_quota`` -- the OpenAI-compatible
 #:   machine codes.
-#: * ``payment required`` / ``billing`` -- the generic gateway wordings.
+#: * ``payment required`` -- the generic gateway wording.
 #: * ``out of credits`` / ``credit balance is too low`` -- Anthropic's own.
 #: * ``creditserror`` -- OpenCode Go's error class name, lowercased.
+#:
+#: The bare word ``billing`` was on this list from 6.34.0 and was removed in
+#: 6.35.1: it broke the rule the paragraph above states. It matches "see our
+#: billing documentation for limits" in an ordinary 400, which would classify
+#: a merely malformed request as ``quota`` and bench the whole key pool. It
+#: is not replaced by a narrower "billing ..." phrase because no provider
+#: wording was on hand to justify one; a phrase is added here only with a
+#: measured upstream body behind it.
 QUOTA_PHRASES: tuple[str, ...] = (
     "insufficient credits",
     "purchase more credits",
@@ -100,7 +108,6 @@ QUOTA_PHRASES: tuple[str, ...] = (
     "quota exceeded",
     "insufficient_quota",
     "payment required",
-    "billing",
     "out of credits",
     "credit balance is too low",
     "creditserror",

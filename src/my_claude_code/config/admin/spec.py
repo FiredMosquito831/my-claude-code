@@ -63,3 +63,9 @@ class ConfigFieldSpec:
     # Published so the browser can show the bound as a hint beside the input
     # instead of appending it to the end of the help text.
     range_hint: str = ""
+    # Whether changing this field can alter a provider client or its
+    # catalogue. Defaults True: an unknown or newly added key rebuilds the
+    # provider generation and re-sweeps discovery, which is slow but correct.
+    # Only a field the provider layer demonstrably never reads sets this
+    # False -- see ``update_affects_providers``.
+    affects_providers: bool = True
