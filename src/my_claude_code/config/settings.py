@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .constants import (
     ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+    CATALOGUE_FETCH_TIMEOUT_SECONDS,
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
     CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT,
@@ -1184,6 +1185,15 @@ class Settings(BaseSettings):
     server_graceful_shutdown_seconds: float = Field(
         default=SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
         validation_alias="SERVER_GRACEFUL_SHUTDOWN_SECONDS",
+    )
+    # Seconds an ``mcc-<agent>`` launcher waits for the server to build a
+    # harness catalogue document that is not on disk yet. Read by the launcher
+    # process, not by the server: it is the budget for one cold-start
+    # GET /admin/api/catalogue-models. The steady state reads the file the
+    # server maintains and never spends it.
+    catalogue_fetch_timeout_seconds: float = Field(
+        default=CATALOGUE_FETCH_TIMEOUT_SECONDS,
+        validation_alias="CATALOGUE_FETCH_TIMEOUT_SECONDS",
     )
 
     # ==================== Desktop (mcc-desktop) ====================

@@ -35,6 +35,9 @@ from my_claude_code.cli.harnesses.catalogue_client import (
     harness_catalogue,
     print_defaulted_summary,
 )
+from my_claude_code.cli.harnesses.catalogue_documents import (
+    warn_catalogue_unavailable,
+)
 from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
 from my_claude_code.config.harness_config_merge import (
     MergeResult,
@@ -168,10 +171,12 @@ def merge_provider_block(
             backup_suffix=catalogue.merge.backup_suffix,
         )
     except Exception as exc:
-        print(
-            f"My Claude Code warning: could not update the {spec.display_name} "
-            f"config ({exc}); launching without an MCC provider.",
-            file=sys.stderr,
+        warn_catalogue_unavailable(
+            display_name=spec.display_name,
+            launcher_command="mcc-commandcode",
+            path=None,
+            proxy_root_url=proxy_root_url,
+            exc=exc,
         )
         return False
     _print_merge_summary(spec, result)

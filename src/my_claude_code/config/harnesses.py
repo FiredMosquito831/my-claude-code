@@ -364,13 +364,6 @@ class HarnessCatalogue:
     format_id: str
     #: File written under ``~/.fcc``, or ``None`` for a process-local delivery.
     filename: str | None = None
-    #: Whether the server creates this file at startup even though nothing has
-    #: launched the harness yet. False by default and deliberately so: writing
-    #: a catalogue for a CLI the user does not use leaves MCC's files behind
-    #: for a tool they never installed, so a launcher-owned catalogue is
-    #: created on the first ``mcc-<id>`` run and only *refreshed* thereafter.
-    #: True only where a consumer exists that has no launcher to create it.
-    created_at_startup: bool = False
     #: The CLI's own documented environment variable naming a config file it
     #: should read *in addition to* the user's own. Set for a harness that
     #: takes its provider block from a file rather than from argv or env: MCC
@@ -589,10 +582,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         catalogue=HarnessCatalogue(
             format_id="codex",
             filename="codex-model-catalog.json",
-            # The Codex *App* reads this same file from a persistent
-            # config.toml and has no launcher to create it, so this one
-            # catalogue is written at server startup as well.
-            created_at_startup=True,
         ),
         rtk_agent=True,
         rtk_enable_args=("init", "-g", "--codex"),

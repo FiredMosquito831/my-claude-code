@@ -536,9 +536,15 @@ document of its own under `~/.fcc` and hands the launched process its path:
 
 Your `~/.config/opencode/opencode.json` is never read, never written and never
 backed up. Stop launching through MCC and the file you wrote is the file you
-have. The file is created on your first `mcc-opencode` run — MCC does not
-scatter config for a CLI you never launch — and refreshed on every model or
-capability change thereafter.
+have.
+
+**The server owns the file; the launcher reads it.** `mcc-server` writes every
+agent's document under `~/.fcc` when it starts, and rewrites it whenever the
+model inventory or any model's resolved capabilities change. `mcc-opencode`
+opens the file it needs and launches — no HTTP, no wait. It asks the server to
+build one only when the file is not there at all, which on a machine where the
+server has ever run means never. See
+[How an agent's model list gets to disk](#how-an-agents-model-list-gets-to-disk).
 
 **Your proxy token is not in the file.** The generated document writes
 `options.apiKey` as OpenCode's own `{env:MCC_OPENCODE_API_KEY}` substitution,
@@ -1376,9 +1382,49 @@ If every model on a route is benched, MCC tries them in order anyway — skippin
 
 Requests that name a provider and model directly (`open_router/…`) are never redirected. An explicit choice is honoured as given.
 
+<a id="how-an-agents-model-list-gets-to-disk"></a>
+
+### How an agent's model list gets to disk
+
+Every agent's generated document lives under `~/.fcc` — `~/.fcc/opencode-config.json`,
+`~/.fcc/crush/crush.json`, `~/.fcc/kimi-code-config.toml` and the rest, one per
+agent, all listed on the **Coding agents** page with the path and the time it was
+last written. They are MCC's files in MCC's own directory; nothing is ever
+written inside a CLI's own configuration folder.
+
+**`mcc-server` writes all of them at startup, and rewrites them on every
+catalogue publish.** A launcher's job is therefore to open the file and start
+the agent. It costs no HTTP at all, so a launch is as fast as the agent itself.
+
+**A launcher fetches only to create a document that is not there** — a machine
+where `mcc-server` has never run, or a file you deleted. That single build gets
+`CATALOGUE_FETCH_TIMEOUT_SECONDS` (20 s by default, on **Limits & Resilience →
+Deadlines**), and if it fails the warning names the file it wanted, the request
+it tried, the budget it had and what to do next; the agent then starts without
+MCC's provider rather than refusing to start.
+
+Two agents work differently, on purpose:
+
+* **Command Code** has no extra-config variable, so MCC owns one key inside
+  `~/.commandcode/providers.json` — a file *you* wrote. That merge happens on
+  every `mcc-commandcode` launch and never in the background: a `provider.mcc`
+  block must not appear in your own config because a key rotated on a server you
+  left running.
+* **Goose** has no generated file anywhere. It takes its model and context limit
+  from environment variables the launcher sets, so it reads the model list from
+  the server on each launch.
+
+> **Before 6.36.1 this was the other way round**, and it deadlocked. Only the
+> launcher created a file, and its fetch was given the 1.5 s budget belonging to
+> the `GET /health` preflight — for a route that takes 1.8–4.0 s on a real
+> install. So the fetch timed out, the file was never created, the server never
+> refreshed a file that did not exist, and every later launch failed the same
+> way: *"could not prepare the OpenCode config (timed out); launching without an
+> MCC provider"*, forever.
+
 ### The Codex App catalog
 
-The Codex App has no launcher — it reads a persistent `~/.codex/config.toml` rather than an environment built per command. It is the one generated catalogue the server creates on its own: `mcc-server` writes `~/.fcc/codex-model-catalog.json` at startup if it is missing, and rewrites it whenever the model inventory *or any model's resolved capabilities* change. Every other harness catalogue is created by that harness's own launcher on its first run, so MCC leaves no files behind for a CLI you do not use. The Codex App points at that stable path from its config:
+The Codex App has no launcher — it reads a persistent `~/.codex/config.toml` rather than an environment built per command. Its catalogue is written the same way every other agent's is: `mcc-server` writes `~/.fcc/codex-model-catalog.json` at startup and rewrites it whenever the model inventory *or any model's resolved capabilities* change. The Codex App points at that stable path from its config:
 
 ```toml
 model_catalog_json = "/Users/YOUR_USERNAME/.fcc/codex-model-catalog.json"   # macOS

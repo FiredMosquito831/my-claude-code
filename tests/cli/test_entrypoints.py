@@ -15,6 +15,7 @@ from urllib.request import Request
 
 import pytest
 
+from my_claude_code.config.constants import CATALOGUE_FETCH_TIMEOUT_SECONDS
 from my_claude_code.config.settings import Settings
 
 
@@ -1103,7 +1104,9 @@ def test_launch_codex_passes_responses_config_and_child_env(
 
     def fake_urlopen(request: Request, *, timeout: float) -> _JsonResponse:
         requests.append(request)
-        assert timeout == 1.5
+        # This route's own budget, never the /health preflight's 1.5s. The two
+        # sharing one constant is the whole of the defect fixed in 6.36.1.
+        assert timeout == CATALOGUE_FETCH_TIMEOUT_SECONDS
         return _JsonResponse(
             {
                 "models": [],
@@ -1233,8 +1236,14 @@ def test_launch_codex_catalog_failure_warns_and_continues(
     command = popen.call_args.args[0]
     assert not any("model_catalog_json=" in arg for arg in command)
     captured = capsys.readouterr()
-    assert "could not prepare Codex model catalog" in captured.err
-    assert "launching without model picker catalog" in captured.err
+    # The warning names the file it wanted, the request it tried and what to do
+    # about it -- the old one said only that something failed.
+    assert "no Codex model list at" in captured.err
+    assert "codex-model-catalog.json" in captured.err
+    assert "/admin/api/catalogue-models" in captured.err
+    assert "CATALOGUE_FETCH_TIMEOUT_SECONDS" in captured.err
+    assert "Start the server with mcc-server" in captured.err
+    assert "Launching without the model picker catalog." in captured.err
 
 
 def test_pi_launcher_builds_scoped_session_command_and_proxy_env(

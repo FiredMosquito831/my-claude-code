@@ -113,12 +113,25 @@ def _publisher(codex_path: Path) -> HarnessCatalogueFanoutPublisher:
     return HarnessCatalogueFanoutPublisher({"codex": codex_path})
 
 
-def test_no_catalogue_is_created_for_a_harness_never_launched(tmp_path: Path) -> None:
+def test_the_fan_out_creates_a_missing_document(tmp_path: Path) -> None:
+    """A publish writes the file even when nothing has launched that harness.
+
+    It used to skip it, and that is the whole of the defect this test pins. The
+    launcher was the only thing that could create the file; its fetch was given
+    the 1.5 s health-check budget for a route measuring 1.8-4.0 s; so the file
+    was never created and this publisher never refreshed a file that did not
+    exist. Every ``mcc-opencode`` after the first failed identically, forever.
+    """
+
     codex_path = tmp_path / "codex-model-catalog.json"
 
     _publisher(codex_path).publish(_runtime())
 
-    assert not codex_path.exists()
+    slugs = [
+        entry["slug"]
+        for entry in json.loads(codex_path.read_text(encoding="utf-8"))["models"]
+    ]
+    assert slugs == ["nvidia_nim/configured", "open_router/discovered"]
 
 
 def test_an_existing_catalogue_is_refreshed_in_place(tmp_path: Path) -> None:
@@ -211,26 +224,28 @@ def test_an_empty_projection_preserves_every_last_known_good_file(
     assert codex_path.read_text(encoding="utf-8") == "last known good\n"
 
 
-def test_startup_creates_only_the_declared_server_owned_catalogue(
-    tmp_path: Path,
-) -> None:
-    """Exactly one catalogue may be created before anything launches.
+def test_every_catalogue_format_is_materialised_at_startup(tmp_path: Path) -> None:
+    """Every MCC-owned document exists after startup, whatever its format.
 
-    The Codex App reads ``~/.fcc/codex-model-catalog.json`` from a persistent
-    ``config.toml`` and has no launcher of its own, so nothing else would ever
-    create it. Every other catalogue is the launcher's to create.
+    JSON, TOML and the two-document harness alike: the launcher's job is to read
+    one of these, so a format that startup skips is a coding agent that pays a
+    cold-start fetch it should never have needed. The merge target is the one
+    exclusion, and it has its own test -- that file belongs to the user.
     """
 
-    codex_path = tmp_path / "codex-model-catalog.json"
-
-    _publisher(codex_path).ensure_exists(_runtime())
-
-    assert codex_path.exists()
-    assert [
-        spec.id
+    paths = {
+        spec.id: tmp_path / f"{spec.id}{Path(spec.catalogue.filename).suffix}"
         for spec in harness_specs()
-        if spec.catalogue is not None and spec.catalogue.created_at_startup
-    ] == ["codex"]
+        if spec.catalogue is not None
+        and spec.catalogue.filename is not None
+        and spec.catalogue.merge is None
+    }
+    assert len(paths) == 11
+
+    HarnessCatalogueFanoutPublisher(paths).ensure_exists(_runtime())
+
+    missing = sorted(harness_id for harness_id, p in paths.items() if not p.exists())
+    assert missing == []
 
 
 def test_a_startup_refresh_does_not_overwrite_an_unchanged_catalogue(
@@ -272,6 +287,10 @@ def test_the_default_path_resolves_under_the_fcc_config_directory(
         ("aider-model-metadata.json",),
         ("droid-settings.json",),
         ("gemini-cli-settings.json",),
+        # Aider's second document, resolved during the write pass rather than
+        # the target sweep above. It is written now that the first one is
+        # always created; it used to be skipped for a harness never launched.
+        ("aider-model-settings.yml",),
     ]
 
 
@@ -291,9 +310,11 @@ def test_aiders_second_document_is_published_beside_its_first(
     publisher = HarnessCatalogueFanoutPublisher({"aider": metadata_path})
     metadata_path.write_text("{}", encoding="utf-8")
 
+    # Every harness's document is materialised now, so the resolver has to
+    # answer per filename rather than handing every caller one path.
     with patch(
         "my_claude_code.runtime.harness_catalogues.harness_catalogue_path",
-        return_value=sidecar_path,
+        side_effect=lambda name: tmp_path / Path(name).name,
     ):
         publisher.publish(_runtime())
 
@@ -404,11 +425,19 @@ def test_a_toml_catalogue_is_written_as_toml_with_its_credentials_resolved(
     assert models["mcc/nvidia_nim/configured"]["max_context_size"] == 300_000
 
 
-def test_a_toml_catalogue_is_never_created_for_an_unlaunched_harness(
+def test_a_toml_catalogue_is_created_as_toml_when_it_is_missing(
     tmp_path: Path,
 ) -> None:
+    """Kimi's document is the one that is not JSON, so creation is tested twice.
+
+    A creation path that only ever ran for the JSON writer would leave exactly
+    one harness paying a cold-start fetch, and it would be the harness whose
+    document carries a literal credential.
+    """
+
     path = tmp_path / "kimi-code-config.toml"
 
     HarnessCatalogueFanoutPublisher({"kimi_code": path}).ensure_exists(_runtime())
 
-    assert not path.exists()
+    document = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert document["providers"]["mcc"]["type"] == "anthropic"

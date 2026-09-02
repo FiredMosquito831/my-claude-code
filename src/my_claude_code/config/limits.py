@@ -157,6 +157,16 @@ LIMIT_RANGES: dict[str, LimitRange] = {
         600.0,
         "1s minimum drain before connections are force-closed; uvicorn treats 0 as immediate shutdown, not infinite",
     ),
+    # A launcher's one cold-start fetch of a harness catalogue document. The
+    # floor is 1s because ``urlopen(timeout=0)`` fails before the connection is
+    # made rather than waiting indefinitely, so 0 here would mean "never build a
+    # missing document" -- exactly the deadlock this budget exists to end. The
+    # ceiling is an hour: a value larger than that is a hang, not a budget.
+    "catalogue_fetch_timeout_seconds": LimitRange(
+        1.0,
+        HOUR,
+        "1s minimum; 0 would fail the fetch outright rather than wait forever",
+    ),
     # --- desktop tray/window process (mcc-desktop) --------------------------
     # mcc-desktop is a separate process from the server; it reads these via
     # get_settings() once, at launch, so a change here applies to the next

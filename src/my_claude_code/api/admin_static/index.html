@@ -1923,6 +1923,22 @@ mcc-gemini</code></pre>
                   <code>mcc</code>, as <code>mcc/&lt;provider&gt;/&lt;model&gt;</code>.
                 </p>
                 <p>
+                  <strong>This server owns those files; the launcher only reads
+                  them.</strong> Every agent's document is written under
+                  <code>~/.fcc</code> when this server starts and rewritten whenever
+                  the model list or any model's resolved capabilities change, so
+                  <code>mcc-&lt;agent&gt;</code> opens the file it needs and launches
+                  &mdash; no HTTP, no wait. A launcher asks this server to build a
+                  document only when the file is not there at all, and that one build
+                  gets <strong>Coding agent catalogue build budget</strong> on
+                  <strong>Limits &amp; Resilience &rarr; Deadlines</strong> (20 s by
+                  default). Each agent's card above names its file and when it was last
+                  written. Before 6.36.1 only the launcher could create a document and
+                  its fetch was given the 1.5 s health-check budget for a route that
+                  takes 1.8&ndash;4.0 s, so the first launch failed, the file was never
+                  created, and every launch after it failed identically.
+                </p>
+                <p>
                   <strong>Command Code is the one exception, and it says so on its
                   card.</strong> It reads exactly one document,
                   <code>~/.commandcode/providers.json</code>, and publishes no flag

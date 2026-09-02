@@ -47,6 +47,9 @@ from my_claude_code.cli.harnesses.catalogue_client import (
     catalogue_model_summaries,
     fetch_catalogue_models,
 )
+from my_claude_code.cli.harnesses.catalogue_documents import (
+    warn_catalogue_unavailable,
+)
 from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
 from my_claude_code.config.harness_base_url import root_base_url
 from my_claude_code.config.harnesses import (
@@ -183,10 +186,13 @@ def resolve_model(
             fetch_catalogue_models(proxy_root_url, auth_token)
         )
     except Exception as exc:
-        print(
-            "My Claude Code warning: could not read the model list "
-            f"({exc}); launching Goose without a resolved context limit.",
-            file=sys.stderr,
+        warn_catalogue_unavailable(
+            display_name="Goose",
+            launcher_command="mcc-goose",
+            path=None,
+            proxy_root_url=proxy_root_url,
+            exc=exc,
+            consequence="Launching Goose without a resolved context limit.",
         )
         return requested, None
 

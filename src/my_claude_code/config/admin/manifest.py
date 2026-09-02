@@ -1098,6 +1098,22 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "0 would be an immediate, no-drain shutdown rather than waiting."
         ),
     ),
+    ConfigFieldSpec(
+        "CATALOGUE_FETCH_TIMEOUT_SECONDS",
+        "Coding agent catalogue build budget",
+        "deadlines",
+        "number",
+        settings_attr="catalogue_fetch_timeout_seconds",
+        default="20",
+        description=(
+            "Seconds an mcc-<agent> launcher waits for this server to build a "
+            "coding agent's model list the first time, when no document for "
+            "that agent exists under ~/.fcc yet. Every later launch reads the "
+            "file the server keeps up to date and spends none of this. Read by "
+            "the launcher process, so a change applies to the next mcc-<agent> "
+            "you run, not to the server. 1s is the floor."
+        ),
+    ),
     # ---- Benching: when to stop trying a model ---------------------------
     ConfigFieldSpec(
         "FALLBACK_BENCH_ENABLED",

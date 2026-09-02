@@ -69,6 +69,10 @@ from my_claude_code.cli.harnesses.catalogue_client import (
     harness_catalogue,
     print_defaulted_summary,
 )
+from my_claude_code.cli.harnesses.catalogue_documents import (
+    read_document,
+    warn_catalogue_unavailable,
+)
 from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
 from my_claude_code.config.atomic_json import (
     write_json_document_atomically_if_changed,
@@ -197,6 +201,22 @@ def write_harness_config(
     catalogue = spec.catalogue
     if catalogue is None or catalogue.filename is None:
         return None
+    config_path = harness_catalogue_path(catalogue.filename)
+    if (on_disk := read_document(config_path)) is not None:
+        # The server writes this document at startup and rewrites it on every
+        # catalogue publish, so no HTTP is needed to launch. The one thing the
+        # file cannot already know is which model *this* invocation asked for,
+        # so ``--model`` is re-applied to what is on disk and nothing else is.
+        requested = selected_model(argv)
+        if requested is not None:
+            write_json_document_atomically_if_changed(
+                config_path,
+                strip_mcc_keys(
+                    with_selected_model(dict(on_disk), CLINE_PROVIDER_ID, requested)
+                ),
+            )
+            restrict_permissions(config_path)
+        return config_path
     try:
         payload = fetch_catalogue_models(proxy_root_url, auth_token)
         document = harness_catalogue(payload, spec.id)
@@ -207,7 +227,6 @@ def write_harness_config(
                 file=sys.stderr,
             )
             return None
-        config_path = harness_catalogue_path(catalogue.filename)
         if catalogue.base_url_sentinel is not None:
             document = with_v1_base_url(
                 document, catalogue.base_url_sentinel, proxy_root_url
@@ -227,10 +246,12 @@ def write_harness_config(
         write_json_document_atomically_if_changed(config_path, strip_mcc_keys(document))
         restrict_permissions(config_path)
     except Exception as exc:
-        print(
-            f"My Claude Code warning: could not prepare the {spec.display_name} "
-            f"config ({exc}); launching without an MCC provider.",
-            file=sys.stderr,
+        warn_catalogue_unavailable(
+            display_name=spec.display_name,
+            launcher_command="mcc-cline",
+            path=config_path,
+            proxy_root_url=proxy_root_url,
+            exc=exc,
         )
         return None
     return config_path

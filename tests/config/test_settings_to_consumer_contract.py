@@ -12,6 +12,8 @@ from unittest.mock import patch
 import pytest
 
 from my_claude_code.application.execution import route_execution_policy
+from my_claude_code.cli.harnesses.catalogue_client import fetch_catalogue_models
+from my_claude_code.config.limits import range_for
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.settings import Settings, parse_lockout_tiers
 from my_claude_code.core.credential_rotation import PROVIDER_TUNING
@@ -151,3 +153,52 @@ def test_quota_is_a_skip_kind_an_operator_can_choose_but_never_inherits() -> Non
 
     chosen = route_execution_policy(_settings(FALLBACK_SKIP_KINDS="quota"))
     assert chosen.skip_kinds == frozenset({FailureKind.QUOTA})
+
+
+def test_the_catalogue_fetch_budget_reaches_the_launcher_socket() -> None:
+    """The dashboard number has to be the number urlopen is handed.
+
+    This one is easy to get wrong because the consumer is not the server: the
+    launchers run as their own processes, so nothing about a running server
+    proves the field arrives. It shipped as a hardcoded 1.5 s borrowed from the
+    health preflight, which failed every OpenCode launch on a real install.
+    """
+
+    settings = _settings(CATALOGUE_FETCH_TIMEOUT_SECONDS=37.5)
+    timeouts: list[float] = []
+
+    def fake_urlopen(request, *, timeout: float):
+        timeouts.append(timeout)
+        raise TimeoutError("stop here; the budget is the whole claim")
+
+    with (
+        patch(
+            "my_claude_code.cli.harnesses.catalogue_client.get_settings",
+            return_value=settings,
+        ),
+        patch(
+            "my_claude_code.cli.harnesses.catalogue_client.urlopen",
+            side_effect=fake_urlopen,
+        ),
+        pytest.raises(TimeoutError),
+    ):
+        fetch_catalogue_models("http://127.0.0.1:8082", "token")
+
+    assert timeouts == [37.5]
+
+
+def test_the_catalogue_fetch_budget_is_clamped_to_a_usable_floor() -> None:
+    """``urlopen(timeout=0)`` fails before it connects, so 0 must be unreachable.
+
+    Every other deadline in this product treats 0 as "no limit". This one
+    cannot: a 0 here would mean "never build a missing catalogue", which is the
+    deadlock the setting exists to end. The range's floor is what stops it.
+    """
+
+    bounds = range_for("catalogue_fetch_timeout_seconds")
+    assert bounds is not None
+    assert bounds.minimum > 0
+    assert (
+        _settings(CATALOGUE_FETCH_TIMEOUT_SECONDS=0).catalogue_fetch_timeout_seconds
+        == bounds.minimum
+    )

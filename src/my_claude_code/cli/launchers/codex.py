@@ -11,6 +11,10 @@ from my_claude_code.cli.harnesses.catalogue_client import (
     harness_catalogue,
     print_defaulted_summary,
 )
+from my_claude_code.cli.harnesses.catalogue_documents import (
+    document_on_disk,
+    warn_catalogue_unavailable,
+)
 from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
 from my_claude_code.config.atomic_json import (
     write_json_document_atomically_if_changed,
@@ -131,6 +135,12 @@ def codex_model_catalog_config_args(
     worse session; a session that will not start is no session at all.
     """
 
+    catalog_path = codex_model_catalog_path()
+    if document_on_disk(catalog_path):
+        # The server writes this catalog at startup and rewrites it on every
+        # catalogue publish, so the file on disk is the current one and this
+        # launch costs no HTTP at all. The fetch below exists to create it.
+        return build_model_catalog_config_args(str(catalog_path))
     try:
         payload = fetch_catalogue_models(proxy_root_url, settings.anthropic_auth_token)
         catalog = harness_catalogue(payload, HARNESS_ID)
@@ -142,14 +152,16 @@ def codex_model_catalog_config_args(
                 file=sys.stderr,
             )
             return []
-        catalog_path = codex_model_catalog_path()
         write_json_document_atomically_if_changed(catalog_path, catalog)
         print_defaulted_summary("Codex", catalogue_defaulted(payload, HARNESS_ID))
     except Exception as exc:
-        print(
-            "My Claude Code warning: could not prepare Codex model catalog "
-            f"({exc}); launching without model picker catalog.",
-            file=sys.stderr,
+        warn_catalogue_unavailable(
+            display_name="Codex",
+            launcher_command="mcc-codex",
+            path=catalog_path,
+            proxy_root_url=proxy_root_url,
+            exc=exc,
+            consequence="Launching without the model picker catalog.",
         )
         return []
 

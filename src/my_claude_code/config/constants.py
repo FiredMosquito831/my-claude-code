@@ -379,3 +379,21 @@ TRIM_MODE_NAMES: frozenset[str] = frozenset({"off", "observe", "on"})
 # mandatory. Enforcement began 2026-08-27, when every previously-working
 # `tencent/hy3:free` request started failing.
 NOUS_PORTAL_USER_TAG_DEFAULT = "user=my-claude-code"
+
+# Seconds a launcher gives the server to build a harness catalogue document
+# that is not on disk yet. It is deliberately NOT the health-preflight budget:
+# ``GET /health`` answers in milliseconds and 1.5s is a generous budget for it,
+# while ``GET /admin/api/catalogue-models`` serialises every registered
+# harness's document from the resolution ladder and, measured on a real install
+# with 292 routable models, takes 1.8-4.0s. Sharing the preflight constant made
+# that fetch fail on every single launch, and because only the launcher could
+# create the file and the server's fan-out only refreshed files that already
+# existed, the failure was permanent rather than transient.
+#
+# 20s because it is a cold-start cost paid at most once per harness -- the
+# steady state reads the file the server maintains and issues no request at all
+# -- and because the same route on a cold models.dev index measured 5s of
+# provenance work before that walk was made opt-in. A budget that fails on a
+# first run of a busy install buys nothing; a launch that waits a few seconds
+# once and then never again costs nothing worth naming.
+CATALOGUE_FETCH_TIMEOUT_SECONDS = 20.0

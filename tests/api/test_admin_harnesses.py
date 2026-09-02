@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from my_claude_code.application.catalogues import serialise
 from my_claude_code.application.model_metadata import (
     ModelReasoningCapability,
     ProviderModelInfo,
@@ -199,7 +200,7 @@ def test_catalogue_models_route_carries_capabilities_and_each_cli_document(
     )
 
     with _local_client(app) as client:
-        body = client.get("/admin/api/catalogue-models").json()
+        body = client.get("/admin/api/catalogue-models?provenance=1").json()
 
     entry = next(
         model
@@ -360,3 +361,61 @@ def test_a_toml_catalogue_is_read_back_with_the_parser_its_format_needs(
     assert entry["exists"] is True
     assert entry["model_count"] == 2
     assert entry["defaulted_model_count"] == 1
+
+
+def test_provenance_is_opt_in_on_the_catalogue_route(monkeypatch, tmp_path):
+    """The expensive half is bought only when somebody asks for it.
+
+    ``capability_provenance`` walks the resolution ladder once per field per
+    model -- 2.74 ms/model warm, 292 models on the install that reported this,
+    so 0.8 s warm and about 5 s on a cold models.dev index. The only callers of
+    this route are the ``mcc-<agent>`` launchers, which read ``document``,
+    ``model_count`` and ``defaulted`` and never look at provenance, so that
+    whole cost used to be bought and thrown away on every launch.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    settings = Settings().model_copy(update={"model": "nvidia_nim/configured"})
+    app = create_test_app(settings)
+
+    with _local_client(app) as client:
+        default = client.get("/admin/api/catalogue-models").json()
+        asked = client.get("/admin/api/catalogue-models?provenance=1").json()
+
+    assert default["models"]
+    assert all(model["provenance"] == {} for model in default["models"])
+    assert any(model["provenance"] for model in asked["models"])
+    # Everything a launcher reads is identical either way -- the option adds a
+    # field, it never changes a document.
+    assert default["catalogues"] == asked["catalogues"]
+
+
+def test_opencode_document_authenticates_with_apikey_alone(monkeypatch, tmp_path):
+    """The generated document carries one credential, and MCC accepts it.
+
+    ``@ai-sdk/anthropic`` sends ``options.apiKey`` as ``x-api-key``. The
+    document used to also carry an explicit ``Authorization`` header, justified
+    by a comment saying MCC did not read ``x-api-key`` -- true when it was
+    written, wrong since 6.27.0. This drives the real dependency rather than
+    re-reading the comment: the header the SDK sends, against the app's own
+    auth, with nothing else presented.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    settings = Settings().model_copy(
+        update={"model": "nvidia_nim/configured", "anthropic_auth_token": "proxy-token"}
+    )
+    app = create_test_app(settings)
+
+    document, _ = serialise("opencode", ())
+    options = document["provider"]["mcc"]["options"]
+    assert set(options) == {"baseURL", "apiKey"}
+
+    with _local_client(app) as client:
+        accepted = client.get("/v1/models", headers={"x-api-key": "proxy-token"})
+        refused = client.get("/v1/models", headers={"x-api-key": "wrong-token"})
+        unauthenticated = client.get("/v1/models")
+
+    assert accepted.status_code == 200
+    assert refused.status_code == 401
+    assert unauthenticated.status_code == 401

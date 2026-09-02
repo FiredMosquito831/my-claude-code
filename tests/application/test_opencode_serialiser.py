@@ -247,13 +247,15 @@ def test_the_document_names_env_placeholders_rather_than_the_token() -> None:
 
     provider = document["provider"][PROVIDER_ID]
     assert provider["npm"] == PROVIDER_NPM_PACKAGE
+    # One credential, in one place. ``@ai-sdk/anthropic`` sends ``apiKey`` as
+    # ``x-api-key``, which MCC has read since 6.27.0; the second copy this
+    # document used to carry as an explicit Authorization header was justified
+    # by a comment that had been wrong for nine minor versions.
     assert provider["options"] == {
         "baseURL": f"{{env:{BASE_URL_ENV}}}",
         "apiKey": f"{{env:{API_KEY_ENV}}}",
-        # MCC authenticates on Authorization: Bearer, not on the x-api-key
-        # header @ai-sdk/anthropic would send by itself.
-        "headers": {"Authorization": f"Bearer {{env:{API_KEY_ENV}}}"},
     }
+    assert "headers" not in provider["options"]
     assert "sk-" not in str(document)
 
 

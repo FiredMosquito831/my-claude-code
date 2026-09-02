@@ -18,10 +18,11 @@ order", and "configuration files are merged together, not replaced"
 ``~/.config/opencode`` is read, written, merged or backed up, and a user who
 stops launching through MCC is left with exactly the document they wrote.
 
-**The token never lands on disk.** ``options.baseURL``, ``options.apiKey`` and
-the ``Authorization`` header are written as OpenCode's own
-``{env:VARIABLE_NAME}`` substitutions and the launcher sets those two variables
-in the child process only.
+**The token never lands on disk.** ``options.baseURL`` and ``options.apiKey``
+are written as OpenCode's own ``{env:VARIABLE_NAME}`` substitutions and the
+launcher sets those two variables in the child process only. ``apiKey`` is the
+only credential in the document: ``@ai-sdk/anthropic`` sends it as
+``x-api-key``, which MCC has read since 6.27.0.
 
 **Unknown stays unknown**, in OpenCode's own vocabulary -- but ``limit`` and
 ``cost`` are all-or-nothing objects and that changes what "omit" may mean.
@@ -160,17 +161,18 @@ def build_opencode_catalogue(
                 "name": PROVIDER_DISPLAY_NAME,
                 "options": {
                     "baseURL": f"{{env:{BASE_URL_ENV}}}",
-                    # Both, and both are load-bearing. MCC authenticates on
-                    # ``Authorization: Bearer`` -- the header Claude Code's own
-                    # ANTHROPIC_AUTH_TOKEN produces -- while ``@ai-sdk/anthropic``
-                    # would send ``x-api-key``, which MCC does not read. Measured
-                    # against OpenCode 1.18.25: with ``apiKey`` alone every request
-                    # arrived at ``POST /v1/messages`` with no credential at all
-                    # and came back 401; adding this header made the same request
-                    # 200. ``apiKey`` stays because the SDK expects a provider to
-                    # have one.
+                    # ``apiKey`` alone, and it is enough. ``@ai-sdk/anthropic``
+                    # sends the key as ``x-api-key``, and MCC has read that
+                    # header since 6.27.0 -- ``api/dependencies.py``'s
+                    # ``_presented_proxy_token`` accepts ``Authorization:
+                    # Bearer``, ``x-api-key``, ``x-goog-api-key`` and a ``key``
+                    # query parameter, in that order. This block used to carry a
+                    # second copy of the token as an explicit ``Authorization``
+                    # header, justified by a comment saying MCC did not read
+                    # ``x-api-key``; that was measured against a build predating
+                    # 6.27.0 and has been wrong ever since. One credential, in
+                    # one place, spelled the way the SDK spells it.
                     "apiKey": f"{{env:{API_KEY_ENV}}}",
-                    "headers": {"Authorization": f"Bearer {{env:{API_KEY_ENV}}}"},
                 },
                 "models": entries,
             }

@@ -490,6 +490,23 @@ Every catalogue MCC generates for an agent carries that model's **real** metadat
 
 Where a CLI's schema requires a value and no provider published one, MCC fills in **that CLI's own documented default** — never a number MCC invented — and records it. You can see which numbers are guesses three ways: a `_mcc_defaulted` block in the generated file, a line on stderr when the launcher starts, and a count on the agent's dashboard card.
 
+**The server owns those files; the launcher only reads them.** Every agent's
+document lives under `~/.fcc` (`~/.fcc/opencode-config.json`,
+`~/.fcc/crush/crush.json`, and so on), it is written when the server starts and
+rewritten every time the model catalogue is republished, and `mcc-<agent>` reads
+whichever one it needs and launches. No HTTP, no wait. A launcher asks the
+server to build a document only when that file does not exist yet — on a
+machine where the server has never run — and that one build gets
+`CATALOGUE_FETCH_TIMEOUT_SECONDS` (20 s by default, editable on **Limits &
+Resilience → Deadlines**) rather than the 1.5 s health-check budget it used to
+share. Command Code is the exception by design: its provider block is one key
+inside `~/.commandcode/providers.json`, a file you own, so it is merged on every
+launch and never written behind your back.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `CATALOGUE_FETCH_TIMEOUT_SECONDS` | `20` | Seconds an `mcc-<agent>` launcher waits for the server to build that agent's model list the first time, when no document for it exists under `~/.fcc` yet. Every later launch reads the file and spends none of it. Read by the launcher process, so a change applies to the next `mcc-<agent>` you run. Floor `1`. |
+
 <a id="install-troubleshooting"></a>
 
 ### Install Troubleshooting

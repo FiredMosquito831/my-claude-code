@@ -65,6 +65,9 @@ SECTION_KEYS: dict[str, tuple[str, ...]] = {
         "HTTP_WRITE_TIMEOUT",
         "HTTP_CONNECT_TIMEOUT",
         "SERVER_GRACEFUL_SHUTDOWN_SECONDS",
+        # Read by an mcc-<agent> launcher, not by the server, but it is a
+        # "how long do we wait" number and this is the card that owns those.
+        "CATALOGUE_FETCH_TIMEOUT_SECONDS",
     ),
     "benching": (
         "FALLBACK_BENCH_ENABLED",

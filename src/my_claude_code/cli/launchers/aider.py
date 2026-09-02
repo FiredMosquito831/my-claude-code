@@ -53,6 +53,10 @@ from my_claude_code.cli.harnesses.catalogue_client import (
     harness_sidecar,
     print_defaulted_summary,
 )
+from my_claude_code.cli.harnesses.catalogue_documents import (
+    document_on_disk,
+    warn_catalogue_unavailable,
+)
 from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
 from my_claude_code.config.atomic_json import (
     write_json_document_atomically_if_changed,
@@ -208,6 +212,13 @@ def write_harness_config(
         return None
     if catalogue.sidecar_filename is None:
         return None
+    metadata_path = harness_catalogue_path(catalogue.filename)
+    settings_path = harness_catalogue_path(catalogue.sidecar_filename)
+    # Both, because Aider is handed both on the command line and a launch with
+    # limits but no model settings is a half-configured session. The server
+    # writes the pair together, so "one present" only happens mid-write.
+    if document_on_disk(metadata_path) and settings_path.exists():
+        return metadata_path, settings_path
     try:
         payload = fetch_catalogue_models(proxy_root_url, auth_token)
         document = harness_catalogue(payload, spec.id)
@@ -218,8 +229,6 @@ def write_harness_config(
                 file=sys.stderr,
             )
             return None
-        metadata_path = harness_catalogue_path(catalogue.filename)
-        settings_path = harness_catalogue_path(catalogue.sidecar_filename)
         write_json_document_atomically_if_changed(metadata_path, document)
         # JSON is valid YAML, and Aider loads this file with ``yaml.safe_load``
         # -- so one writer serves both documents and there is no second
@@ -233,10 +242,13 @@ def write_harness_config(
             spec.display_name, catalogue_defaulted(payload, spec.id)
         )
     except Exception as exc:
-        print(
-            f"My Claude Code warning: could not prepare the {spec.display_name} "
-            f"model files ({exc}); launching without MCC model metadata.",
-            file=sys.stderr,
+        warn_catalogue_unavailable(
+            display_name=spec.display_name,
+            launcher_command="mcc-aider",
+            path=metadata_path,
+            proxy_root_url=proxy_root_url,
+            exc=exc,
+            consequence="Launching without MCC model metadata.",
         )
         return None
     return metadata_path, settings_path

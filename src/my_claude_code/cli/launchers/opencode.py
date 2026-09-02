@@ -28,6 +28,10 @@ from my_claude_code.cli.harnesses.catalogue_client import (
     harness_catalogue,
     print_defaulted_summary,
 )
+from my_claude_code.cli.harnesses.catalogue_documents import (
+    document_on_disk,
+    warn_catalogue_unavailable,
+)
 from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
 from my_claude_code.config.atomic_json import (
     write_json_document_atomically_if_changed,
@@ -135,6 +139,12 @@ def write_harness_config(
     catalogue = spec.catalogue
     if catalogue is None or catalogue.filename is None:
         return None
+    config_path = harness_catalogue_path(catalogue.filename)
+    if document_on_disk(config_path, catalogue.document_format):
+        # The server writes this document at startup and rewrites it on every
+        # catalogue publish, so the file on disk is the current one and this
+        # launch costs no HTTP at all. The fetch below exists to create it.
+        return config_path
     try:
         payload = fetch_catalogue_models(
             proxy_root_url, getattr(settings, "anthropic_auth_token", "")
@@ -147,16 +157,17 @@ def write_harness_config(
                 file=sys.stderr,
             )
             return None
-        config_path = harness_catalogue_path(catalogue.filename)
         write_json_document_atomically_if_changed(config_path, document)
         print_defaulted_summary(
             spec.display_name, catalogue_defaulted(payload, spec.id)
         )
     except Exception as exc:
-        print(
-            f"My Claude Code warning: could not prepare the {spec.display_name} "
-            f"config ({exc}); launching without an MCC provider.",
-            file=sys.stderr,
+        warn_catalogue_unavailable(
+            display_name=spec.display_name,
+            launcher_command=f"mcc-{spec.id}",
+            path=config_path,
+            proxy_root_url=proxy_root_url,
+            exc=exc,
         )
         return None
     return config_path

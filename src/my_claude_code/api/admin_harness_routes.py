@@ -72,12 +72,25 @@ async def list_harnesses(request: Request):
 @router.get("/admin/api/catalogue-models")
 async def list_catalogue_models(
     request: Request,
+    provenance: bool = False,
     services: ApiServices = Depends(get_services),
 ):
-    """Return the ladder's capabilities per model, plus each CLI's document."""
+    """Return the ladder's capabilities per model, plus each CLI's document.
+
+    ``?provenance=1`` adds the per-field record of which rung of the resolution
+    ladder answered. It is off by default because it is the expensive half and
+    almost nobody wants it: :func:`capability_provenance` walks the ladder once
+    per field per model, measured at 2.74 ms/model warm and 292 models on a real
+    install -- 0.8 s warm, 5 s on a cold models.dev index -- while the only
+    consumers of this route are the ``mcc-<agent>`` launchers, which read
+    ``document``, ``model_count`` and ``defaulted`` and never look at it. That
+    unwanted 0.8-5 s is most of why a launcher's fetch used to time out.
+    """
 
     require_loopback_admin(request)
-    return await asyncio.to_thread(_catalogue_models_payload, services)
+    return await asyncio.to_thread(
+        _catalogue_models_payload, services, with_provenance=provenance
+    )
 
 
 # ------------------------------------------------------------------ harnesses
@@ -243,10 +256,14 @@ def _mtime_iso(path: Path) -> str | None:
 # ----------------------------------------------------------- catalogue models
 
 
-def _catalogue_models_payload(services: ApiServices) -> dict[str, Any]:
+def _catalogue_models_payload(
+    services: ApiServices, *, with_provenance: bool = False
+) -> dict[str, Any]:
     runtime = services.requests
     models = build_catalogue_models(
-        runtime.current_settings(), runtime, provenance=capability_provenance
+        runtime.current_settings(),
+        runtime,
+        provenance=capability_provenance if with_provenance else None,
     )
     catalogues: dict[str, Any] = {}
     for spec in harness_specs():

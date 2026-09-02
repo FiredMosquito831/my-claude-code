@@ -9,22 +9,81 @@ extra config file instead, so MCC owns a file under ``~/.fcc`` and hands over
 its path. These tests pin that, and pin the token staying out of the file.
 """
 
+import json
+from importlib import import_module
 from pathlib import Path
+from unittest.mock import patch
 
+from my_claude_code.cli.harnesses import catalogue_client
 from my_claude_code.cli.harnesses.catalogue_client import (
     catalogue_defaulted,
     print_defaulted_summary,
 )
+from my_claude_code.cli.launchers.common import PROXY_PREFLIGHT_TIMEOUT_SECONDS
 from my_claude_code.cli.launchers.opencode import (
     build_opencode_launcher_env,
     is_passthrough,
     messages_base_url,
+    write_harness_config,
 )
+from my_claude_code.config.constants import CATALOGUE_FETCH_TIMEOUT_SECONDS
 from my_claude_code.config.harnesses import (
     OPENCODE_API_KEY_ENV,
     OPENCODE_BASE_URL_ENV,
     harness_spec,
 )
+from my_claude_code.config.settings import Settings
+
+#: The generated document as the server writes it. Small on purpose: these
+#: tests are about *whether* a fetch happens, not about the mapping, which
+#: ``tests/application/test_opencode_serialiser.py`` owns.
+_ON_DISK_DOCUMENT = {
+    "$schema": "https://opencode.ai/config.json",
+    "provider": {"mcc": {"npm": "@ai-sdk/anthropic", "models": {"a/b": {"name": "B"}}}},
+}
+
+
+class _JsonResponse:
+    """The shape ``urlopen`` returns, as much of it as the client reads."""
+
+    def __init__(self, payload: dict) -> None:
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _JsonResponse:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+def _fake_urlopen(timeouts: list[float]):
+    """Return a ``urlopen`` double that records the budget it was given."""
+
+    def fake(request: object, *, timeout: float) -> _JsonResponse:
+        timeouts.append(timeout)
+        return _JsonResponse(
+            {
+                "models": [],
+                "catalogues": {
+                    "opencode": {
+                        "document": _ON_DISK_DOCUMENT,
+                        "model_count": 1,
+                        "defaulted": {},
+                    }
+                },
+            }
+        )
+
+    return fake
+
+
+def _opencode_settings(**overrides: object) -> Settings:
+    return Settings().model_copy(
+        update={"anthropic_auth_token": "proxy-token", **overrides}
+    )
 
 
 def test_each_harness_is_pointed_with_its_own_documented_variable() -> None:
@@ -144,3 +203,200 @@ def test_the_defaulted_record_is_read_from_the_payload_not_the_document() -> Non
 
     assert catalogue_defaulted(payload, "kilo") == {"a/b": ["limit.context"]}
     assert catalogue_defaulted(payload, "not_a_harness") == {}
+
+
+# --------------------------------------------------------------- file-first
+
+
+def test_a_launcher_uses_the_document_on_disk_without_fetching(tmp_path) -> None:
+    """The steady state is zero HTTP: the server owns the file, the launcher reads it.
+
+    Before this, every launch fetched a 1.41 MB payload in order to rewrite a
+    73 KB document that had not changed, on a 1.5 s budget the route could not
+    meet.
+    """
+
+    spec = harness_spec("opencode")
+    config_path = tmp_path / "opencode-config.json"
+    config_path.write_text(json.dumps(_ON_DISK_DOCUMENT), encoding="utf-8")
+
+    with (
+        patch(
+            "my_claude_code.cli.launchers.opencode.harness_catalogue_path",
+            return_value=config_path,
+        ),
+        patch("my_claude_code.cli.harnesses.catalogue_client.urlopen") as urlopen,
+    ):
+        result = write_harness_config(
+            spec, "http://127.0.0.1:8082", _opencode_settings()
+        )
+
+    assert result == config_path
+    urlopen.assert_not_called()
+    # The file is handed over untouched -- a read is not a rewrite.
+    assert json.loads(config_path.read_text(encoding="utf-8")) == _ON_DISK_DOCUMENT
+
+
+def test_a_corrupt_document_on_disk_falls_back_to_a_fetch(tmp_path) -> None:
+    """Half a JSON file is not a catalogue, and OpenCode would refuse it."""
+
+    spec = harness_spec("opencode")
+    config_path = tmp_path / "opencode-config.json"
+    config_path.write_text('{"provider": ', encoding="utf-8")
+    timeouts: list[float] = []
+
+    with (
+        patch(
+            "my_claude_code.cli.launchers.opencode.harness_catalogue_path",
+            return_value=config_path,
+        ),
+        patch(
+            "my_claude_code.cli.harnesses.catalogue_client.urlopen",
+            side_effect=_fake_urlopen(timeouts),
+        ),
+    ):
+        result = write_harness_config(
+            spec, "http://127.0.0.1:8082", _opencode_settings()
+        )
+
+    assert result == config_path
+    assert len(timeouts) == 1
+    assert json.loads(config_path.read_text(encoding="utf-8"))["provider"]["mcc"]
+
+
+def test_a_missing_document_is_fetched_once_with_the_catalogue_timeout_not_the_preflight_one(
+    tmp_path,
+) -> None:
+    """Exactly one GET, on this route's own budget.
+
+    ``PROXY_PREFLIGHT_TIMEOUT_SECONDS`` is 1.5 s, sized for ``GET /health``.
+    The route this fetches measured 1.8-4.0 s on a real install, so sharing the
+    one constant made the fetch fail -- and because the launcher was the only
+    thing that could create the file, it then failed identically forever.
+    """
+
+    spec = harness_spec("opencode")
+    config_path = tmp_path / "opencode-config.json"
+    timeouts: list[float] = []
+
+    with (
+        patch(
+            "my_claude_code.cli.launchers.opencode.harness_catalogue_path",
+            return_value=config_path,
+        ),
+        patch(
+            "my_claude_code.cli.harnesses.catalogue_client.urlopen",
+            side_effect=_fake_urlopen(timeouts),
+        ),
+    ):
+        result = write_harness_config(
+            spec, "http://127.0.0.1:8082", _opencode_settings()
+        )
+
+    assert result == config_path
+    assert timeouts == [CATALOGUE_FETCH_TIMEOUT_SECONDS]
+    assert CATALOGUE_FETCH_TIMEOUT_SECONDS != PROXY_PREFLIGHT_TIMEOUT_SECONDS
+    assert config_path.exists()
+
+
+def test_the_catalogue_budget_is_the_one_the_dashboard_saved(tmp_path) -> None:
+    """The manifest field has to reach the socket, or the form is decoration."""
+
+    spec = harness_spec("opencode")
+    timeouts: list[float] = []
+    settings = _opencode_settings(catalogue_fetch_timeout_seconds=45.0)
+
+    with (
+        patch(
+            "my_claude_code.cli.launchers.opencode.harness_catalogue_path",
+            return_value=tmp_path / "opencode-config.json",
+        ),
+        patch(
+            "my_claude_code.cli.harnesses.catalogue_client.get_settings",
+            return_value=settings,
+        ),
+        patch(
+            "my_claude_code.cli.harnesses.catalogue_client.urlopen",
+            side_effect=_fake_urlopen(timeouts),
+        ),
+    ):
+        write_harness_config(spec, "http://127.0.0.1:8082", settings)
+
+    assert timeouts == [45.0]
+
+
+def test_the_catalogue_fetch_never_imports_the_health_check_budget() -> None:
+    """A static guard: one module must not be able to reach both budgets.
+
+    The name is where the bug lived -- nothing about
+    ``PROXY_PREFLIGHT_TIMEOUT_SECONDS`` says it is also the budget for a
+    multi-second serialisation of thirteen catalogues, and nothing stopped it
+    being used as one.
+    """
+
+    source = Path(catalogue_client.__file__ or "").read_text(encoding="utf-8")
+    imports = [
+        line for line in source.splitlines() if line.startswith(("import ", "from "))
+    ]
+
+    assert imports
+    assert not [line for line in imports if "PROXY_PREFLIGHT_TIMEOUT_SECONDS" in line]
+
+
+def test_a_slow_server_never_yields_a_config_less_launch_silently(
+    tmp_path, capsys
+) -> None:
+    """The warning has to be actionable; its absence is what let this ship.
+
+    The user's report was one line -- ``could not prepare the OpenCode config
+    (timed out); launching without an MCC provider`` -- which named the symptom
+    and nothing else: not the file that would have fixed it, not the request
+    that failed, and not that it would never recover on its own.
+    """
+
+    spec = harness_spec("opencode")
+    config_path = tmp_path / "opencode-config.json"
+
+    with (
+        patch(
+            "my_claude_code.cli.launchers.opencode.harness_catalogue_path",
+            return_value=config_path,
+        ),
+        patch(
+            "my_claude_code.cli.harnesses.catalogue_client.urlopen",
+            side_effect=TimeoutError("timed out"),
+        ),
+    ):
+        result = write_harness_config(
+            spec, "http://127.0.0.1:8082", _opencode_settings()
+        )
+
+    assert result is None
+    err = capsys.readouterr().err
+    assert str(config_path) in err
+    assert "timed out" in err
+    assert "/admin/api/catalogue-models" in err
+    assert "CATALOGUE_FETCH_TIMEOUT_SECONDS" in err
+    assert "mcc-server" in err
+    assert "mcc-opencode" in err
+    assert "Coding agents" in err
+
+
+def test_every_catalogue_owning_launcher_reads_its_document_first() -> None:
+    """One harness fixed and nine left fetching is the same bug, renamed."""
+
+    for name in (
+        "opencode",
+        "codex",
+        "kimi",
+        "qwen",
+        "crush",
+        "cline",
+        "aider",
+        "droid",
+        "gemini",
+    ):
+        module = import_module(f"my_claude_code.cli.launchers.{name}")
+        source = Path(module.__file__ or "").read_text(encoding="utf-8")
+        assert "catalogue_documents" in source, name
+        assert "read_document(" in source or "document_on_disk(" in source, name

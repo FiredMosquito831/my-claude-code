@@ -19,21 +19,49 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.request import Request, urlopen
 
-from my_claude_code.cli.launchers.common import PROXY_PREFLIGHT_TIMEOUT_SECONDS
+from my_claude_code.config.settings import get_settings
 
 CATALOGUE_MODELS_PATH = "/admin/api/catalogue-models"
 
 
-def fetch_catalogue_models(proxy_root_url: str, auth_token: str) -> dict[str, Any]:
-    """Fetch the capability-bearing catalogue payload from the local proxy."""
+def catalogue_fetch_timeout() -> float:
+    """Return this install's budget for one cold-start catalogue build.
+
+    Resolved here rather than threaded through ten launcher signatures: every
+    launcher fetches through :func:`fetch_catalogue_models` and none of them has
+    any business holding a different number. ``Settings`` clamps the field to
+    ``config.limits.LIMIT_RANGES``, whose floor is 1 s, so this can never return
+    the ``0`` that would make ``urlopen`` fail before it connected.
+    """
+
+    return float(get_settings().catalogue_fetch_timeout_seconds)
+
+
+def fetch_catalogue_models(
+    proxy_root_url: str,
+    auth_token: str,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Fetch the capability-bearing catalogue payload from the local proxy.
+
+    The budget is this route's own, never
+    ``cli.launchers.common.PROXY_PREFLIGHT_TIMEOUT_SECONDS``. That constant is
+    sized for ``GET /health``, which answers in milliseconds; this route
+    serialises every registered harness's document out of the resolution ladder
+    and measured 1.8-4.0 s on a 292-model install, so sharing the one number
+    made this call fail on every launch. ``tests/cli/test_opencode_launcher.py``
+    holds the two apart as a static guard, because the failure they produced
+    together was silent and permanent.
+    """
 
     url = f"{proxy_root_url.rstrip('/')}{CATALOGUE_MODELS_PATH}"
     headers: dict[str, str] = {}
     if token := auth_token.strip():
         headers["Authorization"] = f"Bearer {token}"
 
+    budget = catalogue_fetch_timeout() if timeout_seconds is None else timeout_seconds
     request = Request(url, headers=headers, method="GET")
-    with urlopen(request, timeout=PROXY_PREFLIGHT_TIMEOUT_SECONDS) as response:
+    with urlopen(request, timeout=budget) as response:
         payload = json.loads(response.read().decode("utf-8"))
 
     if not isinstance(payload, dict):

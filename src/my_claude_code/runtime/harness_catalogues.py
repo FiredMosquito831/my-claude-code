@@ -7,20 +7,28 @@ adding a harness with a catalogue file needs no change here.
 
 Two rules shape it.
 
-**Only refresh what exists**, with one declared exception. A catalogue file is
-created by that harness's own launcher, on the first ``mcc-<id>`` run, because
-writing one for a CLI the user does not use would leave MCC's files behind for
-a tool they never installed. The exception is a catalogue whose consumer has no
-launcher at all: the Codex App reads ``~/.fcc/codex-model-catalog.json`` from a
-persistent ``config.toml``, so nothing would ever create it. Those specs set
-``created_at_startup`` and are the only ones :meth:`ensure_exists` may create.
+**Every MCC-owned document is materialised**, at startup and on every publish.
+It did not used to be: a file was created by that harness's own launcher on the
+first ``mcc-<id>`` run and only *refreshed* here, on the reasoning that writing
+a catalogue for a CLI the user does not use leaves MCC's files behind for a tool
+they never installed. That rule cost a user every OpenCode session they tried to
+start. The launcher was the only thing that could create
+``~/.fcc/opencode-config.json``; its fetch was given the ``/health`` preflight's
+1.5 s budget for a route that measured 1.8-4.0 s; so the fetch failed, the file
+was never created, this publisher never refreshed a file that did not exist, and
+the next launch failed identically. A deadlock, not a flake.
 
-A *merge* target is stricter still. Command Code reads only its own
-``~/.commandcode/providers.json``, so MCC owns one key inside a document the
-user wrote, and the file existing proves nothing about whether MCC was ever
-invited into it. The test is therefore the presence of MCC's own key, never the
-file: a ``provider.mcc`` block must never appear in someone's config because a
-provider key rotated on a server they left running.
+The concern the old rule answered was real but misplaced: these files live under
+``~/.fcc``, which is MCC's own directory, not inside any CLI's configuration.
+Nothing is left in a tool's own directory by materialising them, and the file
+being there is what makes a launch cost no HTTP at all.
+
+A *merge* target is the exception, and is stricter than ever. Command Code reads
+only its own ``~/.commandcode/providers.json``, so MCC owns one key inside a
+document the user wrote, and the file existing proves nothing about whether MCC
+was ever invited into it. The test is therefore the presence of MCC's own key,
+never the file: a ``provider.mcc`` block must never appear in someone's config
+because a provider key rotated on a server they left running.
 
 **One CLI's failure is one CLI's failure.** Each serialiser and each write is
 isolated: a bug in one harness's mapping must not abort the others, and must
@@ -86,21 +94,21 @@ class HarnessCatalogueFanoutPublisher:
         self._catalogue_paths = dict(catalogue_paths or {})
 
     def ensure_exists(self, runtime: RequestRuntimePort) -> None:
-        """Refresh at startup, creating only the declared server-owned files."""
+        """Write every MCC-owned catalogue at startup, creating what is absent."""
 
-        self._publish(runtime, create_missing=True)
+        self._publish(runtime)
 
     def publish(self, runtime: RequestRuntimePort) -> None:
-        """Rewrite every materialised catalogue from the current ladder state."""
+        """Rewrite every MCC-owned catalogue from the current ladder state."""
 
-        self._publish(runtime, create_missing=False)
+        self._publish(runtime)
 
-    def _publish(self, runtime: RequestRuntimePort, *, create_missing: bool) -> None:
+    def _publish(self, runtime: RequestRuntimePort) -> None:
         targets = [
             (spec, path)
             for spec in harness_specs()
             if (path := self._path_for(spec)) is not None
-            and self._is_materialised(spec, path, create_missing=create_missing)
+            and self._is_writable_target(spec, path)
         ]
         if not targets:
             return
@@ -116,18 +124,17 @@ class HarnessCatalogueFanoutPublisher:
         for spec, path in targets:
             self._publish_one(spec, path, models, proxy_root_url, settings)
 
-    def _is_materialised(
-        self, spec: HarnessSpec, path: Path, *, create_missing: bool
-    ) -> bool:
-        """Return whether MCC has already written this harness's configuration.
+    def _is_writable_target(self, spec: HarnessSpec, path: Path) -> bool:
+        """Return whether this publisher may write this harness's document.
 
-        For a file MCC owns, its existence is the whole answer. For a merge
-        target the file belongs to the *user*, so its existence proves
-        nothing: a Command Code user who has never run ``mcc-commandcode``
-        already has a ``providers.json``, and finding a ``provider.mcc`` block
-        appear in it because an unrelated provider key rotated would be
-        exactly the behaviour the never-write-for-an-unlaunched-harness rule
-        exists to prevent.
+        For a document MCC owns under ``~/.fcc`` the answer is always yes: the
+        file is the launcher's whole input, and one that does not exist is a
+        launch with no MCC models in the picker. For a merge target the file
+        belongs to the *user*, so its existence proves nothing -- a Command Code
+        user who has never run ``mcc-commandcode`` already has a
+        ``providers.json``, and finding a ``provider.mcc`` block appear in it
+        because an unrelated provider key rotated on a server they left running
+        is exactly the behaviour this asymmetry exists to prevent.
         """
 
         catalogue = spec.catalogue
@@ -135,7 +142,7 @@ class HarnessCatalogueFanoutPublisher:
             return False
         if catalogue.merge is not None:
             return owned_block_present(path, catalogue.merge.owned_key_path)
-        return path.exists() or (create_missing and catalogue.created_at_startup)
+        return catalogue.filename is not None
 
     def _publish_one(
         self,
