@@ -7,6 +7,8 @@ drifted out of the manifests this way before this test existed
 ``WEBSEARCH_DIGEST_ANSWER``, ``ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE``).
 """
 
+from pydantic import AliasChoices
+
 from my_claude_code.config.admin.manifest import env_keys
 from my_claude_code.config.settings import Settings
 
@@ -30,7 +32,13 @@ def _env_key(name: str) -> str:
 
     field = Settings.model_fields[name]
     alias = field.validation_alias
-    return str(alias) if alias else name.upper()
+    if alias is None:
+        return name.upper()
+    # ``AliasChoices`` lists the canonical name first; the manifest keys on
+    # that canonical name, so resolve to it instead of the repr.
+    if isinstance(alias, AliasChoices):
+        return str(alias.choices[0])
+    return str(alias)
 
 
 def _suggested_manifest(key: str) -> str:

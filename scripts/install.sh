@@ -683,7 +683,7 @@ configure_and_verify_my_claude_code() {
         mcc-qwen mcc-crush \
         mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini \
         mcc-init mcc-chatgpt-oauth-login mcc-anthropic-oauth-login \
-        mcc-compact-log mcc-help mcc-rtk \
+        mcc-compact-log mcc-help mcc-rtk mcc-migrate \
         mcc-desktop my-claude-code; do
         if [ ! -x "$tool_bin/$command_name" ]; then
             if [ -z "$missing_commands" ]; then
@@ -756,7 +756,7 @@ else
     printf '  mcc-gemini              Launch Gemini CLI through the proxy\n'
     printf '  mcc-desktop             Open the system tray app (desktop)\n'
     printf '\nManage and inspect:\n'
-    printf '  mcc-init                Create or repair ~/.fcc/.env\n'
+    printf '  mcc-init                Create or repair ~/.mcc/.env\n'
     printf '  mcc-rtk                 Manage the RTK token optimizer\n'
     printf '  mcc-help                Show what each command does\n'
     if [ "$enable_desktop" -eq 1 ]; then

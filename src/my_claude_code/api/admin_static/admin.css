@@ -4017,6 +4017,40 @@ details.turn-pane > summary:focus-visible {
   transition: width var(--transition-normal);
 }
 
+.config-dir-banner {
+  margin: 0 0 20px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.config-dir-banner-text {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.config-dir-banner-summary,
+.config-dir-banner-error {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.config-dir-banner-error {
+  color: var(--danger, #c0392b);
+}
+
+.config-dir-migrate-button {
+  align-self: flex-start;
+}
+
 .get-started-steps {
   list-style: none;
   margin: 0 0 20px;

@@ -103,6 +103,10 @@ from my_claude_code.config.onboarding import (
 )
 from my_claude_code.config.paths import (
     claude_settings_path,
+    config_dir_path,
+    config_dir_resolution,
+    legacy_config_dir_path,
+    retired_config_dir_path,
 )
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.proxy_auth import proxy_auth_token
@@ -912,6 +916,88 @@ async def update_onboarding(
     )
     state = await _build_onboarding_state(settings)
     return _onboarding_state_response(state)
+
+
+# --------------------------------------------------------------------- config-dir migration
+class ConfigDirStatusPayload(BaseModel):
+    """Read-only snapshot of the config-dir decision, for the Get Started banner."""
+
+    current_dir: str = Field(..., alias="currentDir")
+    legacy_dir: str = Field(..., alias="legacyDir")
+    retired_dir: str = Field(..., alias="retiredDir")
+    uses_legacy_home: bool = Field(..., alias="usesLegacyHome")
+    legacy_rejected: bool = Field(..., alias="legacyRejected")
+    failed_check: str | None = Field(None, alias="failedCheck")
+    can_migrate: bool = Field(..., alias="canMigrate")
+    notice: str = ""
+    banner: str = ""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MigrateConfigDirPayload(BaseModel):
+    force: bool = False
+
+
+def _config_dir_status_payload() -> ConfigDirStatusPayload:
+    resolution = config_dir_resolution()
+    legacy_home = legacy_config_dir_path()
+    can_migrate = (
+        not resolution.uses_legacy_home and resolution.legacy_rejected
+    ) or resolution.uses_legacy_home
+    banner = ""
+    if resolution.uses_legacy_home:
+        banner = (
+            f"Your data lives in the legacy {legacy_home}. Run mcc-migrate to "
+            f"move it to {config_dir_path()}."
+        )
+    elif resolution.legacy_rejected:
+        health = resolution.legacy_health
+        check = health.failed_check if health else "unknown"
+        banner = (
+            f"{legacy_home} exists but failed the '{check}' check and was left "
+            f"untouched. Starting fresh in {config_dir_path()}."
+        )
+    return ConfigDirStatusPayload(
+        currentDir=str(config_dir_path()),
+        legacyDir=str(legacy_home),
+        retiredDir=str(retired_config_dir_path()),
+        usesLegacyHome=resolution.uses_legacy_home,
+        legacyRejected=resolution.legacy_rejected,
+        failedCheck=resolution.legacy_health.failed_check
+        if resolution.legacy_health
+        else None,
+        canMigrate=can_migrate
+        and legacy_home.is_dir()
+        and not config_dir_path().exists(),
+        notice=resolution.notice,
+        banner=banner,
+    )
+
+
+@router.get("/admin/api/config-dir")
+async def get_config_dir_status(request: Request):
+    """Config-dir decision, for the Get Started banner and the migrate button."""
+    require_loopback_admin(request)
+    return _config_dir_status_payload().model_dump(by_alias=True)
+
+
+@router.post("/admin/api/migrate-config-dir")
+async def migrate_config_dir(request: Request, payload: MigrateConfigDirPayload):
+    """Run the opt-in ``~/.fcc`` -> ``~/.mcc`` rename from the dashboard."""
+    require_loopback_admin(request)
+    from my_claude_code.cli.migrate_config_dir import (
+        MigrationError,
+        migrate_config_dir,
+    )
+
+    try:
+        summary = await asyncio.to_thread(migrate_config_dir, force=payload.force)
+    except MigrationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    status = _config_dir_status_payload().model_dump(by_alias=True)
+    status["summary"] = summary
+    return status
 
 
 def _models_page_payload(services: ApiServices) -> dict[str, Any]:

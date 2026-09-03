@@ -29,6 +29,7 @@ def build_asgi_app(
         log_path,
         level=settings.log_level,
         verbose_third_party=settings.log_raw_api_payloads,
+        retain_files=settings.server_log_retain_files,
     )
     provider_manager = ProviderRuntimeManager(
         settings,

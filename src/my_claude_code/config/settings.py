@@ -1,10 +1,11 @@
 """Flat application settings schema loaded by Pydantic Settings."""
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .constants import (
@@ -73,8 +74,8 @@ from .constants import (
 )
 from .env_files import (
     ANTHROPIC_AUTH_TOKEN_ENV,
+    LazyEnvFiles,
     env_file_override,
-    settings_env_files,
 )
 from .limits import LIMIT_RANGES
 from .model_refs import format_model_ref_list, parse_model_ref_list
@@ -1084,6 +1085,14 @@ class Settings(BaseSettings):
     # ==================== Debug / diagnostic logging (avoid sensitive content) ====================
     # Minimum log level for the JSON file sink (DEBUG, INFO, WARNING, ERROR, CRITICAL).
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    # How many rotated ``server.*.log`` files to keep. The current log file is
+    # never counted and never deleted; only the oldest rotated files beyond this
+    # cap are removed, both when a new rotation happens and at startup. ``0``
+    # keeps every rotated file. Defaults to 10 because an unbounded rotation is
+    # what produced a 17 GB ``logs/`` on an earlier install.
+    server_log_retain_files: int = Field(
+        default=10, validation_alias="SERVER_LOG_RETAIN_FILES"
+    )
     # When false (default), API and SSE helpers log only metadata (counts, lengths, ids).
     log_raw_api_payloads: bool = Field(
         default=False, validation_alias="LOG_RAW_API_PAYLOADS"
@@ -1191,7 +1200,10 @@ class Settings(BaseSettings):
     # ==================== Server ====================
     host: str = "0.0.0.0"
     port: int = 8082
-    open_admin_browser: bool = Field(default=True, validation_alias="FCC_OPEN_BROWSER")
+    open_admin_browser: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("MCC_OPEN_BROWSER", "FCC_OPEN_BROWSER"),
+    )
     # Optional proxy bearer token protecting public API endpoints.
     # Set via env `ANTHROPIC_AUTH_TOKEN`. When empty, no auth is required.
     anthropic_auth_token: str = Field(
@@ -1578,12 +1590,56 @@ class Settings(BaseSettings):
         dotenv_value = env_file_override(self.model_config, ANTHROPIC_AUTH_TOKEN_ENV)
         if dotenv_value is not None:
             self.anthropic_auth_token = dotenv_value
+        _log_legacy_fcc_env_names_once()
         return self
 
+    # Not a Field: it is derived from the resolved config directory, and a Field
+    # would make ``tests/contracts/test_every_setting_has_an_admin_field.py``
+    # demand an admin surface for it. ``store_from_settings`` reads it directly.
+    @property
+    def request_log_path(self) -> Path:
+        """The request log database path under the resolved config directory."""
+
+        from .paths import request_log_path
+
+        return request_log_path()
+
     model_config = SettingsConfigDict(
-        env_file=settings_env_files(),
+        env_file=LazyEnvFiles(),
         env_file_encoding="utf-8",
         extra="ignore",
+    )
+
+
+_LEGACY_FCC_ENV_LOGGED = False
+
+
+def _log_legacy_fcc_env_names_once() -> None:
+    """Log one line per process listing every legacy ``FCC_*`` env name in use.
+
+    The new canonical names are ``MCC_*``; the pre-6.40.0 ``FCC_*`` names are
+    still accepted as working aliases (see ``env_files`` and the
+    ``AliasChoices`` on the fields). This surfaces the rename for anyone still
+    setting the old names without breaking them.
+    """
+
+    import os
+
+    global _LEGACY_FCC_ENV_LOGGED
+    if _LEGACY_FCC_ENV_LOGGED:
+        return
+    _LEGACY_FCC_ENV_LOGGED = True
+    legacy = sorted(
+        name
+        for name in os.environ
+        if name.startswith("FCC_") and name != "FCC_ENV_FILE"
+    )
+    if not legacy:
+        return
+    logger.warning(
+        "Legacy FCC_* environment variables detected ({}). They still work, "
+        "but the canonical names are now MCC_*; consider renaming them.",
+        ", ".join(legacy),
     )
 
 

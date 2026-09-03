@@ -137,14 +137,25 @@ def test_configure_logging_defaults_to_info(tmp_path) -> None:
 
 
 def test_file_sink_bounds_rotated_log_retention(tmp_path) -> None:
-    """Five archives plus the active 50 MB file bound normal disk usage."""
+    """Rotation bounds the active file; retain_files bounds the archives."""
     log_file = tmp_path / "bounded.log"
 
     with patch.object(logging_config.logger, "add", return_value=1) as add:
-        logging_config._add_file_sink(log_file, "INFO")
+        logging_config._add_file_sink(log_file, "INFO", retain_files=10)
 
     assert add.call_args.kwargs["rotation"] == "50 MB"
-    assert add.call_args.kwargs["retention"] == 5
+    # A positive retain_files is passed straight through as the retention count.
+    assert add.call_args.kwargs["retention"] == 10
+
+
+def test_file_sink_retain_files_zero_keeps_every_rotated_file(tmp_path) -> None:
+    """``retain_files=0`` means keep all rotated files (retention=None)."""
+    log_file = tmp_path / "unbounded.log"
+
+    with patch.object(logging_config.logger, "add", return_value=1) as add:
+        logging_config._add_file_sink(log_file, "INFO", retain_files=0)
+
+    assert add.call_args.kwargs["retention"] is None
 
 
 def test_configure_logging_handles_level_change_on_restart(tmp_path) -> None:

@@ -9,10 +9,14 @@ PACKAGE_NAME="my-claude-code"
 # kept as best-effort cleanup. Absence of either tool is acceptable.
 LEGACY_PACKAGE_NAME="free-claude-code"
 FCC_HOME_DIRNAME=".fcc"
+# The new default config directory. On uninstall we purge this and, if still
+# present, the legacy ~/.fcc; ~/.fcc-old (the rollback-note dir) is left alone.
+MCC_HOME_DIRNAME=".mcc"
+RETIRED_HOME_DIRNAME=".fcc-old"
 # Must mirror every entry in [project.scripts] + [project.gui-scripts] (the
 # same list as Get-LauncherCommands in scripts/install.ps1); pinned by
 # tests/contracts/test_uninstaller_parity.py.
-FCC_COMMANDS="fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init fcc-chatgpt-oauth-login fcc-compact-log free-claude-code fcc-anthropic-oauth-login fcc-rtk fcc-help fcc-desktop mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi mcc-qwen mcc-crush mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-anthropic-oauth-login mcc-rtk mcc-help mcc-desktop my-claude-code"
+FCC_COMMANDS="fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init fcc-chatgpt-oauth-login fcc-compact-log free-claude-code fcc-anthropic-oauth-login fcc-rtk fcc-help fcc-migrate fcc-desktop mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi mcc-qwen mcc-crush mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-anthropic-oauth-login mcc-rtk mcc-help mcc-migrate mcc-desktop my-claude-code"
 
 dry_run=0
 uv_tool_bin=""
@@ -198,17 +202,31 @@ verify_fcc_commands_removed() {
     fi
 }
 
-purge_fcc_home() {
-    fcc_home="$HOME/$FCC_HOME_DIRNAME"
-    if [ ! -e "$fcc_home" ]; then
-        printf 'No FCC config directory at %s; skipping purge.\n' "$fcc_home"
+purge_config_dir() {
+    # Removes one config directory if present. The refuse-while-running guard
+    # already ran, so anything still here is safe to delete. The retired
+    # ~/.fcc-old dir is reported but never touched: it holds the user's
+    # rollback note.
+    _dir_name="$1"
+    _home="$HOME/$_dir_name"
+    if [ ! -e "$_home" ]; then
         return 0
     fi
-
-    run rm -rf "$fcc_home"
-    if [ "$dry_run" -eq 0 ] && [ -e "$fcc_home" ]; then
-        fail "FCC config directory still exists after deletion: $fcc_home"
+    if [ "$_dir_name" = "$RETIRED_HOME_DIRNAME" ]; then
+        printf 'Leaving %s in place (rollback note).\n' "$_home"
+        return 0
     fi
+    printf 'Purging %s\n' "$_home"
+    run rm -rf "$_home"
+    if [ "$dry_run" -eq 0 ] && [ -e "$_home" ]; then
+        fail "$_dir_name config directory still exists after deletion: $_home"
+    fi
+}
+
+purge_fcc_home() {
+    purge_config_dir "$MCC_HOME_DIRNAME"
+    purge_config_dir "$FCC_HOME_DIRNAME"
+    purge_config_dir "$RETIRED_HOME_DIRNAME"
 }
 
 parse_args() {

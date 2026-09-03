@@ -19,6 +19,9 @@ _current_path: Path | None = None
 _current_level = "INFO"
 _current_verbose: bool | None = None
 _sink_id: int | None = None
+# Default number of rotated ``server.*.log`` files to keep. ``0`` keeps them
+# all. Applied both when loguru rotates and by the startup sweep below.
+_default_retain_files = 10
 
 _THIRD_PARTY_LOGGERS = (
     "httpx",
@@ -32,6 +35,12 @@ _THIRD_PARTY_LOGGERS = (
 # Loguru ``logger.bind()`` key used by structured TRACE payloads; ``core/trace.py``
 # uses the identical string constant ``TRACE_PAYLOAD_BINDING``.
 _TRACE_PAYLOAD_BINDING = "trace_payload"
+
+# Beyond this many rotated files the sweep is skipped entirely: a directory with
+# an enormous number of files is more likely a misconfiguration (wrong glob,
+# wrong directory) than a real retention problem, and we refuse to bulk-delete
+# on a guess. ``retain_files`` itself is capped well below this.
+_MAX_ROTATED_FILES = 100_000
 
 # Context keys we promote to top-level JSON for traceability / grep
 _CONTEXT_KEYS = (
@@ -123,8 +132,11 @@ def _set_third_party_levels(verbose: bool) -> None:
         logging.getLogger(name).setLevel(level)
 
 
-def _add_file_sink(log_file: str | Path, level: str) -> int:
+def _add_file_sink(log_file: str | Path, level: str, retain_files: int) -> int:
     log_path = Path(log_file)
+    # ``retain_files`` is the number of rotated ``server.*.log`` files to keep.
+    # ``0`` means keep them all, which loguru expresses as ``retention=None``.
+    retention: int | None = retain_files if retain_files > 0 else None
     return logger.add(
         log_path,
         level=level,
@@ -132,9 +144,46 @@ def _add_file_sink(log_file: str | Path, level: str) -> int:
         encoding="utf-8",
         mode="a",
         rotation="50 MB",
-        retention=5,
+        retention=retention,
         enqueue=True,
     )
+
+
+def _sweep_rotated_logs(log_path: Path, retain_files: int) -> None:
+    """Delete rotated ``server.*.log`` files beyond ``retain_files``.
+
+    The current log file (``log_path`` itself) is never touched, and ``retain_files``
+    of the newest rotated files are kept; only older ones are removed. Loguru's
+    own ``retention`` only prunes as it rotates, so a directory that already holds
+    more files than the cap (an earlier install left ~340 rotated files) keeps
+    them until each one is rotated past again -- the sweep fixes that on the
+    next startup. Logs each deletion so the cap is observable.
+    """
+
+    if retain_files <= 0:
+        return
+    if retain_files >= _MAX_ROTATED_FILES:
+        return
+    stem = log_path.stem
+    suffix = log_path.suffix
+    try:
+        rotated = sorted(
+            log_path.parent.glob(f"{stem}.*{suffix}"),
+            key=lambda candidate: candidate.stat().st_mtime,
+        )
+    except OSError as exc:
+        logger.warning("Rotated-log sweep could not list {}: {}", log_path.parent, exc)
+        return
+    excess = len(rotated) - retain_files
+    if excess <= 0:
+        return
+    for old in rotated[:excess]:
+        try:
+            old.unlink()
+        except OSError as exc:
+            logger.warning("Rotated-log sweep could not remove {}: {}", old, exc)
+            continue
+        logger.info("Removed rotated log {} (retain {} files).", old, retain_files)
 
 
 def configure_logging(
@@ -143,6 +192,7 @@ def configure_logging(
     force: bool = False,
     verbose_third_party: bool = False,
     level: str = "INFO",
+    retain_files: int = _default_retain_files,
 ) -> None:
     """Configure loguru with JSON output to log_file and intercept stdlib logging.
 
@@ -151,11 +201,18 @@ def configure_logging(
     On verbosity change alone, updates only the third-party logger levels.
     Use force=True to reconfigure from scratch.
 
+    ``retain_files`` caps the number of rotated ``server.*.log`` files kept;
+    ``0`` keeps them all. The cap is applied both as loguru's rotation retention
+    and by a startup sweep, so a directory that already holds more rotated files
+    than the cap is trimmed on the next start rather than only as each one rotates
+    past. The current log file is never deleted.
+
     When ``verbose_third_party`` is false, noisy HTTP and Telegram loggers are
     capped at WARNING unless explicitly configured otherwise.
     """
     global _configured, _current_path, _current_level, _current_verbose, _sink_id
 
+    retain_files = max(0, int(retain_files))
     log_path = Path(log_file).expanduser().resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -175,7 +232,7 @@ def configure_logging(
 
         log_path.write_text("")
 
-        _sink_id = _add_file_sink(log_path, level)
+        _sink_id = _add_file_sink(log_path, level, retain_files)
 
         intercept = InterceptHandler()
         logging.root.handlers = [intercept]
@@ -185,11 +242,13 @@ def configure_logging(
     elif log_path != _current_path or level != _current_level:
         if _sink_id is not None:
             logger.remove(_sink_id)
-        _sink_id = _add_file_sink(log_path, level)
+        _sink_id = _add_file_sink(log_path, level, retain_files)
         if verbose_third_party != _current_verbose:
             _set_third_party_levels(verbose_third_party)
     else:
         _set_third_party_levels(verbose_third_party)
+
+    _sweep_rotated_logs(log_path, retain_files)
 
     _current_path = log_path
     _current_level = level

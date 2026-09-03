@@ -320,6 +320,7 @@ async function load() {
   state.loading = true;
   try {
     await loadOnboarding().catch((error) => showMessage(error.message, "error"));
+    await loadConfigDir().catch((error) => showMessage(error.message, "error"));
     await loadDashboardState();
   } finally {
     state.loading = false;
@@ -682,6 +683,77 @@ async function updateOnboarding(patch) {
   state.onboarding = data;
   renderOnboarding();
   return data;
+}
+
+// The config-dir banner tells a user on the legacy ``~/.fcc`` home (or one
+// whose legacy dir failed the health check) how to migrate to ``~/.mcc``. It is
+// purely informational unless the server can migrate right now, in which case
+// it offers the button that calls ``POST /admin/api/migrate-config-dir``. The
+// action is opt-in and atomic; the route reports the outcome and we re-render.
+async function loadConfigDir() {
+  try {
+    const data = await api("/admin/api/config-dir");
+    state.configDir = data;
+    renderConfigDirBanner();
+  } catch (err) {
+    // A pre-6.40.0 server has no such route; fail quietly and leave the
+    // checklist on its own.
+    state.configDir = null;
+  }
+  return state.configDir;
+}
+
+let configDirBannerListenersWired = false;
+
+function renderConfigDirBanner() {
+  const banner = byId("configDirBanner");
+  if (!banner) return;
+  const data = state.configDir;
+  if (!data || !data.banner) {
+    banner.hidden = true;
+    banner.innerHTML = "";
+    return;
+  }
+  banner.hidden = false;
+  banner.innerHTML = "";
+
+  const text = document.createElement("p");
+  text.className = "config-dir-banner-text";
+  text.textContent = data.banner;
+  banner.appendChild(text);
+
+  if (data.canMigrate) {
+    const button = document.createElement("button");
+    button.className = "primary-button config-dir-migrate-button";
+    button.type = "button";
+    button.textContent = "Move to ~/.mcc now";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "Moving…";
+      try {
+        const result = await api("/admin/api/migrate-config-dir", {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        state.configDir = result;
+        renderConfigDirBanner();
+        if (result && result.summary) {
+          const summary = document.createElement("p");
+          summary.className = "config-dir-banner-summary";
+          summary.textContent = result.summary;
+          banner.appendChild(summary);
+        }
+      } catch (err) {
+        button.disabled = false;
+        button.textContent = "Move to ~/.mcc now";
+        const error = document.createElement("p");
+        error.className = "config-dir-banner-error";
+        error.textContent = String(err);
+        banner.appendChild(error);
+      }
+    });
+    banner.appendChild(button);
+  }
 }
 
 // The first incomplete required step is "next" — the one worth walking

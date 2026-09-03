@@ -35,12 +35,9 @@ def _isolate_request_log(monkeypatch, tmp_path):
     """Keep request-log writes out of the real ~/.fcc directory during tests."""
     from my_claude_code.core import request_log
 
-    monkeypatch.setattr(
-        request_log,
-        "default_request_log_path",
-        lambda: tmp_path / "requests.db",
-    )
+    request_log.set_request_log_path(tmp_path / "requests.db")
     yield
+    request_log.set_request_log_path(None)
     request_log.reset_request_log_stores()
 
 
@@ -95,6 +92,21 @@ def _isolate_route_health():
     execution.reset_route_health_registries()
     yield
     execution.reset_route_health_registries()
+
+
+@pytest.fixture(autouse=True)
+def _reset_config_dir_cache():
+    """Forget the cached config-directory decision before each test.
+
+    ``config_dir_resolution()`` caches the resolved directory for the life of
+    the process; tests that redirect ``HOME``/``USERPROFILE`` to a ``tmp_path``
+    would otherwise keep using a directory resolved by an earlier test.
+    """
+    from my_claude_code.config import paths
+
+    paths.reset_config_dir_cache()
+    yield
+    paths.reset_config_dir_cache()
 
 
 @pytest.fixture(autouse=True)

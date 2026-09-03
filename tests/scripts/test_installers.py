@@ -182,10 +182,10 @@ if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
         mcc-qwen mcc-crush \
         mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini \
         mcc-init mcc-chatgpt-oauth-login mcc-anthropic-oauth-login \
-        mcc-compact-log mcc-help mcc-rtk \
+        mcc-compact-log mcc-help mcc-rtk mcc-migrate \
         mcc-desktop my-claude-code fcc-server fcc-claude fcc-claude-old fcc-pi \
         fcc-init fcc-chatgpt-oauth-login fcc-anthropic-oauth-login \
-        fcc-compact-log fcc-help fcc-rtk fcc-desktop free-claude-code \
+        fcc-compact-log fcc-help fcc-rtk fcc-migrate fcc-desktop free-claude-code \
         fcc-codex; do
         cp "$FAKE_FIXTURES/fcc-command.sh" "$FAKE_TOOL_BIN/$name"
     done
@@ -607,7 +607,7 @@ exit /b 0
 :install
 if "%FAIL_STEP%"=="fcc-install" exit /b 53
 if not exist "%FAKE_TOOL_BIN%" mkdir "%FAKE_TOOL_BIN%"
-for %%N in (mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi mcc-qwen mcc-crush mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-help mcc-rtk mcc-desktop my-claude-code fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init fcc-chatgpt-oauth-login fcc-compact-log free-claude-code) do copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%FAKE_TOOL_BIN%\%%N.cmd" >nul
+for %%N in (mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi mcc-qwen mcc-crush mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-help mcc-rtk mcc-migrate mcc-desktop my-claude-code fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init fcc-chatgpt-oauth-login fcc-compact-log fcc-migrate free-claude-code) do copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%FAKE_TOOL_BIN%\%%N.cmd" >nul
 if "%FAIL_STEP%"=="fcc-missing" del /q "%FAKE_TOOL_BIN%\mcc-server.cmd" >nul
 exit /b 0
 :update_shell
@@ -1864,7 +1864,7 @@ def test_staged_install_keeps_a_locked_shim_and_repoints_the_receipt(
     tool_dir = tmp_path / "tools" / "my-claude-code"
     for path in (bin_dir, stage_source, tool_dir):
         path.mkdir(parents=True)
-    for name in ("mcc-server.exe", "mcc-rtk.exe"):
+    for name in ("mcc-server.exe", "mcc-rtk.exe", "mcc-migrate.exe"):
         (bin_dir / name).write_bytes(b"old shim")
         (stage_source / name).write_bytes(b"new shim")
 
@@ -1880,6 +1880,8 @@ def test_staged_install_keeps_a_locked_shim_and_repoints_the_receipt(
         "\r\n"
         f'>> "{tool_dir}\\uv-receipt.toml" echo     {{ name = "mcc-server", '
         'install-path = "%UV_TOOL_BIN_DIR:\\=/%/mcc-server.exe" },\r\n'
+        f'>> "{tool_dir}\\uv-receipt.toml" echo     {{ name = "mcc-migrate", '
+        'install-path = "%UV_TOOL_BIN_DIR:\\=/%/mcc-migrate.exe" },\r\n'
         f'>> "{tool_dir}\\uv-receipt.toml" echo ]\r\n',
         encoding="utf-8",
     )

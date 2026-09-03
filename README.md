@@ -79,7 +79,7 @@ Everything is configured through the same `.env` file (see [.env.example](.env.e
 
 ### 1. Install Or Update
 
-**Pick one environment and stay in it.** On Windows you can install either in **PowerShell** or in **WSL** — both work, but install in the one where you'll actually run your coding agent. Installing in both is the most common way to end up confused, because you get two separate configs (`C:\Users\<you>\.fcc` and `~/.fcc` inside WSL) and only one of them is the one your server is reading.
+**Pick one environment and stay in it.** On Windows you can install either in **PowerShell** or in **WSL** — both work, but install in the one where you'll actually run your coding agent. Installing in both is the most common way to end up confused, because you get two separate configs (`C:\Users\<you>\`.mcc` and `~/`.mcc` inside WSL) and only one of them is the one your server is reading.
 
 > Not sure? If you already do your development inside WSL, install in WSL. Otherwise use PowerShell.
 
@@ -220,7 +220,7 @@ mcc-codex exec "hello"
 `mcc-pi` registers MCC only for that Pi process; your existing Pi settings, sessions, credentials, and extensions remain unchanged. `mcc-codex` is the same idea one layer down: it passes ephemeral `-c` assignments on the command line, so your own `~/.codex/config.toml` is never rewritten. The legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases behave identically.
 
 The OpenCode family reads its configuration from a file rather than from
-arguments, so MCC writes **its own** file under `~/.fcc` and points the launched
+arguments, so MCC writes **its own** file under `~/`.mcc` and points the launched
 process at it with the CLI's own documented variable — `OPENCODE_CONFIG` for
 OpenCode and OpenCode 2, `KILO_CONFIG` for Kilo. Your
 `~/.config/opencode/opencode.json` is never read, written or backed up, and your
@@ -274,7 +274,7 @@ Kimi Code is Moonshot's `kimi` CLI — a Python tool on PyPI, installed with `uv
 tool install kimi-cli` or `pipx`, not npm. It reads one config document,
 `~/.kimi/config.toml`, but unlike Command Code it publishes a flag naming
 another: `kimi --config-file PATH`. So MCC writes a `config.toml` of its own
-under `~/.fcc` and passes that path for the launch. **Your own
+under `~/`.mcc` and passes that path for the launch. **Your own
 `~/.kimi/config.toml` is never read, written or backed up.** Your sessions,
 skills and MCP servers are untouched too — those come from `~/.kimi` and from
 Kimi's own MCP defaults, neither of which MCC moves. The one thing that does
@@ -286,7 +286,7 @@ This is also the one agent whose generated file holds the proxy token. Kimi's
 `api_key` is a plain string — there is no `"$VAR"` reference form, and Kimi's
 environment overrides do not apply to an `anthropic`-type provider at all — so
 there is no out-of-band channel to use. The token goes into a file MCC owns
-under `~/.fcc`, mode `0600`, in the same directory as the `~/.fcc/.env` that
+under `~/`.mcc`, mode `0600`, in the same directory as the `~/.mcc/.env` that
 already holds the identical value; nothing is written into a file you own. With
 proxy auth switched off, the value written is the `fcc-no-auth` marker, which
 is not a credential.
@@ -308,7 +308,7 @@ mcc-qwen
 
 Qwen Code is Alibaba's `qwen` CLI (`npm install -g @qwen-code/qwen-code`). It
 publishes `QWEN_CODE_SYSTEM_SETTINGS_PATH`, a variable naming a settings
-document it reads, so MCC writes one of its own under `~/.fcc` and points the
+document it reads, so MCC writes one of its own under `~/`.mcc` and points the
 launch at it. **Your own `~/.qwen/settings.json` is never read for MCC's sake,
 never written and never backed up.** The document carries a
 `modelProviders.anthropic` array — every routable model with the context
@@ -340,7 +340,7 @@ mcc-crush
 
 Crush is Charm's `crush` CLI (`npm install -g @charmland/crush`, or the Go
 binary from its releases). It publishes `CRUSH_GLOBAL_CONFIG`, a variable
-naming its global config **directory**, so MCC owns `~/.fcc/crush/` and writes
+naming its global config **directory**, so MCC owns `~/.mcc/crush/` and writes
 one `crush.json` into it. **Your own `~/.config/crush` is never read for a
 provider, written or backed up** — and neither is your data directory, so every
 session, log and statistic Crush has stays where it was. The trade is that the
@@ -409,7 +409,7 @@ The four before it were unreachable until MCC grew an inbound
 lever, and none of them is a file you own.
 
 **Cline** (`npm install -g cline`) publishes `--config`, which moves its whole
-configuration *directory*. MCC owns `~/.fcc/cline/` and writes one
+configuration *directory*. MCC owns `~/.mcc/cline/` and writes one
 `providers.json` into it declaring the `openai-compatible` provider — the entry
 that takes an arbitrary base URL and makes no model-discovery call. (The
 `openai-native` the survey suggested is OpenAI's own hosted entry; `openai` is
@@ -422,7 +422,7 @@ output ceiling onto the model you asked for. It is also the second generated
 file that holds the proxy token literally, and for a measured reason: with
 `apiKey` absent and `OPENAI_API_KEY` set, a headless run did not authenticate
 and did not terminate. Same treatment as Kimi Code's — mode `0600`, under
-`~/.fcc`, beside the `.env` that already holds the same value.
+`~/`.mcc`, beside the `.env` that already holds the same value.
 
 **Goose** (Block, from its GitHub releases) is the one agent MCC configures
 without writing anything, anywhere. `OPENAI_HOST` plus
@@ -440,7 +440,7 @@ flag for each. `--model-metadata-file` takes a LiteLLM `model_cost` map with
 every model's context window, output ceiling, per-token prices and vision
 support; `--model-settings-file` takes a list saying what each model *accepts*
 — whether `--reasoning-effort` and `--thinking-tokens` will be honoured,
-whether `temperature` may be sent at all. MCC owns both under `~/.fcc`, so no
+whether `temperature` may be sent at all. MCC owns both under `~/`.mcc`, so no
 `.aider.model.*` file of yours is read or written. `OPENAI_BASE_URL` and
 `OPENAI_API_KEY` are set in the launched process only, so the token is in
 neither file. Models appear as `openai/anthropic/<provider>/<model>` — the
@@ -450,7 +450,7 @@ neither file. Models appear as `openai/anthropic/<provider>/<model>` — the
 Its `customModels[].provider: "anthropic"` accepts an arbitrary `baseUrl`, so
 `mcc-droid` talks to MCC in MCC's own native Anthropic Messages protocol with
 no translation in between. `--settings` is a runtime overlay merged for that
-process only, so MCC owns `~/.fcc/droid-settings.json` and **`~/.factory` is
+process only, so MCC owns `~/.mcc/droid-settings.json` and **`~/.factory` is
 never edited**. The key is written as Droid's own `${MCC_DROID_API_KEY}`
 reference and supplied to the launched process, so it never lands on disk. No
 Factory account is needed for a model MCC routes.
@@ -491,8 +491,8 @@ Every catalogue MCC generates for an agent carries that model's **real** metadat
 Where a CLI's schema requires a value and no provider published one, MCC fills in **that CLI's own documented default** — never a number MCC invented — and records it. You can see which numbers are guesses three ways: a `_mcc_defaulted` block in the generated file, a line on stderr when the launcher starts, and a count on the agent's dashboard card.
 
 **The server owns those files; the launcher only reads them.** Every agent's
-document lives under `~/.fcc` (`~/.fcc/opencode-config.json`,
-`~/.fcc/crush/crush.json`, and so on), it is written when the server starts and
+document lives under `~/`.mcc` (`~/.mcc/opencode-config.json`,
+`~/.mcc/crush/crush.json`, and so on), it is written when the server starts and
 rewritten every time the model catalogue is republished, and `mcc-<agent>` reads
 whichever one it needs and launches. No HTTP, no wait. A launcher asks the
 server to build a document only when that file does not exist yet — on a
@@ -505,7 +505,7 @@ launch and never written behind your back.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `CATALOGUE_FETCH_TIMEOUT_SECONDS` | `20` | Seconds an `mcc-<agent>` launcher waits for the server to build that agent's model list the first time, when no document for it exists under `~/.fcc` yet. Every later launch reads the file and spends none of it. Read by the launcher process, so a change applies to the next `mcc-<agent>` you run. Floor `1`. |
+| `CATALOGUE_FETCH_TIMEOUT_SECONDS` | `20` | Seconds an `mcc-<agent>` launcher waits for the server to build that agent's model list the first time, when no document for it exists under `~/`.mcc` yet. Every later launch reads the file and spends none of it. Read by the launcher process, so a change applies to the next `mcc-<agent>` you run. Floor `1`. |
 
 <a id="install-troubleshooting"></a>
 
@@ -612,7 +612,7 @@ See [docs/USAGE.md](docs/USAGE.md#running-the-server-with-the-desktop-tray) for 
 
 ### The window, and why app-mode is the default
 
-There is no single "native window" API that works the same way across Windows, macOS, and Linux — WebView2, WKWebView, and WebKitGTK all behave differently. So `mcc-desktop` resolves its window through a **provider chain** that prefers Chromium **app-mode**: a real browser process launched with no tabs and no URL bar, its own taskbar entry, and a private profile under `~/.fcc/desktop-profile`.
+There is no single "native window" API that works the same way across Windows, macOS, and Linux — WebView2, WKWebView, and WebKitGTK all behave differently. So `mcc-desktop` resolves its window through a **provider chain** that prefers Chromium **app-mode**: a real browser process launched with no tabs and no URL bar, its own taskbar entry, and a private profile under `~/.mcc/desktop-profile`.
 
 This preference is not aesthetic. Three things the dashboard depends on **break inside an embedded webview**: `window.open` (both OAuth logins use it), `<a download>` (the analytics export), and `navigator.clipboard` (every copy button). App-mode is a real browser process, so all three work normally.
 
@@ -632,7 +632,7 @@ The installer's opt-in `--desktop` flag (`-Desktop` on PowerShell) adds a Start 
 
 ### DESKTOP_* settings
 
-Nine settings, editable from **Admin → Providers → Desktop** (they moved off the Limits page in 6.2.0, to sit beside the live desktop panel) or directly in `~/.fcc/.env`, tune how `mcc-desktop` behaves: `DESKTOP_HEALTH_POLL_SECONDS`, `DESKTOP_HEALTH_FAILURE_THRESHOLD`, `DESKTOP_ACTIVATION_POLL_SECONDS`, `DESKTOP_SERVER_START_TIMEOUT`, `DESKTOP_ADMIN_REQUEST_TIMEOUT`, `DESKTOP_HEALTH_CHECK_INTERVAL`, `DESKTOP_WINDOW_WIDTH`, `DESKTOP_WINDOW_HEIGHT`, and `DESKTOP_BROWSER_PATH` (points at a browser binary in a nonstandard location; falls back to the built-in search with a warning if it no longer exists). Full ranges and defaults are in [docs/USAGE.md](docs/USAGE.md#desktop-settings-apply-on-the-next-launch) and the Admin UI itself.
+Nine settings, editable from **Admin → Providers → Desktop** (they moved off the Limits page in 6.2.0, to sit beside the live desktop panel) or directly in `~/.mcc/.env`, tune how `mcc-desktop` behaves: `DESKTOP_HEALTH_POLL_SECONDS`, `DESKTOP_HEALTH_FAILURE_THRESHOLD`, `DESKTOP_ACTIVATION_POLL_SECONDS`, `DESKTOP_SERVER_START_TIMEOUT`, `DESKTOP_ADMIN_REQUEST_TIMEOUT`, `DESKTOP_HEALTH_CHECK_INTERVAL`, `DESKTOP_WINDOW_WIDTH`, `DESKTOP_WINDOW_HEIGHT`, and `DESKTOP_BROWSER_PATH` (points at a browser binary in a nonstandard location; falls back to the built-in search with a warning if it no longer exists). Full ranges and defaults are in [docs/USAGE.md](docs/USAGE.md#desktop-settings-apply-on-the-next-launch) and the Admin UI itself.
 
 **These settings apply on the next `mcc-desktop` launch, not to a tray already running** — `mcc-desktop` is a separate process that reads them once at start.
 
@@ -740,7 +740,7 @@ Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` 
 
 ### Custom Providers
 
-Any OpenAI-compatible endpoint that has no card of its own can be added at runtime: **Providers → Add custom provider**, then a display name, a base URL and a key. It becomes a full provider — routable as `custom_<name>/<model>`, with its own key pool, rotation policy, proxy, benching and analytics. Two things differ from a built-in card. The base URL is used **verbatim**, so it must already include `/v1` (MCC does not append it), and the keys live in `~/.fcc/custom_providers.json` rather than `~/.fcc/.env`. Creating, enabling or re-keying a custom provider queries its `/models` once and publishes the result everywhere immediately — no restart — and **Refresh models** on the card re-runs that query on demand. The card also shows per-key health, and learns which `reasoning_effort` words the host actually accepts by asking it — so a gateway documenting `low/high/max` is sent `max` rather than a clamped `high`. Disabling pauses the routes that name it; deleting rewrites them, and says which. See [Custom providers](docs/USAGE.md#custom-providers).
+Any OpenAI-compatible endpoint that has no card of its own can be added at runtime: **Providers → Add custom provider**, then a display name, a base URL and a key. It becomes a full provider — routable as `custom_<name>/<model>`, with its own key pool, rotation policy, proxy, benching and analytics. Two things differ from a built-in card. The base URL is used **verbatim**, so it must already include `/v1` (MCC does not append it), and the keys live in `~/.mcc/custom_providers.json` rather than `~/.mcc/.env`. Creating, enabling or re-keying a custom provider queries its `/models` once and publishes the result everywhere immediately — no restart — and **Refresh models** on the card re-runs that query on demand. The card also shows per-key health, and learns which `reasoning_effort` words the host actually accepts by asking it — so a gateway documenting `low/high/max` is sent `max` rather than a clamped `high`. Disabling pauses the routes that name it; deleting rewrites them, and says which. See [Custom providers](docs/USAGE.md#custom-providers).
 
 <a id="model-provider-key-rotation"></a>
 
@@ -823,7 +823,7 @@ Claude Code never names a model — it asks for `claude-sonnet-5` and gets whate
 | `mcc/cheap` | `MODEL_HAIKU` |
 | `mcc/vision` | `MODEL_VISION` |
 
-On a default install `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU` and `MODEL_VISION` are unset, so all five collapse onto `MODEL` — primary, fallbacks and pause list together — exactly as `claude-opus-5` already does; MCC does not invent a different model for an unset tier, and the dashboard says *Same as global Opus — currently `<ref>`* rather than hiding the fact. Any one agent can be given its own chain per tier from the **Coding agents** page, which writes `~/.fcc/harness_tiers.json`; `HARNESS_TIER_ALIASES=false` keeps the pickers to concrete refs, and the router still answers an alias a client sends anyway. See [Tiers for every other coding agent](docs/USAGE.md#tiers-for-every-other-coding-agent).
+On a default install `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU` and `MODEL_VISION` are unset, so all five collapse onto `MODEL` — primary, fallbacks and pause list together — exactly as `claude-opus-5` already does; MCC does not invent a different model for an unset tier, and the dashboard says *Same as global Opus — currently `<ref>`* rather than hiding the fact. Any one agent can be given its own chain per tier from the **Coding agents** page, which writes `~/.mcc/harness_tiers.json`; `HARNESS_TIER_ALIASES=false` keeps the pickers to concrete refs, and the router still answers an alias a client sends anyway. See [Tiers for every other coding agent](docs/USAGE.md#tiers-for-every-other-coding-agent).
 
 ### Model Visibility
 
@@ -1069,7 +1069,7 @@ What it deliberately does *not* model: time already spent on the request, a prim
 
 ### Saving Settings: Blank Means Unset
 
-Pressing **Apply** writes only what you actually changed. Until 6.1.0 it did the opposite: the first Save of any field materialised *every* manifest default into `~/.fcc/.env` as a real value — and a value on disk outranks a code default forever, so on any install that had pressed Save once, **no shipped default could ever change again**. `FALLBACK_BENCH_ENABLED=false` outliving the release that flipped its default to `true` is the casualty people actually hit — and the same rule cuts the other way now that the default is `false` again: an install with `FALLBACK_BENCH_ENABLED=true` written into `~/.fcc/.env` keeps benching on until that line is removed.
+Pressing **Apply** writes only what you actually changed. Until 6.1.0 it did the opposite: the first Save of any field materialised *every* manifest default into `~/.mcc/.env` as a real value — and a value on disk outranks a code default forever, so on any install that had pressed Save once, **no shipped default could ever change again**. `FALLBACK_BENCH_ENABLED=false` outliving the release that flipped its default to `true` is the casualty people actually hit — and the same rule cuts the other way now that the default is `false` again: an install with `FALLBACK_BENCH_ENABLED=true` written into `~/.mcc/.env` keeps benching on until that line is removed.
 
 Now the managed file is the starting point, and an untouched field is written as a commented placeholder that records what it would do:
 
@@ -1281,7 +1281,7 @@ Search failures come back to the client as a proper `web_search_tool_result_erro
 
 ### Web search analytics
 
-Every logical search and each provider attempt are recorded by a non-blocking background writer in `~/.fcc/logs/websearch.db`. Route records include a correlation ID, primary and terminal providers, the attempted chain, fallback use, final status, end-to-end latency, results, and known cost. Attempt records additionally retain the complete normalized tool input and provider output: full query and domain parameters, provider answer/rich summary, every result's title/URL/snippet/full content/publication date, result count and cost. A redacted snapshot preserves the effective provider, route/fallback policy, base URL, proxy endpoint without credentials, timeout, rotation policy, credential count, capabilities, and advanced options used for that attempt. Legacy scraper outcomes use the same detail shape.
+Every logical search and each provider attempt are recorded by a non-blocking background writer in `~/.mcc/logs/websearch.db`. Route records include a correlation ID, primary and terminal providers, the attempted chain, fallback use, final status, end-to-end latency, results, and known cost. Attempt records additionally retain the complete normalized tool input and provider output: full query and domain parameters, provider answer/rich summary, every result's title/URL/snippet/full content/publication date, result count and cost. A redacted snapshot preserves the effective provider, route/fallback policy, base URL, proxy endpoint without credentials, timeout, rotation policy, credential count, capabilities, and advanced options used for that attempt. Legacy scraper outcomes use the same detail shape.
 
 The Admin UI keeps the two levels explicit: top cards and the main trend chart report logical searches, route success/fallback rate, average attempts, and end-to-end latency, while provider/key tables and recent rows report individual attempts. Each recent row has an accessible **View** dialog with effective configuration, tool input, a readable answer/result summary, and the complete normalized output JSON. Filtering searches captured input/output as well as query previews, and JSON export includes the captured detail payloads. Existing pre-4.12 attempt history remains visible, but logical-route metrics begin with 4.12:
 
@@ -1316,7 +1316,7 @@ The Admin UI (`http://127.0.0.1:8082/admin`, local-only) is the control center f
 
 ### Request Analytics
 
-MCC keeps a persistent log of every completed request (non-blocking background writer, SQLite at `~/.fcc/logs/requests.db`) and surfaces it in **Admin UI → Analytics**. Each record captures endpoint/protocol, requested and resolved model, provider, stream flag, input/output text (capped at 50k chars) with SHA-256 hashes and lengths, reasoning and params, token counts, TTFT and duration, status (success/error/cancelled), and error details. **Search** covers everything a request contains — prompt, reply, the model's reasoning, and its tool calls with their commands and arguments — and requires every word to appear somewhere in the request rather than as an exact phrase, so `proxy 8082` finds a request whose prompt mentions the proxy and whose reasoning mentions the port. Every filter (provider/model/status/endpoint/search/time range) applies consistently to metric cards, p50/p95 latency, provider/model breakdowns, top errors, charts, and the request table. Two footnotes on that consistency, both consequences of the rollup described below: p50/p95 are **interpolated from a 64-bucket log-spaced histogram** (1 ms to 30 minutes), which measured **≤ 2.3% error** on every all-time percentile of a 244k-request log, and are exact only when the call falls back to a raw scan; and a time window is **snapped outward to the whole UTC hour** when it is served from the rollup, which the payload reports as `window.snapped_since` / `window.snapped_until` beside the bounds you asked for. The dashboard adds race-safe auto-refresh, page-size controls, accessible chart legends, provider performance, JSON export, keyboard-friendly request details, explicit unavailable/stale states, and an unambiguous clear-all action (`/admin/api/requests*` endpoints back it).
+MCC keeps a persistent log of every completed request (non-blocking background writer, SQLite at `~/.mcc/logs/requests.db`) and surfaces it in **Admin UI → Analytics**. Each record captures endpoint/protocol, requested and resolved model, provider, stream flag, input/output text (capped at 50k chars) with SHA-256 hashes and lengths, reasoning and params, token counts, TTFT and duration, status (success/error/cancelled), and error details. **Search** covers everything a request contains — prompt, reply, the model's reasoning, and its tool calls with their commands and arguments — and requires every word to appear somewhere in the request rather than as an exact phrase, so `proxy 8082` finds a request whose prompt mentions the proxy and whose reasoning mentions the port. Every filter (provider/model/status/endpoint/search/time range) applies consistently to metric cards, p50/p95 latency, provider/model breakdowns, top errors, charts, and the request table. Two footnotes on that consistency, both consequences of the rollup described below: p50/p95 are **interpolated from a 64-bucket log-spaced histogram** (1 ms to 30 minutes), which measured **≤ 2.3% error** on every all-time percentile of a 244k-request log, and are exact only when the call falls back to a raw scan; and a time window is **snapped outward to the whole UTC hour** when it is served from the rollup, which the payload reports as `window.snapped_since` / `window.snapped_until` beside the bounds you asked for. The dashboard adds race-safe auto-refresh, page-size controls, accessible chart legends, provider performance, JSON export, keyboard-friendly request details, explicit unavailable/stale states, and an unambiguous clear-all action (`/admin/api/requests*` endpoints back it).
 
 ```bash
 REQUEST_LOG_ENABLED=true
@@ -1535,9 +1535,9 @@ Nothing in the 6.x line requires you to edit a file before it will start, and th
 
 1. **Check `MAX_OUTPUT_TOKENS_CEILING`.** It ships set to `131072` as of 6.8.0, where it was previously unset. If you want no ceiling at all, the value is now **`0`** — a blank field resolves to the default, not to off. See [Output Token Budget](#output-token-budget) for why it ships set.
 2. **Check `FALLBACK_BENCH_ENABLED` on Limits & Resilience** (or on Model Config — same setting). If it shows a *set here* chip and you never chose the value, an older Save wrote the then-current default into your `.env` and it outlived every release that has moved it since. Press **Use default**, or delete the line. Nothing was migrated for you on purpose: a value on disk is effective configuration, and rewriting it silently would be the worse bug.
-3. **Delete any `CREDENTIAL_CIRCUIT_THRESHOLD=` line from `~/.fcc/.env`.** The setting was removed in 6.0.0 along with the circuit breaker it configured. `Settings` is declared `extra="ignore"`, so the stale line starts fine and does nothing — which is exactly why it is worth deleting before it reads as live configuration to the next person.
+3. **Delete any `CREDENTIAL_CIRCUIT_THRESHOLD=` line from `~/.mcc/.env`.** The setting was removed in 6.0.0 along with the circuit breaker it configured. `Settings` is declared `extra="ignore"`, so the stale line starts fine and does nothing — which is exactly why it is worth deleting before it reads as live configuration to the next person.
 
-Your first Save after 6.2.0 will rewrite `~/.fcc/.env` with six section headings where there was one `# Limits` heading. No value changes; the diff just looks larger than it is.
+Your first Save after 6.2.0 will rewrite `~/.mcc/.env` with six section headings where there was one `# Limits` heading. No value changes; the diff just looks larger than it is.
 
 <a id="oauth-providers"></a>
 
@@ -1565,7 +1565,7 @@ x-anthropic-billing-header: cc_version=2.1.258; cc_entrypoint=cli;
 
 Since 6.36.0 the upstream request is Claude Code's own shape: the token goes in `Authorization: Bearer` (never `x-api-key`), `anthropic-beta` is MCC's floor unioned with the client's own list, and `user-agent`, `x-app` and `anthropic-version` are mirrored from the inbound request. Tool names go out verbatim. Before 6.36.0 this provider had never produced a successful request.
 
-MCC's own credential lives at `~/.fcc/anthropic_oauth.json` (mode `0600`). Claude Code's file is read-only to MCC and is never refreshed in place — rotating it would log out your real client. The access token is refreshed ahead of expiry in the background, single-flight per credential file, and a 401 refreshes once and retries once. A raw `ANTHROPIC_OAUTH_ACCESS_TOKEN` works as a single-value override but cannot be refreshed, and a comma-separated list of them is rejected.
+MCC's own credential lives at `~/.mcc/anthropic_oauth.json` (mode `0600`). Claude Code's file is read-only to MCC and is never refreshed in place — rotating it would log out your real client. The access token is refreshed ahead of expiry in the background, single-flight per credential file, and a 401 refreshes once and retries once. A raw `ANTHROPIC_OAUTH_ACCESS_TOKEN` works as a single-value override but cannot be refreshed, and a comma-separated list of them is rejected.
 
 The Claude subscription card on the **Providers** page reports the plan, the rate-limit tier, both token expiries, the scopes, and the 5-hour/weekly usage windows — the last of these only when a real Anthropic response carried the header, and otherwise the literal *not yet observed*.
 
@@ -1580,7 +1580,7 @@ MCC can talk directly to `chatgpt.com/backend-api/codex/responses` (OpenAI Respo
 3. `mcc-chatgpt-oauth-login` — browser PKCE locally, with immediate device-code fallback under WSL/remote sessions or when the callback cannot start. `--device` forces device login; `--browser` explicitly confirms a same-localhost browser.
 4. **Import Codex CLI Tokens** — after `codex login`, copy the complete renewable credential bundle into MCC without modifying `~/.codex/auth.json`.
 
-MCC stores its renewable credentials separately at `~/.fcc/auth/chatgpt-oauth.json`. The Admin API and `.env` contain only a non-secret managed-credential reference. A raw `CHATGPT_OAUTH_ACCESS_TOKEN` remains supported as an advanced override, but it cannot be refreshed.
+MCC stores its renewable credentials separately at `~/.mcc/auth/chatgpt-oauth.json`. The Admin API and `.env` contain only a non-secret managed-credential reference. A raw `CHATGPT_OAUTH_ACCESS_TOKEN` remains supported as an advanced override, but it cannot be refreshed.
 
 **The model list is discovered, not hardcoded.** The Codex backend answers `401` on its own models endpoint for an OAuth session, so the catalog cannot come from the gateway. MCC reads the [models.dev](https://models.dev) `openai` catalog it already caches and filters it by the same allowlist the Codex CLI uses — so a new GPT-5.x release appears after a **Refresh models** rather than after a new MCC version. A static list is used when that cache is unavailable, so a fresh offline install still has a usable picker.
 
@@ -1656,7 +1656,7 @@ env_key = "FCC_CODEX_API_KEY"
 wire_api = "responses"
 ```
 
-Match the model and port to the Admin UI. The `env_key` reads the same proxy auth token the `mcc-codex` launcher sets for each process. `mcc-server` publishes the catalog file under `~/.fcc/` on startup and whenever the model inventory changes, so restart the Codex App after setup or model changes, then select an MCC model from its model picker.
+Match the model and port to the Admin UI. The `env_key` reads the same proxy auth token the `mcc-codex` launcher sets for each process. `mcc-server` publishes the catalog file under `~/.mcc/` on startup and whenever the model inventory changes, so restart the Codex App after setup or model changes, then select an MCC model from its model picker.
 
 </details>
 
@@ -1821,7 +1821,7 @@ Restart `mcc-server`. In **Admin UI → Messaging → Voice**, enable voice note
 
 ### Desktop & token optimizer
 
-The `mcc-desktop` tray menu covers **Open Admin**, **Check Server Status**, **Restart Server**, **Server mode** (`spawn` / `attach` / `off`), **Start at Login**, **Tray Enabled**, a **Token optimizer** submenu, and **Quit**; preferences persist to `~/.fcc/desktop.json`. The **Token optimizer** card in the Admin UI controls the same RTK integration per agent as `mcc-rtk status|enable|disable|uninstall|apply`, persisted to `~/.fcc/rtk.json`. Full details, including per-platform start-at-login, are in the [Usage Guide](docs/USAGE.md).
+The `mcc-desktop` tray menu covers **Open Admin**, **Check Server Status**, **Restart Server**, **Server mode** (`spawn` / `attach` / `off`), **Start at Login**, **Tray Enabled**, a **Token optimizer** submenu, and **Quit**; preferences persist to `~/.mcc/desktop.json`. The **Token optimizer** card in the Admin UI controls the same RTK integration per agent as `mcc-rtk status|enable|disable|uninstall|apply`, persisted to `~/.mcc/rtk.json`. Full details, including per-platform start-at-login, are in the [Usage Guide](docs/USAGE.md).
 
 ## Manage Your Installation
 
@@ -1831,7 +1831,7 @@ Re-run the matching command from [Install Or Update](#install).
 
 ### Uninstall
 
-Stop every running MCC command first. The uninstaller removes the MCC uv tool, verifies every MCC command is gone, and then deletes `~/.fcc/`. It leaves uv, Python, Claude Code, Codex, Pi, and shared PATH entries intact.
+Stop every running MCC command first. The uninstaller removes the MCC uv tool, verifies every MCC command is gone, and then deletes `~/.mcc/`. It leaves uv, Python, Claude Code, Codex, Pi, and shared PATH entries intact.
 
 macOS/Linux:
 

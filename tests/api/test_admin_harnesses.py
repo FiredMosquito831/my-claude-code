@@ -117,7 +117,7 @@ def test_catalogue_card_reports_path_model_count_and_defaulted_count(
     monkeypatch.setattr(
         "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
     )
-    catalogue = tmp_path / ".fcc" / "codex-model-catalog.json"
+    catalogue = tmp_path / ".mcc" / "codex-model-catalog.json"
     catalogue.parent.mkdir(parents=True, exist_ok=True)
     catalogue.write_text(
         json.dumps(
@@ -324,7 +324,7 @@ def test_a_toml_catalogue_is_read_back_with_the_parser_its_format_needs(
     monkeypatch.setattr(
         "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
     )
-    config_dir = tmp_path / ".fcc"
+    config_dir = tmp_path / ".mcc"
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "kimi-code-config.toml").write_text(
         "\n".join(

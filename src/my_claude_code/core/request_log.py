@@ -27,8 +27,12 @@ from my_claude_code.core.request_images import CapturedImage
 from my_claude_code.core.upstream_ladder import format_status_census
 
 # ``core`` must not import ``config`` (import-boundary contract), so the
-# ``~/.fcc`` dirname convention from ``config.paths`` is mirrored here.
-_FCC_CONFIG_DIRNAME = ".fcc"
+# request-log path is not computed here. ``config.paths.request_log_path``
+# owns the directory; ``set_request_log_path`` records the resolved default
+# for this process and every entrypoint calls it before the first store is
+# opened. See ``tests/contracts/test_config_dir_is_single_sourced.py``, which
+# pins the two modules' column inventories together.
+_default_request_log_path: Path | None = None
 
 RequestStatus = Literal["success", "error", "cancelled"]
 
@@ -937,6 +941,22 @@ _REQUEST_INSERT_SQL = (
 # rollup counter, or neither.
 _ROLLUP_ACKNOWLEDGED_COLUMNS = frozenset(_REQUEST_INSERT_COLUMNS)
 
+
+# The columns a ``requests`` table must have to be one this store wrote. This
+# is the original ``CREATE TABLE`` set: every column in ``_REQUEST_INSERT_COLUMNS``
+# that is not added later by ``_ADDED_COLUMNS``. It is mirrored in
+# ``config.paths.LEGACY_REQUEST_LOG_COLUMNS`` (``core`` may not import
+# ``config``), and ``tests/contracts/test_config_dir_is_single_sourced.py`` fails
+# if the two ever drift. Used by the legacy-config health check.
+def required_request_columns() -> frozenset[str]:
+    """Return the columns a ``requests`` table must have to be from this store."""
+
+    added = {column for column, _ in _ADDED_COLUMNS}
+    return frozenset(
+        column for column in _REQUEST_INSERT_COLUMNS if column not in added
+    )
+
+
 # Written in this order by ``_store_attempts``; the placeholder count is
 # asserted against it so a column can never be added without its marker.
 _ATTEMPT_INSERT_COLUMNS = (
@@ -1048,10 +1068,40 @@ def unpack_bodies(raw: bytes) -> dict[str, Any]:
     return {name: packed[short] for short, name in _BODY_FIELDS if short in packed}
 
 
-def default_request_log_path() -> Path:
-    """Return the canonical request log database path."""
+def set_request_log_path(path: Path | None) -> None:
+    """Record the resolved request-log path as this process's default.
 
-    return Path.home() / _FCC_CONFIG_DIRNAME / "logs" / "requests.db"
+    Every MCC entrypoint calls this (via ``cli.entrypoints``) right after the
+    config directory is resolved and before any store is opened, so the path
+    honours ``MCC_CONFIG_DIR`` and the ``~/.mcc``/``~/.fcc`` rule. Tests call it
+    directly to point the log at a scratch directory; pass ``None`` to clear
+    the recorded path (used in test teardown).
+    """
+
+    global _default_request_log_path
+    _default_request_log_path = Path(path) if path is not None else None
+
+
+def default_request_log_path() -> Path:
+    """Return the canonical request log database path for this process.
+
+    Returns the path last passed to ``set_request_log_path``. ``core`` must not
+    import ``config`` (import-boundary contract, enforced by
+    ``tests/contracts/test_import_boundaries.py``), so there is no fallback
+    that resolves the directory here -- every entrypoint registers the path
+    before the first store is opened. Raises ``RuntimeError`` if it was never
+    registered.
+    """
+
+    if _default_request_log_path is None:
+        raise RuntimeError(
+            "Request log path is not registered for this process. "
+            "set_request_log_path() must be called from the entrypoint before "
+            "the first request log store is opened; ``core`` cannot resolve it "
+            "itself because the import-boundary contract forbids ``core`` from "
+            "importing ``config``."
+        )
+    return _default_request_log_path
 
 
 def cap_text(text: str | None, limit: int = MAX_TEXT_CHARS) -> str | None:
@@ -5051,6 +5101,11 @@ def store_from_settings(settings: Any) -> RequestLogStore | None:
     """Resolve the shared store for the active settings, if logging is enabled."""
     if not getattr(settings, "request_log_enabled", True):
         return None
+    # The path is whatever the entrypoint registered with
+    # ``set_request_log_path`` before the first store was opened; passing no
+    # path here honours that registration. Reading ``settings.request_log_path``
+    # instead would recompute the path from ``config_dir_path()`` and bypass
+    # both the registration and the test isolation that depends on it.
     return get_request_log_store(
         max_rows=int(getattr(settings, "request_log_max_rows", 50_000) or 50_000),
         text_max_chars=int(

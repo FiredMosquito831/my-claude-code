@@ -29,8 +29,10 @@ from my_claude_code.config.env_migrations import (
 from my_claude_code.config.env_template import load_env_template
 from my_claude_code.config.paths import (
     config_dir_path,
+    config_dir_resolution,
     legacy_env_paths,
     managed_env_path,
+    request_log_path,
 )
 from my_claude_code.config.proxy_auth import open_proxy_without_auth_error
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
@@ -187,8 +189,50 @@ def _log_bind_failure(settings: Settings, exc: OSError) -> None:
     )
 
 
+_config_dir_banner_emitted = False
+
+
+def _bootstrap_request_log_path() -> None:
+    """Register the resolved request-log path for this process (once)."""
+
+    from my_claude_code.core import request_log
+
+    request_log.set_request_log_path(request_log_path())
+
+
+def _emit_config_dir_banner() -> None:
+    """Print the legacy-config notice once per process, if it applies."""
+
+    global _config_dir_banner_emitted
+    if _config_dir_banner_emitted:
+        return
+    _config_dir_banner_emitted = True
+    resolution = config_dir_resolution()
+    if not resolution.uses_legacy_home and not resolution.legacy_rejected:
+        return
+    if resolution.uses_legacy_home:
+        logger.info(
+            "Your data lives in the legacy {}. Run mcc-migrate to move it to {}.",
+            resolution.path,
+            config_dir_path(),
+        )
+    elif resolution.legacy_rejected:
+        health = resolution.legacy_health
+        check = health.failed_check if health else "unknown"
+        logger.warning(
+            "{} exists but failed the '{}' check ({}); it was left untouched. "
+            "Starting fresh in {}.",
+            resolution.legacy_path,
+            check,
+            health.detail if health else "unknown",
+            resolution.path,
+        )
+
+
 def serve() -> None:
     """Start and supervise the FastAPI server."""
+    _bootstrap_request_log_path()
+    _emit_config_dir_banner()
     opened_admin_browser = False
     try:
         try:
@@ -340,7 +384,7 @@ def _run_supervised_server(
 
 
 def init() -> None:
-    """Scaffold config at ~/.fcc/.env."""
+    """Scaffold config at the resolved config directory's .env."""
     config_dir = config_dir_path()
     env_file = managed_env_path()
 

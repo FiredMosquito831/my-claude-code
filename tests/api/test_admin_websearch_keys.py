@@ -48,7 +48,7 @@ def _set_home(monkeypatch, tmp_path: Path) -> None:
 
 
 def _managed_env_text(tmp_path: Path) -> str:
-    env_file = tmp_path / ".fcc" / ".env"
+    env_file = tmp_path / ".mcc" / ".env"
     return env_file.read_text(encoding="utf-8")
 
 
@@ -84,7 +84,7 @@ def test_websearch_key_list_masks_keys_and_reports_no_health_when_unused(
     monkeypatch, tmp_path
 ):
     _set_home(monkeypatch, tmp_path)
-    env_file = tmp_path / ".fcc" / ".env"
+    env_file = tmp_path / ".mcc" / ".env"
     env_file.parent.mkdir(parents=True, exist_ok=True)
     env_file.write_text("EXA_API_KEY=k1-aaaa1111bbbb,k2-cccc2222dddd\n", "utf-8")
     app = create_test_app()
@@ -109,7 +109,7 @@ def test_websearch_key_list_masks_keys_and_reports_no_health_when_unused(
 
 def test_websearch_key_delete_removes_index_and_persists(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
-    env_file = tmp_path / ".fcc" / ".env"
+    env_file = tmp_path / ".mcc" / ".env"
     env_file.parent.mkdir(parents=True, exist_ok=True)
     env_file.write_text("EXA_API_KEY=k1-aaaa1111bbbb,k2-cccc2222dddd\n", "utf-8")
     app = create_test_app()

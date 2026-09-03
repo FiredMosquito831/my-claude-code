@@ -39,7 +39,7 @@ def _local_client(app) -> TestClient:
 
 
 def _isolated_home(monkeypatch, tmp_path: Path) -> None:
-    """Point ~/.fcc at a temp directory and forget any cached override table."""
+    """Point ~/.mcc at a temp directory and forget any cached override table."""
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -284,7 +284,7 @@ def test_the_three_override_states_survive_the_api(monkeypatch, tmp_path):
     assert effective["seed"]["action"] == "inherit"
 
     on_disk = json.loads(
-        (tmp_path / ".fcc" / "model_overrides.json").read_text(encoding="utf-8")
+        (tmp_path / ".mcc" / "model_overrides.json").read_text(encoding="utf-8")
     )
     assert on_disk["models"]["open_router/routed"] == {
         "top_p": 0.95,
@@ -351,7 +351,7 @@ def test_a_parameter_outside_the_allow_list_never_reaches_the_file(
     )
 
     on_disk = json.loads(
-        (tmp_path / ".fcc" / "model_overrides.json").read_text(encoding="utf-8")
+        (tmp_path / ".mcc" / "model_overrides.json").read_text(encoding="utf-8")
     )
     assert on_disk["models"]["open_router/routed"] == {"top_k": 40}
 

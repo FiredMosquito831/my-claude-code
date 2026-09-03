@@ -522,7 +522,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         restart_required=True,
     ),
     ConfigFieldSpec(
-        "FCC_OPEN_BROWSER",
+        "MCC_OPEN_BROWSER",
         "Open Admin on Startup",
         "runtime",
         "boolean",
@@ -706,6 +706,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "How much the server writes to its log file. DEBUG includes every "
             "routing decision, which is what to use when a fallback behaves "
             "unexpectedly."
+        ),
+    ),
+    ConfigFieldSpec(
+        "SERVER_LOG_RETAIN_FILES",
+        "Rotated server logs to keep",
+        "diagnostics",
+        "number",
+        settings_attr="server_log_retain_files",
+        default="10",
+        restart_required=True,
+        description=(
+            "How many rotated server.*.log files to keep. The current log file "
+            "is never counted and never deleted; only the oldest rotated files "
+            "beyond this cap are removed, both when a new rotation happens and "
+            "at startup. Set to 0 to keep every rotated file. An earlier install "
+            "left hundreds of 50 MB rotated files, so the startup sweep is what "
+            "actually reclaims the space."
         ),
     ),
     ConfigFieldSpec(

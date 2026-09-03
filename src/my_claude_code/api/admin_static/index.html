@@ -52,6 +52,7 @@
                 </div>
               </div>
               <div id="getStartedProgress" class="get-started-progress" aria-live="polite"></div>
+              <div id="configDirBanner" class="config-dir-banner" role="status" aria-live="polite" hidden></div>
               <ol id="getStartedSteps" class="get-started-steps"></ol>
               <div class="get-started-footer">
                 <button id="getStartedDismissButton" class="secondary-button" type="button">
@@ -87,7 +88,7 @@
                   <p>
                     How the optional tray app (<code>mcc-desktop</code>) and the
                     headless server (<code>mcc-server</code>) run on this machine.
-                    These write <code>~/.fcc/desktop.json</code>; the next tray
+                    These write <code>~/.mcc/desktop.json</code>; the next tray
                     launch applies Start at Login to your OS.
                   </p>
                 </div>
@@ -135,7 +136,7 @@
                   <h3>Token optimizer</h3>
                   <p>
                     Patch each coding agent with the RTK token optimizer. These write
-                    <code>~/.fcc/rtk.json</code> and apply immediately.
+                    <code>~/.mcc/rtk.json</code> and apply immediately.
                   </p>
                 </div>
               </div>
@@ -1584,8 +1585,8 @@
                   <strong>verbatim</strong>, so it must already end in <code>/v1</code> (or
                   whatever the gateway's own <code>curl</code> example puts before
                   <code>/chat/completions</code>); My Claude Code does not append it. And
-                  its keys live in <code>~/.fcc/custom_providers.json</code>, not
-                  <code>~/.fcc/.env</code>. Creating, enabling or re-keying one reads its
+                  its keys live in <code>~/.mcc/custom_providers.json</code>, not
+                  <code>~/.mcc/.env</code>. Creating, enabling or re-keying one reads its
                   model list once and publishes it everywhere immediately, with no restart;
                   if that read fails the card says so, and <em>Refresh models</em> retries
                   on demand.
@@ -1597,7 +1598,7 @@
                 <pre><code>LM_STUDIO_BASE_URL="http://127.0.0.1:1234/v1"
 OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                 <p>
-                  Everything is stored in <code>~/.fcc/.env</code>. Edit that file directly
+                  Everything is stored in <code>~/.mcc/.env</code>. Edit that file directly
                   if you prefer, then restart the server &mdash; config is read at startup.
                 </p>
                 <p>
@@ -1898,7 +1899,7 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   to something in the <code>mcc/</code> namespace is dropped with a log
                   line, because it would either loop or resolve through a provider id that
                   does not exist &mdash; and neither failure is visible from the file that
-                  caused it. Overrides live in <code>~/.fcc/harness_tiers.json</code>; the
+                  caused it. Overrides live in <code>~/.mcc/harness_tiers.json</code>; the
                   card is the supported way to edit them.
                 </p>
 
@@ -2120,7 +2121,7 @@ mcc-gemini</code></pre>
                   Each of them documents a variable naming an <em>extra</em> config file
                   &mdash; <code>OPENCODE_CONFIG</code> and <code>KILO_CONFIG</code>
                   &mdash; so the launcher writes a file of its own under
-                  <code>~/.fcc</code> and hands over its path. Your proxy token is not in
+                  <code>~/.mcc</code> and hands over its path. Your proxy token is not in
                   that file either: it is written as OpenCode's own
                   <code>{env:...}</code> substitution and supplied to the launched
                   process only. Inside those CLIs the models appear under the provider
@@ -2129,7 +2130,7 @@ mcc-gemini</code></pre>
                 <p>
                   <strong>This server owns those files; the launcher only reads
                   them.</strong> Every agent's document is written under
-                  <code>~/.fcc</code> when this server starts and rewritten whenever
+                  <code>~/.mcc</code> when this server starts and rewritten whenever
                   the model list or any model's resolved capabilities change, so
                   <code>mcc-&lt;agent&gt;</code> opens the file it needs and launches
                   &mdash; no HTTP, no wait. A launcher asks this server to build a
@@ -2162,7 +2163,7 @@ mcc-gemini</code></pre>
                   it.</strong> It is a Python tool &mdash;
                   <code>uv tool install kimi-cli</code>, not npm &mdash; and it
                   publishes <code>--config-file</code>, so this proxy writes
-                  <code>~/.fcc/kimi-code-config.toml</code> and passes that path.
+                  <code>~/.mcc/kimi-code-config.toml</code> and passes that path.
                   Your <code>~/.kimi/config.toml</code> is never read, written or
                   backed up, and your sessions and skills are untouched. Two things
                   are different from the CLIs above and both are on its card: the
@@ -2171,7 +2172,7 @@ mcc-gemini</code></pre>
                   <code>theme</code> and <code>hooks</code>; and Kimi's
                   <code>api_key</code> accepts no environment reference of any kind,
                   so this is the one generated file that holds the proxy token
-                  &mdash; mode <code>0600</code>, under <code>~/.fcc</code>, beside
+                  &mdash; mode <code>0600</code>, under <code>~/.mcc</code>, beside
                   the <code>.env</code> that already holds the same value.
                 </p>
                 <p>
@@ -2179,7 +2180,7 @@ mcc-gemini</code></pre>
                   whole config document, so neither file of yours is
                   touched.</strong> Qwen Code reads
                   <code>QWEN_CODE_SYSTEM_SETTINGS_PATH</code> and this proxy
-                  writes <code>~/.fcc/qwen-code-settings.json</code>: a
+                  writes <code>~/.mcc/qwen-code-settings.json</code>: a
                   <code>modelProviders.anthropic</code> array carrying every
                   routable model with its real context window, and an
                   <code>envKey</code> naming <code>MCC_QWEN_API_KEY</code>
@@ -2189,7 +2190,7 @@ mcc-gemini</code></pre>
                   under <code>~/.qwen</code> is read for it or written to.
                   Crush reads <code>CRUSH_GLOBAL_CONFIG</code>, which names a
                   config <em>directory</em>, so this proxy owns
-                  <code>~/.fcc/crush/</code> and writes one
+                  <code>~/.mcc/crush/</code> and writes one
                   <code>crush.json</code> into it with
                   <code>"api_key": "$MCC_CRUSH_API_KEY"</code> &mdash; Crush's
                   own documented reference form. Your
@@ -2219,7 +2220,7 @@ mcc-gemini</code></pre>
                   and none of them is your own config file. <strong>Cline</strong>
                   publishes <code>--config</code>, which moves its whole
                   configuration <em>directory</em>, so this proxy owns
-                  <code>~/.fcc/cline/</code> and writes one
+                  <code>~/.mcc/cline/</code> and writes one
                   <code>providers.json</code> into it declaring the
                   <code>openai-compatible</code> provider &mdash; the one entry
                   that takes an arbitrary base URL and makes no discovery call.
@@ -2257,7 +2258,7 @@ mcc-gemini</code></pre>
                   Anthropic Messages protocol, with no translation in between.
                   Its <code>--settings</code> flag is a runtime overlay merged
                   for that process only, so this proxy owns
-                  <code>~/.fcc/droid-settings.json</code> and
+                  <code>~/.mcc/droid-settings.json</code> and
                   <code>~/.factory</code> is never edited. The key is written as
                   Droid's own <code>${MCC_DROID_API_KEY}</code> reference and
                   supplied to the launched process, so it never lands on disk.
@@ -2268,7 +2269,7 @@ mcc-gemini</code></pre>
                   literally, for a measured reason: its environment fallback for
                   a missing <code>apiKey</code> does not authenticate a headless
                   run. Like Kimi Code's, that file is mode <code>0600</code>
-                  under <code>~/.fcc</code>, beside the <code>.env</code> that
+                  under <code>~/.mcc</code>, beside the <code>.env</code> that
                   already holds the same value. Cline also carries limits for
                   <em>one</em> model at a time &mdash; its schema has no
                   per-model array &mdash; so <code>mcc-cline -m &lt;model&gt;</code>
@@ -2556,7 +2557,7 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
 
                 <h3 id="guide-analytics">See what a request actually did</h3>
                 <p>
-                  Two local SQLite stores under <code>~/.fcc/logs/</code>, written by a
+                  Two local SQLite stores under <code>~/.mcc/logs/</code>, written by a
                   background thread so they never block a request.
                 </p>
                 <img class="guide-shot" src="/admin/img/admin-analytics.png"
@@ -2796,7 +2797,7 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>systemd --user</code> or an autostart <code>.desktop</code> entry
                   on WSL/Linux. The tray menu also covers Open Admin, Check Server
                   Status, Restart Server, Tray Enabled, and Quit; preferences live in
-                  <code>~/.fcc/desktop.json</code>.
+                  <code>~/.mcc/desktop.json</code>.
                 </p>
                 <p>
                   The <strong>Window</strong> control on the same Deployment card picks
@@ -2848,7 +2849,7 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <strong>Providers</strong> tab manages the RTK binary, which filters
                   noisy terminal output before it reaches the model. Toggle it per agent
                   (Claude Code, Codex, Pi); the state lives in
-                  <code>~/.fcc/rtk.json</code> and applies immediately. The same controls
+                  <code>~/.mcc/rtk.json</code> and applies immediately. The same controls
                   are available from the tray's Token optimizer submenu or the CLI:
                 </p>
                 <p class="guide-note">
@@ -3230,7 +3231,7 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   <code>CREDENTIAL_CIRCUIT_THRESHOLD</code> no longer exists —
                   the breaker it configured was removed along with the fixed
                   cooldown ladder and half-open probing. A stale line for it in
-                  <code>~/.fcc/.env</code> is ignored rather than fatal, but it
+                  <code>~/.mcc/.env</code> is ignored rather than fatal, but it
                   is doing nothing; delete it.
                 </p>
                 <h4>What to keep</h4>
@@ -3245,10 +3246,10 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   a blank value falls back to the built-in default rather than
                   failing. A value outside its range is refused here with the
                   range quoted; a value edited directly into
-                  <code>~/.fcc/.env</code> is clamped at startup with a warning
+                  <code>~/.mcc/.env</code> is clamped at startup with a warning
                   in the log, because a proxy that will not start is worse than
                   one running a sane number. A setting you have never chosen is
-                  written to <code>~/.fcc/.env</code> as a commented placeholder
+                  written to <code>~/.mcc/.env</code> as a commented placeholder
                   rather than a value, and <strong>Use default</strong> removes
                   the line again — so the file records what you chose, not what
                   the defaults happened to be on the day you saved.

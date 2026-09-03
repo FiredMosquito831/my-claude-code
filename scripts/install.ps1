@@ -1073,7 +1073,9 @@ function New-DesktopShortcut {
             $launcherPath = Join-Path $toolBin "mcc-desktop.exe"
         }
 
-        $configDir = Join-Path $env:USERPROFILE ".fcc"
+        # New installs keep their config in ~/.mcc; the app icon is a fresh
+        # export written into that directory, never into a legacy ~/.fcc.
+        $configDir = Join-Path $env:USERPROFILE ".mcc"
         New-Item -ItemType Directory -Path $configDir -Force | Out-Null
         $iconPath = Join-Path $configDir "app-icon.ico"
 
@@ -1209,7 +1211,7 @@ function Write-MccCommandReference {
     Write-Host "  mcc-desktop             Open the system tray app (desktop)"
     Write-Host ""
     Write-Host "Manage and inspect:"
-    Write-Host "  mcc-init                Create or repair ~/.fcc/.env"
+    Write-Host "  mcc-init                Create or repair ~/.mcc/.env"
     Write-Host "  mcc-rtk                 Manage the RTK token optimizer"
     Write-Host "  mcc-help                Show what each command does"
     if ($script:EnableDesktop) {
@@ -1250,8 +1252,9 @@ function Get-LauncherCommands {
         "mcc-qwen", "mcc-crush",
         "mcc-cline", "mcc-goose", "mcc-aider", "mcc-droid", "mcc-gemini",
         "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
-        "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-desktop",
-        "my-claude-code"
+        "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-migrate",
+        "mcc-desktop", "my-claude-code",
+        "fcc-migrate"
     )
 }
 

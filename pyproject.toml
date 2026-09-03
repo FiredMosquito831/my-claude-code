@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "6.39.2"
+version = "6.40.0"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 license = "AGPL-3.0-or-later AND MIT"
@@ -59,6 +59,7 @@ mcc-anthropic-oauth-login = "my_claude_code.cli.entrypoints:anthropic_oauth_logi
 mcc-compact-log = "my_claude_code.cli.entrypoints:compact_log"
 mcc-rtk = "my_claude_code.cli.entrypoints:rtk"
 mcc-help = "my_claude_code.cli.entrypoints:help_command"
+mcc-migrate = "my_claude_code.cli.entrypoints:migrate_config_dir"
 # Legacy command family (free-claude-code owner) — preserved as aliases that
 # resolve through the canonical my_claude_code implementation (or the
 # free_claude_code compatibility shim that re-exports it).
@@ -74,6 +75,7 @@ fcc-anthropic-oauth-login = "my_claude_code.cli.entrypoints:anthropic_oauth_logi
 fcc-compact-log = "my_claude_code.cli.entrypoints:compact_log"
 fcc-rtk = "my_claude_code.cli.entrypoints:rtk"
 fcc-help = "my_claude_code.cli.entrypoints:help_command"
+fcc-migrate = "my_claude_code.cli.entrypoints:migrate_config_dir"
 
 [project.gui-scripts]
 mcc-desktop = "my_claude_code.cli.desktop_entrypoint:launch"

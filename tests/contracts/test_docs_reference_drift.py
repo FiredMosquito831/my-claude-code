@@ -259,6 +259,27 @@ def _nav_page_names() -> frozenset[str]:
     ) | frozenset(match.group(1) for match in re.finditer(r'title:\s*"([^"]+)"', block))
 
 
+# ------------------------------------------------------------- config-dir paths
+
+#: The config directories the product actually uses. ``~/.mcc`` is the new
+#: default; ``~/.fcc`` is the legacy home and ``~/.fcc-old`` the rollback-note
+#: dir ``mcc-migrate`` writes. Quoted in code voice, a path must be one of
+#: these -- anything else is a stale ``~/.fcc`` reference the docs drift back to.
+_KNOWN_CONFIG_DIRS = frozenset({".mcc", ".fcc", ".fcc-old"})
+
+
+def _config_dir_spans(text: str) -> list[str]:
+    """Home-rooted directory paths in code voice, e.g. ``~/.mcc/.env``."""
+    spans: list[str] = []
+    for span in _code_voice(text):
+        for match in re.finditer(r"~(/\.[A-Za-z0-9_.-]+)+/?", span):
+            tail = match.group(0).split("~", 1)[1].rstrip("/")
+            name = tail.rsplit("/", 1)[-1] if "/" in tail else tail.lstrip("/")
+            if name in _KNOWN_CONFIG_DIRS:
+                spans.append(match.group(0))
+    return spans
+
+
 # -------------------------------------------------------------------- tests
 
 
@@ -397,4 +418,52 @@ def test_allowlist_has_no_dead_entries() -> None:
     assert not redundant, (
         f"{ALLOWLIST_PATH.name} exempts names that now exist for real: "
         f"{redundant}. Delete those lines so the guard covers them."
+    )
+
+
+#: A ``~/.<name>`` path in code voice whose top segment is one of these is an
+#: MCC config-dir reference and is checked; paths naming other tools
+#: (``~/.claude``, ``~/.codex`` ...) are theirs and are never ours to guard.
+_MCC_CONFIG_DIR_PATTERNS = (
+    re.compile(r"~/\.fcc(?:/|$)"),
+    re.compile(r"~/\.fcc-old(?:/|$)|~/\.fccold(?:/|$)"),
+)
+
+
+def _is_legacy_context(text: str, position: int) -> bool:
+    """A ``~/.fcc`` mention sitting inside the legacy subsection is deliberate."""
+    window = text[max(0, position - 260) : position + 80]
+    return bool(_LEGACY_CONTEXT.search(window))
+
+
+_LEGACY_CONTEXT = re.compile(
+    r"\b(legacy|older|migrated|pre[- ]6\.40|mcc[- ]migrate|move (it|your data) "
+    r"to|formerly|previous(ly)?|retired|was the old)\b",
+    re.I,
+)
+
+
+@pytest.mark.parametrize("doc_name", sorted(_doc_surfaces()))
+def test_docs_default_to_dot_mcc_not_dot_fcc(doc_name: str) -> None:
+    """An ``~/.fcc`` reference outside the legacy subsection is drift.
+
+    This is the fifth check the rename needs: the new default is ``~/.mcc``,
+    so the docs should say ``~/.mcc`` everywhere the legacy home is not being
+    discussed on purpose. The "Legacy ~/.fcc" subsection and the
+    ``mcc-migrate`` walkthrough legitimately quote ``~/.fcc``; everything else
+    is a re-drift to the old name. Other tools' directories (``~/.claude``,
+    ``~/.codex``) are not MCC config dirs and are never flagged.
+    """
+    text = _doc_surfaces()[doc_name]
+    drifted: set[str] = set()
+    for pattern in _MCC_CONFIG_DIR_PATTERNS:
+        for match in pattern.finditer(text):
+            if _is_legacy_context(text, match.start()):
+                continue
+            drifted.add(match.group(0))
+
+    assert not drifted, (
+        f"{doc_name} quotes {sorted(drifted)} outside the legacy subsection; "
+        f"the new default is ~/.mcc. Move the mention into a Legacy ~/.fcc "
+        f"subsection, or update it to ~/.mcc."
     )

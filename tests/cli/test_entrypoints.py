@@ -40,7 +40,7 @@ def _run_init(tmp_home: Path) -> tuple[str, Path]:
     """Run init() with home directory redirected to tmp_home. Returns (printed output, env_file path)."""
     from my_claude_code.cli.commands import init
 
-    env_file = tmp_home / ".fcc" / ".env"
+    env_file = tmp_home / ".mcc" / ".env"
     printed: list[str] = []
 
     with (
@@ -115,10 +115,10 @@ def test_init_migrates_legacy_xdg_env_before_template(tmp_path: Path) -> None:
 def test_legacy_env_migration_does_not_overwrite_managed_env(
     tmp_path: Path,
 ) -> None:
-    """Legacy migration never overwrites an existing ~/.fcc/.env."""
+    """Legacy migration never overwrites an existing ~/.mcc/.env."""
     from my_claude_code.cli.commands import _migrate_legacy_env_if_missing
 
-    managed_env = tmp_path / ".fcc" / ".env"
+    managed_env = tmp_path / ".mcc" / ".env"
     managed_env.parent.mkdir(parents=True)
     managed_env.write_text("MODEL=nvidia_nim/current\n", encoding="utf-8")
     legacy_env = tmp_path / "free-claude-code" / ".env"
@@ -144,8 +144,8 @@ def test_env_template_loader_uses_root_template_in_source_checkout() -> None:
 
 
 def test_init_creates_parent_directories(tmp_path: Path) -> None:
-    """init() creates ~/.fcc/ even if it doesn't exist."""
-    config_dir = tmp_path / ".fcc"
+    """init() creates ~/.mcc/ even if it doesn't exist."""
+    config_dir = tmp_path / ".mcc"
     assert not config_dir.exists()
 
     _run_init(tmp_path)
@@ -158,7 +158,7 @@ def test_init_skips_if_env_already_exists(tmp_path: Path) -> None:
     # Create it first
     _run_init(tmp_path)
 
-    env_file = tmp_path / ".fcc" / ".env"
+    env_file = tmp_path / ".mcc" / ".env"
     env_file.write_text("existing content", encoding="utf-8")
 
     output, _ = _run_init(tmp_path)
@@ -581,7 +581,7 @@ def test_serve_migrates_legacy_env_before_loading_settings(tmp_path: Path) -> No
     ):
         commands.serve()
 
-    assert (tmp_path / ".fcc" / ".env").read_text("utf-8") == (
+    assert (tmp_path / ".mcc" / ".env").read_text("utf-8") == (
         "MODEL=deepseek/deepseek-chat\n"
     )
     get_settings.assert_called_once_with()

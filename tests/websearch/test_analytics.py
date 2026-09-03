@@ -963,7 +963,7 @@ class TestRecordSearch:
         assert store.stats()["routes"]["totals"]["searches"] == 1
         assert default_websearch_db_path().is_file()
         assert default_websearch_db_path().parent.name == "logs"
-        assert default_websearch_db_path().parent.parent.name == ".fcc"
+        assert default_websearch_db_path().parent.parent.name == ".mcc"
 
     def test_shared_store_honors_max_rows_setting(self, monkeypatch) -> None:
         monkeypatch.setenv("WEBSEARCH_LOG_MAX_ROWS", "3")

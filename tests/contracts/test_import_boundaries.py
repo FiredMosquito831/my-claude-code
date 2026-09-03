@@ -96,6 +96,16 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     ),
     (
         "my_claude_code.api.admin_routes",
+        "my_claude_code.cli.migrate_config_dir",
+    ): (
+        "Owner: admin dashboard config-dir migration button. "
+        "Reason: the route delegates the opt-in ~/.fcc -> ~/.mcc rename to the "
+        "migration command; the import is deferred until the button is pressed, "
+        "and migrate_config_dir depends only on config.paths, so it does not "
+        "reintroduce a cli dependency into the api package's steady state."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
         "my_claude_code.providers.chatgpt_oauth.oauth_login",
     ): (
         "Owner: admin dashboard ChatGPT OAuth login API. "

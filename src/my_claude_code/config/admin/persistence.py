@@ -271,14 +271,15 @@ def quote_env_value(value: str) -> str:
     return value
 
 
-# Project-owned env prefix. Keys under this prefix (e.g. FCC_SMOKE_*) are
-# real, settable environment variables that belong to this project even when
-# no admin field or Settings alias reads them -- developer tooling such as
-# smoke/ reads them straight from os.environ. A populated value here is a
-# deliberate user choice and must survive a save the same way an
-# admin-managed field would; an empty value configures nothing and is safe
-# to drop.
-_FCC_OWNED_ENV_PREFIX = "FCC_"
+# Project-owned env prefixes. Keys under these prefixes (e.g. MCC_SMOKE_* and
+# the pre-6.40.0 FCC_SMOKE_*) are real, settable environment variables that
+# belong to this project even when no admin field or Settings alias reads them
+# -- developer tooling such as smoke/ reads them straight from os.environ. A
+# populated value here is a deliberate user choice and must survive a save the
+# same way an admin-managed field would; an empty value configures nothing and
+# is safe to drop. Both prefixes are accepted so MCC_* keys do not silently
+# stop being persisted the moment the canonical name is used.
+_OWNED_ENV_PREFIXES = ("MCC_", "FCC_")
 
 
 def settings_env_aliases() -> frozenset[str]:
@@ -291,9 +292,19 @@ def settings_env_aliases() -> frozenset[str]:
     the user chose.
     """
 
+    from pydantic import AliasChoices
+
+    def _alias_key(name: str, field) -> str:
+        alias = field.validation_alias
+        if alias is None:
+            return name.upper()
+        # ``AliasChoices`` lists the canonical name first; key on that.
+        if isinstance(alias, AliasChoices):
+            return str(alias.choices[0]).upper()
+        return str(alias)
+
     return frozenset(
-        str(field.validation_alias) if field.validation_alias else name.upper()
-        for name, field in Settings.model_fields.items()
+        _alias_key(name, field) for name, field in Settings.model_fields.items()
     )
 
 
@@ -314,7 +325,7 @@ def unmanaged_env_values(path: Path | None = None) -> dict[str, str]:
         for key, value in existing.items()
         if key not in managed
         and value is not None
-        and (key in aliases or (key.startswith(_FCC_OWNED_ENV_PREFIX) and value != ""))
+        and (key in aliases or (key.startswith(_OWNED_ENV_PREFIXES) and value != ""))
     }
 
 

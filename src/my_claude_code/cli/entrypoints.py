@@ -83,10 +83,28 @@ update to start the new version.
 """
 
 
+def _bootstrap_config_paths() -> None:
+    """Resolve the config directory and register the request-log path.
+
+    The one place that ties the config-dir rule to ``core.request_log`` without
+    violating the import-boundary contract: ``core`` may not import ``config``,
+    so the resolved ``request_log_path`` is pushed into ``core`` here, before
+    any store is opened. Runs once per process; later calls are a no-op.
+    """
+
+    from my_claude_code.config import paths
+    from my_claude_code.core import request_log
+
+    paths.config_dir_resolution()
+    request_log.set_request_log_path(paths.request_log_path())
+
+
 def serve(argv: Sequence[str] | None = None) -> None:
     """Start the FastAPI server."""
     if _print_version_if_requested(argv):
         return
+
+    _bootstrap_config_paths()
 
     # Keep the server composition root off metadata-only command paths.
     from my_claude_code.cli.commands import serve as run_server
@@ -95,9 +113,11 @@ def serve(argv: Sequence[str] | None = None) -> None:
 
 
 def init(argv: Sequence[str] | None = None) -> None:
-    """Scaffold config at ~/.fcc/.env."""
+    """Scaffold config at the resolved config directory's .env."""
     if _print_version_if_requested(argv):
         return
+
+    _bootstrap_config_paths()
 
     # Config initialization shares command infrastructure with the server.
     from my_claude_code.cli.commands import init as initialize_config
@@ -139,6 +159,8 @@ def compact_log(argv: Sequence[str] | None = None) -> None:
     if _print_version_if_requested(argv):
         return
 
+    _bootstrap_config_paths()
+
     from my_claude_code.cli.commands import compact_log as run_compaction
 
     run_compaction()
@@ -149,3 +171,13 @@ def rtk(argv: Sequence[str] | None = None) -> None:
     from my_claude_code.cli.rtk_commands import rtk_command
 
     rtk_command(argv)
+
+
+def migrate_config_dir(argv: Sequence[str] | None = None) -> int:
+    """Move the legacy ``~/.fcc`` home to ``~/.mcc`` (opt-in)."""
+    if _print_version_if_requested(argv):
+        return 0
+
+    from my_claude_code.cli.migrate_config_dir import main
+
+    return main(list(argv) if argv is not None else None)

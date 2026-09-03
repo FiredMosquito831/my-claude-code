@@ -29,8 +29,9 @@ $FccCommands = @(
     "mcc-qwen", "mcc-crush",
     "mcc-cline", "mcc-goose", "mcc-aider", "mcc-droid", "mcc-gemini",
     "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
-    "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-desktop",
-    "my-claude-code"
+    "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-migrate",
+    "mcc-desktop", "my-claude-code",
+    "fcc-migrate"
 )
 # GUI scripts (mcc-desktop / fcc-desktop) run as pythonw.exe out of the uv
 # tool environment rather than under a shim named after the command, so the
@@ -235,17 +236,32 @@ function Confirm-FccCommandsRemoved {
     }
 }
 
-function Purge-FccHome {
-    $fccHome = Join-Path $env:USERPROFILE $FccHomeDirname
-    if (-not (Test-Path -LiteralPath $fccHome)) {
-        Write-Host "No FCC config directory at $fccHome; skipping purge."
+function Purge-ConfigDir {
+    # Removes one config directory ($dirName) if it exists. The refuse-while-
+    # running guard already ran (Assert-NoMccProcessesRunning), so anything still
+    # here is safe to delete. $leaveAlone means "report it, but never touch it":
+    # that is ~/.fcc-old, which holds the user's rollback note.
+    param(
+        [Parameter(Mandatory)] [string] $DirName,
+        [switch] $LeaveAlone
+    )
+    # NOTE: the variable is named $targetDir, not $home -- PowerShell
+    # variables are case-insensitive and $HOME is a read-only automatic
+    # variable, so assigning to $home throws "Cannot overwrite variable
+    # HOME".
+    $targetDir = Join-Path $env:USERPROFILE $DirName
+    if (-not (Test-Path -LiteralPath $targetDir)) {
+        return
+    }
+    if ($LeaveAlone) {
+        Write-Host "Leaving $targetDir in place (user data / rollback note)."
         return
     }
 
     $commandText = @(
         "Remove-Item",
         "-LiteralPath",
-        (Format-Argument $fccHome),
+        (Format-Argument $targetDir),
         "-Recurse",
         "-Force"
     ) -join " "
@@ -254,10 +270,18 @@ function Purge-FccHome {
         return
     }
 
-    Remove-Item -LiteralPath $fccHome -Recurse -Force
-    if (Test-Path -LiteralPath $fccHome) {
-        throw "FCC config directory still exists after deletion: $fccHome"
+    Remove-Item -LiteralPath $targetDir -Recurse -Force
+    if (Test-Path -LiteralPath $targetDir) {
+        throw "$DirName config directory still exists after deletion: $targetDir"
     }
+}
+
+function Purge-FccHome {
+    # The new default (~/.mcc) and, if still present, the legacy home (~/.fcc).
+    # ~/.fcc-old is left untouched: it holds the user's rollback note.
+    Purge-ConfigDir -DirName ".mcc"
+    Purge-ConfigDir -DirName $FccHomeDirname
+    Purge-ConfigDir -DirName ".fcc-old" -LeaveAlone
 }
 
 if ($Help) {

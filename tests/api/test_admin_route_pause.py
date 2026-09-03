@@ -84,7 +84,7 @@ def test_pausing_a_model_writes_one_key_and_round_trips(monkeypatch, tmp_path):
     assert paused.json()["paused_key"] == "MODEL_OPUS_PAUSED"
     assert paused.json()["paused_value"] == "open_router/one"
 
-    env = (tmp_path / ".fcc" / ".env").read_text(encoding="utf-8")
+    env = (tmp_path / ".mcc" / ".env").read_text(encoding="utf-8")
     assert "MODEL_OPUS_PAUSED=open_router/one" in env
 
     resumed = client.post(
@@ -98,7 +98,7 @@ def test_pausing_a_model_writes_one_key_and_round_trips(monkeypatch, tmp_path):
 
     assert resumed.json()["paused_value"] == ""
     assert "MODEL_OPUS_PAUSED=open_router/one" not in (
-        tmp_path / ".fcc" / ".env"
+        tmp_path / ".mcc" / ".env"
     ).read_text(encoding="utf-8")
 
 
@@ -112,7 +112,7 @@ def test_a_pause_write_touches_no_other_setting(monkeypatch, tmp_path):
         "/admin/api/config/apply",
         json={"values": {"MODEL_OPUS_FALLBACKS": "open_router/one,open_router/two"}},
     )
-    before = (tmp_path / ".fcc" / ".env").read_text(encoding="utf-8")
+    before = (tmp_path / ".mcc" / ".env").read_text(encoding="utf-8")
 
     client.post(
         PAUSE_ENDPOINT,
@@ -122,7 +122,7 @@ def test_a_pause_write_touches_no_other_setting(monkeypatch, tmp_path):
             "paused": True,
         },
     )
-    after = (tmp_path / ".fcc" / ".env").read_text(encoding="utf-8")
+    after = (tmp_path / ".mcc" / ".env").read_text(encoding="utf-8")
 
     added = set(after.splitlines()) - set(before.splitlines())
     assert added == {"MODEL_OPUS_PAUSED=open_router/two"}
@@ -233,7 +233,7 @@ async def test_two_overlapping_pause_writes_both_survive(monkeypatch, tmp_path):
         runtime.apply_admin_config_with(builder("open_router/two")),
     )
 
-    env = (tmp_path / ".fcc" / ".env").read_text(encoding="utf-8")
+    env = (tmp_path / ".mcc" / ".env").read_text(encoding="utf-8")
     line = next(row for row in env.splitlines() if row.startswith(f"{key}="))
     assert "open_router/one" in line
     assert "open_router/two" in line
@@ -254,7 +254,7 @@ def test_a_paused_ref_is_pruned_when_it_leaves_the_chain(monkeypatch, tmp_path):
         },
     )
     assert "MODEL_OPUS_PAUSED=open_router/two" in (
-        tmp_path / ".fcc" / ".env"
+        tmp_path / ".mcc" / ".env"
     ).read_text(encoding="utf-8")
 
     client.post(
@@ -264,7 +264,7 @@ def test_a_paused_ref_is_pruned_when_it_leaves_the_chain(monkeypatch, tmp_path):
 
     # The rendered file carries a commented placeholder for every field, so
     # look for a live line rather than for the key anywhere in the text.
-    lines = (tmp_path / ".fcc" / ".env").read_text(encoding="utf-8").splitlines()
+    lines = (tmp_path / ".mcc" / ".env").read_text(encoding="utf-8").splitlines()
     assert not [row for row in lines if row.startswith("MODEL_OPUS_PAUSED=")]
 
 

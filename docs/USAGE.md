@@ -66,7 +66,7 @@ Three consequences worth internalising before you start:
 
 ## 2. Install
 
-> **Pick one environment and stay in it.** On Windows you can install under PowerShell *or* WSL. Both work — but they keep **separate configs** (`C:\Users\<you>\.fcc` versus `~/.fcc` inside WSL). Installing in both is the most common way to end up editing one config while the server reads the other.
+> **Pick one environment and stay in it.** On Windows you can install under PowerShell *or* WSL. Both work — but they keep **separate configs** (`C:\Users\<you>\`.mcc` versus `~/`.mcc` inside WSL). Installing in both is the most common way to end up editing one config while the server reads the other.
 >
 > Already develop inside WSL? Install in WSL. Otherwise use PowerShell.
 
@@ -134,13 +134,13 @@ http://127.0.0.1:8082/admin
   <img src="../assets/admin-page.png" alt="Admin dashboard overview" width="860">
 </div>
 
-The dashboard is where everything is configured. Every setting maps to a variable in `~/.fcc/.env`, and the UI writes to that same file — see [.env.example](../.env.example) for the fully annotated list. If you edit the file by hand, restart the server, because configuration is read at startup.
+The dashboard is where everything is configured. Every setting maps to a variable in `~/.mcc/.env`, and the UI writes to that same file — see [.env.example](../.env.example) for the fully annotated list. If you edit the file by hand, restart the server, because configuration is read at startup.
 
 That file records **choices, not defaults**. A setting you have never touched appears as a commented placeholder naming what the code will use — `# FALLBACK_BENCH_ENABLED= (default: false)` — and a plain `KEY=value` line means it was set from the dashboard, so the field shows *set here* beside its label. Every field prints its default underneath, and one that was set gets a **Use default** button that removes the line again. Leaving a setting alone is what lets a later release change its default for you; storing the same value freezes it, which is the point of the distinction.
 
 **Blank means unset.** Clearing a field removes its line, and the code default applies again — the one exception being a key your repo-level `.env` also sets, where MCC writes a bare `KEY=` to mask it if the setting's type accepts an empty value, and returns a warning naming the key if it does not. Warnings from a Save are shown in the dashboard rather than swallowed. Because "unset" is now a real state, selects carry an explicit **Default (…)** option and every boolean is a three-way choice — **Default (On)** / **On** / **Off** — instead of a checkbox that had no way to say "I never picked".
 
-> **If you have been running MCC since before 6.1.0, check one thing.** Until then, the first Save of *anything* wrote every field's default into `~/.fcc/.env` as a real value — and a value on disk always outranks a code default, so no default could ever change for you again. The upgrade deliberately does not rewrite those lines (a value on disk is effective configuration). Open **Limits & Resilience** and look at **Bench failures** (`FALLBACK_BENCH_ENABLED`): if it shows a *set here* chip and you never chose the value, press **Use default**. This is the setting that has moved most — off in 5.58.0, on in 5.61.0, off again in 6.14.0 — and a line on disk has outlived every one of those. Separately, the next Save after 6.2.0 regroups the file under six section headings instead of one `# Limits` heading — the diff looks large, the values are untouched.
+> **If you have been running MCC since before 6.1.0, check one thing.** Until then, the first Save of *anything* wrote every field's default into `~/.mcc/.env` as a real value — and a value on disk always outranks a code default, so no default could ever change for you again. The upgrade deliberately does not rewrite those lines (a value on disk is effective configuration). Open **Limits & Resilience** and look at **Bench failures** (`FALLBACK_BENCH_ENABLED`): if it shows a *set here* chip and you never chose the value, press **Use default**. This is the setting that has moved most — off in 5.58.0, on in 5.61.0, off again in 6.14.0 — and a line on disk has outlived every one of those. Separately, the next Save after 6.2.0 regroups the file under six section headings instead of one `# Limits` heading — the diff looks large, the values are untouched.
 
 There is also a **Guide** tab inside the dashboard with a condensed version of this document, available offline.
 
@@ -157,7 +157,7 @@ Same port. The Admin UI is additionally restricted to loopback callers — see [
 
 ### Running the server with the desktop tray
 
-Two optional commands change how the server is *owned*, and both write to the same `~/.fcc/desktop.json` state file:
+Two optional commands change how the server is *owned*, and both write to the same `~/.mcc/desktop.json` state file:
 
 | Command | What it does |
 | --- | --- |
@@ -196,7 +196,7 @@ mcc-desktop --status
 
 ### Picking a window
 
-There is no single "native window" API that behaves the same across Windows, macOS, and Linux (WebView2 / WKWebView / WebKitGTK all differ), so `mcc-desktop` resolves its window through a **provider chain** that prefers Chromium **app-mode**: a real browser process launched with no tabs and no URL bar, its own taskbar entry, and a private profile under `~/.fcc/desktop-profile`.
+There is no single "native window" API that behaves the same across Windows, macOS, and Linux (WebView2 / WKWebView / WebKitGTK all differ), so `mcc-desktop` resolves its window through a **provider chain** that prefers Chromium **app-mode**: a real browser process launched with no tabs and no URL bar, its own taskbar entry, and a private profile under `~/.mcc/desktop-profile`.
 
 This is not a cosmetic preference. Three things the dashboard depends on **break inside an embedded webview**: `window.open` (both OAuth logins use it), `<a download>` (the analytics export), and `navigator.clipboard` (every copy button). App-mode is a real browser process, so all three keep working.
 
@@ -232,7 +232,7 @@ This writes a Start Menu `.lnk` on Windows, a `.desktop` entry on Linux, and a m
 
 ### DESKTOP_* settings apply on the next launch
 
-> **These settings apply on the next `mcc-desktop` launch, not to a tray already running.** `mcc-desktop` is a separate process from `mcc-server` and reads them once at start — changing one in the dashboard or in `~/.fcc/.env` does nothing to a tray you already have open. Quit and relaunch `mcc-desktop` to pick it up.
+> **These settings apply on the next `mcc-desktop` launch, not to a tray already running.** `mcc-desktop` is a separate process from `mcc-server` and reads them once at start — changing one in the dashboard or in `~/.mcc/.env` does nothing to a tray you already have open. Quit and relaunch `mcc-desktop` to pick it up.
 
 Nine settings live under **Admin → Providers → Desktop**, beside the live desktop panel. They sat on the Limits page until 6.2.0; if you are following an older note, that is where they went.
 
@@ -527,20 +527,20 @@ names an *extra* config file, merged into its precedence chain rather than
 replacing it — `OPENCODE_CONFIG` for OpenCode
 ([docs](https://opencode.ai/docs/config/)) and `KILO_CONFIG` for Kilo
 ([docs](https://kilo.ai/docs/code-with-ai/platforms/cli)) — so MCC writes a
-document of its own under `~/.fcc` and hands the launched process its path:
+document of its own under `~/`.mcc` and hands the launched process its path:
 
 | Command | File MCC owns | Variable it is handed with |
 | --- | --- | --- |
-| `mcc-opencode` | `~/.fcc/opencode-config.json` | `OPENCODE_CONFIG` |
-| `mcc-opencode2` | `~/.fcc/opencode2-config.json` | `OPENCODE_CONFIG` |
-| `mcc-kilo` | `~/.fcc/kilo-config.json` | `KILO_CONFIG` |
+| `mcc-opencode` | `~/.mcc/opencode-config.json` | `OPENCODE_CONFIG` |
+| `mcc-opencode2` | `~/.mcc/opencode2-config.json` | `OPENCODE_CONFIG` |
+| `mcc-kilo` | `~/.mcc/kilo-config.json` | `KILO_CONFIG` |
 
 Your `~/.config/opencode/opencode.json` is never read, never written and never
 backed up. Stop launching through MCC and the file you wrote is the file you
 have.
 
 **The server owns the file; the launcher reads it.** `mcc-server` writes every
-agent's document under `~/.fcc` when it starts, and rewrites it whenever the
+agent's document under `~/`.mcc` when it starts, and rewrites it whenever the
 model inventory or any model's resolved capabilities change. `mcc-opencode`
 opens the file it needs and launches — no HTTP, no wait. It asks the server to
 build one only when the file is not there at all, which on a machine where the
@@ -649,7 +649,7 @@ things the docs would have told you are no longer true:
 
 **Your `~/.kimi/config.toml` is never read, written or backed up.** Kimi
 publishes `--config-file PATH`, so MCC writes a `config.toml` of its own at
-`~/.fcc/kimi-code-config.toml` and passes that path for the launch. The share
+`~/.mcc/kimi-code-config.toml` and passes that path for the launch. The share
 directory is deliberately *not* redirected: it also holds your sessions, your
 credentials, your plugins and the background-worker state, and moving it to
 serve one config file would hide every session you have.
@@ -665,8 +665,8 @@ reason is in the table above: `api_key` is a plain string with no `"$VAR"`,
 `"{env:VAR}"` or `"!command"` form, and Kimi's environment overrides do not
 reach an `anthropic` provider. There is no out-of-band channel, so the choice
 was a literal value or no Kimi Code support at all. The literal goes into a
-file MCC owns under `~/.fcc`, mode `0600`, in the same directory as the
-`~/.fcc/.env` that already holds the identical `ANTHROPIC_AUTH_TOKEN` in
+file MCC owns under `~/`.mcc`, mode `0600`, in the same directory as the
+`~/.mcc/.env` that already holds the identical `ANTHROPIC_AUTH_TOKEN` in
 clear — nothing is disclosed that was not disclosed already, and nothing is
 written into a document you own. With proxy auth off, the value written is the
 `fcc-no-auth` marker, which is not a credential.
@@ -707,7 +707,7 @@ the survey expected turned out to be wrong in MCC's favour:
 
 **Your `~/.qwen/settings.json` is never read for MCC's sake, never written and
 never backed up.** Qwen publishes `QWEN_CODE_SYSTEM_SETTINGS_PATH`, so MCC
-writes `~/.fcc/qwen-code-settings.json` and names it in the launched process's
+writes `~/.mcc/qwen-code-settings.json` and names it in the launched process's
 environment only.
 
 **The proxy token is not in that file.** `envKey` names an environment
@@ -751,7 +751,7 @@ on the wire, because the survey's picture of it was out of date:
 | --- | --- |
 | `crush.json` is deprecated; `crushrc` (a Bash script) is the format | Both load, and `crush schema` still publishes the full JSON schema. If a directory has both they merge, with `crushrc` winning. |
 | You configure a provider with `crush provider add …` | There is no `provider` command in `--help`. |
-| There is no config override, so MCC must merge into your file | `CRUSH_GLOBAL_CONFIG` replaces the global config **directory**, so MCC owns `~/.fcc/crush/` and writes one `crush.json` into it. No merge, no backup file. |
+| There is no config override, so MCC must merge into your file | `CRUSH_GLOBAL_CONFIG` replaces the global config **directory**, so MCC owns `~/.mcc/crush/` and writes one `crush.json` into it. No merge, no backup file. |
 | `discover_models` will find MCC's models | It asks `GET <base_url>/models` — not `/v1/models` — so it finds nothing against a root base URL, and the `/v1` base URL that would reach it breaks `POST /v1/messages`. MCC sets `discover_models: false`. |
 
 **Your `~/.config/crush` is never read for a provider, written or backed up.**
@@ -806,7 +806,7 @@ because the survey's picture of it was wrong in two ways:
 
 | What you might expect | What Cline 3.0.61 actually does |
 | --- | --- |
-| Configure it by running `cline auth --provider openai-native …` against `~/.cline` | `cline --config <dir>` moves the whole configuration directory, and Cline derives its data directory from the settings file inside it. MCC owns `~/.fcc/cline/` and passes the flag. |
+| Configure it by running `cline auth --provider openai-native …` against `~/.cline` | `cline --config <dir>` moves the whole configuration directory, and Cline derives its data directory from the settings file inside it. MCC owns `~/.mcc/cline/` and passes the flag. |
 | `openai-native` is the OpenAI-compatible provider | It is OpenAI's own hosted entry. `openai` is an alias that normalises to `openai-compatible`, which is the one described as "OpenAI-compatible chat completions endpoint", takes an arbitrary `baseUrl`, and has no `modelsSourceUrl` — so it makes no discovery call to a route MCC does not serve under that id. |
 | Writing the provider block is enough | It is not. With the block written but not selected, Cline fell back to its own hosted `cline` provider and failed with "Unauthorized … re-authenticate your Cline account". MCC passes `-P openai-compatible` on every session launch. |
 | Leave `apiKey` out and export `OPENAI_API_KEY` | Cline does have that fallback, and on 3.0.61 it neither authenticated nor terminated — the run hung. With the key in the document the same run answered in 885 ms. |
@@ -816,7 +816,7 @@ base URL is `<root>/v1`: `@ai-sdk/openai-compatible` appends `chat/completions`
 and nothing else.
 
 **This is one of two generated files that carries the proxy token literally.**
-It is MCC's own file under `~/.fcc/cline/`, mode `0600`, beside the `.env` that
+It is MCC's own file under `~/.mcc/cline/`, mode `0600`, beside the `.env` that
 already holds the same value — the same treatment, and the same justification,
 as Kimi Code's `config.toml`.
 
@@ -904,8 +904,8 @@ would mean writing into your `~`. Both have a flag, so MCC owns both files:
 
 | Flag | MCC's file | What it carries |
 | --- | --- | --- |
-| `--model-metadata-file` | `~/.fcc/aider-model-metadata.json` | LiteLLM's `model_cost` schema: `max_input_tokens`, `max_output_tokens`, `max_tokens`, `input_cost_per_token`, `output_cost_per_token`, `supports_vision`, `litellm_provider`, `mode` |
-| `--model-settings-file` | `~/.fcc/aider-model-settings.yml` | a list of `ModelSettings` records: `accepts_settings` (`reasoning_effort`, `thinking_tokens`) and `use_temperature` |
+| `--model-metadata-file` | `~/.mcc/aider-model-metadata.json` | LiteLLM's `model_cost` schema: `max_input_tokens`, `max_output_tokens`, `max_tokens`, `input_cost_per_token`, `output_cost_per_token`, `supports_vision`, `litellm_provider`, `mode` |
+| `--model-settings-file` | `~/.mcc/aider-model-settings.yml` | a list of `ModelSettings` records: `accepts_settings` (`reasoning_effort`, `thinking_tokens`) and `use_temperature` |
 
 The split is not arbitrary. The first says *what the model is*; the second says
 *what it accepts*, which is what decides whether `--reasoning-effort` is
@@ -959,7 +959,7 @@ the Anthropic SDK appends `/v1/messages` itself.
 
 | What you might expect | What Droid 0.210.0 actually does |
 | --- | --- |
-| MCC must merge into `~/.factory/config.json` | `--settings <path>` is a runtime settings overlay, merged into the same hierarchy for that process only. MCC owns `~/.fcc/droid-settings.json`. (The persistent file is `settings.json` in current versions; `config.json` is a legacy snake_case fallback. MCC touches neither.) |
+| MCC must merge into `~/.factory/config.json` | `--settings <path>` is a runtime settings overlay, merged into the same hierarchy for that process only. MCC owns `~/.mcc/droid-settings.json`. (The persistent file is `settings.json` in current versions; `config.json` is a legacy snake_case fallback. MCC touches neither.) |
 | A custom model needs a Factory login | It does not. With a fresh home and no login, `droid exec --model custom:…` logged "Invalid auth", classified the model `isByok`, made no `whoami` call and went straight to the custom base URL. |
 | The `apiKey` must be a literal | Droid documents `${VAR}` and expands it from the process environment. MCC writes `${MCC_DROID_API_KEY}` and the launcher supplies the value. |
 
@@ -1000,7 +1000,7 @@ surface — `POST /v1beta/models/{model}:generateContent` — described under
 **What `mcc-gemini` sets, and what it never touches.** Two environment
 variables in the launched process only — `GOOGLE_GEMINI_BASE_URL` pointing at
 this proxy and `GEMINI_API_KEY` carrying your `ANTHROPIC_AUTH_TOKEN` — plus one
-MCC-owned settings document at `~/.fcc/gemini-cli-settings.json`, handed to the
+MCC-owned settings document at `~/.mcc/gemini-cli-settings.json`, handed to the
 CLI through its own `GEMINI_CLI_SYSTEM_SETTINGS_PATH` variable. **Your
 `~/.gemini/settings.json` is never written and never read for authentication**,
 and the OAuth tokens beside it are never read at all: the API-key path returns
@@ -1237,7 +1237,7 @@ That 404 case trips people up constantly. If Refresh models fails with 404, chec
 
 ### Doing it by file instead
 
-Set the matching variable in `~/.fcc/.env`:
+Set the matching variable in `~/.mcc/.env`:
 
 ```bash
 NVIDIA_NIM_API_KEY="nvapi-..."
@@ -1265,9 +1265,9 @@ Any OpenAI-compatible endpoint that is not one of the 56 built-in cards can be a
 
 Creating the provider registers it, hot-reloads the provider runtime and queries `GET <base_url>/models` **once**. What that query returns is what the card reports, what `/v1/models` serves, what the **Models** page counts and what the **Model Config** pickers offer — one discovery, one answer, no restart. If it fails, MCC retries it once and then says so: the card turns red with the upstream's error, and the banner tells you to press Refresh models. A failed discovery never renders as a healthy card.
 
-**Refresh models** on a custom card does exactly what it does on a built-in remote card: re-queries the upstream's model list and republishes every generated harness catalogue, including `~/.fcc/codex-model-catalog.json`. Use it after the upstream adds a model, or after a discovery failure you have since fixed. Enabling a provider, adding a key and removing a key each re-run discovery on their own.
+**Refresh models** on a custom card does exactly what it does on a built-in remote card: re-queries the upstream's model list and republishes every generated harness catalogue, including `~/.mcc/codex-model-catalog.json`. Use it after the upstream adds a model, or after a discovery failure you have since fixed. Enabling a provider, adding a key and removing a key each re-run discovery on their own.
 
-Keys for a custom provider live in **`~/.fcc/custom_providers.json`, not `~/.fcc/.env`.** There is no environment variable for them, so the `{ENV}_API_KEY` / `{ENV}_ROTATION` file workflow does not apply — but the pool itself is the same one built-in providers use, so several keys plus a rotation policy work exactly as they do elsewhere.
+Keys for a custom provider live in **`~/.mcc/custom_providers.json`, not `~/.mcc/.env`.** There is no environment variable for them, so the `{ENV}_API_KEY` / `{ENV}_ROTATION` file workflow does not apply — but the pool itself is the same one built-in providers use, so several keys plus a rotation policy work exactly as they do elsewhere.
 
 **Per-key health.** A custom pool has always rotated, benched and cooled down on the same engine a built-in pool uses; since 6.25.0 the card also *shows* it. Each key row carries the same badge the built-in pools carry — `HEALTHY`, a cooldown with the time remaining, a lockout, or `HEALTHY (1 model)` when the key is rate-limited for one model and still serving every other. Custom pools also appear in the **Rotation, per pool** readout on the Providers tab.
 
@@ -1437,7 +1437,7 @@ Model Config: drag a row by its grip to reorder the chain, **Pause** one entry
 without deleting it, and drop a fallback onto the top slot to promote it to the
 route's own model. **Override** on a tier starts that agent's own chain,
 **Revert to global** removes it again. The result is written atomically to
-`~/.fcc/harness_tiers.json`, which you can also read or edit by hand:
+`~/.mcc/harness_tiers.json`, which you can also read or edit by hand:
 
 ```json
 {
@@ -1513,8 +1513,8 @@ global route. Nothing about the log's schema changed and exports are unchanged.
 
 ### How an agent's model list gets to disk
 
-Every agent's generated document lives under `~/.fcc` — `~/.fcc/opencode-config.json`,
-`~/.fcc/crush/crush.json`, `~/.fcc/kimi-code-config.toml` and the rest, one per
+Every agent's generated document lives under `~/`.mcc` — `~/.mcc/opencode-config.json`,
+`~/.mcc/crush/crush.json`, `~/.mcc/kimi-code-config.toml` and the rest, one per
 agent, all listed on the **Coding agents** page with the path and the time it was
 last written. They are MCC's files in MCC's own directory; nothing is ever
 written inside a CLI's own configuration folder.
@@ -1551,7 +1551,7 @@ Two agents work differently, on purpose:
 
 ### The Codex App catalog
 
-The Codex App has no launcher — it reads a persistent `~/.codex/config.toml` rather than an environment built per command. Its catalogue is written the same way every other agent's is: `mcc-server` writes `~/.fcc/codex-model-catalog.json` at startup and rewrites it whenever the model inventory *or any model's resolved capabilities* change. The Codex App points at that stable path from its config:
+The Codex App has no launcher — it reads a persistent `~/.codex/config.toml` rather than an environment built per command. Its catalogue is written the same way every other agent's is: `mcc-server` writes `~/.mcc/codex-model-catalog.json` at startup and rewrites it whenever the model inventory *or any model's resolved capabilities* change. The Codex App points at that stable path from its config:
 
 ```toml
 model_catalog_json = "/Users/YOUR_USERNAME/.fcc/codex-model-catalog.json"   # macOS
@@ -1663,7 +1663,7 @@ It means exactly one thing: this host answered a real request with a 400 whose o
 
 The same holds for the output cap a host states in a 400: the number is read out of the host's own message, applied to that request, and used to clamp later ones. It only ever lowers what is asked for.
 
-**Both memories are per process, and that is deliberate.** They live on the provider instance, so a config reload, a restart, or an update rebuilds the provider and forgets everything it had learned. Nothing is written to `~/.fcc`. A host that was briefly misconfigured therefore heals by itself rather than staying blacklisted until someone notices — at the cost of paying each 400 once more after a restart, which is one request per model.
+**Both memories are per process, and that is deliberate.** They live on the provider instance, so a config reload, a restart, or an update rebuilds the provider and forgets everything it had learned. Nothing is written to `~/`.mcc`. A host that was briefly misconfigured therefore heals by itself rather than staying blacklisted until someone notices — at the cost of paying each 400 once more after a restart, which is one request per model.
 
 A 400 that names a **sampling** parameter — `top_p`, `temperature`, `seed` — is never treated as a reasoning rejection: dropping thinking would not have fixed it, so the error is raised. So is a 400 that names nothing recognisable at all; Command Code's Anthropic endpoint answers a malformed `thinking` value with a bare `Invalid input`, and a gateway that vague gets a visible failure rather than a guess.
 
@@ -1770,7 +1770,7 @@ All **66** advanced options are editable from the Web Search tab's **Advanced op
 
 ## 10. Analytics
 
-Two separate local SQLite stores under `~/.fcc/logs/`, both written by a background thread so they never block a request.
+Two separate local SQLite stores under `~/.mcc/logs/`, both written by a background thread so they never block a request.
 
 ### Model requests
 
@@ -2128,7 +2128,7 @@ The rule behind the table is "judge a key only on signals about the key". The sa
 
 > **The deliberate gap.** A key that fails with a 5xx or a transport fault on *every single request* is never benched — rotation tries it once per request and the chain absorbs the cost. That is the trade MCC made knowingly: the failure classes that could identify such a key were the same ones emptying healthy pools by the thousand. A 401 or 403 still locks it out, which is how a genuinely dead key gets caught.
 >
-> If your `~/.fcc/.env` still carries a `CREDENTIAL_CIRCUIT_THRESHOLD=` line, it configures nothing — the breaker it belonged to was removed in 6.0.0. The line is ignored rather than fatal; delete it when convenient.
+> If your `~/.mcc/.env` still carries a `CREDENTIAL_CIRCUIT_THRESHOLD=` line, it configures nothing — the breaker it belonged to was removed in 6.0.0. The line is ignored rather than fatal; delete it when convenient.
 
 ### The RTK token optimizer
 
@@ -2142,7 +2142,7 @@ mcc-rtk uninstall           # disable every agent and remove the binary
 mcc-rtk apply               # re-apply the stored state to the machine
 ```
 
-Enablement is per agent — `claude`, `codex`, and `pi` are each toggled independently. On first enable MCC downloads the pinned RTK release, verifies its SHA-256, installs it under `~/.local/bin`, and patches the agent's own config with telemetry disabled. Desired state lives in `~/.fcc/rtk.json`; `mcc-rtk apply` reconciles the machine against that stored state after any drift.
+Enablement is per agent — `claude`, `codex`, and `pi` are each toggled independently. On first enable MCC downloads the pinned RTK release, verifies its SHA-256, installs it under `~/.local/bin`, and patches the agent's own config with telemetry disabled. Desired state lives in `~/.mcc/rtk.json`; `mcc-rtk apply` reconciles the machine against that stored state after any drift.
 
 The same controls live in the dashboard under the **Token optimizer** card and in the `mcc-desktop` tray's **Token optimizer** submenu, so the three surfaces stay in sync.
 
@@ -2322,7 +2322,7 @@ If Windows refuses to move a launcher aside (an antivirus scan, the search index
 That means a command the release publishes is genuinely absent, not merely stale. Close the `mcc-claude` window(s) and the tray, then re-run the install command. The installer exits non-zero in that case — it never reports "verified" for a command that does not exist.
 
 **Two configs on Windows.**
-If you installed under both PowerShell and WSL you have `C:\Users\<you>\.fcc` *and* `~/.fcc` inside WSL. The server prints which config directory it is using at startup — check that against the one you've been editing.
+If you installed under both PowerShell and WSL you have `C:\Users\<you>\`.mcc` *and* `~/`.mcc` inside WSL. The server prints which config directory it is using at startup — check that against the one you've been editing.
 
 **Claude Code still talks to Anthropic.**
 `~/.claude/settings.json` wins over shell exports. Confirm with `/status` — it should show `http://127.0.0.1:8082`. Check the JSON is valid and that you edited the path for your platform.
@@ -2390,7 +2390,7 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `FALLBACK_END_CLEANLY_AFTER_COMMIT` | `true` | **New in 6.15.0.** A model that fails *after* it started answering ends the message cleanly (`stop_reason: max_tokens`) instead of returning an API error under a partial answer. `false` restores the error. |
 | `FALLBACK_RESUME_AFTER_COMMIT` | `true` | **New in 6.18.0.** Rather than only ending a half-written answer, hand the text already sent to the next model on the route and splice its continuation into the same message. Falls back to the row above whenever the continuation is unusable, so it can only lengthen an answer, never break one. `false` stops at the short message. |
 | `STREAM_COMMIT_HOLDBACK_CHARS` | `0` | **New in 6.18.0.** Visible characters that must arrive before output is released, on top of `STREAM_COMMIT_HOLDBACK_SECONDS`. Raising it means a model that writes a word and dies has shown you nothing, so the route restarts on the next model invisibly; the cost is that much time-to-first-visible-word on every request. `0` uses the clock alone. |
-| `HARNESS_TIER_ALIASES` | `true` | **New in 6.38.0.** Lists `mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` at the top of every coding agent's generated picker, each a name for one of MCC's own routes rather than a model of its own. Off keeps those pickers to concrete refs; the router still resolves an alias a client sends anyway, so an agent already configured on one keeps working. Per-agent chains live in `~/.fcc/harness_tiers.json`, written by the **Coding agents** page. See [Tiers for every other coding agent](#tiers-for-every-other-coding-agent). |
+| `HARNESS_TIER_ALIASES` | `true` | **New in 6.38.0.** Lists `mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` at the top of every coding agent's generated picker, each a name for one of MCC's own routes rather than a model of its own. Off keeps those pickers to concrete refs; the router still resolves an alias a client sends anyway, so an agent already configured on one keeps working. Per-agent chains live in `~/.mcc/harness_tiers.json`, written by the **Coding agents** page. See [Tiers for every other coding agent](#tiers-for-every-other-coding-agent). |
 | `CREDENTIAL_CIRCUIT_THRESHOLD` | **removed at 6.0.0** | The circuit breaker it configured no longer exists for provider pools. A stale line is ignored, not fatal — delete it. |
 
 **Settings that moved page, not meaning:** the nine `REQUEST_LOG_*` keys are at the bottom of **Analytics**, the nine `DESKTOP_*` keys are on **Providers**, `LOG_LEVEL` joined the logging flags under **Diagnostics**, and `HTTP_*_TIMEOUT`, `PROVIDER_RATE_LIMIT`, `PROVIDER_RATE_WINDOW` and `PROVIDER_MAX_CONCURRENCY` came *onto* **Limits & Resilience**. `FALLBACK_SKIP_KINDS` stays on **Model Config**, cross-linked, because which failures abort a chain is a routing decision rather than a resilience one.
