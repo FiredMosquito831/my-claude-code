@@ -15,6 +15,7 @@ from pathlib import Path
 from my_claude_code.cli.launchers import gemini
 from my_claude_code.config.harnesses import harness_spec
 from my_claude_code.config.proxy_auth import proxy_auth_token
+from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 
 SPEC = harness_spec("gemini_cli")
 CONFIG = Path("/home/u/.fcc/gemini-cli-settings.json")
@@ -123,3 +124,42 @@ def test_the_launcher_binds_the_registry_spec_it_documents() -> None:
     # No base-URL sentinel: the CLI publishes a variable for it, so the
     # serialiser has nothing to leave behind for the launcher to resolve.
     assert SPEC.catalogue.base_url_sentinel is None
+
+
+# -------------------------------------------------------- harness attribution
+
+
+def test_the_launch_declares_which_harness_it_is() -> None:
+    """Gemini CLI's list is comma-separated, not newline-separated like Claude's."""
+
+    assert _env()[gemini.CUSTOM_HEADERS_ENV] == f"{HARNESS_HEADER}: gemini_cli"
+
+
+def test_a_users_own_custom_headers_are_kept_and_mccs_is_appended() -> None:
+    """The variable is the user's; MCC owns one entry in it, not the list.
+
+    Last wins on a duplicate name, so appending is also what makes MCC's entry
+    authoritative without deleting anything the user put there.
+    """
+
+    env = _env({gemini.CUSTOM_HEADERS_ENV: "X-Trace: abc"})
+
+    assert (
+        env[gemini.CUSTOM_HEADERS_ENV] == f"X-Trace: abc,{HARNESS_HEADER}: gemini_cli"
+    )
+
+
+def test_the_header_is_not_appended_twice_in_a_nested_launch() -> None:
+    """A launcher run inside a session it already configured adds nothing."""
+
+    already = f"{HARNESS_HEADER}: gemini_cli"
+
+    assert (
+        _env({gemini.CUSTOM_HEADERS_ENV: already})[gemini.CUSTOM_HEADERS_ENV] == already
+    )
+
+
+def test_no_document_means_no_attribution_header_either() -> None:
+    """The no-config branch sets nothing at all, and that includes this."""
+
+    assert gemini.CUSTOM_HEADERS_ENV not in _env(config_path=None)

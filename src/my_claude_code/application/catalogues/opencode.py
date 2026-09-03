@@ -68,6 +68,7 @@ from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.catalogues.base import (
     DEFAULTED_KEY,
     DefaultedFields,
+    attribution_headers,
     can_reason,
     clamp_efforts,
     visible_entries,
@@ -173,6 +174,21 @@ def build_opencode_catalogue(
                     # 6.27.0 and has been wrong ever since. One credential, in
                     # one place, spelled the way the SDK spells it.
                     "apiKey": f"{{env:{API_KEY_ENV}}}",
+                    # MCC's own attribution header, and the reason it is not
+                    # the ``Authorization`` override the comment above
+                    # describes. That key held a *credential*, in the one
+                    # place a credential did not belong; this one holds a
+                    # non-secret label -- the id of the CLI MCC just launched
+                    # -- so the request log can say "OpenCode 2 sent this"
+                    # instead of guessing from a user-agent that OpenCode,
+                    # OpenCode 2 and Kilo all share. Nothing authenticates on
+                    # it and nothing may: ``core/client_fingerprint`` treats
+                    # it as a diagnostic claim, never as an authorisation
+                    # input. The value is a sentinel because this serialiser
+                    # is shared by all three of those harnesses and cannot
+                    # tell which one it is writing for; see
+                    # ``config/harness_attribution``.
+                    "headers": attribution_headers(),
                 },
                 "models": entries,
             }

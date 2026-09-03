@@ -22,6 +22,7 @@ from typing import Any, Literal
 
 from loguru import logger
 
+from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.request_images import CapturedImage
 from my_claude_code.core.upstream_ladder import format_status_census
 
@@ -83,13 +84,27 @@ _LATENCY_STEP = math.log(_LATENCY_CEILING_MS / _LATENCY_FLOOR_MS) / (
 # the walk reaches the end and is what ``stats()`` checks before serving from
 # the rollup at all.
 _IS_LOCAL_BACKFILL_KEY = "is_local_backfilled_at"
-_ROLLUP_BACKFILL_KEY = "rollup_backfilled_at"
-_ROLLUP_BACKFILL_THROUGH_KEY = "rollup_backfilled_through"
+_HARNESS_BACKFILL_KEY = "harness_backfilled_at"
+# Versioned, and the version is load-bearing. ``harness`` joined
+# ``_ROLLUP_DIMENSIONS`` after these tables shipped, so an installed database
+# carries a completion marker for a rollup keyed on nine columns. Reusing the
+# old names would let ``_ensure_rollup_backfill`` read that marker as "already
+# done" and serve a rollup with no harness dimension in it -- a confident wrong
+# answer, which is worse than the seconds a rebuild costs. Nothing an older
+# release wrote can satisfy the v2 names.
+_ROLLUP_BACKFILL_KEY = "rollup_backfilled_at_v2"
+_ROLLUP_BACKFILL_THROUGH_KEY = "rollup_backfilled_through_v2"
+# The names their predecessors used, deleted when the rebuild is scheduled so a
+# database stops carrying a marker nothing will ever read again.
+_SUPERSEDED_ROLLUP_KEYS = ("rollup_backfilled_at", "rollup_backfilled_through")
 # Hours folded per committed transaction. One 14-second transaction would push
 # the whole rollup into the WAL before any checkpoint could run.
 _ROLLUP_CHUNK_HOURS = 24
 # Rows updated per committed chunk of the ``is_local`` backfill.
 _IS_LOCAL_CHUNK_ROWS = 5_000
+# Rows classified per committed chunk of the ``harness`` backfill. Measured on
+# the real 272 132-row log: 55 chunks, 15.8 s in total.
+_HARNESS_CHUNK_ROWS = 5_000
 _HOUR_SECONDS = 3_600
 
 # A request answered by a local optimization rule never reached a provider, so
@@ -205,6 +220,10 @@ _LIST_METADATA_COLUMNS = (
     # shape here only because no rule could have fired unrecorded.
     "optimization",
     "optimization_tokens_saved",
+    # Which coding agent sent this request. Projected into the list so a row
+    # can be labelled without being opened, and so the harness filter and the
+    # rows it selects are visibly the same fact.
+    "harness",
 )
 
 _SCHEMA = """
@@ -248,7 +267,8 @@ CREATE TABLE IF NOT EXISTS requests (
     tool_call_count INTEGER,
     optimization TEXT,
     optimization_tokens_saved INTEGER,
-    input_image_count INTEGER
+    input_image_count INTEGER,
+    harness TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts_epoch);
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
@@ -312,6 +332,11 @@ CREATE TABLE IF NOT EXISTS request_log_meta (
 # Hour and not day: ``_series`` switches to hourly buckets for windows under
 # 48 hours. Hour grain costs 4.6x the rows of day grain (4 626 against 993 on
 # the measured log) and is what makes that switch possible.
+#
+# ``harness`` is the tenth and is cheap to key on: 12 distinct values across
+# the whole measured log, and a harness barely varies inside an hour bucket
+# already split by provider, model and key, so the table grows by a small
+# factor rather than by twelve.
 _ROLLUP_DIMENSIONS = (
     "hour_epoch",
     "is_local",
@@ -322,6 +347,7 @@ _ROLLUP_DIMENSIONS = (
     "endpoint",
     "key_label",
     "optimization",
+    "harness",
 )
 
 # NULL is stored as the empty string, not as a sentinel word, so the reverse
@@ -477,6 +503,27 @@ def _upsert_sql(table: str, keys: tuple[str, ...], counters: tuple[str, ...]) ->
     )
 
 
+def _stored_headers(raw: Any) -> dict[str, str] | None:
+    """Read one row's stored ``headers`` column back into a mapping.
+
+    Anything unusable -- NULL, invalid JSON, a JSON scalar -- becomes ``None``,
+    which the classifier answers ``unknown`` for. Raising instead would let one
+    malformed blob abort the backfill and leave every row after it
+    unattributed, which is a far larger loss than the one row it protects.
+    """
+    if not isinstance(raw, str):
+        return None
+    try:
+        decoded = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    return {
+        str(name): value for name, value in decoded.items() if isinstance(value, str)
+    }
+
+
 def _is_local_value(record: RequestRecord) -> int:
     """``LOCAL_ANSWER_SQL`` applied to a record about to be written.
 
@@ -525,7 +572,7 @@ _LATENCY_BUCKET_SQL = (
 
 
 def _rollup_dimension_select(prefix: str = "") -> tuple[str, ...]:
-    """Return the nine dimension expressions read off a ``requests`` row."""
+    """Return the ten dimension expressions read off a ``requests`` row."""
     return (
         f"CAST({prefix}ts_epoch / {_HOUR_SECONDS} AS INTEGER) * {_HOUR_SECONDS}",
         f"{prefix}is_local",
@@ -536,6 +583,7 @@ def _rollup_dimension_select(prefix: str = "") -> tuple[str, ...]:
         f"{prefix}endpoint",
         f"COALESCE({prefix}key_label, '')",
         f"COALESCE({prefix}optimization, '')",
+        f"COALESCE({prefix}harness, '')",
     )
 
 
@@ -790,6 +838,14 @@ _ADDED_COLUMNS = (
         "is_local",
         "ALTER TABLE requests ADD COLUMN is_local INTEGER NOT NULL DEFAULT 0",
     ),
+    # Which coding agent sent the request. Nullable with no default, unlike
+    # ``is_local``: every row written from now on is classified at capture time
+    # and can never be NULL, so NULL means exactly "written before this column
+    # existed and not yet backfilled" -- which is what
+    # ``_ensure_harness_backfill`` uses as its own progress cursor. A
+    # ``DEFAULT 'unknown'`` would have erased that distinction and left the
+    # whole history unrecoverably unattributed.
+    ("harness", "ALTER TABLE requests ADD COLUMN harness TEXT"),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -862,6 +918,7 @@ _REQUEST_INSERT_COLUMNS = (
     "optimization",
     "optimization_tokens_saved",
     "is_local",
+    "harness",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -907,7 +964,20 @@ _EMPTY_LADDER_ROLLUP: dict[str, Any] = {
     "ladder_root_cause": "",
 }
 
-_ADDED_INDEXES = ("CREATE INDEX IF NOT EXISTS idx_requests_key ON requests(key_label)",)
+# Created here rather than in ``_SCHEMA`` for the same reason as the columns
+# above: this runs after the ALTER TABLE pass, which is the only point at which
+# ``harness`` is guaranteed to exist.
+#
+# Its own index rather than a widening of ``idx_requests_stats_v4``: the
+# comment on ``_ensure_stats_index`` records that every column added to that
+# one is another chance of the planner regression already measured there.
+# Versioned by name, so changing the column list means ``_v2`` plus a drop.
+# Measured: 0.7 s to build, and it takes the all-time harness breakdown from a
+# full table scan to 756 ms.
+_ADDED_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_requests_key ON requests(key_label)",
+    "CREATE INDEX IF NOT EXISTS idx_requests_harness_v1 ON requests(harness, ts_epoch)",
+)
 
 
 def pack_fields(values: dict[str, Any], fields: tuple[tuple[str, str], ...]) -> bytes:
@@ -1195,6 +1265,11 @@ class RequestRecord:
     # saw it is what made these invisible in analytics for their whole life.
     optimization: str | None = None
     optimization_tokens_saved: int | None = None
+    # Which coding agent sent this request, as ``client_fingerprint``
+    # classified its headers. Left None only by a caller that never saw any
+    # headers -- the API boundary always fills it, because that classifier
+    # answers ``unknown`` rather than nothing when it recognises nothing.
+    harness: str | None = None
 
     @property
     def ts_iso(self) -> str:
@@ -1419,6 +1494,14 @@ class RequestLogStore:
                 # Deliberately not part of ``_SCHEMA``: that script runs before
                 # the ALTER TABLE migration, and these tables are independent of
                 # ``requests`` anyway.
+                #
+                # The drop has to sit between the two scripts. It needs
+                # ``request_log_meta``, which ``_TOTALS_SCHEMA`` above creates;
+                # and it has to precede the CREATEs, because
+                # ``CREATE TABLE IF NOT EXISTS`` would find the stale tables and
+                # leave them, while dropping afterwards would delete the correct
+                # new ones and leave nothing behind.
+                self._drop_superseded_rollup_tables(conn)
                 conn.executescript(_ROLLUP_SCHEMA)
                 conn.executescript(_BODIES_SCHEMA)
                 self._ensure_added_columns(conn)
@@ -1431,6 +1514,43 @@ class RequestLogStore:
                 self._ensure_bodies_index(conn)
         finally:
             conn.close()
+
+    @staticmethod
+    def _drop_superseded_rollup_tables(conn: sqlite3.Connection) -> None:
+        """Discard rollup tables keyed on fewer dimensions than we now store.
+
+        The three ``request_stats_*`` tables are ``WITHOUT ROWID`` with the
+        whole dimension tuple as their PRIMARY KEY, and
+        ``CREATE TABLE IF NOT EXISTS`` never revises an existing definition. A
+        database written before ``harness`` became a dimension would therefore
+        keep its nine-column tables, and every later upsert would fold two
+        different harnesses into one bucket -- silently, and forever.
+
+        There is nothing to migrate in place: the missing dimension was never
+        recorded, so those rows cannot be split apart again. Dropping them and
+        letting ``_ensure_rollup_backfill`` rebuild is the only correct move,
+        and it is safe because ``requests`` still holds every fact the rollup
+        summarises.
+        """
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(request_stats_rollup)")
+        }
+        # An empty result is a database that has no rollup yet -- a fresh file,
+        # or one created before these tables existed. Nothing to drop.
+        if not columns or "harness" in columns:
+            return
+        for table in _ROLLUP_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        # The v2 keys cannot have been written by a release that lacked the
+        # dimension, but clearing them keeps this correct if the dimension list
+        # ever grows again under the same names.
+        for key in (
+            *_SUPERSEDED_ROLLUP_KEYS,
+            _ROLLUP_BACKFILL_KEY,
+            _ROLLUP_BACKFILL_THROUGH_KEY,
+        ):
+            conn.execute("DELETE FROM request_log_meta WHERE key = ?", (key,))
 
     @staticmethod
     def _ensure_added_columns(conn: sqlite3.Connection) -> None:
@@ -1645,6 +1765,69 @@ class RequestLogStore:
         if updated:
             logger.info(
                 "Request log marked {} locally answered rows in {:.1f}s",
+                updated,
+                time.monotonic() - started,
+            )
+
+    @classmethod
+    def _ensure_harness_backfill(cls, conn: sqlite3.Connection) -> None:
+        """Attribute rows written before the ``harness`` column existed.
+
+        Classified in Python, not in SQL. The rule is a table of user-agent
+        patterns owned by ``client_fingerprint``; re-expressing it as a
+        ``CASE WHEN`` ladder would be a second classifier, drifting from the
+        first the day Claude Code changes the shape of its user-agent. The
+        stored ``headers`` dict is exactly what ``harness_from_headers``
+        accepts, which is what lets the history and the live path share one
+        implementation instead of agreeing by inspection.
+
+        Chunked and committed per chunk, for the reason
+        ``_ensure_is_local_backfill`` gives: a single UPDATE over the whole
+        table would hold one long write transaction and push every changed page
+        into the WAL before a checkpoint could run.
+
+        Resumability needs no cursor of its own, unlike the rollup's stored
+        hour marker. ``harness IS NULL`` *is* the progress: a committed chunk
+        stops matching the predicate, so a restart resumes exactly where the
+        last commit left off and can never redo work. The rollup needs a marker
+        only because it writes to a different table and cannot see its own
+        progress in the rows it is reading.
+        """
+        if cls._meta_get(conn, _HARNESS_BACKFILL_KEY) is not None:
+            return
+        started = time.monotonic()
+        updated = 0
+        try:
+            while True:
+                rows = conn.execute(
+                    "SELECT id, headers FROM requests WHERE harness IS NULL LIMIT ?",
+                    (_HARNESS_CHUNK_ROWS,),
+                ).fetchall()
+                if not rows:
+                    break
+                updates = [
+                    (
+                        harness_from_headers(_stored_headers(row[1])).harness,
+                        str(row[0]),
+                    )
+                    for row in rows
+                ]
+                with conn:
+                    conn.executemany(
+                        "UPDATE requests SET harness = ? WHERE id = ?", updates
+                    )
+                updated += len(updates)
+            with conn:
+                cls._meta_set(conn, _HARNESS_BACKFILL_KEY, str(time.time()))
+        except sqlite3.Error as exc:
+            # Same rule as the siblings: a concurrent store on the same file may
+            # have won the race, and its marker means "already done", not
+            # "corrupt". Committed chunks stay; the next start resumes.
+            logger.warning("Request log harness backfill skipped: {}", exc)
+            return
+        if updated:
+            logger.info(
+                "Request log attributed {} rows to a harness in {:.1f}s",
                 updated,
                 time.monotonic() - started,
             )
@@ -2172,6 +2355,11 @@ class RequestLogStore:
             # Before the rollup backfill, which keys every bucket on the stored
             # column this fills in.
             self._ensure_is_local_backfill(conn)
+            # And so is this one, for exactly the same reason: ``harness`` is a
+            # rollup dimension, so a bucket built while the column was still
+            # NULL would be keyed on the empty string and never agree with the
+            # rows it summarises.
+            self._ensure_harness_backfill(conn)
             # Must precede the first flush: these aggregates and the live
             # accumulator would otherwise both count any request written in
             # between.
@@ -2276,7 +2464,7 @@ class RequestLogStore:
 
     @staticmethod
     def _rollup_key(record: RequestRecord) -> tuple[Any, ...]:
-        """The nine dimension values of one record, as the rollup stores them.
+        """The ten dimension values of one record, as the rollup stores them.
 
         SQL NULL is stored as the empty string, matching the ``COALESCE(x, '')``
         the backfill uses, so a row written live and the same row rebuilt by the
@@ -2292,6 +2480,7 @@ class RequestLogStore:
             record.endpoint,
             record.key_label or "",
             record.optimization or "",
+            record.harness or "",
         )
 
     @staticmethod
@@ -2865,6 +3054,7 @@ class RequestLogStore:
             record.optimization,
             record.optimization_tokens_saved,
             _is_local_value(record),
+            record.harness,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose
@@ -2920,6 +3110,7 @@ class RequestLogStore:
         until: float | None = None,
         q: str | None = None,
         local: str | None = None,
+        harness: str | None = None,
     ) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         args: list[Any] = []
@@ -2968,6 +3159,16 @@ class RequestLogStore:
                 clauses.append(f"({' OR '.join(alternatives)})")
                 args.extend(named_args)
                 args.extend(local_args)
+        if harness:
+            # Comma-separated values mean "any of these harnesses", mirroring
+            # the model filter rather than the single-valued ones: what a
+            # reader filters by is a row of the ``by_harness`` breakdown, and
+            # comparing two agents is the question that breakdown invites.
+            harnesses = [part for part in harness.split(",") if part]
+            if harnesses:
+                placeholders = ",".join("?" * len(harnesses))
+                clauses.append(f"harness IN ({placeholders})")
+                args.extend(harnesses)
         if key:
             clauses.append("key_label = ?")
             args.append(key)
@@ -3036,6 +3237,7 @@ class RequestLogStore:
         until: float | None = None,
         q: str | None = None,
         local: str | None = None,
+        harness: str | None = None,
         body_preview_chars: int | None = LIST_BODY_PREVIEW_CHARS,
     ) -> tuple[list[dict[str, Any]], int]:
         """Return (rows, total) newest-first, with bodies truncated for list views."""
@@ -3049,6 +3251,7 @@ class RequestLogStore:
             until=until,
             q=q,
             local=local,
+            harness=harness,
         )
         limit = max(1, min(limit, 500))
         offset = max(0, offset)
@@ -3116,6 +3319,7 @@ class RequestLogStore:
         since: float | None = None,
         until: float | None = None,
         q: str | None = None,
+        harness: str | None = None,
         page_size: int = 1_000,
     ) -> Generator[dict[str, Any]]:
         """Yield every matching row for an export, bypassing the 500-row page cap.
@@ -3141,6 +3345,7 @@ class RequestLogStore:
             since=since,
             until=until,
             q=q,
+            harness=harness,
         )
         conn = self._connect()
         try:
@@ -3194,6 +3399,7 @@ class RequestLogStore:
         since: float | None = None,
         until: float | None = None,
         q: str | None = None,
+        harness: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield the aggregated (grouped) records for an export.
 
@@ -3210,6 +3416,7 @@ class RequestLogStore:
             since=since,
             until=until,
             q=q,
+            harness=harness,
         )
         group_sql = ", ".join(group_by)
         order_sql = ", ".join(group_by)
@@ -3338,6 +3545,7 @@ class RequestLogStore:
         until: float | None = None,
         q: str | None = None,
         local: str | None = None,
+        harness: str | None = None,
     ) -> dict[str, Any]:
         """Aggregate analytics, served from the rollup where it can be.
 
@@ -3351,7 +3559,18 @@ class RequestLogStore:
         # ``local`` belongs in the key: without it a "hide" call inside the TTL
         # would be served the "all" numbers it just cached, and the cards would
         # contradict the table.
-        cache_key = (provider, model, status, endpoint, key, since, until, q, local)
+        cache_key = (
+            provider,
+            model,
+            status,
+            endpoint,
+            key,
+            since,
+            until,
+            q,
+            local,
+            harness,
+        )
         now = time.monotonic()
         with self._stats_lock:
             cached = self._stats_cache.get(cache_key)
@@ -3373,6 +3592,7 @@ class RequestLogStore:
                 since=since,
                 until=until,
                 local=local,
+                harness=harness,
             )
         if payload is None:
             payload = self._stats_from_rows(
@@ -3385,6 +3605,7 @@ class RequestLogStore:
                 until=until,
                 q=q,
                 local=local,
+                harness=harness,
             )
         with self._stats_lock:
             self._stats_cache[cache_key] = (now, payload)
@@ -3405,6 +3626,7 @@ class RequestLogStore:
         until: float | None = None,
         q: str | None = None,
         local: str | None = None,
+        harness: str | None = None,
     ) -> dict[str, Any]:
         """Compute the whole payload by scanning ``requests``.
 
@@ -3424,6 +3646,7 @@ class RequestLogStore:
             until=until,
             q=q,
             local=local,
+            harness=harness,
         )
         with self._connection() as conn:
             totals = conn.execute(
@@ -3467,6 +3690,9 @@ class RequestLogStore:
                 conn, "resolved_model", where, args
             )
             by_key, by_key_truncated = self._breakdown(conn, "key_label", where, args)
+            by_harness, by_harness_truncated = self._breakdown(
+                conn, "harness", where, args
+            )
             top_errors = [
                 {"message": row[0], "count": row[1]}
                 for row in conn.execute(
@@ -3619,6 +3845,11 @@ class RequestLogStore:
             "by_model_truncated": by_model_truncated,
             "by_key": by_key,
             "by_key_truncated": by_key_truncated,
+            # Which coding agent sent the traffic. ``(unknown)`` here is a row
+            # the backfill has not reached yet, not a client we failed to
+            # recognise -- an unrecognised client is stored as ``unknown``.
+            "by_harness": by_harness,
+            "by_harness_truncated": by_harness_truncated,
             "series": series,
             "top_errors": top_errors,
             # Every upstream status behind the recorded attempts, not just the
@@ -3640,6 +3871,7 @@ class RequestLogStore:
         since: float | None = None,
         until: float | None = None,
         local: str | None = None,
+        harness: str | None = None,
     ) -> tuple[str, list[Any]]:
         """``_where`` translated onto the rollup's dimension columns.
 
@@ -3680,6 +3912,16 @@ class RequestLogStore:
                 clauses.append(f"({' OR '.join(alternatives)})")
                 args.extend(named_args)
                 args.extend(local_args)
+        if harness:
+            # Comma-separated values mean "any of these harnesses", mirroring
+            # the model filter rather than the single-valued ones: what a
+            # reader filters by is a row of the ``by_harness`` breakdown, and
+            # comparing two agents is the question that breakdown invites.
+            harnesses = [part for part in harness.split(",") if part]
+            if harnesses:
+                placeholders = ",".join("?" * len(harnesses))
+                clauses.append(f"harness IN ({placeholders})")
+                args.extend(harnesses)
         if key:
             clauses.append("key_label = ?")
             args.append(key)
@@ -3721,6 +3963,7 @@ class RequestLogStore:
         since: float | None = None,
         until: float | None = None,
         local: str | None = None,
+        harness: str | None = None,
     ) -> dict[str, Any] | None:
         """Compute the whole payload from the rollup, or None if it cannot.
 
@@ -3736,6 +3979,7 @@ class RequestLogStore:
             since=since,
             until=until,
             local=local,
+            harness=harness,
         )
         sums = ", ".join(f"COALESCE(SUM({name}), 0)" for name in _ROLLUP_COUNTER_NAMES)
         with self._connection() as conn:
@@ -3762,6 +4006,9 @@ class RequestLogStore:
             )
             by_key, by_key_truncated = self._rollup_breakdown(
                 conn, self._rollup_key_sql("key_label"), where, args
+            )
+            by_harness, by_harness_truncated = self._rollup_breakdown(
+                conn, self._rollup_key_sql("harness"), where, args
             )
             connector = " AND" if where else " WHERE"
             top_errors = [
@@ -3871,6 +4118,8 @@ class RequestLogStore:
             "by_model_truncated": by_model_truncated,
             "by_key": by_key,
             "by_key_truncated": by_key_truncated,
+            "by_harness": by_harness,
+            "by_harness_truncated": by_harness_truncated,
             "series": series,
             "top_errors": top_errors,
             "upstream_statuses": upstream_statuses,
@@ -4184,6 +4433,7 @@ class RequestLogStore:
         until: float | None = None,
         q: str | None = None,
         local: str | None = None,
+        harness: str | None = None,
     ) -> dict[str, Any]:
         """Return a cheap heartbeat: row count and latest timestamp for these filters.
 
@@ -4201,12 +4451,31 @@ class RequestLogStore:
             until=until,
             q=q,
             local=local,
+            harness=harness,
         )
         with self._connection() as conn:
             total, last_ts = conn.execute(
                 f"SELECT COUNT(*), MAX(ts_epoch) FROM requests{where}", args
             ).fetchone()
         return {"total": total or 0, "last_ts": last_ts}
+
+    def harness_usage(self, *, since: float) -> dict[str, int]:
+        """Requests per harness since ``since``, newest-heaviest first.
+
+        Read off ``requests`` rather than the rollup on purpose. It answers one
+        narrow question for one small card, ``idx_requests_harness_v1`` makes it
+        a range seek, and a caller that cannot be wrong about a half-built
+        rollup is simpler than one that has to check whether the backfill
+        finished.
+        """
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"SELECT COALESCE(harness, '{UNKNOWN_PROVIDER_KEY}') AS key,"
+                " COUNT(*) AS requests FROM requests WHERE ts_epoch >= ?"
+                " GROUP BY key ORDER BY requests DESC",
+                (since,),
+            ).fetchall()
+        return {str(row["key"]): int(row["requests"]) for row in rows}
 
     @staticmethod
     def _breakdown(

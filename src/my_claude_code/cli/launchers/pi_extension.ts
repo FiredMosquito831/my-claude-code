@@ -1,5 +1,13 @@
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 
+// MCC's own attribution header and the harness id it carries. Restated here
+// rather than imported because this file is TypeScript and the definitions are
+// Python -- `core/client_fingerprint.HARNESS_HEADER` and the `pi` entry in
+// `config/harnesses.HARNESS_SPECS`. `tests/cli/test_entrypoints.py` reads this
+// source and asserts both halves still match those two, which is the closest
+// thing to a shared constant a language boundary allows.
+const HARNESS_HEADER = "x-mcc-harness";
+const HARNESS_ID = "pi";
 const API_KEY_ENV = "FCC_PI_API_KEY";
 const BASE_URL_ENV = "FCC_PI_BASE_URL";
 const CATALOG_TIMEOUT_MS = 3000;
@@ -196,6 +204,13 @@ export default async function freeClaudeCode(pi: ExtensionAPI): Promise<void> {
 		apiKey: `$${API_KEY_ENV}`,
 		authHeader: true,
 		api: "anthropic-messages",
+		// Pi's ProviderConfig takes `headers?: Record<string, string>` and
+		// merges it into every request the provider makes. The one header MCC
+		// adds is not a credential -- `apiKey` above is the credential, and it
+		// is a reference to the environment, not a literal -- it is the label
+		// that lets the request log say "Pi sent this" rather than inferring it
+		// from a user-agent.
+		headers: { [HARNESS_HEADER]: HARNESS_ID },
 		models,
 	});
 }

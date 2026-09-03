@@ -99,6 +99,10 @@ const state = {
   // here rather than by the Coding agents view because the Token Optimizer
   // page's RTK checkboxes are generated from the same list.
   harnesses: null,
+  // {enabled, days, counts, labels} from /admin/api/requests/harness-usage.
+  // Fetched beside the harness list so a card can say how much traffic the
+  // agent actually sent; null until that call lands or when it failed.
+  harnessUsage: null,
   claudeSettings: null,
   claudeSettingsBusy: false,
   claudeConfig: {
@@ -352,6 +356,7 @@ async function loadDashboardState() {
     if (byId("reqFilterProvider")) byId("reqFilterProvider").value = f.provider || "";
     if (byId("reqFilterModel")) byId("reqFilterModel").value = f.model || "";
     if (byId("reqFilterKey")) byId("reqFilterKey").value = f.key || "";
+    if (byId("reqFilterHarness")) byId("reqFilterHarness").value = f.harness || "";
     if (byId("reqFilterSearch")) byId("reqFilterSearch").value = f.search || "";
     if (f.status && byId("reqFilterStatus")) byId("reqFilterStatus").value = f.status;
     if (byId("reqFilterEndpoint")) byId("reqFilterEndpoint").value = f.endpoint || "";
@@ -7590,6 +7595,14 @@ async function loadHarnesses() {
     renderRtkState();
     return;
   }
+  // Separate call, separate failure: the cards are still worth rendering when
+  // the request log is off or the usage query fails, they just cannot say how
+  // much traffic each agent sent.
+  try {
+    state.harnessUsage = await api("/admin/api/requests/harness-usage?days=7");
+  } catch (_) {
+    state.harnessUsage = null;
+  }
   renderHarnesses();
   renderRtkState();
 }
@@ -7721,10 +7734,25 @@ function harnessCommandList(harness) {
   return list;
 }
 
+/** "Requests (7d)" for one agent.
+ *
+ * A measured zero is a fact -- the agent is installed and sent nothing -- so
+ * it renders as 0. The dash is reserved for the one case where the number
+ * does not exist: no request log to count from.
+ */
+function harnessUsageRow(harness) {
+  const usage = state.harnessUsage;
+  if (!usage || usage.enabled === false) return ["Requests (7d)", "—"];
+  const counts = usage.counts && typeof usage.counts === "object" ? usage.counts : {};
+  return ["Requests (7d)", formatAnalyticsNumber(Number(counts[harness.id] || 0))];
+}
+
 function harnessMeta(harness) {
   const meta = document.createElement("dl");
   meta.className = "agent-meta";
-  const rows = [["Protocol", harness.protocol_label]];
+  // Both halves of this function render `rows`, and an agent MCC cannot launch
+  // can still have sent requests of its own, so the count belongs in both.
+  const rows = [["Protocol", harness.protocol_label], harnessUsageRow(harness)];
   const catalogue = harness.catalogue;
 
   if (harness.available === false) {
@@ -9128,6 +9156,10 @@ const reqState = {
   providerOptions: new Set(),
   modelOptions: new Set(),
   keyOptions: new Set(),
+  harnessOptions: new Set(),
+  // id -> display name, as the stats payload reports it. The registry lives
+  // on the server; the page only ever renders the names it was handed.
+  harnessLabels: {},
   // Baseline the pulse poll compares against. Established by the first pulse
   // rather than by a full load: the list query is paged, so its newest visible
   // row is not MAX(ts_epoch) once you are past page 1, and seeding from it
@@ -9149,6 +9181,7 @@ function reqFilters() {
   const provider = byId("reqFilterProvider").value.trim();
   const model = byId("reqFilterModel").value.trim();
   const key = byId("reqFilterKey").value.trim();
+  const harness = byId("reqFilterHarness").value.trim();
   const status = byId("reqFilterStatus").value;
   const search = byId("reqFilterSearch").value.trim();
   const endpoint = byId("reqFilterEndpoint").value.trim();
@@ -9157,6 +9190,7 @@ function reqFilters() {
   if (provider) params.set("provider", provider);
   if (model) params.set("model", model);
   if (key) params.set("key", key);
+  if (harness) params.set("harness", harness);
   if (status) params.set("status", status);
   if (search) params.set("q", search);
   if (endpoint) params.set("endpoint", endpoint);
@@ -9192,6 +9226,7 @@ async function loadRequestsView() {
     byId("reqStatsCards").innerHTML = "";
     byId("reqTableBody").innerHTML = "";
     byId("reqProviderBreakdown").innerHTML = "";
+    byId("reqHarnessBreakdown").innerHTML = "";
     byId("reqKeyBreakdown").innerHTML = "";
     byId("reqTopErrors").innerHTML = "";
     byId("reqFallbackRoutes").innerHTML = "";
@@ -9211,6 +9246,12 @@ async function loadRequestsView() {
   byId("reqBodiesIndicator").textContent = stats.capture_bodies
     ? "Bodies: captured"
     : "Bodies: hashes only (REQUEST_LOG_CAPTURE_BODIES=false)";
+  // Set before anything renders: the chips, the filter datalist and the
+  // breakdown all read their display names out of this.
+  reqState.harnessLabels =
+    stats.harness_labels && typeof stats.harness_labels === "object"
+      ? stats.harness_labels
+      : {};
   renderRequestStatsCards(stats);
   renderRequestRetentionNote(stats);
   renderRequestLifetime(lifetime);
@@ -9219,6 +9260,7 @@ async function loadRequestsView() {
   renderReqModelChart(stats.by_model || []);
   populateRequestFilterOptions(stats);
   renderRequestProviderBreakdown(stats.by_provider || []);
+  renderRequestHarnessBreakdown(stats.by_harness || []);
   renderRequestKeyBreakdown(stats.by_key || []);
   renderRequestTopErrors(stats.top_errors || []);
   renderRequestUpstreamStatuses(stats.upstream_statuses || []);
@@ -9259,6 +9301,12 @@ function populateRequestFilterOptions(stats) {
   );
   populate("reqModelOptions", stats.by_model || [], reqState.modelOptions);
   populate("reqKeyOptions", stats.by_key || [], reqState.keyOptions);
+  populate(
+    "reqHarnessOptions",
+    stats.by_harness || [],
+    reqState.harnessOptions,
+    harnessDisplayLabel,
+  );
 }
 
 /** Each breakdown (provider/model/key) is capped server-side; surface it when hit. */
@@ -9703,6 +9751,41 @@ function renderRequestProviderBreakdown(rows) {
   );
 }
 
+/** The display name the server published for a harness id, or the id.
+ *
+ * The registry is the server's: `harness_labels` arrives with every stats
+ * payload and names exactly the ids in it, so a new agent shows up here the
+ * release it starts sending traffic, with no table to keep in step.
+ */
+function harnessDisplayLabel(harness) {
+  if (!harness) return "";
+  return reqState.harnessLabels[harness] || harness;
+}
+
+/* Same COALESCE-d sums as the provider breakdown: a zero here was counted. */
+function renderRequestHarnessBreakdown(rows) {
+  const container = byId("reqHarnessBreakdown");
+  container.innerHTML = "";
+  container.appendChild(
+    analyticsTable(
+      ["Harness", "Requests", "Error rate", "Tokens in", "Tokens out", "Avg latency"],
+      rows.map((row) => {
+        const requests = Number(row.requests || 0);
+        const errors = Number(row.errors || 0);
+        return [
+          harnessDisplayLabel(row.key) || "unknown",
+          formatAnalyticsNumber(requests),
+          requests ? `${((errors / requests) * 100).toFixed(1)}%` : "0%",
+          formatAnalyticsNumber(Number(row.tokens_in || 0)),
+          formatAnalyticsNumber(Number(row.tokens_out || 0)),
+          row.avg_duration_ms != null ? `${row.avg_duration_ms} ms` : "—",
+        ];
+      }),
+      "No harness activity in this range.",
+    ),
+  );
+}
+
 /* The aggregates below are SQL COALESCE(...,0) sums, so their zeros are
    measured zeros and Number(x || 0) is honest here. avg_duration_ms is the
    one genuinely NULL-able column and uses the dash convention. */
@@ -9820,13 +9903,41 @@ function buildModelCell(row) {
   return td;
 }
 
+/** Which client sent the request, as a chip.
+ *
+ * The label is the server's display name; the raw id is the fallback so a
+ * harness the running server knows about but this stats window did not see
+ * still reads as itself rather than as nothing.
+ */
+function buildHarnessCell(row) {
+  const td = document.createElement("td");
+  if (!row.harness) {
+    td.textContent = "—";
+    return td;
+  }
+  const chip = document.createElement("span");
+  chip.className = "harness-chip";
+  chip.dataset.harness = row.harness;
+  chip.textContent = harnessDisplayLabel(row.harness);
+  td.appendChild(chip);
+  return td;
+}
+
+// The empty-state row has to span the header, and the header is markup this
+// file cannot see. Counting it keeps the two from drifting apart the way a
+// hardcoded 11 did when the Harness column was added.
+function requestTableColumnCount() {
+  const headers = document.querySelectorAll(".requests-table thead th");
+  return headers.length || 12;
+}
+
 function renderRequestsTable(rows) {
   const body = byId("reqTableBody");
   body.innerHTML = "";
   if (rows.length === 0) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 11;
+    td.colSpan = requestTableColumnCount();
     td.className = "analytics-empty";
     td.textContent = "No requests match the current filters.";
     tr.appendChild(td);
@@ -9836,31 +9947,24 @@ function renderRequestsTable(rows) {
   rows.forEach((row) => {
     const tr = document.createElement("tr");
     tr.className = `req-row req-status-${row.status}`;
-    const cells = [
-      formatRequestTime(row),
-      row.endpoint || "",
-      providerDisplayLabel(row.provider, row.optimization),
-      row.key_label || "",
-    ];
-    cells.forEach((text) => {
+    const addText = (text) => {
       const td = document.createElement("td");
       td.textContent = text;
       tr.appendChild(td);
-    });
+    };
+    addText(formatRequestTime(row));
+    addText(row.endpoint || "");
+    // Beside Endpoint: both answer "what came in", before the columns that
+    // say what MCC did with it.
+    tr.appendChild(buildHarnessCell(row));
+    addText(providerDisplayLabel(row.provider, row.optimization));
+    addText(row.key_label || "");
     tr.appendChild(buildModelCell(row));
-    const statusCell = document.createElement("td");
-    statusCell.textContent = row.status;
-    tr.appendChild(statusCell);
+    addText(row.status);
     tr.appendChild(buildTurnShapeCell(row));
-    [
-      `${row.tokens_in ?? "—"}/${row.tokens_out ?? "—"}`,
-      row.ttft_ms != null ? `${Math.round(row.ttft_ms)} ms` : "—",
-      row.duration_ms != null ? `${Math.round(row.duration_ms)} ms` : "—",
-    ].forEach((text) => {
-      const td = document.createElement("td");
-      td.textContent = text;
-      tr.appendChild(td);
-    });
+    addText(`${row.tokens_in ?? "—"}/${row.tokens_out ?? "—"}`);
+    addText(row.ttft_ms != null ? `${Math.round(row.ttft_ms)} ms` : "—");
+    addText(row.duration_ms != null ? `${Math.round(row.duration_ms)} ms` : "—");
     const actionCell = document.createElement("td");
     const detailButton = document.createElement("button");
     detailButton.type = "button";
@@ -9968,6 +10072,7 @@ function persistDashboardState() {
         provider: byId("reqFilterProvider")?.value?.trim() || undefined,
         model: byId("reqFilterModel")?.value?.trim() || undefined,
         key: byId("reqFilterKey")?.value?.trim() || undefined,
+        harness: byId("reqFilterHarness")?.value?.trim() || undefined,
         search: byId("reqFilterSearch")?.value?.trim() || undefined,
         status: byId("reqFilterStatus")?.value || undefined,
         endpoint: byId("reqFilterEndpoint")?.value?.trim() || undefined,
@@ -10119,6 +10224,35 @@ function renderReqModelChart(byModel) {
   });
 }
 
+/** A version string out of a user-agent, when one is cheaply visible.
+ *
+ * Every client that names itself does so as `<name>/<version>`, so the first
+ * slash-prefixed number is the version. Nothing is parsed beyond that: an
+ * agent that reports no version simply shows no version.
+ */
+function harnessVersionFromUserAgent(userAgent) {
+  if (typeof userAgent !== "string") return "";
+  const match = userAgent.match(/\/(\d+(?:\.\d+)*)/);
+  return match ? match[1] : "";
+}
+
+/** "OpenCode 1.18.26 (explicit header)" — who sent it, and how we know.
+ *
+ * The distinction is the point: an `x-mcc-harness` header is our own launcher
+ * stating what it is, while everything else is inference from a user-agent
+ * that any client is free to spoof or omit.
+ */
+function formatHarnessDetail(row) {
+  const harness = row.harness;
+  if (!harness) return "";
+  if (harness === "unknown") return "Unknown (no client identification)";
+  const headers = row.headers && typeof row.headers === "object" ? row.headers : {};
+  const version = harnessVersionFromUserAgent(headers["user-agent"]);
+  const label = harnessDisplayLabel(harness);
+  const name = version ? `${label} ${version}` : label;
+  return `${name} (${headers["x-mcc-harness"] ? "explicit header" : "from user-agent"})`;
+}
+
 async function openRequestDetail(requestId) {
   reqState.detailReturnFocus = document.activeElement;
   const row = await api(`/admin/api/requests/${requestId}`);
@@ -10128,6 +10262,7 @@ async function openRequestDetail(requestId) {
   const fields = [
     ["Time", row.ts_iso],
     ["Endpoint", row.endpoint],
+    ["Harness", formatHarnessDetail(row)],
     ["Protocol", row.protocol],
     ["Requested model", row.requested_model],
     ["Provider", providerDisplayLabel(row.provider, row.optimization) || null],
@@ -11674,7 +11809,14 @@ byId("reqApplyFilters").addEventListener("click", applyReqFilters);
 // long enough that a typed provider name is one query, short enough that it
 // still feels like the view is following along.
 let reqFilterTypingTimer = null;
-["reqFilterProvider", "reqFilterModel", "reqFilterKey", "reqFilterSearch", "reqFilterEndpoint"].forEach(
+[
+  "reqFilterProvider",
+  "reqFilterModel",
+  "reqFilterKey",
+  "reqFilterHarness",
+  "reqFilterSearch",
+  "reqFilterEndpoint",
+].forEach(
   (id) => {
     byId(id).addEventListener("input", () => {
       if (reqFilterTypingTimer) window.clearTimeout(reqFilterTypingTimer);
@@ -11691,6 +11833,7 @@ byId("reqClearFilters").addEventListener("click", () => {
   byId("reqFilterProvider").value = "";
   byId("reqFilterModel").value = "";
   byId("reqFilterKey").value = "";
+  byId("reqFilterHarness").value = "";
   byId("reqFilterSearch").value = "";
   byId("reqFilterStatus").value = "";
   byId("reqFilterEndpoint").value = "";

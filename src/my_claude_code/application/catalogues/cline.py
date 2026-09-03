@@ -64,6 +64,7 @@ from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.catalogues.base import (
     DEFAULTED_KEY,
     DefaultedFields,
+    attribution_headers,
     starting_model,
     visible_entries,
 )
@@ -144,6 +145,13 @@ def build_cline_catalogue(
         "provider": PROVIDER_ID,
         "apiKey": CLINE_API_KEY_SENTINEL,
         "baseUrl": CLINE_BASE_URL_SENTINEL,
+        # Inside ``settings``, never at the root: Cline discards the whole
+        # document on one unrecognised *root* key (see ``strip_mcc_keys`` in
+        # ``config/harness_cline.py``, and the 3.0.61 measurement recorded
+        # there), and this is MCC's own non-secret attribution label rather
+        # than bookkeeping to be stripped. It rides with the provider's base
+        # URL and key because that is the block Cline hands its HTTP client.
+        "headers": attribution_headers(),
     }
     # Cline opens on exactly one model, so which one is a decision rather
     # than an enumeration artefact: ``starting_model`` names MCC's own

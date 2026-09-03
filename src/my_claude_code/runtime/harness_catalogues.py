@@ -55,6 +55,7 @@ from my_claude_code.application.catalogue_model import (
 from my_claude_code.application.catalogues import serialise, serialise_sidecar
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.atomic_json import write_json_document_atomically_if_changed
+from my_claude_code.config.harness_attribution import with_harness_id
 from my_claude_code.config.harness_base_url import with_root_base_url, with_v1_base_url
 from my_claude_code.config.harness_cline import (
     strip_mcc_keys,
@@ -157,6 +158,13 @@ class HarnessCatalogueFanoutPublisher:
             return
         try:
             document, defaulted = serialise(catalogue.format_id, models)
+            # Before the branch, not inside one: the harness-id sentinel can
+            # appear in a merged block, a TOML document or a JSON one, and the
+            # serialiser that wrote it does not know which harness this is --
+            # ``opencode``, ``opencode2`` and ``kilo`` all reach here through
+            # the same two serialisers. The launch path resolves it in
+            # ``cli/harnesses/catalogue_client.harness_catalogue``.
+            document = with_harness_id(document, spec.id)
             if catalogue.merge is not None:
                 merge_owned_block(
                     path=path,

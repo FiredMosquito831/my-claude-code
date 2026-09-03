@@ -1079,6 +1079,45 @@ const ROUTES = {
     ],
     by_model: [],
     by_key: [],
+    // Same shape as by_provider, with the display names alongside: the page
+    // is not allowed to carry a registry of its own.
+    by_harness: [
+      {
+        key: "opencode",
+        requests: 90210,
+        errors: 41,
+        tokens_in: 3900,
+        tokens_out: 12400,
+        cache_read_tokens: 96100,
+        cache_write_tokens: 0,
+        avg_duration_ms: 2410,
+      },
+      {
+        key: "claude",
+        requests: 61003,
+        errors: 0,
+        tokens_in: 1200,
+        tokens_out: 8800,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        avg_duration_ms: 1880,
+      },
+      {
+        key: "unknown",
+        requests: 6693,
+        errors: 12,
+        tokens_in: 0,
+        tokens_out: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        avg_duration_ms: null,
+      },
+    ],
+    harness_labels: {
+      opencode: "OpenCode",
+      claude: "Claude Code",
+      unknown: "Unknown",
+    },
     series: [],
     top_errors: [],
     fallback_routes: [],
@@ -1121,7 +1160,117 @@ const ROUTES = {
       { anchor: "windows", text: "Windows", level: 3 },
     ],
   },
-  "/admin/api/requests": { rows: [], total: 0 },
+  "/admin/api/requests": {
+    total: 480,
+    rows: [
+      { id: "req-explicit", harness: "opencode",
+        ts_iso: "2026-09-02T10:00:00Z",
+        endpoint: "/v1/messages",
+        protocol: "anthropic_messages",
+        provider: "nous_portal",
+        key_label: "NOUS_API_KEY",
+        requested_model: "claude-sonnet-4",
+        resolved_model: "hermes-4-405b",
+        status: "success",
+        tokens_in: 120,
+        tokens_out: 340,
+        ttft_ms: 410,
+        duration_ms: 2100,
+      },
+      { id: "req-ua", harness: "claude",
+        ts_iso: "2026-09-02T10:00:00Z",
+        endpoint: "/v1/messages",
+        protocol: "anthropic_messages",
+        provider: "nous_portal",
+        key_label: "NOUS_API_KEY",
+        requested_model: "claude-sonnet-4",
+        resolved_model: "hermes-4-405b",
+        status: "success",
+        tokens_in: 120,
+        tokens_out: 340,
+        ttft_ms: 410,
+        duration_ms: 2100,
+      },
+      { id: "req-none", harness: "unknown",
+        ts_iso: "2026-09-02T10:00:00Z",
+        endpoint: "/v1/messages",
+        protocol: "anthropic_messages",
+        provider: "nous_portal",
+        key_label: "NOUS_API_KEY",
+        requested_model: "claude-sonnet-4",
+        resolved_model: "hermes-4-405b",
+        status: "success",
+        tokens_in: 120,
+        tokens_out: 340,
+        ttft_ms: 410,
+        duration_ms: 2100,
+      },
+    ],
+  },
+  // The launcher stated what it is: the modal has to say so rather than
+  // present an inference as a fact.
+  "/admin/api/requests/req-explicit": {
+    id: "req-explicit",
+    harness: "opencode",
+    headers: {
+      "x-mcc-harness": "opencode",
+      "user-agent": "opencode/1.18.26",
+    },
+        ts_iso: "2026-09-02T10:00:00Z",
+        endpoint: "/v1/messages",
+        protocol: "anthropic_messages",
+        provider: "nous_portal",
+        key_label: "NOUS_API_KEY",
+        requested_model: "claude-sonnet-4",
+        resolved_model: "hermes-4-405b",
+        status: "success",
+        tokens_in: 120,
+        tokens_out: 340,
+        ttft_ms: 410,
+        duration_ms: 2100,
+  },
+  // No header: the id was inferred from the user-agent, version and all.
+  "/admin/api/requests/req-ua": {
+    id: "req-ua",
+    harness: "claude",
+    headers: { "user-agent": "claude-cli/2.0.14 (external, cli)" },
+        ts_iso: "2026-09-02T10:00:00Z",
+        endpoint: "/v1/messages",
+        protocol: "anthropic_messages",
+        provider: "nous_portal",
+        key_label: "NOUS_API_KEY",
+        requested_model: "claude-sonnet-4",
+        resolved_model: "hermes-4-405b",
+        status: "success",
+        tokens_in: 120,
+        tokens_out: 340,
+        ttft_ms: 410,
+        duration_ms: 2100,
+  },
+  // Nothing identified itself at all.
+  "/admin/api/requests/req-none": {
+    id: "req-none",
+    harness: "unknown",
+    headers: { "user-agent": "python-httpx" },
+        ts_iso: "2026-09-02T10:00:00Z",
+        endpoint: "/v1/messages",
+        protocol: "anthropic_messages",
+        provider: "nous_portal",
+        key_label: "NOUS_API_KEY",
+        requested_model: "claude-sonnet-4",
+        resolved_model: "hermes-4-405b",
+        status: "success",
+        tokens_in: 120,
+        tokens_out: 340,
+        ttft_ms: 410,
+        duration_ms: 2100,
+  },
+  "/admin/api/requests/harness-usage": {
+    enabled: true,
+    days: 7,
+    counts: { opencode: 12480, claude: 3120, codex: 0 },
+    labels: { opencode: "OpenCode", claude: "Claude Code", codex: "Codex CLI" },
+  },
   "/admin/api/requests/lifetime": { enabled: true, by_model: [], by_provider: [] },
   "/admin/api/requests/pulse": { enabled: true, total: 0, latest: null },
   "/admin/api/websearch/analytics/stats": { enabled: false },
@@ -1153,6 +1302,7 @@ if (process.env.EMPTY === "1") {
     ],
   };
   ROUTES["/admin/api/requests/stats"] = { enabled: false };
+  ROUTES["/admin/api/requests/harness-usage"] = { enabled: false, counts: {}, labels: {} };
   ROUTES["/admin/api/rtk"] = { installed: false };
   ROUTES["/admin/api/harnesses"] = { harnesses: [] };
   ROUTES["/admin/api/rtk/gain"] = {
@@ -1193,6 +1343,37 @@ class NoopObserver {
 }
 window.IntersectionObserver = NoopObserver;
 window.ResizeObserver = NoopObserver;
+/* A 2D context that does nothing but answer every call.
+ *
+ * Not cosmetic: jsdom's getContext() returns null, and prepareCanvas() calls
+ * ctx.setTransform() on it -- so `renderReqModelChart` threw and took the rest
+ * of loadRequestsView() down with it. Everything after the two charts (the
+ * filter datalists, all six breakdown panels and the request table itself) was
+ * silently never rendered, and no test could see any of it. */
+function stubCanvasContext() {
+  const written = new Map();
+  return new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        if (written.has(prop)) return written.get(prop);
+        if (prop === "measureText") return () => ({ width: 0 });
+        if (prop === "createLinearGradient" || prop === "createRadialGradient") {
+          return () => ({ addColorStop() {} });
+        }
+        return () => {};
+      },
+      set(_target, prop, value) {
+        written.set(prop, value);
+        return true;
+      },
+    },
+  );
+}
+window.HTMLCanvasElement.prototype.getContext = function getContext() {
+  if (!this._stubContext) this._stubContext = stubCanvasContext();
+  return this._stubContext;
+};
 window.MutationObserver = window.MutationObserver || NoopObserver;
 window.scrollTo = () => {};
 // jsdom ships no clipboard, and addCopyButton returns without appending a
@@ -2857,6 +3038,111 @@ const analytics = {};
   analytics.loadsAfterEnterAndPause = statsCalls().length;
 }
 
+// ------------------------------------------------- harness attribution
+/* Who sent the request, end to end: the column and its chip, the empty-state
+   colspan that has to follow the header, the modal's two wordings, the filter
+   through all five of its wiring sites, and the breakdown panel. */
+const harnessAttr = {};
+{
+  const statsCalls = () =>
+    fetchUrls.filter((url) => url.startsWith("/admin/api/requests/stats"));
+  const listCalls = () =>
+    fetchUrls.filter((url) => url.startsWith("/admin/api/requests?"));
+  const body = doc.getElementById("reqTableBody");
+
+  harnessAttr.headers = Array.from(
+    doc.querySelectorAll(".requests-table thead th"),
+  ).map((th) => th.textContent.trim());
+  harnessAttr.chips = Array.from(body.querySelectorAll(".harness-chip")).map(
+    (chip) => ({ text: chip.textContent, harness: chip.dataset.harness }),
+  );
+  harnessAttr.harnessCellIndex = (() => {
+    const chip = body.querySelector(".harness-chip");
+    if (!chip) return -1;
+    const cells = Array.from(chip.closest("tr").children);
+    return cells.indexOf(chip.closest("td"));
+  })();
+
+  // The empty state has to span the header the markup declares, not a number
+  // someone typed once.
+  window.eval("renderRequestsTable([])");
+  harnessAttr.emptyText = body.querySelector("td").textContent;
+  harnessAttr.emptyColSpan = Number(
+    body.querySelector("td").getAttribute("colspan"),
+  );
+
+  // --- the modal says how the attribution was reached, not just what it is
+  const metaText = () =>
+    Array.from(doc.getElementById("reqDetailMeta").children)
+      .map((el) => el.textContent)
+      .join("\u0000");
+  const harnessLine = () => {
+    const nodes = Array.from(doc.getElementById("reqDetailMeta").children);
+    const index = nodes.findIndex(
+      (el) => el.tagName === "DT" && el.textContent === "Harness",
+    );
+    return index === -1 ? null : nodes[index + 1].textContent;
+  };
+  for (const [name, id] of [
+    ["explicit", "req-explicit"],
+    ["inferred", "req-ua"],
+    ["unidentified", "req-none"],
+  ]) {
+    await window.eval(`openRequestDetail(${JSON.stringify(id)})`);
+    await settle();
+    harnessAttr[`detail_${name}`] = harnessLine();
+    window.eval("closeRequestDetail()");
+  }
+  harnessAttr.detailHasMeta = metaText().includes("Harness");
+
+  // --- the breakdown panel, one row per by_harness entry, named
+  harnessAttr.breakdown = Array.from(
+    doc.querySelectorAll("#reqHarnessBreakdown tbody tr"),
+  ).map((tr) => Array.from(tr.children).map((td) => td.textContent));
+  harnessAttr.breakdownHeaders = Array.from(
+    doc.querySelectorAll("#reqHarnessBreakdown thead th"),
+  ).map((th) => th.textContent);
+
+  // --- the datalist is filled from the payload, labels and all
+  harnessAttr.datalist = Array.from(
+    doc.getElementById("reqHarnessOptions").querySelectorAll("option"),
+  ).map((option) => [option.value, option.getAttribute("label")]);
+
+  // --- typing the filter: one load, after the pause, from page 1
+  doc.getElementById("reqNextPage").dispatchEvent(
+    new window.MouseEvent("click", { bubbles: true }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  harnessAttr.pagedUrl = listCalls()[listCalls().length - 1] || "";
+  fetchUrls.length = 0;
+  const input = doc.getElementById("reqFilterHarness");
+  for (const text of ["op", "openc", "opencode"]) {
+    input.value = text;
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  }
+  harnessAttr.loadsWhileTyping = statsCalls().length;
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  harnessAttr.loadsAfterTypingPause = statsCalls().length;
+  harnessAttr.typedStatsUrl = statsCalls()[statsCalls().length - 1] || "";
+  harnessAttr.typedListUrl = listCalls()[listCalls().length - 1] || "";
+  harnessAttr.persisted = JSON.parse(
+    window.localStorage.getItem("mcc-dashboard-state") || "{}",
+  ).reqFilters;
+
+  // --- Clear empties it and forgets it
+  fetchUrls.length = 0;
+  doc.getElementById("reqClearFilters").dispatchEvent(
+    new window.MouseEvent("click", { bubbles: true }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  harnessAttr.clearedValue = input.value;
+  harnessAttr.clearUrl = statsCalls()[statsCalls().length - 1] || "";
+  harnessAttr.persistedAfterClear = JSON.parse(
+    window.localStorage.getItem("mcc-dashboard-state") || "{}",
+  ).reqFilters;
+}
+
 /* ------------------------------------------------------- credential keys
    The key manager is opened from a credential field's panel. Render both
    pools and report what came out, so a model bench sub-line is proven to
@@ -3399,6 +3685,12 @@ if (codingAgentsLink) {
       }),
     ),
     meta: flatten(card.querySelector(".agent-meta")),
+    metaTerms: Array.from(card.querySelectorAll(".agent-meta dt")).map(
+      (dt) => dt.textContent,
+    ),
+    metaValues: Array.from(card.querySelectorAll(".agent-meta dd")).map(
+      (dd) => dd.textContent,
+    ),
     defaulted: card.querySelector(".agent-defaulted")
       ? flatten(card.querySelector(".agent-defaulted"))
       : null,
@@ -3506,6 +3798,7 @@ console.log(
       models,
       routing,
       analytics,
+      harnessAttr,
       optimizer: {
         present: Boolean(optimizer),
         kpis: optimizer ? optimizer.querySelectorAll(".opt-kpi").length : 0,

@@ -45,6 +45,26 @@ def _isolate_request_log(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_client_fingerprint():
+    """The mirrored client fingerprint must not survive from one test to the next.
+
+    ``install_fingerprint`` writes a ContextVar that the Anthropic subscription
+    provider reads to reproduce the caller's own headers upstream. Anything that
+    builds a request capture sets it as a side effect, and under xdist the next
+    test on that worker inherits it -- which is how a fixture user-agent from an
+    unrelated capture test made ``test_oauth_headers_are_the_claude_code_set``
+    fail on a particular shard order and pass on every other. The leak was always
+    there; it only became reachable when a second suite started capturing. Clear
+    it around every test rather than asking each new one to remember.
+    """
+    from my_claude_code.core.client_fingerprint import install_fingerprint
+
+    install_fingerprint(None)
+    yield
+    install_fingerprint(None)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_route_health():
     """Benches must not survive from one test into the next.
 

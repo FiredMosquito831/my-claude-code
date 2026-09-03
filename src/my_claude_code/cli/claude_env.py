@@ -4,11 +4,50 @@ from collections.abc import Mapping
 
 from my_claude_code.config.harnesses import harness_spec
 from my_claude_code.config.proxy_auth import proxy_auth_token
+from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 
 CLAUDE_CODE_AUTO_COMPACT_WINDOW = "190000"
 #: Read from the harness registry so the managed session, the launcher and the
 #: dashboard's installed-probe can never look for different executables.
 CLAUDE_BINARY_NAME = harness_spec("claude").binary
+
+#: The harness id this module configures, and the registry is what says so:
+#: the header value has to be the same string the request log keys on.
+CLAUDE_HARNESS_ID = harness_spec("claude").id
+
+#: Claude Code's own custom-header variable. ``Name: Value`` per line,
+#: newline-separated for several -- ``docs/CLAUDE-CODE-CONFIG.md`` and
+#: ``config/data/claude_code_config_catalog.json`` both record the format, and
+#: v2.1.227 is the floor. An older Claude Code ignores the variable, which is
+#: exactly the right failure: the request is still served and the log falls
+#: back to attributing it by user-agent.
+CUSTOM_HEADERS_ENV = "ANTHROPIC_CUSTOM_HEADERS"
+
+
+def with_harness_header(env: dict[str, str]) -> dict[str, str]:
+    """Add MCC's attribution header to ``ANTHROPIC_CUSTOM_HEADERS``, in place.
+
+    Appends rather than assigns. A user who set the variable themselves --
+    a corporate gateway token, a tracing id -- put it there for a reason, and
+    a launcher that overwrote it would break their session to gain a
+    diagnostic label. MCC's line is added last so it wins on a duplicate name
+    without removing anything they wrote.
+
+    Nothing is appended if the inherited value already names this header: a
+    launcher that ran inside a session it had already configured would
+    otherwise grow one line per generation.
+    """
+
+    line = f"{HARNESS_HEADER}: {CLAUDE_HARNESS_ID}"
+    existing = env.get(CUSTOM_HEADERS_ENV, "").strip()
+    if not existing:
+        env[CUSTOM_HEADERS_ENV] = line
+    elif not any(
+        entry.split(":", 1)[0].strip().lower() == HARNESS_HEADER
+        for entry in existing.splitlines()
+    ):
+        env[CUSTOM_HEADERS_ENV] = "\n".join((existing, line))
+    return env
 
 
 def build_claude_proxy_env(
@@ -34,7 +73,7 @@ def build_claude_proxy_env(
     env["DISABLE_FEEDBACK_COMMAND"] = "1"
     env["DISABLE_ERROR_REPORTING"] = "1"
     env["DISABLE_TELEMETRY"] = "1"
-    return env
+    return with_harness_header(env)
 
 
 def build_minimal_claude_proxy_env(
@@ -76,4 +115,4 @@ def build_minimal_claude_proxy_env(
         env["ENABLE_WEB_SERVER_TOOLS"] = "true"
     if enable_model_discovery:
         env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
-    return env
+    return with_harness_header(env)

@@ -577,3 +577,108 @@ def test_stats_endpoint_reports_how_it_was_served(client, seeded_store) -> None:
     # not a rollup dimension and never will be, so it falls back to raw rows.
     searched = client.get("/admin/api/requests/stats", params={"q": "inin"}).json()
     assert searched["served_from"] == "rows"
+
+
+# ------------------------------------------------------------------ harness --
+
+
+@pytest.fixture
+def harness_store(tmp_path):
+    """Three agents, one of them not a registry entry at all."""
+    store = get_request_log_store(tmp_path / "requests.db")
+    assert store is not None
+    base = time.time()
+    for index, harness in enumerate(
+        ("claude", "claude", "opencode2", "claude_agent_sdk")
+    ):
+        store.enqueue(
+            RequestRecord(
+                id=f"h{index}",
+                endpoint="/v1/messages",
+                protocol="anthropic",
+                provider="p1",
+                resolved_model="m1",
+                ts_epoch=base - index,
+                harness=harness,
+                tokens_in=index,
+                duration_ms=float(10 * (index + 1)),
+            )
+        )
+    store.close()
+    yield store
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/admin/api/requests", "/admin/api/requests/stats", "/admin/api/requests/pulse"],
+)
+def test_the_three_request_routes_accept_a_harness_filter(
+    client, harness_store, path
+) -> None:
+    """Free-form like ``provider``, not an enum like ``local``: never a 4xx."""
+    response = client.get(path, params={"harness": "claude"})
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
+    # An id nothing matches is a legitimate question with an empty answer.
+    empty = client.get(path, params={"harness": "no-such-harness"})
+    assert empty.status_code == 200
+    assert empty.json()["total"] == 0
+
+
+def test_stats_carries_the_breakdown_and_its_display_names(
+    client, harness_store
+) -> None:
+    """The dashboard must not need a copy of the harness registry to render."""
+    payload = client.get("/admin/api/requests/stats").json()
+    assert {row["key"]: row["requests"] for row in payload["by_harness"]} == {
+        "claude": 2,
+        "opencode2": 1,
+        "claude_agent_sdk": 1,
+    }
+    # Both vocabularies resolved: two registry ids and one that is deliberately
+    # not in the registry because it is not a launchable agent.
+    assert payload["harness_labels"] == {
+        "claude": "Claude Code",
+        "opencode2": "OpenCode 2",
+        "claude_agent_sdk": "Claude Agent SDK",
+    }
+
+
+def test_harness_usage_returns_counts_and_labels(client, harness_store) -> None:
+    payload = client.get("/admin/api/requests/harness-usage").json()
+    assert payload["enabled"] is True
+    assert payload["days"] == 7
+    assert payload["counts"] == {"claude": 2, "opencode2": 1, "claude_agent_sdk": 1}
+    assert payload["labels"]["opencode2"] == "OpenCode 2"
+
+
+def test_harness_usage_clamps_its_window(client, harness_store) -> None:
+    """1..90 days, so a zero or a decade cannot turn into an unbounded scan."""
+    assert (
+        client.get("/admin/api/requests/harness-usage", params={"days": 0}).json()[
+            "days"
+        ]
+        == 1
+    )
+    assert (
+        client.get("/admin/api/requests/harness-usage", params={"days": 5000}).json()[
+            "days"
+        ]
+        == 90
+    )
+
+
+def test_harness_usage_is_not_shadowed_by_the_request_id_route(
+    client, harness_store
+) -> None:
+    """Declaration order is the whole guarantee here.
+
+    FastAPI matches in declaration order, so ``/admin/api/requests/{request_id}``
+    would answer this path with a 404 for a request whose id is
+    "harness-usage" if it were declared first.
+    """
+    response = client.get("/admin/api/requests/harness-usage")
+    assert response.status_code == 200
+    assert "counts" in response.json()
+    # The path-parameter route still works for a real id.
+    assert client.get("/admin/api/requests/h0").json()["harness"] == "claude"

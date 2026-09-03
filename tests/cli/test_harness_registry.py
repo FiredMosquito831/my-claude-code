@@ -249,6 +249,11 @@ def test_codex_spec_builds_the_same_argv_as_before() -> None:
         'model_providers.fcc.env_key="FCC_CODEX_API_KEY"',
         "-c",
         'model_providers.fcc.wire_api="responses"',
+        # MCC's attribution header, as a TOML inline table -- ``=`` between the
+        # pair, not the ``:`` a JSON object would use, because Codex parses the
+        # right-hand side of a ``-c`` as TOML.
+        "-c",
+        'model_providers.fcc.http_headers={"x-mcc-harness"="codex"}',
     ]
     env = build_codex_launcher_env(
         auth_token="token",

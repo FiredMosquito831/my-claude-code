@@ -3,7 +3,7 @@
 import asyncio
 import ipaddress
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -75,7 +75,10 @@ from my_claude_code.config.desktop import (
     resolve_auto_window,
     save_desktop_state,
 )
-from my_claude_code.config.harnesses import rtk_capable_ids
+from my_claude_code.config.harnesses import (
+    harness_display_name,
+    rtk_capable_ids,
+)
 from my_claude_code.config.model_overrides import (
     current_model_overrides,
     save_model_overrides,
@@ -117,6 +120,9 @@ from my_claude_code.config.settings import Settings
 from my_claude_code.config.websearch_catalog import (
     WEBSEARCH_CATALOG,
     WebSearchDescriptor,
+)
+from my_claude_code.core.client_fingerprint import (
+    NON_REGISTRY_HARNESS_LABELS,
 )
 from my_claude_code.core.model_visibility import ModelVisibility
 from my_claude_code.core.optimization_discovery import (
@@ -2076,6 +2082,22 @@ def _validate_request_log_local(local: str | None) -> None:
         raise HTTPException(status_code=422, detail="Invalid local filter")
 
 
+def _harness_labels(harness_ids: Iterable[str]) -> dict[str, str]:
+    """Display names for exactly the harness ids in one payload.
+
+    Two vocabularies meet here and only this layer can see both. ``config``
+    owns the registry of agents MCC can launch; ``core`` owns the ids its
+    fingerprinter invents for clients that are no such thing -- a bare SDK, a
+    curl one-liner, ``unknown``. Neither package may import the other, so the
+    union is resolved at the boundary that already imports both.
+    """
+    return {
+        harness_id: NON_REGISTRY_HARNESS_LABELS.get(harness_id)
+        or harness_display_name(harness_id)
+        for harness_id in harness_ids
+    }
+
+
 @router.get("/admin/api/requests")
 async def list_request_log(
     request: Request,
@@ -2090,6 +2112,7 @@ async def list_request_log(
     until: float | None = None,
     q: str | None = None,
     local: str | None = None,
+    harness: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Page through the persisted request log (newest first)."""
@@ -2120,6 +2143,7 @@ async def list_request_log(
         until=until,
         q=q,
         local=local,
+        harness=harness,
     )
     return {
         "enabled": True,
@@ -2143,6 +2167,7 @@ async def request_log_stats(
     until: float | None = None,
     q: str | None = None,
     local: str | None = None,
+    harness: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Aggregate request analytics over an optional epoch-second window.
@@ -2171,9 +2196,17 @@ async def request_log_stats(
         until=until,
         q=q,
         local=local,
+        harness=harness,
     )
     result["enabled"] = True
     result["capture_bodies"] = bool(settings.request_log_capture_bodies)
+    # Resolved here and shipped with the numbers, because the store cannot do
+    # it: ``core`` may not import ``config``, so the harness registry is out of
+    # its reach. Sending the labels beside the breakdown also means the
+    # dashboard never has to carry a copy of the registry to render a name.
+    result["harness_labels"] = _harness_labels(
+        row["key"] for row in result.get("by_harness", [])
+    )
     # Lets the dashboard say "these totals have stopped rising" when the table
     # is at its cap, instead of leaving the plateau unexplained.
     result["retained_rows_max"] = int(settings.request_log_max_rows)
@@ -2338,6 +2371,7 @@ async def request_log_pulse(
     until: float | None = None,
     q: str | None = None,
     local: str | None = None,
+    harness: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
     """Cheap heartbeat for auto-refresh: row count and latest timestamp only.
@@ -2363,9 +2397,43 @@ async def request_log_pulse(
         until=until,
         q=q,
         local=local,
+        harness=harness,
     )
     result["enabled"] = True
     return result
+
+
+@router.get("/admin/api/requests/harness-usage")
+async def request_log_harness_usage(
+    request: Request,
+    days: int = 7,
+    settings: Settings = Depends(get_settings),
+):
+    """Which coding agents have been talking to this proxy lately.
+
+    Declared above ``/admin/api/requests/{request_id}``, and it has to stay
+    there: FastAPI matches routes in declaration order, so the path-parameter
+    route would otherwise swallow this one and answer 404 for a request id of
+    "harness-usage".
+
+    A disabled store answers ``enabled: False`` with an empty body rather than
+    a 404 or a 500, like its siblings -- the card is an optional read, and a
+    dashboard that has request logging switched off should render it empty
+    instead of showing an error the user cannot act on.
+    """
+    require_loopback_admin(request)
+    window_days = max(1, min(int(days), 90))
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {"enabled": False, "days": window_days, "counts": {}, "labels": {}}
+    since = time.time() - window_days * 86_400
+    counts = await asyncio.to_thread(store.harness_usage, since=since)
+    return {
+        "enabled": True,
+        "days": window_days,
+        "counts": counts,
+        "labels": _harness_labels(counts),
+    }
 
 
 @router.get("/admin/api/requests/{request_id}")

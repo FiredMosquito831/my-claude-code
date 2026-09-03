@@ -1,9 +1,11 @@
 """Request-log and web-search export iterators: keyset paging, body decompression,
 aggregate grouping, websearch include_content."""
 
+import io
 import time
 
 import pytest
+from openpyxl import load_workbook
 
 from my_claude_code.core import export as export_engine
 from my_claude_code.core.request_log import RequestRecord, get_request_log_store
@@ -182,3 +184,97 @@ def test_render_txt_keeps_cells_longer_than_the_width_cap() -> None:
 
     row_line = chunks[-2].decode("utf-8")
     assert long_value in row_line
+
+
+# ------------------------------------------------------------------ harness --
+
+
+def test_harness_is_an_always_present_detail_column() -> None:
+    """A column gated by no field group is unreachable, so this one is not.
+
+    ``headers`` sits in the display order belonging to no group and can
+    therefore never be exported; ``harness`` must not join it.
+    """
+    assert "harness" in export_engine._REQUEST_ALWAYS_COLUMNS
+    assert "harness" in export_engine._REQUEST_COLUMN_ORDER
+    assert export_engine._REQUEST_COLUMN_LABELS["harness"] == "Harness"
+    # Empty field selection: the structural columns are all that survive.
+    assert "harness" in export_engine.request_detail_columns([])
+
+
+def _rendered(fmt: str) -> str:
+    """One row through one renderer, using the real column list and labels.
+
+    XLSX is a zip archive, so it is read back through openpyxl rather than
+    decoded; the other three are text and are compared as text.
+    """
+    columns = export_engine.request_detail_columns([])
+    headers = [export_engine._REQUEST_COLUMN_LABELS.get(name, name) for name in columns]
+    row = dict.fromkeys(columns, "")
+    row["harness"] = "opencode2"
+    if fmt == "csv":
+        chunks = export_engine.render_csv([row], columns, headers)
+    elif fmt == "json":
+        chunks = export_engine.render_json_array([row])
+    elif fmt == "txt":
+        chunks = export_engine.render_txt([row], columns, headers, "Title", "Summary")
+    else:
+        rendered = b"".join(export_engine.render_xlsx([row], columns, headers))
+        sheet = load_workbook(io.BytesIO(rendered)).active
+        assert sheet is not None
+        return "\n".join(
+            " ".join("" if cell is None else str(cell) for cell in line)
+            for line in sheet.values
+        )
+    return b"".join(chunks).decode("utf-8", "replace")
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json", "txt", "xlsx"])
+def test_every_renderer_carries_the_harness_column(fmt: str) -> None:
+    """All four read the same column list, so all four must show the value."""
+    rendered = _rendered(fmt)
+    assert "opencode2" in rendered
+    if fmt == "json":
+        # JSON is keyed, not positional, so it names the column rather than
+        # its label.
+        assert '"harness"' in rendered
+    else:
+        assert "Harness" in rendered
+
+
+def test_harness_is_a_group_by_dimension(tmp_path) -> None:
+    """Grouping by harness must aggregate the same rows the dashboard does."""
+    assert "harness" in export_engine.REQUEST_GROUP_DIMENSIONS
+    assert export_engine.validate_group_by(
+        export_engine.REQUEST_SCOPE, ["harness"]
+    ) == ["harness"]
+
+    store = get_request_log_store(tmp_path / "requests.db")
+    assert store is not None
+    for index in range(6):
+        store.enqueue(
+            RequestRecord(
+                id=f"r{index}",
+                endpoint="/v1/messages",
+                protocol="anthropic",
+                provider="p1",
+                ts_epoch=time.time() - 100 + index,
+                harness=("claude", "codex")[index % 2],
+                tokens_in=index,
+            )
+        )
+    store.close()
+
+    select, names = export_engine.request_aggregate_sql(["providers"], ["harness"])
+    rows = list(
+        store.iter_export_aggregates(select=select, names=names, group_by=["harness"])
+    )
+    assert [row["harness"] for row in rows] == ["claude", "codex"]
+
+    # And the same dimension filters, so an export can be narrowed to one agent.
+    only = list(
+        store.iter_export_aggregates(
+            select=select, names=names, group_by=["harness"], harness="codex"
+        )
+    )
+    assert [row["harness"] for row in only] == ["codex"]

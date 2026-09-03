@@ -13,9 +13,10 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
 )
 from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
-from my_claude_code.config.harnesses import harness_specs
+from my_claude_code.config.harnesses import MCC_HARNESS_ID_SENTINEL, harness_specs
 from my_claude_code.config.proxy_auth import PROXY_NO_AUTH_SENTINEL
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.runtime.harness_catalogues import HarnessCatalogueFanoutPublisher
 
@@ -441,3 +442,81 @@ def test_a_toml_catalogue_is_created_as_toml_when_it_is_missing(
 
     document = tomllib.loads(path.read_text(encoding="utf-8"))
     assert document["providers"]["mcc"]["type"] == "anthropic"
+
+
+# -------------------------------------------------------- harness attribution
+
+
+def test_every_published_document_resolves_the_harness_id_sentinel(
+    tmp_path: Path,
+) -> None:
+    """No ``{{...}}`` reaches disk, and each file names its own harness.
+
+    The three OpenCode-family harnesses are the case this exists for: they
+    share two serialisers between them, so the id in the file can only come
+    from the ``HarnessSpec`` this publisher is holding.
+    """
+
+    paths = {
+        spec.id: tmp_path / f"{spec.id}{Path(spec.catalogue.filename).suffix}"
+        for spec in harness_specs()
+        if spec.catalogue is not None
+        and spec.catalogue.filename is not None
+        and spec.catalogue.merge is None
+    }
+
+    HarnessCatalogueFanoutPublisher(paths).publish(_runtime())
+
+    for harness_id, path in paths.items():
+        text = path.read_text(encoding="utf-8")
+        assert MCC_HARNESS_ID_SENTINEL not in text, harness_id
+        assert "{{" not in text, harness_id
+        if HARNESS_HEADER in text:
+            document = (
+                tomllib.loads(text) if path.suffix == ".toml" else json.loads(text)
+            )
+            assert _harness_header_values(document) == {harness_id}, harness_id
+
+    # The three that share a serialiser each got their own id, not one id three
+    # times, which is the failure the sentinel exists to make impossible.
+    family = {
+        harness_id: _harness_header_values(
+            json.loads(paths[harness_id].read_text(encoding="utf-8"))
+        )
+        for harness_id in ("opencode", "opencode2", "kilo")
+    }
+    assert family == {
+        "opencode": {"opencode"},
+        "opencode2": {"opencode2"},
+        "kilo": {"kilo"},
+    }
+
+
+def test_a_merged_block_carries_the_resolved_harness_id(tmp_path: Path) -> None:
+    """The merge path resolves it too -- the substitution is before the branch."""
+
+    path = tmp_path / "providers.json"
+    path.write_text(
+        json.dumps({"provider": {"mcc": {"models": {"stale/model": {}}}}}),
+        encoding="utf-8",
+    )
+
+    _merge_publisher(path).publish(_runtime())
+
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["provider"]["mcc"]["headers"] == {HARNESS_HEADER: "commandcode_cli"}
+
+
+def _harness_header_values(node: object) -> set[str]:
+    """Return every value bound to the attribution header, at any depth."""
+
+    found: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and key.lower() == HARNESS_HEADER:
+                found.add(str(value))
+            found |= _harness_header_values(value)
+    elif isinstance(node, list):
+        for item in node:
+            found |= _harness_header_values(item)
+    return found

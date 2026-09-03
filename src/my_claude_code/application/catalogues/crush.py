@@ -59,6 +59,7 @@ from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.catalogues.base import (
     DEFAULTED_KEY,
     DefaultedFields,
+    attribution_headers,
     can_reason,
     clamp_efforts,
     reasoning_is_mandatory,
@@ -179,6 +180,12 @@ def build_crush_catalogue(
                 "type": PROVIDER_TYPE,
                 "base_url": BASE_URL_SENTINEL,
                 "api_key": API_KEY_REFERENCE,
+                # ``providers.<id>.extra_headers``, spelled the way Crush's own
+                # schema spells it -- "Additional HTTP headers to send with
+                # requests", ``tests/fixtures/schemas/crush.schema.json``. The
+                # one header MCC adds is its non-secret attribution label; see
+                # ``application/catalogues/base.attribution_headers``.
+                "extra_headers": attribution_headers(),
                 # See the module docstring: discovery would GET ``/models``.
                 "discover_models": False,
                 "models": entries,

@@ -10,6 +10,7 @@ import ast
 import re
 from importlib import import_module
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,7 +26,15 @@ from my_claude_code.application.catalogues.base import (
     visible_entries,
 )
 from my_claude_code.application.model_metadata import ModelReasoningCapability
-from my_claude_code.config.harnesses import catalogue_specs
+from my_claude_code.config.harness_attribution import with_harness_id
+from my_claude_code.config.harnesses import (
+    HARNESS_SPECS,
+    HARNESSES_WITHOUT_ATTRIBUTION_HEADER,
+    MCC_HARNESS_ID_SENTINEL,
+    catalogue_specs,
+    harness_spec,
+)
+from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 from my_claude_code.core.reasoning import ReasoningEffort
 
 SERIALISER_PACKAGE = (
@@ -297,3 +306,167 @@ def test_the_starting_model_is_the_configured_route_then_the_first_paid_one() ->
     assert starting_model([free, paid]) is paid
     assert starting_model([free]) is free
     assert starting_model([]) is None
+
+
+# --------------------------------------------------------- harness attribution
+#
+# MCC's launchers tell the proxy which coding agent they started, with the
+# ``x-mcc-harness`` request header. For a harness configured from a *document*
+# the header lives in the generated document, and the tests below are the
+# record of which documents that is and which it deliberately is not.
+
+#: Catalogue formats whose CLI publishes somewhere to put a custom request
+#: header, with the key it publishes. The key is the CLI's own spelling and is
+#: restated here rather than imported, because a serialiser that silently
+#: renamed it would still pass a test that read the name back out of it.
+FORMATS_WITH_AN_ATTRIBUTION_HEADER: dict[str, tuple[str, ...]] = {
+    # ``provider.mcc.options`` is handed to ``@ai-sdk/anthropic``'s
+    # ``createAnthropic``, which merges ``headers`` into every request. This
+    # is the key PR #258 removed an ``Authorization`` override from; what
+    # goes back is a label, not a credential.
+    "opencode": ("provider", "mcc", "options", "headers"),
+    "kilo": ("provider", "mcc", "options", "headers"),
+    "commandcode": ("provider", "mcc", "headers"),
+    # ``providers.<id>.extra_headers``, "Additional HTTP headers to send with
+    # requests" in Crush's own schema -- tests/fixtures/schemas/crush.schema.json.
+    "crush": ("providers", "mcc", "extra_headers"),
+    # Inside ``settings``: Cline discards the whole document on an unknown
+    # *root* key. See ``config/harness_cline.strip_mcc_keys``.
+    "cline": ("providers", "openai-compatible", "settings", "headers"),
+}
+
+#: Qwen Code's is a sixth, and it is not in the table above because its header
+#: map is per *model* -- ``modelProviders.anthropic[].generationConfig
+#: .customHeaders`` -- so there is no one path to state. It has a test of its
+#: own below.
+QWEN_FORMAT = "qwen"
+
+#: Everything else, derived rather than listed, so a catalogue format added
+#: later lands in exactly one of these three sets and cannot quietly land in
+#: none. Four of these have a hook elsewhere -- Codex takes a ``-c``
+#: assignment, Gemini CLI and Claude Code an environment variable, Pi an
+#: argument to ``registerProvider`` in its bundled extension -- and the rest
+#: have no hook at all, which ``HARNESSES_WITHOUT_ATTRIBUTION_HEADER`` in
+#: ``config/harnesses.py`` records with the reason per harness.
+FORMATS_WITHOUT_AN_ATTRIBUTION_HEADER = (
+    frozenset(SERIALISERS) - set(FORMATS_WITH_AN_ATTRIBUTION_HEADER) - {QWEN_FORMAT}
+)
+
+
+def _attribution_model() -> CatalogueModel:
+    return CatalogueModel(
+        gateway_id="anthropic/openrouter/sonnet",
+        provider_model_ref="openrouter/sonnet",
+        display_name="openrouter/sonnet",
+        context_length=131072,
+        max_output_tokens=16384,
+    )
+
+
+def _at_path(document: dict[str, Any], path: tuple[str, ...]) -> Any:
+    node: Any = document
+    for key in path:
+        assert isinstance(node, dict), path
+        assert key in node, f"missing {key} of {path}"
+        node = node[key]
+    return node
+
+
+def _header_values(node: object) -> list[str]:
+    """Return every value bound to the attribution header, at any depth."""
+
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str) and key.lower() == HARNESS_HEADER:
+                found.append(str(value))
+            found.extend(_header_values(value))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_header_values(item))
+    return found
+
+
+@pytest.mark.parametrize("format_id", sorted(FORMATS_WITH_AN_ATTRIBUTION_HEADER))
+def test_a_header_capable_format_writes_the_sentinel_where_its_cli_reads_it(
+    format_id: str,
+) -> None:
+    """The header is at the CLI's own key, and its value is not yet an id.
+
+    Not an id, because it cannot be one here: ``build_opencode_catalogue``
+    serves ``opencode``, ``opencode2`` and ``kilo``, and a pure function of the
+    model records cannot tell them apart. The caller resolves the sentinel.
+    """
+
+    document, _ = serialise(format_id, [_attribution_model()])
+
+    headers = _at_path(document, FORMATS_WITH_AN_ATTRIBUTION_HEADER[format_id])
+    assert headers == {HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL}
+    # The version companion is explicitly out of scope: MCC never probes a
+    # harness binary for its version, and a version it does not have is worse
+    # than none.
+    assert "x-mcc-harness-version" not in str(document)
+
+
+def test_qwen_hangs_its_headers_off_every_models_generation_config() -> None:
+    """Qwen Code's header map is per model, not per provider."""
+
+    document, _ = serialise(QWEN_FORMAT, [_attribution_model()])
+
+    entries = model_entries(QWEN_FORMAT, document)
+    assert entries
+    for entry in entries:
+        assert entry["generationConfig"]["customHeaders"] == {
+            HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL
+        }
+
+
+@pytest.mark.parametrize("format_id", sorted(FORMATS_WITHOUT_AN_ATTRIBUTION_HEADER))
+def test_a_format_with_no_documented_header_hook_gains_no_header(
+    format_id: str,
+) -> None:
+    """No hook, no header -- and no sentinel smuggled in somewhere else either."""
+
+    document, _ = serialise(format_id, [_attribution_model()])
+
+    assert _header_values(document) == []
+    assert MCC_HARNESS_ID_SENTINEL not in str(document)
+
+
+def test_the_harnesses_with_no_hook_are_named_in_the_registry() -> None:
+    """The 'no header' decision is data, so it can be checked rather than trusted."""
+
+    ids = {spec.id for spec in HARNESS_SPECS}
+    assert ids >= HARNESSES_WITHOUT_ATTRIBUTION_HEADER
+
+    for harness_id in HARNESSES_WITHOUT_ATTRIBUTION_HEADER:
+        catalogue = harness_spec(harness_id).catalogue
+        if catalogue is None:
+            # Goose and Antigravity have no generated document at all.
+            continue
+        document, _ = serialise(catalogue.format_id, [_attribution_model()])
+        assert _header_values(document) == [], harness_id
+
+
+def test_every_harness_that_does_get_a_header_resolves_to_its_registry_id() -> None:
+    """The value on disk is the registry id, spelled the way the log keys on it."""
+
+    for harness_id in (
+        "opencode",
+        "opencode2",
+        "kilo",
+        "commandcode_cli",
+        "qwen_code",
+        "crush",
+        "cline_cli",
+    ):
+        spec = harness_spec(harness_id)
+        assert spec.catalogue is not None
+        document, _ = serialise(spec.catalogue.format_id, [_attribution_model()])
+        resolved = with_harness_id(document, spec.id)
+        values = _header_values(resolved)
+        assert values and set(values) == {spec.id}, harness_id
+        assert MCC_HARNESS_ID_SENTINEL not in str(resolved)
+        # The sentinel's own shape, so a *partially* substituted document --
+        # one branch resolved and another missed -- fails here too.
+        assert "{{" not in str(resolved)

@@ -1789,6 +1789,44 @@ The detail dialog answers the question "what did MCC actually put on the wire, a
 
 **Local answers** defaults to **Hide**, so the table, the cards, the charts and the breakdowns show requests that actually went to a provider. Requests MCC answered itself — title-generation skips, probe replies, suggestion-mode skips — are hidden until you switch it to **Show** (everything, as before 6.13.0) or **Only** (nothing else). The choice is remembered across refreshes. Rows whose provider is genuinely unknown are not local answers and stay visible under Hide, and the **All time** rollup and the export window ignore this filter.
 
+**Harness** names the coding agent that sent the request. Since 6.37.0 every row records it, the
+table shows it as a chip, the detail dialog spells it out, there is a **Harness** filter beside
+Provider and Model, and Analytics carries a **Requests by harness** breakdown with counts, error
+rate, tokens and average latency. The **Coding agents** page shows `Requests (7d)` on each card from
+the same data. MCC works it out two ways, and the detail dialog tells you which:
+
+| Detail dialog says | How MCC knows |
+| --- | --- |
+| `OpenCode 1.18.26 (explicit header)` | MCC's own launcher wrote `x-mcc-harness` into the config it generates for that CLI. Exact, not a guess |
+| `Claude Code 2.1.258 (from user-agent)` | inferred from the `user-agent` the client sent |
+| `Unknown (no client identification)` | the client sent nothing MCC recognises, or nothing at all |
+
+Eleven of the sixteen agents can carry the explicit header, because their configuration has
+somewhere to put one: Claude Code and Gemini CLI through an environment variable, Codex through a
+`-c` assignment, Pi through the provider its bundled extension registers, and OpenCode, OpenCode 2,
+Kilo, Command Code, Qwen Code, Crush and Cline through the provider document MCC generates for them.
+Kimi Code, Aider, Droid and Goose publish no header hook MCC could verify, and Antigravity is not
+launched by MCC at all, so those five are identified by user-agent alone.
+
+Two caveats worth knowing before you read the numbers:
+
+- **`Unknown` is large on an old log, and that is history, not a bug.** MCC only started recording
+  inbound headers in 5.36.0, so any request written before that has nothing to classify. On the
+  reference log that is 146,658 of 272,132 rows. Requests written from 6.37.0 on are always
+  attributed to something, even if that something is `Script or curl`.
+- **Qwen Code and Pi send Claude Code's user-agent.** Both build `claude-cli/<their own version>`
+  on their Anthropic path, so requests from them before 6.37.0 are counted as Claude Code. The
+  explicit header separates them from 6.37.0 onward. `Claude Agent SDK` is broken out separately
+  from `Claude Code` on purpose — it is a different program, and on the reference log it is the
+  busiest client on the box.
+
+**A model that never appears in Analytics never reached the proxy.** The request log records what
+MCC was asked to serve; if a model you tried is missing entirely — no rows, not even failed ones —
+the agent never sent MCC a request for it. Look at the agent's own configuration and base URL, not
+at Analytics. This is different from a request that arrived and failed, which is always logged with
+its error.
+
+
 **2. Read the chain first.** One entry per attempt: outcome badge, model ref, how long it took, and — this is the 6.4.0 addition — **the credential that served that attempt**. Three things it can say:
 
 | Shown | Means |

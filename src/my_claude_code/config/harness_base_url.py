@@ -38,21 +38,35 @@ def root_base_url(proxy_root_url: str) -> str:
     return stripped.removesuffix("/v1").rstrip("/")
 
 
-def with_root_base_url(
-    document: Mapping[str, Any], sentinel: str, proxy_root_url: str
+def with_resolved_sentinel(
+    document: Mapping[str, Any], sentinel: str, value: str
 ) -> dict[str, Any]:
-    """Return the document with every occurrence of ``sentinel`` resolved.
+    """Return the document with every occurrence of ``sentinel`` replaced.
 
     Every string equal to the sentinel is replaced, at any depth. Matching the
     whole value rather than a substring is deliberate: a sentinel that has
     somehow reached a prose field must not be silently rewritten, and a
-    partially substituted URL is a worse failure than an untouched one.
+    partially substituted value is a worse failure than an untouched one.
+
+    The two base-URL helpers below and
+    ``config/harness_attribution.with_harness_id`` are the only callers, and
+    they share this walk rather than each carrying a copy of it: the rule
+    "whole value or nothing, at any depth" has to be the same rule for every
+    sentinel or the guarantee above is only true of some of them.
     """
 
-    resolved = _walk(document, sentinel, root_base_url(proxy_root_url))
+    resolved = _walk(document, sentinel, value)
     if not isinstance(resolved, dict):  # pragma: no cover - documents are mappings
         raise TypeError("harness catalogue document must be a mapping")
     return resolved
+
+
+def with_root_base_url(
+    document: Mapping[str, Any], sentinel: str, proxy_root_url: str
+) -> dict[str, Any]:
+    """Return the document with every occurrence of ``sentinel`` resolved."""
+
+    return with_resolved_sentinel(document, sentinel, root_base_url(proxy_root_url))
 
 
 def _walk(node: Any, sentinel: str, value: str) -> Any:
@@ -87,7 +101,4 @@ def with_v1_base_url(
 ) -> dict[str, Any]:
     """Return the document with every occurrence of ``sentinel`` resolved to ``<root>/v1``."""
 
-    resolved = _walk(document, sentinel, v1_base_url(proxy_root_url))
-    if not isinstance(resolved, dict):  # pragma: no cover - documents are mappings
-        raise TypeError("harness catalogue document must be a mapping")
-    return resolved
+    return with_resolved_sentinel(document, sentinel, v1_base_url(proxy_root_url))

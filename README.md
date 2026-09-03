@@ -1413,6 +1413,14 @@ Requests logged before 4.42.0 have no chain recorded, so the panel is hidden for
 
 Every request records **which credential served it**, so a multi-key pool is no longer a black box. The Analytics view adds a **Key** column to the request table, a **Key performance** panel, and a **Key** filter that composes with every other filter.
 
+Since **6.37.0** every request also records **which coding agent sent it**. MCC's launchers write an
+`x-mcc-harness` header into the configuration they generate for the eleven CLIs that have somewhere
+to put one, and everything else is identified from its user-agent; the detail dialog says
+which of the two it was. Analytics gains a **Harness** column, a **Harness** filter and a **Requests
+by harness** breakdown, the Coding agents page shows `Requests (7d)` per agent, and all four export
+formats carry the column. Rows written before 5.36.0 have no stored client headers and read as
+`Unknown` — and a model that appears nowhere in Analytics never reached the proxy at all.
+
 Credentials are identified by a masked `first4…last4` label and their pool index. **The raw key is never written to the database, a log line, or any HTTP response.**
 
 <div align="center">

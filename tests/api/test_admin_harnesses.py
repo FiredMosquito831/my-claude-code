@@ -409,7 +409,13 @@ def test_opencode_document_authenticates_with_apikey_alone(monkeypatch, tmp_path
 
     document, _ = serialise("opencode", ())
     options = document["provider"]["mcc"]["options"]
-    assert set(options) == {"baseURL", "apiKey"}
+    # 6.37.0 added ``headers`` beside them to carry ``x-mcc-harness``. That is
+    # an attribution label, not a credential, so the test's teeth move rather
+    # than come out: exactly one thing in this document may authenticate, and
+    # no header may smuggle a second one back in the way ``Authorization`` did.
+    assert set(options) == {"baseURL", "apiKey", "headers"}
+    assert set(options["headers"]) == {"x-mcc-harness"}
+    assert "authorization" not in {name.lower() for name in options["headers"]}
 
     with _local_client(app) as client:
         accepted = client.get("/v1/models", headers={"x-api-key": "proxy-token"})

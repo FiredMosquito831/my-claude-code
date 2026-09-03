@@ -51,6 +51,7 @@ from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.catalogues.base import (
     DEFAULTED_KEY,
     DefaultedFields,
+    attribution_headers,
     can_reason,
     clamp_efforts,
     visible_entries,
@@ -183,7 +184,12 @@ def _entry(
 def _generation_config(
     model: CatalogueModel, model_id: str, defaulted: DefaultedFields
 ) -> dict[str, Any]:
-    generation: dict[str, Any] = {}
+    # ``customHeaders`` is unconditional, which is why the block is built with
+    # it rather than around it: Qwen Code hangs its per-request header map off
+    # ``generationConfig``, so a model whose every capability is unknown still
+    # needs the block for MCC's attribution header to reach the wire. Every
+    # other key here stays absent when the ladder had no answer.
+    generation: dict[str, Any] = {"customHeaders": attribution_headers()}
 
     if model.context_length is None:
         defaulted.record(model_id, "contextWindowSize")

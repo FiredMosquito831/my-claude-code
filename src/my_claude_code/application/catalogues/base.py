@@ -29,10 +29,12 @@ from dataclasses import dataclass, field, replace
 
 from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.model_metadata import ModelReasoningCapability
+from my_claude_code.config.harnesses import MCC_HARNESS_ID_SENTINEL
 from my_claude_code.core.catalogue_refs import (
     is_excluded_ref,
     select_starting_index,
 )
+from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 from my_claude_code.core.gateway_model_ids import gateway_model_id
 from my_claude_code.core.reasoning import ReasoningEffort
 
@@ -49,6 +51,34 @@ EFFORT_ORDER: tuple[ReasoningEffort, ...] = (
     ReasoningEffort.XHIGH,
     ReasoningEffort.MAX,
 )
+
+
+def attribution_headers() -> dict[str, str]:
+    """Return the request-header block MCC puts in a generated document.
+
+    One header, ``x-mcc-harness``, carrying the id of the harness this
+    document was written for. It is the only signal on an inbound request that
+    is not a guess: without it the request log has to infer the sender from a
+    user-agent, and OpenCode, OpenCode 2 and Kilo all send the same one.
+
+    The header *name* comes from ``core/client_fingerprint``, which is also
+    what reads it back off the wire, so the emitter and the classifier cannot
+    drift. The *value* is a sentinel, resolved by
+    ``config/harness_attribution.with_harness_id`` on the way to disk: a
+    serialiser is a pure function of the model records and does not know which
+    of the harnesses sharing it the caller is writing for.
+
+    Built fresh on every call rather than shared as a module constant: the
+    dict is nested into a document the caller then mutates, and a shared
+    mapping would be the same object in every generated file.
+
+    Not called by every serialiser. Five formats declare it -- the five whose
+    CLI documents a place to put a custom request header -- and the rest
+    deliberately send nothing; ``HARNESSES_WITHOUT_ATTRIBUTION_HEADER`` in
+    ``config/harnesses.py`` names them and says why.
+    """
+
+    return {HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL}
 
 
 @dataclass

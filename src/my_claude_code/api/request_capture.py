@@ -27,7 +27,10 @@ from my_claude_code.core.anthropic import (
     request_image_inputs,
 )
 from my_claude_code.core.async_iterators import try_close_async_iterator
-from my_claude_code.core.client_fingerprint import install_fingerprint
+from my_claude_code.core.client_fingerprint import (
+    harness_from_headers,
+    install_fingerprint,
+)
 from my_claude_code.core.credential_attribution import install_attribution
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import failure_kind_name, find_execution_failure
@@ -87,6 +90,7 @@ class RequestCapture:
         wire_body_max_chars: int = DEFAULT_WIRE_BODY_MAX_CHARS,
         ladder_body_max_chars: int = DEFAULT_LADDER_BODY_MAX_CHARS,
         headers: dict[str, str] | None = None,
+        harness: str | None = None,
     ) -> None:
         self._store = store
         self._capture_bodies = capture_bodies
@@ -173,6 +177,7 @@ class RequestCapture:
             input_chars=input_chars,
             params=params,
             headers=headers,
+            harness=harness,
         )
 
     @property
@@ -777,6 +782,12 @@ def build_capture(
             )
         ),
         headers=capture_headers(headers),
+        # Attributed at write time, from the same classifier the historical
+        # backfill uses. ``harness_from_headers`` answers ``unknown`` rather
+        # than nothing when it recognises nothing, so ``.harness`` is always a
+        # string and a row written from here is never NULL -- which is what
+        # lets NULL keep meaning "predates the column" for the backfill.
+        harness=harness_from_headers(headers).harness,
     )
 
 

@@ -67,6 +67,7 @@ from my_claude_code.config.paths import harness_catalogue_path
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import get_settings
+from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 
 from .common import preflight_proxy, run_client_process
 
@@ -76,6 +77,12 @@ HARNESS_ID = "gemini_cli"
 #: API-key path reads. Both are set in the launched process only.
 BASE_URL_ENV = "GOOGLE_GEMINI_BASE_URL"
 API_KEY_ENV = "GEMINI_API_KEY"
+
+#: Gemini CLI's own custom-header variable. Its list is **comma**-separated
+#: ``Name: Value`` pairs, not newline-separated the way Claude Code's is --
+#: two CLIs, two spellings, and writing the wrong one produces a single header
+#: whose value contains the other pair rather than an error.
+CUSTOM_HEADERS_ENV = "GEMINI_CLI_CUSTOM_HEADERS"
 
 #: Variables MCC owns in the launched environment. Stripped before they are
 #: set so a stale value inherited from a parent shell cannot outrank the one
@@ -182,6 +189,30 @@ def build_gemini_launcher_env(
         env[catalogue.config_env_var] = str(config_path)
     env[BASE_URL_ENV] = root_base_url(proxy_root_url)
     env[API_KEY_ENV] = proxy_auth_token(auth_token)
+    return with_harness_header(env)
+
+
+def with_harness_header(env: dict[str, str]) -> dict[str, str]:
+    """Add MCC's attribution header to ``GEMINI_CLI_CUSTOM_HEADERS``, in place.
+
+    Appended, never assigned, and for the same reason Claude Code's is: a
+    value the user set is theirs, and a diagnostic label is not worth
+    discarding it for. ``GEMINI_CLI_CUSTOM_HEADERS`` is deliberately absent
+    from ``_MCC_OWNED_ENV_KEYS`` above -- MCC owns one entry in this list, not
+    the list.
+
+    Nothing is appended when the inherited value already names this header.
+    """
+
+    line = f"{HARNESS_HEADER}: {HARNESS_ID}"
+    existing = env.get(CUSTOM_HEADERS_ENV, "").strip()
+    if not existing:
+        env[CUSTOM_HEADERS_ENV] = line
+    elif not any(
+        entry.split(":", 1)[0].strip().lower() == HARNESS_HEADER
+        for entry in existing.split(",")
+    ):
+        env[CUSTOM_HEADERS_ENV] = ",".join((existing, line))
     return env
 
 

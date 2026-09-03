@@ -20,6 +20,8 @@ from my_claude_code.application.catalogues.opencode import (
     build_opencode_catalogue,
 )
 from my_claude_code.application.model_metadata import ModelReasoningCapability
+from my_claude_code.config.harnesses import MCC_HARNESS_ID_SENTINEL
+from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 from my_claude_code.core.reasoning import ReasoningEffort
 
 
@@ -254,9 +256,29 @@ def test_the_document_names_env_placeholders_rather_than_the_token() -> None:
     assert provider["options"] == {
         "baseURL": f"{{env:{BASE_URL_ENV}}}",
         "apiKey": f"{{env:{API_KEY_ENV}}}",
+        # The header block is back, and it is not what PR #258 removed. That
+        # was an ``Authorization`` override carrying a second copy of the
+        # proxy token; this is one non-secret label naming the harness. The
+        # assertion is on the whole mapping so a credential cannot be added
+        # beside it without this test saying so.
+        "headers": {HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL},
     }
-    assert "headers" not in provider["options"]
+    assert "authorization" not in {
+        key.lower() for key in provider["options"]["headers"]
+    }
     assert "sk-" not in str(document)
+
+
+def test_the_provider_block_carries_the_harness_attribution_sentinel() -> None:
+    """The value is a sentinel, not an id: one serialiser, three harnesses."""
+
+    document, _ = build_opencode_catalogue([_model()])
+
+    headers = document["provider"][PROVIDER_ID]["options"]["headers"]
+    assert headers == {HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL}
+    # Nested, never at the root. Kilo CLI rejects an unknown *root* key and
+    # ignores an unknown nested one, and this document is Kilo's too.
+    assert HARNESS_HEADER not in document
 
 
 def test_pinned_default_parameters_become_opencode_options() -> None:

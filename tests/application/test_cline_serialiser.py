@@ -30,7 +30,9 @@ from my_claude_code.config.harness_cline import (
 from my_claude_code.config.harnesses import (
     CLINE_API_KEY_SENTINEL,
     CLINE_BASE_URL_SENTINEL,
+    MCC_HARNESS_ID_SENTINEL,
 )
+from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 
 
 def _model(
@@ -251,3 +253,33 @@ def test_the_serialiser_is_reachable_through_the_registry() -> None:
 def test_the_documented_defaults_say_what_cline_does_instead() -> None:
     assert set(CLI_DOCUMENTED_DEFAULTS) == {"contextWindow", "maxTokens"}
     assert all(value is None for value in CLI_DOCUMENTED_DEFAULTS.values())
+
+
+def test_the_attribution_header_rides_in_settings_and_survives_the_strip() -> None:
+    """Inside ``settings``, so Cline's root-key check never sees it.
+
+    ``strip_mcc_keys`` removes MCC's *bookkeeping* from the root before the
+    write. This header is not bookkeeping -- it is a key Cline itself reads and
+    sends -- so it has to be somewhere the strip does not reach, and it is.
+    """
+
+    document, _ = build_cline_catalogue([_model()])
+
+    settings = document["providers"][PROVIDER_ID]["settings"]
+    assert settings["headers"] == {HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL}
+    assert HARNESS_HEADER not in document
+
+    on_disk = strip_mcc_keys(document)
+    assert on_disk["providers"][PROVIDER_ID]["settings"]["headers"] == {
+        HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL
+    }
+
+
+def test_the_selected_models_numbers_do_not_displace_the_header() -> None:
+    """``settings.update(entry)`` merges limits in; it must not drop the header."""
+
+    document, _ = build_cline_catalogue([_model(context_length=131072)])
+
+    settings = document["providers"][PROVIDER_ID]["settings"]
+    assert settings["contextWindow"] == 131072
+    assert settings["headers"] == {HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL}

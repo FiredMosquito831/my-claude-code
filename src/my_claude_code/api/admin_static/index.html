@@ -767,6 +767,18 @@
                 />
                 <datalist id="reqModelOptions"></datalist>
               </label>
+              <label
+                title="Which coding agent or SDK sent the request, from the x-mcc-harness header our launchers set or inferred from the user-agent."
+              >
+                Harness
+                <input
+                  id="reqFilterHarness"
+                  type="text"
+                  list="reqHarnessOptions"
+                  placeholder="any"
+                />
+                <datalist id="reqHarnessOptions"></datalist>
+              </label>
               <label>
                 Key
                 <input
@@ -889,6 +901,10 @@
                 <div id="reqProviderBreakdown"></div>
               </section>
               <section class="analytics-panel">
+                <h4>Requests by harness</h4>
+                <div id="reqHarnessBreakdown"></div>
+              </section>
+              <section class="analytics-panel">
                 <h4>Key performance</h4>
                 <div id="reqKeyBreakdown"></div>
               </section>
@@ -915,6 +931,7 @@
                   <tr>
                     <th>Time</th>
                     <th>Endpoint</th>
+                    <th>Harness</th>
                     <th>Provider</th>
                     <th>Key</th>
                     <th>Model</th>

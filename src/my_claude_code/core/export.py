@@ -116,7 +116,13 @@ WEBSEARCH_FIELD_LABELS: dict[str, str] = {
 
 # Dimension ids usable in ``group_by`` for each scope. Order in ``group_by`` is
 # preserved by the caller and becomes both GROUP BY and ORDER BY order.
-REQUEST_GROUP_DIMENSIONS: tuple[str, ...] = ("provider", "period", "model", "key")
+REQUEST_GROUP_DIMENSIONS: tuple[str, ...] = (
+    "provider",
+    "period",
+    "model",
+    "key",
+    "harness",
+)
 WEBSEARCH_GROUP_DIMENSIONS: tuple[str, ...] = ("provider", "period", "key")
 
 # Default field selection (safe, fast, no bodies).
@@ -217,6 +223,12 @@ _REQUEST_ALWAYS_COLUMNS: tuple[str, ...] = (
     "duration_ms",
     "ttft_ms",
     "route_attempt",
+    # Always present rather than gated by a field group. A column named in
+    # ``_REQUEST_COLUMN_ORDER`` that belongs to no group is unreachable -- the
+    # note below records that ``headers`` is stranded exactly that way -- and
+    # "which agent sent this" is a structural fact about a row, like its
+    # endpoint and its protocol, not one of the metrics the checklist selects.
+    "harness",
 )
 
 # Field -> columns added to the detail export when selected.
@@ -313,6 +325,7 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "reasoning_adaptation",
     "params",
     "headers",
+    "harness",
     "input_sha256",
     "output_sha256",
     "cache_hit_rate",
@@ -360,6 +373,7 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "reasoning_adaptation": "Reasoning adaptation",
     "params": "Params",
     "headers": "Headers",
+    "harness": "Harness",
     "input_sha256": "Input SHA-256",
     "output_sha256": "Output SHA-256",
     "cache_hit_rate": "Cache hit rate",
@@ -507,6 +521,7 @@ _REQUEST_DIMENSION_SQL: dict[str, str] = {
     "provider": PROVIDER_KEY_SQL,
     "model": "COALESCE(resolved_model, '(unknown)')",
     "key": "COALESCE(key_label, '(unknown)')",
+    "harness": "COALESCE(harness, '(unknown)')",
     "period": "strftime('%Y-%m-%d', ts_epoch, 'unixepoch')",
 }
 

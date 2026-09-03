@@ -691,7 +691,7 @@ def test_stats_cache_evicts_least_recently_used(tmp_path) -> None:
             # The key is the whole filter tuple, so its arity is pinned here on
             # purpose: a filter added to `stats()` and forgotten in the key
             # would serve one question's numbers as another's.
-            empty = (None,) * 8
+            empty = (None,) * 9
             assert ("provider-0", *empty) not in store._stats_cache
             assert (f"provider-{max_entries}", *empty) in store._stats_cache
     finally:
@@ -2877,8 +2877,8 @@ def _rollup_fixture(store: RequestLogStore, base: float) -> None:
     Several UTC hours; providers named, absent-with-an-optimization (a local
     answer) and absent-without-one (genuinely unknown); models where
     ``resolved_model`` differs from ``requested_model``; all three statuses;
-    several key labels; rows with and without durations, TTFTs, route attempts,
-    diversions, images and recovery counters.
+    several key labels; five harnesses; rows with and without durations, TTFTs,
+    route attempts, diversions, images and recovery counters.
     """
     hour = 3600.0
     providers = ["p1", "p2", None, None]
@@ -2927,6 +2927,12 @@ def _rollup_fixture(store: RequestLogStore, base: float) -> None:
                 resolved_model=f"res-{index % 4}",
                 endpoint=("/v1/messages", "/v1/responses")[index % 2],
                 key_label=f"key-{index % 3}",
+                # Five harnesses, including the two ids that are not registry
+                # entries at all, so the rollup is exercised on both halves of
+                # the vocabulary the column actually holds.
+                harness=("claude", "codex", "claude_agent_sdk", "script", "unknown")[
+                    index % 5
+                ],
                 status=status,
                 # Distinct, well separated counts keep every LIMIT-10 list's
                 # ordering unambiguous, so the comparison is not asserting on
@@ -3049,7 +3055,12 @@ def test_rollup_and_raw_stats_agree_across_every_filter_combination(
         {"endpoint": "/v1/responses"},
         {"key": "key-1"},
         {"key": "no-such-key"},
+        {"harness": "claude"},
+        {"harness": "claude,codex"},
+        {"harness": "claude_agent_sdk"},
+        {"harness": "no-such-harness"},
         {"provider": "p2", "status": "error", "endpoint": "/v1/messages"},
+        {"harness": "codex", "provider": "p1", "status": "error"},
     ]
     for local in ("all", "hide", "only"):
         for since in (None, base + 2 * 3600):
@@ -3394,3 +3405,358 @@ def test_migrating_a_database_shaped_like_the_live_log(tmp_path) -> None:
             store=upgraded,
             arguments=dict[str, Any](local=local),
         )
+
+
+# ------------------------------------------------------------------ harness --
+
+
+def _headers(user_agent: str | None = None, harness: str | None = None) -> dict:
+    """One row's stored ``headers`` mapping, in the shape capture writes it."""
+    stored: dict[str, str] = {}
+    if user_agent is not None:
+        stored["user-agent"] = user_agent
+    if harness is not None:
+        stored["x-mcc-harness"] = harness
+    return stored
+
+
+def _drop_harness_column(path) -> None:
+    """Rewind a database to the shape it had before ``harness`` existed."""
+    with sqlite3.connect(path) as conn:
+        # The index carries the column, so it has to go first.
+        conn.execute("DROP INDEX IF EXISTS idx_requests_harness_v1")
+        conn.execute("ALTER TABLE requests DROP COLUMN harness")
+        conn.execute(
+            "DELETE FROM request_log_meta WHERE key = ?",
+            (request_log_module._HARNESS_BACKFILL_KEY,),
+        )
+
+
+def test_the_guarded_alter_adds_harness_to_a_database_without_it(tmp_path) -> None:
+    """A database created by the previous release must gain the column."""
+    path = tmp_path / "requests.db"
+    seed = RequestLogStore(path, max_rows=100)
+    seed.enqueue(_record("r1"))
+    seed.close()
+    _drop_harness_column(path)
+    with sqlite3.connect(path) as conn:
+        before = {str(row[1]) for row in conn.execute("PRAGMA table_info(requests)")}
+    assert "harness" not in before
+
+    upgraded = RequestLogStore(path, max_rows=100)
+    upgraded.close()
+
+    with sqlite3.connect(path) as conn:
+        after = {str(row[1]) for row in conn.execute("PRAGMA table_info(requests)")}
+        indexes = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+        }
+    assert "harness" in after
+    # The index is versioned by name and created only after the ALTER, so its
+    # presence is what proves the ordering held.
+    assert "idx_requests_harness_v1" in indexes
+
+
+def test_a_stored_record_round_trips_its_harness(store: RequestLogStore) -> None:
+    """The column is written by the insert and read back by both queries."""
+    store.enqueue(_record("r1", harness="opencode2"))
+    store.close()
+    detail = store.get_request("r1")
+    assert detail is not None
+    assert detail["harness"] == "opencode2"
+    rows, _total = store.list_requests()
+    assert rows[0]["harness"] == "opencode2"
+
+
+def test_the_harness_backfill_classifies_rows_written_before_the_column(
+    tmp_path,
+) -> None:
+    """History is attributed from the headers already stored on each row."""
+    path = tmp_path / "requests.db"
+    seed = RequestLogStore(path, max_rows=1000)
+    seed.enqueue(_record("ua", headers=_headers("claude-cli/2.0.0 (external, cli)")))
+    seed.enqueue(_record("sdk", headers=_headers("opencode/1.4.2")))
+    seed.enqueue(_record("explicit", headers=_headers("curl/8.4.0", harness="droid")))
+    seed.enqueue(_record("silent", headers=None))
+    seed.enqueue(_record("broken", headers=_headers("curl/8.4.0")))
+    seed.close()
+    # A blob no JSON decoder can read must not stop the walk.
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE requests SET headers = '{not json' WHERE id = 'broken'")
+    _drop_harness_column(path)
+
+    upgraded = RequestLogStore(path, max_rows=1000)
+    upgraded.close()
+
+    with sqlite3.connect(path) as conn:
+        stored = dict(conn.execute("SELECT id, harness FROM requests"))
+        marker = conn.execute(
+            "SELECT value FROM request_log_meta WHERE key = ?",
+            (request_log_module._HARNESS_BACKFILL_KEY,),
+        ).fetchone()
+    assert stored == {
+        "ua": "claude",
+        "sdk": "opencode",
+        # The explicit header beats the user-agent, which is the whole point of
+        # storing it: this row would otherwise read as a curl one-liner.
+        "explicit": "droid",
+        "silent": "unknown",
+        "broken": "unknown",
+    }
+    assert marker is not None
+
+
+def test_the_harness_backfill_is_resumable_and_never_redoes_work(tmp_path) -> None:
+    """``harness IS NULL`` is the progress, so a restart resumes exactly."""
+    path = tmp_path / "requests.db"
+    seed = RequestLogStore(path, max_rows=1000)
+    for index in range(6):
+        seed.enqueue(_record(f"r{index}", headers=_headers("opencode/1.4.2")))
+    seed.close()
+    _drop_harness_column(path)
+
+    # One chunk's worth of work, committed, with a value the classifier could
+    # never produce: if the resumed pass revisited these rows it would
+    # overwrite the sentinel with "opencode" and the assertion below would say
+    # so. Nothing else records that the chunk happened.
+    with sqlite3.connect(path) as conn:
+        conn.execute("ALTER TABLE requests ADD COLUMN harness TEXT")
+        conn.execute(
+            "UPDATE requests SET harness = 'sentinel' WHERE id IN ('r0', 'r1')"
+        )
+
+    resumed = RequestLogStore(path, max_rows=1000)
+    resumed.close()
+
+    with sqlite3.connect(path) as conn:
+        stored = dict(conn.execute("SELECT id, harness FROM requests"))
+    assert stored["r0"] == "sentinel"
+    assert stored["r1"] == "sentinel"
+    assert {stored[f"r{index}"] for index in range(2, 6)} == {"opencode"}
+
+    # And once the marker is written the walk never runs again, however the
+    # rows look: a row nulled afterwards stays null.
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE requests SET harness = NULL WHERE id = 'r5'")
+    reopened = RequestLogStore(path, max_rows=1000)
+    reopened.close()
+    with sqlite3.connect(path) as conn:
+        after = conn.execute("SELECT harness FROM requests WHERE id = 'r5'").fetchone()[
+            0
+        ]
+    assert after is None
+
+
+def test_harness_filters_the_list_and_the_stats(store: RequestLogStore) -> None:
+    """One filter, both surfaces, and comma-separated means "any of these"."""
+    store.enqueue(_record("a", harness="claude"))
+    store.enqueue(_record("b", harness="codex"))
+    store.enqueue(_record("c", harness="script"))
+    store.close()
+
+    rows, total = store.list_requests(harness="claude")
+    assert total == 1
+    assert [row["id"] for row in rows] == ["a"]
+
+    _rows, multi = store.list_requests(harness="claude,codex")
+    assert multi == 2
+
+    assert store.stats(harness="codex")["total"] == 1
+    assert store.stats(harness="claude,script")["total"] == 2
+    assert store.stats(harness="no-such-harness")["total"] == 0
+    assert store.pulse(harness="claude")["total"] == 1
+
+
+def test_by_harness_totals_equal_the_raw_group_by(store: RequestLogStore) -> None:
+    """The breakdown is a claim about the table; check it against the table."""
+    for index in range(9):
+        store.enqueue(
+            _record(f"r{index}", harness=("claude", "codex", "script")[index % 3])
+        )
+    store.close()
+
+    with sqlite3.connect(store.db_path) as conn:
+        expected = dict(
+            conn.execute("SELECT harness, COUNT(*) FROM requests GROUP BY harness")
+        )
+    stats = store.stats()
+    assert {row["key"]: row["requests"] for row in stats["by_harness"]} == expected
+    assert stats["by_harness_truncated"] is False
+
+
+def test_harness_usage_counts_only_the_requested_window(
+    store: RequestLogStore,
+) -> None:
+    """The card's window is a filter on the rows, not on the labels."""
+    now = time.time()
+    store.enqueue(_record("recent", ts_epoch=now - 3600, harness="claude"))
+    store.enqueue(_record("also", ts_epoch=now - 7200, harness="claude"))
+    store.enqueue(_record("old", ts_epoch=now - 40 * 86_400, harness="codex"))
+    store.close()
+
+    assert store.harness_usage(since=now - 7 * 86_400) == {"claude": 2}
+    assert store.harness_usage(since=now - 90 * 86_400) == {"claude": 2, "codex": 1}
+
+
+def test_the_harness_breakdown_is_served_by_its_own_index(
+    store: RequestLogStore,
+) -> None:
+    """The index exists to keep the all-time breakdown off a full table scan."""
+    store.enqueue(_record("r1", harness="claude"))
+    store.close()
+    with sqlite3.connect(store.db_path) as conn:
+        plan = " ".join(
+            str(row[3])
+            for row in conn.execute(
+                "EXPLAIN QUERY PLAN"
+                " SELECT harness, COUNT(*) FROM requests GROUP BY harness"
+            )
+        )
+    assert "idx_requests_harness_v1" in plan
+
+
+def test_the_stats_cache_key_carries_every_filter_including_harness(
+    store: RequestLogStore,
+) -> None:
+    """Ten filters, ten slots.
+
+    Two calls that differ only in ``harness`` must not share a cache entry, or
+    one harness's numbers are served as another's for the TTL.
+    """
+    store.enqueue(_record("a", harness="claude"))
+    store.enqueue(_record("b", harness="codex"))
+    store.close()
+    assert store.stats(harness="claude")["total"] == 1
+    assert store.stats(harness="codex")["total"] == 1
+    with store._stats_lock:
+        keys = list(store._stats_cache)
+    assert all(len(key) == 10 for key in keys)
+    assert {key[9] for key in keys} == {"claude", "codex"}
+
+
+def test_the_rollup_tables_are_rebuilt_when_they_lack_the_harness_dimension(
+    tmp_path,
+) -> None:
+    """A rollup keyed on nine columns cannot answer a ten-column question.
+
+    ``CREATE TABLE IF NOT EXISTS`` never revises an existing definition, so the
+    stale tables have to be dropped and rebuilt or every later upsert folds two
+    harnesses into one bucket.
+    """
+    path = tmp_path / "requests.db"
+    base = float(int(time.time() // 3600) * 3600 - 6 * 3600)
+    seed = RequestLogStore(path, max_rows=1000)
+    for index in range(12):
+        seed.enqueue(
+            _record(
+                f"r{index}",
+                ts_epoch=base + index * 600.0,
+                harness=("claude", "codex", "script")[index % 3],
+                duration_ms=float(10 * (index + 1)),
+            )
+        )
+    seed.close()
+
+    # Rewind the rollup to the previous release's shape: three tables with no
+    # harness dimension, a bogus row inside them, and the old marker names.
+    with sqlite3.connect(path) as conn:
+        for table in request_log_module._ROLLUP_TABLES:
+            conn.execute(f"DROP TABLE {table}")
+        conn.execute(
+            "CREATE TABLE request_stats_rollup ("
+            " hour_epoch INTEGER NOT NULL, is_local INTEGER NOT NULL,"
+            " provider TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,"
+            " PRIMARY KEY (hour_epoch, is_local, provider)) WITHOUT ROWID"
+        )
+        conn.execute("CREATE TABLE request_stats_latency (bucket INTEGER)")
+        conn.execute("CREATE TABLE request_stats_detail (kind TEXT)")
+        conn.execute("INSERT INTO request_stats_rollup VALUES (0, 0, 'stale', 999999)")
+        conn.execute(
+            "DELETE FROM request_log_meta WHERE key IN (?, ?)",
+            (
+                request_log_module._ROLLUP_BACKFILL_KEY,
+                request_log_module._ROLLUP_BACKFILL_THROUGH_KEY,
+            ),
+        )
+        for key in request_log_module._SUPERSEDED_ROLLUP_KEYS:
+            conn.execute(
+                "INSERT OR REPLACE INTO request_log_meta (key, value) VALUES (?, ?)",
+                (key, "1"),
+            )
+
+    upgraded = RequestLogStore(path, max_rows=1000)
+    upgraded.close()
+
+    with sqlite3.connect(path) as conn:
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(request_stats_rollup)")
+        }
+        stale = conn.execute(
+            "SELECT COUNT(*) FROM request_stats_rollup WHERE provider = 'stale'"
+        ).fetchone()[0]
+        superseded = conn.execute(
+            "SELECT COUNT(*) FROM request_log_meta WHERE key IN (?, ?)",
+            request_log_module._SUPERSEDED_ROLLUP_KEYS,
+        ).fetchone()[0]
+    assert "harness" in columns
+    # Dropped, not carried forward: those counts were keyed on a tuple that no
+    # longer exists and could never be split by harness after the fact.
+    assert stale == 0
+    # The pre-harness marker names are gone, so nothing reads them again.
+    assert superseded == 0
+
+    # And the rebuilt rollup answers the same as a raw scan, harness included.
+    _assert_payloads_agree(
+        upgraded.stats(),
+        upgraded._stats_from_rows(),
+        "rebuilt",
+        store=upgraded,
+        arguments={},
+    )
+    assert {row["key"] for row in upgraded.stats()["by_harness"]} == {
+        "claude",
+        "codex",
+        "script",
+    }
+
+
+def test_the_versioned_rollup_marker_cannot_be_satisfied_by_an_old_one(
+    tmp_path,
+) -> None:
+    """The short-circuit must not read a pre-harness completion marker.
+
+    A v1 marker left on a database whose rollup was built without the harness
+    dimension would make ``_ensure_rollup_backfill`` skip, and ``stats()``
+    would serve a confident, permanently wrong ``by_harness``.
+    """
+    assert request_log_module._ROLLUP_BACKFILL_KEY not in (
+        request_log_module._SUPERSEDED_ROLLUP_KEYS
+    )
+    path = tmp_path / "requests.db"
+    seed = RequestLogStore(path, max_rows=100)
+    seed.enqueue(_record("r1", harness="claude"))
+    seed.close()
+    # Only the superseded names present: the rollup must still be built.
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "DELETE FROM request_log_meta WHERE key IN (?, ?)",
+            (
+                request_log_module._ROLLUP_BACKFILL_KEY,
+                request_log_module._ROLLUP_BACKFILL_THROUGH_KEY,
+            ),
+        )
+        for table in request_log_module._ROLLUP_TABLES:
+            conn.execute(f"DELETE FROM {table}")
+        for key in request_log_module._SUPERSEDED_ROLLUP_KEYS:
+            conn.execute(
+                "INSERT OR REPLACE INTO request_log_meta (key, value) VALUES (?, ?)",
+                (key, "1"),
+            )
+
+    upgraded = RequestLogStore(path, max_rows=100)
+    upgraded.close()
+    stats = upgraded.stats()
+    assert stats["served_from"] == "rollup"
+    assert [row["key"] for row in stats["by_harness"]] == ["claude"]

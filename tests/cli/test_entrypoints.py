@@ -16,7 +16,9 @@ from urllib.request import Request
 import pytest
 
 from my_claude_code.config.constants import CATALOGUE_FETCH_TIMEOUT_SECONDS
+from my_claude_code.config.harnesses import harness_spec
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 
 
 def _launcher_settings(
@@ -729,7 +731,13 @@ def test_claude_minimal_child_env_sets_only_proxy_variables() -> None:
     assert env["ANTHROPIC_AUTH_TOKEN"] == "proxy-token"
     # Web server tools default off on the client, mirroring the proxy setting.
     assert "ENABLE_WEB_SERVER_TOOLS" not in env
-    assert set(env) - set(base_env) == {"ANTHROPIC_AUTH_TOKEN"}
+    assert set(env) - set(base_env) == {
+        "ANTHROPIC_AUTH_TOKEN",
+        # MCC's own attribution header. It is a launcher-set variable like the
+        # two above, not a variable of the user's this builder preserves.
+        "ANTHROPIC_CUSTOM_HEADERS",
+    }
+    assert env["ANTHROPIC_CUSTOM_HEADERS"] == f"{HARNESS_HEADER}: claude"
     assert env["PATH"] == "keep"
     assert env["ANTHROPIC_API_KEY"] == "official-key"
     assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "0"
@@ -920,8 +928,10 @@ def test_launch_claude_uses_minimal_env_and_passes_args(
     assert changed == {
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_CUSTOM_HEADERS",
         "ENABLE_WEB_SERVER_TOOLS",
     }
+    assert child_env["ANTHROPIC_CUSTOM_HEADERS"] == f"{HARNESS_HEADER}: claude"
     register_pid.assert_called_once_with(12345)
     unregister_pid.assert_called_once_with(12345)
 
@@ -964,7 +974,11 @@ def test_launch_claude_omits_web_tools_when_proxy_setting_is_off(
         for key in set(inherited_env) | set(child_env)
         if inherited_env.get(key) != child_env.get(key)
     }
-    assert changed == {"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"}
+    assert changed == {
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_CUSTOM_HEADERS",
+    }
 
 
 def test_launch_claude_discover_models_flag_strips_flag_and_enables_discovery(
@@ -1929,3 +1943,75 @@ def test_bind_failure_surfaces_the_port_owner() -> None:
     # The owner PID is reported as a structured field, not buried in text.
     assert any(kw.get("pid") == 4242 for _args, kw in errors)
     assert any("Cannot bind" in str(args[0]) for args, _kw in errors)
+
+
+# -------------------------------------------------------- harness attribution
+
+
+def test_claude_custom_headers_keep_what_the_user_set() -> None:
+    """The variable is the user's; MCC owns one line in it, not the file.
+
+    ``ANTHROPIC_CUSTOM_HEADERS`` is a documented Claude Code variable a user
+    may already be using for a corporate gateway token. Overwriting it to gain
+    a diagnostic label would break their session; appending costs nothing, and
+    the later line wins on a duplicate name.
+    """
+    from my_claude_code.cli.claude_env import build_minimal_claude_proxy_env
+
+    env = build_minimal_claude_proxy_env(
+        proxy_root_url="http://127.0.0.1:9090",
+        auth_token="proxy-token",
+        base_env={"ANTHROPIC_CUSTOM_HEADERS": "X-Corp-Tenant: acme"},
+    )
+
+    assert env["ANTHROPIC_CUSTOM_HEADERS"] == (
+        f"X-Corp-Tenant: acme\n{HARNESS_HEADER}: claude"
+    )
+
+
+def test_claude_custom_headers_are_not_appended_twice() -> None:
+    """A launch inside a session MCC already configured adds no second line."""
+    from my_claude_code.cli.claude_env import build_minimal_claude_proxy_env
+
+    already = f"{HARNESS_HEADER}: claude"
+
+    env = build_minimal_claude_proxy_env(
+        proxy_root_url="http://127.0.0.1:9090",
+        auth_token="proxy-token",
+        base_env={"ANTHROPIC_CUSTOM_HEADERS": already},
+    )
+
+    assert env["ANTHROPIC_CUSTOM_HEADERS"] == already
+
+
+def test_the_full_claude_env_declares_the_harness_too() -> None:
+    """Both builders, not just the minimal one: both start the same binary."""
+    from my_claude_code.cli.claude_env import build_claude_proxy_env
+
+    env = build_claude_proxy_env(
+        proxy_root_url="http://127.0.0.1:9090",
+        auth_token="proxy-token",
+        base_env={"PATH": "keep"},
+    )
+
+    assert env["ANTHROPIC_CUSTOM_HEADERS"] == f"{HARNESS_HEADER}: claude"
+
+
+def test_the_pi_extension_declares_the_same_header_and_id_python_does() -> None:
+    """The one constant this repo cannot share, checked instead of trusted.
+
+    ``pi_extension.ts`` is TypeScript and the definitions are Python, so the
+    header name and the harness id are restated in it. This test is what stops
+    the two copies drifting: rename either side and it fails here rather than
+    silently attributing every Pi session to nothing.
+    """
+    from my_claude_code.cli.launchers.pi import pi_extension_path
+
+    source = pi_extension_path().read_text(encoding="utf-8")
+
+    assert f'const HARNESS_HEADER = "{HARNESS_HEADER}";' in source
+    assert f'const HARNESS_ID = "{harness_spec("pi").id}";' in source
+    # And it is actually handed to Pi, not merely declared.
+    assert "headers: { [HARNESS_HEADER]: HARNESS_ID }," in source
+    # No version companion: MCC never probes a harness for its version.
+    assert "x-mcc-harness-version" not in source

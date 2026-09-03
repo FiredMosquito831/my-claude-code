@@ -206,6 +206,53 @@ DROID_BASE_URL_SENTINEL = "https://base-url.mcc.invalid"
 #: 0.15.11 rewrote MCC's file on first read.
 QWEN_SETTINGS_VERSION = 4
 
+#: The placeholder a catalogue serialiser writes wherever the generated
+#: document declares MCC's own attribution header, and that the caller replaces
+#: with the real harness id on the way to disk.
+#:
+#: The header itself is ``core.client_fingerprint.HARNESS_HEADER`` -- named
+#: there, not here, because ``config`` describes the harnesses and ``core``
+#: owns the wire vocabulary the proxy reads back. The *value* needs a sentinel
+#: for the same reason the base URLs above do, and for one more: a serialiser
+#: is a pure function of the model records
+#: (``application/catalogues/__init__.py`` types it
+#: ``Iterable[CatalogueModel] -> document``), so it cannot know whether the
+#: document it is building is OpenCode's, OpenCode 2's or Kilo's -- all three
+#: share one serialiser and only the *caller* holds the ``HarnessSpec``. So the
+#: serialiser writes this and
+#: ``config/harness_attribution.with_harness_id`` resolves it, in the two
+#: places a document reaches disk: ``cli/harnesses/catalogue_client`` for a
+#: launch and ``runtime/harness_catalogues`` for the background refresh.
+#:
+#: It is deliberately shaped so a substitution that did not happen is loud: it
+#: is not a registry id, it does not look like one, and it survives into the
+#: request log verbatim rather than being mistaken for a real harness.
+MCC_HARNESS_ID_SENTINEL = "{{mcc_harness_id}}"
+
+#: The harnesses that deliberately send **no** ``x-mcc-harness`` header, with
+#: the reason, so the omission reads as a decision rather than an oversight.
+#: Every one of them is attributed by user-agent instead
+#: (``core/client_fingerprint._HARNESS_UA_TABLE``), which costs the certainty
+#: an explicit header would give and nothing else.
+#:
+#: * ``kimi_code`` -- ``kimi_cli.config.LLMProvider`` has no header field at
+#:   all; its ``anthropic`` provider carries a base URL, a key and a model.
+#: * ``aider`` -- configured entirely through LiteLLM's OpenAI variables and
+#:   two model-fact documents, neither of which describes a request header.
+#: * ``droid`` -- ``customModels[]`` entries declare a provider, a base URL, a
+#:   key reference and limits; the bundle exposes no per-model header map.
+#: * ``goose`` -- MCC writes Goose no file at all (see
+#:   ``GOOSE_PROVIDER_VALUE`` above) and Goose publishes no header variable.
+#: * ``antigravity`` -- not servable at all; see
+#:   ``ANTIGRAVITY_UNAVAILABLE_REASON``.
+#:
+#: Stated as data rather than prose because a contract test asserts that the
+#: generated document for each of these carries no header, so adding a hook
+#: later means deleting a line here and watching that test tell you where.
+HARNESSES_WITHOUT_ATTRIBUTION_HEADER: frozenset[str] = frozenset(
+    {"kimi_code", "aider", "droid", "goose", "antigravity"}
+)
+
 
 #: Why ``mcc-antigravity`` does not exist, stated with the version and the
 #: date it was measured so a reader can re-check it rather than trust it.
@@ -1492,6 +1539,27 @@ def harness_spec(harness_id: str) -> HarnessSpec:
         if spec.id == harness_id:
             return spec
     raise KeyError(f"unknown harness: {harness_id}")
+
+
+def harness_display_name(harness_id: str) -> str:
+    """Return the human label for one harness id, or the id itself.
+
+    ``harness_spec`` raises on an unknown id, which is right for a launcher
+    resolving what to run and wrong for a label: the request log's ``harness``
+    column also holds ids for clients that are not launchable agents at all (a
+    bare SDK, a curl one-liner, ``unknown``), and one of those arriving must
+    render as a name rather than take a page down. Returning the raw id is the
+    honest fallback -- it is what the column actually says.
+
+    ``core.client_fingerprint`` owns the labels for that second vocabulary and
+    ``config`` may not import ``core``, so the caller that has both packages in
+    scope consults it; this function answers only for the registry.
+    """
+
+    for spec in HARNESS_SPECS:
+        if spec.id == harness_id:
+            return spec.display_name
+    return harness_id
 
 
 def rtk_capable_ids() -> tuple[str, ...]:

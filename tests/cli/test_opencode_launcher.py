@@ -14,6 +14,8 @@ from importlib import import_module
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from my_claude_code.cli.harnesses import catalogue_client
 from my_claude_code.cli.harnesses.catalogue_client import (
     catalogue_defaulted,
@@ -28,11 +30,13 @@ from my_claude_code.cli.launchers.opencode import (
 )
 from my_claude_code.config.constants import CATALOGUE_FETCH_TIMEOUT_SECONDS
 from my_claude_code.config.harnesses import (
+    MCC_HARNESS_ID_SENTINEL,
     OPENCODE_API_KEY_ENV,
     OPENCODE_BASE_URL_ENV,
     harness_spec,
 )
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 
 #: The generated document as the server writes it. Small on purpose: these
 #: tests are about *whether* a fetch happens, not about the mapping, which
@@ -400,3 +404,78 @@ def test_every_catalogue_owning_launcher_reads_its_document_first() -> None:
         source = Path(module.__file__ or "").read_text(encoding="utf-8")
         assert "catalogue_documents" in source, name
         assert "read_document(" in source or "document_on_disk(" in source, name
+
+
+# -------------------------------------------------------- harness attribution
+
+
+#: The document as the *server* hands it over: the harness-id sentinel is
+#: still in it, because the serialiser that wrote it is shared by all three of
+#: these harnesses and cannot tell which one asked.
+_SENTINEL_DOCUMENT = {
+    "$schema": "https://opencode.ai/config.json",
+    "provider": {
+        "mcc": {
+            "npm": "@ai-sdk/anthropic",
+            "options": {"headers": {HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL}},
+            "models": {"a/b": {"name": "B"}},
+        }
+    },
+}
+
+
+def _sentinel_urlopen(harness_id: str):
+    def fake(request: object, *, timeout: float) -> _JsonResponse:
+        return _JsonResponse(
+            {
+                "models": [],
+                "catalogues": {
+                    harness_id: {
+                        "document": _SENTINEL_DOCUMENT,
+                        "model_count": 1,
+                        "defaulted": {},
+                    }
+                },
+            }
+        )
+
+    return fake
+
+
+@pytest.mark.parametrize("harness_id", ["opencode", "opencode2", "kilo"])
+def test_each_family_member_writes_its_own_harness_id(
+    harness_id: str, tmp_path: Path
+) -> None:
+    """One serialiser, three files, three different ids -- and no sentinel left.
+
+    Without this the request log cannot tell an OpenCode session from a Kilo
+    one: all three send the same user-agent, so the header is the only signal
+    that separates them, and it is the one thing a shared pure serialiser
+    cannot supply.
+    """
+
+    spec = harness_spec(harness_id)
+    config_path = tmp_path / f"{harness_id}-config.json"
+
+    with (
+        patch(
+            "my_claude_code.cli.launchers.opencode.harness_catalogue_path",
+            return_value=config_path,
+        ),
+        patch(
+            "my_claude_code.cli.harnesses.catalogue_client.urlopen",
+            _sentinel_urlopen(harness_id),
+        ),
+    ):
+        result = write_harness_config(
+            spec, "http://127.0.0.1:8082", _opencode_settings()
+        )
+
+    assert result == config_path
+    text = config_path.read_text(encoding="utf-8")
+    assert MCC_HARNESS_ID_SENTINEL not in text
+    assert "{{" not in text
+    document = json.loads(text)
+    assert document["provider"]["mcc"]["options"]["headers"] == {
+        HARNESS_HEADER: harness_id
+    }

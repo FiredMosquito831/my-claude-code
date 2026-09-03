@@ -47,6 +47,7 @@ from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.catalogues.base import (
     DEFAULTED_KEY,
     DefaultedFields,
+    attribution_headers,
     can_reason,
     clamp_efforts,
     visible_entries,
@@ -147,6 +148,13 @@ def build_commandcode_catalogue(
                 "api": PROVIDER_API,
                 "baseURL": BASE_URL_SENTINEL,
                 "apiKey": API_KEY_REFERENCE,
+                # A static map, unlike ``apiKey`` beside it: Command Code
+                # expands ``"$VAR"`` in the key field and nowhere else, and
+                # this value needs no expansion because it is not a secret --
+                # it is the id of the CLI this block was written for, which the
+                # request log reads back as attribution. See
+                # ``application/catalogues/base.attribution_headers``.
+                "headers": attribution_headers(),
                 "models": entries,
             }
         }

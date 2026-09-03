@@ -2346,6 +2346,7 @@ textarea:focus-visible,
 }
 
 #reqProviderBreakdown,
+#reqHarnessBreakdown,
 #reqTopErrors {
   overflow-x: auto;
 }
@@ -2373,11 +2374,11 @@ textarea:focus-visible,
   padding: 4px 10px;
 }
 
-.req-status-error td:nth-child(5) {
+.req-status-error td:nth-child(6) {
   color: #e05d5d;
 }
 
-.req-status-cancelled td:nth-child(5) {
+.req-status-cancelled td:nth-child(6) {
   color: #d8a23f;
 }
 
@@ -2751,6 +2752,25 @@ details.turn-pane > summary:focus-visible {
 .turn-chip[data-kind="image"] {
   border-color: var(--info-border, var(--line-strong));
   color: var(--info, var(--text-strong));
+}
+
+/* ---- Which client sent the request ---- */
+
+.harness-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Nothing identified itself: the row is real, the attribution is not, so the
+   chip reads as absent rather than as a named client. */
+.harness-chip[data-harness="unknown"] {
+  border-style: dashed;
+  opacity: 0.75;
 }
 
 /* What the model was looking at. Thumbnails are stored small, so they are

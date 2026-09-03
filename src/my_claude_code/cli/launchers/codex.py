@@ -23,6 +23,7 @@ from my_claude_code.config.paths import codex_model_catalog_path
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
+from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 
 from .common import preflight_proxy, run_client_process
 
@@ -188,6 +189,11 @@ def codex_config_args(*, api_url: str, model: str | None = None) -> list[str]:
         _toml_assignment("model_providers.fcc.env_key", _CODEX_AUTH_ENV_KEY),
         "-c",
         _toml_assignment("model_providers.fcc.wire_api", "responses"),
+        "-c",
+        _toml_inline_table_assignment(
+            "model_providers.fcc.http_headers",
+            {HARNESS_HEADER: HARNESS_ID},
+        ),
     ]
     if model:
         args.extend(["-c", _toml_assignment("model", model)])
@@ -201,3 +207,23 @@ def _ensure_v1_url(url: str) -> str:
 
 def _toml_assignment(key: str, value: str) -> str:
     return f"{key}={json.dumps(value)}"
+
+
+def _toml_inline_table_assignment(key: str, table: Mapping[str, str]) -> str:
+    """Return one ``-c`` assignment whose value is a TOML inline table.
+
+    ``-c key={"a"="b"}``. Codex parses the right-hand side of a ``-c`` as TOML,
+    so a map has to be written in TOML's inline-table syntax -- ``=`` between
+    the pairs, not the ``:`` a JSON object would use, which is why this cannot
+    be ``json.dumps(table)``. Both halves still go through ``json.dumps``
+    individually because TOML's basic string is JSON's, so the quoting and
+    escaping are identical.
+
+    Verified on the wire against Codex 0.151.0: the header arrives on the
+    request MCC serves.
+    """
+
+    pairs = ", ".join(
+        f"{json.dumps(name)}={json.dumps(value)}" for name, value in table.items()
+    )
+    return f"{key}={{{pairs}}}"

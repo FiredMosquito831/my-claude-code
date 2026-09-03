@@ -79,6 +79,8 @@ def test_allow_listed_headers_are_stored_with_values_and_lowercased_keys() -> No
             "Anthropic-Beta": "oauth-2025-04-20",
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "X-MCC-Harness": "opencode",
+            "X-MCC-Harness-Version": "1.2.3",
         }
     )
     assert captured == {
@@ -88,10 +90,31 @@ def test_allow_listed_headers_are_stored_with_values_and_lowercased_keys() -> No
         "anthropic-beta": "oauth-2025-04-20",
         "accept": "application/json",
         "content-type": "application/json",
+        "x-mcc-harness": "opencode",
+        "x-mcc-harness-version": "1.2.3",
     }
     assert captured is not None
     assert UNLISTED_NAMES_KEY not in captured
     assert set(captured) == set(ALLOWED_HEADERS)
+
+
+def test_the_harness_headers_are_allow_listed_by_name() -> None:
+    """The launcher's own attribution claim has to survive to storage.
+
+    Without both of these on the list the header path is indistinguishable
+    from the user-agent path on a stored row, and the detail pane can no
+    longer say which of the two produced the harness id.
+    """
+    assert "x-mcc-harness" in ALLOWED_HEADERS
+    assert "x-mcc-harness-version" in ALLOWED_HEADERS
+
+
+def test_a_harness_header_alone_is_captured_with_its_value() -> None:
+    """A launcher that sends only its claim must still produce a stored row."""
+    captured = capture_headers({"x-mcc-harness": "droid"})
+    assert captured == {"x-mcc-harness": "droid"}
+    assert captured is not None
+    assert UNLISTED_NAMES_KEY not in captured
 
 
 def test_unlisted_header_records_name_only_and_never_its_value() -> None:
@@ -255,3 +278,42 @@ def test_capture_without_headers_leaves_the_column_null(store, monkeypatch) -> N
     row = store.get_request("req_none")
     assert row is not None
     assert row["headers"] is None
+
+
+# --------------------------------------------------- write-time attribution
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"user-agent": "claude-cli/2.0.0 (external, cli)"}, "claude"),
+        ({"user-agent": "opencode2/0.3.1"}, "opencode2"),
+        # Explicit beats inferred: this row would read as a curl one-liner.
+        ({"user-agent": "curl/8.4.0", "x-mcc-harness": "droid"}, "droid"),
+        # Nothing recognisable is still an answer, never a NULL.
+        ({"user-agent": "something-nobody-has-seen/1"}, "unknown"),
+        ({}, "unknown"),
+    ],
+)
+def test_a_new_row_is_attributed_to_a_harness_at_write_time(
+    store, monkeypatch, headers, expected
+) -> None:
+    """Every row written from here on carries a harness, so NULL keeps meaning
+    "written before the column existed" for the historical backfill."""
+    monkeypatch.setattr(
+        "my_claude_code.api.request_capture.store_from_settings", lambda _s: store
+    )
+    capture = build_capture(
+        Settings(),
+        _request(),
+        request_id="req_harness",
+        endpoint="/v1/messages",
+        protocol="anthropic",
+        headers=headers,
+    )
+    capture.finish_success("done")
+    store.close()
+
+    row = store.get_request("req_harness")
+    assert row is not None
+    assert row["harness"] == expected

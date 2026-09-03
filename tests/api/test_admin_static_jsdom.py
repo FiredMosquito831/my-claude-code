@@ -1426,6 +1426,155 @@ def test_the_filter_choice_round_trips_through_persisted_state(rendered) -> None
     assert "search" not in analytics["persistedAfterClear"]
 
 
+# ---------------------------------------------------------------------------
+# Harness attribution: which client sent the request
+# ---------------------------------------------------------------------------
+
+
+def test_the_request_table_names_the_client_that_sent_each_row(rendered) -> None:
+    """The column exists, and every row wears its harness as a labelled chip."""
+
+    harness = rendered["harnessAttr"]
+
+    assert harness["headers"] == [
+        "Time",
+        "Endpoint",
+        "Harness",
+        "Provider",
+        "Key",
+        "Model",
+        "Status",
+        "Turn",
+        "Tokens",
+        "TTFT",
+        "Duration",
+        "Details",
+    ]
+    # The display name, not the id: the ids are wire values, and the reader
+    # never has to learn that `claude` means Claude Code.
+    assert harness["chips"] == [
+        {"text": "OpenCode", "harness": "opencode"},
+        {"text": "Claude Code", "harness": "claude"},
+        {"text": "Unknown", "harness": "unknown"},
+    ]
+    # Beside Endpoint, before the columns about what MCC did with the request.
+    assert harness["harnessCellIndex"] == 2
+
+
+def test_the_empty_request_table_spans_every_column_it_declares(rendered) -> None:
+    """A hardcoded colspan is how the empty state drifts one column short."""
+
+    harness = rendered["harnessAttr"]
+
+    assert harness["emptyText"] == "No requests match the current filters."
+    assert harness["emptyColSpan"] == len(harness["headers"])
+
+
+def test_the_detail_modal_says_how_the_harness_was_identified(rendered) -> None:
+    """An explicit header from our launcher is a fact; a user-agent is a guess.
+
+    The modal has to keep them apart, because a client is free to send any
+    user-agent it likes and none at all is also a valid answer.
+    """
+
+    harness = rendered["harnessAttr"]
+
+    assert harness["detail_explicit"] == "OpenCode 1.18.26 (explicit header)"
+    assert harness["detail_inferred"] == "Claude Code 2.0.14 (from user-agent)"
+    assert harness["detail_unidentified"] == "Unknown (no client identification)"
+
+
+def test_the_harness_filter_reloads_once_from_page_one(rendered) -> None:
+    """Same contract as every other text filter: debounced, and back to page 1."""
+
+    harness = rendered["harnessAttr"]
+
+    assert "offset=25" in harness["pagedUrl"]
+    assert harness["loadsWhileTyping"] == 0
+    assert harness["loadsAfterTypingPause"] == 1
+    assert "harness=opencode" in harness["typedStatsUrl"]
+    assert "harness=opencode" in harness["typedListUrl"]
+    assert "offset=0" in harness["typedListUrl"]
+
+
+def test_clear_filters_empties_the_harness_box(rendered) -> None:
+    harness = rendered["harnessAttr"]
+
+    assert harness["clearedValue"] == ""
+    assert "harness=" not in harness["clearUrl"]
+    assert "harness" not in harness["persistedAfterClear"]
+
+
+def test_the_harness_filter_round_trips_through_persisted_state(rendered) -> None:
+    harness = rendered["harnessAttr"]
+
+    assert harness["persisted"]["harness"] == "opencode"
+
+
+def test_the_harness_filter_offers_the_harnesses_the_window_saw(rendered) -> None:
+    """The datalist is built from the payload; the page carries no registry."""
+
+    harness = rendered["harnessAttr"]
+
+    assert harness["datalist"] == [
+        ["claude", "Claude Code"],
+        ["opencode", "OpenCode"],
+        ["unknown", "Unknown"],
+    ]
+
+
+def test_requests_by_harness_names_every_harness_in_the_payload(rendered) -> None:
+    """One row per `by_harness` entry, under its display name."""
+
+    harness = rendered["harnessAttr"]
+
+    assert harness["breakdownHeaders"] == [
+        "Harness",
+        "Requests",
+        "Error rate",
+        "Tokens in",
+        "Tokens out",
+        "Avg latency",
+    ]
+    assert [row[0] for row in harness["breakdown"]] == [
+        "OpenCode",
+        "Claude Code",
+        "Unknown",
+    ]
+    assert harness["breakdown"][0][1] == "90,210"
+    assert harness["breakdown"][2][2] == "0.2%"
+    # avg_duration_ms is the one genuinely NULL-able column.
+    assert harness["breakdown"][2][5] == "—"
+
+
+def test_a_coding_agent_card_reports_its_own_seven_day_traffic(rendered) -> None:
+    """An agent that sent nothing says 0, because that zero was measured.
+
+    An em dash would claim the number is unknown, which is only true when the
+    request log is off -- and then every card says so, not just the quiet ones.
+    """
+
+    cards = {card["id"]: card for card in rendered["codingAgents"]["cards"]}
+
+    def requests_7d(card: dict) -> str:
+        index = card["metaTerms"].index("Requests (7d)")
+        return card["metaValues"][index]
+
+    assert requests_7d(cards["opencode"]) == "12,480"
+    assert requests_7d(cards["claude"]) == "3,120"
+    # Present in the counts with a real zero, and absent from them entirely:
+    # both are "no traffic", and both read as 0 rather than as unknown.
+    assert requests_7d(cards["codex"]) == "0"
+    assert requests_7d(cards["pi"]) == "0"
+    # An agent MCC cannot launch can still have sent requests of its own, so
+    # the early-return half of harnessMeta carries the row too.
+    assert cards["antigravity"]["metaTerms"] == [
+        "Protocol",
+        "Requests (7d)",
+        "Launcher",
+    ]
+
+
 def test_a_key_with_model_benches_renders_the_model_sub_line(rendered) -> None:
     """The operator asking "why is my key benched" gets the answer on the row.
 

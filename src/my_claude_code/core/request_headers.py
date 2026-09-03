@@ -25,6 +25,15 @@ ALLOWED_HEADERS: frozenset[str] = frozenset(
         "anthropic-beta",
         "accept",
         "content-type",
+        # The launcher's own attribution claim, and non-secret by
+        # construction: MCC writes both of these into the provider document it
+        # generates for a harness, so their values are ids this repository
+        # already publishes. Storing them is what lets the request-detail pane
+        # say "explicit header" rather than "inferred from user-agent" without
+        # a second column recording where the harness id came from -- the row
+        # keeps the evidence, so the answer stays re-derivable.
+        "x-mcc-harness",
+        "x-mcc-harness-version",
     }
 )
 

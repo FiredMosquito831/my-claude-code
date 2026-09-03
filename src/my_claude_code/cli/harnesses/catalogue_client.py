@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.request import Request, urlopen
 
+from my_claude_code.config.harness_attribution import with_harness_id
 from my_claude_code.config.settings import get_settings
 
 CATALOGUE_MODELS_PATH = "/admin/api/catalogue-models"
@@ -70,7 +71,20 @@ def fetch_catalogue_models(
 
 
 def harness_catalogue(payload: Mapping[str, Any], harness_id: str) -> dict[str, Any]:
-    """Return one harness's serialised catalogue document from the payload."""
+    """Return one harness's serialised catalogue document from the payload.
+
+    The harness-id sentinel is resolved here, which is the one place on the
+    launch path where the document and the id it was fetched under are both in
+    hand. Every launcher funnels through this function, so a harness added
+    later inherits the substitution without doing anything: the alternative was
+    the same three lines in each of five launchers, and the four that got them
+    right would never have shown that the fifth did not. The base URL is
+    resolved by the launcher instead, because only the launcher knows which
+    proxy root it is pointing the CLI at -- this one does not vary.
+
+    A document with no sentinel in it -- most of them -- passes through
+    unchanged.
+    """
 
     catalogues = payload.get("catalogues")
     if not isinstance(catalogues, Mapping):
@@ -81,7 +95,7 @@ def harness_catalogue(payload: Mapping[str, Any], harness_id: str) -> dict[str, 
     document = entry.get("document")
     if not isinstance(document, dict):
         raise ValueError(f"{harness_id} catalogue document was not a JSON object")
-    return document
+    return with_harness_id(document, harness_id)
 
 
 def catalogue_model_count(payload: Mapping[str, Any], harness_id: str) -> int:
