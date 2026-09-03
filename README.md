@@ -6,7 +6,7 @@
 
 An Anthropic-compatible local proxy for Claude Code, Codex, Pi, and their IDE extensions — backed by 56 model providers, with multi-key rotation everywhere, built-in web search providers, and full request analytics.
 
-[![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue.svg?style=for-the-badge)](https://polyformproject.org/licenses/noncommercial/1.0.0)
+[![License: AGPL v3 or commercial](https://img.shields.io/badge/License-AGPL%20v3%20or%20commercial-blue.svg?style=for-the-badge)](LICENSE)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776ab.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=for-the-badge)](https://github.com/astral-sh/uv)
 [![Tested with Pytest](https://img.shields.io/badge/testing-Pytest-00c0ff.svg?style=for-the-badge)](https://github.com/FiredMosquito831/my-claude-code/actions/workflows/tests.yml)
@@ -1863,4 +1863,23 @@ Every setting documented above — model providers, rotation policies, web searc
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+Dual-licensed. Use it under the [GNU Affero General Public License v3 or
+later](LICENSE) — free for everyone, personal and commercial alike, including
+routing your own or your employer's work through the proxy. The AGPL asks for
+source in return: if you convey the software, or run a modified version as a
+network service other people interact with, section 13 obliges you to offer
+those users your version's complete corresponding source under the same
+license. The Required Notice at the top of `LICENSE` must be preserved; that is
+an additional term under AGPL section 7(b).
+
+If that trade does not suit you — hosting it as a service, routing
+commercially, or reusing its code or routing logic inside a product you ship
+closed-source — a commercial license is available by negotiation. See
+[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
+
+The model-routing infrastructure inherited from the upstream project by Ali
+Khokhar ([Alishahryar1/free-claude-code](https://github.com/Alishahryar1/free-claude-code))
+stays under its original MIT license; substantial portions of it remain in this
+project.
+
+See [LICENSE](LICENSE) for the full terms, including the MIT notice.
