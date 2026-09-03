@@ -321,6 +321,19 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
             "Defaults to https://router.bynara.id/v1."
         ),
     },
+    "HYPERCHARM_API_KEY": {
+        "label": "HyperCharm API Key",
+        "description": (
+            "HyperCharm OpenAI-compatible gateway API key for "
+            "hyper.charm.land/v1. Create one at https://hyper.charm.land."
+        ),
+    },
+    "HYPERCHARM_BASE_URL": {
+        "description": (
+            "HyperCharm OpenAI-compatible Chat Completions base URL. "
+            "Defaults to https://hyper.charm.land/v1."
+        ),
+    },
     "QWENCLOUD_API_KEY": {
         "label": "QwenCloud Token Plan API Key",
         "description": (

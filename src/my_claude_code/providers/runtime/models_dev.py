@@ -566,6 +566,11 @@ PROVIDER_ID_ALIASES: dict[str, str] = {
     # the Workers AI REST root, not the AI Gateway host
     # (gateway.ai.cloudflare.com) -- so "cloudflare-workers-ai" is the match.
     "cloudflare": "cloudflare-workers-ai",
+    # models.dev files this host as "hyper" (name "Charm Hyper") with
+    # ``api: https://hyper.charm.land/v1`` -- character-for-character the base
+    # URL configured here -- so the bucket is the same product, not a
+    # namesake. 31 of the 32 ids the live /v1/models publishes overlap it.
+    "hypercharm": "hyper",
 }
 
 # Deliberately NOT aliased. These were audited against the live models.dev

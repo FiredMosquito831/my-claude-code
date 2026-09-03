@@ -47,6 +47,7 @@ _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "bedrock",
     "tokenrouter",
     "nararoute",
+    "hypercharm",
     "xai",
     "together",
     "deepinfra",

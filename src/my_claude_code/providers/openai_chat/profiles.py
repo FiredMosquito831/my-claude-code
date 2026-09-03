@@ -729,6 +729,25 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         NamedEffortReasoning(_LOW_MEDIUM_HIGH, enabled_value="medium"),
     ),
+    # HyperCharm is the generic profile, deliberately: nothing about this host
+    # asks for a bespoke one. ``/v1/models`` publishes no
+    # ``supported_parameters``, so there is nothing to narrow the dialect with;
+    # its per-model ``reasoning.effort_levels`` ladders differ model by model,
+    # which is what the per-model capability gate in front of this encoder is
+    # for, not what a provider-wide encoder can express. Reasoning arrives as
+    # ``reasoning_content`` deltas (probed 2026-09-02), which is this file's
+    # default. So: the standard ``reasoning_effort`` field, the reject-and-
+    # remember net behind it, and the learned output cap.
+    "hypercharm": OpenAIChatProfile(
+        _policy(
+            "HYPERCHARM",
+            ReasoningReplayMode.DISABLED,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        OPENAI_STANDARD_REASONING,
+    ),
     "tokenrouter": OpenAIChatProfile(
         _policy(
             "TOKENROUTER",

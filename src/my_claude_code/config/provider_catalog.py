@@ -99,6 +99,11 @@ BEDROCK_DEFAULT_BASE = "https://bedrock-mantle.us-east-1.api.aws/v1"
 TOKENROUTER_DEFAULT_BASE = "https://api.tokenrouter.com/v1"
 # NaraRoute OpenAI-compatible Chat Completions gateway.
 NARAROUTE_DEFAULT_BASE = "https://router.bynara.id/v1"
+# HyperCharm OpenAI-compatible Chat Completions gateway. The host also
+# answers /v1/messages and /v1/responses, but both are translation shims
+# over the same open-weight roster -- no claude-* id exists there -- so
+# chat completions is the only protocol wired.
+HYPERCHARM_DEFAULT_BASE = "https://hyper.charm.land/v1"
 # xAI OpenAI-compatible Chat Completions API.
 XAI_DEFAULT_BASE = "https://api.x.ai/v1"
 # Together AI OpenAI-compatible Chat Completions API.
@@ -650,6 +655,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=NARAROUTE_DEFAULT_BASE,
         base_url_attr="nararoute_base_url",
         proxy_attr="nararoute_proxy",
+        group="gateway",
+    ),
+    "hypercharm": ProviderDescriptor(
+        provider_id="hypercharm",
+        display_name="HyperCharm",
+        credential_env="HYPERCHARM_API_KEY",
+        credential_url="https://hyper.charm.land",
+        credential_attr="hypercharm_api_key",
+        default_base_url=HYPERCHARM_DEFAULT_BASE,
+        base_url_attr="hypercharm_base_url",
+        proxy_attr="hypercharm_proxy",
         group="gateway",
     ),
     "xai": ProviderDescriptor(

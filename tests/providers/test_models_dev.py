@@ -354,6 +354,7 @@ def test_known_not_reasoning_is_distinct_from_unknown_model(tmp_path: Path) -> N
         ("chatgpt_oauth", "openai"),
         ("anthropic_oauth", "anthropic"),
         ("github_models", "github-copilot"),
+        ("hypercharm", "hyper"),
     ],
 )
 def test_all_declared_aliases_resolve(provider_id: str, models_dev_id: str) -> None:
@@ -654,6 +655,10 @@ _MATCHING_INDEX = {
     "opencode-go": {"models": {"opencode-go/gpt-5": {"reasoning": True}}},
     "wafer.ai": {"models": {"wafer-1": {"reasoning": True}}},
     "moonshotai": {"models": {"kimi-k3": {"reasoning": True}}},
+    # models.dev's own bucket for hyper.charm.land; its ``api`` field is the
+    # exact base URL the catalogue configures, which is the justification for
+    # the alias.
+    "hyper": {"models": {"deepseek-v4-flash": {"reasoning": True}}},
     "cloudflare-workers-ai": {"models": {"@cf/nvidia/nemotron": {"reasoning": True}}},
     # A "llama" provider exists here on purpose: our llamacpp provider must
     # still resolve to None (rejected pairing, see PROVIDER_ID_ALIASES).
@@ -685,6 +690,7 @@ def _write_matching_cache(path: Path) -> None:
         ("wafer", "wafer-1"),
         ("kimi", "kimi-k3"),
         ("cloudflare", "@cf/nvidia/nemotron"),
+        ("hypercharm", "deepseek-v4-flash"),
     ],
 )
 def test_new_aliases_reach_their_models_dev_bucket(

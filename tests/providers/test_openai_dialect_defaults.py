@@ -315,6 +315,31 @@ def test_no_openai_chat_profile_is_silent_any_more() -> None:
     assert not isinstance(GENERIC_OPENAI_PROFILE.reasoning, NoReasoning)
 
 
+def test_hypercharm_speaks_the_default_and_leaves_its_neighbours_alone() -> None:
+    """A new generic gateway must not reach the shared encoder to change it.
+
+    The 5.69.0 lesson: one shared encoder family, several correct answers. So
+    the assertion is two-sided -- HyperCharm gets the default object itself,
+    and the two catalogue neighbours it was copied from keep the dialects they
+    were probed into.
+    """
+    assert OPENAI_CHAT_PROFILES["hypercharm"].reasoning is OPENAI_STANDARD_REASONING
+
+    max_on = ReasoningPolicy.on(effort=ReasoningEffort.MAX)
+    body = _profile_body("hypercharm", max_on)
+    assert body["reasoning_effort"] == "high"
+    assert "reasoning" not in body
+    assert "reasoning" not in body.get("extra_body", {})
+    assert "reasoning_effort" not in _profile_body("hypercharm", ReasoningPolicy.off())
+
+    # NaraRoute's own named-effort ladder and ZenMux's reasoning object are
+    # untouched by the addition.
+    assert _profile_body("nararoute", max_on)["reasoning_effort"] == "high"
+    assert _profile_body("zenmux", max_on)["extra_body"]["reasoning"] == {
+        "effort": "xhigh"
+    }
+
+
 def test_declared_dialects_survive_the_default() -> None:
     """The other half of the guard: nobody else's shape was flattened."""
     max_on = ReasoningPolicy.on(effort=ReasoningEffort.MAX)

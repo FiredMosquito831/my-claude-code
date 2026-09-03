@@ -371,6 +371,13 @@ class Settings(BaseSettings):
         validation_alias="NARAROUTE_BASE_URL",
     )
 
+    # ==================== HyperCharm Config ====================
+    hypercharm_api_key: str = Field(default="", validation_alias="HYPERCHARM_API_KEY")
+    hypercharm_base_url: str = Field(
+        default="https://hyper.charm.land/v1",
+        validation_alias="HYPERCHARM_BASE_URL",
+    )
+
     # ==================== QwenCloud Token Plan (OpenAI-compatible) ====================
     qwencloud_api_key: str = Field(default="", validation_alias="QWENCLOUD_API_KEY")
 
@@ -878,6 +885,7 @@ class Settings(BaseSettings):
     bedrock_proxy: str = Field(default="", validation_alias="BEDROCK_PROXY")
     tokenrouter_proxy: str = Field(default="", validation_alias="TOKENROUTER_PROXY")
     nararoute_proxy: str = Field(default="", validation_alias="NARAROUTE_PROXY")
+    hypercharm_proxy: str = Field(default="", validation_alias="HYPERCHARM_PROXY")
     xai_proxy: str = Field(default="", validation_alias="XAI_PROXY")
     together_proxy: str = Field(default="", validation_alias="TOGETHER_PROXY")
     deepinfra_proxy: str = Field(default="", validation_alias="DEEPINFRA_PROXY")
