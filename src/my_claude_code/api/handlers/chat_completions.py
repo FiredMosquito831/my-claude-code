@@ -31,6 +31,7 @@ from my_claude_code.core.anthropic import (
     MessagesRequest,
     aggregate_anthropic_sse_to_message,
 )
+from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import ExecutionFailure, find_execution_failure
 from my_claude_code.core.openai_chat_completions import (
@@ -119,7 +120,9 @@ class ChatCompletionsHandler:
                 stream=wants_stream,
             )
             require_non_empty_messages(chat_request.messages)
-            plan = self._model_router.resolve_messages_plan(chat_request)
+            plan = self._model_router.resolve_messages_plan(
+                chat_request, harness=harness_from_headers(headers).harness
+            )
             capture.set_plan(plan)
             capture.set_routing(plan.primary)
 

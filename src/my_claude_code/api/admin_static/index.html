@@ -1573,6 +1573,23 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   cheap so unmapped requests cannot surprise you.
                 </p>
                 <p class="guide-note">
+                  <strong>Every other coding agent gets these tiers too.</strong> Claude
+                  Code never names a model &mdash; it asks for
+                  <code>claude-sonnet-5</code> and gets whatever you mapped Sonnet to.
+                  Every other agent had to name a real <code>provider/model</code> ref, so
+                  a model id typed into its config a month ago is still that id today
+                  however many times you moved the route it should have followed. Five
+                  names now sit at the top of every generated picker &mdash;
+                  <code>mcc/best</code> (<code>MODEL</code>), <code>mcc/good</code>
+                  (Opus), <code>mcc/medium</code> (Sonnet), <code>mcc/cheap</code>
+                  (Haiku) and <code>mcc/vision</code> &mdash; each carrying that route's
+                  own fallback chain and pause list. An unset tier follows
+                  <code>MODEL</code>, exactly as <code>claude-opus-5</code> does, and the
+                  card says so rather than inventing a model for it. One agent can be
+                  given its own chain per tier under <strong>Tiers</strong> on its
+                  <a href="#guide-other">Coding agents</a> card; nothing else is affected.
+                </p>
+                <p class="guide-note">
                   <strong>Managing many models at once.</strong> Each provider header
                   carries <em>Show all</em>, <em>Hide all</em> and <em>Invert</em>, and
                   they act on whatever the filter and the state chips have narrowed the

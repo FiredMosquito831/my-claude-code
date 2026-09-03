@@ -66,6 +66,7 @@ from my_claude_code.core.anthropic import (
     get_token_count,
     trim_tool_results,
 )
+from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import ExecutionFailure, find_execution_failure
 from my_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
@@ -163,7 +164,9 @@ class MessagesHandler:
         )
         try:
             require_non_empty_messages(request_data.messages)
-            plan = self._model_router.resolve_messages_plan(request_data)
+            plan = self._model_router.resolve_messages_plan(
+                request_data, harness=harness_from_headers(headers).harness
+            )
             plan = self._apply_message_routing_policies(plan)
             capture.set_plan(plan)
             routed = plan.primary

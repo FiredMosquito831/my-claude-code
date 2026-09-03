@@ -575,10 +575,12 @@ provider execution, then converts Anthropic SSE back to Responses SSE.
 ## Model Routing
 
 [application/routing.py](src/my_claude_code/application/routing.py) resolves incoming client model names.
-It supports two forms:
+It supports three forms:
 
 - Direct provider model refs such as `nvidia_nim/nvidia/model-name`.
 - Gateway model IDs decoded by [core/gateway_model_ids.py](src/my_claude_code/core/gateway_model_ids.py).
+- The five coding-agent tier aliases, intercepted ahead of both — see
+  [Coding-Agent Tier Aliases](#coding-agent-tier-aliases) below.
 
 If the incoming model is not direct, `ModelRouter` maps it by Claude tier. Names
 containing `fable`, `opus`, `sonnet`, or `haiku` use the matching tier override when set,
@@ -634,6 +636,63 @@ synchronizer: it fetches the same `/v1/models` response, uses the same adapter
 and writer, and passes the path as an ephemeral override. Codex users open the
 native picker with `/model`; FCC does not implement a proxy-level `/models`
 alias.
+
+### Coding-Agent Tier Aliases
+
+`mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` are protocol
+names for MCC's own global routes, serving harnesses that have no `claude-*`
+vocabulary of their own. They are pointers, not models: each names one of
+`MODEL`, `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU`, `MODEL_VISION` together
+with that route's `_FALLBACKS` and `_PAUSED` list, and an unset route collapses
+onto `MODEL` exactly as `_resolve_model_ref` already collapses `claude-opus-5`.
+
+Ownership is split across three modules because three layers need the same
+answer and none of them may own it alone:
+
+- [core/tier_refs.py](src/my_claude_code/core/tier_refs.py) holds the names,
+  their picker order, their labels and the `Settings` attributes each one reads.
+  `core` owns it because `application` (the router and the catalogue
+  serialisers), `api` (`/v1/models`) and `cli` (the launchers) all need it — the
+  same argument `core/catalogue_refs.py` makes for itself.
+- [config/harness_tiers.py](src/my_claude_code/config/harness_tiers.py) owns
+  `~/.fcc/harness_tiers.json`, the per-agent override store, parsed
+  defensively and cached on the file's own `stat` so a dashboard write lands
+  without a restart. `config` is a leaf package that imports nothing, so
+  `TIER_NAMESPACE` and `MODEL_TIER_NAMES` are mirrored in `config/constants.py`
+  and pinned equal to `core` by `tests/contracts/test_import_boundaries.py`,
+  exactly as `FAILURE_KIND_NAMES` is.
+- [application/tier_chains.py](src/my_claude_code/application/tier_chains.py)
+  applies the resolution rule. It has two callers that must never disagree: the
+  router answering a request, and `application/catalogue_model.py` writing the
+  alias entry whose display name states which model the tier currently points
+  at. A picker promising one model while the router served another would be
+  worse than having no tiers at all.
+
+`ModelRouter.resolve` and `resolve_chain` intercept a tier **before**
+`_direct_provider_model`, and both take an optional `harness` naming the agent
+the request came from (the `x-mcc-harness` header, or user-agent
+fingerprinting); an unidentified request resolves against the global chain
+rather than failing. The tier segment is matched exactly rather than by
+substring, unlike the older `_matched_route`. `RoutedMessagesPlan.tier_route`
+carries the resolved `TierChain` so `api/request_capture.py` can record `tier`,
+`tier_source` and `tier_harness` in the row's `params` — no new column, no
+export change, and written only for a request that named a tier.
+
+Emission has the same two-writer discipline as everything else here.
+`application/catalogue_model.py` prepends the five records to a harness's
+catalogue, each a verbatim copy of the primary's own metadata with only its
+identity replaced -- `gateway_id`, `provider_model_ref` and `display_name` --
+so no serialiser has to know a tier exists and no capability number is
+invented. The alias carries its *own* ref rather than the primary's because the
+six agents that key their document on the bare ref would otherwise dedupe the
+alias away against the model it points at; `api/model_catalog.py` adds both
+spellings to `/v1/models`. Both are gated on `HARNESS_TIER_ALIASES` alone —
+`core/model_visibility.py` never sees them, on the same exemption as the
+built-in `claude-*` ids, because filtering a protocol name would break an
+agent's saved config rather than hide a model. `config/provider_registry.py`
+reserves the `mcc` provider id for the same reason: a custom provider slugging
+to it would make every alias ambiguous, and the router resolves the alias
+first.
 
 ## Model visibility has one filter and one writer
 

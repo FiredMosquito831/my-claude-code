@@ -30,6 +30,7 @@ from my_claude_code.core.anthropic import (
     MessagesRequest,
     aggregate_anthropic_sse_to_message,
 )
+from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import ExecutionFailure, find_execution_failure
 from my_claude_code.core.gemini_api import (
@@ -124,7 +125,9 @@ class GeminiHandler:
                 stream=stream,
             )
             require_non_empty_messages(gemini_request.messages)
-            plan = self._model_router.resolve_messages_plan(gemini_request)
+            plan = self._model_router.resolve_messages_plan(
+                gemini_request, harness=harness_from_headers(headers).harness
+            )
             capture.set_plan(plan)
             capture.set_routing(plan.primary)
 

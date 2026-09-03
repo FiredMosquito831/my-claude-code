@@ -849,3 +849,26 @@ def test_config_mirrors_the_failure_kinds_it_cannot_import():
     from my_claude_code.core.failures import FailureKind
 
     assert {kind.value for kind in FailureKind} == FAILURE_KIND_NAMES
+
+
+def test_config_mirrors_the_tier_vocabulary_it_cannot_import():
+    """Same leaf-package rule, same both-directions pin.
+
+    ``config`` needs the tier names twice -- to validate the per-harness tier
+    store, and to reserve the ``mcc`` provider id so a custom provider cannot
+    shadow every alias -- and may not import ``core.tier_refs`` to get them.
+    A name added on one side and not the other would either drop a tier from
+    the store silently or leave the namespace unreserved.
+    """
+    from my_claude_code.config.constants import MODEL_TIER_NAMES, TIER_NAMESPACE
+    from my_claude_code.core.tier_refs import (
+        TIER_NAMESPACE as CORE_TIER_NAMESPACE,
+    )
+    from my_claude_code.core.tier_refs import (
+        TIER_ORDER,
+        ModelTier,
+    )
+
+    assert TIER_NAMESPACE == CORE_TIER_NAMESPACE
+    assert set(MODEL_TIER_NAMES) == {tier.value for tier in ModelTier}
+    assert tuple(tier.value for tier in TIER_ORDER) == MODEL_TIER_NAMES

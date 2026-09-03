@@ -45,6 +45,24 @@ def _isolate_request_log(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_harness_tiers(monkeypatch, tmp_path):
+    """No test may read the developer's own per-agent tier overrides.
+
+    The file is read on the request path, so a real one on the machine running
+    the suite would silently move which model a tier resolves to and make a
+    routing test pass or fail for a reason that is not in the repository.
+    """
+    from my_claude_code.config import harness_tiers
+
+    monkeypatch.setattr(
+        harness_tiers, "harness_tiers_path", lambda: tmp_path / "harness_tiers.json"
+    )
+    harness_tiers.reset_harness_tiers_cache()
+    yield
+    harness_tiers.reset_harness_tiers_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_client_fingerprint():
     """The mirrored client fingerprint must not survive from one test to the next.
 

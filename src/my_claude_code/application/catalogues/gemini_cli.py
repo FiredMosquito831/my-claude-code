@@ -72,6 +72,7 @@ from my_claude_code.application.catalogues.base import (
     DefaultedFields,
     can_reason,
     clamp_efforts,
+    starting_model,
     visible_entries,
 )
 from my_claude_code.core.reasoning import ReasoningEffort
@@ -130,15 +131,15 @@ def build_gemini_cli_catalogue(
 
     defaulted = DefaultedFields()
     aliases: dict[str, Any] = {}
-    first_model: str | None = None
+    listed: list[CatalogueModel] = []
 
     for model in visible_entries(models):
         model_id = model.gateway_id
         if model_id in aliases:
             continue
-        if first_model is None:
-            first_model = model_id
+        listed.append(model)
         aliases[model_id] = _alias(model, model_id, defaulted)
+    chosen = starting_model(listed)
 
     document: dict[str, Any] = {
         "security": {"auth": {"selectedType": AUTH_TYPE}},
@@ -147,11 +148,18 @@ def build_gemini_cli_catalogue(
         "privacy": {"usageStatisticsEnabled": False},
         "modelConfigs": {"customAliases": aliases},
     }
-    if first_model is not None:
+    if chosen is not None:
         # Gemini CLI runs one model at a time; ``-m`` moves it. Without this
         # the CLI would default to the alias ``auto`` and resolve it to a
         # Google model id this proxy has never heard of.
-        document["model"] = {"name": first_model}
+        #
+        # ``starting_model``, not the first entry. Taking the first entry was an
+        # enumeration artefact wearing the clothes of a decision -- the exact
+        # bug ``core/catalogue_refs.select_starting_index`` was written to kill
+        # for Cline and Crush, still live here: on a real install it opened
+        # every Gemini CLI session on whichever free tier happened to enumerate
+        # first, while the route the operator configured sat below it.
+        document["model"] = {"name": chosen.gateway_id}
     if defaulted.by_model:
         document[DEFAULTED_KEY] = defaulted.as_document()
     return document, defaulted

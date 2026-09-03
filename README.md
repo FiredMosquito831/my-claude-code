@@ -810,6 +810,20 @@ Web search provider keys share the same rotation engine — see [Web Search → 
 
 For example, route Opus to `nvidia_nim/moonshotai/kimi-k2.6`, Sonnet to `open_router/openrouter/free`, Haiku to `lmstudio/qwen3.5-coder`, and keep `MODEL` on `zai/glm-5.2`.
 
+### Tiers For Every Coding Agent
+
+Claude Code never names a model — it asks for `claude-sonnet-5` and gets whatever `MODEL_SONNET` points at, which is why moving a route moves every session already running on it. Every other agent had to name a concrete `provider/model` ref, because that was the only thing that existed for it. Since 6.38.0 five alias names close that gap: they sit at the top of the model picker MCC generates for each of the thirteen agents that carry a catalogue (Codex, Pi, OpenCode, OpenCode 2, Kilo, Command Code, Kimi Code, Qwen Code, Crush, Cline, Aider, Droid, Gemini CLI), in the bare form below and in the gateway form `anthropic/mcc/best`, and each names a route rather than a model:
+
+| Name | The route it names, with that route's own fallbacks and pause list |
+| --- | --- |
+| `mcc/best` | `MODEL` — the route MCC itself starts on |
+| `mcc/good` | `MODEL_OPUS` |
+| `mcc/medium` | `MODEL_SONNET` |
+| `mcc/cheap` | `MODEL_HAIKU` |
+| `mcc/vision` | `MODEL_VISION` |
+
+On a default install `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU` and `MODEL_VISION` are unset, so all five collapse onto `MODEL` — primary, fallbacks and pause list together — exactly as `claude-opus-5` already does; MCC does not invent a different model for an unset tier, and the dashboard says *Same as global Opus — currently `<ref>`* rather than hiding the fact. Any one agent can be given its own chain per tier from the **Coding agents** page, which writes `~/.fcc/harness_tiers.json`; `HARNESS_TIER_ALIASES=false` keeps the pickers to concrete refs, and the router still answers an alias a client sends anyway. See [Tiers for every other coding agent](docs/USAGE.md#tiers-for-every-other-coding-agent).
+
 ### Model Visibility
 
 A gateway can publish hundreds of models — `nous_portal` alone lists 343 — and every one of them lands in `/v1/models` (what `mcc-claude --discover-models` writes into Claude Code, and what the Codex catalog is built from) and in the Admin model pickers. Two glob lists decide which of them are worth showing.

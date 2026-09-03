@@ -29,7 +29,7 @@ in a harness catalogue, or the reverse.
 """
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from my_claude_code.application.model_metadata import (
     ModelDefaultParameters,
@@ -37,6 +37,8 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
 )
 from my_claude_code.application.ports import RequestRuntimePort
+from my_claude_code.application.tier_chains import resolve_tier_chain
+from my_claude_code.config.harness_tiers import EMPTY_HARNESS_TIERS, HarnessTiers
 from my_claude_code.config.model_refs import (
     configured_chat_model_refs,
     parse_model_name,
@@ -48,6 +50,7 @@ from my_claude_code.core.gateway_model_ids import (
     no_thinking_gateway_model_id,
 )
 from my_claude_code.core.model_visibility import ModelVisibility
+from my_claude_code.core.tier_refs import TIER_LABELS, TIER_ORDER, tier_ref
 
 #: Request parameters whose presence in a gateway's published
 #: ``supported_parameters`` list means the model accepts tool calls. Derived,
@@ -152,6 +155,9 @@ def build_catalogue_models(
     settings: Settings,
     runtime: RequestRuntimePort,
     provenance: CapabilityProvenanceLookup | None = None,
+    *,
+    harness_id: str | None = None,
+    harness_tiers: HarnessTiers | None = None,
 ) -> tuple[CatalogueModel, ...]:
     """Resolve every visible routable model into the neutral catalogue record.
 
@@ -160,6 +166,12 @@ def build_catalogue_models(
     projection -- minus the eight fixed Claude protocol aliases, which are
     protocol names rather than routable refs and carry no capabilities to
     publish.
+
+    ``harness_id`` names the coding agent this document is being built for, so
+    the five tier aliases at the head of the list reflect *that* agent's
+    overrides. It is optional because ``/admin/api/catalogue-models`` and the
+    tests build one neutral list for nobody in particular, which is exactly the
+    global chain.
     """
 
     visibility = ModelVisibility.from_raw(
@@ -199,7 +211,89 @@ def build_catalogue_models(
             provenance=provenance,
         )
 
-    return tuple(models)
+    aliases = _tier_alias_models(
+        settings,
+        harness_tiers if harness_tiers is not None else EMPTY_HARNESS_TIERS,
+        harness_id,
+        models,
+    )
+    if not aliases:
+        return tuple(models)
+    # Aliases first. Ordering is the only discoverability lever this layer has:
+    # it puts the tiers at the top of OpenCode's and Qwen's pickers and gives
+    # them priority 0-4 in Codex. And Best carries ``is_primary_route``, so
+    # ``select_starting_index`` -- unchanged -- seeds Cline's session model and
+    # Crush's ``models.large`` on ``mcc/best``, which means those two open on
+    # the route rather than on a ref that is frozen into their config file.
+    demoted = [
+        replace(model, is_primary_route=False) if model.is_primary_route else model
+        for model in models
+    ]
+    return (*aliases, *demoted)
+
+
+def _tier_alias_models(
+    settings: Settings,
+    harness_tiers: HarnessTiers,
+    harness_id: str | None,
+    models: list[CatalogueModel],
+) -> tuple[CatalogueModel, ...]:
+    """Build the five tier records, each a copy of the model it points at.
+
+    **The primary's metadata, verbatim.** Every capability field, every
+    ``field_provenance`` entry and every ``None`` travels with it untouched; only
+    ``gateway_id`` and ``display_name`` are replaced. That is what lets no
+    serialiser know a tier exists, and it is why the alternative -- a MIN across
+    the chain -- is rejected: a minimum over two providers' answers is a number
+    no source ever stated, which is precisely the invented number this module's
+    docstring forbids. It would also silently downgrade the common case, since a
+    fallback is only ever reached on a failure, and it would flip whenever the
+    operator reordered a rail.
+
+    **Both wire spellings, from one record.** ``provider_model_ref`` is the
+    alias itself (``mcc/best``) and ``gateway_id`` its gateway form
+    (``anthropic/mcc/best``), because the fleet is genuinely split: Codex,
+    Command Code, OpenCode, Kilo, Pi and Kimi write the bare ref, while Cline,
+    Crush, Droid, Gemini CLI, Qwen and Aider write the gateway id -- and the
+    router accepts both. Carrying the *primary's* ref here instead would collide
+    with the primary's own entry in every bare-ref serialiser, which dedupes by
+    that id, and the alias would silently vanish from six of the thirteen
+    pickers. ``mcc/best`` still splits into two non-empty segments, so
+    ``parse_model_name`` never sees a slashless id and Pi's bundled extension
+    -- which requires at least two segments after the gateway prefix -- accepts
+    ``anthropic/mcc/best`` unchanged.
+
+    A tier whose chain resolves to a model this catalogue does not list gets no
+    entry: an alias pointing at something absent from the same document is a
+    picker entry that cannot be selected.
+    """
+
+    if not settings.harness_tier_aliases:
+        return ()
+    by_ref: dict[str, CatalogueModel] = {}
+    for model in models:
+        if not model.force_no_thinking:
+            by_ref.setdefault(model.provider_model_ref, model)
+    aliases: list[CatalogueModel] = []
+    for tier in TIER_ORDER:
+        chain = resolve_tier_chain(settings, harness_tiers, harness_id, tier)
+        primary_ref = chain.primary
+        if primary_ref is None:
+            continue
+        record = by_ref.get(primary_ref)
+        if record is None:
+            continue
+        aliases.append(
+            replace(
+                record,
+                gateway_id=gateway_model_id(tier_ref(tier)),
+                provider_model_ref=tier_ref(tier),
+                display_name=f"{TIER_LABELS[tier]} ({primary_ref})",
+                force_no_thinking=False,
+                is_primary_route=tier is TIER_ORDER[0],
+            )
+        )
+    return tuple(aliases)
 
 
 def _append_variants(

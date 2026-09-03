@@ -6932,6 +6932,94 @@ details.turn-pane > summary:focus-visible {
   color: var(--warn);
 }
 
+/* ---------------------------------------------------------- agent tiers
+   The rails themselves are the Model Config component and carry their own
+   grid; nothing here adds a child to .route-node or .model-chain-row, so
+   nothing here can push a control onto a second line. What is styled is only
+   the frame around each rail: the tier's name, what it resolves to today, and
+   the two buttons that turn the override on and off. */
+
+.agent-tiers {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.agent-tiers-summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.agent-tiers > .field-description {
+  margin: 6px 0 10px;
+}
+
+.agent-tier {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.agent-tier:first-of-type {
+  border-top: none;
+}
+
+.agent-tier-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-tier-name {
+  margin: 0;
+  font-size: 13px;
+}
+
+.agent-tier-ref {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.agent-tier-readout {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.agent-tier-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The rail is the Model Config component, and everywhere it renders today it
+   sits inside a form grid whose own rule stretches a text input to its cell.
+   A coding agent's card has no such grid, so the input kept its intrinsic
+   ~223px width inside a `minmax(0, 1fr)` column that had shrunk to 62px and
+   drew straight over the Pause chip beside it. Nothing wrapped and every test
+   still passed -- which is exactly why a rendered row gets opened in a
+   browser. */
+.agent-tiers .route-rail input[type="text"] {
+  width: 100%;
+  min-width: 0;
+}
+
+/* An open rail needs room for a `provider/model` ref, and the card it lives in
+   is one column of a 340px-minimum grid: the fixed chrome the rail carries --
+   grip, marker, pause chip and button, two move buttons and the remove spacer
+   -- left the combobox 63px wide, which is not a width anybody can read a ref
+   at. A card whose Tiers block is open takes two columns; a closed one is
+   unchanged, which is every card until somebody opens one. */
+.coding-agent-card:has(.agent-tiers[open]) {
+  grid-column: span 2;
+}
+
 .coding-agent-card .agent-install-hint {
   margin: 0;
   font-size: 12px;

@@ -24,6 +24,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [Using Claude models](#using-claude-models)
   - [Custom providers](#custom-providers)
 - [8. Model tiers and routing](#8-model-tiers-and-routing)
+  - [Tiers for every other coding agent](#tiers-for-every-other-coding-agent)
   - [Tutorial: manage many models](#tutorial-manage-many-models)
 - [9. Web search](#9-web-search)
 - [10. Analytics](#10-analytics)
@@ -1382,6 +1383,132 @@ If every model on a route is benched, MCC tries them in order anyway — skippin
 
 Requests that name a provider and model directly (`open_router/…`) are never redirected. An explicit choice is honoured as given.
 
+<a id="tiers-for-every-other-coding-agent"></a>
+
+### Tiers for every other coding agent
+
+Everything above this line has been Claude Code's privilege. Claude Code never
+names a model: it asks for `claude-sonnet-5` and receives whatever you mapped
+Sonnet to, which is why moving a route moves every session that is already
+running on it. Every other agent had to name a concrete `provider/model` ref,
+because that was the only thing that existed for it — and the request log is
+blunt about the consequence. Across the whole 272,132-row request log the number
+of non-Claude-Code requests that ever named a tier-style alias is **zero** —
+every coding-agent request named a concrete provider/model ref, because that was
+the only thing that existed for them, while 99.98% of Claude Code traffic names
+an alias. A model id typed into OpenCode's config a month ago is still that
+model id today, however many times you have moved the route it should have been
+following.
+
+**New in 6.38.0**, five names close that gap. They sit at the top of the model
+picker MCC generates for each of the thirteen agents that carry a catalogue —
+Codex, Pi, OpenCode, OpenCode 2, Kilo, Command Code, Kimi Code, Qwen Code,
+Crush, Cline, Aider, Droid and Gemini CLI — and each one is a name for a route
+on this page rather than a model of its own:
+
+| Name | The route it names | And therefore the chain it uses |
+| --- | --- | --- |
+| `mcc/best` | `MODEL` | `MODEL_FALLBACKS`, `MODEL_PAUSED` |
+| `mcc/good` | `MODEL_OPUS` | `MODEL_OPUS_FALLBACKS`, `MODEL_OPUS_PAUSED` |
+| `mcc/medium` | `MODEL_SONNET` | `MODEL_SONNET_FALLBACKS`, `MODEL_SONNET_PAUSED` |
+| `mcc/cheap` | `MODEL_HAIKU` | `MODEL_HAIKU_FALLBACKS`, `MODEL_HAIKU_PAUSED` |
+| `mcc/vision` | `MODEL_VISION` | `MODEL_VISION_FALLBACKS`, `MODEL_VISION_PAUSED` |
+
+The fleet is genuinely split over how it spells a model id, so both spellings
+are accepted: the bare `mcc/best` that Codex, Command Code, OpenCode, Kilo, Pi
+and Kimi Code put on the wire, and the gateway form `anthropic/mcc/best` that
+Cline, Crush, Droid, Gemini CLI, Qwen Code and Aider put on it. The router
+answers the same way to both, and the tier segment is matched exactly — no name
+merely *containing* `cheap` lands on the cheap rail.
+
+**On a default install all five resolve to the same model, and the dashboard
+says so.** `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU` and `MODEL_VISION` ship
+unset, so every tier collapses onto `MODEL` — primary, fallbacks and pause list
+together — which is exactly what `claude-opus-5` already does today. MCC
+deliberately does not invent a different model for an unset tier, because
+choosing one would be MCC choosing a model for you; the Tiers section says *Same
+as global Opus — currently `<ref>`* instead of quietly picking something. Map
+Opus, Sonnet and Haiku the way section 8 recommends and the five names separate
+by themselves, with no further configuration.
+
+**Giving one agent its own tier.** Each card on the **Coding agents** page now
+carries a collapsible **Tiers** section built from the same rail component as
+Model Config: drag a row by its grip to reorder the chain, **Pause** one entry
+without deleting it, and drop a fallback onto the top slot to promote it to the
+route's own model. **Override** on a tier starts that agent's own chain,
+**Revert to global** removes it again. The result is written atomically to
+`~/.fcc/harness_tiers.json`, which you can also read or edit by hand:
+
+```json
+{
+  "harnesses": {
+    "opencode": {
+      "best":  {"model": "open_router/x-ai/grok-5",
+                "fallbacks": ["nous_portal/tencent/hy3"],
+                "paused": []},
+      "cheap": {"fallbacks": ["open_router/z/cheap-1"]}
+    }
+  }
+}
+```
+
+There are three states per agent and tier, and the middle one is the point of
+the file:
+
+| What the file says | What the agent gets |
+| --- | --- |
+| no entry for that agent, or none for that tier | the global chain — the default for every agent and every tier |
+| an entry with no `model` | the global primary still leads, but this agent's own `fallbacks` and `paused` follow it |
+| an entry with `model` set | this agent's own chain leads |
+
+An entry that names its own `model` owns its **whole** chain: the global
+fallbacks are not appended underneath it, because attaching models you never
+listed under a heading that says these are yours would be the more surprising
+answer. A ref in the `mcc/` namespace is refused — a tier can never point at
+another tier — and an entry for an agent id MCC does not know is dropped with a
+log line rather than honoured against nothing.
+
+**A request with no agent identity still resolves.** Per-agent overrides need to
+know which agent is asking, which MCC learns from the `x-mcc-harness` header its
+launchers send or from the user-agent fingerprinting added in 6.37.0. When
+neither answers — raw `curl`, an older launcher — the tier still resolves; it
+simply resolves against the global chain. The feature never fails a request for
+want of an identity.
+
+**Turning the names off.** `HARNESS_TIER_ALIASES` (default `true`) is the master
+switch for whether the five aliases are emitted into the generated pickers and
+into `/v1/models`. It is on **Model Config**, under the models section, as *List
+MCC tiers in coding agents*. Switching it off keeps the pickers to concrete refs
+only; it does **not** stop the router resolving a tier alias a client sends
+anyway, so an agent whose config already names one keeps working either way. For
+the same reason `MODEL_VISIBILITY_ALLOW` and `MODEL_VISIBILITY_DENY` never
+filter these five: they are protocol names for MCC's own routes, exactly like
+the eight `claude-*` aliases, so filtering one would not hide a model — it would
+break an agent whose config file already names it.
+
+**What else moved with them.** Crush now seeds `models.large` on `mcc/best` and
+`models.small` on `mcc/cheap`; it used to repeat the same model for both,
+because inventing a "small" model by matching on a name would have been MCC
+guessing which of your routes is cheap, and `mcc/cheap` is not a guess — it is
+the route you labelled cheap. Cline seeds its session model on `mcc/best` for
+the same reason. Gemini CLI's seeded model was simply a bug: it took the first
+entry of the enumeration rather than the route you configured, so a session
+opened on whichever model happened to enumerate first; it now goes through the
+same starting-model rule as Cline and Crush. Kimi Code prefixes every ref with
+`mcc/`, so a tier's generated key there reads `mcc/mcc/best` while the `model`
+value on the wire is the plain `mcc/best`. Claude Code is unaffected — it has no
+generated catalogue and keeps speaking the `claude-*` names. And the provider id
+`mcc` is now reserved: creating a custom provider whose name would slug to it is
+refused with a message saying why, rather than shadowing all five aliases and
+leaving that provider's models silently unroutable.
+
+**Finding one in the log.** A request that named a tier is recorded with
+`requested_model=mcc/best`, `harness=<agent id>` and `resolved_model=<the real
+ref>`, plus `tier`, `tier_source` (`global` or `override`) and `tier_harness` in
+the row's parameters — enough to answer the question `resolved_model` alone
+cannot, which is whether *your* override fired or the agent quietly followed the
+global route. Nothing about the log's schema changed and exports are unchanged.
+
 <a id="how-an-agents-model-list-gets-to-disk"></a>
 
 ### How an agent's model list gets to disk
@@ -2263,6 +2390,7 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `FALLBACK_END_CLEANLY_AFTER_COMMIT` | `true` | **New in 6.15.0.** A model that fails *after* it started answering ends the message cleanly (`stop_reason: max_tokens`) instead of returning an API error under a partial answer. `false` restores the error. |
 | `FALLBACK_RESUME_AFTER_COMMIT` | `true` | **New in 6.18.0.** Rather than only ending a half-written answer, hand the text already sent to the next model on the route and splice its continuation into the same message. Falls back to the row above whenever the continuation is unusable, so it can only lengthen an answer, never break one. `false` stops at the short message. |
 | `STREAM_COMMIT_HOLDBACK_CHARS` | `0` | **New in 6.18.0.** Visible characters that must arrive before output is released, on top of `STREAM_COMMIT_HOLDBACK_SECONDS`. Raising it means a model that writes a word and dies has shown you nothing, so the route restarts on the next model invisibly; the cost is that much time-to-first-visible-word on every request. `0` uses the clock alone. |
+| `HARNESS_TIER_ALIASES` | `true` | **New in 6.38.0.** Lists `mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` at the top of every coding agent's generated picker, each a name for one of MCC's own routes rather than a model of its own. Off keeps those pickers to concrete refs; the router still resolves an alias a client sends anyway, so an agent already configured on one keeps working. Per-agent chains live in `~/.fcc/harness_tiers.json`, written by the **Coding agents** page. See [Tiers for every other coding agent](#tiers-for-every-other-coding-agent). |
 | `CREDENTIAL_CIRCUIT_THRESHOLD` | **removed at 6.0.0** | The circuit breaker it configured no longer exists for provider pools. A stale line is ignored, not fatal — delete it. |
 
 **Settings that moved page, not meaning:** the nine `REQUEST_LOG_*` keys are at the bottom of **Analytics**, the nine `DESKTOP_*` keys are on **Providers**, `LOG_LEVEL` joined the logging flags under **Diagnostics**, and `HTTP_*_TIMEOUT`, `PROVIDER_RATE_LIMIT`, `PROVIDER_RATE_WINDOW` and `PROVIDER_MAX_CONCURRENCY` came *onto* **Limits & Resilience**. `FALLBACK_SKIP_KINDS` stays on **Model Config**, cross-linked, because which failures abort a chain is a routing decision rather than a resilience one.

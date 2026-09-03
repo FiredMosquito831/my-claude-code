@@ -2059,15 +2059,17 @@ def test_admin_static_reorders_a_route_rail_as_one_list():
         encoding="utf-8"
     )
 
-    # One builder for all six rails -- the four tier overrides, the default
-    # route and the vision adapter. A rail that reorders differently from the
-    # one beside it reads as a bug, not as a distinction, so the primary node
-    # is built in exactly one place: the definition plus its single call.
+    # One builder for every rail on the product -- the four tier overrides, the
+    # default route, the vision adapter, and since 6.38.0 each coding agent's
+    # own per-tier override on the Coding agents page. A rail that reorders
+    # differently from the one beside it reads as a bug, not as a distinction,
+    # so the primary node is built in exactly one place: the definition plus
+    # its two calls.
     assert "function appendRouteRail(rail, modelField, chainField) {" in script
     assert script.count("routeNode(") == 2, (
         "a route primary is built outside appendRouteRail"
     )
-    assert script.count("appendRouteRail(") == 3, (
+    assert script.count("appendRouteRail(") == 4, (
         "a rail is filled outside appendRouteRail"
     )
 

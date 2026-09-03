@@ -132,7 +132,20 @@ def test_the_fan_out_creates_a_missing_document(tmp_path: Path) -> None:
         entry["slug"]
         for entry in json.loads(codex_path.read_text(encoding="utf-8"))["models"]
     ]
-    assert slugs == ["nvidia_nim/configured", "open_router/discovered"]
+    # The five tier aliases lead every document: ordering is the only
+    # discoverability lever this layer has, and it gives them priority 0-4 in
+    # Codex's own picker. On this fixture every tier is unset, so all five
+    # resolve onto MODEL -- which is exactly the collapse the dashboard names
+    # rather than hides.
+    assert slugs == [
+        "mcc/best",
+        "mcc/good",
+        "mcc/medium",
+        "mcc/cheap",
+        "mcc/vision",
+        "nvidia_nim/configured",
+        "open_router/discovered",
+    ]
 
 
 def test_an_existing_catalogue_is_refreshed_in_place(tmp_path: Path) -> None:
@@ -145,7 +158,20 @@ def test_an_existing_catalogue_is_refreshed_in_place(tmp_path: Path) -> None:
         entry["slug"]
         for entry in json.loads(codex_path.read_text(encoding="utf-8"))["models"]
     ]
-    assert slugs == ["nvidia_nim/configured", "open_router/discovered"]
+    # The five tier aliases lead every document: ordering is the only
+    # discoverability lever this layer has, and it gives them priority 0-4 in
+    # Codex's own picker. On this fixture every tier is unset, so all five
+    # resolve onto MODEL -- which is exactly the collapse the dashboard names
+    # rather than hides.
+    assert slugs == [
+        "mcc/best",
+        "mcc/good",
+        "mcc/medium",
+        "mcc/cheap",
+        "mcc/vision",
+        "nvidia_nim/configured",
+        "open_router/discovered",
+    ]
 
 
 def test_capability_change_alone_re_emits_every_catalogue(tmp_path: Path) -> None:
@@ -377,8 +403,19 @@ def test_an_invited_merge_target_is_refreshed_and_keeps_every_other_key(
     assert document["theme"] == "dark"
     assert document["provider"]["ollama"] == {"baseURL": "http://x/v1"}
     models = document["provider"]["mcc"]["models"]
-    assert sorted(models) == ["nvidia_nim/configured", "open_router/discovered"]
+    assert sorted(models) == [
+        "mcc/best",
+        "mcc/cheap",
+        "mcc/good",
+        "mcc/medium",
+        "mcc/vision",
+        "nvidia_nim/configured",
+        "open_router/discovered",
+    ]
     assert models["nvidia_nim/configured"]["contextWindow"] == 300_000
+    # The alias carries the primary's record verbatim -- every capability field
+    # and every None -- with only the id and the display name replaced.
+    assert models["mcc/best"]["contextWindow"] == 300_000
     # Written by the server, so the URL is this install's own proxy root and
     # the token is still only a reference the launcher expands.
     assert document["provider"]["mcc"]["baseURL"].endswith("/v1")
@@ -419,10 +456,20 @@ def test_a_toml_catalogue_is_written_as_toml_with_its_credentials_resolved(
     assert "base-url.mcc.invalid" not in path.read_text(encoding="utf-8")
     assert document["providers"]["mcc"]["api_key"] == PROXY_NO_AUTH_SENTINEL
     models = document["models"]
+    # Kimi builds its key as ``mcc/<ref>``, so a tier alias reads ``mcc/mcc/best``
+    # while the wire ``model`` value stays ``mcc/best``. Ugly in one CLI's
+    # --model help and correct everywhere; the alternative is a per-serialiser
+    # exception that breaks the "pure function of the records" property.
     assert sorted(models) == [
+        "mcc/mcc/best",
+        "mcc/mcc/cheap",
+        "mcc/mcc/good",
+        "mcc/mcc/medium",
+        "mcc/mcc/vision",
         "mcc/nvidia_nim/configured",
         "mcc/open_router/discovered",
     ]
+    assert models["mcc/mcc/best"]["model"] == "mcc/best"
     assert models["mcc/nvidia_nim/configured"]["max_context_size"] == 300_000
 
 

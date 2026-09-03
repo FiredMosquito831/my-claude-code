@@ -103,7 +103,7 @@ class FixedProviderModelRouter(ModelRouter):
         self._fixed_provider_id = provider_id
 
     def resolve_messages_request(
-        self, request: MessagesRequest
+        self, request: MessagesRequest, *, harness: str | None = None
     ) -> RoutedMessagesRequest:
         resolved = ResolvedModel(
             original_model=request.model,

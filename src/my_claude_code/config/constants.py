@@ -153,6 +153,17 @@ FALLBACK_SKIP_KINDS_DEFAULT = "invalid_request"
 MODEL_VISIBILITY_ALLOW_DEFAULT = ""
 MODEL_VISIBILITY_DENY_DEFAULT = ""
 
+# Mirrors core.tier_refs.TIER_NAMESPACE and ModelTier. `config` is a leaf
+# package by declared policy -- it imports nothing, not even core -- so the
+# names are repeated here rather than imported, and
+# tests/contracts/test_import_boundaries.py pins the two equal in both
+# directions exactly as it does for FAILURE_KIND_NAMES. Two files need them on
+# this side of the boundary: the per-harness tier store, which validates that a
+# tier never points at another tier, and the provider registry, which reserves
+# the namespace so a custom provider cannot shadow every alias.
+TIER_NAMESPACE = "mcc"
+MODEL_TIER_NAMES: tuple[str, ...] = ("best", "good", "medium", "cheap", "vision")
+
 # Mirrors core.failures.FailureKind. `config` is a leaf package by declared
 # policy -- it imports nothing, not even core -- so the names are repeated
 # here rather than imported. A list that mirrors another file drifts, so

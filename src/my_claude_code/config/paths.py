@@ -19,6 +19,7 @@ CLAUDE_CONFIG_DIRNAME = ".claude"
 CLAUDE_SETTINGS_FILENAME = "settings.json"
 ONBOARDING_STATE_FILENAME = "onboarding.json"
 MODEL_OVERRIDES_FILENAME = "model_overrides.json"
+HARNESS_TIERS_FILENAME = "harness_tiers.json"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
 WSL_WINDOWS_USERS_DIR = "/mnt/c/Users"
 MACOS_MANAGED_SETTINGS_PATH = (
@@ -49,6 +50,12 @@ def model_overrides_path() -> Path:
     """Return the per-provider/per-model request parameter override file."""
 
     return config_dir_path() / MODEL_OVERRIDES_FILENAME
+
+
+def harness_tiers_path() -> Path:
+    """Return the per-coding-agent tier override file."""
+
+    return config_dir_path() / HARNESS_TIERS_FILENAME
 
 
 def legacy_env_paths() -> tuple[Path, ...]:

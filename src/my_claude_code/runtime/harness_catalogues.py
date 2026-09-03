@@ -69,6 +69,7 @@ from my_claude_code.config.harness_config_merge import (
     owned_block_present,
     with_base_url,
 )
+from my_claude_code.config.harness_tiers import current_harness_tiers
 from my_claude_code.config.harness_toml import (
     with_kimi_credentials,
     write_toml_document_atomically_if_changed,
@@ -115,7 +116,8 @@ class HarnessCatalogueFanoutPublisher:
             return
 
         settings = runtime.current_settings()
-        models = build_catalogue_models(settings, runtime)
+        harness_tiers = current_harness_tiers()
+        models = build_catalogue_models(settings, runtime, harness_tiers=harness_tiers)
         if not models:
             # Preserve every last-known-good file rather than replacing them
             # with an empty picker during a provider outage.
@@ -123,7 +125,22 @@ class HarnessCatalogueFanoutPublisher:
 
         proxy_root_url = local_proxy_root_url(settings)
         for spec, path in targets:
-            self._publish_one(spec, path, models, proxy_root_url, settings)
+            # One shared build for the common case, a second one only for an
+            # agent that actually has tier overrides. Thirteen full builds would
+            # re-walk the whole resolution ladder thirteen times to produce
+            # thirteen identical lists on the install that has never opened the
+            # Tiers section -- which is every install until somebody does.
+            per_harness = (
+                build_catalogue_models(
+                    settings,
+                    runtime,
+                    harness_id=spec.id,
+                    harness_tiers=harness_tiers,
+                )
+                if harness_tiers.for_harness(spec.id)
+                else models
+            )
+            self._publish_one(spec, path, per_harness, proxy_root_url, settings)
 
     def _is_writable_target(self, spec: HarnessSpec, path: Path) -> bool:
         """Return whether this publisher may write this harness's document.

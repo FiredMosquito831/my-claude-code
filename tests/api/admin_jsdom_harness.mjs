@@ -1265,6 +1265,24 @@ const ROUTES = {
         ttft_ms: 410,
         duration_ms: 2100,
   },
+  // Every agent's tier state. `codex` overrides Best -- the state the card has
+  // to render as a rail -- and every other agent follows the global chain,
+  // which on this fixture has all five tiers collapsed onto MODEL.
+  "/admin/api/harness-tiers": {
+    tiers: [
+      { id: "best", label: "Best", ref: "mcc/best", route_label: "Default", env_var: "MODEL", inherits_default: false,
+        global: { primary: "nvidia_nim/one", fallbacks: ["open_router/two"], paused: [], paused_label: "MODEL_PAUSED", source: "global" } },
+      { id: "good", label: "Good", ref: "mcc/good", route_label: "Opus", env_var: "MODEL_OPUS", inherits_default: true,
+        global: { primary: "nvidia_nim/one", fallbacks: [], paused: [], paused_label: "MODEL_PAUSED", source: "global" } },
+      { id: "medium", label: "Medium", ref: "mcc/medium", route_label: "Sonnet", env_var: "MODEL_SONNET", inherits_default: true,
+        global: { primary: "nvidia_nim/one", fallbacks: [], paused: [], paused_label: "MODEL_PAUSED", source: "global" } },
+      { id: "cheap", label: "Cheap", ref: "mcc/cheap", route_label: "Haiku", env_var: "MODEL_HAIKU", inherits_default: true,
+        global: { primary: "nvidia_nim/one", fallbacks: [], paused: [], paused_label: "MODEL_PAUSED", source: "global" } },
+      { id: "vision", label: "Vision", ref: "mcc/vision", route_label: "Vision", env_var: "MODEL_VISION", inherits_default: true,
+        global: { primary: "nvidia_nim/one", fallbacks: [], paused: [], paused_label: "MODEL_PAUSED", source: "global" } },
+    ],
+    harnesses: {},
+  },
   "/admin/api/requests/harness-usage": {
     enabled: true,
     days: 7,
@@ -1458,6 +1476,42 @@ window.fetch = async (url, options = {}) => {
     (options.method || "GET").toUpperCase() === "POST"
   ) {
     body = customCreateResult;
+  }
+  if (String(url).split("?")[0] === "/admin/api/harness-tiers") {
+    // A real enough server: the write lands in the same document the next GET
+    // (and the card's own re-render) reads back, so "Override then Revert"
+    // exercises two states rather than one payload twice.
+    const state = ROUTES["/admin/api/harness-tiers"];
+    if ((options.method || "GET").toUpperCase() === "POST") {
+      const sent = JSON.parse(options.body);
+      const agent = state.harnesses[sent.harness] || {};
+      const globalChain = (state.tiers.find((tier) => tier.id === sent.tier) || {}).global || {};
+      if (sent.override) {
+        agent[sent.tier] = {
+          override: true,
+          model: sent.model || "",
+          fallbacks: sent.fallbacks || [],
+          paused: sent.paused || [],
+          resolved: {
+            primary: sent.model || globalChain.primary,
+            fallbacks: sent.fallbacks || [],
+            paused: sent.paused || [],
+            paused_label: `harness_tiers.json:${sent.harness}.${sent.tier}.paused`,
+            source: "override",
+          },
+        };
+      } else {
+        agent[sent.tier] = {
+          override: false,
+          model: "",
+          fallbacks: [],
+          paused: [],
+          resolved: { ...globalChain, source: "global" },
+        };
+      }
+      state.harnesses[sent.harness] = agent;
+    }
+    body = state;
   }
   if (String(url).split("?")[0] === "/admin/api/config/route-pause") {
     // Held open on request, so the in-flight state of the row's own toggle is
@@ -3651,6 +3705,24 @@ const customProviders = {};
 }
 
 // ------------------------------------------------------------ coding agents
+// Every listed agent starts on the global chain, which is the state twelve of
+// the thirteen are in on any real install.
+for (const agent of ROUTES["/admin/api/harnesses"].harnesses || []) {
+  if (!agent.catalogue) continue;
+  ROUTES["/admin/api/harness-tiers"].harnesses[agent.id] = Object.fromEntries(
+    ROUTES["/admin/api/harness-tiers"].tiers.map((tier) => [
+      tier.id,
+      {
+        override: false,
+        model: "",
+        fallbacks: [],
+        paused: [],
+        resolved: { ...tier.global, source: "global" },
+      },
+    ]),
+  );
+}
+
 const codingAgentsLink = navLinks.find(
   (link) => link.dataset.view === "coding_agents",
 );
@@ -3699,6 +3771,102 @@ if (codingAgentsLink) {
       : null,
   }));
   codingAgents.gatewayNote = flatten(doc.getElementById("codingAgentsGatewayNote"));
+
+  /* ------------------------------------------------------------- tiers
+     Five rows per agent that has a picker, none for the one that does not,
+     and the same rail component the Model Config page draws once Override is
+     pressed. jsdom proves what the gesture did to the DOM and what went out on
+     the wire; it cannot prove the rail's grid, which is checked in a browser. */
+  const tierCard = (id) => list.querySelector(`.coding-agent-card[data-harness="${id}"]`);
+  const tierRows = (id) =>
+    Array.from((tierCard(id) || doc).querySelectorAll(".agent-tier"));
+  const tierRow = (id, tier) =>
+    tierRows(id).find((row) => row.dataset.tier === tier) || null;
+
+  const tiers = {};
+  // The fresh-install run lists no agents at all, so there is nothing to
+  // exercise and nothing to assert; the shape stays present so the driver can
+  // tell "no agents" from "no tiers section".
+  tiers.present = Boolean(tierRow("codex", "best"));
+  tiers.rowsPerAgent = Object.fromEntries(
+    codingAgents.cards.map((card) => [card.id, tierRows(card.id).length]),
+  );
+  if (!tiers.present) {
+    codingAgents.tiers = tiers;
+  } else {
+  tiers.labels = tierRows("codex").map(
+    (row) => row.querySelector(".agent-tier-name").textContent,
+  );
+  tiers.refs = tierRows("codex").map(
+    (row) => row.querySelector(".agent-tier-ref").textContent,
+  );
+  tiers.inheritedReadout = flatten(
+    tierRow("codex", "medium").querySelector(".agent-tier-readout"),
+  );
+  tiers.inheritedChip = tierRow("codex", "medium")
+    .querySelector(".route-state")
+    .textContent;
+  tiers.railsBeforeOverride = tierRow("codex", "best").querySelectorAll(".route-rail").length;
+
+  // --- Override reveals the shared rail component.
+  tierRow("codex", "best")
+    .querySelector(".agent-tier-actions button")
+    .click();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const best = () => tierRow("codex", "best");
+  tiers.railsAfterOverride = best().querySelectorAll(".route-rail").length;
+  tiers.primaryValue = best().querySelector(".route-node.is-primary input").value;
+  tiers.chainRows = best().querySelectorAll(".model-chain-row").length;
+  tiers.overrideChip = best().querySelector(".route-state").textContent;
+  tiers.hasGrip = Boolean(best().querySelector("[data-route-id]"));
+  tiers.hasPauseButton = Boolean(best().querySelector(".route-pause-toggle"));
+  tiers.actionLabels = Array.from(
+    best().querySelectorAll(".agent-tier-actions button"),
+  ).map((button) => button.textContent);
+
+  // --- The rail's inputs must never join the settings diff.
+  tiers.changedValuesKeys = Object.keys(window.eval("changedValues()"));
+  tiers.dirtyAfterOverride = doc.getElementById("applyButton").disabled;
+
+  // --- A pointer drag inside the agent's own rail. MouseEvent, never
+  //     PointerEvent: jsdom implements neither PointerEvent nor DataTransfer,
+  //     which is why the product's drags are built on pointer events at all.
+  const railNodes = () =>
+    Array.from(best().querySelectorAll("[data-route-id]"));
+  const before = railNodes().map(
+    (node) => (node.querySelector("input") || {}).value,
+  );
+  const grip = railNodes()[1] && railNodes()[1].querySelector(".route-drag-grip");
+  if (grip) {
+    grip.dispatchEvent(new window.MouseEvent("pointerdown", { bubbles: true }));
+    railNodes()[0].dispatchEvent(
+      new window.MouseEvent("pointerover", { bubbles: true, clientY: 0 }),
+    );
+    doc.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  tiers.dragBefore = before;
+  tiers.dragAfter = railNodes().map(
+    (node) => (node.querySelector("input") || {}).value,
+  );
+
+  // --- Revert to global deletes the entry and the rail with it.
+  const revert = Array.from(
+    best().querySelectorAll(".agent-tier-actions button"),
+  ).find((button) => button.textContent === "Revert to global");
+  if (revert) {
+    revert.click();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  }
+  tiers.railsAfterRevert = tierRow("codex", "best").querySelectorAll(".route-rail").length;
+  tiers.readoutAfterRevert = flatten(
+    tierRow("codex", "best").querySelector(".agent-tier-readout"),
+  );
+  tiers.posts = fetchBodies
+    .filter((entry) => entry.path === "/admin/api/harness-tiers")
+    .map((entry) => entry.body);
+  codingAgents.tiers = tiers;
+  }
 }
 
 const rtkToggleContainer = doc.getElementById("rtkAgentToggles");

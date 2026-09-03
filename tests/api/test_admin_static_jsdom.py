@@ -2514,3 +2514,122 @@ def test_subscription_card_hides_itself_when_there_is_no_credential(
 ) -> None:
     assert rendered["anthropicOAuthCard"]["absent"]["hidden"] is True
     assert rendered["anthropicOAuthCard"]["absent"]["text"] == ""
+
+
+# --------------------------------------------------------------- agent tiers
+#
+# The Tiers section of each Coding agents card. jsdom proves what a gesture did
+# to the DOM and which body went out on the wire; it cannot prove the rail's
+# grid, because it has no box model -- that is checked in a real browser and
+# recorded in the PR.
+
+
+def test_the_tiers_block_renders_five_rows_per_agent_with_a_picker(
+    rendered: dict,
+) -> None:
+    """Five, in picker order, for every agent that has a generated catalogue.
+
+    And none for the three that have not: Claude Code self-discovers through
+    /v1/models and speaks the claude-* names, so it has no tier to override.
+    """
+    tiers = rendered["codingAgents"]["tiers"]
+
+    assert tiers["labels"] == ["Best", "Good", "Medium", "Cheap", "Vision"]
+    assert tiers["refs"] == [
+        "mcc/best",
+        "mcc/good",
+        "mcc/medium",
+        "mcc/cheap",
+        "mcc/vision",
+    ]
+    with_picker = {agent: rows for agent, rows in tiers["rowsPerAgent"].items() if rows}
+    assert set(with_picker.values()) == {5}
+    assert tiers["rowsPerAgent"]["claude"] == 0
+
+
+def test_an_inherited_tier_says_which_global_route_it_follows(rendered: dict) -> None:
+    """The collapse, named rather than hidden.
+
+    A picker showing five entries that are the same model is only confusing if
+    nothing says why, so the row names both the route and the setting that
+    would move it.
+    """
+    tiers = rendered["codingAgents"]["tiers"]
+
+    assert tiers["inheritedChip"] == "Same as global"
+    assert tiers["inheritedReadout"] == (
+        "Same as global Sonnet \u2014 currently nvidia_nim/one. "
+        "MODEL_SONNET is unset, so it follows MODEL."
+    )
+
+
+def test_override_reveals_the_shared_rail_component(rendered: dict) -> None:
+    """The Model Config rail, not a second one built for this page.
+
+    A rail that reordered differently from the one beside it would read as a
+    bug rather than as a distinction, so the grip, the chain editor and the
+    Pause button all have to be the same ones.
+    """
+    tiers = rendered["codingAgents"]["tiers"]
+
+    assert tiers["railsBeforeOverride"] == 0
+    assert tiers["railsAfterOverride"] == 1
+    assert tiers["hasGrip"] is True
+    assert tiers["hasPauseButton"] is True
+    assert tiers["chainRows"] == 1
+    assert tiers["overrideChip"] == "This agent's own chain"
+    assert tiers["actionLabels"] == ["Save", "Revert to global"]
+    # Seeded from what the tier resolves to today: pressing Override must not
+    # move the agent onto something the operator did not choose.
+    assert tiers["primaryValue"] == "nvidia_nim/one"
+
+
+def test_a_tier_rail_never_joins_the_settings_diff(rendered: dict) -> None:
+    """These keys are not env vars.
+
+    Collected by ``changedValues()`` they would be posted to
+    /admin/api/config/apply as unknown keys on every Apply, and the page would
+    read dirty from a section the dirty count cannot explain.
+    """
+    tiers = rendered["codingAgents"]["tiers"]
+
+    assert not any(key.startswith("HARNESS_TIER") for key in tiers["changedValuesKeys"])
+
+
+def test_a_pointer_drag_moves_a_fallback_within_a_harness_rail(rendered: dict) -> None:
+    """Synthesised as MouseEvent: jsdom has neither PointerEvent nor DataTransfer.
+
+    Dragging the fallback onto the primary swaps them, which is the promote
+    gesture the Model Config rails already have -- and it has to reach the
+    editor through ``state.routeRails``, which this section registers itself.
+    """
+    tiers = rendered["codingAgents"]["tiers"]
+
+    assert tiers["dragBefore"] == ["nvidia_nim/one", "open_router/two"]
+    assert tiers["dragAfter"] == ["open_router/two", "nvidia_nim/one"]
+
+
+def test_revert_to_global_clears_the_entry(rendered: dict) -> None:
+    """Deleted, not emptied: the two are different states of the store."""
+    tiers = rendered["codingAgents"]["tiers"]
+
+    assert tiers["railsAfterRevert"] == 0
+    # "Default", because Best names MODEL and that is what the Model Config
+    # page calls that card. The row reads in the operator's vocabulary, not the
+    # tier's.
+    assert tiers["readoutAfterRevert"].startswith("Same as global Default")
+    assert tiers["posts"] == [
+        {
+            "harness": "codex",
+            "tier": "best",
+            "override": True,
+            "model": "nvidia_nim/one",
+            "fallbacks": ["open_router/two"],
+            "paused": [],
+        },
+        {"harness": "codex", "tier": "best", "override": False},
+    ]
+
+
+def test_the_tiers_section_makes_no_console_errors(rendered: dict) -> None:
+    assert rendered["consoleErrors"] == []

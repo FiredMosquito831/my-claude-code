@@ -406,6 +406,26 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "HARNESS_TIER_ALIASES",
+        "List MCC tiers in coding agents",
+        "models",
+        "boolean",
+        settings_attr="harness_tier_aliases",
+        default="true",
+        description=(
+            "Add mcc/best, mcc/good, mcc/medium, mcc/cheap and mcc/vision to "
+            "the top of every coding agent's model picker. They are names for "
+            "MCC's own routes, the way Claude Code asks for claude-sonnet-5 "
+            "and gets whatever MODEL_SONNET points at, so a session started on "
+            "one follows the route when you move it instead of pinning a "
+            "provider's model id inside the agent's config. Each agent can be "
+            "given its own chain per tier on the Coding agents page; until it "
+            "is, every tier follows the global route above. Turn this off to "
+            "keep the pickers to concrete refs only -- an agent that already "
+            "names a tier keeps working either way."
+        ),
+    ),
+    ConfigFieldSpec(
         "FALLBACK_SKIP_KINDS",
         "Do not fall back on",
         "models",

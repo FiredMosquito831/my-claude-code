@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.tier_refs import is_tier_ref
 from tests.api.support import create_test_app, provider_manager_for_app
 
 
@@ -166,11 +167,18 @@ def _visibility_settings(*, allow: str = "", deny: str = "") -> Settings:
 
 
 def _listed_refs(app) -> set[str]:
-    """The provider refs behind the listed ids, ignoring the Claude aliases."""
+    """The provider refs behind the listed ids.
+
+    Both alias families are excluded. The eight Claude protocol names have no
+    ``/`` at all; the five coding-agent tier names do, but they are protocol
+    names for MCC's own routes in exactly the same sense and are exempt from
+    visibility for exactly the same reason -- see
+    ``test_the_tier_aliases_survive_every_filter`` below.
+    """
     return {
         item["display_name"].removesuffix(" (no thinking)")
         for item in TestClient(app).get("/v1/models").json()["data"]
-        if "/" in item["id"]
+        if "/" in item["id"] and not is_tier_ref(item["id"])
     }
 
 
@@ -223,6 +231,23 @@ def test_models_list_keeps_the_claude_aliases_whatever_the_filter_says():
     assert _listed_refs(app) == set()
     assert "claude-sonnet-4-20250514" in ids
     assert "claude-fable-5" in ids
+
+
+def test_the_tier_aliases_survive_every_filter_in_both_spellings():
+    """The five coding-agent tiers are protocol names too.
+
+    Filtering one would not hide a model: it would remove the id an agent's
+    generated config already names, and that agent's next session would open on
+    a model the gateway says does not exist. Both spellings are listed because
+    Pi's bundled extension only accepts the gateway form while OpenCode and
+    Codex send the bare one.
+    """
+    app = _app_with_two_providers(_visibility_settings(allow="nothing-matches-this/*"))
+
+    ids = [item["id"] for item in TestClient(app).get("/v1/models").json()["data"]]
+    for ref in ("mcc/best", "mcc/good", "mcc/medium", "mcc/cheap", "mcc/vision"):
+        assert ref in ids
+        assert f"anthropic/{ref}" in ids
 
 
 def test_models_list_hides_a_configured_model_that_is_denied():

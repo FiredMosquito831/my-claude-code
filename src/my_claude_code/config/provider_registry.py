@@ -21,6 +21,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from my_claude_code.config.constants import TIER_NAMESPACE
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
@@ -29,6 +30,14 @@ from my_claude_code.config.provider_catalog import (
 from my_claude_code.config.reasoning_enum import normalize_effort_words
 
 CUSTOM_PROVIDER_ID_PREFIX = "custom_"
+
+#: Provider ids nothing may register. ``mcc`` is the namespace of the five tier
+#: aliases (``mcc/best`` and friends, ``core/tier_refs``): a provider with that
+#: id would make every alias ambiguous with a real ``provider/model`` ref, and
+#: the router resolves the alias first, so the provider's models would simply
+#: stop routing. Refused at creation rather than repaired afterwards, because
+#: by then the operator has a provider whose models silently do not work.
+RESERVED_PROVIDER_IDS: frozenset[str] = frozenset({TIER_NAMESPACE})
 CUSTOM_PROVIDERS_FILENAME = "custom_providers.json"
 DEFAULT_CUSTOM_CREDENTIAL_ROTATION = "failover"
 CUSTOM_CREDENTIAL_ROTATION_POLICIES = frozenset(
@@ -174,6 +183,13 @@ class ProviderRegistry:
         if not isinstance(item, dict):
             return None
         provider_id = item.get("provider_id")
+        if isinstance(provider_id, str) and provider_id in RESERVED_PROVIDER_IDS:
+            # A hand-edited file is the only way one of these reaches here.
+            logger.warning(
+                "CUSTOM PROVIDER: '{}' is a reserved id; ignoring the entry",
+                provider_id,
+            )
+            return None
         display_name = item.get("display_name")
         base_url = item.get("base_url")
         api_keys = item.get("api_keys")
@@ -326,6 +342,12 @@ class ProviderRegistry:
         name = display_name.strip()
         if not name:
             raise ValueError("Custom provider display_name must not be empty")
+        if _slug(name) in RESERVED_PROVIDER_IDS:
+            raise ValueError(
+                f"'{_slug(name)}' is reserved for MCC's own coding-agent tier "
+                f"aliases (mcc/best, mcc/good, mcc/medium, mcc/cheap, "
+                f"mcc/vision). Choose another name."
+            )
         url = base_url.strip()
         if not url:
             raise ValueError("Custom provider base_url must not be empty")

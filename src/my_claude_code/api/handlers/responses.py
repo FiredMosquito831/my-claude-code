@@ -26,6 +26,7 @@ from my_claude_code.application.ports import ProviderResolver
 from my_claude_code.application.routing import ModelRouter
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import MessagesRequest
+from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import ExecutionFailure, find_execution_failure
 from my_claude_code.core.openai_responses import (
@@ -109,7 +110,9 @@ class ResponsesHandler:
                 headers=headers,
             )
             require_non_empty_messages(response_request.messages)
-            plan = self._model_router.resolve_messages_plan(response_request)
+            plan = self._model_router.resolve_messages_plan(
+                response_request, harness=harness_from_headers(headers).harness
+            )
             capture.set_plan(plan)
             capture.set_routing(plan.primary)
 

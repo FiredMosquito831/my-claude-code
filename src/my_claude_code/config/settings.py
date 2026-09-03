@@ -506,6 +506,18 @@ class Settings(BaseSettings):
         default=None, validation_alias="MODEL_VISION_PAUSED"
     )
 
+    # ==================== Coding agent tier aliases ====================
+    # Whether the five tier names (mcc/best, mcc/good, mcc/medium, mcc/cheap,
+    # mcc/vision) are emitted into every coding agent's generated catalogue.
+    # They are protocol names for MCC's own routes, exactly as Claude Code's
+    # claude-* aliases are, so MODEL_VISIBILITY_* never filters them; this
+    # switch is the supported way to remove them from an already-long picker.
+    # Turning it off does not stop the router resolving one that a client sends
+    # anyway -- an id that used to work must keep working.
+    harness_tier_aliases: bool = Field(
+        default=True, validation_alias="HARNESS_TIER_ALIASES"
+    )
+
     # ==================== Model visibility ====================
     # Comma-separated globs matched case-insensitively against the full
     # `provider/model` ref. Empty allow means "list everything"; deny is

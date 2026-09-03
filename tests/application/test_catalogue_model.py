@@ -11,8 +11,10 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.gateway_model_ids import gateway_model_id
 from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.reasoning import ReasoningEffort
+from my_claude_code.core.tier_refs import TIER_ORDER, ModelTier, is_tier_ref, tier_ref
 
 
 class FakeRuntime(RequestRuntimePort):
@@ -224,15 +226,45 @@ def test_catalogue_models_and_v1_models_agree_on_visible_refs() -> None:
     )
 
     catalogue_ids = {
-        model.gateway_id for model in build_catalogue_models(settings, runtime)
+        model.gateway_id
+        for model in build_catalogue_models(settings, runtime)
+        if not is_tier_ref(model.provider_model_ref)
     }
     listing = build_models_list_response(settings, runtime)
     # The eight Claude protocol aliases are names, not routable refs, and are
-    # deliberately exempt from visibility; everything else must match exactly.
-    listing_ids = {entry.id for entry in listing.data if "/" in entry.id}
+    # deliberately exempt from visibility; so are the five coding-agent tier
+    # aliases, for the same reason and asserted separately below. Everything
+    # else must match exactly.
+    listing_ids = {
+        entry.id
+        for entry in listing.data
+        if "/" in entry.id and not is_tier_ref(entry.id)
+    }
 
     assert catalogue_ids == listing_ids
     assert not any("hidden" in model_id for model_id in catalogue_ids)
+
+
+def test_both_listings_carry_the_five_tier_aliases_exempt_from_visibility() -> None:
+    """A tier alias is a protocol name for one of MCC's own routes.
+
+    Filtering one would not hide a model: it would remove the id a coding
+    agent's config file already names and break that agent's next session --
+    exactly the reasoning the eight Claude aliases already carry.
+    """
+
+    settings = _settings(model="open_router/shown", model_visibility_deny="*")
+    runtime = FakeRuntime(
+        settings=settings, cached_infos=(ProviderModelInfo("open_router/shown"),)
+    )
+
+    listing_ids = {
+        entry.id for entry in build_models_list_response(settings, runtime).data
+    }
+
+    for tier in TIER_ORDER:
+        assert tier_ref(tier) in listing_ids
+        assert gateway_model_id(tier_ref(tier)) in listing_ids
 
 
 def test_the_catalogue_is_filtered_by_model_visibility() -> None:
@@ -256,6 +288,7 @@ def test_the_catalogue_is_filtered_by_model_visibility() -> None:
     refs = {
         model.provider_model_ref
         for model in build_catalogue_models(runtime.current_settings(), runtime)
+        if not is_tier_ref(model.provider_model_ref)
     }
 
     assert refs == {"open_router/kept"}
@@ -277,10 +310,22 @@ def test_the_configured_primary_route_is_marked_on_its_record() -> None:
         ),
     )
 
-    primary = {
-        model.provider_model_ref
-        for model in build_catalogue_models(runtime.current_settings(), runtime)
-        if model.is_primary_route
-    }
+    models = build_catalogue_models(runtime.current_settings(), runtime)
+    primary = {model.provider_model_ref for model in models if model.is_primary_route}
 
-    assert primary == {"open_router/primary"}
+    # Since the tier aliases exist, the mark moved onto ``mcc/best`` -- which
+    # *is* the route ``MODEL`` names, one level of indirection later. A session
+    # opened on it follows the route when the operator moves it, where a session
+    # opened on ``open_router/primary`` froze today's answer into the agent's
+    # own config file. The raw record must not keep the mark as well, or
+    # ``select_starting_index`` would return whichever came first.
+    assert primary == {tier_ref(ModelTier.BEST)}
+    best = next(model for model in models if model.is_primary_route)
+    raw = next(
+        model
+        for model in models
+        if model.provider_model_ref == "open_router/primary"
+        and not model.force_no_thinking
+    )
+    assert best.display_name == "Best (open_router/primary)"
+    assert not raw.is_primary_route

@@ -77,6 +77,9 @@ const state = {
   // destination editor from a DOM node, and every editor used to be
   // reachable only through the closure that built it.
   routeRails: new Map(),
+  // GET /admin/api/harness-tiers: the five tiers, what each resolves to
+  // globally, and which of them each coding agent overrides.
+  harnessTiers: null,
   activeView: "providers",
   webSearchStatsPeriod: "daily",
   webSearchAnalyticsStats: null,
@@ -1452,6 +1455,11 @@ function syncRoutePauseUi() {
 
 async function toggleRoutePause(modelKey, ref, paused, button) {
   if (!modelKey || !ref) return;
+  const harnessTier = parseHarnessTierKey(modelKey);
+  if (harnessTier) {
+    await toggleHarnessTierPause(harnessTier, modelKey, ref, paused, button);
+    return;
+  }
   // The models tick reverts optimistically and leaves its box live while the
   // write is in flight; a second click there raced the first. Disable instead.
   if (button) button.disabled = true;
@@ -4200,6 +4208,12 @@ function changedValues() {
   const values = {};
   document.querySelectorAll("[data-key]").forEach((input) => {
     if (input.disabled || !input.matches("input, select, textarea")) return;
+    // A coding agent's tier rail is not a setting: it is one entry in
+    // harness_tiers.json, written by that section's own Save. Collected here
+    // it would be posted to /admin/api/config/apply as an unknown env key on
+    // every Apply, and it would make the page read dirty from a section the
+    // dirty count cannot explain.
+    if (input.closest(".agent-tiers")) return;
     const value = readFieldValue(input);
     if (value !== input.dataset.original) {
       values[input.dataset.key] = value;
@@ -7603,6 +7617,7 @@ async function loadHarnesses() {
   } catch (_) {
     state.harnessUsage = null;
   }
+  await loadHarnessTiers();
   renderHarnesses();
   renderRtkState();
 }
@@ -7619,9 +7634,11 @@ function renderHarnesses(errorMessage) {
     list.append(failed);
     return;
   }
+  clearHarnessTierRails();
   (state.harnesses || []).forEach((harness) => {
     list.append(harnessCard(harness));
   });
+  syncRoutePauseUi();
 }
 
 function harnessCard(harness) {
@@ -7677,6 +7694,9 @@ function harnessCard(harness) {
   card.append(harnessCommandList(harness));
   card.append(harnessMeta(harness));
 
+  const tiers = harnessTiersSection(harness);
+  if (tiers) card.append(tiers);
+
   if (!harness.installed && harness.install_hint) {
     const hint = document.createElement("p");
     hint.className = "agent-install-hint";
@@ -7686,6 +7706,290 @@ function harnessCard(harness) {
     card.append(hint);
   }
   return card;
+}
+
+/* ------------------------------------------------------------- agent tiers
+   Claude Code never names a model: it asks for `claude-sonnet-5` and MCC maps
+   that onto whatever MODEL_SONNET points at. Every other coding agent had to
+   name a concrete provider/model ref, so moving a route left every agent
+   pinned to yesterday's answer. The five tier aliases close that, and this
+   section is where one agent is given its own chain for one of them.
+
+   The rails are the *same* component the Model Config page draws
+   (`appendRouteRail`), so the grip, the pointer drag, the move buttons, the
+   Pause button and the chain editor behave identically on both pages -- a rail
+   that reordered differently from the one beside it would read as a bug rather
+   than as a distinction. What differs is only where the value goes: these keys
+   are not env vars, so they never join `changedValues()` and are written by
+   this section's own Save through POST /admin/api/harness-tiers. */
+
+const HARNESS_TIER_KEY_PREFIX = "HARNESS_TIER";
+
+/** The synthetic field key for one (agent, tier, role). Namespaced so it can
+ *  never collide with a real setting key, and parseable back to its parts. */
+function harnessTierKey(harnessId, tierId, role) {
+  return `${HARNESS_TIER_KEY_PREFIX}::${harnessId}::${tierId}::${role}`;
+}
+
+function parseHarnessTierKey(key) {
+  const parts = String(key || "").split("::");
+  if (parts.length !== 4 || parts[0] !== HARNESS_TIER_KEY_PREFIX) return null;
+  return { harness: parts[1], tier: parts[2], role: parts[3] };
+}
+
+async function loadHarnessTiers() {
+  try {
+    state.harnessTiers = await api("/admin/api/harness-tiers");
+  } catch (_) {
+    // The cards are still worth rendering without them: an agent's command,
+    // its catalogue path and its request count do not depend on tiers.
+    state.harnessTiers = null;
+  }
+}
+
+/** Forget every rail this section registered, before it draws them again.
+ *
+ * `state.routeRails` is keyed by chain key and is what a cross-rail drag
+ * resolves a drop target through. A rebuilt card leaves its old editors in
+ * there pointing at detached DOM, and a drop onto one would write into a rail
+ * nobody can see. */
+function clearHarnessTierRails() {
+  Array.from(state.routeRails.keys()).forEach((key) => {
+    if (parseHarnessTierKey(key)) state.routeRails.delete(key);
+  });
+  Array.from(ROUTE_PAUSE_KEY.keys()).forEach((key) => {
+    if (parseHarnessTierKey(key)) ROUTE_PAUSE_KEY.delete(key);
+  });
+}
+
+function harnessTierField(key, label, type, value) {
+  return {
+    key,
+    label,
+    type,
+    value: value || "",
+    default: "",
+    secret: false,
+    configured: false,
+    locked: false,
+  };
+}
+
+/** The Tiers block for one agent's card, or null when it has no picker. */
+function harnessTiersSection(harness) {
+  const payload = state.harnessTiers;
+  if (!payload || !harness.catalogue) return null;
+  const tiers = Array.isArray(payload.tiers) ? payload.tiers : [];
+  const perHarness = (payload.harnesses || {})[harness.id];
+  if (!tiers.length || !perHarness) return null;
+
+  const block = document.createElement("details");
+  block.className = "agent-tiers";
+  block.dataset.harness = harness.id;
+  // Open when this agent has said something of its own: a collapsed card would
+  // hide the one fact that makes this agent differ from the other twelve.
+  block.open = tiers.some((tier) => (perHarness[tier.id] || {}).override);
+
+  const summary = document.createElement("summary");
+  summary.className = "agent-tiers-summary";
+  summary.textContent = "Tiers";
+  block.append(summary);
+
+  const intro = document.createElement("p");
+  intro.className = "field-description";
+  intro.textContent =
+    "Five names this agent can pick instead of a provider's model id. Each one " +
+    "follows the matching global route until you override it here, and only " +
+    "this agent is affected.";
+  block.append(intro);
+
+  tiers.forEach((tier) => {
+    block.append(harnessTierRow(harness, tier, perHarness[tier.id] || {}));
+  });
+  return block;
+}
+
+function harnessTierRow(harness, tier, entry) {
+  const row = document.createElement("div");
+  row.className = "agent-tier";
+  row.dataset.tier = tier.id;
+
+  const head = document.createElement("div");
+  head.className = "agent-tier-head";
+
+  const name = document.createElement("h5");
+  name.className = "agent-tier-name";
+  name.textContent = tier.label;
+
+  const ref = document.createElement("code");
+  ref.className = "agent-tier-ref";
+  ref.textContent = tier.ref;
+
+  head.append(name, ref);
+
+  const resolved = entry.resolved || {};
+  const globalChain = tier.global || {};
+  const overridden = Boolean(entry.override);
+
+  const stateChip = document.createElement("span");
+  stateChip.className = `route-state${overridden ? "" : " is-inherited"}`;
+  stateChip.textContent = overridden ? "This agent's own chain" : "Same as global";
+  head.append(stateChip);
+  row.append(head);
+
+  const readout = document.createElement("p");
+  readout.className = "agent-tier-readout";
+  // The collapse, said out loud. On a default install MODEL_OPUS and friends
+  // are unset, so every tier resolves to MODEL -- and a picker showing five
+  // entries that are the same model is only confusing if nothing says why.
+  readout.textContent = overridden
+    ? `Resolves to ${resolved.primary || "nothing yet"}.`
+    : `Same as global ${tier.route_label || tier.label} — currently ${
+        globalChain.primary || "unset"
+      }.${
+        tier.inherits_default && tier.env_var !== "MODEL"
+          ? ` ${tier.env_var} is unset, so it follows MODEL.`
+          : ""
+      }`;
+  row.append(readout);
+
+  const actions = document.createElement("div");
+  actions.className = "agent-tier-actions";
+
+  if (!overridden) {
+    const override = document.createElement("button");
+    override.type = "button";
+    override.className = "secondary-button";
+    override.textContent = "Override";
+    override.addEventListener("click", () => {
+      saveHarnessTier(harness.id, tier.id, {
+        override: true,
+        // Seeded from what this tier resolves to today, so pressing Override
+        // changes nothing until the operator edits the rail. An empty rail
+        // would silently move the agent onto MODEL the moment it was saved.
+        model: globalChain.primary || "",
+        fallbacks: globalChain.fallbacks || [],
+        paused: [],
+      });
+    });
+    actions.append(override);
+    row.append(actions);
+    return row;
+  }
+
+  const rail = document.createElement("div");
+  rail.className = "route-rail";
+  const modelKey = harnessTierKey(harness.id, tier.id, "MODEL");
+  const chainKey = harnessTierKey(harness.id, tier.id, "CHAIN");
+  const pausedKey = harnessTierKey(harness.id, tier.id, "PAUSED");
+  // Registered exactly as a real route's pause list is, so `routePausedRefs`
+  // and `syncRoutePauseUi` need no branch at all: they read one field by key.
+  ROUTE_PAUSE_KEY.set(modelKey, pausedKey);
+  state.fields.set(
+    pausedKey,
+    harnessTierField(pausedKey, `${tier.label} paused`, "text", (entry.paused || []).join(",")),
+  );
+  appendRouteRail(
+    rail,
+    harnessTierField(modelKey, `${harness.display_name} ${tier.label}`, "optional_model", entry.model),
+    harnessTierField(
+      chainKey,
+      `${harness.display_name} ${tier.label} fallbacks`,
+      "model_chain",
+      (entry.fallbacks || []).join(","),
+    ),
+  );
+  row.append(rail);
+
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "primary-button";
+  save.textContent = "Save";
+  save.addEventListener("click", () => {
+    const editor = state.routeRails.get(chainKey);
+    saveHarnessTier(
+      harness.id,
+      tier.id,
+      {
+        override: true,
+        model: readHarnessTierModel(modelKey),
+        fallbacks: editor ? editor.parseValue(editor.input.value) : [],
+        paused: routePausedRefs(modelKey),
+      },
+      save,
+    );
+  });
+
+  const revert = document.createElement("button");
+  revert.type = "button";
+  revert.className = "ghost-button";
+  revert.textContent = "Revert to global";
+  revert.addEventListener("click", () => {
+    saveHarnessTier(harness.id, tier.id, { override: false }, revert);
+  });
+
+  actions.append(save, revert);
+  row.append(actions);
+  return row;
+}
+
+function readHarnessTierModel(modelKey) {
+  const input = document.querySelector(`input[data-key="${modelKey}"]`);
+  if (!input) return "";
+  const value = input.value.trim();
+  // "None" is what an emptied optional_model control writes back into itself;
+  // it means unset, not a model called None.
+  return value.toLowerCase() === "none" ? "" : value;
+}
+
+async function saveHarnessTier(harnessId, tierId, body, button) {
+  if (button) button.disabled = true;
+  try {
+    state.harnessTiers = await api("/admin/api/harness-tiers", {
+      method: "POST",
+      body: JSON.stringify({ harness: harnessId, tier: tierId, ...body }),
+    });
+    renderHarnesses();
+    showMessage(
+      body.override
+        ? `Saved the ${tierId} tier for ${harnessId}.`
+        : `${harnessId} follows the global ${tierId} route again.`,
+      "ok",
+    );
+  } catch (error) {
+    showMessage(error.message, "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+/** Write one pause into an agent's own tier entry.
+ *
+ * A per-agent tier's paused refs live in `harness_tiers.json`, not in an env
+ * var, so `/admin/api/config/route-pause` -- which resolves a settings key --
+ * cannot express this. Pausing here must also not switch the ref off for every
+ * other agent, which is exactly what writing MODEL_HAIKU_PAUSED would do.
+ */
+async function toggleHarnessTierPause(parsed, modelKey, ref, paused, button) {
+  const chainKey = harnessTierKey(parsed.harness, parsed.tier, "CHAIN");
+  const editor = state.routeRails.get(chainKey);
+  const current = routePausedRefs(modelKey);
+  const next = paused
+    ? current.includes(ref)
+      ? current
+      : [...current, ref]
+    : current.filter((entry) => entry !== ref);
+  await saveHarnessTier(
+    parsed.harness,
+    parsed.tier,
+    {
+      override: true,
+      model: readHarnessTierModel(modelKey),
+      fallbacks: editor ? editor.parseValue(editor.input.value) : [],
+      paused: next,
+    },
+    button,
+  );
 }
 
 // Every command line this agent answers to, generated server-side from the
@@ -15026,6 +15330,11 @@ initModelsView();
 function initRouteRails() {
   const view = byId("view-model_config");
   if (view) view.addEventListener("pointerover", continueRouteDrag);
+  // The same rails are drawn again in each coding agent's Tiers section, and a
+  // drag only continues while something is listening for the pointer moving
+  // over a drop target.
+  const agents = byId("view-coding_agents");
+  if (agents) agents.addEventListener("pointerover", continueRouteDrag);
   document.addEventListener("pointerup", endRouteDrag);
   document.addEventListener("pointercancel", () => {
     if (state.routeDrag) endRouteDrag(null);

@@ -9,6 +9,14 @@ RTK toggle. It is deliberately a probe and nothing more -- MCC never installs a
 third-party CLI, so a "not installed" card offers the vendor's own install line
 and stops there.
 
+``GET`` and ``POST /admin/api/harness-tiers`` back the Tiers section of each
+Coding agents card: which of the five tier aliases this agent overrides, what
+each one resolves to today, and the write that changes one. A JSON document
+rather than settings keys, so it cannot go through ``/admin/api/config/apply``
+-- that route's flat env-key-to-string map has no way to express
+``(harness, tier)``, and widening it is what would break ``changedValues()``
+and the dirty-state diff on every other page.
+
 ``GET /admin/api/catalogue-models`` is the capability-bearing model list.
 ``GET /v1/models`` cannot serve this purpose: it is an Anthropic-compatible
 protocol payload consumed by Claude Code itself and its ``ModelResponse``
@@ -24,13 +32,15 @@ import asyncio
 import json
 import os
 import shutil
+import threading
 import tomllib
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from my_claude_code.api.admin_routes import require_loopback_admin
 from my_claude_code.api.dependencies import get_services
@@ -47,8 +57,20 @@ from my_claude_code.application.catalogues import (
     serialise_sidecar,
 )
 from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.application.tier_chains import (
+    global_tier_chain,
+    resolve_tier_chain,
+)
 from my_claude_code.config.atomic_json import json_document_bytes
 from my_claude_code.config.harness_config_merge import merge_config_path
+from my_claude_code.config.harness_tiers import (
+    HarnessTierOverride,
+    HarnessTiers,
+    current_harness_tiers,
+    is_valid_tier_override_ref,
+    load_harness_tiers,
+    save_harness_tiers,
+)
 from my_claude_code.config.harnesses import (
     PROTOCOL_LABELS,
     HarnessSpec,
@@ -57,8 +79,23 @@ from my_claude_code.config.harnesses import (
 )
 from my_claude_code.config.paths import harness_catalogue_path
 from my_claude_code.config.rtk import load_rtk_state
+from my_claude_code.config.settings import Settings
+from my_claude_code.core.tier_refs import (
+    GLOBAL_TIER_SETTINGS,
+    TIER_LABELS,
+    TIER_ORDER,
+    ModelTier,
+    tier_ref,
+)
 
 router = APIRouter()
+
+# One writer at a time. Two tier edits landing together would each derive their
+# new document from a base read before the other committed, and the second would
+# silently drop the first -- the same race ``apply_admin_config_with`` closes for
+# the env-var settings, which this file cannot use because it writes a JSON
+# document rather than keys.
+_TIER_WRITE_LOCK = threading.Lock()
 
 
 @router.get("/admin/api/harnesses")
@@ -91,6 +128,160 @@ async def list_catalogue_models(
     return await asyncio.to_thread(
         _catalogue_models_payload, services, with_provenance=provenance
     )
+
+
+# ---------------------------------------------------------------- tiers
+
+
+class HarnessTierPayload(BaseModel):
+    """One ``(harness, tier)`` edit.
+
+    ``override`` false is "revert to global": the entry is deleted, which is a
+    different state from an entry that is present and empty. An entry present
+    and empty means "this agent overrides this tier and has not said what yet",
+    and the card has to be able to render that without the toggle bouncing back.
+    """
+
+    harness: str
+    tier: str
+    override: bool = True
+    model: str | None = None
+    fallbacks: list[str] = Field(default_factory=list)
+    paused: list[str] = Field(default_factory=list)
+
+
+@router.get("/admin/api/harness-tiers")
+async def get_harness_tiers(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    """Return every agent's tier state: global, override, and what each resolves to."""
+
+    require_loopback_admin(request)
+    return await asyncio.to_thread(_harness_tiers_payload, services)
+
+
+@router.post("/admin/api/harness-tiers")
+async def set_harness_tier(
+    payload: HarnessTierPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Write one ``(harness, tier)`` entry and return the whole refreshed state."""
+
+    require_loopback_admin(request)
+    known = {spec.id for spec in harness_specs()}
+    if payload.harness not in known:
+        raise HTTPException(
+            status_code=400, detail=f"Not a coding agent: {payload.harness}"
+        )
+    try:
+        tier = ModelTier(payload.tier.strip().lower())
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail=f"Not a tier: {payload.tier}"
+        ) from None
+
+    override: HarnessTierOverride | None = None
+    if payload.override:
+        model = (payload.model or "").strip() or None
+        rejected = [
+            ref
+            for ref in ([model] if model else []) + payload.fallbacks + payload.paused
+            if ref and not is_valid_tier_override_ref(ref.strip())
+        ]
+        if rejected:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A tier must point at a provider/model ref and never at "
+                    f"another tier: {', '.join(sorted(set(rejected)))}"
+                ),
+            )
+        override = HarnessTierOverride(
+            model=model,
+            fallbacks=_clean_list(payload.fallbacks),
+            paused=_clean_list(payload.paused),
+        )
+
+    await asyncio.to_thread(_commit_harness_tier, payload.harness, tier, override)
+    return await asyncio.to_thread(_harness_tiers_payload, services)
+
+
+def _clean_list(values: list[str]) -> tuple[str, ...]:
+    cleaned: list[str] = []
+    for value in values:
+        ref = (value or "").strip()
+        if ref and ref not in cleaned:
+            cleaned.append(ref)
+    return tuple(cleaned)
+
+
+def _commit_harness_tier(
+    harness_id: str, tier: ModelTier, override: HarnessTierOverride | None
+) -> None:
+    with _TIER_WRITE_LOCK:
+        # Re-read inside the lock, never from the mtime cache: the base for this
+        # edit has to be what is on disk right now, not what was on disk when
+        # the last request happened to stat it.
+        current = load_harness_tiers()
+        save_harness_tiers(current.with_override(harness_id, tier, override))
+
+
+def _harness_tiers_payload(services: ApiServices) -> dict[str, Any]:
+    settings = services.requests.current_settings()
+    tiers = current_harness_tiers()
+    return {
+        "tiers": [
+            {
+                "id": tier.value,
+                "label": TIER_LABELS[tier],
+                "ref": tier_ref(tier),
+                # The Model Config route this tier names, and its env var. The
+                # card says "same as global Sonnet" rather than deriving the
+                # name from whatever the chain collapsed onto, so an unset tier
+                # still tells the reader which setting would change it.
+                "route_label": GLOBAL_TIER_SETTINGS[tier].route_label,
+                "env_var": GLOBAL_TIER_SETTINGS[tier].env_var,
+                "inherits_default": not str(
+                    getattr(settings, GLOBAL_TIER_SETTINGS[tier].model_attr, "") or ""
+                ).strip(),
+                "global": _chain_payload(global_tier_chain(settings, tier)),
+            }
+            for tier in TIER_ORDER
+        ],
+        "harnesses": {
+            spec.id: _harness_tier_state(settings, tiers, spec.id)
+            for spec in harness_specs()
+            if spec.catalogue is not None
+        },
+    }
+
+
+def _harness_tier_state(
+    settings: Settings, tiers: HarnessTiers, harness_id: str
+) -> dict[str, Any]:
+    state: dict[str, Any] = {}
+    for tier in TIER_ORDER:
+        override = tiers.override(harness_id, tier)
+        resolved = resolve_tier_chain(settings, tiers, harness_id, tier)
+        state[tier.value] = {
+            "override": override is not None,
+            "model": (override.model if override is not None else None) or "",
+            "fallbacks": list(override.fallbacks) if override is not None else [],
+            "paused": list(override.paused) if override is not None else [],
+            "resolved": _chain_payload(resolved),
+        }
+    return state
+
+
+def _chain_payload(chain: Any) -> dict[str, Any]:
+    return {
+        "primary": chain.primary or "",
+        "fallbacks": list(chain.refs[1:]),
+        "paused": list(chain.paused),
+        "paused_label": chain.paused_label,
+        "source": chain.source,
+    }
 
 
 # ------------------------------------------------------------------ harnesses
@@ -260,17 +451,37 @@ def _catalogue_models_payload(
     services: ApiServices, *, with_provenance: bool = False
 ) -> dict[str, Any]:
     runtime = services.requests
+    settings = runtime.current_settings()
+    harness_tiers = current_harness_tiers()
     models = build_catalogue_models(
-        runtime.current_settings(),
+        settings,
         runtime,
         provenance=capability_provenance if with_provenance else None,
+        harness_tiers=harness_tiers,
     )
     catalogues: dict[str, Any] = {}
     for spec in harness_specs():
         catalogue = spec.catalogue
         if catalogue is None:
             continue
-        document, defaulted = serialise(catalogue.format_id, models)
+        # This route is what every ``mcc-<agent>`` launcher reads, so an agent
+        # with its own tier chain has to be served its own records here or the
+        # picker it launches with would disagree with the router. Rebuilt only
+        # for an agent that actually has overrides; the shared list is the
+        # answer for every other, which is all of them until somebody opens the
+        # Tiers section.
+        harness_models = (
+            build_catalogue_models(
+                settings,
+                runtime,
+                provenance=capability_provenance if with_provenance else None,
+                harness_id=spec.id,
+                harness_tiers=harness_tiers,
+            )
+            if harness_tiers.for_harness(spec.id)
+            else models
+        )
+        document, defaulted = serialise(catalogue.format_id, harness_models)
         entry: dict[str, Any] = {
             "format": catalogue.format_id,
             "filename": catalogue.filename,
@@ -282,7 +493,7 @@ def _catalogue_models_payload(
         # The second document, for the one harness that reads two. Absent
         # rather than null for every other, so a launcher asking for it gets
         # the same "this harness has none" answer whichever way it checks.
-        sidecar = serialise_sidecar(catalogue.format_id, models)
+        sidecar = serialise_sidecar(catalogue.format_id, harness_models)
         if sidecar is not None:
             entry["sidecar_filename"] = catalogue.sidecar_filename
             entry["sidecar_document"] = sidecar

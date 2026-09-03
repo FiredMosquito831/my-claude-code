@@ -29,6 +29,34 @@ def _settings(**overrides) -> Settings:
     return Settings(**overrides)
 
 
+def test_the_tier_alias_switch_reaches_the_catalogue_builder() -> None:
+    """HARNESS_TIER_ALIASES is the one new field, and it has one consumer.
+
+    A master switch that becomes a field and a manifest entry but never reaches
+    the builder is worse than no switch: the dashboard offers to shorten every
+    coding agent's picker, saving it says it applied, and thirteen pickers stay
+    exactly as long as they were.
+    """
+
+    from my_claude_code.application.catalogue_model import build_catalogue_models
+    from my_claude_code.application.model_metadata import ProviderModelInfo
+    from tests.application.test_catalogue_model import FakeRuntime
+
+    def refs(enabled: bool) -> set[str]:
+        settings = _settings(model="nvidia_nim/one", HARNESS_TIER_ALIASES=enabled)
+        runtime = FakeRuntime(
+            settings=settings,
+            cached_infos=(ProviderModelInfo("nvidia_nim/one"),),
+        )
+        return {
+            model.provider_model_ref
+            for model in build_catalogue_models(settings, runtime)
+        }
+
+    assert "mcc/best" in refs(True)
+    assert "mcc/best" not in refs(False)
+
+
 def test_the_backoff_and_lockout_settings_reach_the_provider_config() -> None:
     config = build_provider_config(
         PROVIDER_CATALOG["nvidia_nim"],

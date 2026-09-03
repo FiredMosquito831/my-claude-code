@@ -7,6 +7,7 @@ from enum import StrEnum
 from loguru import logger
 
 from my_claude_code.application.errors import UnknownProviderError
+from my_claude_code.config.harness_tiers import HarnessTiers, current_harness_tiers
 from my_claude_code.config.model_refs import (
     parse_model_name,
     parse_model_ref_list,
@@ -29,6 +30,11 @@ from my_claude_code.core.reasoning import (
     ReasoningPolicy,
     combine_reasoning_adaptations,
 )
+from my_claude_code.core.tier_refs import (
+    TIER_REASONING_SETTINGS,
+    ModelTier,
+    parse_tier_ref,
+)
 
 from .model_metadata import ModelReasoningCapability
 from .output_tokens import (
@@ -39,6 +45,7 @@ from .output_tokens import (
 from .reasoning import resolve_reasoning_policy
 from .reasoning_budget import reconcile_reasoning_budget
 from .reasoning_gating import adapt_reasoning_policy
+from .tier_chains import TierChain, resolve_tier_chain
 
 _ROUTE_SETTINGS = (
     ("fable", "model_fable", "reasoning_fable", "model_fable_fallbacks"),
@@ -168,6 +175,10 @@ class RoutedMessagesPlan:
     #: The env var that holds ``paused_refs``, so an all-paused route can name
     #: the setting the reader has to change.
     paused_env_var: str = "MODEL_PAUSED"
+    #: Set when the client named one of the five tier aliases. ``None`` for
+    #: every Claude alias, every raw ref and every gateway id, which is what
+    #: keeps a tier row in the request log distinguishable from all of them.
+    tier_route: TierChain | None = None
 
     def __post_init__(self) -> None:
         if not self.attempts:
@@ -314,8 +325,16 @@ class ModelRouter:
         reasoning_dialect_lookup: ReasoningDialectLookup | None = None,
         output_limit_lookup: OutputLimitLookup | None = None,
         context_length_lookup: ContextLengthLookup | None = None,
+        harness_tiers: Callable[[], HarnessTiers] | None = None,
     ):
         self._settings = settings
+        # A callable, not a table: the router is built once per settings
+        # generation and lives for thousands of requests, while
+        # ``~/.fcc/harness_tiers.json`` is rewritten by the dashboard between
+        # any two of them. ``current_harness_tiers`` re-reads only when the
+        # file's own mtime changed, so this costs a stat per tier request and a
+        # dashboard edit lands without a restart.
+        self._harness_tiers = harness_tiers or current_harness_tiers
         self._vision_lookup = vision_lookup
         self._reasoning_capability_lookup = reasoning_capability_lookup
         self._reasoning_dialect_lookup = reasoning_dialect_lookup
@@ -326,7 +345,19 @@ class ModelRouter:
         # five chains to answer a question it may never ask.
         self._probe_candidate_cache: dict[str, ResolvedModel] | None = None
 
-    def resolve(self, claude_model_name: str) -> ResolvedModel:
+    def resolve(
+        self, claude_model_name: str, *, harness: str | None = None
+    ) -> ResolvedModel:
+        # Before ``_direct_provider_model``, deliberately. ``mcc/best`` already
+        # "worked" before this feature -- by accident: ``mcc`` is not a
+        # supported provider id, so the direct branch declined it,
+        # ``_matched_route`` matched nothing, and ``_resolve_model_ref`` fell
+        # through to ``settings.model`` with no fallbacks, no pause and no trace
+        # in the log. Intercepting here replaces that silent behaviour rather
+        # than layering another rule on top of it.
+        tier = parse_tier_ref(claude_model_name)
+        if tier is not None:
+            return self._resolve_tier_chain(claude_model_name, tier, harness)[0][0]
         (
             direct_provider_id,
             direct_provider_model,
@@ -399,13 +430,19 @@ class ModelRouter:
             return None, None, False
         return provider_id, provider_model, False
 
-    def resolve_chain(self, claude_model_name: str) -> tuple[ResolvedModel, ...]:
+    def resolve_chain(
+        self, claude_model_name: str, *, harness: str | None = None
+    ) -> tuple[ResolvedModel, ...]:
         """Resolve a Claude model name to its ordered primary/fallback chain.
 
         A client that names a provider and model directly gets exactly what it
         asked for: overriding an explicit choice with a configured fallback
         would silently answer a different question than the one asked.
         """
+
+        tier = parse_tier_ref(claude_model_name)
+        if tier is not None:
+            return self._resolve_tier_chain(claude_model_name, tier, harness)[0]
 
         primary = self.resolve(claude_model_name)
         direct_provider_id, _model, _off = self._direct_provider_model(
@@ -443,6 +480,101 @@ class ModelRouter:
                 )
             )
         return tuple(resolved)
+
+    # ------------------------------------------------------------- tiers --
+
+    def _tier_chain(self, tier: ModelTier, harness: str | None) -> TierChain:
+        """Resolve one tier for one coding agent. The rule lives in
+        ``application/tier_chains`` because the catalogue builder applies the
+        same one when it writes each agent's picker entry, and a picker that
+        promised a different model than the router serves would be worse than
+        having no tiers at all.
+        """
+
+        return resolve_tier_chain(self._settings, self._harness_tiers(), harness, tier)
+
+    def _resolve_tier_chain(
+        self, claude_model_name: str, tier: ModelTier, harness: str | None
+    ) -> tuple[tuple[ResolvedModel, ...], TierChain]:
+        """Build a tier's chain, skipping entries that name unknown providers.
+
+        ``original_model`` stays the alias the client sent, so the request log's
+        ``requested_model`` reads ``mcc/best`` and the row can be found by the
+        name the operator configured in the agent -- not by whatever it happened
+        to resolve to on the day.
+        """
+
+        route = self._tier_chain(tier, harness)
+        preference = self._tier_reasoning_preference(tier)
+        resolved: list[ResolvedModel] = []
+        seen: set[str] = set()
+        for model_ref in route.refs:
+            if not model_ref or model_ref in seen:
+                continue
+            seen.add(model_ref)
+            provider_id = parse_provider_type(model_ref)
+            try:
+                self._validate_provider_id(provider_id)
+            except UnknownProviderError:
+                # One bad override entry must not take a whole agent's tier
+                # down, exactly as one bad fallback does not take down a chain.
+                logger.warning(
+                    "TIER ENTRY SKIPPED: '{}' on {} names unknown provider '{}'",
+                    model_ref,
+                    claude_model_name,
+                    provider_id,
+                )
+                continue
+            resolved.append(
+                ResolvedModel(
+                    original_model=claude_model_name,
+                    provider_id=provider_id,
+                    provider_model=parse_model_name(model_ref),
+                    provider_model_ref=model_ref,
+                    reasoning_preference=preference,
+                )
+            )
+        if not resolved:
+            # Every entry was unusable. Fall back to the one ref this install is
+            # guaranteed to have: an alias that raises is worse than an alias
+            # that answers with the route MCC itself starts on.
+            fallback_ref = self._settings.model.strip()
+            provider_id = parse_provider_type(fallback_ref)
+            self._validate_provider_id(provider_id)
+            resolved.append(
+                ResolvedModel(
+                    original_model=claude_model_name,
+                    provider_id=provider_id,
+                    provider_model=parse_model_name(fallback_ref),
+                    provider_model_ref=fallback_ref,
+                    reasoning_preference=preference,
+                )
+            )
+            route = replace(route, refs=(fallback_ref,))
+        logger.debug(
+            "MODEL TIER: '{}' harness={} source={} -> {}",
+            claude_model_name,
+            route.harness or "unknown",
+            route.source,
+            " -> ".join(entry.provider_model_ref for entry in resolved),
+        )
+        return tuple(resolved), route
+
+    def _tier_reasoning_preference(self, tier: ModelTier) -> ReasoningPreference:
+        """Return the reasoning preference the tier's underlying route carries.
+
+        Best and Vision have none: ``settings`` defines exactly four
+        ``REASONING_*`` route overrides, so both fall through to the global
+        policy. Per-harness reasoning overrides are deliberately out of scope --
+        the file models a chain, not a reasoning pipeline.
+        """
+
+        attribute = TIER_REASONING_SETTINGS.get(tier)
+        if attribute is not None:
+            preference = getattr(self._settings, attribute)
+            if preference is not ReasoningPreference.INHERIT:
+                return preference
+        return self._settings.reasoning_policy
 
     def _fallback_model_refs(self, claude_model_name: str) -> tuple[str, ...]:
         """Return the fallback chain that sits next to this route's primary."""
@@ -483,14 +615,29 @@ class ModelRouter:
         )
 
     def resolve_messages_request(
-        self, request: MessagesRequest
+        self, request: MessagesRequest, *, harness: str | None = None
     ) -> RoutedMessagesRequest:
         """Return an internal routed request context."""
-        return self._route_for(request, self.resolve(request.model))
+        return self._route_for(request, self.resolve(request.model, harness=harness))
 
-    def resolve_messages_plan(self, request: MessagesRequest) -> RoutedMessagesPlan:
-        """Return the primary routed request plus its configured fallbacks."""
-        route_chain = self.resolve_chain(request.model)
+    def resolve_messages_plan(
+        self, request: MessagesRequest, *, harness: str | None = None
+    ) -> RoutedMessagesPlan:
+        """Return the primary routed request plus its configured fallbacks.
+
+        ``harness`` is the coding agent behind this request, as
+        ``core/client_fingerprint.harness_from_headers`` attributed it. It is
+        read for exactly one thing -- which chain a tier alias resolves through
+        -- and is ignored for every other model name, so a misattributed agent
+        can never move a Claude alias or a raw ref.
+        """
+        tier = parse_tier_ref(request.model)
+        if tier is not None:
+            route_chain, tier_route = self._resolve_tier_chain(
+                request.model, tier, harness
+            )
+        else:
+            route_chain, tier_route = self.resolve_chain(request.model), None
         chain, vision_unavailable = self._apply_vision_policy(request, route_chain)
         diverted = chain[0].provider_model_ref != route_chain[0].provider_model_ref
         if diverted:
@@ -499,9 +646,14 @@ class ModelRouter:
             diversion = RouteDiversion.VISION_UNAVAILABLE
         else:
             diversion = None
-        paused_refs, paused_env_var = self._paused_for(
-            request.model, chain, route_chain
-        )
+        if tier_route is not None:
+            paused_refs, paused_env_var = self._tier_paused_for(
+                tier_route, chain, route_chain
+            )
+        else:
+            paused_refs, paused_env_var = self._paused_for(
+                request.model, chain, route_chain
+            )
         plan = RoutedMessagesPlan(
             tuple(self._route_for(request, resolved) for resolved in chain),
             diverted_from=(route_chain[0].provider_model_ref if diverted else None),
@@ -509,6 +661,7 @@ class ModelRouter:
             probe_candidates=self._probe_candidates(),
             paused_refs=paused_refs,
             paused_env_var=paused_env_var,
+            tier_route=tier_route,
         )
         if plan.has_fallbacks or diverted:
             logger.debug(
@@ -517,6 +670,41 @@ class ModelRouter:
                 " -> ".join(plan.model_refs()),
             )
         return plan
+
+    def _tier_paused_for(
+        self,
+        route: TierChain,
+        chain: tuple[ResolvedModel, ...],
+        route_chain: tuple[ResolvedModel, ...],
+    ) -> tuple[frozenset[str], str]:
+        """Pause resolution for a tier alias, by name rather than by heuristic.
+
+        The vision adapter can still splice its own chain in front of any tier,
+        so an entry the adapter contributed is judged by ``MODEL_VISION_PAUSED``
+        and everything else by the tier's own list -- the same rule
+        :meth:`_paused_for` applies to the Claude aliases, with the tier's list
+        looked up by tier instead of by substring-matching the model name.
+        """
+
+        tier_paused = frozenset(route.paused)
+        vision_paused = set(
+            parse_model_ref_list(getattr(self._settings, _VISION_PAUSE_SETTING[0]))
+        )
+        route_refs = {resolved.provider_model_ref for resolved in route_chain}
+        paused = {
+            resolved.provider_model_ref
+            for resolved in chain
+            if resolved.provider_model_ref
+            in (
+                tier_paused
+                if resolved.provider_model_ref in route_refs
+                else vision_paused
+            )
+        }
+        env_var = route.paused_label
+        if chain and chain[0].provider_model_ref not in route_refs:
+            env_var = _VISION_PAUSE_SETTING[1]
+        return frozenset(paused), env_var
 
     def _paused_for(
         self,

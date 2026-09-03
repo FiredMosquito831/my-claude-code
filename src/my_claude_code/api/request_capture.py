@@ -347,6 +347,19 @@ class RequestCapture:
         self._record.route_diversion = (
             plan.diversion.value if plan.diversion is not None else None
         )
+        if plan.tier_route is not None:
+            # In ``params`` rather than a new column. ``requested_model`` already
+            # says ``mcc/best`` and ``resolved_model`` already says what answered;
+            # what neither can say is whether *this agent's* override fired or
+            # whether it quietly followed the global chain -- and an override
+            # naming the same ref as the global chain is indistinguishable from
+            # no override at all. Three keys, only ever written for a request
+            # that named a tier, so no existing row and no export changes shape.
+            params = dict(self._record.params or {})
+            params["tier"] = plan.tier_route.tier.value
+            params["tier_source"] = plan.tier_route.source
+            params["tier_harness"] = plan.tier_route.harness
+            self._record.params = params
 
     def set_routing(self, routed: RoutedMessagesRequest, attempt: int = 0) -> None:
         """Attach provider/model/reasoning metadata for the attempt in flight.

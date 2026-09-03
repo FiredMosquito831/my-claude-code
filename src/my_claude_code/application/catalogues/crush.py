@@ -71,6 +71,7 @@ from my_claude_code.config.harnesses import (
     CRUSH_BASE_URL_SENTINEL,
 )
 from my_claude_code.core.reasoning import ReasoningEffort
+from my_claude_code.core.tier_refs import ModelTier, tier_ref
 
 #: The one provider key MCC owns in the generated document. Not ``crush``:
 #: a provider id is Crush's own namespace and ``mcc`` is what every other
@@ -201,21 +202,40 @@ def build_crush_catalogue(
 
 
 def _selected_models(models: Sequence[CatalogueModel]) -> dict[str, Any]:
-    """Name the model Crush's large and small agents start on.
+    """Name the models Crush's large and small agents start on.
 
     Crush refuses to open a session with no ``models.large``, so leaving this
     out would produce a document that lists every MCC model and cannot run any
     of them. :func:`starting_model` chooses it -- MCC's own configured route
-    first -- and the same model fills both roles: inventing a "small" model by
-    matching on a name would be MCC guessing which of the user's routes is
-    cheap.
+    first, which is now the ``mcc/best`` tier alias.
+
+    ``small`` is the one place Crush's two-role split can finally be answered
+    honestly. It used to repeat ``large``, because inventing a "small" model by
+    matching on a name would have been MCC guessing which of the operator's
+    routes is cheap. ``mcc/cheap`` is not a guess: it is the route the operator
+    labelled cheap. When the tier aliases are switched off, or the cheap tier
+    resolves to nothing this document lists, it falls back to repeating
+    ``large`` exactly as before.
     """
 
     chosen = starting_model(models)
     if chosen is None:
         return {}
-    selected = {"model": _model_id(chosen), "provider": PROVIDER_ID}
-    return {"large": dict(selected), "small": dict(selected)}
+    large = {"model": _model_id(chosen), "provider": PROVIDER_ID}
+    cheap = next(
+        (
+            model
+            for model in models
+            if model.provider_model_ref == tier_ref(ModelTier.CHEAP)
+        ),
+        None,
+    )
+    small = (
+        {"model": _model_id(cheap), "provider": PROVIDER_ID}
+        if cheap is not None
+        else dict(large)
+    )
+    return {"large": large, "small": small}
 
 
 def _model_id(model: CatalogueModel) -> str:

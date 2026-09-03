@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from my_claude_code.application.ports import RequestRuntimePort
+from my_claude_code.application.tier_chains import global_tier_chain
 from my_claude_code.config.model_refs import configured_chat_model_refs
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.gateway_model_ids import (
@@ -12,6 +13,7 @@ from my_claude_code.core.gateway_model_ids import (
     no_thinking_gateway_model_id,
 )
 from my_claude_code.core.model_visibility import ModelVisibility
+from my_claude_code.core.tier_refs import TIER_LABELS, TIER_ORDER, tier_ref
 
 DISCOVERED_MODEL_CREATED_AT = "1970-01-01T00:00:00Z"
 
@@ -128,6 +130,31 @@ def build_models_list_response(
     # client, so the visibility lists never see them.
     for model in SUPPORTED_CLAUDE_MODELS:
         _append_unique_model(models, seen, model)
+
+    # The five coding-agent tier aliases, on the same reasoning and therefore
+    # under the same exemption. They are names for MCC's own routes, so
+    # filtering them would not hide a model either -- it would remove the id an
+    # agent's config file already names and break that agent's next session.
+    # Both spellings, because Pi's bundled extension only accepts the gateway
+    # form (it requires two segments after the ``anthropic/`` prefix) while
+    # OpenCode and Codex send the bare one.
+    if settings.harness_tier_aliases:
+        for tier in TIER_ORDER:
+            chain = global_tier_chain(settings, tier)
+            ref = tier_ref(tier)
+            label = (
+                f"{TIER_LABELS[tier]} ({chain.primary})"
+                if chain.primary
+                else TIER_LABELS[tier]
+            )
+            _append_unique_model(
+                models, seen, _discovered_model_response(ref, display_name=label)
+            )
+            _append_unique_model(
+                models,
+                seen,
+                _discovered_model_response(gateway_model_id(ref), display_name=label),
+            )
 
     return ModelsListResponse(
         data=models,
