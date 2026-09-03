@@ -936,6 +936,47 @@ NIM reasoning budget control is also treated as a provider-owned best-effort
 downgrade: if an upstream NIM deployment rejects explicit budget control, FCC
 retries without the budget while preserving thinking enablement.
 
+### The Anthropic Subscription Client Gate
+
+An Anthropic subscription credential may serve requests from Anthropic's own
+clients only — the Claude Code CLI and the Claude Agent SDK, which drives the
+Claude Code binary. Everything else routed through MCC (OpenCode, Cline, Crush,
+a bare API call) is refused by the OAuth provider and falls through to a
+provider carrying its own credential.
+
+The signal is not an HTTP header. Claude Code stamps an attribution line at the
+head of the **system prompt**, in the request body:
+
+```
+x-anthropic-billing-header: cc_version=2.1.258; cc_entrypoint=cli;
+```
+
+Because the marker travels with the body, it is the one client signal a proxy
+can neither forge for traffic it did not receive nor strip from traffic it did.
+That property is exactly why the gate reads it — and it is also the limit of
+what it proves. **The marker is a good-faith attribution field, not an
+authenticator.** Anything that sets `CLAUDE_CODE_ENTRYPOINT` and reuses Claude
+Code's system-prompt shape can claim any value. MCC forwards a claim the client
+made; it does not verify it, and this gate must never be described as if it
+did.
+
+`CLAUDE_CODE_ENTRYPOINTS` is a **closed set**, not a prefix match: `cli`,
+`cli-bg`, `sdk-cli`, `sdk-py`, `sdk-ts`. A `sdk-*` wildcard would admit whatever
+a future — or a hostile — client decided to call itself, and the point of the
+gate is that its membership is a decision somebody made on purpose. Adding an
+entrypoint there is a policy change, not a typo fix.
+
+The set is wider than it first shipped, and the measurement is why. Across
+120,969 requests carrying a captured user-agent over 14 days, three entrypoints
+appeared live: `cli` (30,391), `sdk-py` (77,064) and `sdk-cli` (291). Before
+6.36.0 the gate admitted `cli` alone, so 64% of that traffic — all of it
+genuinely from Anthropic's own SDK — was being refused.
+
+On the wire the OAuth credential is a **`Authorization: Bearer` token, never
+`x-api-key`**, and it is sent with Anthropic's official client headers. A
+credential that has expired is refused rather than retried; re-authenticate
+with `mcc-anthropic-oauth-login`.
+
 ### Reasoning Ownership
 
 [core/reasoning.py](src/my_claude_code/core/reasoning.py) owns the immutable,
@@ -1916,6 +1957,73 @@ state only after the manager accepts it.
 Codex and Pi are supported through their installed launchers. FCC does not keep
 internal managed session runners for them because no user-facing messaging
 setting selects either client for Discord or Telegram.
+
+### Catalogue File Materialisation
+
+A generated catalogue is a **file on disk that this server owns and a launcher
+only reads.** Every catalogue-carrying harness gets its document written under
+`~/.fcc` when the server starts, and rewritten whenever the model list or any
+model's resolved capabilities change. `mcc-<agent>` therefore opens a file that
+is already there and execs — no HTTP call, no wait, and no dependency on the
+server being reachable at launch time.
+
+The launcher asks the server to build a document only when the file is absent
+altogether. That one build is bounded by **`CATALOGUE_FETCH_TIMEOUT_SECONDS`**
+(Limits & Resilience → Deadlines), and the default is generous because it is a
+cold-start path, not a per-request one.
+
+The ownership split matters because it was once the other way round. Before
+6.36.1 only the launcher could create a document, and its fetch was given the
+1.5 s health-check budget for a route that takes 1.8–4.0 s. The first launch
+failed, the file was never created, and every launch after it failed
+identically — a permanent failure produced by a timeout that was only ever
+wrong by a fraction of a second. Writing from the server, on the server's own
+schedule, removes the deadline from the user's path entirely.
+
+Two sentinels keep the serialisers pure. A serialiser is typed
+`Iterable[CatalogueModel] -> document` and is a pure function of the model
+records, so it cannot know the base URL it is writing for, and — where one
+serialiser backs several harnesses — it cannot know which harness it is writing
+for either. `config/harness_base_url` and `config/harness_attribution` resolve
+those two sentinels at the two call sites that know:
+`cli/harnesses/catalogue_client.harness_catalogue` for a launch, and
+`runtime/harness_catalogues` for the background refresh.
+
+### Harness Attribution
+
+Every logged request carries the coding agent that made it, so Analytics can
+answer "what is this agent costing me" rather than only "what did this model
+cost". There are two sources, and the record keeps which one it was:
+
+| Source | How | Confidence |
+| --- | --- | --- |
+| `header` | The launcher configures the CLI to send `x-mcc-harness` naming itself | Exact |
+| `user-agent` | `core/client_fingerprint` matches the agent's own UA string | Inferred |
+
+The header is emitted only by harnesses whose configuration format has
+somewhere to put a request header. `HARNESSES_WITHOUT_ATTRIBUTION_HEADER`
+records the five that do not — `kimi_code`, `aider`, `droid`, `goose`,
+`antigravity` — each with the reason, as data rather than prose, because a
+contract test asserts that each of those generated documents carries no header.
+Adding a hook later means deleting a line there and watching that test say
+where.
+
+The header name lives in `core/client_fingerprint`, beside the classifier that
+reads it back, so the emitter and the reader cannot disagree about its
+spelling. `config` names the sentinel; `core` names the header; the serialisers
+in `application` may import both and put the two together.
+
+**Fingerprinting has one irreducible collision.** Qwen Code and Pi both emit
+Claude Code's user-agent verbatim — `claude-cli/<their own version> (external,
+cli)`. There is no reliable way to separate the three from the user-agent
+alone: a version-range rule would misfile the day Claude Code ships a 0.x or
+Qwen Code a 2.x. `CLAUDE_CLI_COLLISION` names the two deliberately, the
+classifier answers `claude` for all three, and the explicit header is what
+separates them going forward. Every pattern in the UA table except the generic
+SDK and script ones was taken from a real row of the live request log or from
+the installed CLI's own bundle — guessing a user-agent produces a rule that
+matches nothing and is never noticed, because "no rows" and "wrong rule" look
+identical in a breakdown.
 
 ## Messaging Architecture
 

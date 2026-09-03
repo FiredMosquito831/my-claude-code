@@ -13,6 +13,7 @@ EXPECTED_STEP_IDS = (
     "provider",
     "models",
     "client",
+    "coding_agents",
     "websearch",
     "messaging",
     "analytics",

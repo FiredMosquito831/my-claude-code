@@ -194,6 +194,8 @@ def build_state(
                 "Type its name into 'Search providers' to jump straight to its card.",
                 "Press Configure, then paste the API key into 'Add key' and press it.",
                 "Press Refresh models to confirm the key works.",
+                "For an endpoint that is not in the list, use 'Add custom "
+                "provider' instead and give it a base URL and a key.",
             ),
             target="#providersSections",
         ),
@@ -202,8 +204,10 @@ def build_state(
             label="Set your fallback model",
             description=(
                 "Pick which provider/model handles requests by default. "
-                "Per-tier overrides (Opus, Sonnet, Haiku, Fable) are optional "
-                "and can be set later."
+                "Per-tier overrides are optional and can be set later: the "
+                "Claude aliases (Opus, Sonnet, Haiku, Fable) for Claude Code, "
+                "and mcc/best, good, medium, cheap and vision for every other "
+                "coding agent."
             ),
             view="model_config",
             optional=False,
@@ -230,6 +234,31 @@ def build_state(
                 "Click Configure to write MCC's URL and token into settings.json.",
             ),
             target="#claudeSettingsPanel",
+        ),
+        OnboardingStep(
+            id="coding_agents",
+            label="Launch a coding agent (optional)",
+            description=(
+                "Claude Code is not the only client MCC serves. The Coding "
+                "agents page lists every CLI it can launch, whether that CLI "
+                "is installed, and the exact command for each one."
+            ),
+            view="coding_agents",
+            optional=True,
+            # Not derivable from configuration: nothing is written when a user
+            # runs `mcc-codex` in their own terminal, so this step is done
+            # because they opened the page that tells them how.
+            done="coding_agents" in visited,
+            instructions=(
+                "Open the Coding agents page from the left nav.",
+                "Find an agent you already have installed - its card says "
+                "whether the binary is on your PATH.",
+                "Copy one of the commands on the card and run it in a "
+                "terminal; the launcher writes that agent's config for you.",
+                "Agents other than Claude Code pick models by tier, as "
+                "mcc/best, mcc/good, mcc/medium, mcc/cheap and mcc/vision.",
+            ),
+            target="#codingAgentsList",
         ),
         OnboardingStep(
             id="websearch",

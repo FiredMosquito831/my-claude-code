@@ -1274,7 +1274,8 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         ),
         passthrough_flags=frozenset({"--help", "-h", "--version", "-V"}),
         summary=(
-            "Goose, pointed here with six environment variables and no file "
+            "Goose, pointed here with five environment variables -- seven "
+            "when it also pins a model and a context limit -- and no file "
             "at all, because its only file-shaped mechanism would put an "
             "MCC-owned document inside Goose's own config directory."
         ),

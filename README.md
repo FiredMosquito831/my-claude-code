@@ -584,7 +584,7 @@ The desktop app routes its **Code tab** through the same `~/.claude/settings.jso
   <img src="assets/claude-desktop-gateway-config.png" alt="Claude Desktop third-party inference settings filled in for My Claude Code" width="760">
 </div>
 
-Use the port from your server's startup log if it isn't `8082`, and match the API key to `AUTH_TOKEN` if you changed it from the default `freecc`.
+Use the port from your server's startup log if it isn't `8082`, and match the API key to `ANTHROPIC_AUTH_TOKEN` if you changed it from the default `freecc`.
 
 **4. Restart the app.**
 
@@ -1043,7 +1043,7 @@ Everything above that is a number rather than a model lives on one page, **Admin
 | **Output & thinking budgets** | How large one answer may be, and how it is split between thinking and the answer. A per-model limit published by the provider always wins over anything here. |
 | **Deadlines** | How long one model may hold a request before the chain moves on — including `FALLBACK_REASONING_ANSWER_TIMEOUT`, which used to sit on Model Config away from the deadline it pre-empts. |
 | **Chain benching** | Whether a model that keeps failing is skipped, and on what evidence. |
-| **Provider retries & throughput** | How hard one model is retried, and how fast requests may leave — `HTTP_*_TIMEOUT`, `PROVIDER_RATE_*` and `MAX_CONCURRENCY` moved here from Providers, where the transport ceiling underneath every deadline had no description at all. |
+| **Provider retries & throughput** | How hard one model is retried, and how fast requests may leave — `HTTP_*_TIMEOUT`, `PROVIDER_RATE_*` and `PROVIDER_MAX_CONCURRENCY` moved here from Providers, where the transport ceiling underneath every deadline had no description at all. |
 | **Credential health** | What one API key's failures cost it. Nothing else can bench a key. |
 | **Diagnostics** | Logging and debugging flags, `LOG_LEVEL` included. |
 

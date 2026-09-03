@@ -1,5 +1,6 @@
 """Tests for config/onboarding.py."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ EXPECTED_STEP_IDS = (
     "provider",
     "models",
     "client",
+    "coding_agents",
     "websearch",
     "messaging",
     "analytics",
@@ -294,17 +296,15 @@ class TestStepInstructionsAndTargets:
 
     def test_every_step_view_is_a_known_dashboard_view(self, monkeypatch, tmp_path):
         _set_home(monkeypatch, tmp_path)
-        known_views = {
-            "get_started",
-            "providers",
-            "claude",
-            "model_config",
-            "messaging",
-            "requests",
-            "optimizer",
-            "web_search",
-            "guide",
-        }
+        # Read the real nav rather than restating it: this set was hand-kept
+        # and had already fallen four views behind (coding_agents, models,
+        # limits, docs), so it would have passed a step pointing at a view
+        # that does not exist.
+        script = (ADMIN_STATIC_DIR / "admin.js").read_text(encoding="utf-8")
+        start = script.index("const VIEW_GROUPS = [")
+        block = script[start : script.index("\n];", start)]
+        known_views = set(re.findall(r'id:\s*"([a-z_]+)"', block))
+        assert "coding_agents" in known_views
 
         state = build_state(claude_settings_configured=False, has_requests=False)
 

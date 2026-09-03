@@ -859,11 +859,15 @@ function renderOnboarding() {
         ? `Go to ${targetView.label}`
         : `Open ${step.view}`;
       button.addEventListener("click", () => {
-        if (step.id === "guide") {
-          updateOnboarding({ visited: ["guide"] }).catch((error) =>
-            showMessage(error.message, "error"),
-          );
-        }
+        // Mark every step visited, not just the Guide. Steps whose doneness
+        // cannot be derived from configuration -- reading the Guide, opening
+        // the Coding agents page -- are done because you went there, and the
+        // server is the only thing that knows which ones those are. Sending
+        // the id unconditionally keeps that decision in one place instead of
+        // growing a second list of special cases here.
+        updateOnboarding({ visited: [step.id] }).catch((error) =>
+          showMessage(error.message, "error"),
+        );
         state.userNavigated = true;
         setActiveView(step.view, { scroll: true });
         if (step.target) {

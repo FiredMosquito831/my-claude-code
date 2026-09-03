@@ -423,8 +423,9 @@
                   <div class="claude-launcher-info">
                     <h4>Goose</h4>
                     <p>
-                      Block's Goose, pointed here with six environment variables
-                      and no file at all &mdash; the one agent this proxy
+                      Block's Goose, pointed here with five environment variables
+                      &mdash; seven when it also pins a model and a context limit
+                      &mdash; and no file at all. It is the one agent this proxy
                       configures without writing anything, anywhere.
                     </p>
                   </div>
@@ -1393,9 +1394,11 @@
               <nav class="guide-toc" aria-label="Guide contents">
                 <p class="eyebrow guide-toc-eyebrow">On this page</p>
                 <a href="#guide-start">How it works</a>
+                <a href="#guide-walkthrough">First run, end to end</a>
                 <a href="#guide-keys">Add a provider</a>
                 <a href="#guide-claude-models">Use Claude models</a>
                 <a href="#guide-models">Map model tiers</a>
+                <a href="#guide-agent-tiers">Tiers for every agent</a>
                 <a href="#guide-reasoning">Reasoning</a>
                 <a href="#guide-cli">Claude Code</a>
                 <a href="#guide-desktop">Claude Desktop</a>
@@ -1404,9 +1407,11 @@
                 <a href="#guide-gemini-clients">Connect a Gemini client</a>
                 <a href="#guide-websearch">Search the web</a>
                 <a href="#guide-analytics">See what happened</a>
+                <a href="#guide-attribution">Which agent sent this?</a>
                 <a href="#guide-deploy">Desktop &amp; RTK</a>
                 <a href="#guide-optimizer">Token Optimizer page</a>
                 <a href="#guide-limits">Limits &amp; resilience</a>
+                <a href="#guide-credits">Running out of credit</a>
                 <a href="#guide-rotation">Rotate keys safely</a>
                 <a href="#guide-updates">Update the server</a>
                 <a href="#guide-security">Lock it down</a>
@@ -1436,6 +1441,109 @@
                 <p class="guide-note">
                   Three steps to working: add a provider key, map the model tiers, point
                   your agent at <code>http://127.0.0.1:8082</code>.
+                </p>
+
+                <h3 id="guide-walkthrough">First run, end to end</h3>
+                <p>
+                  Eight steps, in order, from nothing installed to a request you can
+                  read in the log. Everything after this section is a single topic in
+                  depth; this is the path through all of them.
+                </p>
+                <ol>
+                  <li>
+                    <strong>Install.</strong> In PowerShell,
+                    <code>&amp; ([scriptblock]::Create((irm
+                    "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.ps1")))</code>;
+                    in WSL, Linux or macOS,
+                    <code>curl -fsSL
+                    "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh"
+                    | sh</code>. Pick <em>one</em> environment and stay in it &mdash;
+                    PowerShell and WSL keep separate <code>.fcc</code> directories, and
+                    installing in both is the usual way to end up editing the config
+                    your server is not reading.
+                  </li>
+                  <li>
+                    <strong>Reopen the terminal, then start the server:</strong>
+                    <code>mcc-server</code>. It is a daemon and must stay running;
+                    close it and every agent pointed at it stops working. The startup
+                    log prints the admin URL.
+                  </li>
+                  <li>
+                    <strong>Open the dashboard</strong> at
+                    <code>http://127.0.0.1:8082/admin</code>. The
+                    <strong>Get Started</strong> page is a live checklist &mdash; each
+                    step is ticked because the thing is really configured, not because
+                    you clicked something. Work down it and you have done this
+                    walkthrough.
+                  </li>
+                  <li>
+                    <strong>Add a provider.</strong> Two ways, and both end on the same
+                    card:
+                    <ul>
+                      <li>
+                        <em>A provider MCC already knows:</em> on
+                        <strong>Providers</strong>, type its name into
+                        <em>Search providers</em> &mdash; the box matches the variable
+                        name too, so <code>GROQ_API_KEY</code> finds Groq. Press
+                        <em>Configure</em>, paste the key into <em>Add key</em>, press
+                        it.
+                      </li>
+                      <li>
+                        <em>Anything else with an OpenAI-compatible endpoint:</em> press
+                        <em>Add custom provider</em>, give it a base URL and a key, and
+                        press <em>Add provider</em>. MCC probes the host once to learn
+                        which dialect it speaks and records what came back.
+                      </li>
+                    </ul>
+                    Either way, press <em>Refresh models</em> and watch the model count
+                    change. That is the only proof the key works; a card can look
+                    healthy on a key that cannot list models.
+                  </li>
+                  <li>
+                    <strong>Look at what you actually got</strong> on the
+                    <strong>Models</strong> page. Every model the provider offered is
+                    here, each with where its facts came from and which tiers it is
+                    eligible for. If a model you expected is missing, it was missing
+                    from the provider's own <code>/models</code> answer &mdash; press
+                    <em>Refresh models</em> on the card rather than editing anything
+                    here.
+                  </li>
+                  <li>
+                    <strong>Set the tiers</strong> on <strong>Model Config</strong>.
+                    <em>Default Model</em> is the only required one: it answers anything
+                    you have not mapped. Map the small tier to something cheap and fast
+                    before you map anything else &mdash; agents hit it constantly for
+                    bookkeeping, and it governs how quick the whole session feels. Press
+                    <em>Apply</em>.
+                  </li>
+                  <li>
+                    <strong>Launch an agent</strong> from <strong>Coding agents</strong>.
+                    The page lists every CLI this proxy can launch and says whether each
+                    binary is on your PATH. Copy a command from a card you have installed
+                    &mdash; <code>mcc-codex</code>, <code>mcc-opencode</code>,
+                    <code>mcc-crush</code>, <code>mcc-gemini</code> and the rest &mdash;
+                    and run it. The launcher hands that CLI a config file this server
+                    already wrote; nothing of yours is edited.
+                  </li>
+                  <li>
+                    <strong>Read the request</strong> on <strong>Analytics</strong>. Ask
+                    the agent anything, then refresh. The row names the model that
+                    answered, the agent that asked, and what it cost. If nothing appears
+                    at all, the agent never reached MCC &mdash; the request went straight
+                    to a vendor instead, and the fix is in that agent's configuration,
+                    not here.
+                  </li>
+                </ol>
+                <img class="guide-shot" src="/admin/img/admin-get-started.png"
+                     alt="The Get Started checklist, showing which setup steps are complete"
+                     loading="lazy">
+                <p class="guide-note">
+                  <strong>A tick on Get Started is a measurement, not a memory.</strong>
+                  Every required step is recomputed from live configuration each time the
+                  page loads, so a step un-ticks itself if you later remove the key it was
+                  reporting. The two optional steps that cannot be measured &mdash;
+                  reading this Guide, and opening the Coding agents page &mdash; are done
+                  because you went there.
                 </p>
 
                 <h3 id="guide-keys">Add a provider</h3>
@@ -1730,6 +1838,68 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   Afterwards, <a href="#guide-analytics">Analytics</a> shows the whole path
                   a request took: which models were tried, which one answered, and whether
                   the vision adapter stepped in.
+                </p>
+
+                <h3 id="guide-agent-tiers">Tiers for every agent</h3>
+                <p>
+                  Claude Code never names a model: it asks for
+                  <code>claude-sonnet-5</code> and gets whatever you mapped Sonnet to.
+                  Every other coding agent had to name a concrete
+                  <code>provider/model</code> ref, so a model id typed into its config a
+                  month ago is still that id today, whatever you have since changed here.
+                  Five aliases close that gap. They are pointers to the same routes the
+                  Claude aliases use:
+                </p>
+                <table class="guide-table">
+                  <thead>
+                    <tr><th>Alias</th><th>Points at</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td><code>mcc/best</code></td><td><code>MODEL</code> &mdash; the route MCC itself starts on</td></tr>
+                    <tr><td><code>mcc/good</code></td><td><code>MODEL_OPUS</code></td></tr>
+                    <tr><td><code>mcc/medium</code></td><td><code>MODEL_SONNET</code></td></tr>
+                    <tr><td><code>mcc/cheap</code></td><td><code>MODEL_HAIKU</code></td></tr>
+                    <tr><td><code>mcc/vision</code></td><td><code>MODEL_VISION</code></td></tr>
+                  </tbody>
+                </table>
+                <p>
+                  Inside a CLI these appear under the provider <code>mcc</code>, which is
+                  why OpenCode's own flag reads <code>-m mcc/mcc/best</code> &mdash; one
+                  <code>mcc</code> for the provider, one for the alias namespace. Two
+                  segments, not three: <code>mcc/tier/best</code> would buy nothing and
+                  would make Kimi's generated key <code>mcc/mcc/tier/best</code>.
+                </p>
+                <p class="guide-note">
+                  <strong>An unset tier collapses onto <code>MODEL</code>.</strong> If you
+                  have not mapped Opus, then <code>mcc/good</code> resolves to the same
+                  place <code>mcc/best</code> does &mdash; exactly as
+                  <code>claude-opus-5</code> already does today. Four agents asking for
+                  four different tiers can therefore all land on one model, and nothing is
+                  wrong. The dashboard says so rather than hiding it: MCC choosing a
+                  distinct model for a tier you left unset would be MCC picking a model
+                  for you.
+                </p>
+                <p>
+                  <strong>Per-agent overrides.</strong> The Coding agents card has a
+                  <em>Tiers</em> section for saying "best means <em>this</em> in Crush, and
+                  the global thing everywhere else". Each (agent, tier) pair has three
+                  states, and the middle one is the reason the feature exists:
+                </p>
+                <ul>
+                  <li><strong>No entry</strong> &mdash; inherit the global tier chain. The
+                    default for every agent and every tier.</li>
+                  <li><strong>An entry with no model</strong> &mdash; keep the global
+                    primary, but use this agent's own fallbacks and pauses.</li>
+                  <li><strong>An entry with a model</strong> &mdash; this agent's own chain
+                    leads.</li>
+                </ul>
+                <p class="guide-note">
+                  <strong>A tier may never point at a tier.</strong> An override resolving
+                  to something in the <code>mcc/</code> namespace is dropped with a log
+                  line, because it would either loop or resolve through a provider id that
+                  does not exist &mdash; and neither failure is visible from the file that
+                  caused it. Overrides live in <code>~/.fcc/harness_tiers.json</code>; the
+                  card is the supported way to edit them.
                 </p>
 
                 <h3 id="guide-reasoning">Reasoning</h3>
@@ -2149,6 +2319,18 @@ mcc-gemini</code></pre>
                   Code, or Claude Code through JetBrains ACP.
                 </p>
 
+                <p class="guide-note">
+                  <strong>Housekeeping commands do not need the proxy.</strong>
+                  Each launcher keeps a list of subcommands and flags that reach the
+                  CLI untouched &mdash; no MCC configuration, no generated file, and no
+                  running server. <code>mcc-kimi login</code>,
+                  <code>mcc-crush dirs</code>, <code>mcc-droid doctor</code> and
+                  <code>mcc-&lt;agent&gt; --version</code> all answer with the proxy
+                  stopped, because logging in or printing a version has nothing to do
+                  with which provider serves a request. Anything that actually runs the
+                  agent is configured normally.
+                </p>
+
                 <h3 id="guide-openai-clients">Connect any OpenAI-compatible client</h3>
                 <p>
                   Anything that speaks the OpenAI API can point at this proxy without a
@@ -2551,6 +2733,54 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>WEBSEARCH_LOG_CAPTURE_CONTENT=false</code> withholds the payloads
                   <em>and</em> the query text, keeping only lengths and hashes. API keys are
                   never written to either store &mdash; only masked labels.
+                </p>
+
+                <h3 id="guide-attribution">Which agent sent this?</h3>
+                <p>
+                  Every request in the log is attributed to the coding agent that made
+                  it, so Analytics can answer "what is Crush actually costing me" and not
+                  just "what did this model cost". The column is in the request table,
+                  it is a filter, it is a breakdown, and it is in the exports.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-analytics-harness.png"
+                     alt="Analytics with the harness column, filter and breakdown"
+                     loading="lazy">
+                <p>
+                  There are two ways a row gets its answer, and the difference matters
+                  when you are reading a number:
+                </p>
+                <ul>
+                  <li>
+                    <strong>The agent said so.</strong> MCC's launchers configure the CLI
+                    to send an <code>x-mcc-harness</code> header naming itself. This is
+                    exact.
+                  </li>
+                  <li>
+                    <strong>We recognised it.</strong> Five agents cannot send that header
+                    &mdash; Kimi Code, Aider, Droid, Goose and Antigravity &mdash; because
+                    nothing in their configuration format describes a request header. They
+                    are attributed by user-agent instead, which costs certainty and
+                    nothing else. Each row records which of the two it was.
+                  </li>
+                </ul>
+                <p class="guide-note">
+                  <strong>Qwen Code and Pi are filed as Claude Code until they send the
+                  header.</strong> Both emit Claude Code's user-agent verbatim &mdash;
+                  <code>claude-cli/&lt;their own version&gt; (external, cli)</code> &mdash;
+                  and there is no reliable way to tell the three apart from the
+                  user-agent alone. A version-range rule would misfile the day Claude Code
+                  ships a 0.x or Qwen Code a 2.x, so fingerprinting deliberately answers
+                  <em>claude</em> for all three and the explicit header is what separates
+                  them going forward. If your Claude Code numbers look too big and you run
+                  Qwen Code or Pi, this is why.
+                </p>
+                <p class="guide-note">
+                  <strong>An agent missing from Analytics never reached MCC.</strong> The
+                  log records what this server answered. A request that went straight to a
+                  vendor cannot appear here however long you look, so a missing agent is a
+                  configuration problem in that agent, not a reporting gap. Launch it from
+                  the Coding agents page and it will be configured correctly by
+                  construction.
                 </p>
 
                 <h3 id="guide-deploy">Desktop &amp; RTK</h3>
@@ -3022,6 +3252,30 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   rather than a value, and <strong>Use default</strong> removes
                   the line again — so the file records what you chose, not what
                   the defaults happened to be on the day you saved.
+                </p>
+
+                <h3 id="guide-credits">When a provider runs out of credit</h3>
+                <p>
+                  "Out of credits" is its own failure kind, <code>quota</code>, separate
+                  from a rate limit and separate from a bad key. It gets its own kind
+                  because the three want opposite responses: a rate limit means wait, a
+                  bad key means stop, and an empty balance means <em>try something
+                  else</em>.
+                </p>
+                <p class="guide-note">
+                  <strong>Running out of credits never ends the route.</strong>
+                  <code>quota</code> is deliberately absent from the default
+                  <code>FALLBACK_SKIP_KINDS</code>: an account with no balance has said
+                  nothing about your request, and the next key or the next model may
+                  answer it perfectly well. The chain keeps going. Add <code>quota</code>
+                  to that setting only if you would rather a request fail than be served
+                  by a different model.
+                </p>
+                <p>
+                  The exhausted key is benched for the cooldown so the next request does
+                  not re-spend a second on a balance that is still zero, and the card on
+                  Providers says which key and why. It comes back on its own; you do not
+                  have to re-enter anything.
                 </p>
 
                 <h3 id="guide-rotation">Use more than one key safely</h3>

@@ -1,0 +1,61 @@
+# Names the user-facing docs use in code voice on purpose, which are not
+# MCC's own settings, commands, routes or pages. Read by
+# test_docs_reference_drift.py.
+#
+# One name per line. Put the reason on the line above it. Do not add a name
+# here to silence a real rename -- fix the doc instead. An entry that becomes
+# real again is failed by test_allowlist_has_no_dead_entries, so this file
+# cannot quietly grow stale.
+#
+# Everything here was triaged against the source when the guard was written:
+# each line is a name the docs mention deliberately, not a name that drifted.
+
+# --- Settings documented as REMOVED, kept so a reader who still has the line
+# --- in ~/.fcc/.env learns it configures nothing and can delete it. Both are
+# --- named in USAGE.md's "what changed in 6.x" table and in the Guide. -----
+CREDENTIAL_CIRCUIT_THRESHOLD
+MIN_CREDENTIAL_FIRST_TOKEN_SECONDS
+
+# --- Variables belonging to the *other* tool, named so the reader knows what
+# --- MCC does and does not set on their behalf. ---------------------------
+# Anthropic's own CLI/SDK entry-point marker, read by Claude Code, not by MCC.
+CLAUDE_CODE_ENTRYPOINT
+CLAUDE_CODE_MAX_OUTPUT_TOKENS
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+# Gemini CLI's own backend-host and workspace-trust variables. USAGE says
+# explicitly that MCC does not set either for you.
+CLOUD_CODE_URL
+GEMINI_CLI_TRUST_WORKSPACE
+# Command Code's own credential, which MCC deliberately will not fake.
+COMMAND_CODE_API_KEY
+# Qwen Code's internal default, quoted to explain what Qwen falls back to when
+# MCC omits a context window it could not resolve.
+DEFAULT_TOKEN_LIMIT
+# Documented in USAGE's Kimi table as a variable that does NOT exist -- the
+# entry exists precisely to correct that belief.
+KIMI_CODE_HOME
+# NVIDIA's self-hosted NIM deployment toggle, not available on the shared API.
+NIM_ENABLE_KV_CACHE_REUSE
+# uv's own tool-install location, named in the install troubleshooting section.
+UV_TOOL_BIN_DIR
+
+# --- Upstream status/error phrases quoted verbatim so a reader can match the
+# --- string they see in a log. They are values, not variables. ------------
+LOCKED_OUT
+NOT_ENOUGH_BALANCE
+
+# --- Sentinel values MCC writes where a credential would go, quoted so the
+# --- reader recognises them in a generated config file. -------------------
+fcc-no-auth
+
+# --- Generic shell / OS variables used in install and path examples. -------
+PATH
+HOME
+USERPROFILE
+XDG_CONFIG_HOME
+NO_COLOR
+
+# --- Placeholders that stand in for a value the reader supplies. -----------
+YOUR_API_KEY
+YOUR_USERNAME
+PROVIDER_API_KEY
