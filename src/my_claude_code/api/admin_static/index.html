@@ -2835,6 +2835,15 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   real browser process so all three keep working. The CLI equivalent is
                   <code>mcc-desktop --window auto|app-mode|pywebview|browser</code>.
                 </p>
+                <p>
+                  <code>mcc-desktop --status</code> prints those preferences as five
+                  <code>key=value</code> lines. <code>mcc-desktop --print-status</code>
+                  prints the same answers, plus the admin and health URLs, whether the
+                  port is held by a healthy server, nothing, or a stranger, and the
+                  reconnect budget, as <strong>one JSON document</strong> for scripts and
+                  for a window that renders this dashboard. Both are read-only: neither
+                  starts a server or changes a setting.
+                </p>
                 <div class="guide-note guide-note-warn">
                   <p>
                     <strong>Embedded webview (pywebview) ships switched off</strong> and

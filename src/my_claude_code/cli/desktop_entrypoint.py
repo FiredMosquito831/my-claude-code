@@ -52,7 +52,8 @@ def _print_usage() -> None:
         "[--window auto|app-mode|pywebview|browser] "
         "[--autostart on|off] "
         "[--start-at-login | --no-start-at-login | "
-        "--tray-enabled | --no-tray-enabled | --status | --export-icon PATH]",
+        "--tray-enabled | --no-tray-enabled | "
+        "--status | --print-status | --export-icon PATH]",
         file=sys.stderr,
     )
 
@@ -114,6 +115,14 @@ def launch(argv: Sequence[str] | None = None) -> None:
 
     if len(args) == 1 and args[0] == "--status":
         _print_state()
+        return
+
+    if len(args) == 1 and args[0] == "--print-status":
+        # Imported here, not at module scope, so the toggle paths above
+        # keep their current import cost.
+        from my_claude_code.cli.desktop_status import print_status
+
+        print_status()
         return
 
     if args:

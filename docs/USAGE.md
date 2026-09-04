@@ -308,7 +308,70 @@ You can also drive these from the command line:
 mcc-desktop --server-mode spawn|attach|off
 mcc-desktop --autostart on|off
 mcc-desktop --status
+mcc-desktop --print-status
 ```
+
+<a id="machine-readable-status"></a>
+
+#### `--print-status`: the same answers, as JSON
+
+`--status` prints five `key=value` lines for a human. `--print-status` prints **one JSON
+document** on stdout and exits `0`, for a program:
+
+```console
+$ mcc-desktop --print-status
+{
+  "schema": 1,
+  "version": "6.42.0",
+  "config_dir": "C:\\Users\\me\\.mcc",
+  "config_dir_source": "current",
+  "config_dir_is_legacy": false,
+  "host": "127.0.0.1",
+  "port": 8082,
+  "root_url": "http://127.0.0.1:8082",
+  "admin_url": "http://127.0.0.1:8082/admin",
+  "health_url": "http://127.0.0.1:8082/health",
+  "server_presence": "healthy",
+  "port_conflict": null,
+  "server_mode": "spawn",
+  "window": "auto",
+  "window_open": true,
+  "window_width": 1400,
+  "window_height": 900,
+  "tray_enabled": true,
+  "minimize_to_tray": false,
+  "start_at_login": false,
+  "server_log": "C:\\Users\\me\\.mcc\\logs\\server.log",
+  "start_timeout_seconds": 15.0,
+  "health_check_interval_seconds": 0.25,
+  "health_poll_seconds": 5.0,
+  "health_failure_threshold": 3,
+  "activation_poll_seconds": 1.0,
+  "reconnect_timeout_seconds": 1040.0
+}
+```
+
+Four things are worth knowing about it:
+
+- **It is a pure read.** No server is started, no singleton lock is taken, `desktop.json`
+  is not written, and no autostart registration is touched. It is safe to run against a
+  live machine, in a loop, from a script.
+- **`host` is where you connect, not where the server binds.** The default bind is
+  `0.0.0.0`, which is not an address anything can navigate to; the wildcard is mapped to
+  `127.0.0.1` here exactly as it is in the URL the server prints at startup.
+- **`server_presence` is the three-way answer**, not a boolean: `healthy` (a My Claude
+  Code server is answering), `free` (nothing is listening) or `foreign` (something else
+  holds the port). Only `foreign` fills `port_conflict`, and it names the holding process.
+- **`schema` is the compatibility handle.** It is bumped when a documented key is removed
+  or changes type. New keys can appear without a bump, so a reader must ignore keys it
+  does not recognise, and should refuse loudly on a `schema` it does not know.
+
+There are no keys, tokens or secrets in the document — it is safe to paste into a bug
+report. `reconnect_timeout_seconds` and `health_failure_threshold` are the two numbers a
+window must use rather than invent: together they are what stops a routine self-update
+restart being drawn as a dead server.
+
+The `fcc-desktop` alias accepts every one of these flags identically.
 
 <a id="picking-a-window"></a>
 

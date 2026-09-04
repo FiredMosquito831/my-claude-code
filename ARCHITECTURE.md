@@ -247,6 +247,13 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
   These eleven have no `fcc-` alias: no installed copy of MCC ever published
   one, so inventing it would ship a command that never had users.
 - `mcc-desktop` (legacy alias `fcc-desktop`) calls `my_claude_code.cli.desktop_entrypoint:main`;
+  [cli/desktop_status.py](src/my_claude_code/cli/desktop_status.py) answers its
+  `--print-status` flag with one JSON document (`schema: 1`) describing the config
+  directory, the loopback URLs, the healthy/free/foreign presence of the port, the
+  desktop preferences and the health-debounce and reconnect budgets. It is the read-only
+  surface a second process (a native window, a script) uses instead of re-deriving any of
+  them: `resolve_config_dir()`, `config/server_urls.py` and `probe_server_presence()`
+  stay the single sources, and the module writes nothing at all;
   [cli/desktop.py](src/my_claude_code/cli/desktop.py) is the controller that owns the `mcc-server`
   child process — spawn, health check, restart, stop — while
   [cli/desktop_tray.py](src/my_claude_code/cli/desktop_tray.py) owns the pystray menu.

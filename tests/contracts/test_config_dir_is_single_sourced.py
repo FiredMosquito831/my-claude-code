@@ -8,6 +8,8 @@ the two ever diverge, which is the latent bug the spec flagged.
 
 from pathlib import Path
 
+import pytest
+
 from my_claude_code.config import paths
 from my_claude_code.core import request_log
 
@@ -145,4 +147,55 @@ def test_user_facing_files_outside_python_do_not_name_the_legacy_dir() -> None:
         + "; ".join(offenders)
         + ". The default is .mcc; a deliberate mention of the old home has to "
         "say 'legacy' on the same line."
+    )
+
+
+#: Where the desktop shell (spec S2) will live once it exists. Named here now
+#: so the contract that keeps it honest is in place before the first line of it
+#: is written, rather than after the first hard-coded ``8082``.
+_SHELL_SOURCE_ROOT = "desktop-shell"
+
+#: Literals a shell may never contain. C1: the shell asks
+#: ``mcc-desktop --print-status`` for the config directory, the port and the
+#: admin URL. A copy of any of these in the shell is the single most likely way
+#: this design decays -- it works on the author's machine and silently ignores
+#: an ``MCC_CONFIG_DIR`` override or a changed port on everyone else's.
+_SHELL_FORBIDDEN_LITERALS = (".mcc", ".fcc", "MCC_CONFIG_DIR", "8082")
+
+#: File suffixes worth reading in the shell tree. Lock files, icons and build
+#: output are not source and would produce noise, not findings.
+_SHELL_SOURCE_SUFFIXES = (".rs", ".ts", ".js", ".json", ".toml", ".html")
+
+
+def test_shell_source_never_names_the_config_dir() -> None:
+    """C1 -- and a no-op until the shell tree exists, deliberately.
+
+    Skipping while ``desktop-shell/`` is absent keeps this contract in the
+    repository from S1 onwards: the PR that adds the shell does not also have
+    to remember to add its guard, it merely has to pass one that is already
+    green.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    root = repo_root / _SHELL_SOURCE_ROOT
+    if not root.is_dir():
+        pytest.skip(f"{_SHELL_SOURCE_ROOT}/ does not exist yet (spec S2)")
+
+    offenders: list[str] = []
+    for path in root.rglob("*"):
+        if not path.is_file() or path.suffix not in _SHELL_SOURCE_SUFFIXES:
+            continue
+        if "target" in path.relative_to(root).parts:
+            continue
+        with open(path, encoding="utf-8", errors="replace", newline=None) as handle:
+            text = handle.read()
+        offenders.extend(
+            f"{path.relative_to(repo_root).as_posix()}: {literal}"
+            for literal in _SHELL_FORBIDDEN_LITERALS
+            if literal in text
+        )
+
+    assert not offenders, (
+        "the desktop shell must ask `mcc-desktop --print-status` for the config "
+        "directory, the port and the admin URL, never spell them itself: "
+        + "; ".join(offenders)
     )

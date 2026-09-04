@@ -683,6 +683,10 @@ mcc-desktop --window auto|app-mode|pywebview|browser
 
 `auto` (the default) tries app-mode first and falls back to a plain browser tab if no Chromium-family browser is found. `mcc-desktop --status` shows which one is currently in effect. An unavailable choice falls back with a warning rather than failing outright.
 
+### Scripting it: `mcc-desktop --print-status`
+
+`mcc-desktop --print-status` prints one JSON document on stdout and exits `0` — the config directory and how it was chosen, the loopback host, port, admin and health URLs, whether a healthy server, nothing, or a stranger holds the port, every desktop preference, and the two timing budgets (`health_failure_threshold`, `reconnect_timeout_seconds`) a window must read rather than hard-code. It is a **pure read**: nothing is started, locked, or written. Full field list and the `schema` rule are in [docs/USAGE.md](docs/USAGE.md#machine-readable-status).
+
 The dashboard's Deployment card exposes the same choice as a **Window** control, with a fourth option, **Embedded webview**, that is **not installed by default** (see pywebview below) — OAuth login, downloads, and copy buttons may not work in it.
 
 ### `--desktop` at install time

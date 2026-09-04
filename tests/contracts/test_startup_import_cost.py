@@ -135,3 +135,62 @@ def _stub_response(status_code: int):
     return httpx.Response(
         status_code=status_code, request=httpx.Request("POST", "https://example.test")
     )
+
+
+#: What ``mcc-desktop --print-status`` must not drag in. A desktop shell calls
+#: it on every launch and on every reconnect attempt, so its cost is paid over
+#: and over on a machine that may not even have a server running yet. The four
+#: heavyweights above are joined here by the admin surface: the status document
+#: is built from ``config`` and ``core`` alone, and importing the routes that
+#: serve the dashboard to read four numbers out of ``Settings`` would be a
+#: silent regression nothing else notices.
+PRINT_STATUS_MUST_NOT_IMPORT: tuple[str, ...] = (
+    *sorted(DEFERRED_UNTIL_FIRST_USE),
+    "my_claude_code.api.admin_routes",
+    "my_claude_code.api.app",
+    "my_claude_code.application.release_updates",
+    "pystray",
+)
+
+_PRINT_STATUS_PROBE = "\n".join(
+    (
+        "import io, sys",
+        "from contextlib import redirect_stdout",
+        "from my_claude_code.cli.desktop_entrypoint import launch",
+        "with redirect_stdout(io.StringIO()) as sink:",
+        "    launch(['--print-status'])",
+        "import json",
+        "json.loads(sink.getvalue())",
+        f"names = {list(PRINT_STATUS_MUST_NOT_IMPORT)!r}",
+        "print(','.join(name for name in names if name in sys.modules))",
+    )
+)
+
+
+def test_print_status_imports_nothing_heavyweight(tmp_path) -> None:
+    """A fresh interpreter that answers ``--print-status`` stays cheap."""
+    import os
+
+    environment = dict(os.environ)
+    # A scratch config directory and a port nothing owns: the probe must never
+    # read the developer's real configuration or contact their live server.
+    environment["MCC_CONFIG_DIR"] = str(tmp_path / "config")
+    environment["PORT"] = "8199"
+    environment["HOST"] = "127.0.0.1"
+    (tmp_path / "config").mkdir()
+
+    completed = subprocess.run(
+        [sys.executable, "-c", _PRINT_STATUS_PROBE],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    loaded = [name for name in completed.stdout.strip().split(",") if name]
+    assert loaded == [], (
+        "mcc-desktop --print-status is meant to be the cheapest command in the "
+        "product -- a shell calls it on every launch and every reconnect. It "
+        "loaded: " + ", ".join(loaded)
+    )
