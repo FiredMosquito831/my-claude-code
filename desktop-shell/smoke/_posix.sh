@@ -128,6 +128,11 @@ smoke::run() {
     # -- 1. the artifact ---------------------------------------------------
     [ -f "$binary" ] || smoke::fail "no binary at $binary"
     [ -x "$binary" ] || smoke::fail "$binary is not executable"
+    # Absolute, before anything else. Step 3 launches from inside the scratch
+    # directory, so a path relative to the caller's working directory would
+    # resolve to nothing there -- and the failure looks like the shell dying
+    # on its status document rather than like a path bug.
+    binary="$(cd "$(dirname "$binary")" && pwd)/$(basename "$binary")"
     smoke::ok "binary present: $(smoke::sha256 "$binary")"
 
     scratch="$(mktemp -d)"
@@ -157,6 +162,12 @@ print("  ok: the document parses, schema 1, presence foreign")
 ' || smoke::fail "the status document is not the shape the shell parses"
 
     # -- 3. the real binary, with a real window ----------------------------
+    # Step 2 called the stub twice itself, so the log is not empty. Emptying it
+    # is what makes the wait below mean "the *shell* ran it" rather than
+    # "somebody ran it at some point", which is a test that passes even when
+    # the binary never starts.
+    : >"$scratch/desktop-calls.log"
+
     (
         cd "$scratch"
         MCC_SHELL_DESKTOP_COMMAND="$scratch/mcc-desktop" \

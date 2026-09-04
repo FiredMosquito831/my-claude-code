@@ -162,6 +162,12 @@ foreach ($key in 'admin_url', 'health_url', 'config_dir', 'server_log', 'port_co
 Ok 'the document parses, schema 1, presence foreign'
 
 # -- 3. the real binary, with a real window -------------------------------
+# Step 2 called the stub twice itself, so the log already exists. Removing it
+# is what makes the wait below mean "the *shell* ran it" rather than "somebody
+# ran it at some point" -- a test that passes even when the binary never
+# starts.
+Remove-Item -LiteralPath $callsPath -Force -ErrorAction SilentlyContinue
+
 $env:MCC_SHELL_DESKTOP_COMMAND = "cmd /c $stubPath"
 $env:MCC_SHELL_SERVER_COMMAND = "cmd /c $serverStub"
 $env:MCC_SHELL_DATA_DIR = (Join-Path $Scratch 'data')
@@ -182,7 +188,9 @@ while (-not (Test-Path -LiteralPath $callsPath)) {
     }
     Start-Sleep -Seconds 1
 }
-$calls = Get-Content -LiteralPath $callsPath
+# `@(...)`, because `Get-Content` on a one-line file returns a string, and
+# `$calls[0]` on a string is its first character.
+$calls = @(Get-Content -LiteralPath $callsPath)
 Ok "the shell ran the stub: $($calls[0])"
 if (-not ($calls -match '--print-status')) {
     Fail 'the shell called mcc-desktop without --print-status'
