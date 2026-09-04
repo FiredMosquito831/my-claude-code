@@ -235,14 +235,23 @@ Alongside them, one more asset:
 SHA256SUMS-desktop-shell.txt
 ```
 
-Four lines, sorted by filename, in exactly the format `sha256sum` emits and
-`sha256sum -c` reads — the digest, **two spaces**, the filename:
+Four lines, sorted by filename, in exactly the format `sha256sum -c` reads —
+64 hex characters, **two spaces**, the filename, and nothing else:
 
 ```
-3f...c1  MyClaudeCode-linux-x86_64.tar.gz
-9a...7e  MyClaudeCode-macos-aarch64.tar.gz
-...
+57883dc18219d223e80e04ad9cbae306e04e18d907678c788b265c560694f0f8  MyClaudeCode-linux-x86_64.tar.gz
+088360a67dcd32ab00ed1eedb2427645980926b74afe0253738ceafea601768a  MyClaudeCode-macos-aarch64.tar.gz
+648460de2d3df68292a7e83401d12345b24b734073fd1405b99aa3ccba953238  MyClaudeCode-macos-x86_64.tar.gz
+b4d8255397bc8000278665c92fd6196035cc5c030554784c1b6eb37094eea478  MyClaudeCode-windows-x86_64.zip
 ```
+
+Each leg rebuilds its line from the digest rather than printing whatever its
+`sha256sum` felt like emitting, because the printers disagree: Git for
+Windows' defaults to *binary* mode and writes `<digest> *<name>`, GNU
+coreutils on Linux writes `<digest>  <name>`. Both are valid input to `-c`,
+but they are not the same bytes, and a file whose format depends on which
+runner produced which line is a contract nobody can parse. The aggregating job
+asserts the shape of every line before uploading.
 
 That format is a contract, not an accident. S4 fetches this file and parses it
 into the `(platform, arch) -> (asset, sha256)` table that `config/rtk.py`

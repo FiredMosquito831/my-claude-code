@@ -219,14 +219,23 @@ jobs:
       - name: Checksum
         working-directory: dist
         # One `sha256  filename` line, exactly the shape `sha256sum -c` reads
-        # and exactly the shape the Python pin in S4 parses. Two spaces.
+        # and exactly the shape the Python pin in S4 parses. Two spaces, and
+        # no mode marker.
+        #
+        # The line is rebuilt from the digest rather than taken as printed,
+        # because the printers disagree. Git for Windows' `sha256sum` defaults
+        # to binary mode and writes `<digest> *<name>`; GNU coreutils on Linux
+        # writes `<digest>  <name>`. Both are valid input to `-c`, but they are
+        # not the same bytes, and a checksum file whose format depends on which
+        # runner produced which line is a contract nobody can parse.
         run: |
           set -euo pipefail
           if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+            digest="$(sha256sum "${{ matrix.asset }}" | cut -d' ' -f1)"
           else
-            shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+            digest="$(shasum -a 256 "${{ matrix.asset }}" | cut -d' ' -f1)"
           fi
+          printf '%s  %s\n' "$digest" "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
           cat "${{ matrix.asset }}.sha256"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -263,6 +272,14 @@ jobs:
             || { echo "::error::expected four checksum lines"; exit 1; }
           cat SHA256SUMS-desktop-shell.txt
           sha256sum -c SHA256SUMS-desktop-shell.txt
+          # The format is a published contract -- S4 parses this file to get
+          # its (platform, arch) -> sha256 table -- so assert its shape here
+          # rather than discovering a stray mode marker in Python months later.
+          if grep -qvE '^[0-9a-f]{64}  MyClaudeCode-[a-z0-9_.-]+$' SHA256SUMS-desktop-shell.txt; then
+            echo "::error::a line is not '<64 hex><space><space><filename>'"
+            exit 1
+          fi
+          echo "the checksum file is four 'sha256  filename' lines"
 
       - name: Upload to the release
         working-directory: staging
