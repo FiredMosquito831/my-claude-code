@@ -2188,6 +2188,27 @@ commercially, or reusing its code or routing logic inside a product you ship
 closed-source — a commercial license is available by negotiation. See
 [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
 
+## Project History
+
+This repository began as a fork of
+[Alishahryar1/free-claude-code](https://github.com/Alishahryar1/free-claude-code)
+and became a standalone project on 2026-09-05. Every commit, branch and tag
+carried across unchanged — the Git history here is byte-for-byte the history it
+always had, and every release from v4.x onward is present with its original
+notes and assets.
+
+GitHub pull requests are database records rather than Git objects, so they could
+not travel with the code. They are preserved as documents instead:
+[`history/pull-requests/`](history/pull-requests/index.md) holds all 284 of them
+with their descriptions, conversations, reviews and commit lists, plus the raw
+API payloads. Each one names the commit it merged as, and that commit is in this
+repository's history.
+
+Two consequences worth knowing. Pull request numbers written into old commit
+subjects, such as `(#265)`, refer to those archived records rather than to
+anything in this repository. And release publication dates all read 2026-09-05,
+because the API cannot backdate them; the tag and commit dates are the real ones.
+
 The model-routing infrastructure inherited from the upstream project by Ali
 Khokhar ([Alishahryar1/free-claude-code](https://github.com/Alishahryar1/free-claude-code))
 stays under its original MIT license; substantial portions of it remain in this
