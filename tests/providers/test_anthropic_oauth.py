@@ -347,5 +347,19 @@ def test_discoverable_credential_does_not_block_provider_construction() -> None:
         require_provider_credential(PROVIDER_CATALOG["anthropic"], "")
 
 
-def test_display_name_says_it_is_unsupported() -> None:
-    assert "unsupported" in PROVIDER_CATALOG["anthropic_oauth"].display_name.lower()
+def test_display_name_carries_the_caution() -> None:
+    """The card must say what it is: OAuth that works, with a caveat.
+
+    It said "unsupported" until 6.45.0, when the login flow started working
+    end to end. The word became untrue and read as "this is broken"; the
+    caveat it was standing in for -- Anthropic does not permit driving a
+    Claude subscription this way, and the docs say so at length -- is a
+    caution, not a defect. The assertion stays because the *absence* of any
+    marker would be the real regression.
+    """
+
+    display_name = PROVIDER_CATALOG["anthropic_oauth"].display_name
+    assert "Caution" in display_name, display_name
+    assert "unsupported" not in display_name.lower(), (
+        "the OAuth login works; 'unsupported' told users it did not"
+    )

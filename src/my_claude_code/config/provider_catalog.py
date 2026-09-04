@@ -240,7 +240,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     # come from the Claude Code CLI. See docs/ANTHROPIC-SUBSCRIPTION.md.
     "anthropic_oauth": ProviderDescriptor(
         provider_id="anthropic_oauth",
-        display_name="Anthropic Claude subscription (OAuth, unsupported)",
+        display_name="Anthropic Claude subscription (OAuth, Caution)",
         credential_env="ANTHROPIC_OAUTH_ACCESS_TOKEN",
         credential_url="https://claude.com/pricing",
         credential_attr="anthropic_oauth_access_token",

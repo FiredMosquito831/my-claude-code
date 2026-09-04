@@ -51,6 +51,7 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     "tray_enabled": bool,
     "minimize_to_tray": bool,
     "start_at_login": bool,
+    "autostart_reconcile": bool,
     "server_log": str,
     "start_timeout_seconds": float,
     "health_check_interval_seconds": float,
@@ -318,3 +319,29 @@ def test_reconnect_budget_follows_the_configured_drain(config_dir, monkeypatch) 
     )
     _presence(monkeypatch, "healthy")
     assert desktop_status()["reconnect_timeout_seconds"] == 1065.0
+
+
+def test_reports_that_autostart_reconciliation_is_switched_off(
+    config_dir, monkeypatch
+) -> None:
+    """``MCC_DESKTOP_SKIP_AUTOSTART=1`` is visible in the document.
+
+    A reader that sees ``start_at_login: true`` and ``autostart_reconcile:
+    false`` knows the preference is stored but nobody is enforcing it, which
+    is exactly the state a smoke run against a scratch config directory is
+    supposed to be in.
+    """
+
+    _presence(monkeypatch, "healthy")
+
+    monkeypatch.delenv(desktop_module.SKIP_AUTOSTART_ENV, raising=False)
+    assert desktop_status()["autostart_reconcile"] is True
+
+    monkeypatch.setenv(desktop_module.SKIP_AUTOSTART_ENV, "1")
+    assert desktop_status()["autostart_reconcile"] is False
+
+    # Anything but the exact value 1 keeps the normal behaviour: an empty or
+    # mistyped variable must not silently disable a user's autostart.
+    for value in ("", "0", "yes", "true"):
+        monkeypatch.setenv(desktop_module.SKIP_AUTOSTART_ENV, value)
+        assert desktop_status()["autostart_reconcile"] is True, value

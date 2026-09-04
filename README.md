@@ -79,6 +79,51 @@ Everything is configured through the same `.env` file (see [.env.example](.env.e
 
 ### 1. Install Or Update
 
+There are **two ways in**, and they end up in the same place — the same server, the
+same dashboard, the same configuration directory. Pick the one that matches how you
+want to use it.
+
+| | **Server + web dashboard** | **Desktop app** |
+| --- | --- | --- |
+| What you get | `mcc-server` and the 16 `mcc-*` agent launchers on your `PATH`; the dashboard opens in your browser at `http://127.0.0.1:8082/admin`. | A real application with its own window, its own icon and a tray icon. It renders the same dashboard. |
+| How you install it | The one-line command below. | Download an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest). |
+| Does it need the other half? | No. This is the whole product. | It **installs the server for you** on first launch: if `mcc-desktop` is not there, the window shows the exact install command and runs it in front of you. Nothing is bundled and nothing is hidden. |
+| Best for | Terminal-first work, WSL, servers, headless boxes. | "I just want to double-click something." |
+| Availability | Windows, Linux, macOS, WSL — today. | **Windows today** (`MyClaudeCode-Setup-windows-x86_64.exe`). Linux `.deb`/tarball and a macOS `.dmg` are coming in the next releases; until then Linux and macOS get the app through `mcc-desktop` itself — see [Desktop App](#desktop-app). |
+
+Both paths can coexist on one machine. The desktop app is a window onto the server;
+installing it does not give you a second copy of anything.
+
+#### Path B: the desktop app (Windows)
+
+1. Download **`MyClaudeCode-Setup-windows-x86_64.exe`** from the
+   [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest).
+   Its SHA-256 is in `SHA256SUMS-desktop-shell.txt` on the same release page.
+2. Run it. It installs **per user** into `%LOCALAPPDATA%\Programs\My Claude Code`,
+   asks for no administrator rights, and adds a Start Menu entry. It installs one
+   executable — no Python, no server, no configuration.
+3. Launch **My Claude Code** from the Start Menu. If the server is not installed yet,
+   the window says so, shows you the exact command, and runs it. When it finishes, the
+   window starts the server and loads the dashboard.
+
+To remove it, use **"My Claude Code (desktop app)"** in Apps & Features. That removes
+the window and nothing else — your configuration, your keys and `mcc-server` itself are
+untouched. Removing *those* is [`uninstall.ps1`](scripts/uninstall.ps1), which is a
+separate, deliberate step.
+
+**It is unsigned, and Windows will say so.** There is no code-signing certificate on
+this installer (and buying one would not help much: since a 2024 policy change even an
+EV certificate no longer skips the prompt). What you will see the first time is
+SmartScreen's blue **"Windows protected your PC"** dialog; the way through it is **More
+info → Run anyway**. That warning is about *reputation*, which accrues per file hash
+from real download volume — so it fades for a release that many people install and comes
+back for every new release, because every new release is a new file. Machines with
+**Smart App Control** turned on block unsigned installers outright with no "run anyway";
+there, use the server one-liner above, which downloads a wheel and checks the SHA-256
+GitHub publishes for it.
+
+#### Path A: the server and the web dashboard
+
 **Pick one environment and stay in it.** On Windows you can install either in **PowerShell** or in **WSL** — both work, but install in the one where you'll actually run your coding agent. Installing in both is the most common way to end up confused, because you get two separate configs (`C:\Users\<you>\.mcc` and `~/.mcc` inside WSL) and only one of them is the one your server is reading.
 
 > Not sure? If you already do your development inside WSL, install in WSL. Otherwise use PowerShell.
@@ -703,9 +748,29 @@ mcc-desktop --window auto|app-mode|pywebview|browser
 
 ### Scripting it: `mcc-desktop --print-status`
 
-`mcc-desktop --print-status` prints one JSON document on stdout and exits `0` — the config directory and how it was chosen, the loopback host, port, admin and health URLs, whether a healthy server, nothing, or a stranger holds the port, every desktop preference, the two timing budgets (`health_failure_threshold`, `reconnect_timeout_seconds`) a window must read rather than hard-code, and since 6.44.0 four keys about the desktop app (`shell_ready`, `shell_binary`, `shell_release_tag`, `shell_tray`). It is a **pure read**: nothing is started, locked, or written. Full field list and the `schema` rule are in [docs/USAGE.md](docs/USAGE.md#machine-readable-status).
+`mcc-desktop --print-status` prints one JSON document on stdout and exits `0` — the config directory and how it was chosen, the loopback host, port, admin and health URLs, whether a healthy server, nothing, or a stranger holds the port, every desktop preference, the two timing budgets (`health_failure_threshold`, `reconnect_timeout_seconds`) a window must read rather than hard-code, four keys about the desktop app (`shell_ready`, `shell_binary`, `shell_release_tag`, `shell_tray`), and `autostart_reconcile`. It is a **pure read**: nothing is started, locked, or written. Full field list and the `schema` rule are in [docs/USAGE.md](docs/USAGE.md#machine-readable-status).
 
 The dashboard's Deployment card exposes the same choice as a **Window** control, with a fourth option, **Embedded webview**, that is **not installed by default** (see pywebview below) — OAuth login, downloads, and copy buttons may not work in it.
+
+### Installing the app from a downloadable installer (Windows)
+
+Everything above is delivery **path A**: `mcc-desktop` fetches the app for you, and it
+is how Linux and macOS get it today. Path **B** is the one for somebody who has never
+heard of `uv`: a `setup.exe` on the release page.
+
+| | What it does |
+| --- | --- |
+| Installs | `MyClaudeCode.exe` and its icon into `%LOCALAPPDATA%\Programs\My Claude Code`, plus a Start Menu shortcut (a desktop icon is offered, off by default). |
+| Does **not** install | Python, `uv`, `mcc-server`, or any of the 40 entry points. The app installs those itself on first launch (decision Q4), which is also what keeps the installer at ~3 MB and free of administrator rights. |
+| Does **not** write | The start-at-login registration. That value has exactly one owner — `mcc-desktop` reconciles it from `desktop.json` on every launch — and an installer with a second opinion about it would disable the tray's autostart when you removed the window. |
+| Privileges | `PrivilegesRequired=lowest`: per user, no UAC prompt, and the Apps & Features entry lives in `HKCU`. |
+| WebView2 | Detected through the registry key Microsoft documents for it. Windows 11 ships the runtime and Windows 10 has had it pushed since December 2022, so on nearly every machine nothing is downloaded; when it really is missing, the ~2 MB Evergreen Bootstrapper is fetched from Microsoft's permanent link and run silently. Its digest is deliberately **not** pinned — it is a rolling download, and pinning it would break every install the day Microsoft ships a runtime. |
+| Uninstall | **"My Claude Code (desktop app)"** removes the executable, the icons, the shortcuts and its own registry key. It offers to remove the app's remembered window size and position, and defaults to keeping it. It never touches `~/.local/bin`, `~/.mcc`, or the start-at-login value. |
+| Unattended | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` completes without a prompt — the switch set winget supplies for Inno installers — and is smoke-tested on every release. |
+
+The installer is built with Inno Setup 6 from
+[`desktop-shell/installer/windows/MyClaudeCode.iss`](desktop-shell/installer/windows/MyClaudeCode.iss),
+which carries the full reasoning in its header.
 
 ### `--desktop` at install time
 

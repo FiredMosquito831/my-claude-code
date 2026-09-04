@@ -146,7 +146,7 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
         ),
     },
     "ANTHROPIC_OAUTH_ACCESS_TOKEN": {
-        "label": "Claude subscription OAuth token (unsupported)",
+        "label": "Claude subscription OAuth token (Caution)",
         "description": (
             "**Anthropic does not permit this.** Their terms state Claude Free/Pro/Max "
             "OAuth credentials are for Claude Code and Claude.ai only and may not be "

@@ -202,6 +202,73 @@ jobs:
             -Path "desktop-shell/src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }}" `
             -DestinationPath "dist/${{ matrix.asset }}"
 
+      # ---------------------------------------------------------------
+      # The Windows installer (delivery path B, spec S5).
+      #
+      # Inno Setup is fetched from the project's own GitHub release and
+      # verified against a pinned digest, rather than installed from
+      # Chocolatey: `choco install innosetup` follows the channel and would
+      # have silently moved this job from Inno Setup 6 to 7 in August 2026.
+      # A pinned URL plus a pinned SHA-256 is the same shape the rest of this
+      # repository already uses for actions and for the shell's own assets.
+      #
+      # Source: https://jrsoftware.org/isdl.php -> is-6_7_3 on
+      # github.com/jrsoftware/issrc. Bump the version and the digest together.
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          INNO_VERSION: "6.7.3"
+          INNO_SHA256: "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/jrsoftware/issrc/releases/download/is-$($env:INNO_VERSION -replace '\.','_')/innosetup-$env:INNO_VERSION.exe"
+          $exe = Join-Path $env:RUNNER_TEMP "innosetup.exe"
+          Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
+          $actual = (Get-FileHash -Path $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:INNO_SHA256) {
+            Write-Error "Inno Setup digest mismatch: expected $env:INNO_SHA256, got $actual"
+          }
+          $dir = Join-Path $env:RUNNER_TEMP "inno"
+          $proc = Start-Process -FilePath $exe -Wait -PassThru -ArgumentList `
+            "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/NOICONS","/CURRENTUSER","/DIR=$dir"
+          if ($proc.ExitCode -ne 0) { Write-Error "Inno Setup install exited $($proc.ExitCode)" }
+          "ISCC=$dir\ISCC.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Compile the installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          # Where the assets go, which is what the installer must claim to be.
+          # A dispatch that builds `main` into an old tag still stamps the tag.
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:TAG -replace '^v',''
+          if ($version -notmatch '^[0-9]+(\.[0-9]+){1,3}$') {
+            # VersionInfoVersion must be numeric. A tag that is not a version
+            # (a dispatch smoke, say) still produces an installer, marked 0.0.0.
+            Write-Host "::warning::'$env:TAG' is not a numeric version; stamping 0.0.0"
+            $version = "0.0.0"
+          }
+          $exe = "$PWD\desktop-shell\src-tauri\target\$env:TARGET\release\MyClaudeCode.exe"
+          & $env:ISCC "/DAppVersion=$version" "/DSourceExe=$exe" "/O$PWD\dist" `
+            "desktop-shell\installer\windows\MyClaudeCode.iss"
+          if ($LASTEXITCODE -ne 0) { Write-Error "iscc exited $LASTEXITCODE" }
+          Get-ChildItem dist
+
+      # `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` is the switch set winget
+      # supplies automatically for `InstallerType: inno` (spec S8), so it is
+      # not optional and it is not a detail: if it ever prompts, every
+      # unattended install hangs forever. Prove it here, on every release,
+      # rather than discovering it in a winget validation run.
+      - name: Smoke the installer (silent install, launch, silent uninstall)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: desktop-shell
+        run: ./smoke/windows-installer.ps1 -Setup "../dist/MyClaudeCode-Setup-windows-x86_64.exe"
+
       - name: Package (tar)
         if: runner.os != 'Windows'
         env:
@@ -218,9 +285,9 @@ jobs:
 
       - name: Checksum
         working-directory: dist
-        # One `sha256  filename` line, exactly the shape `sha256sum -c` reads
-        # and exactly the shape the Python pin in S4 parses. Two spaces, and
-        # no mode marker.
+        # One `sha256  filename` line per artefact, exactly the shape
+        # `sha256sum -c` reads and exactly the shape the Python pin in S4
+        # parses. Two spaces, and no mode marker.
         #
         # The line is rebuilt from the digest rather than taken as printed,
         # because the printers disagree. Git for Windows' `sha256sum` defaults
@@ -228,15 +295,22 @@ jobs:
         # writes `<digest>  <name>`. Both are valid input to `-c`, but they are
         # not the same bytes, and a checksum file whose format depends on which
         # runner produced which line is a contract nobody can parse.
+        #
+        # This loops rather than naming `matrix.asset`, because the Windows leg
+        # now produces two artefacts: the archive Path A fetches and the
+        # installer a human downloads.
         run: |
           set -euo pipefail
-          if command -v sha256sum >/dev/null 2>&1; then
-            digest="$(sha256sum "${{ matrix.asset }}" | cut -d' ' -f1)"
-          else
-            digest="$(shasum -a 256 "${{ matrix.asset }}" | cut -d' ' -f1)"
-          fi
-          printf '%s  %s\n' "$digest" "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
-          cat "${{ matrix.asset }}.sha256"
+          for artefact in *; do
+            case "$artefact" in *.sha256) continue ;; esac
+            if command -v sha256sum >/dev/null 2>&1; then
+              digest="$(sha256sum "$artefact" | cut -d' ' -f1)"
+            else
+              digest="$(shasum -a 256 "$artefact" | cut -d' ' -f1)"
+            fi
+            printf '%s  %s\n' "$digest" "$artefact" > "$artefact.sha256"
+          done
+          cat ./*.sha256
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -268,18 +342,22 @@ jobs:
           set -euo pipefail
           cat ./*.sha256 | LC_ALL=C sort -k2 > SHA256SUMS-desktop-shell.txt
           rm -f ./*.sha256
-          test "$(wc -l < SHA256SUMS-desktop-shell.txt)" -eq 4 \
-            || { echo "::error::expected four checksum lines"; exit 1; }
+          # Four archives plus the Windows installer.
+          test "$(wc -l < SHA256SUMS-desktop-shell.txt)" -eq 5 \
+            || { echo "::error::expected five checksum lines"; exit 1; }
           cat SHA256SUMS-desktop-shell.txt
           sha256sum -c SHA256SUMS-desktop-shell.txt
           # The format is a published contract -- S4 parses this file to get
           # its (platform, arch) -> sha256 table -- so assert its shape here
           # rather than discovering a stray mode marker in Python months later.
-          if grep -qvE '^[0-9a-f]{64}  MyClaudeCode-[a-z0-9_.-]+$' SHA256SUMS-desktop-shell.txt; then
+          # The character class carries `A-Z` for `MyClaudeCode-Setup-...`.
+          if grep -qvE '^[0-9a-f]{64}  MyClaudeCode-[A-Za-z0-9_.-]+$' SHA256SUMS-desktop-shell.txt; then
             echo "::error::a line is not '<64 hex><space><space><filename>'"
             exit 1
           fi
-          echo "the checksum file is four 'sha256  filename' lines"
+          grep -q '  MyClaudeCode-Setup-windows-x86_64\.exe$' SHA256SUMS-desktop-shell.txt \
+            || { echo "::error::the Windows installer is missing from the checksum file"; exit 1; }
+          echo "the checksum file is five 'sha256  filename' lines"
 
       - name: Upload to the release
         working-directory: staging
@@ -293,6 +371,7 @@ jobs:
           ls -l
           gh release upload "$TAG" \
             MyClaudeCode-windows-x86_64.zip \
+            MyClaudeCode-Setup-windows-x86_64.exe \
             MyClaudeCode-linux-x86_64.tar.gz \
             MyClaudeCode-macos-aarch64.tar.gz \
             MyClaudeCode-macos-x86_64.tar.gz \

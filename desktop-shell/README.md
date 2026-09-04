@@ -221,6 +221,10 @@ blind to everything else on a release —
 | `macos-latest` | `aarch64-apple-darwin` | `MyClaudeCode-macos-aarch64.tar.gz` |
 | `macos-15-intel` | `x86_64-apple-darwin` | `MyClaudeCode-macos-x86_64.tar.gz` |
 
+The Windows leg produces one more file from the same binary:
+`MyClaudeCode-Setup-windows-x86_64.exe`, the downloadable installer (delivery
+path B). It is described in **The Windows installer** below.
+
 Each archive contains the executable and nothing else. The zip holds
 `MyClaudeCode.exe`; each tarball holds `MyClaudeCode`, mode preserved.
 
@@ -235,7 +239,8 @@ Alongside them, one more asset:
 SHA256SUMS-desktop-shell.txt
 ```
 
-Four lines, sorted by filename, in exactly the format `sha256sum -c` reads —
+Five lines — the four archives and the Windows installer — sorted by filename,
+in exactly the format `sha256sum -c` reads —
 64 hex characters, **two spaces**, the filename, and nothing else:
 
 ```
@@ -243,7 +248,10 @@ Four lines, sorted by filename, in exactly the format `sha256sum -c` reads —
 088360a67dcd32ab00ed1eedb2427645980926b74afe0253738ceafea601768a  MyClaudeCode-macos-aarch64.tar.gz
 648460de2d3df68292a7e83401d12345b24b734073fd1405b99aa3ccba953238  MyClaudeCode-macos-x86_64.tar.gz
 b4d8255397bc8000278665c92fd6196035cc5c030554784c1b6eb37094eea478  MyClaudeCode-windows-x86_64.zip
+7d0d5b1fa9c2f0c1e9a6d3b7c2e1f4a8b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1  MyClaudeCode-Setup-windows-x86_64.exe
 ```
+
+(The digests above are an illustration of the shape, not of any one release.)
 
 Each leg rebuilds its line from the digest rather than printing whatever its
 `sha256sum` felt like emitting, because the printers disagree: Git for
@@ -290,3 +298,127 @@ The feature is not optional. `tauri::is_dev()` is `!cfg!(feature =
 built without it would look for a `ui/` directory the user does not have. That
 one flag is the whole difference between a release build and a development one,
 which is why it is spelled out here rather than left to a CLI to remember.
+
+
+## The Windows installer
+
+`installer/windows/MyClaudeCode.iss` is an [Inno Setup 6](https://jrsoftware.org/)
+script that wraps the Windows binary in a `setup.exe` for somebody who has never
+heard of `uv`. The workflow compiles it on the Windows leg with Inno Setup
+**6.7.3**, fetched from the project's own GitHub release and checked against a
+pinned SHA-256 — deliberately not `choco install innosetup`, which follows the
+channel and would have silently moved this build from Inno Setup 6 to 7 in
+August 2026.
+
+Build it locally the same way:
+
+```
+iscc /DAppVersion=6.45.0 ^
+     /DSourceExe=..\..\src-tauri\target\release\MyClaudeCode.exe ^
+     installer\windows\MyClaudeCode.iss
+```
+
+Both `/D` defines are optional — the script compiles without them, stamping
+`0.0.0` and taking the binary from the default `target/release` path — so it can
+be syntax-checked without inventing a release.
+
+### What it does, and what it deliberately does not
+
+| | |
+| --- | --- |
+| Installs | `MyClaudeCode.exe` and `app-icon.ico` into `%LOCALAPPDATA%\Programs\My Claude Code`, plus a Start Menu shortcut. A desktop icon is an unchecked task. |
+| Privileges | `PrivilegesRequired=lowest`, so it is per-user, raises no UAC prompt, and its Apps & Features entry lands in `HKCU\...\Uninstall\{AppId}_is1` — the shape winget's `Scope: user` and `AppsAndFeaturesEntries.ProductCode` expect (spec S8). `PrivilegesRequiredOverridesAllowed=dialog` lets somebody who genuinely wants a machine-wide install ask for one. |
+| Does **not** install | Python, `uv`, `mcc-server`, or any entry point. Decision Q4 moved the bootstrap into the application: on launch with no `mcc-desktop`, the window prints the exact install command and runs it, streaming the output (`src-tauri/src/install.rs`). An installer that also carried the server would be a second, divergent copy of `scripts/install.ps1` and would want administrator rights the moment it wanted to place a Python. |
+| Does **not** write | The `HKCU\...\Run` autostart value. That value has exactly one writer — `_reconcile_start_at_login` in `cli/desktop.py`, from `desktop.json` — and a second one would make "remove the window" silently disable the server tray's autostart. A contract test asserts the `.iss` has no `[Registry]` section at all. |
+| Signing | None (decision Q9). See below. |
+
+### WebView2
+
+The shell is a webview, so it needs the Microsoft Edge WebView2 runtime. The
+script checks the registry key Microsoft documents for it — the `EdgeUpdate`
+client `{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}` and its `pv` version string, in
+`HKLM` (32- and 64-bit views) and `HKCU`, treating absent, empty and `0.0.0.0`
+alike as "not installed". Windows 11 ships the runtime as part of the OS and
+Microsoft pushed it to Windows 10 from December 2022, so on nearly every machine
+this finds it and nothing is downloaded.
+
+When it really is missing, the ~2 MB **Evergreen Bootstrapper** is downloaded
+from `https://go.microsoft.com/fwlink/p/?LinkId=2124703` and run with
+`/silent /install`.
+
+**Its SHA-256 is deliberately not pinned, and cannot be.** The bootstrapper is a
+*rolling* download: its bytes change every time Microsoft ships a runtime, so a
+pinned digest would turn the next runtime release into a broken installer for
+everybody. What is pinnable is the **URL** — the permanent fwlink Microsoft
+documents for exactly this purpose, over HTTPS to a Microsoft host — and that is
+what the script pins. The alternative, the Fixed Version runtime, is 250+ MB and
+would have to be hand-updated for every CVE.
+
+A failed download is a warning, not an abort. A machine that is briefly offline
+should still end up with the app installed; the runtime may arrive later through
+Windows Update, and the window says what is wrong if it does not.
+
+### Uninstall, and the split that matters
+
+Inno records every `[Files]` and `[Icons]` entry in its own uninstall log and
+removes them, so the executable, the icon and both shortcuts come back out
+automatically; the contract test asserts that nothing carries
+`uninsneveruninstall`. The `[UninstallDelete]` section adds the one thing the
+log cannot know about — the WebView2 user-data directory the webview creates
+next to the exe on first paint.
+
+The app's remembered window size and position
+(`%APPDATA%\com.myclaudecode.desktop`) is **asked about**, defaulting to *keep*.
+That question lives in `[Code]` rather than `[UninstallDelete]` because
+`[UninstallDelete]` entries are recorded at *install* time, so a `Check:` on one
+would ask months before the answer matters. It uses `SuppressibleMsgBox`, so a
+`/VERYSILENT` uninstall takes the default and never blocks.
+
+**"Uninstall the desktop app" is not "uninstall My Claude Code."** The Apps &
+Features entry is named `My Claude Code (desktop app)` so that this is visible
+before anyone clicks it. It never touches `~/.local/bin`, `~/.mcc`, `~/.fcc`, or
+the start-at-login value; removing those is `scripts/uninstall.ps1`, on explicit
+consent. `tests/contracts/test_uninstaller_parity.py` asserts every part of
+that: no `[Registry]` section, no entry naming a server path, no opt-out of
+automatic removal, and a pinned `AppId`.
+
+### Unattended installs
+
+```
+MyClaudeCode-Setup-windows-x86_64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+```
+
+is the switch set winget supplies automatically for `InstallerType: inno`, which
+is why `smoke/windows-installer.ps1` runs exactly it on every release build. An
+installer that prompts under those switches makes every unattended install hang
+forever, and that is not something to discover during winget validation.
+
+The smoke also snapshots `HKCU\...\Uninstall`, `HKCU\...\Run` and the Start
+Menu before the install and compares them after the uninstall: they must be
+byte-identical. That is the machine-readable form of "removes everything it
+created, and nothing it did not".
+
+### Signing, and what SmartScreen actually shows
+
+There is none (decision Q9), and the honest version is:
+
+* The first person to run a given `MyClaudeCode-Setup-windows-x86_64.exe` sees
+  SmartScreen's blue **"Windows protected your PC"** dialog. **More info → Run
+  anyway** proceeds.
+* That warning is about **reputation**, and reputation is **per file hash**. It
+  accrues from real download volume, so it fades for a release many people
+  install — and comes back for the next release, because that is a different
+  file. There is no way to pre-warm it.
+* **An EV certificate would not remove it.** Microsoft's guidance since 2024 is
+  that EV no longer bypasses the SmartScreen prompt, so the several hundred
+  dollars a year buys a publisher name in the dialog and not the absence of the
+  dialog.
+* On a machine with **Smart App Control** enabled, an unsigned installer is
+  blocked outright with no "run anyway" at all. That is not a bug to work around;
+  it is the point of the feature. The supported route there is the server
+  one-liner, which downloads a wheel and verifies the SHA-256 GitHub publishes
+  for it.
+
+This is written down rather than worked around because the alternative — an
+installer that claims to be signed, or a document that pretends the warning does
+not happen — costs more trust than the warning does.

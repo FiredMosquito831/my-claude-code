@@ -91,6 +91,17 @@ DESKTOP_SHELL_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 
 #: ``(sys.platform, normalized arch) -> (asset name, sha256 of the archive)``.
 #:
+#: **The Windows installer is deliberately absent from this table.** Since
+#: 6.45.0 ``shell-release.yml`` also attaches
+#: ``MyClaudeCode-Setup-windows-x86_64.exe``, and it appears in the checksum
+#: file this module parses -- but it is delivery *path B*, the thing a human
+#: downloads from the release page. Path A is this module, and it wants the
+#: archive: a ``setup.exe`` would have to be *run*, per-user, with a Start Menu
+#: shortcut and an Apps & Features entry as side effects, to place a file this
+#: code already knows how to place itself. Two installers writing the same
+#: binary is how you get two of them. The line is simply ignored; nothing here
+#: needs to change when it moves.
+#:
 #: The four targets ``shell-release.yml`` builds. ``linux/aarch64`` is
 #: deliberately absent: no runner builds it (see the workflow's matrix), so
 #: claiming it here would mean a 404 on a machine that has a working fallback.

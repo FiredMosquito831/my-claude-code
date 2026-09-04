@@ -24,3 +24,7 @@ JOURNAL.md
 
 # Cached upstream Claude Code docs used by scripts/gen_claude_config_reference.py
 .claude-docs-cache/
+
+# Build output. `uv build` writes the wheel here, and the desktop shell's
+# Inno Setup script writes MyClaudeCode-Setup-windows-x86_64.exe here.
+/dist/

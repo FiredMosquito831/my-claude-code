@@ -169,7 +169,8 @@ when that vendor changes its UI, not when MCC does.
 - ] Wheel contains `my_claude_code/` and `free_claude_code/`
 - [ ] Dashboard screenshots refreshed from a scratch `mcc-server` (§4), written to **both** image directories, and scanned for `sk-`
 - [ ] README quickstart uses `mcc-server`; `fcc-server` still documented as alias
-- [ ] After publishing: the **Desktop shell release** workflow (`shell-release.yml`) ran automatically on `release: published`. Check all four legs are green and that the assets appear on the release within about 15 minutes (§7)
+- [ ] After publishing: the **Desktop shell release** workflow (`shell-release.yml`) ran automatically on `release: published`. Check all four legs are green and that the six assets appear on the release within about 15 minutes (§7)
+- [ ] Windows installer smoked by hand from the published file: digest checked, `/VERYSILENT` install, launched from the Start Menu, uninstalled from Apps & Features, and `mcc-server` still working afterwards (§7)
 
 ## 6. Wheel end-to-end guard (`wheel-e2e.yml`)
 
@@ -196,18 +197,20 @@ when that vendor changes its UI, not when MCC does.
 The desktop shell is a Rust binary, so it is not in the wheel. It rides the
 **same GitHub release** (decision Q6): publishing a release fires
 `.github/workflows/shell-release.yml` on `release: published`, which builds the
-shell on four runners and attaches five more assets to the release you just
-made. Nothing is required of the releaser except to look.
+shell on four runners and attaches six more assets to the release you just
+made. Nothing is required of the releaser except to look, and -- once, on
+Windows -- to install the installer.
 
 **The step, at release time:** publish the release with the wheel as usual, then
 open Actions -> *Desktop shell release*. There is one run per release. Confirm
 all four legs are green, and that the assets are on the release page within
 about 15 minutes (a cold cargo cache is the long pole; a warm one is nearer
-five). Then check the release page carries exactly these five:
+five). Then check the release page carries exactly these six:
 
 | Asset | Runner | Rust target |
 | --- | --- | --- |
 | `MyClaudeCode-windows-x86_64.zip` | `windows-latest` | `x86_64-pc-windows-msvc` |
+| `MyClaudeCode-Setup-windows-x86_64.exe` | `windows-latest` | (the same binary, in an Inno Setup 6 installer) |
 | `MyClaudeCode-linux-x86_64.tar.gz` | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` |
 | `MyClaudeCode-macos-aarch64.tar.gz` | `macos-latest` | `aarch64-apple-darwin` |
 | `MyClaudeCode-macos-x86_64.tar.gz` | `macos-15-intel` | `x86_64-apple-darwin` |
@@ -242,6 +245,34 @@ commit explicitly:
 gh workflow run shell-release.yml --repo FiredMosquito831/my-claude-code \
     -f tag=v6.43.0 -f ref=main
 ```
+
+**Smoke the Windows installer once per release.** The workflow already runs
+`desktop-shell/smoke/windows-installer.ps1` on the runner -- silent install,
+Start Menu shortcut, `HKCU` Apps & Features entry, silent uninstall, and a
+before/after snapshot of `HKCU\...\Uninstall`, `HKCU\...\Run` and the Start
+Menu that must come back identical. Do it once by hand anyway, on the file that
+is actually on the release page, because a runner is not a desktop:
+
+1. download `MyClaudeCode-Setup-windows-x86_64.exe` and check its digest against
+   `SHA256SUMS-desktop-shell.txt`;
+2. run it silently, into a scratch directory, and confirm it needs no
+   administrator rights:
+
+   ```powershell
+   .\MyClaudeCode-Setup-windows-x86_64.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=C:\tmp\mcc-app
+   ```
+
+3. launch **My Claude Code** from the Start Menu and confirm the dashboard
+   loads;
+4. uninstall from Apps & Features -- the entry is **"My Claude Code (desktop
+   app)"** -- and confirm `mcc-server`, `~/.mcc` and the start-at-login value
+   are all still there afterwards.
+
+Set `MCC_DESKTOP_SKIP_AUTOSTART=1` in any shell you use to launch a real
+`mcc-desktop` against a scratch configuration directory during this. The
+start-at-login registration is machine-global while the preference driving it is
+per-config-directory, so without the switch a test launch silently deletes the
+registration belonging to your real install.
 
 **What the release must not be asked to prove:** the workflow runs each
 platform's real-binary smoke (`desktop-shell/smoke/`) -- the binary launches,

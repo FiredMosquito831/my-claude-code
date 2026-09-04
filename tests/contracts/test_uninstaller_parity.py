@@ -20,6 +20,16 @@ autostart entry, the systemd user unit and the HKCU ``Run`` value all used to
 survive an uninstall. ARTEFACTS below enumerates every one of them together
 with the code that creates it and the code that removes it, so adding a
 creator without a remover fails here.
+
+The third half -- there are three -- is the Windows *desktop app* installer
+(``desktop-shell/installer/windows/MyClaudeCode.iss``, spec S5). It is not a
+row in ARTEFACTS because it is self-removing: Inno Setup records every
+``[Files]`` and ``[Icons]`` entry into its own uninstall log and deletes them
+on uninstall, so parity there means "nothing opts *out* of that", not "a
+second script names each file". The ``.iss`` assertions at the bottom of this
+file check exactly that, plus the boundary that matters more: the desktop
+app's uninstaller must not reach into the *server's* artefacts. Removing the
+window is not removing My Claude Code.
 """
 
 import re
@@ -35,6 +45,7 @@ UNINSTALL_PS1 = REPO_ROOT / "scripts" / "uninstall.ps1"
 INSTALL_SH = REPO_ROOT / "scripts" / "install.sh"
 INSTALL_PS1 = REPO_ROOT / "scripts" / "install.ps1"
 DESKTOP_CONFIG = REPO_ROOT / "src" / "my_claude_code" / "config" / "desktop.py"
+INNO_SCRIPT = REPO_ROOT / "desktop-shell" / "installer" / "windows" / "MyClaudeCode.iss"
 
 
 @dataclass(frozen=True)
@@ -438,3 +449,282 @@ def test_neither_uninstaller_touches_the_retired_rollback_directory() -> None:
     assert 'Purge-ConfigDir -DirName ".fcc-old" -LeaveAlone' in powershell
     assert 'Purge-ConfigDir -DirName ".mcc"' in powershell
     assert 'purge_config_dir "$MCC_HOME_DIRNAME"' in shell
+
+
+# --------------------------------------------------------------------------
+# The Windows desktop-app installer (spec S5).
+#
+# Inno Setup removes [Files] and [Icons] automatically from its uninstall log,
+# so the parity question for this installer is not "does a second script name
+# each file" but "does anything opt out of that, and does the uninstaller stay
+# inside its own lane". Both are mechanical, and both are checked here.
+# --------------------------------------------------------------------------
+
+#: The AppId, and therefore the HKCU uninstall key name (``{AppId}_is1``) and
+#: the winget ProductCode. It is a published identity: changing it turns the
+#: next release into a second, parallel installation that does not upgrade the
+#: first, and orphans the Apps & Features entry of every existing install.
+INNO_APP_ID = "{5FC8D5C3-33F7-4366-AD8D-C844D21BC089}"
+
+#: The shell's own application-data directory, relative to ``{userappdata}``.
+#: It is Tauri's ``app_data_dir()`` -- ``dirs::data_dir()/<identifier>`` -- and
+#: the identifier comes from ``desktop-shell/src-tauri/tauri.conf.json``.
+INNO_SHELL_DATA_DIR = "com.myclaudecode.desktop"
+
+
+def _iss_text() -> str:
+    return INNO_SCRIPT.read_text(encoding="utf-8")
+
+
+def _iss_sections() -> dict[str, list[str]]:
+    """Split the ``.iss`` into ``{section: [entry lines]}``.
+
+    Comments (``;`` in the script sections, ``//`` in ``[Code]``) and blank
+    lines are dropped; everything else is an entry. ``[Code]`` is kept whole
+    because it is Pascal, not entries.
+    """
+
+    sections: dict[str, list[str]] = {}
+    current = "preamble"
+    sections[current] = []
+    for raw in _iss_text().splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            current = line[1:-1]
+            sections.setdefault(current, [])
+            continue
+        if not line:
+            continue
+        if current != "Code" and line.startswith(";"):
+            continue
+        if current == "Code" and line.startswith("//"):
+            continue
+        sections[current].append(line)
+    return sections
+
+
+def test_the_inno_script_is_parsable() -> None:
+    """A silent parse miss would make every assertion below vacuous."""
+
+    sections = _iss_sections()
+    for name in ("Setup", "Files", "Icons", "Run", "UninstallDelete", "Code"):
+        assert name in sections, (
+            f"could not find a [{name}] section in {INNO_SCRIPT.name} -- if the "
+            "installer was restructured, update this parser rather than "
+            "deleting the guard"
+        )
+    assert len(sections["Files"]) >= 2, "expected the exe and its icon"
+    assert sections["Icons"], "expected at least the Start Menu shortcut"
+
+
+def test_no_installed_file_or_icon_opts_out_of_removal() -> None:
+    """``uninsneveruninstall`` is how a file survives an uninstall.
+
+    Inno removes everything in ``[Files]`` and ``[Icons]`` from its uninstall
+    log; the single flag that exempts an entry is ``uninsneveruninstall``.
+    One of those on the exe would leave a 3.5 MB orphan in
+    ``%LOCALAPPDATA%\\Programs`` that nothing ever removes again.
+    """
+
+    sections = _iss_sections()
+    offenders = [
+        line
+        for name in ("Files", "Icons", "Dirs")
+        for line in sections.get(name, ())
+        if "uninsneveruninstall" in line.lower()
+    ]
+    assert not offenders, (
+        "these installer entries opt out of automatic removal: "
+        f"{offenders}. Every file and icon this installer writes must come "
+        "back out with it."
+    )
+
+
+def test_every_installed_file_and_icon_lands_somewhere_the_uninstall_reaches() -> None:
+    """Inno only removes what it put under a directory it owns.
+
+    A ``DestDir`` outside ``{app}`` (or a shortcut outside the Start Menu and
+    the desktop) is still logged and still removed, but it also means the
+    installer is writing into somebody else's directory -- which is how an
+    uninstall starts deleting files it did not create.
+    """
+
+    sections = _iss_sections()
+
+    stray_files = [line for line in sections["Files"] if 'DestDir: "{app}"' not in line]
+    assert not stray_files, (
+        f"these [Files] entries install outside {{app}}: {stray_files}. The "
+        "desktop app installs one directory and nothing else."
+    )
+
+    allowed_icon_roots = ("{autoprograms}", "{autodesktop}")
+    stray_icons = [
+        line
+        for line in sections["Icons"]
+        if not any(root in line for root in allowed_icon_roots)
+    ]
+    assert not stray_icons, (
+        f"these [Icons] entries are outside the Start Menu and the desktop: "
+        f"{stray_icons}."
+    )
+
+
+def test_the_installer_writes_no_registry_value_of_its_own() -> None:
+    """Autostart has exactly one writer, and it is not the installer.
+
+    ``config/desktop.py`` owns the HKCU ``Run`` value and
+    ``_reconcile_start_at_login`` is the only code that writes it. An
+    installer that also wrote it would make uninstalling the *window* disable
+    the *server tray's* autostart -- a value with two owners and one remover.
+    Inno's own ``{AppId}_is1`` uninstall key is written by the compiler, not
+    by this script, and is removed by the uninstaller.
+    """
+
+    sections = _iss_sections()
+    assert not sections.get("Registry"), (
+        "MyClaudeCode.iss has grown a [Registry] section: "
+        f"{sections.get('Registry')}. Anything written there is a registry "
+        "value with no remover outside Inno's log, and autostart in "
+        "particular belongs to the application (config/desktop.py)."
+    )
+    text = _iss_text()
+    for forbidden in ("CurrentVersion\\Run", "MyClaudeCodeDesktop"):
+        assert forbidden not in text, (
+            f"MyClaudeCode.iss names {forbidden!r}. The desktop app installer "
+            "must not touch the start-at-login registration."
+        )
+
+
+def test_the_uninstaller_stays_out_of_the_servers_directories() -> None:
+    """ "Uninstall the desktop app" must not uninstall My Claude Code.
+
+    The split is deliberate and is documented in the .iss header, in the
+    README and in USAGE: the Inno uninstaller removes the window; removing the
+    server is ``scripts/uninstall.ps1``, on explicit consent.
+    """
+
+    # Entries only, not comments: the header talks about ~/.local/bin
+    # precisely in order to say that the installer must never go there.
+    sections = _iss_sections()
+    entries = "\n".join(
+        line for name, lines in sections.items() if name != "Code" for line in lines
+    ).lower()
+    for forbidden in (".local", ".mcc", ".fcc", "{userprofile}", "uninstall.ps1"):
+        assert forbidden not in entries, (
+            f"an entry in MyClaudeCode.iss names {forbidden!r}. The desktop "
+            "app's uninstaller must never reach into the server's install, "
+            "the config directory, or the legacy home, and it must not run "
+            "the server's uninstaller."
+        )
+
+
+def test_the_only_optional_removal_is_the_shells_own_data_directory() -> None:
+    """The one thing worth asking about, asked about in one place.
+
+    ``[UninstallDelete]`` entries are recorded at *install* time, so a
+    ``Check:`` on one would ask months before the answer matters. The opt-in
+    deletion therefore lives in ``[Code]``, and this pins it there so it
+    cannot quietly become unconditional.
+    """
+
+    sections = _iss_sections()
+    code = "\n".join(sections["Code"])
+
+    assert "CurUninstallStepChanged" in code
+    assert "usPostUninstall" in code
+    assert "SuppressibleMsgBox" in code, (
+        "the uninstall question must use SuppressibleMsgBox so /VERYSILENT "
+        "takes the default instead of hanging on a dialog"
+    )
+    assert "IDNO" in code, (
+        "the silent default must be 'keep the data': an unattended uninstall "
+        "may not delete something the user was never asked about"
+    )
+    assert INNO_SHELL_DATA_DIR in _iss_text(), (
+        "the .iss no longer names the shell's application-data directory "
+        f"({INNO_SHELL_DATA_DIR}); if tauri.conf.json's identifier changed, "
+        "change it here too or the old directory is orphaned forever"
+    )
+
+    unconditional = [
+        line for line in sections["UninstallDelete"] if INNO_SHELL_DATA_DIR in line
+    ]
+    assert not unconditional, (
+        f"these [UninstallDelete] entries remove the shell's data directory "
+        f"unconditionally: {unconditional}. It is opt-in, in [Code]."
+    )
+
+
+def test_the_installer_identity_and_privileges_are_pinned() -> None:
+    """The four directives that make this a per-user, upgradable install."""
+
+    sections = _iss_sections()
+    setup = {}
+    for line in sections["Setup"]:
+        name, _, value = line.partition("=")
+        setup[name.strip()] = value.strip()
+
+    assert setup.get("AppId") == "{" + INNO_APP_ID, (
+        f"AppId is {setup.get('AppId')!r}. It must stay "
+        f"'{{{INNO_APP_ID}' (Inno's doubled leading brace) forever: it is the "
+        "upgrade key, the HKCU uninstall key name and the winget ProductCode."
+    )
+    assert setup.get("PrivilegesRequired") == "lowest", (
+        "PrivilegesRequired must be 'lowest': a per-user install needs no "
+        "UAC prompt and puts its uninstall key in HKCU, which is what "
+        "winget's Scope: user expects."
+    )
+    assert setup.get("Uninstallable") == "yes"
+    assert setup.get("UninstallDisplayName", "").endswith("(desktop app)"), (
+        "the Apps & Features entry must say '(desktop app)' out loud, so "
+        "nobody removes the server by trying to remove the window"
+    )
+    assert setup.get("UninstallDisplayIcon"), (
+        "an Apps & Features entry with no icon looks like malware"
+    )
+
+
+def test_the_webview2_bootstrapper_url_is_the_documented_permanent_one() -> None:
+    """A rolling download, so the URL is pinned and the digest cannot be.
+
+    The Evergreen Bootstrapper's bytes change every time Microsoft ships a
+    runtime. Pinning its SHA-256 would make the next runtime release break
+    every install; what is pinnable is the permanent fwlink Microsoft
+    documents for this exact purpose, over HTTPS to a Microsoft host.
+    """
+
+    text = _iss_text()
+    assert "https://go.microsoft.com/fwlink/p/?LinkId=2124703" in text
+    assert "F3017226-FE2A-4295-8BDF-00C3A9A7E4C5" in text, (
+        "the WebView2 EdgeUpdate client GUID is how the runtime is detected; "
+        "without it the bootstrapper runs on every machine"
+    )
+    assert "/silent /install" in text
+
+
+def test_the_installer_smoke_runs_the_winget_switches() -> None:
+    """The switch set winget supplies for `InstallerType: inno` (spec S8).
+
+    If the installer ever prompts under these, every unattended install hangs
+    forever, so the release workflow proves it on every build.
+    """
+
+    smoke = (REPO_ROOT / "desktop-shell" / "smoke" / "windows-installer.ps1").read_text(
+        encoding="utf-8"
+    )
+    for switch in ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"):
+        assert switch in smoke, f"the installer smoke does not pass {switch}"
+    assert "unins000.exe" in smoke, "the smoke never uninstalls"
+    assert INNO_APP_ID in smoke, (
+        "the smoke must look for this exact AppId's uninstall key"
+    )
+
+    workflow = (REPO_ROOT / ".github" / "workflows" / "shell-release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "smoke/windows-installer.ps1" in workflow, (
+        "the release workflow no longer runs the installer smoke"
+    )
+    assert "MyClaudeCode-Setup-windows-x86_64.exe" in workflow, (
+        "the release workflow no longer uploads the Windows installer"
+    )

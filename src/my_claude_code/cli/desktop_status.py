@@ -22,7 +22,8 @@ Three rules hold this file together:
 ``schema`` is the compatibility handle. It is bumped when a documented key is
 removed or changes type; adding a key does not bump it, because a reader is
 required to tolerate keys it does not know. 6.44.0 added four shell keys and
-left the schema at 1 for exactly that reason.
+6.45.0 added ``autostart_reconcile``; the schema stayed at 1 both times, for
+exactly that reason.
 
 **One word about ``tray_enabled``.** It answers "should the reader of this
 document draw a tray icon", which is not always the same as the persisted
@@ -41,7 +42,11 @@ import json
 import os
 from typing import Any
 
-from my_claude_code.cli.desktop import port_conflict_message, probe_server_presence
+from my_claude_code.cli.desktop import (
+    autostart_reconcile_enabled,
+    port_conflict_message,
+    probe_server_presence,
+)
 from my_claude_code.cli.desktop_window import SHELL_TRAY_ENV
 from my_claude_code.config.constants import (
     DASHBOARD_RECONNECT_TIMEOUT_SECONDS,
@@ -85,6 +90,7 @@ STATUS_KEYS: tuple[str, ...] = (
     "tray_enabled",
     "minimize_to_tray",
     "start_at_login",
+    "autostart_reconcile",
     "server_log",
     "start_timeout_seconds",
     "health_check_interval_seconds",
@@ -166,6 +172,10 @@ def desktop_status() -> dict[str, Any]:
         "tray_enabled": shell_tray,
         "minimize_to_tray": state.minimize_to_tray,
         "start_at_login": state.start_at_login,
+        # Whether the *next* launch would touch the OS registration at all.
+        # A reader that sees ``false`` here knows ``start_at_login`` above is
+        # a stored preference nobody is currently enforcing.
+        "autostart_reconcile": autostart_reconcile_enabled(),
         "server_log": str(server_log_path()),
         "start_timeout_seconds": float(settings.desktop_server_start_timeout),
         "health_check_interval_seconds": float(settings.desktop_health_check_interval),

@@ -69,6 +69,24 @@ OPEN_BROWSER_ENV = "MCC_OPEN_BROWSER"
 #: How often the close watcher samples ``window.is_open`` (seconds).
 WINDOW_CLOSE_POLL_SECONDS = 1.0
 
+#: Set to ``1`` to make every launch-time autostart reconciliation a no-op.
+#:
+#: The OS autostart registration is *machine-global* -- one HKCU ``Run`` value,
+#: one LaunchAgent, one XDG ``.desktop`` -- while the preference that drives it
+#: lives in ``desktop.json`` *inside whichever config directory is in force*.
+#: Those two facts do not compose: running ``mcc-desktop`` against a scratch
+#: ``MCC_CONFIG_DIR`` loads a fresh ``desktop.json`` whose ``start_at_login``
+#: is the default ``False``, and the reconciliation below then deletes the
+#: registration belonging to the user's *real* install. That is not
+#: theoretical; it happened during the S5 installer work, to a real HKCU
+#: ``Run`` value.
+#:
+#: So: any test, smoke or installer run that starts a real ``mcc-desktop``
+#: against a config directory that is not the user's own must set this. It is
+#: deliberately an environment variable and not a flag, because it has to
+#: reach a child process nobody in the middle knows how to pass a flag to.
+SKIP_AUTOSTART_ENV = "MCC_DESKTOP_SKIP_AUTOSTART"
+
 #: Three distinguishable states of the configured host:port.
 type ServerPresence = Literal["healthy", "foreign", "free"]
 
@@ -735,6 +753,17 @@ class WindowOnlyHost:
         self._stopped.set()
 
 
+def autostart_reconcile_enabled() -> bool:
+    """Return whether launch-time autostart reconciliation may touch the OS.
+
+    ``MCC_DESKTOP_SKIP_AUTOSTART=1`` turns it off. See ``SKIP_AUTOSTART_ENV``
+    for why that switch has to exist. Only the exact value ``1`` disables it,
+    so an empty or accidental value keeps the normal behaviour.
+    """
+
+    return os.environ.get(SKIP_AUTOSTART_ENV, "").strip() != "1"
+
+
 def _reconcile_start_at_login(state: DesktopState) -> None:
     """Make the OS registration match what the admin API persisted.
 
@@ -743,7 +772,17 @@ def _reconcile_start_at_login(state: DesktopState) -> None:
     the flag with the OS ("The next ``mcc-desktop``/tray launch reconciles
     the file with the OS"). Both directions are idempotent. A disabled tray
     never registers: an invisible tray must not relaunch at login.
+
+    ``MCC_DESKTOP_SKIP_AUTOSTART=1`` makes the whole thing a no-op, because
+    the registration is machine-global and the preference driving it is not.
     """
+
+    if not autostart_reconcile_enabled():
+        logger.info(
+            "%s=1: leaving the start-at-login registration untouched.",
+            SKIP_AUTOSTART_ENV,
+        )
+        return
 
     try:
         if state.tray_enabled and state.start_at_login:

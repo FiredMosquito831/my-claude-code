@@ -10,6 +10,8 @@ The [README](../README.md) is the overview. This is the long-form manual.
 
 - [1. How it works](#1-how-it-works)
 - [2. Install](#2-install)
+  - [Two ways in](#two-ways-in)
+  - [The Windows desktop-app installer](#the-windows-desktop-app-installer)
 - [3. First run](#3-first-run)
   - [Where your configuration lives](#where-your-configuration-lives)
   - [Legacy `~/.fcc`: migrating with `mcc-migrate`](#legacy-fcc-migrating-with-mcc-migrate)
@@ -70,6 +72,60 @@ Three consequences worth internalising before you start:
 ---
 
 ## 2. Install
+
+<a id="two-ways-in"></a>
+
+### Two ways in
+
+Both end at the same place: one server, one dashboard, one configuration directory.
+
+| | **Server + web dashboard** | **Desktop app** |
+| --- | --- | --- |
+| You get | `mcc-server` plus the 16 `mcc-*` launchers on your `PATH`; the dashboard opens in a browser tab. | A window with its own icon and tray icon, rendering the same dashboard. |
+| You install it by | running the one-liner below. | downloading an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest). |
+| The other half | — | is installed **by the app**, on first launch, in front of you: no `mcc-desktop` on the machine means the window prints the exact install command and runs it, streaming the output. Nothing is bundled. |
+| Available | Windows, WSL, Linux, macOS — today. | **Windows today**: `MyClaudeCode-Setup-windows-x86_64.exe`. A Linux `.deb`/tarball and a macOS `.dmg` are planned for the next releases; until they exist, Linux and macOS get the same app through `mcc-desktop` itself ([The desktop app](#the-desktop-app-fetched-verified-installed)). |
+
+Neither excludes the other. The desktop app is a window onto the server, not a second
+copy of it, and one machine can have both.
+
+<a id="the-windows-desktop-app-installer"></a>
+
+### The Windows desktop-app installer
+
+Download `MyClaudeCode-Setup-windows-x86_64.exe` from the release page — its SHA-256 is
+in `SHA256SUMS-desktop-shell.txt` beside it — and run it.
+
+| | |
+| --- | --- |
+| Where it installs | `%LOCALAPPDATA%\Programs\My Claude Code`, per user, **no administrator rights**. |
+| What it installs | The executable, its icon, and a Start Menu entry. A desktop icon is offered and is off by default. That is the entire payload: no Python, no `uv`, no server. |
+| What it does not write | The start-at-login registration. That value has exactly one owner (`mcc-desktop`, reconciling it from `desktop.json` at every launch); an installer with a second opinion about it would turn "remove the window" into "disable the tray's autostart". |
+| WebView2 | Detected through the `EdgeUpdate` client key Microsoft documents. Windows 11 ships the runtime; Windows 10 has had it pushed since December 2022. Only when it is genuinely absent is Microsoft's ~2 MB Evergreen Bootstrapper downloaded from its permanent link and run silently — and if that fails, setup says so and continues rather than refusing to install. |
+| Unattended | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` finishes without a prompt. That is the switch set winget supplies for Inno installers, and the release workflow proves it on every build. |
+| Uninstall | **"My Claude Code (desktop app)"** in Apps & Features. |
+
+**Two uninstallers, two different jobs.** This is the split, and it is deliberate:
+
+| Uninstaller | Removes |
+| --- | --- |
+| **"My Claude Code (desktop app)"** (Apps & Features) | The executable, its icon, the Start Menu and desktop shortcuts, and its own `HKCU` uninstall key. It asks — defaulting to *no* — whether to also forget the window's remembered size and position. It never touches `~/.local/bin`, `~/.mcc`, `~/.fcc`, or the start-at-login value. |
+| [`scripts/uninstall.ps1`](../scripts/uninstall.ps1) | Everything else: the shims, the configuration directory, the shortcut `install.ps1 -Desktop` made, and the start-at-login value. See [What the uninstaller removes](#what-the-uninstaller-removes). |
+
+Removing the window is not removing My Claude Code, and the Apps & Features entry says
+"(desktop app)" out loud so that nobody has to guess.
+
+**It is unsigned, and Windows will say so.** There is no code-signing certificate on
+this installer, so the first run shows SmartScreen's **"Windows protected your PC"**
+dialog; **More info → Run anyway** proceeds. The warning is about *reputation*, which
+accrues per file hash from download volume — it fades for a widely installed release and
+returns with every new one, because every release is a new file. Buying an EV
+certificate would not remove it either: Microsoft's own guidance since 2024 is that EV
+no longer bypasses the prompt. On a machine with **Smart App Control** enabled the
+installer is blocked outright with no override; there, use the one-liner below, which
+downloads a wheel and verifies the SHA-256 GitHub publishes for it.
+
+### The server and the web dashboard
 
 > **Pick one environment and stay in it.** On Windows you can install under PowerShell *or* WSL. Both work — but they keep **separate configs** (`C:\Users\<you>\.mcc` versus `~/.mcc` inside WSL). Installing in both is the most common way to end up editing one config while the server reads the other.
 >
@@ -342,6 +398,7 @@ $ mcc-desktop --print-status
   "tray_enabled": true,
   "minimize_to_tray": false,
   "start_at_login": false,
+  "autostart_reconcile": true,
   "server_log": "C:\\Users\\me\\.mcc\\logs\\server.log",
   "start_timeout_seconds": 15.0,
   "health_check_interval_seconds": 0.25,
@@ -356,8 +413,17 @@ $ mcc-desktop --print-status
 }
 ```
 
-Five things are worth knowing about it:
+Six things are worth knowing about it:
 
+- **`autostart_reconcile` says whether anyone is enforcing `start_at_login`.** It is
+  `false` when `MCC_DESKTOP_SKIP_AUTOSTART=1` is set in the environment, which turns the
+  launch-time reconciliation of the OS registration into a no-op with one log line. Set
+  it whenever you run `mcc-desktop` against a configuration directory that is not your
+  own — a smoke, an installer test, a bug repro. The reason is that the registration is
+  *machine-global* (one `HKCU\...\Run` value, one LaunchAgent, one XDG entry) while the
+  preference driving it lives *inside a config directory*: without the switch, launching
+  against a scratch `MCC_CONFIG_DIR` reads a fresh `desktop.json`, sees the default
+  `false`, and helpfully deletes the registration belonging to your real install.
 - **It is a pure read.** No server is started, no singleton lock is taken, `desktop.json`
   is not written, and no autostart registration is touched. It is safe to run against a
   live machine, in a loop, from a script.
@@ -470,7 +536,14 @@ This writes a Start Menu `.lnk` on Windows, a `.desktop` entry on Linux, and a m
 
 <a id="what-the-uninstaller-removes"></a>
 
+<a id="what-the-uninstaller-removes"></a>
+
 ### What the uninstaller removes
+
+> These two scripts are the **server's** uninstallers. The Windows desktop app has its
+> own, separate one — "My Claude Code (desktop app)" in Apps & Features — which removes
+> the window and deliberately leaves everything in this table alone. See
+> [The Windows desktop-app installer](#the-windows-desktop-app-installer).
 
 `scripts/uninstall.sh` and `scripts/uninstall.ps1` remove everything the installers and the tray create, not just the command shims. Until 6.41.3 they removed the shims and the config directory only, which left a Start Menu entry pointing at a deleted `mcc-desktop.exe` and an autostart registration relaunching a package that was no longer installed.
 
