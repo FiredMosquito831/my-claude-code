@@ -347,19 +347,103 @@ one:
    curl -fsSL https://github.com/FiredMosquito831/my-claude-code/releases/download/vN/SHA256SUMS-desktop-shell.txt
    ```
 
-4. In `src/my_claude_code/config/desktop_shell.py`, move
+4. **Vendor that file**, so the comparison is ordinary CI rather than an
+   opt-in one:
+
+   ```bash
+   mkdir -p tests/fixtures/desktop_shell/vN
+   gh release download vN --repo FiredMosquito831/my-claude-code \
+       -p SHA256SUMS-desktop-shell.txt \
+       --dir tests/fixtures/desktop_shell/vN
+   ```
+
+   `.gitattributes` checks that directory out with its bytes untouched.
+   `test_desktop_shell_pin.py` fails on a missing directory, so this step
+   cannot be skipped by accident.
+
+   If the Linux tarball's *contents* changed in this release, refresh the
+   member listing beside it too — path A's rule is "exactly one member named
+   `MyClaudeCode`, and no links", and the listing is what proves the released
+   archive still satisfies it:
+
+   ```bash
+   gh release download vN --repo FiredMosquito831/my-claude-code \
+       -p MyClaudeCode-linux-x86_64.tar.gz --dir /tmp
+   tar -tzvf /tmp/MyClaudeCode-linux-x86_64.tar.gz \
+       > tests/fixtures/desktop_shell/vN/MyClaudeCode-linux-x86_64.tar.gz.tzvf.txt
+   ```
+
+5. In `src/my_claude_code/config/desktop_shell.py`, move
    `DESKTOP_SHELL_RELEASE_TAG` to `vN` and replace **all four** archive digests
    (delivery path A fetches archives, never the installers or the `.dmg`) in
    `_RELEASES` with the lines from that file, in one commit. Never move the tag
-   without the digests: the two are one fact.
-5. Ship that as the next PATCH. `tests/config/test_desktop_shell_pin.py` checks
-   the shape offline; run the network-gated check to prove the pin against the
-   real release:
+   without the digests: the two are one fact. Never hand-type a digest —
+   copy it out of the file you just downloaded.
+6. Ship that as the next PATCH. `tests/config/test_desktop_shell_pin.py` now
+   compares the table against the vendored file offline, on every run; the
+   network-gated check proves the same thing against the live release, which is
+   worth doing once by hand:
 
    ```bash
    MCC_NETWORK_TESTS=1 uv run pytest -q tests/config/test_desktop_shell_pin.py
    ```
 
+7. Prove path A end to end on one machine, against a scratch everything:
+
+   ```bash
+   MCC_CONFIG_DIR=/tmp/mcc-pin-cfg \
+   MCC_DESKTOP_SHELL_DIR=/tmp/mcc-pin-shell \
+   MCC_DESKTOP_SKIP_AUTOSTART=1 \
+   PORT=8199 HOST=127.0.0.1 mcc-desktop
+   ```
+
+   The receipt at `/tmp/mcc-pin-shell/MyClaudeCode.receipt.json` must name `vN`
+   and the digest you just pinned. `MCC_DESKTOP_SKIP_AUTOSTART=1` is not
+   optional: the start-at-login registration is machine-global while the
+   preference driving it is per-config-directory, so without it a scratch
+   launch deletes the registration belonging to your real install. Stop the
+   window and the scratch server by their exact process ids when you are done.
+
 **When the shell has not changed, leave the pin alone.** Every user who already
 has that binary reads a receipt and downloads nothing; moving the pin for its own
 sake makes all of them re-download an identical window.
+
+
+## 9. The winget manifest (`desktop-shell/installer/winget/`)
+
+Only relevant once the manifest has been **accepted** into
+`microsoft/winget-pkgs`. Until then this section is preparation, and
+`desktop-shell/installer/winget/SUBMIT.md` is the runbook for the first
+submission — which has deliberately not been made.
+
+Each release that ships a `MyClaudeCode-Setup-windows-x86_64.exe` needs its own
+version folder in the community repository, and the repository side of that is
+one command:
+
+```bash
+uv run --offline python desktop-shell/installer/winget/render.py vN
+```
+
+It reads the release's own `SHA256SUMS-desktop-shell.txt` and the release date
+from GitHub, and the other six values out of
+`desktop-shell/installer/windows/MyClaudeCode.iss` and `pyproject.toml`, so
+nothing is typed twice. Commit the new `desktop-shell/installer/winget/N/`
+directory. Then, before submitting:
+
+```powershell
+winget validate --manifest desktop-shell\installer\winget\N
+```
+
+`tests/scripts/test_winget_manifest.py` pins the *committed* version, so bump
+its `MANIFEST_TAG` in the same commit; that test is what keeps the checked-in
+manifests trustworthy to copy into a submission.
+
+**The submission itself is `wingetcreate update` or `komac update`**, from the
+account that signed Microsoft's CLA — never a push to `microsoft/winget-pkgs`,
+and one package version per pull request. `SUBMIT.md` §2a has the exact
+command.
+
+**Do not submit a version whose assets might still be re-uploaded.** The
+`InstallerSha256` is verified on every install; replacing an asset after the
+manifest is merged breaks every install of that version, and the fix is a new
+manifest version rather than an edit.

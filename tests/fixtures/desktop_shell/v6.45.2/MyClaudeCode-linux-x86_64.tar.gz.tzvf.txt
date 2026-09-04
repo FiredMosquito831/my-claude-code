@@ -1,0 +1,8 @@
+-rwxr-xr-x runner/runner 4613208 2026-09-04 19:54 MyClaudeCode
+-rwxr-xr-x runner/runner    6798 2026-09-04 19:54 install-desktop.sh
+-rw-r--r-- runner/runner     346 2026-09-04 19:54 my-claude-code-desktop.desktop
+drwxr-xr-x runner/runner       0 2026-09-04 19:54 icons/
+-rw-r--r-- runner/runner   23282 2026-09-04 19:54 icons/128x128.png
+-rw-r--r-- runner/runner    2544 2026-09-04 19:54 icons/32x32.png
+-rw-r--r-- runner/runner   71023 2026-09-04 19:54 icons/256x256.png
+-rw-r--r-- runner/runner  240825 2026-09-04 19:54 icons/512x512.png

@@ -105,6 +105,7 @@ in `SHA256SUMS-desktop-shell.txt` beside it — and run it.
 | What it does not write | The start-at-login registration. That value has exactly one owner (`mcc-desktop`, reconciling it from `desktop.json` at every launch); an installer with a second opinion about it would turn "remove the window" into "disable the tray's autostart". |
 | WebView2 | Detected through the `EdgeUpdate` client key Microsoft documents. Windows 11 ships the runtime; Windows 10 has had it pushed since December 2022. Only when it is genuinely absent is Microsoft's ~2 MB Evergreen Bootstrapper downloaded from its permanent link and run silently — and if that fails, setup says so and continues rather than refusing to install. |
 | Unattended | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` finishes without a prompt. That is the switch set winget supplies for Inno installers, and the release workflow proves it on every build. |
+| winget | `winget install FiredMosquito831.MyClaudeCode` — **once the manifest is accepted.** The manifest is written and validated and lives in the repository at `desktop-shell/installer/winget/`; it has not been submitted to Microsoft's community repository, which is a separate decision for the maintainer. Until then this command finds nothing and the download above is the way in. |
 | Uninstall | **"My Claude Code (desktop app)"** in Apps & Features. |
 
 **Two uninstallers, two different jobs.** This is the split, and it is deliberate:

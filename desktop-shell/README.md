@@ -441,6 +441,54 @@ Menu before the install and compares them after the uninstall: they must be
 byte-identical. That is the machine-readable form of "removes everything it
 created, and nothing it did not".
 
+### winget
+
+`installer/winget/` holds the three manifests for
+`FiredMosquito831.MyClaudeCode` at manifest schema 1.28.0, plus `render.py`,
+which produces them, and `SUBMIT.md`, which is the submission runbook.
+
+**They are rendered, not written.** Six of the values in a winget manifest are
+facts that live elsewhere in this repository and go stale silently: the
+`ProductCode` is `AppId` from `MyClaudeCode.iss` with `_is1` appended;
+`AppsAndFeaturesEntries`' `DisplayName`, `DisplayVersion` and `Publisher` are
+the exact strings that installer writes into `HKCU\...\Uninstall`; `License` is
+`pyproject.toml`'s; and `InstallerSha256` comes from the release's own
+`SHA256SUMS-desktop-shell.txt`. `render.py` reads all six, and
+`tests/scripts/test_winget_manifest.py` asserts that rendering the committed
+version reproduces the committed bytes. So a change to the `AppId` — the one
+change that would silently stop winget recognising an installed copy — is a red
+test rather than a support thread.
+
+    uv run --offline python desktop-shell/installer/winget/render.py v6.45.2
+
+`winget validate --manifest desktop-shell/installer/winget/6.45.2` passes.
+
+Three things are deliberately absent:
+
+* **`InstallerSwitches`.** `InstallerType: inno` already means winget supplies
+  `/SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`
+  (`winget-cli`'s `GetDefaultKnownSwitches`), which is the set above. Writing it
+  out here would be a second copy of a list Microsoft maintains, and the winget
+  documentation asks you not to.
+* **`Commands`.** The installer puts nothing on `PATH` — one windowed
+  executable in `%LOCALAPPDATA%\Programs` and a Start Menu shortcut — so a
+  `Commands: [MyClaudeCode]` entry would promise the user a shell command that
+  does not exist.
+* **A submission.** Nothing has been opened against `microsoft/winget-pkgs`.
+  The package identifier is claimed permanently and is awkward to rename, so
+  publishing is the maintainer's call; `SUBMIT.md` carries the exact steps, the
+  pull-request text and the moderator checklist, with the evidence for each
+  item already gathered.
+
+On the identifier itself: the publisher segment is the **GitHub owner**, not a
+company name. The community repository asks for "the name of the company that
+publishes the tool" and there is no company; its own convention for that case is
+the account name (`sharkdp.bat`, `ajeetdsouza.zoxide`). Note that this
+deliberately differs from `AppsAndFeaturesEntries.Publisher`, which is
+`My Claude Code`: that field is not a display name, it is what Inno writes into
+the registry and what winget reads back to decide whether the package is
+installed.
+
 ### Signing, and what SmartScreen actually shows
 
 There is none (decision Q9), and the honest version is:

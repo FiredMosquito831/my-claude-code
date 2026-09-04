@@ -1,2 +1,7 @@
 desktop-shell/** text=auto eol=lf
 desktop-shell/src-tauri/icons/** binary
+
+# Vendored release artefacts. `test_desktop_shell_pin.py` compares these bytes
+# with the published ones, so a checkout that rewrote their line endings would
+# be comparing a copy of itself.
+tests/fixtures/desktop_shell/** -text

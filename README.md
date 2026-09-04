@@ -86,7 +86,7 @@ want to use it.
 | | **Server + web dashboard** | **Desktop app** |
 | --- | --- | --- |
 | What you get | `mcc-server` and the 16 `mcc-*` agent launchers on your `PATH`; the dashboard opens in your browser at `http://127.0.0.1:8082/admin`. | A real application with its own window, its own icon and a tray icon. It renders the same dashboard. |
-| How you install it | The one-line command below. | Download an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest). |
+| How you install it | The one-line command below. | Download an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest) — or, on Windows, `winget install FiredMosquito831.MyClaudeCode` once the manifest is accepted (see below). |
 | Does it need the other half? | No. This is the whole product. | It **installs the server for you** on first launch: if `mcc-desktop` is not there, the window shows the exact install command and runs it in front of you. Nothing is bundled and nothing is hidden. |
 | Best for | Terminal-first work, WSL, servers, headless boxes. | "I just want to double-click something." |
 | Availability | Windows, Linux, macOS, WSL — today. | **All three** — `MyClaudeCode-Setup-windows-x86_64.exe`, `MyClaudeCode-linux-x86_64.deb` (Ubuntu 22.04+/Debian 12+), `MyClaudeCode-linux-x86_64.tar.gz` (Fedora 40+, Arch, anywhere without root) and `MyClaudeCode-macos-universal.dmg` (Apple silicon and Intel in one file). The macOS `.dmg` is **unsigned**: the first launch needs one Terminal command, and the reason is spelled out below. |
@@ -105,6 +105,16 @@ installing it does not give you a second copy of anything.
 3. Launch **My Claude Code** from the Start Menu. If the server is not installed yet,
    the window says so, shows you the exact command, and runs it. When it finishes, the
    window starts the server and loads the dashboard.
+
+**Or `winget install FiredMosquito831.MyClaudeCode`, once the manifest is
+accepted.** The manifest is written, validated and proven — installed, launched and
+uninstalled on a real Windows 11 machine with an empty before/after diff — and it lives
+in this repository at [`desktop-shell/installer/winget/`](desktop-shell/installer/winget/).
+It has **not** been submitted to Microsoft's community repository: publishing the
+project's name into a Microsoft-run index is a decision for the maintainer rather than
+an implementation detail, so the steps are prepared and stop there
+([SUBMIT.md](desktop-shell/installer/winget/SUBMIT.md)). Until that happens, the
+download above is the way in, and `winget install` will not find it.
 
 To remove it, use **"My Claude Code (desktop app)"** in Apps & Features. That removes
 the window and nothing else — your configuration, your keys and `mcc-server` itself are

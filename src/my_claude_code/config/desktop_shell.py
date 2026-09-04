@@ -51,9 +51,13 @@ from pathlib import Path, PurePosixPath
 
 #: The release whose shell assets this build wants. Bumping it is a step in
 #: ``docs/RELEASE-CHECKLIST.md``: cut the release, wait for
-#: ``shell-release.yml`` to attach the five assets, then move this tag and the
-#: four digests below together, in one commit.
-DESKTOP_SHELL_RELEASE_TAG = "v6.43.0"
+#: ``shell-release.yml`` to attach the eight assets, then move this tag and the
+#: four digests below together, in one commit -- and vendor that release's own
+#: ``SHA256SUMS-desktop-shell.txt`` under ``tests/fixtures/desktop_shell/`` so
+#: ``test_desktop_shell_pin.py`` can compare the two offline. A pin that drifts
+#: from the published sums file is the one failure this table cannot survive,
+#: and it is not something a reviewer can see by eye.
+DESKTOP_SHELL_RELEASE_TAG = "v6.45.2"
 
 #: The repository the shell is released from. The same one
 #: ``application/release_updates.py`` polls for the wheel -- one release stream
@@ -108,19 +112,19 @@ DESKTOP_SHELL_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 _RELEASES: dict[tuple[str, str], tuple[str, str]] = {
     ("linux", "x86_64"): (
         "MyClaudeCode-linux-x86_64.tar.gz",
-        "ec4f92d648aee24a90184d30cdb39204be466df81c3ef145ecb6ca701a08a55f",
+        "46040b4bc7b7cf5c020b043648aa1cc0a8d7cdf2f5fbae4befb2722666eebae0",
     ),
     ("darwin", "x86_64"): (
         "MyClaudeCode-macos-x86_64.tar.gz",
-        "41d059d34e8cca7b1cbdebce0e5b7e6e0ba6019aa5949927a91ec76bd1b7ff96",
+        "c0ca0e566acb7c0739a675aa2da6d426d7d13e8aab61ded099a9fa1d045373ee",
     ),
     ("darwin", "aarch64"): (
         "MyClaudeCode-macos-aarch64.tar.gz",
-        "cfc66ea64cb7a89fc006431240dd67c43ea1a79cc58e9a5918a67e7242d24183",
+        "f5a694a6c0adefbbbc073bf283ff728ddf04f303fe65558768e8e2045dd44818",
     ),
     ("win32", "x86_64"): (
         "MyClaudeCode-windows-x86_64.zip",
-        "3a159d2494abadc1fc19855fb44765af3a0b28535711177de2c1852bfa92436e",
+        "f71368ef638098161ef7f95fd24f6d7c33cc0bb69f9f7a869eaede75c74f7f76",
     ),
 }
 
