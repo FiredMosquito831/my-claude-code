@@ -15,10 +15,19 @@ all three to varying degrees per engine.
 Every provider loads ``http://127.0.0.1:<port>/admin`` over real HTTP. Nothing
 here ever presents a ``file://`` origin, because the admin API's
 ``require_loopback_admin`` rejects one with a 403.
+
+Since 6.44.0 the chain has a first link that is not a browser at all: the
+project's own desktop shell, a small Tauri window fetched and verified by
+``config/desktop_shell.py``. It leads ``auto`` because it is the only provider
+that gives My Claude Code a window of its own -- its own icon, its own dock
+entry, and on Linux its own tray. App-mode remains directly behind it, and
+remains what an explicit ``window=app-mode`` selects, so nothing that works
+today stops working.
 """
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import webbrowser
@@ -26,12 +35,19 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from my_claude_code.cli.tool_paths import resolve_installed_command
 from my_claude_code.config.desktop import (
     WINDOW_PREFERENCES,
     WindowPreference,
     chromium_binary,
     load_desktop_state,
     record_applied_window_size,
+)
+from my_claude_code.config.desktop_shell import (
+    DesktopShellError,
+    desktop_shell_enabled,
+    ensure_desktop_shell,
+    is_desktop_shell_installed,
 )
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.config.settings import get_settings
@@ -41,8 +57,27 @@ logger = logging.getLogger(__name__)
 LINUX_WM_CLASS = "MyClaudeCode"
 PROFILE_DIRNAME = "desktop-profile"
 
-#: Provider identifiers in default preference order. ``auto`` walks this list.
+#: The command the shell calls back into for ``--print-status``. It is the only
+#: way the shell learns where the config directory, the port and the admin URL
+#: are (contract C1), so it is handed an absolute path rather than being left to
+#: find ``mcc-desktop`` on a ``PATH`` a GUI launch may not have.
+SHELL_DESKTOP_COMMAND_ENV = "MCC_SHELL_DESKTOP_COMMAND"
+
+#: The command the shell starts when the ladder says the server must be started.
+SHELL_SERVER_COMMAND_ENV = "MCC_SHELL_SERVER_COMMAND"
+
+#: Set in the shell child's environment to say whether it owns the tray icon.
+#: ``mcc-desktop`` is the only writer, and ``cli/desktop_status.py`` is the only
+#: reader; see that module for why the answer is not simply ``tray_enabled``.
+SHELL_TRAY_ENV = "MCC_DESKTOP_SHELL_TRAY"
+
+#: Provider identifiers a *pinned* preference degrades through, in order. The
+#: shell is deliberately not here: it is chosen by ``auto``, never as the
+#: consolation prize for an explicit pin that could not be honoured.
 PROVIDER_CHAIN: tuple[str, ...] = ("app-mode", "pywebview", "browser")
+
+#: What ``auto`` walks. The shell first, then the browser-backed chain.
+AUTO_PROVIDER_CHAIN: tuple[str, ...] = ("shell", *PROVIDER_CHAIN)
 
 
 @runtime_checkable
@@ -203,6 +238,156 @@ class AppModeWindow:
     def is_open(self) -> bool:
         process = self._process
         return process is not None and process.poll() is None
+
+
+class ShellWindow:
+    """The project's own desktop app: a window, an icon, and on Linux a tray.
+
+    Unlike every other provider this one is a *separate program* that resolves
+    nothing for itself. It runs ``mcc-desktop --print-status`` to learn the
+    admin URL, the server-presence ladder and the timing budgets, which is why
+    :meth:`environment` hands it an absolute path to that command rather than
+    hoping ``PATH`` carries one: a window launched from a shortcut, a
+    LaunchAgent or a ``.desktop`` file does not inherit a login shell's ``PATH``.
+
+    ``open`` therefore takes the admin URL and does not pass it on. The URL is
+    not this process's to give -- handing one over would create a second source
+    of truth for the port, which is exactly what contract C1 forbids -- and the
+    shell derives the same answer from the same status document.
+
+    **Raising an existing window is a second launch, not a doorbell.** The shell
+    holds ``tauri-plugin-single-instance``, whose second-instance callback
+    focuses the window already open and exits; that is the same trick
+    :class:`AppModeWindow` plays with a Chromium profile. Ringing
+    ``desktop.activate`` from here instead would feed the tray's own activation
+    watcher, which polls that very file, and the two would raise each other in a
+    loop.
+    """
+
+    def __init__(self, binary: Path) -> None:
+        self._binary = binary
+        self._process: subprocess.Popen[bytes] | None = None
+
+    @staticmethod
+    def available() -> bool:
+        """Whether an already-installed shell could be used without a download."""
+
+        return desktop_shell_enabled() and is_desktop_shell_installed()
+
+    @classmethod
+    def create(cls) -> ShellWindow | None:
+        """Return the shell, fetching the pinned release when it is absent.
+
+        Every failure is a warning and a ``None``, never an exception: a
+        machine that is offline, behind a proxy, on an unbuilt architecture or
+        out of disk still has a working app-mode window one link down the
+        chain. The desktop app not launching is a far worse outcome than the
+        desktop app launching in a browser window.
+        """
+
+        if not desktop_shell_enabled():
+            return None
+        try:
+            binary = ensure_desktop_shell()
+        except DesktopShellError as exc:
+            logger.warning(
+                "Falling back to a browser window: the My Claude Code desktop "
+                "app could not be installed. %s",
+                exc,
+            )
+            return None
+        return cls(binary)
+
+    def environment(self, *, owns_tray: bool = False) -> dict[str, str]:
+        """Return the environment the shell child is launched with.
+
+        ``owns_tray`` is the Q2 decision made concrete: while the Python tray
+        is running -- Windows and macOS, today -- the shell must not draw a
+        second icon beside it.
+        """
+
+        environment = dict(os.environ)
+        environment[SHELL_TRAY_ENV] = "1" if owns_tray else "0"
+        for stem, name in (
+            ("mcc-desktop", SHELL_DESKTOP_COMMAND_ENV),
+            ("mcc-server", SHELL_SERVER_COMMAND_ENV),
+        ):
+            # Only set what we actually resolved. An empty override is treated
+            # by the shell as "not set", but writing one anyway would hide a
+            # PATH that does work from a reader of this environment.
+            if environment.get(name, "").strip():
+                continue
+            resolved = resolve_installed_command(stem)
+            if resolved is not None:
+                environment[name] = resolved
+        return environment
+
+    def _spawn(self) -> subprocess.Popen[bytes] | None:
+        try:
+            return subprocess.Popen(
+                [str(self._binary)],
+                env=self.environment(owns_tray=not python_tray_is_running()),
+            )
+        except OSError:
+            logger.warning("Could not launch the desktop app at %s.", self._binary)
+            return None
+
+    def open(self, url: str) -> None:
+        process = self._spawn()
+        if process is None:
+            webbrowser.open(url)
+            return
+        self._process = process
+
+    def focus(self) -> bool:
+        """Launch again so the single-instance guard raises the open window."""
+
+        if not self.is_open:
+            return False
+        # Deliberately not stored: this child exists only to hand the running
+        # instance a "come to the front", and exits immediately afterwards.
+        return self._spawn() is not None
+
+    def close(self) -> None:
+        process = self._process
+        self._process = None
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+    @property
+    def is_open(self) -> bool:
+        process = self._process
+        return process is not None and process.poll() is None
+
+
+def python_tray_is_running() -> bool:
+    """Whether the pystray tray is the one drawing the status-area icon.
+
+    One icon, and only one (the "two tray icons" risk in the spec). In 6.44.0
+    the Python tray keeps it wherever it exists, because it is the tray that
+    has been in front of users for releases and it carries menu items the
+    shell's does not. That is Windows and macOS: ``pystray`` is declared
+    ``sys_platform == 'win32' or sys_platform == 'darwin'`` in
+    ``pyproject.toml``, so on Linux there is no Python tray and the shell's is
+    the only one there has ever been.
+
+    Availability is probed rather than assumed from ``sys.platform``, because
+    an incomplete install is a real state and a machine with no tray at all
+    should get the shell's.
+    """
+
+    if not load_desktop_state().tray_enabled:
+        return False
+    try:
+        import pystray  # noqa: F401
+    except ImportError, OSError:
+        return False
+    return True
 
 
 class PywebviewWindow:
@@ -372,6 +557,7 @@ class BrowserTabWindow:
 
 
 _PROVIDERS: dict[str, Callable[[], DesktopWindow | None]] = {
+    "shell": ShellWindow.create,
     "app-mode": AppModeWindow.create,
     "pywebview": PywebviewWindow.create,
     "browser": BrowserTabWindow.create,
@@ -395,7 +581,7 @@ def create_window(preference: str) -> DesktopWindow:
         normalized = "auto"
 
     if normalized == "auto":
-        order = list(PROVIDER_CHAIN)
+        order = list(AUTO_PROVIDER_CHAIN)
     else:
         order = [normalized, *(name for name in PROVIDER_CHAIN if name != normalized)]
 

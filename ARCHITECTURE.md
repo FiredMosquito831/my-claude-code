@@ -257,6 +257,26 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
   [cli/desktop.py](src/my_claude_code/cli/desktop.py) is the controller that owns the `mcc-server`
   child process — spawn, health check, restart, stop — while
   [cli/desktop_tray.py](src/my_claude_code/cli/desktop_tray.py) owns the pystray menu.
+  The controller spawns that child with `MCC_OPEN_BROWSER=0`: the server opens the
+  dashboard in the default browser when it becomes healthy, and the desktop app is about
+  to show it in a window it owns, so without the suppression one launch produced two.
+- **The desktop shell is a fetched binary, not a Python window.** Since 6.44.0 the window
+  chain in [cli/desktop_window.py](src/my_claude_code/cli/desktop_window.py) leads with
+  `ShellWindow`, a separate process built from `desktop-shell/` and released as an asset on
+  the same GitHub release as the wheel. [config/desktop_shell.py](src/my_claude_code/config/desktop_shell.py)
+  is the layer that gets it there: a pinned release tag, a
+  `(sys.platform, arch) -> (asset, sha256)` table, a download whose digest must match both
+  the in-source pin *and* the release's own `SHA256SUMS-desktop-shell.txt`, a safe
+  extraction (one executable; no symlinks, no `..`), an atomic install into `~/.local/bin`
+  and an install receipt so an unchanged pin never downloads twice. It is modelled directly
+  on [config/rtk.py](src/my_claude_code/config/rtk.py), which has delivered a pinned Rust
+  binary for five targets since before 6.40.0. It lives in `config` because `config` may
+  import nothing of ours, it is imported only by `mcc-desktop`, and a contract test
+  (`tests/contracts/test_desktop_shell_not_on_the_server_path.py`) keeps it off the
+  server's startup path. Every failure — offline, proxy, unbuilt architecture, read-only
+  home — is a logged warning and a fall-through to app-mode, never a refusal to launch.
+  The shell resolves nothing itself: it is handed an absolute `mcc-desktop` in
+  `MCC_SHELL_DESKTOP_COMMAND` and asks it for `--print-status` (contract C1).
 - `mcc-rtk` (legacy alias `fcc-rtk`) calls `my_claude_code.cli.entrypoints:rtk`,
   which dispatches to [cli/rtk_commands.py](src/my_claude_code/cli/rtk_commands.py).
 

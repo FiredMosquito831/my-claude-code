@@ -159,6 +159,26 @@ def _isolate_harness_tiers(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_desktop_shell(monkeypatch, tmp_path):
+    """No test may download the desktop shell, or install one at the developer.
+
+    ``ShellWindow.create()`` is the first link of the ``auto`` window chain and
+    it *fetches* -- a real 1.5 MB archive, from the real GitHub release, on the
+    first call. Any test that builds a window with no preference would therefore
+    reach the network, take a second to do it, and fail on an offline CI runner.
+    Both halves are closed here: the install directory is redirected under
+    ``tmp_path``, and the shell is switched off, so the chain behaves as it did
+    before 6.44.0 unless a test deliberately turns it on.
+    """
+    from my_claude_code.config import desktop_shell
+
+    monkeypatch.setenv(
+        desktop_shell.DESKTOP_SHELL_DIR_ENV, str(tmp_path / "desktop-shell-bin")
+    )
+    monkeypatch.setenv(desktop_shell.DESKTOP_SHELL_ENABLED_ENV, "off")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_client_fingerprint():
     """The mirrored client fingerprint must not survive from one test to the next.
 

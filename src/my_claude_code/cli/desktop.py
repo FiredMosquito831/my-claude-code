@@ -9,7 +9,6 @@ restart, stop -- while the tray adapter owns the visible menu.
 import json
 import logging
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -29,6 +28,7 @@ from my_claude_code.cli.port_diagnostics import (
     diagnose_port_owner,
     probe_port_available,
 )
+from my_claude_code.cli.tool_paths import resolve_installed_command
 from my_claude_code.config.claude_discovery import native_origin
 from my_claude_code.config.desktop import (
     DesktopState,
@@ -36,6 +36,11 @@ from my_claude_code.config.desktop import (
     load_desktop_state,
     remove_start_at_login,
     set_window_open,
+)
+from my_claude_code.config.desktop_shell import (
+    DesktopShellError,
+    desktop_shell_enabled,
+    ensure_desktop_shell,
 )
 from my_claude_code.config.paths import DESKTOP_LOCK_FILENAME, config_dir_path
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
@@ -53,6 +58,13 @@ _SERVER_MODULE = "my_claude_code.cli.entrypoints"
 
 LOCK_FILENAME = DESKTOP_LOCK_FILENAME
 ACTIVATION_FILENAME = "desktop.activate"
+
+#: The server's own "open the dashboard when I am healthy" switch, spelled as
+#: the environment variable ``Settings.open_admin_browser`` reads
+#: (``AliasChoices("MCC_OPEN_BROWSER", "FCC_OPEN_BROWSER")`` -- the canonical
+#: name is the first choice, so setting it wins over a legacy value in a
+#: ``.env``).
+OPEN_BROWSER_ENV = "MCC_OPEN_BROWSER"
 
 #: How often the close watcher samples ``window.is_open`` (seconds).
 WINDOW_CLOSE_POLL_SECONDS = 1.0
@@ -275,7 +287,11 @@ class DesktopController:
             creationflags = (
                 subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
             )
-            self._process = subprocess.Popen(command, creationflags=creationflags)
+            self._process = subprocess.Popen(
+                command,
+                creationflags=creationflags,
+                env=self._server_environment(),
+            )
         except OSError as exc:
             raise DesktopError(f"Could not start the MCC server: {exc}") from exc
 
@@ -291,37 +307,31 @@ class DesktopController:
         )
 
     def _server_command(self) -> list[str] | None:
-        binary = self._server_binary()
+        binary = resolve_installed_command("mcc-server")
         if binary is not None:
             return [binary]
         return [sys.executable, "-m", _SERVER_MODULE]
 
-    def _server_binary(self) -> str | None:
-        bin_dir = self._uv_tool_bin_dir()
-        if bin_dir is not None:
-            candidate = bin_dir / (
-                "mcc-server.exe" if os.name == "nt" else "mcc-server"
-            )
-            if candidate.is_file():
-                return str(candidate)
-        return shutil.which("mcc-server")
+    @staticmethod
+    def _server_environment() -> dict[str, str]:
+        """Return the child server's environment, with its browser open silenced.
 
-    def _uv_tool_bin_dir(self) -> Path | None:
-        uv = shutil.which("uv")
-        if uv is None:
-            return None
-        try:
-            completed = subprocess.run(
-                [uv, "tool", "dir", "--bin"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-        except OSError, subprocess.SubprocessError:
-            return None
-        path = completed.stdout.strip()
-        return Path(path) if completed.returncode == 0 and path else None
+        ``mcc-server`` opens the dashboard in the default browser once it is
+        healthy (``Settings.open_admin_browser``, on by default), which is
+        right when a human ran it in a terminal and wrong in every case that
+        reaches this method: the desktop app is *about* to show the dashboard
+        in a window it owns. Left alone, one ``mcc-desktop`` launch produced
+        two dashboards -- the app's window and a browser tab nobody asked for.
+
+        The desktop state is the authority on windows here, not the server's
+        default. That holds for ``window_open=False`` too: a user who closed
+        the window and relaunched to the tray asked for no window, and a
+        browser tab is still a window.
+        """
+
+        environment = dict(os.environ)
+        environment[OPEN_BROWSER_ENV] = "0"
+        return environment
 
     def _stop_child(self) -> None:
         """Ask the server child to stop, wait its own budget, then escalate.
@@ -660,10 +670,21 @@ def headless_refusal_reason() -> str | None:
             "reaches the WSL port directly."
         )
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        # Linux has a desktop session here, and since 6.44.0 it can have a
+        # window and a tray as well -- both from the shell, because pystray is
+        # declared win32/darwin only and always will be. The refusal therefore
+        # became conditional rather than disappearing: with the shell, Linux
+        # is supported; without it, nothing on this machine can draw a tray and
+        # the old advice is still the right advice.
+        unavailable = desktop_shell_unavailable_reason()
+        if unavailable is None:
+            return None
         return (
-            "mcc-desktop's tray lives in the Windows and macOS status areas; "
-            "no Linux tray backend is packaged. Run mcc-server instead -- it "
-            f"is headless -- and open {admin_url} in this machine's browser."
+            "mcc-desktop's tray lives in the Windows and macOS status areas, "
+            "and the My Claude Code desktop app -- which carries its own tray "
+            f"on Linux -- is not available here: {unavailable} Run mcc-server "
+            f"instead -- it is headless -- and open {admin_url} in this "
+            "machine's browser."
         )
     return (
         "mcc-desktop needs a desktop session, and neither DISPLAY nor "
@@ -671,6 +692,47 @@ def headless_refusal_reason() -> str | None:
         f"and open {admin_url} from a browser on any machine that can reach "
         "this one."
     )
+
+
+def desktop_shell_unavailable_reason() -> str | None:
+    """Return why the desktop shell cannot be used here, or ``None``.
+
+    Installing it is the check, because "can this machine have a window" and
+    "is the shell installed" are the same question and the honest way to answer
+    the second is to try. The attempt costs one JSON read once the shell is in
+    place -- :func:`ensure_desktop_shell` short-circuits on its install
+    receipt -- so asking here and again when the window chain is built does not
+    download anything twice.
+    """
+
+    if not desktop_shell_enabled():
+        return "it is switched off with DESKTOP_SHELL=off."
+    try:
+        ensure_desktop_shell()
+    except DesktopShellError as exc:
+        return str(exc)
+    return None
+
+
+class WindowOnlyHost:
+    """A no-op stand-in for the tray, for platforms that do not have one.
+
+    ``launch_desktop`` is built around a tray adapter: it is what owns the
+    thread the process blocks on and what a window close stops. On Linux there
+    is no pystray to provide one and the shell draws its own icon, so this
+    supplies the shape without the icon -- block until stopped, and stop when
+    the window closes.
+    """
+
+    def __init__(self, controller: DesktopController) -> None:
+        self._controller = controller
+        self._stopped = threading.Event()
+
+    def run(self) -> None:
+        self._stopped.wait()
+
+    def stop(self) -> None:
+        self._stopped.set()
 
 
 def _reconcile_start_at_login(state: DesktopState) -> None:

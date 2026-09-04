@@ -384,10 +384,31 @@ def pywebview_available() -> bool:
 def resolve_auto_window() -> tuple[str, str]:
     """Return ``(provider, reason)`` describing what ``auto`` resolves to now.
 
-    Mirrors ``cli.desktop_window.PROVIDER_CHAIN`` / ``create_window``'s
-    fallback order (app-mode, then pywebview, then browser) so the admin UI's
-    "auto -> ..." readout matches what a real launch would actually pick.
+    Mirrors ``cli.desktop_window.AUTO_PROVIDER_CHAIN`` / ``create_window``'s
+    fallback order (the desktop shell, then app-mode, then pywebview, then
+    browser) so the admin UI's "auto -> ..." readout matches what a real launch
+    would actually pick.
+
+    The shell is reported only when it is *already installed*. This function
+    runs inside the server, on an admin request, and a launch's fetch is a
+    network download -- something an admin page render must never trigger. The
+    honest consequence is that the readout says ``app-mode`` on a machine whose
+    next ``mcc-desktop`` launch would download the shell and use it; it becomes
+    ``desktop app`` from the launch after that. Under-promising here is the
+    right way round.
     """
+
+    # Imported inside the function on purpose: this module is on the server's
+    # startup path and the shell fetcher is not (see
+    # tests/contracts/test_desktop_shell_not_on_the_server_path.py).
+    from .desktop_shell import (
+        DESKTOP_SHELL_RELEASE_TAG,
+        desktop_shell_enabled,
+        is_desktop_shell_installed,
+    )
+
+    if desktop_shell_enabled() and is_desktop_shell_installed():
+        return "shell", f"My Claude Code {DESKTOP_SHELL_RELEASE_TAG}"
 
     chromium = _chromium_binary_with_label()
     if chromium is not None:

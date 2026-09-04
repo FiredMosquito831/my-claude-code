@@ -7649,7 +7649,7 @@ const SERVER_MODE_HINTS = {
 };
 
 const WINDOW_HINTS = {
-  auto: "The default. Uses an app window if a Chromium-family browser is available, otherwise a browser tab.",
+  auto: "The default. Uses the My Claude Code desktop app, downloading it once if needed; falls back to a Chromium app-mode window, then a browser tab.",
   "app-mode": "A Chrome/Edge/Brave window with no tabs or URL bar, using its own profile.",
   pywebview:
     "An embedded webview. Not installed by default, and OAuth login, downloads and copy buttons may not work in it.",
@@ -7657,6 +7657,7 @@ const WINDOW_HINTS = {
 };
 
 const WINDOW_PROVIDER_LABELS = {
+  shell: "desktop app",
   "app-mode": "app-mode",
   pywebview: "embedded webview",
   browser: "browser tab",

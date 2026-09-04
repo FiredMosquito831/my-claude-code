@@ -2821,19 +2821,38 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>~/.mcc/desktop.json</code>.
                 </p>
                 <p>
+                  Since 6.44.0 the first thing <em>Auto</em> tries is the
+                  <strong>My Claude Code desktop app</strong> &mdash; a ~1.5&nbsp;MB
+                  window this project builds and attaches to its own GitHub releases.
+                  <code>uv tool install</code> cannot deliver a compiled binary, so the
+                  first <code>mcc-desktop</code> launch after upgrading downloads it,
+                  checks its SHA-256 against both the checksum file published on the
+                  release <em>and</em> a digest pinned inside this build, and installs it
+                  at <code>~/.local/bin/MyClaudeCode</code> with a receipt beside it so it
+                  never downloads twice. If any of that fails &mdash; no network, a proxy,
+                  an architecture with no build &mdash; the launch is
+                  <strong>not blocked</strong>: it warns once and falls back to app-mode.
+                  Opt out with <code>DESKTOP_SHELL=off</code> or by picking
+                  <em>App-mode window</em> here. It is unsigned, so Windows SmartScreen
+                  may warn on first run.
+                </p>
+                <p>
                   The <strong>Window</strong> control on the same Deployment card picks
                   how <code>mcc-desktop</code> shows the dashboard: <em>Auto</em>
                   (recommended), <em>App-mode window</em>, <em>Embedded webview</em>, or
-                  <em>Browser tab</em>. Auto prefers <strong>app-mode</strong> &mdash; a
-                  real Chromium browser process with no tabs or URL bar &mdash; and a line
-                  under the select shows what it currently resolves to, e.g.
-                  <code>auto &rarr; app-mode (Microsoft Edge)</code>. This is not
-                  cosmetic: <code>window.open</code> (both OAuth logins), <code>&lt;a
-                  download&gt;</code> (the analytics export), and
+                  <em>Browser tab</em>. Auto walks
+                  <code>desktop app &rarr; app-mode &rarr; embedded webview &rarr; browser
+                  tab</code>, and a line under the select shows what it currently resolves
+                  to, e.g. <code>auto &rarr; app-mode (Microsoft Edge)</code>. App-mode
+                  &mdash; a real Chromium browser process with no tabs or URL bar &mdash;
+                  is the fallback, and a good one: <code>window.open</code> (both OAuth
+                  logins), <code>&lt;a download&gt;</code> (the analytics export), and
                   <code>navigator.clipboard</code> (every copy button) all
                   <strong>break inside an embedded webview</strong>, and app-mode is a
                   real browser process so all three keep working. The CLI equivalent is
-                  <code>mcc-desktop --window auto|app-mode|pywebview|browser</code>.
+                  <code>mcc-desktop --window auto|app-mode|pywebview|browser</code>; an
+                  explicit choice there falls back through the browser providers only,
+                  never into the desktop app.
                 </p>
                 <p>
                   <code>mcc-desktop --status</code> prints those preferences as five

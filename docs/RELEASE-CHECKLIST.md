@@ -249,3 +249,45 @@ reads a fake `mcc-desktop --print-status`, shows the port-conflict page and
 starts nothing -- but a smoke on a headless runner is not a human looking at a
 window. First-launch SmartScreen and Gatekeeper behaviour cannot be observed in
 CI at all: reputation is per file hash and accrues from real downloads.
+
+
+## 8. Moving the shell pin (`config/desktop_shell.py`)
+
+Since 6.44.0 `mcc-desktop` fetches the shell on launch from **one pinned release
+tag**, verifying the archive against digests pinned in the wheel *and* against
+the release's own `SHA256SUMS-desktop-shell.txt`. Both have to agree or the fetch
+refuses, which is the point -- and it is also why the pin cannot move on its own.
+
+**Moving the pin is a separate, later commit, never part of cutting a release.**
+The digests for release *N* do not exist until `shell-release.yml` has finished
+building release *N*, which happens minutes after the release is published. A
+release that tried to pin itself would be pinning digests nobody has computed.
+
+The sequence, when the shell has actually changed and users should get the new
+one:
+
+1. Cut release *N* as usual. The pin still names *N-1*, and that is correct: the
+   shell it names is real, published and verified.
+2. Wait for `shell-release.yml` on *N* to be green and the five assets attached
+   (section 7).
+3. Read the published digests:
+
+   ```bash
+   curl -fsSL https://github.com/FiredMosquito831/my-claude-code/releases/download/vN/SHA256SUMS-desktop-shell.txt
+   ```
+
+4. In `src/my_claude_code/config/desktop_shell.py`, move
+   `DESKTOP_SHELL_RELEASE_TAG` to `vN` and replace **all four** digests in
+   `_RELEASES` with the lines from that file, in one commit. Never move the tag
+   without the digests: the two are one fact.
+5. Ship that as the next PATCH. `tests/config/test_desktop_shell_pin.py` checks
+   the shape offline; run the network-gated check to prove the pin against the
+   real release:
+
+   ```bash
+   MCC_NETWORK_TESTS=1 uv run pytest -q tests/config/test_desktop_shell_pin.py
+   ```
+
+**When the shell has not changed, leave the pin alone.** Every user who already
+has that binary reads a receipt and downloads nothing; moving the pin for its own
+sake makes all of them re-download an identical window.

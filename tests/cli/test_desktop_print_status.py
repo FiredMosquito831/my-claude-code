@@ -58,6 +58,10 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     "health_failure_threshold": int,
     "activation_poll_seconds": float,
     "reconnect_timeout_seconds": float,
+    "shell_tray": bool,
+    "shell_binary": (str, type(None)),
+    "shell_release_tag": str,
+    "shell_ready": bool,
 }
 
 

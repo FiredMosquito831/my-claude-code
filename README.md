@@ -669,11 +669,29 @@ The tray's **Server mode** — set from the dashboard's Deployment card or the t
 
 See [docs/USAGE.md](docs/USAGE.md#running-the-server-with-the-desktop-tray) for the full walkthrough.
 
-### The window, and why app-mode is the default
+### The desktop app, and what happens on first launch (6.44.0)
 
-There is no single "native window" API that works the same way across Windows, macOS, and Linux — WebView2, WKWebView, and WebKitGTK all behave differently. So `mcc-desktop` resolves its window through a **provider chain** that prefers Chromium **app-mode**: a real browser process launched with no tabs and no URL bar, its own taskbar entry, and a private profile under `~/.mcc/desktop-profile`.
+Since 6.44.0 the first thing `mcc-desktop` tries is **My Claude Code's own desktop app** — a ~1.5 MB window built from `desktop-shell/` in this repository. `uv tool install` cannot deliver a compiled binary, so Python fetches it:
 
-This preference is not aesthetic. Three things the dashboard depends on **break inside an embedded webview**: `window.open` (both OAuth logins use it), `<a download>` (the analytics export), and `navigator.clipboard` (every copy button). App-mode is a real browser process, so all three work normally.
+1. It downloads `SHA256SUMS-desktop-shell.txt` from the pinned GitHub release and checks that the digest published there is **the same digest pinned in the wheel** (`config/desktop_shell.py`). If they disagree, the fetch stops — a replaced release asset cannot change what runs on your machine.
+2. It downloads the ~1.5 MB archive for your platform, verifies its SHA-256, and extracts exactly one executable from it (no symlinks, no `..` paths).
+3. It installs it at `~/.local/bin/MyClaudeCode` (`MyClaudeCode.exe` on Windows) and writes `MyClaudeCode.receipt.json` beside it naming the release tag and digest. **The receipt is why this happens once**: an unchanged pin never downloads again, and a moved pin always does.
+
+If any of that fails — no network, a proxy, an architecture nothing is built for, a read-only home — the launch is **not blocked**. You get a one-line warning naming the reason and the window falls through to Chromium app-mode exactly as it did before.
+
+**How to opt out.** Set `DESKTOP_SHELL=off` in the environment, or pin the window explicitly with `mcc-desktop --window app-mode`. An explicit `--window` never degrades *into* the app; the app is only ever chosen by `auto`. Override where it installs with `MCC_DESKTOP_SHELL_DIR`.
+
+**It is unsigned, and we say so.** On Windows, SmartScreen may warn on first run; reputation accrues per file hash from real download volume, and since a 2024 Microsoft policy change even an EV certificate no longer skips the prompt. Some Windows 11 machines with **Smart App Control** block unsigned apps outright with no "run anyway" — `install.ps1` and app-mode remain the supported path there. On macOS the app is unsigned too, but a file **Python downloaded is not quarantined** — quarantine is applied by browsers, and nothing here goes through one — so it never meets Gatekeeper's download gate. That is a real difference and it is why there is no macOS `.dmg`; if you download the archive yourself in a browser, you will meet Gatekeeper and no amount of documentation changes that.
+
+**Linux is supported now.** The old refusal (`no Linux tray backend is packaged`) was about the tray, not the window: `pystray` is Windows/macOS only. The app carries its own tray, so `mcc-desktop` on a Linux desktop session now runs — and still refuses, correctly, when there is no `DISPLAY`/`WAYLAND_DISPLAY` or when the app cannot be installed. It needs webkit2gtk-4.1 (Ubuntu 22.04+, Debian 12+, Fedora 40+); older distributions keep app-mode.
+
+**One tray icon, not two.** On Windows and macOS the Python tray keeps the status-area icon and the app's own tray is switched off; the tray's *Open Admin* raises the existing window rather than opening a second one. On Linux there is no Python tray, so the app's is the only one. The app's tray takes over everywhere in a later release.
+
+### The window chain, and why app-mode is still in it
+
+There is no single "native window" API that works the same way across Windows, macOS, and Linux — WebView2, WKWebView, and WebKitGTK all behave differently. So `mcc-desktop` resolves its window through a **provider chain**. `auto` walks `shell → app-mode → pywebview → browser`.
+
+Chromium **app-mode** — a real browser process launched with no tabs and no URL bar, its own taskbar entry, and a private profile under `~/.mcc/desktop-profile` — is the fallback, and it is a good one. Three things the dashboard depends on **break inside an embedded webview**: `window.open` (both OAuth logins use it), `<a download>` (the analytics export), and `navigator.clipboard` (every copy button). App-mode is a real browser process, so all three work normally.
 
 Pick the mode with `--window`:
 
@@ -681,11 +699,11 @@ Pick the mode with `--window`:
 mcc-desktop --window auto|app-mode|pywebview|browser
 ```
 
-`auto` (the default) tries app-mode first and falls back to a plain browser tab if no Chromium-family browser is found. `mcc-desktop --status` shows which one is currently in effect. An unavailable choice falls back with a warning rather than failing outright.
+`auto` (the default) tries the desktop app, then app-mode, then a plain browser tab. `mcc-desktop --status` shows which one is currently in effect. An unavailable choice falls back with a warning rather than failing outright — and an explicit choice falls back through the *browser* providers only, never into the desktop app.
 
 ### Scripting it: `mcc-desktop --print-status`
 
-`mcc-desktop --print-status` prints one JSON document on stdout and exits `0` — the config directory and how it was chosen, the loopback host, port, admin and health URLs, whether a healthy server, nothing, or a stranger holds the port, every desktop preference, and the two timing budgets (`health_failure_threshold`, `reconnect_timeout_seconds`) a window must read rather than hard-code. It is a **pure read**: nothing is started, locked, or written. Full field list and the `schema` rule are in [docs/USAGE.md](docs/USAGE.md#machine-readable-status).
+`mcc-desktop --print-status` prints one JSON document on stdout and exits `0` — the config directory and how it was chosen, the loopback host, port, admin and health URLs, whether a healthy server, nothing, or a stranger holds the port, every desktop preference, the two timing budgets (`health_failure_threshold`, `reconnect_timeout_seconds`) a window must read rather than hard-code, and since 6.44.0 four keys about the desktop app (`shell_ready`, `shell_binary`, `shell_release_tag`, `shell_tray`). It is a **pure read**: nothing is started, locked, or written. Full field list and the `schema` rule are in [docs/USAGE.md](docs/USAGE.md#machine-readable-status).
 
 The dashboard's Deployment card exposes the same choice as a **Window** control, with a fourth option, **Embedded webview**, that is **not installed by default** (see pywebview below) — OAuth login, downloads, and copy buttons may not work in it.
 

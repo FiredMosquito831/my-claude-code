@@ -382,16 +382,64 @@ class TestHeadlessRefusal:
         assert reason is not None
         assert "mcc-server" in reason
 
-    def test_linux_with_a_display_still_names_mcc_server(self, monkeypatch):
-        """No Linux tray backend is packaged, so even a display session refuses."""
+    def test_linux_with_a_display_but_no_shell_still_names_mcc_server(
+        self, monkeypatch
+    ):
+        """Without the shell nothing on Linux can draw a tray, so it refuses."""
 
         monkeypatch.setattr(desktop_module, "native_origin", lambda: "linux")
         monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr(
+            desktop_module,
+            "desktop_shell_unavailable_reason",
+            lambda: "there is no network here.",
+        )
 
         reason = headless_refusal_reason()
 
         assert reason is not None
         assert "mcc-server" in reason
+        assert "there is no network here." in reason
+
+    def test_linux_refusal_lifts_when_the_shell_is_installed(self, monkeypatch):
+        """The shell carries its own tray, which is the whole reason Linux was
+        refused. With it, a Linux desktop session is supported."""
+
+        monkeypatch.setattr(desktop_module, "native_origin", lambda: "linux")
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.setattr(
+            desktop_module, "desktop_shell_unavailable_reason", lambda: None
+        )
+
+        assert headless_refusal_reason() is None
+
+    def test_linux_without_a_display_is_refused_even_with_the_shell(self, monkeypatch):
+        """A window needs a display; the shell cannot conjure one."""
+
+        monkeypatch.setattr(desktop_module, "native_origin", lambda: "linux")
+        monkeypatch.delenv("DISPLAY", raising=False)
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        monkeypatch.setattr(
+            desktop_module, "desktop_shell_unavailable_reason", lambda: None
+        )
+
+        reason = headless_refusal_reason()
+
+        assert reason is not None
+        assert "WAYLAND_DISPLAY" in reason
+
+    def test_the_shell_reason_reports_the_documented_opt_out(self, monkeypatch):
+        monkeypatch.setattr(desktop_module, "desktop_shell_enabled", lambda: False)
+
+        assert "DESKTOP_SHELL=off" in (
+            desktop_module.desktop_shell_unavailable_reason() or ""
+        )
+
+    def test_the_shell_reason_is_none_once_it_installs(self, monkeypatch):
+        monkeypatch.setattr(desktop_module, "desktop_shell_enabled", lambda: True)
+        monkeypatch.setattr(desktop_module, "ensure_desktop_shell", lambda: None)
+
+        assert desktop_module.desktop_shell_unavailable_reason() is None
 
     def test_entrypoint_exits_non_zero_when_refused(self, monkeypatch, capsys):
         from my_claude_code.cli import desktop_entrypoint

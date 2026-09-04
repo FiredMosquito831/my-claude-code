@@ -135,9 +135,28 @@ def launch(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(1)
 
     try:
-        from my_claude_code.cli.desktop_tray import launch as launch_tray
-
-        launch_tray()
+        _launch_host()
     except DesktopError as exc:
         _report_fatal_error(str(exc))
         raise SystemExit(1) from exc
+
+
+def _launch_host() -> None:
+    """Run the desktop host with a tray if this platform has one.
+
+    ``pystray`` is declared ``sys_platform == 'win32' or sys_platform ==
+    'darwin'`` in ``pyproject.toml``, so on Linux there is no tray adapter to
+    import and there never will be. Linux reaches this function only when
+    ``headless_refusal_reason()`` found a display *and* the desktop shell, and
+    the shell draws its own tray -- so the host runs with a stand-in that owns
+    nothing but the thread the process blocks on.
+    """
+
+    try:
+        from my_claude_code.cli.desktop_tray import launch as launch_tray
+    except ImportError:
+        from my_claude_code.cli.desktop import WindowOnlyHost, launch_desktop
+
+        launch_desktop(WindowOnlyHost)
+        return
+    launch_tray()

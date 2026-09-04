@@ -15,10 +15,11 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [Legacy `~/.fcc`: migrating with `mcc-migrate`](#legacy-fcc-migrating-with-mcc-migrate)
   - [Pinning a directory with `MCC_CONFIG_DIR`](#pinning-a-directory-with-mcc_config_dir)
   - [Running the server with the desktop tray](#running-the-server-with-the-desktop-tray)
+  - [The desktop app: fetched, verified, installed](#the-desktop-app-fetched-verified-installed)
   - [Picking a window](#picking-a-window)
   - [Installing the desktop shortcut](#installing-the-desktop-shortcut)
   - [DESKTOP_* settings apply on the next launch](#desktop-settings-apply-on-the-next-launch)
-  - [WSL and headless: there is no tray](#wsl-and-headless-there-is-no-tray)
+  - [WSL and headless: still no tray. Linux desktop: now there is one.](#wsl-and-headless-there-is-no-tray)
   - [The embedded webview (pywebview), and its caveat](#the-embedded-webview-pywebview-and-its-caveat)
 - [4. Tutorial: connect Claude Code (CLI)](#4-tutorial-connect-claude-code-cli)
 - [5. Tutorial: connect Claude Desktop](#5-tutorial-connect-claude-desktop)
@@ -347,11 +348,15 @@ $ mcc-desktop --print-status
   "health_poll_seconds": 5.0,
   "health_failure_threshold": 3,
   "activation_poll_seconds": 1.0,
-  "reconnect_timeout_seconds": 1040.0
+  "reconnect_timeout_seconds": 1040.0,
+  "shell_tray": true,
+  "shell_binary": "C:\\Users\\me\\.local\\bin\\MyClaudeCode.exe",
+  "shell_release_tag": "v6.43.0",
+  "shell_ready": true
 }
 ```
 
-Four things are worth knowing about it:
+Five things are worth knowing about it:
 
 - **It is a pure read.** No server is started, no singleton lock is taken, `desktop.json`
   is not written, and no autostart registration is touched. It is safe to run against a
@@ -364,7 +369,12 @@ Four things are worth knowing about it:
   holds the port). Only `foreign` fills `port_conflict`, and it names the holding process.
 - **`schema` is the compatibility handle.** It is bumped when a documented key is removed
   or changes type. New keys can appear without a bump, so a reader must ignore keys it
-  does not recognise, and should refuse loudly on a `schema` it does not know.
+  does not recognise, and should refuse loudly on a `schema` it does not know. The four
+  `shell_*` keys were added in 6.44.0 and the schema stayed at `1`.
+- **`tray_enabled` answers "should *you* draw a tray", not "what is saved".** While the
+  Python tray is running it reports `false` **to the desktop app it launched** — one icon,
+  not two — and `shell_tray` says the same thing in a key that cannot be confused with a
+  preference. `mcc-desktop --status` always prints the saved value, so nothing is hidden.
 
 There are no keys, tokens or secrets in the document — it is safe to paste into a bug
 report. `reconnect_timeout_seconds` and `health_failure_threshold` are the two numbers a
@@ -373,13 +383,62 @@ restart being drawn as a dead server.
 
 The `fcc-desktop` alias accepts every one of these flags identically.
 
+<a id="the-desktop-app-fetched-verified-installed"></a>
+
+### The desktop app: fetched, verified, installed (6.44.0)
+
+`auto` now starts with **My Claude Code's own desktop app** — a ~1.5 MB window built from
+`desktop-shell/` in this repository and attached to the same GitHub release as the wheel.
+`uv tool install` cannot deliver a compiled binary, so the first `mcc-desktop` launch
+after upgrading fetches it. What that means, in order:
+
+| Step | What happens | If it fails |
+| --- | --- | --- |
+| Pin | The wheel names one release tag (`shell_release_tag`) and one SHA-256 per platform. | — |
+| Published checksums | `SHA256SUMS-desktop-shell.txt` is downloaded from that release and compared against the pinned digests. | Refuses — a replaced release asset cannot change what runs. |
+| Archive | The ~1.5 MB `.zip`/`.tar.gz` is downloaded and its SHA-256 compared to the pin. | Refuses. |
+| Extract | Exactly one executable is read out of it. Symlinks and `..` paths are refused, not sanitised. | Refuses. |
+| Install | Atomic replace into `~/.local/bin/MyClaudeCode[.exe]`; a running copy on Windows is renamed aside and swept later. | Refuses, and says to close the window. |
+| Receipt | `MyClaudeCode.receipt.json` records the tag and digest beside the binary. | — |
+
+**Every one of those failures is a warning, not an outage.** Offline, behind a proxy, on
+an architecture nothing is built for, or on a read-only home, the launch continues and the
+window falls through to app-mode with a single line naming the reason. `--print-status`
+reports `shell_ready: false` and a `null` `shell_binary`.
+
+**Because the receipt is checked first, this happens once.** An unchanged pin costs one
+JSON read and no network at all. A pin that moves in a later release downloads once more.
+
+Two switches, both environment variables read by `mcc-desktop` at launch:
+
+```bash
+DESKTOP_SHELL=off              # never use the desktop app; auto starts at app-mode
+MCC_DESKTOP_SHELL_DIR=/some/where   # install it somewhere other than ~/.local/bin
+```
+
+`mcc-desktop --window app-mode` is the other way to opt out, and it is the stronger one:
+an explicit `--window` falls back only through the *browser* providers, never into the app.
+
+**Unsigned, stated plainly.** Windows SmartScreen may warn on first run — reputation is
+per file hash and accrues from real download volume, and since a 2024 policy change even
+an EV certificate no longer skips the prompt. Windows 11 machines with **Smart App
+Control** may block it outright with no "run anyway"; there, `DESKTOP_SHELL=off` and
+app-mode are the answer. On macOS the app is equally unsigned, but a file **Python
+downloaded is not quarantined** — quarantine is applied by browsers, and `urllib` is not
+one — so it never meets Gatekeeper's download gate. Download the archive yourself in a
+browser and you *will* meet it; that asymmetry is precisely why there is no `.dmg`.
+
+**Linux.** The app carries its own tray, which is the one thing Linux never had, so
+`mcc-desktop` runs there now. It needs webkit2gtk-4.1: Ubuntu 22.04+, Debian 12+,
+Fedora 40+. Older distributions keep app-mode and the browser tab.
+
 <a id="picking-a-window"></a>
 
 ### Picking a window
 
-There is no single "native window" API that behaves the same across Windows, macOS, and Linux (WebView2 / WKWebView / WebKitGTK all differ), so `mcc-desktop` resolves its window through a **provider chain** that prefers Chromium **app-mode**: a real browser process launched with no tabs and no URL bar, its own taskbar entry, and a private profile under `~/.mcc/desktop-profile`.
+There is no single "native window" API that behaves the same across Windows, macOS, and Linux (WebView2 / WKWebView / WebKitGTK all differ), so `mcc-desktop` resolves its window through a **provider chain**: `auto` walks `shell → app-mode → pywebview → browser`.
 
-This is not a cosmetic preference. Three things the dashboard depends on **break inside an embedded webview**: `window.open` (both OAuth logins use it), `<a download>` (the analytics export), and `navigator.clipboard` (every copy button). App-mode is a real browser process, so all three keep working.
+Chromium **app-mode** — a real browser process launched with no tabs and no URL bar, its own taskbar entry, and a private profile under `~/.mcc/desktop-profile` — is the fallback and remains a first-class one. Three things the dashboard depends on **break inside an embedded webview**: `window.open` (both OAuth logins use it), `<a download>` (the analytics export), and `navigator.clipboard` (every copy button). App-mode is a real browser process, so all three keep working.
 
 Choose it with `--window`:
 
@@ -387,7 +446,7 @@ Choose it with `--window`:
 mcc-desktop --window auto|app-mode|pywebview|browser
 ```
 
-`auto` is the default — it tries app-mode first, then falls back to a plain browser tab if no Chromium-family browser (Edge, Chrome, Brave) is found. `mcc-desktop --status` reports which provider is currently in effect. Picking an option that isn't available on this machine falls back with a warning, not a failure.
+`auto` is the default — it tries the desktop app, then app-mode, then a plain browser tab if no Chromium-family browser (Edge, Chrome, Brave) is found. `mcc-desktop --status` reports which provider is currently in effect. Picking an option that isn't available on this machine falls back with a warning, not a failure.
 
 The same choice is on the dashboard's Deployment card as a **Window** control, with a line underneath showing what `auto` currently resolves to (for example `auto → app-mode (Microsoft Edge)`). Reading this at launch means a change applies to the **next** `mcc-desktop` start, not a window already open.
 
@@ -457,9 +516,11 @@ Nine settings live under **Admin → Providers → Desktop**, beside the live de
 
 <a id="wsl-and-headless-there-is-no-tray"></a>
 
-### WSL and headless: there is no tray
+### WSL and headless: still no tray. Linux desktop: now there is one.
 
-`mcc-desktop` needs a desktop session — a tray, a window manager, a browser it can launch. WSL and headless Linux don't have one. Run `mcc-server` there instead; it's the same server without the tray, and it's the canonical path for WSL / headless Linux / macOS server (see [Running the server with the desktop tray](#running-the-server-with-the-desktop-tray) above). Trying to run `mcc-desktop` on WSL/headless now explains this and gives you the dashboard URL instead of hanging.
+`mcc-desktop` needs a desktop session — a tray, a window manager, a browser it can launch. WSL and headless Linux don't have one. Run `mcc-server` there instead; it's the same server without the tray, and it's the canonical path for WSL / headless Linux / macOS server (see [Running the server with the desktop tray](#running-the-server-with-the-desktop-tray) above). Trying to run `mcc-desktop` on WSL/headless explains this and gives you the dashboard URL instead of hanging.
+
+**A Linux machine with a display is a different case, and changed in 6.44.0.** The old refusal — "no Linux tray backend is packaged" — was about `pystray`, which is declared Windows/macOS only and always will be. The desktop app carries its own tray, so with `DISPLAY` or `WAYLAND_DISPLAY` set *and* the app installed, `mcc-desktop` runs on Linux: one window, one tray, both from the app. Without the app (`DESKTOP_SHELL=off`, no network on first launch, an unbuilt architecture) the refusal comes back and now names the reason it could not be used.
 
 Reach the dashboard from a Windows browser at the address `mcc-server` prints on startup — normally `http://127.0.0.1:8082/admin`, which WSL forwards to Windows automatically in most configurations.
 
@@ -467,7 +528,7 @@ Reach the dashboard from a Windows browser at the address `mcc-server` prints on
 
 ### The embedded webview (pywebview), and its caveat
 
-A fourth window provider, `pywebview`, exists but **ships switched off** and is **not installed as a dependency**. Two reasons: MCC can't guarantee `pywebview`'s embedded webview handles downloads and external links correctly (the same `window.open` / `<a download>` / clipboard breakage described above), and on macOS its run loop conflicts with the tray's own run loop.
+`pywebview` is the third link of the chain, behind the desktop app and app-mode. It **ships switched off** and is **not installed as a dependency**. Two reasons: MCC can't guarantee `pywebview`'s embedded webview handles downloads and external links correctly (the same `window.open` / `<a download>` / clipboard breakage described above), and on macOS its run loop conflicts with the tray's own run loop.
 
 To opt in anyway: install `pywebview` yourself into the same environment MCC runs in, then set `--window pywebview` (or pick **Embedded webview** on the dashboard's Deployment card). It is present, gated, and unexercised by default — treat it as experimental, and expect OAuth login, the analytics export, and copy buttons to potentially misbehave inside it.
 

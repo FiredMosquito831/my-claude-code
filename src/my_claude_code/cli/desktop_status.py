@@ -21,18 +21,34 @@ Three rules hold this file together:
 
 ``schema`` is the compatibility handle. It is bumped when a documented key is
 removed or changes type; adding a key does not bump it, because a reader is
-required to tolerate keys it does not know.
+required to tolerate keys it does not know. 6.44.0 added four shell keys and
+left the schema at 1 for exactly that reason.
+
+**One word about ``tray_enabled``.** It answers "should the reader of this
+document draw a tray icon", which is not always the same as the persisted
+preference of the same name. While the Python tray is running -- Windows and
+macOS today (decision Q2: the shell's tray is the future, the Python one
+retires later) -- a second icon beside it is a defect, so ``mcc-desktop`` sets
+``MCC_DESKTOP_SHELL_TRAY=0`` in the shell child's environment and this module
+reports ``false`` to that child alone. ``shell_tray`` says the same thing
+unambiguously for a reader that wants it spelled out, and ``mcc-desktop
+--status`` keeps printing the persisted value, so nothing is hidden from a
+human. On Linux there is no Python tray, the variable is ``1``, and the shell's
+tray is the only one.
 """
 
 import json
+import os
 from typing import Any
 
 from my_claude_code.cli.desktop import port_conflict_message, probe_server_presence
+from my_claude_code.cli.desktop_window import SHELL_TRAY_ENV
 from my_claude_code.config.constants import (
     DASHBOARD_RECONNECT_TIMEOUT_SECONDS,
     SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
 )
 from my_claude_code.config.desktop import load_desktop_state
+from my_claude_code.config.desktop_shell import desktop_shell_report
 from my_claude_code.config.paths import config_dir_resolution, server_log_path
 from my_claude_code.config.server_urls import (
     local_admin_url,
@@ -76,7 +92,24 @@ STATUS_KEYS: tuple[str, ...] = (
     "health_failure_threshold",
     "activation_poll_seconds",
     "reconnect_timeout_seconds",
+    "shell_tray",
+    "shell_binary",
+    "shell_release_tag",
+    "shell_ready",
 )
+
+
+def shell_tray_enabled(state: Any) -> bool:
+    """Return whether the reader of this document should draw a tray icon.
+
+    See the module docstring. The environment variable is only ever set by
+    ``mcc-desktop`` on the shell child it launches, so a human running
+    ``--print-status`` sees the persisted preference unchanged.
+    """
+
+    if not state.tray_enabled:
+        return False
+    return os.environ.get(SHELL_TRAY_ENV, "1").strip() != "0"
 
 
 def reconnect_timeout_seconds(settings: Any) -> float:
@@ -105,6 +138,7 @@ def desktop_status() -> dict[str, Any]:
     state = load_desktop_state()
     presence = probe_server_presence(settings)
     root_url = local_proxy_root_url(settings)
+    shell_tray = shell_tray_enabled(state)
 
     return {
         "schema": STATUS_SCHEMA,
@@ -129,7 +163,7 @@ def desktop_status() -> dict[str, Any]:
         "window_open": state.window_open,
         "window_width": int(settings.desktop_window_width),
         "window_height": int(settings.desktop_window_height),
-        "tray_enabled": state.tray_enabled,
+        "tray_enabled": shell_tray,
         "minimize_to_tray": state.minimize_to_tray,
         "start_at_login": state.start_at_login,
         "server_log": str(server_log_path()),
@@ -139,6 +173,8 @@ def desktop_status() -> dict[str, Any]:
         "health_failure_threshold": int(settings.desktop_health_failure_threshold),
         "activation_poll_seconds": float(settings.desktop_activation_poll_seconds),
         "reconnect_timeout_seconds": reconnect_timeout_seconds(settings),
+        "shell_tray": shell_tray,
+        **desktop_shell_report(),
     }
 
 

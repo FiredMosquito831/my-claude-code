@@ -545,6 +545,39 @@ class TestConfiguredBrowserPath:
 
 
 class TestResolveAutoWindow:
+    def test_prefers_the_desktop_app_when_it_is_already_installed(self, monkeypatch):
+        """The readout has to match the chain, which the shell now leads."""
+
+        from my_claude_code.config import desktop_shell
+
+        monkeypatch.setenv(desktop_shell.DESKTOP_SHELL_ENABLED_ENV, "auto")
+        monkeypatch.setattr(desktop_shell, "is_desktop_shell_installed", lambda: True)
+        monkeypatch.setattr(
+            desktop_config,
+            "_chromium_binary_with_label",
+            lambda: ("C:/msedge.exe", "Microsoft Edge"),
+        )
+
+        provider, reason = desktop_config.resolve_auto_window()
+
+        assert provider == "shell"
+        assert desktop_shell.DESKTOP_SHELL_RELEASE_TAG in reason
+
+    def test_an_uninstalled_shell_is_not_promised(self, monkeypatch):
+        """An admin request must never download, so it under-promises instead."""
+
+        from my_claude_code.config import desktop_shell
+
+        monkeypatch.setenv(desktop_shell.DESKTOP_SHELL_ENABLED_ENV, "auto")
+        monkeypatch.setattr(desktop_shell, "is_desktop_shell_installed", lambda: False)
+        monkeypatch.setattr(
+            desktop_config,
+            "_chromium_binary_with_label",
+            lambda: ("C:/msedge.exe", "Microsoft Edge"),
+        )
+
+        assert desktop_config.resolve_auto_window() == ("app-mode", "Microsoft Edge")
+
     def test_prefers_app_mode_when_chromium_found(self, monkeypatch):
         monkeypatch.setattr(
             desktop_config,
