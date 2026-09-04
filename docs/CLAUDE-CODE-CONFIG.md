@@ -45,6 +45,19 @@ Two more files sit outside that hierarchy:
 `CLAUDE_CONFIG_DIR` relocates the whole `~/.claude` tree, which is how you run
 two accounts side by side.
 
+> **If you route Claude Code through My Claude Code's `anthropic_oauth`
+> provider,** MCC reads `.credentials.json` from this same directory and
+> honours `CLAUDE_CONFIG_DIR` when locating it — so relocating the tree moves
+> the credential MCC discovers, too. MCC only ever *reads* that file: a refresh
+> is written to MCC's own store instead, because rotating the token here would
+> log out your real client.
+>
+> **On macOS this file usually does not hold the credential at all.** Claude
+> Code stores it in the login keychain, which MCC cannot read, so MCC's "Use
+> Claude Code credentials" button will report that none was found. That is
+> expected on macOS rather than a fault; sign in to MCC directly instead. See
+> [ANTHROPIC-SUBSCRIPTION.md](ANTHROPIC-SUBSCRIPTION.md).
+
 ### Precedence, highest first
 
 1. **Managed settings** — cannot be overridden, not even by CLI arguments.

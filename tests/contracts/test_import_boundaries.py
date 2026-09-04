@@ -96,6 +96,15 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     ),
     (
         "my_claude_code.api.admin_routes",
+        "my_claude_code.providers.anthropic_oauth.loopback",
+    ): (
+        "Owner: admin dashboard Anthropic subscription OAuth login API. "
+        "Reason: the dashboard sign-in completes through a loopback callback "
+        "server, the same transport Claude Code itself uses, and the server "
+        "belongs to the provider that owns the credential it produces."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
         "my_claude_code.providers.chatgpt_oauth.oauth_login",
     ): (
         "Owner: admin dashboard ChatGPT OAuth login API. "

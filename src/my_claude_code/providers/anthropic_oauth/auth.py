@@ -38,7 +38,20 @@ byte offset into Claude Code 2.1.258's own binary (``claude.exe``, a
     real value on real traffic and MCC used to flatten it to ``cli``.
 
 ``anthropic-dangerous-direct-browser-access`` -> ``true``
-    Observed in the unlisted header names of real inbound Claude Code traffic.
+    Offset 186629277: Claude Code builds its client with
+    ``dangerouslyAllowBrowser:!0``, and the SDK turns that into this header
+    (offset 180347171).
+
+``accept`` -> ``application/json``
+    Offset 180347171, the SDK's ``buildHeaders``, which sends it
+    unconditionally. A true statement about what MCC wants back.
+
+``x-stainless-*`` and ``x-claude-code-session-id`` -> deliberately NOT sent
+    Claude Code sends nine such headers. They describe the JavaScript runtime
+    that built the request, and the client's own session id. MCC is Python and
+    is not that session, so emitting them would manufacture claims. See
+    ``constants.CLAUDE_CODE_HEADERS_NOT_MIRRORED`` for the derivation and for
+    why neither gates anything.
 
 Everything mirrored is a claim the client already made. Nothing here is
 manufactured, and the entrypoint gate in :mod:`.provider` is what keeps that
@@ -48,6 +61,7 @@ enough to be given this header set.
 
 import asyncio
 import time
+from pathlib import Path
 
 from loguru import logger
 
@@ -58,8 +72,34 @@ from my_claude_code.core.client_fingerprint import (
 from my_claude_code.providers.anthropic_messages import ANTHROPIC_API_VERSION
 
 from .betas import merge_betas
-from .constants import CLAUDE_CODE_APP, CLAUDE_CODE_USER_AGENT
-from .credentials import OAuthTokens, load_tokens, refresh_tokens
+from .constants import (
+    ANTHROPIC_OAUTH_ACCEPT,
+    CLAUDE_CODE_APP,
+    CLAUDE_CODE_USER_AGENT,
+)
+from .credentials import (
+    OAuthTokens,
+    load_tokens,
+    managed_store_path,
+    refresh_tokens,
+)
+
+
+def _store_stamp() -> tuple[int, int] | None:
+    """``(mtime_ns, size)`` of the managed store, or ``None`` when absent.
+
+    Cheap enough to call on every request, and it is the whole mechanism behind
+    "the dashboard's Import button works without a restart": a credential
+    written by another process -- the admin routes, or
+    ``mcc-anthropic-oauth-login`` in a second terminal -- changes this tuple,
+    and the next request re-resolves. Claude Code watches its own credential
+    file the same way, and ``chatgpt_oauth`` re-reads unconditionally.
+    """
+    try:
+        stat = Path(managed_store_path()).stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
 
 
 class AnthropicOAuthAuth:
@@ -81,6 +121,12 @@ class AnthropicOAuthAuth:
         self._tokens = tokens
         self._lock = asyncio.Lock()
         self._background: asyncio.Task[None] | None = None
+        # The (mtime_ns, size) the cached credential was read with. Only
+        # meaningful once this instance has read from disk itself: a credential
+        # handed to the constructor (tests, and the 401 retry path) is not
+        # attributable to any file.
+        self._stamp: tuple[int, int] | None = None
+        self._stamp_read = tokens is None
 
     @property
     def tokens(self) -> OAuthTokens | None:
@@ -88,8 +134,14 @@ class AnthropicOAuthAuth:
 
     async def current_tokens(self) -> OAuthTokens:
         async with self._lock:
-            if self._tokens is None:
+            stamp = _store_stamp()
+            if self._tokens is None or (self._stamp_read and stamp != self._stamp):
+                # Re-resolve rather than merely re-read: the managed store may
+                # have appeared, changed, or been quarantined since last time,
+                # and any of those can change *which source* wins.
                 self._tokens = load_tokens()
+                self._stamp = stamp
+                self._stamp_read = True
             tokens = self._tokens
         if not tokens.needs_refresh() or not tokens.has_refresh_token:
             return tokens
@@ -108,6 +160,8 @@ class AnthropicOAuthAuth:
         async with self._lock:
             if self._tokens is None:
                 self._tokens = load_tokens()
+                self._stamp = _store_stamp()
+                self._stamp_read = True
             tokens = self._tokens
         if not tokens.has_refresh_token:
             return None
@@ -121,7 +175,23 @@ class AnthropicOAuthAuth:
         refreshed = await refresh_tokens(tokens)
         async with self._lock:
             self._tokens = refreshed
+            # ``refresh_tokens`` just wrote the store, so adopt the stamp it
+            # produced. Without this, the very next request would see a changed
+            # file and re-read a credential it already holds.
+            self._stamp = _store_stamp()
+            self._stamp_read = True
         return refreshed
+
+    def invalidate(self) -> None:
+        """Drop the cached credential so the next request re-resolves.
+
+        The mtime check already covers a store that was *written*. This covers
+        one that was *removed* while this instance held a credential read from
+        it -- the dashboard's Disconnect button.
+        """
+        self._tokens = None
+        self._stamp = None
+        self._stamp_read = True
 
     def _start_background_refresh(self, tokens: OAuthTokens) -> None:
         """Refresh out of band, at most one task at a time per instance."""
@@ -167,6 +237,7 @@ class AnthropicOAuthAuth:
             # An OAuth token goes in Authorization: Bearer, and x-api-key is
             # not merely unnecessary here -- it is wrong. See the table above.
             "Authorization": f"Bearer {tokens.access_token}",
+            "accept": ANTHROPIC_OAUTH_ACCEPT,
             "anthropic-version": client.anthropic_version or ANTHROPIC_API_VERSION,
             "anthropic-beta": betas,
             "anthropic-dangerous-direct-browser-access": "true",

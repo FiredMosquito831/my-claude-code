@@ -24,7 +24,10 @@ from my_claude_code.providers.anthropic_messages import (
     ApiKeyAuth,
 )
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
-from my_claude_code.providers.failure_policy import classify_provider_failure
+from my_claude_code.providers.failure_policy import (
+    ProviderFailureOverride,
+    classify_provider_failure,
+)
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .models import extract_anthropic_model_infos
@@ -51,6 +54,7 @@ class AnthropicProvider(BaseProvider):
         self._rate_limiter = rate_limiter
         self._auth = auth if auth is not None else ApiKeyAuth(config.api_key)
         self._extra_headers = dict(extra_headers or {})
+        self._failure_override: ProviderFailureOverride | None = None
         self._messages = AnthropicMessagesProvider(
             config,
             provider_name=provider_name,
@@ -77,6 +81,11 @@ class AnthropicProvider(BaseProvider):
         ``None`` -- and the fleet's only ``adaptive`` channel went unreported.
         """
         return self._messages.reasoning_dialect(model_id)
+
+    def set_failure_override(self, override: ProviderFailureOverride | None) -> None:
+        """Classify provider-specific errors on both the request and discovery paths."""
+        self._failure_override = override
+        self._messages.set_failure_override(override)
 
     def throttle_remaining(self, model: str | None = None) -> float:
         return self._rate_limiter.remaining_wait()
@@ -117,6 +126,12 @@ class AnthropicProvider(BaseProvider):
                 mark_rate_limited=self._rate_limiter.extend_reactive_block,
                 cooldown_seconds=self._config.rate_limit_cooldown_seconds,
                 mark_rate_limited_enabled=not self._config.routes_around_model,
+                # Model discovery is where a credential problem shows up first,
+                # so it must classify the same way the request path does. A
+                # discovery failure that says "rate limited" rather than
+                # "upstream error" is the difference between an operator
+                # waiting and an operator re-authenticating.
+                provider_failure_override=self._failure_override,
             ) from error
 
     def preflight_stream(

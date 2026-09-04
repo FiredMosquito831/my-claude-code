@@ -2,6 +2,7 @@
 
 import asyncio
 import ipaddress
+import sys
 import time
 from collections.abc import Callable, Iterable, Mapping
 from functools import lru_cache
@@ -144,13 +145,27 @@ from my_claude_code.providers.anthropic_oauth.constants import (
     INFERENCE_SCOPE as ANTHROPIC_INFERENCE_SCOPE,
 )
 from my_claude_code.providers.anthropic_oauth.credentials import (
+    AnthropicOAuthRefreshError,
+    AnthropicOAuthUnavailableError,
     OAuthTokens,
     claude_credentials_path,
     load_claude_code_tokens,
     load_managed_tokens,
+    load_tokens,
+)
+from my_claude_code.providers.anthropic_oauth.credentials import (
+    quarantine_managed_store as quarantine_anthropic_oauth_store,
+)
+from my_claude_code.providers.anthropic_oauth.credentials import (
+    refresh_tokens as refresh_anthropic_oauth_tokens,
 )
 from my_claude_code.providers.anthropic_oauth.credentials import (
     store_tokens as store_anthropic_oauth_tokens,
+)
+from my_claude_code.providers.anthropic_oauth.loopback import (
+    AnthropicOAuthLoopbackUnavailableError,
+    loopback_login_status,
+    start_loopback_login,
 )
 from my_claude_code.providers.anthropic_oauth.oauth_login import (
     AnthropicOAuthLoginError,
@@ -2115,10 +2130,19 @@ async def anthropic_oauth_import_claude_code(request: Request):
     require_loopback_admin(request)
     tokens = await asyncio.to_thread(load_claude_code_tokens)
     if tokens is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No Claude Code credential found at {claude_credentials_path()}",
-        )
+        detail = f"No Claude Code credential found at {claude_credentials_path()}"
+        if sys.platform == "darwin":
+            # Claude Code on macOS stores the credential in the login keychain
+            # rather than that file ("secure storage (keychain/credentials
+            # file)", 2.1.260), so the file being absent is the *expected*
+            # case there and the bare message reads as a bug. Reading the
+            # keychain is out of scope for this release; naming it is not.
+            detail += (
+                ". On macOS, Claude Code usually keeps it in the login "
+                "keychain instead, which MCC cannot read -- sign in with "
+                "'Sign in with Anthropic' above instead of importing."
+            )
+        raise HTTPException(status_code=400, detail=detail)
     await asyncio.to_thread(store_anthropic_oauth_tokens, tokens)
     return _AnthropicOAuthImportResponse(
         status="complete",
@@ -2173,6 +2197,157 @@ async def anthropic_oauth_complete(
         credential_reference=ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
         subscription_type=tokens.subscription_type,
         message="Signed in. Credential stored in MCC's private store.",
+    )
+
+
+class _AnthropicOAuthLoopbackInitiateResponse(BaseModel):
+    authorize_url: str
+    redirect_uri: str
+
+
+@router.post("/admin/api/anthropic-oauth/loopback/initiate")
+async def anthropic_oauth_loopback_initiate(
+    request: Request,
+    same_host_confirmed: bool = False,
+):
+    """Start a Claude subscription sign-in that completes without pasting.
+
+    A callback server binds an ephemeral port on ``127.0.0.1`` and catches
+    Anthropic's redirect, exactly as Claude Code's own ``http://localhost:
+    <port>/callback`` flow does. The paste flow stays as the fallback.
+
+    ``same_host_confirmed`` is the caller asserting that the browser really
+    shares this process's loopback namespace -- the same guard, and the same
+    503, as the ChatGPT browser login, because under WSL or over SSH
+    "localhost" means two different things and the callback silently never
+    arrives.
+    """
+    require_loopback_admin(request)
+    try:
+        started = await asyncio.to_thread(
+            start_loopback_login,
+            allow_remote=same_host_confirmed,
+        )
+    except AnthropicOAuthLoopbackUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return _AnthropicOAuthLoopbackInitiateResponse(**started)
+
+
+class _AnthropicOAuthLoopbackStatusResponse(BaseModel):
+    status: str
+    credential_reference: str = ""
+    subscription_type: str = ""
+    message: str = ""
+
+
+@router.post("/admin/api/anthropic-oauth/loopback/status")
+async def anthropic_oauth_loopback_status(request: Request):
+    """Poll the in-flight loopback sign-in."""
+    require_loopback_admin(request)
+    result = await loopback_login_status()
+    return _AnthropicOAuthLoopbackStatusResponse(
+        status=result["status"],
+        credential_reference=(
+            ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE
+            if result["status"] == "complete"
+            else ""
+        ),
+        subscription_type=result.get("subscription_type", ""),
+        message=result.get("message", ""),
+    )
+
+
+class _AnthropicOAuthRefreshResponse(BaseModel):
+    status: str
+    credential_reference: str = ""
+    expires_at: int | None = None
+    subscription_type: str | None = None
+    message: str = ""
+
+
+@router.post("/admin/api/anthropic-oauth/refresh")
+async def anthropic_oauth_refresh(request: Request):
+    """Refresh the stored Claude subscription credential, now, on demand.
+
+    Before 6.43.0 there was no control for this at all: the card could say the
+    access token expired days ago and offer nothing to do about it.
+
+    The two failure classes are reported apart, because they call for opposite
+    actions. A *transient* failure (a 429 from a rate-limited token endpoint,
+    a 5xx, a transport error) is a 503 here and the credential is untouched --
+    wait and try again. A *definitive* rejection is a 401 and the store has
+    already been set aside by then -- sign in again or import.
+    """
+    require_loopback_admin(request)
+    try:
+        tokens = await asyncio.to_thread(load_tokens)
+    except AnthropicOAuthUnavailableError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not tokens.has_refresh_token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The stored credential has no refresh token, so it cannot be "
+                "renewed. Sign in again, or import your Claude Code credential."
+            ),
+        )
+    try:
+        refreshed = await refresh_anthropic_oauth_tokens(tokens)
+    except AnthropicOAuthRefreshError as exc:
+        # 401 tells the dashboard "this credential is finished"; 503 tells it
+        # "Anthropic could not answer, the credential is fine". Any other
+        # mapping loses the distinction the whole 6.43.0 change is about.
+        raise HTTPException(
+            status_code=401 if exc.definitive else 503,
+            detail=str(exc),
+        ) from exc
+    return _AnthropicOAuthRefreshResponse(
+        status="complete",
+        credential_reference=ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+        expires_at=refreshed.expires_at,
+        subscription_type=refreshed.subscription_type,
+        message="Refreshed the Claude subscription credential.",
+    )
+
+
+class _AnthropicOAuthDisconnectResponse(BaseModel):
+    status: str
+    quarantined_as: str = ""
+    message: str = ""
+
+
+@router.post("/admin/api/anthropic-oauth/disconnect")
+async def anthropic_oauth_disconnect(request: Request):
+    """Set MCC's own Claude subscription credential aside.
+
+    The store is renamed to ``anthropic_oauth.json.dead-<epoch>``, never
+    deleted: the same rule a definitive refresh rejection follows, so that the
+    evidence survives for whoever investigates later.
+
+    Claude Code's own ``~/.claude/.credentials.json`` is not touched -- so
+    after disconnecting, MCC falls back to it if it is healthy, which is
+    usually what the operator wanted. Nothing needs restarting: the provider
+    notices the store is gone on its next request.
+
+    ``ANTHROPIC_OAUTH_ACCESS_TOKEN`` is left alone deliberately. It holds a
+    non-secret sentinel that ``Settings`` back-fills from the store's mere
+    existence, so removing the store is already enough to clear it on the next
+    settings load; writing the env file here would fight that validator.
+    """
+    require_loopback_admin(request)
+    quarantined = await asyncio.to_thread(quarantine_anthropic_oauth_store)
+    if quarantined is None:
+        return _AnthropicOAuthDisconnectResponse(
+            status="complete",
+            message="There was no MCC-owned credential to disconnect.",
+        )
+    return _AnthropicOAuthDisconnectResponse(
+        status="complete",
+        quarantined_as=quarantined.name,
+        message=(
+            f"Disconnected. The credential was kept as {quarantined.name} "
+            "rather than deleted."
+        ),
     )
 
 

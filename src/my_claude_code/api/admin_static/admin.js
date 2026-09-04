@@ -4476,18 +4476,52 @@ function buildAnthropicOAuthControl(wrapper) {
   loginButton.className = "primary-button";
   loginButton.textContent = "Sign in with Anthropic";
 
-  const buttons = [importButton, loginButton];
+  const refreshButton = document.createElement("button");
+  refreshButton.type = "button";
+  refreshButton.className = "secondary-button";
+  refreshButton.textContent = "Refresh now";
+  refreshButton.disabled = true;
+
+  const disconnectButton = document.createElement("button");
+  disconnectButton.type = "button";
+  disconnectButton.className = "secondary-button";
+  disconnectButton.textContent = "Disconnect";
+  disconnectButton.disabled = true;
+
+  // buttons[0] must stay the import button: refreshAnthropicOAuthSources
+  // takes it positionally and is what enables or disables it.
+  const buttons = [importButton, loginButton, refreshButton, disconnectButton];
   importButton.addEventListener("click", () => {
     importAnthropicOAuthClaudeCode(importButton, buttons, status, details);
   });
   loginButton.addEventListener("click", () => {
     startAnthropicOAuthLogin(loginButton, buttons, status, details, paste);
   });
+  refreshButton.addEventListener("click", () => {
+    refreshAnthropicOAuthCredential(refreshButton, buttons, status, details);
+  });
+  disconnectButton.addEventListener("click", () => {
+    disconnectAnthropicOAuthCredential(
+      disconnectButton,
+      buttons,
+      status,
+      details,
+    );
+  });
 
   const paste = buildAnthropicOAuthPasteField();
 
-  wrapper.append(warning, status, details, importButton, loginButton, paste.root);
-  refreshAnthropicOAuthSources(importButton, status, details);
+  wrapper.append(
+    warning,
+    status,
+    details,
+    importButton,
+    loginButton,
+    refreshButton,
+    disconnectButton,
+    paste.root,
+  );
+  refreshAnthropicOAuthSources(importButton, status, details, buttons);
   return wrapper;
 }
 
@@ -4589,6 +4623,18 @@ function renderAnthropicOAuthDetails(details, sources) {
     appendOAuthDetail(details, "Refresh token expires", refresh.text, {
       warn: refresh.expired,
     });
+    if (refresh.expired) {
+      // Without this the card showed a stale date and nothing else, and the
+      // credential looked renewable while being unrenewable. Refreshing it
+      // cannot help; only a new sign-in can.
+      appendOAuthDetail(
+        details,
+        "Warning",
+        "Refresh token expired -- sign in again, or import your Claude Code " +
+          "credential. Refresh now cannot renew this.",
+        { warn: true },
+      );
+    }
   }
   if (tokens.scopes && tokens.scopes.length) {
     appendOAuthDetail(details, "Scopes", tokens.scopes.join(" "), {
@@ -4643,10 +4689,19 @@ function renderAnthropicOAuthDetails(details, sources) {
   }
 }
 
-async function refreshAnthropicOAuthSources(importButton, status, details) {
+async function refreshAnthropicOAuthSources(
+  importButton,
+  status,
+  details,
+  buttons,
+) {
   try {
     const sources = await api("/admin/api/anthropic-oauth/sources");
     if (details) renderAnthropicOAuthDetails(details, sources);
+    // Refresh and Disconnect only mean anything against MCC's own store:
+    // Claude Code's file is read-only to MCC and must never be renewed or
+    // removed from here.
+    setAnthropicOAuthManagedButtons(buttons, sources.mcc.available);
     const mccNote = sources.mcc.available
       ? `An MCC credential is already stored (${sources.mcc.masked_token}).`
       : "No credential stored in MCC yet.";
@@ -4666,6 +4721,108 @@ async function refreshAnthropicOAuthSources(importButton, status, details) {
   }
 }
 
+// The two managed-store controls live at fixed positions in the buttons array
+// created by buildAnthropicOAuthControl.
+function setAnthropicOAuthManagedButtons(buttons, available) {
+  if (!Array.isArray(buttons)) return;
+  const refreshButton = buttons[2];
+  const disconnectButton = buttons[3];
+  if (refreshButton) refreshButton.disabled = !available;
+  if (disconnectButton) disconnectButton.disabled = !available;
+}
+
+// The Anthropic twin of fillChatGPTOAuthFields. Both admin routes return a
+// credential_reference and the dashboard used to throw it away, which left
+// ANTHROPIC_OAUTH_ACCESS_TOKEN empty and the provider inactive until some
+// later settings load happened to back-fill it.
+function fillAnthropicOAuthFields(credentialReference) {
+  const tokenField = document.querySelector(
+    '[data-key="ANTHROPIC_OAUTH_ACCESS_TOKEN"] input',
+  );
+  if (tokenField && credentialReference) {
+    tokenField.value = credentialReference;
+    // The input event is what marks the form dirty so Apply picks it up.
+    tokenField.dispatchEvent(new Event("input"));
+  }
+}
+
+async function refreshAnthropicOAuthCredential(
+  button,
+  buttons,
+  status,
+  details,
+) {
+  buttons.forEach((candidate) => {
+    candidate.disabled = true;
+  });
+  const original = button.textContent;
+  button.textContent = "Refreshing...";
+  try {
+    const result = await api("/admin/api/anthropic-oauth/refresh", {
+      method: "POST",
+      body: "{}",
+    });
+    if (result.status === "complete") {
+      fillAnthropicOAuthFields(result.credential_reference);
+      const expires = formatOAuthInstant(result.expires_at);
+      showMessage(
+        expires
+          ? `Refreshed the Claude subscription credential. Access token expires ${expires.text}.`
+          : "Refreshed the Claude subscription credential.",
+        "ok",
+      );
+    }
+  } catch (error) {
+    // The route answers 503 for a transient failure and 401 for a definitive
+    // one, and the detail text already says which. Showing it verbatim is the
+    // point: "Anthropic is rate-limiting refreshes, the credential was kept"
+    // and "sign in again" call for opposite actions.
+    showMessage(`Could not refresh: ${error.message}`, "error");
+  } finally {
+    button.textContent = original;
+    buttons.forEach((candidate) => {
+      candidate.disabled = false;
+    });
+    refreshAnthropicOAuthSources(buttons[0], status, details, buttons);
+  }
+}
+
+async function disconnectAnthropicOAuthCredential(
+  button,
+  buttons,
+  status,
+  details,
+) {
+  const confirmed = window.confirm(
+    "Disconnect the Claude subscription credential MCC owns?\n\n" +
+      "It is kept on disk as anthropic_oauth.json.dead-<timestamp>, not " +
+      "deleted, and your Claude Code login is not touched.",
+  );
+  if (!confirmed) return;
+  buttons.forEach((candidate) => {
+    candidate.disabled = true;
+  });
+  const original = button.textContent;
+  button.textContent = "Disconnecting...";
+  try {
+    const result = await api("/admin/api/anthropic-oauth/disconnect", {
+      method: "POST",
+      body: "{}",
+    });
+    if (result.status === "complete") {
+      showMessage(result.message, "ok");
+    }
+  } catch (error) {
+    showMessage(`Could not disconnect: ${error.message}`, "error");
+  } finally {
+    button.textContent = original;
+    buttons.forEach((candidate) => {
+      candidate.disabled = false;
+    });
+    refreshAnthropicOAuthSources(buttons[0], status, details, buttons);
+  }
+}
+
 async function importAnthropicOAuthClaudeCode(button, buttons, status, details) {
   buttons.forEach((candidate) => {
     candidate.disabled = true;
@@ -4678,8 +4835,10 @@ async function importAnthropicOAuthClaudeCode(button, buttons, status, details) 
       body: "{}",
     });
     if (result.status === "complete") {
+      fillAnthropicOAuthFields(result.credential_reference);
       showMessage(
-        "Imported the Claude Code credential into MCC's private store.",
+        "Imported the Claude Code credential into MCC's private store. " +
+          "Apply settings to activate the provider.",
         "ok",
       );
     }
@@ -4690,10 +4849,18 @@ async function importAnthropicOAuthClaudeCode(button, buttons, status, details) 
     buttons.forEach((candidate) => {
       candidate.disabled = false;
     });
-    refreshAnthropicOAuthSources(buttons[0], status, details);
+    refreshAnthropicOAuthSources(buttons[0], status, details, buttons);
   }
 }
 
+// Sign-in has two transports, the same two Claude Code itself offers.
+//
+// The loopback flow is tried first: a callback server on 127.0.0.1 catches
+// Anthropic's redirect, so approving in the browser is the whole interaction
+// and there is no code to mis-copy. If this process and the browser do not
+// share a localhost -- WSL, SSH, a container -- the server answers 503 up
+// front and the paste flow runs instead, rather than silently waiting five
+// minutes for a callback that can never arrive.
 async function startAnthropicOAuthLogin(button, buttons, status, details, paste) {
   buttons.forEach((candidate) => {
     candidate.disabled = true;
@@ -4701,33 +4868,19 @@ async function startAnthropicOAuthLogin(button, buttons, status, details, paste)
   const original = button.textContent;
   button.textContent = "Starting sign-in...";
   try {
-    const initiate = await api("/admin/api/anthropic-oauth/initiate", {
-      method: "POST",
-      body: "{}",
-    });
-    window.open(initiate.authorize_url, "_blank", "noopener");
-    showMessage(
-      "Anthropic OAuth: approve access in the new tab, then paste the code " +
-        "it shows into the field below.",
-      "warn",
-    );
-    const pasted = await promptForAnthropicOAuthCode(paste);
-    if (!pasted) {
-      status.textContent = "Sign-in cancelled: no code entered.";
-      return;
-    }
-    const result = await api("/admin/api/anthropic-oauth/complete", {
-      method: "POST",
-      body: JSON.stringify({
-        pasted_code: pasted,
-        verifier: initiate.verifier,
-      }),
-    });
-    if (result.status === "complete") {
+    let completed = false;
+    try {
+      completed = await runAnthropicOAuthLoopbackLogin(status);
+    } catch (error) {
+      if (!isAnthropicLoopbackUnavailable(error)) throw error;
       showMessage(
-        "Signed in with Anthropic. Credential stored in MCC's private store.",
-        "ok",
+        `Automatic sign-in is not available here (${error.message}) -- ` +
+          "falling back to pasting the code.",
+        "warn",
       );
+    }
+    if (!completed) {
+      await runAnthropicOAuthPasteLogin(status, paste);
     }
   } catch (error) {
     showMessage(`Anthropic sign-in failed: ${error.message}`, "error");
@@ -4736,8 +4889,88 @@ async function startAnthropicOAuthLogin(button, buttons, status, details, paste)
     buttons.forEach((candidate) => {
       candidate.disabled = false;
     });
-    refreshAnthropicOAuthSources(buttons[0], status, details);
+    refreshAnthropicOAuthSources(buttons[0], status, details, buttons);
   }
+}
+
+// api() throws a bare Error carrying the route's detail text, so the 503 the
+// loopback initiate route answers is identified by that detail rather than by
+// a status code the helper does not surface.
+function isAnthropicLoopbackUnavailable(error) {
+  const message = String(error && error.message ? error.message : "");
+  return (
+    message.includes("Use the paste flow instead") ||
+    message.startsWith("503 ")
+  );
+}
+
+async function runAnthropicOAuthLoopbackLogin(status) {
+  const initiate = await api(
+    "/admin/api/anthropic-oauth/loopback/initiate?same_host_confirmed=true",
+    { method: "POST", body: "{}" },
+  );
+  window.open(initiate.authorize_url, "_blank", "noopener");
+  showMessage(
+    "Anthropic OAuth: approve access in the new tab. Nothing to copy -- " +
+      "this page finishes on its own.",
+    "warn",
+  );
+  status.textContent = "Waiting for the browser to come back...";
+  const deadline = Date.now() + 5 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    const result = await api("/admin/api/anthropic-oauth/loopback/status", {
+      method: "POST",
+      body: "{}",
+    });
+    if (result.status === "complete") {
+      fillAnthropicOAuthFields(result.credential_reference);
+      showMessage(
+        "Signed in with Anthropic. Apply settings to activate the provider.",
+        "ok",
+      );
+      return true;
+    }
+    if (result.status === "error") {
+      throw new Error(result.message || "Sign-in failed");
+    }
+  }
+  throw new Error("Timed out waiting for the browser to complete the sign-in");
+}
+
+async function runAnthropicOAuthPasteLogin(status, paste) {
+  const initiate = await api("/admin/api/anthropic-oauth/initiate", {
+    method: "POST",
+    body: "{}",
+  });
+  window.open(initiate.authorize_url, "_blank", "noopener");
+  showMessage(
+    "Anthropic OAuth: approve access in the new tab, then paste the code " +
+      "it shows into the field below. Pasting the whole callback URL from " +
+      "the address bar works too.",
+    "warn",
+  );
+  const pasted = await promptForAnthropicOAuthCode(paste);
+  if (!pasted) {
+    status.textContent = "Sign-in cancelled: no code entered.";
+    return false;
+  }
+  const result = await api("/admin/api/anthropic-oauth/complete", {
+    method: "POST",
+    body: JSON.stringify({
+      pasted_code: pasted,
+      verifier: initiate.verifier,
+    }),
+  });
+  if (result.status === "complete") {
+    fillAnthropicOAuthFields(result.credential_reference);
+    showMessage(
+      "Signed in with Anthropic. Apply settings to activate the provider.",
+      "ok",
+    );
+    return true;
+  }
+  return false;
 }
 
 function promptForAnthropicOAuthCode(paste) {

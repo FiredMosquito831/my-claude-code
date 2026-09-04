@@ -32,6 +32,19 @@ class ChatGPTOAuthError(Exception):
     """Raised when ChatGPT OAuth credential handling fails."""
 
 
+#: Statuses that mean the *credential* is finished, rather than that the token
+#: endpoint could not answer right now. Everything else -- 408, 429, 5xx, a
+#: transport error -- is transient and the credential is kept.
+#:
+#: Named rather than inlined so that
+#: ``tests/providers/test_oauth_refresh_parity.py`` can pin it equal to the
+#: Anthropic provider's. The two implementations drifted apart once already:
+#: this one classified correctly while ``anthropic_oauth`` treated every
+#: failure, 429 included, as a dead credential, and told operators to sign in
+#: again -- which rotates a working refresh token away.
+DEFINITIVE_REFRESH_STATUSES: frozenset[int] = frozenset({400, 401, 403})
+
+
 class ChatGPTOAuthRefreshError(ChatGPTOAuthError):
     """Raised when OpenAI rejects or cannot complete a token refresh."""
 
@@ -466,7 +479,7 @@ def force_refresh_managed_chatgpt_oauth_credentials() -> ChatGPTOAuthCredentials
                 source.refresh_token
             )
         except ChatGPTOAuthRefreshError as exc:
-            if exc.status_code in {400, 401, 403}:
+            if exc.status_code in DEFINITIVE_REFRESH_STATUSES:
                 source.path.unlink(missing_ok=True)
                 raise ChatGPTOAuthError(
                     "ChatGPT OAuth session expired. Reconnect in Admin."

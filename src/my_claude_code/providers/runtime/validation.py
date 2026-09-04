@@ -33,6 +33,16 @@ def provider_query_failure_reason(exc: BaseException, settings: Settings) -> str
         return f"query failure: {exc.message}"
     if isinstance(exc, ExecutionFailure) and settings.log_api_error_tracebacks:
         return f"query failure: {exc.message}"
+    if getattr(exc, "safe_message", False):
+        # MCC's own credential exceptions set this. They are written to carry a
+        # status code and MCC's prose but never a response body, and that text
+        # is the only thing that says *why* discovery was skipped. Logging the
+        # class name instead dropped exactly that: operators saw
+        # "reason=query failure: AnthropicOAuthRefreshError" and could not tell
+        # a rate limit from a dead credential. A marker attribute rather than
+        # an import, because ``providers.runtime`` has no business importing
+        # one specific provider. The result is still redacted by the caller.
+        return f"query failure: {exc}"
     return f"query failure: {type(exc).__name__}"
 
 

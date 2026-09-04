@@ -34,7 +34,7 @@ from my_claude_code.providers.anthropic_oauth import credentials as creds
 from my_claude_code.providers.anthropic_oauth.constants import (
     ANTHROPIC_OAUTH_BETA_FLOOR,
     CLAUDE_CODE_USER_AGENT,
-    OAUTH_REFRESH_BETA,
+    OAUTH_REFRESH_SCOPES,
     OAUTH_SCOPES,
     REFRESH_LEEWAY_SECONDS,
     TOKEN_URL,
@@ -212,7 +212,7 @@ async def test_user_agent_and_x_app_mirror_the_client() -> None:
     absent = auth._headers_for(OAuthTokens(access_token=_TOKEN), ClientFingerprint())
     assert absent["x-app"] == "cli"
     assert absent["user-agent"] == CLAUDE_CODE_USER_AGENT
-    assert "2.1.258" in CLAUDE_CODE_USER_AGENT
+    assert "2.1.260" in CLAUDE_CODE_USER_AGENT
 
 
 @pytest.mark.asyncio
@@ -386,10 +386,10 @@ async def test_concurrent_refreshes_perform_one_exchange_across_two_providers(
     assert {tokens.access_token for tokens in results} == {"fresh-token"}
 
 
-@pytest.mark.asyncio
-async def test_refresh_sends_the_oauth_beta_header(
+async def _refresh_and_capture(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+) -> httpx.Request:
+    """Run one successful refresh and return the request that went out."""
     store = tmp_path / "anthropic_oauth.json"
     monkeypatch.setattr(creds, "managed_store_path", lambda: store)
     creds._REFRESH_LOCKS.clear()
@@ -400,13 +400,50 @@ async def test_refresh_sends_the_oauth_beta_header(
         return httpx.Response(200, json={"access_token": "fresh", "expires_in": 3600})
 
     _use_mock_token_endpoint(monkeypatch, handler)
-
     await creds.refresh_tokens(
         OAuthTokens(access_token=_TOKEN, refresh_token="r", source="mcc")
     )
+    return posts[0]
 
-    assert str(posts[0].url) == TOKEN_URL
-    assert posts[0].headers["anthropic-beta"] == OAUTH_REFRESH_BETA
+
+@pytest.mark.asyncio
+async def test_token_endpoint_headers_match_claude_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Claude Code 2.1.260 sets only Content-Type; its client adds a real UA.
+
+    ``$U`` (offset 182768825) and ``EAn`` (offset 182768091) both post with
+    ``{headers:{"Content-Type":"application/json"}}`` and nothing else -- in
+    particular no ``anthropic-beta``, which MCC used to send here on the
+    strength of an offset that describes the *SDK's* OIDC provider, not any
+    Claude Code login path.
+
+    The ``User-Agent`` is not optional in the other direction: the consented
+    live test for 6.43.0 got a non-JSON 403 from the edge when the on-the-wire
+    UA was ``Python-urllib/3.13``, and a first-class OAuth answer when it was
+    plausible. So the assertion is "a real Claude Code UA", not "absent".
+    """
+    request = await _refresh_and_capture(monkeypatch, tmp_path)
+
+    assert str(request.url) == TOKEN_URL
+    assert request.headers["content-type"] == "application/json"
+    assert request.headers["user-agent"] == CLAUDE_CODE_USER_AGENT
+    assert "anthropic-beta" not in request.headers
+
+
+@pytest.mark.asyncio
+async def test_refresh_body_carries_the_claude_code_refresh_scope_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``$U`` sends ``scope: p8.join(" ")``; MCC omitted it entirely."""
+    request = await _refresh_and_capture(monkeypatch, tmp_path)
+    body = json.loads(request.content)
+
+    assert sorted(body) == ["client_id", "grant_type", "refresh_token", "scope"]
+    assert body["scope"] == OAUTH_REFRESH_SCOPES
+    # p8 is the authorize set minus the authorize-only org:create_api_key.
+    assert "org:create_api_key" not in body["scope"]
+    assert "org:create_api_key" in OAUTH_SCOPES
 
 
 @pytest.mark.asyncio

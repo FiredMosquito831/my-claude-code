@@ -2,17 +2,39 @@
 
 Two sources, in precedence order:
 
-1. **MCC's own store** (``~/.mcc/anthropic_oauth.json``), written by
-   ``mcc-anthropic-oauth-login``. Preferred, because MCC may refresh it without
-   touching state Claude Code owns.
+1. **MCC's own store** (``~/.fcc/anthropic_oauth.json``), written by
+   ``mcc-anthropic-oauth-login``. Preferred **while it is viable**, because MCC
+   may refresh it without touching state Claude Code owns.
 2. **Claude Code's own credential file** (``~/.claude/.credentials.json``,
-   ``claudeAiOauth`` object), read only when MCC has no store of its own.
+   ``claudeAiOauth`` object), used whenever the managed store is not viable.
 
 Reading source 2 is deliberately read-only and never refreshed in place: that
 file belongs to Claude Code, a refresh rotates the token, and racing its owner
 would log the user out of their real client. When a token read from there is
 close to expiry, MCC refreshes into *its own* store and leaves the original
 alone.
+
+Selection is **viability-based**, not existence-based
+-----------------------------------------------------
+
+Before 6.43.0 the managed store won on ``has_access_token`` alone, so a file
+holding a token that expired days ago permanently masked a perfectly good
+Claude Code credential sitting next to it, and the provider served nothing for
+the life of that file. :func:`load_tokens` now asks whether a candidate can
+actually be used -- not expired, or expired but holding a refresh token that is
+not itself past its stated expiry -- and falls through when it cannot. It says
+so once, in the log, naming the source it picked and why.
+
+A refresh failure is not automatically a dead credential
+--------------------------------------------------------
+
+Anthropic's token endpoint rate-limits refresh attempts and answers ``429``.
+Treating that as "your credential is dead, sign in again" destroys a working
+refresh token on the operator's own advice. Only a *definitive* rejection --
+``400``/``401``/``403`` carrying a parseable OAuth error body -- retires a
+credential (:class:`AnthropicOAuthRefreshRejected`). Everything else, including
+a bare ``403`` from the edge that never reached the OAuth handler, is transient
+(:class:`AnthropicOAuthRefreshUnavailable`) and the credential is kept.
 
 See ``docs/ANTHROPIC-SUBSCRIPTION.md`` for the policy position on using these
 credentials at all.
@@ -36,10 +58,10 @@ from my_claude_code.config.paths import (
 
 from .constants import (
     CLAUDE_CODE_CLIENT_ID,
+    CLAUDE_CODE_USER_AGENT,
     LEGACY_TOKEN_URL,
-    OAUTH_REFRESH_BETA,
+    OAUTH_REFRESH_SCOPES,
     REFRESH_LEEWAY_SECONDS,
-    TOKEN_ENDPOINT_USER_AGENT,
     TOKEN_URL,
 )
 
@@ -49,24 +71,155 @@ CLAUDE_OAUTH_KEY = "claudeAiOauth"
 
 
 class AnthropicOAuthRefreshError(RuntimeError):
-    """Raised when Anthropic rejects or cannot complete a token refresh.
+    """Base: Anthropic did not complete a token refresh.
 
-    Carries the status code and nothing else. A token endpoint's response body
-    can echo the credential just presented to it, and this exception's text
-    reaches logs, the request log and HTTP error responses alike.
+    Carries the status code, and never the response body. A token endpoint's
+    body can echo the credential just presented to it, and this exception's
+    text reaches logs, the request log and HTTP error responses alike.
+
+    ``response`` is the raw :class:`httpx.Response` when there was one. It is
+    *not* rendered into the message; it is here so the shared failure policy
+    can read a published ``Retry-After`` off it exactly as it does for any
+    other provider (``providers/failure_policy.retry_after_from_error``).
+
+    Two subclasses carry the only distinction that matters to a caller, and
+    code should catch those rather than this base:
+
+    * :class:`AnthropicOAuthRefreshRejected` -- definitive. The credential is
+      finished; quarantining it and telling the operator to sign in again is
+      correct.
+    * :class:`AnthropicOAuthRefreshUnavailable` -- transient. The credential is
+      fine; the endpoint could not answer right now.
     """
 
-    def __init__(self, status_code: int) -> None:
+    #: Whether this failure means the credential itself is finished.
+    definitive: bool = False
+
+    #: This exception's ``str()`` contains no secret and no response body, so
+    #: it may be shown to an operator verbatim. Read by
+    #: ``providers/runtime/validation.py`` -- a marker attribute rather than an
+    #: import, because ``providers.runtime`` has no business importing a
+    #: specific provider.
+    safe_message = True
+
+    def __init__(
+        self,
+        status_code: int,
+        message: str | None = None,
+        *,
+        response: httpx.Response | None = None,
+    ) -> None:
         self.status_code = status_code
+        self.response = response
         super().__init__(
-            f"Anthropic OAuth refresh failed with HTTP {status_code}. "
-            "Sign in again with `mcc-anthropic-oauth-login` if the refresh "
-            "token has itself expired."
+            message or f"Anthropic OAuth refresh failed with HTTP {status_code}."
         )
+
+
+class AnthropicOAuthRefreshRejected(AnthropicOAuthRefreshError):
+    """The token endpoint definitively rejected the refresh token.
+
+    ``400``/``401``/``403`` *carrying a parseable OAuth error body*. The body
+    shape is load-bearing: the edge in front of the token endpoint answers a
+    bare non-JSON ``403`` for reasons that have nothing to do with the grant
+    (an unrecognised ``User-Agent``, for one -- proved live for 6.43.0), and
+    retiring a working credential on that would be the same bug this class
+    exists to prevent, one layer down.
+    """
+
+    definitive = True
+
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        response: httpx.Response | None = None,
+    ) -> None:
+        super().__init__(
+            status_code,
+            f"Anthropic rejected the refresh token (HTTP {status_code}). "
+            "The stored credential has been set aside; sign in again with "
+            "`mcc-anthropic-oauth-login`, or import your Claude Code "
+            "credential from the dashboard.",
+            response=response,
+        )
+
+
+class AnthropicOAuthRefreshUnavailable(AnthropicOAuthRefreshError):
+    """The refresh could not be completed, but the credential is intact.
+
+    ``408``/``429``/``5xx``, a transport error, an unparseable success body,
+    and any ``4xx`` whose body is not an OAuth error. The credential is kept
+    and the failure is handed to the shared retry ladder and provider-health
+    machinery exactly as an API-key provider's ``429``/``5xx`` would be -- see
+    ``AnthropicOAuthProvider._provider_failure_override``.
+    """
+
+    definitive = False
+
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        detail: str = "",
+        response: httpx.Response | None = None,
+    ) -> None:
+        if status_code == 429:
+            summary = (
+                "Anthropic is rate-limiting token refreshes (HTTP 429). The "
+                "stored credential was kept -- this is not a dead token and "
+                "signing in again would rotate a working one away."
+            )
+        elif detail:
+            summary = (
+                f"Anthropic OAuth refresh could not be completed ({detail}). "
+                "The stored credential was kept."
+            )
+        else:
+            summary = (
+                f"Anthropic OAuth refresh could not be completed (HTTP "
+                f"{status_code}). The stored credential was kept."
+            )
+        super().__init__(status_code, summary, response=response)
+
+
+#: Statuses that *may* be definitive, if the body agrees. Mirrors
+#: ``chatgpt_oauth/credentials.py``'s ``{400, 401, 403}`` so the two OAuth
+#: providers cannot drift apart; ``tests/providers/test_oauth_refresh_parity.py``
+#: pins them together.
+DEFINITIVE_REFRESH_STATUSES: frozenset[int] = frozenset({400, 401, 403})
+
+
+def _is_oauth_error_body(response: httpx.Response) -> bool:
+    """Whether a response body is a parseable OAuth/API error document.
+
+    The token endpoint answers a rejected grant with JSON -- either RFC 6749's
+    ``{"error": "invalid_grant", ...}`` or Anthropic's
+    ``{"error": {"type": ..., "message": ...}}``. An edge block is a short
+    non-JSON body. Only the former is evidence about the *credential*.
+    """
+    try:
+        payload = response.json()
+    except ValueError, TypeError:
+        return False
+    return isinstance(payload, dict) and "error" in payload
+
+
+def classify_refresh_failure(
+    response: httpx.Response,
+) -> AnthropicOAuthRefreshError:
+    """Turn a non-2xx token-endpoint response into the right exception."""
+    status = response.status_code
+    if status in DEFINITIVE_REFRESH_STATUSES and _is_oauth_error_body(response):
+        return AnthropicOAuthRefreshRejected(status, response=response)
+    return AnthropicOAuthRefreshUnavailable(status, response=response)
 
 
 class AnthropicOAuthUnavailableError(RuntimeError):
     """Raised when no subscription credential can be found at all."""
+
+    #: See :class:`AnthropicOAuthRefreshError`.
+    safe_message = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,17 +398,105 @@ def detect_available_sources() -> dict[str, bool]:
     }
 
 
+def credential_viability(tokens: OAuthTokens | None) -> tuple[bool, str]:
+    """Whether a candidate can serve a request, and why not when it cannot.
+
+    Purely local: this never makes a network call. A credential is viable when
+    it has an access token and either
+
+    * that access token has not expired, or
+    * it has expired but a refresh token is present that is not itself past a
+      stated ``refreshTokenExpiresAt``.
+
+    A store with no ``refreshTokenExpiresAt`` (everything MCC wrote before
+    6.36.0) is treated as *possibly* renewable rather than dead: the file does
+    not say, and the only way to find out is to try. That is safe now, because
+    a refusal is classified before it retires anything.
+    """
+    if tokens is None:
+        return False, "absent"
+    if not tokens.has_access_token:
+        return False, "no access token"
+    if not tokens.is_expired():
+        return True, "access token still valid"
+    if not tokens.has_refresh_token:
+        return False, "access token expired and no refresh token"
+    refresh_remaining = tokens.refresh_token_seconds_remaining()
+    if refresh_remaining is not None and refresh_remaining <= 0:
+        return False, "refresh token expired"
+    return True, "access token expired but renewable"
+
+
 def load_tokens() -> OAuthTokens:
-    """Return the credential to use, preferring MCC's own store."""
-    for loader in (load_managed_tokens, load_claude_code_tokens):
-        tokens = loader()
-        if tokens is not None and tokens.has_access_token:
-            return tokens
-    raise AnthropicOAuthUnavailableError(
-        "No Claude subscription credential found. Either sign in with "
-        "`mcc-anthropic-oauth-login`, or log in to Claude Code so that "
-        f"{claude_credentials_path()} exists."
+    """Return the credential to use, preferring MCC's own store *while viable*.
+
+    Existence is not viability. Before 6.43.0 this returned the first file
+    holding a non-empty access token, so a managed store whose tokens had both
+    expired masked a healthy ``~/.claude`` credential permanently, and the
+    provider served nothing for the life of that file.
+    """
+    candidates = (
+        ("mcc", load_managed_tokens),
+        ("claude-code", load_claude_code_tokens),
     )
+    rejected: list[str] = []
+    for name, loader in candidates:
+        tokens = loader()
+        viable, reason = credential_viability(tokens)
+        if viable and tokens is not None:
+            if rejected:
+                # The one line that answers "why is it using that one?" in
+                # server.log without anybody having to reproduce anything.
+                logger.warning(
+                    "Claude subscription credential: using {} ({}); skipped {}",
+                    name,
+                    reason,
+                    "; ".join(rejected),
+                )
+            else:
+                logger.debug(
+                    "Claude subscription credential: using {} ({})", name, reason
+                )
+            return tokens
+        rejected.append(f"{name} ({reason})")
+    raise AnthropicOAuthUnavailableError(
+        "No usable Claude subscription credential found ("
+        + "; ".join(rejected)
+        + "). Either sign in with `mcc-anthropic-oauth-login`, or log in to "
+        f"Claude Code so that {claude_credentials_path()} exists."
+    )
+
+
+def quarantine_managed_store(*, now: float | None = None) -> Path | None:
+    """Move a definitively-rejected managed store aside. Never deletes it.
+
+    ``chatgpt_oauth`` unlinks its dead credential; this renames instead, to
+    ``anthropic_oauth.json.dead-<epoch>``. Same unblocking effect -- the next
+    :func:`load_tokens` cannot see it, so the Claude Code credential is reached
+    -- and the evidence survives for whoever investigates why a credential died.
+
+    Returns the new path, or ``None`` when there was nothing to move.
+    """
+    path = managed_store_path()
+    if not path.is_file():
+        return None
+    stamp = int(time.time() if now is None else now)
+    target = path.with_name(f"{path.name}.dead-{stamp}")
+    try:
+        os.replace(path, target)
+    except OSError as error:
+        logger.warning(
+            "Could not set aside the rejected Claude subscription credential at {}: {}",
+            path,
+            error,
+        )
+        return None
+    logger.warning(
+        "Anthropic definitively rejected the stored Claude subscription "
+        "credential; moved it to {} and will fall back to any other source.",
+        target.name,
+    )
+    return target
 
 
 # ---------------------------------------------------------------------------
@@ -312,10 +553,33 @@ def store_tokens(tokens: OAuthTokens) -> None:
 
 
 def _refresh_payload(refresh_token: str) -> dict[str, str]:
+    """The refresh body Claude Code 2.1.260 sends (``$U``, offset 182768825).
+
+    ``scope`` is the field MCC omitted before 6.43.0. Claude Code always sends
+    it, defaulting to ``p8`` -- the authorize scope set minus the
+    authorize-only ``org:create_api_key``.
+    """
     return {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
         "client_id": CLAUDE_CODE_CLIENT_ID,
+        "scope": OAUTH_REFRESH_SCOPES,
+    }
+
+
+def token_endpoint_headers() -> dict[str, str]:
+    """The headers MCC sends to the token endpoint, on both grants.
+
+    Claude Code sets only ``Content-Type`` explicitly; its HTTP client supplies
+    the ``User-Agent``. Sending no plausible ``User-Agent`` is answered by a
+    non-JSON ``403`` at the edge, so MCC sends the same Claude Code identity it
+    already presents on ``/v1/messages``. ``anthropic-beta`` is not sent:
+    neither ``$U`` nor ``EAn`` carries it. See ``constants.py`` for the full
+    derivation and the live evidence.
+    """
+    return {
+        "Content-Type": "application/json",
+        "User-Agent": CLAUDE_CODE_USER_AGENT,
     }
 
 
@@ -326,7 +590,11 @@ def _tokens_from_refresh(
 ) -> OAuthTokens:
     refreshed = _tokens_from_payload(payload, source="mcc")
     if refreshed is None:
-        raise AnthropicOAuthRefreshError(200)
+        # A 200 with no access token in it is the endpoint misbehaving, not the
+        # credential being dead: keep it and let the ladder retry.
+        raise AnthropicOAuthRefreshUnavailable(
+            200, detail="the response carried no access token"
+        )
     # Anthropic may omit the refresh token on a successful refresh; keeping the
     # previous one is what stops the credential becoming unrenewable. The same
     # is true of every field a refresh response does not restate: dropping the
@@ -373,26 +641,32 @@ async def _post_refresh(refresh_token: str) -> httpx.Response:
     current host retries the legacy one exactly once rather than turning a
     host migration into a forced re-login.
     """
-    headers = {
-        "Content-Type": "application/json",
-        # Offset 180990503: the token endpoint receives this beta and no other.
-        "anthropic-beta": OAUTH_REFRESH_BETA,
-        "User-Agent": TOKEN_ENDPOINT_USER_AGENT,
-    }
+    headers = token_endpoint_headers()
     payload = _refresh_payload(refresh_token)
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(TOKEN_URL, json=payload, headers=headers)
-        if response.status_code in (301, 308, 404) and LEGACY_TOKEN_URL != TOKEN_URL:
-            logger.warning(
-                "Anthropic token endpoint {} answered {}; retrying the "
-                "pre-2.1.258 host once.",
-                TOKEN_URL,
-                response.status_code,
-            )
-            response = await client.post(
-                LEGACY_TOKEN_URL, json=payload, headers=headers
-            )
-        return response
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(TOKEN_URL, json=payload, headers=headers)
+            if (
+                response.status_code in (301, 308, 404)
+                and LEGACY_TOKEN_URL != TOKEN_URL
+            ):
+                logger.warning(
+                    "Anthropic token endpoint {} answered {}; retrying the "
+                    "pre-2.1.258 host once.",
+                    TOKEN_URL,
+                    response.status_code,
+                )
+                response = await client.post(
+                    LEGACY_TOKEN_URL, json=payload, headers=headers
+                )
+            return response
+    except httpx.HTTPError as error:
+        # A transport failure reaching the *token* endpoint is not a failure of
+        # the inference request, and it is certainly not a dead credential.
+        # Wrapping it here is what keeps the two apart downstream.
+        raise AnthropicOAuthRefreshUnavailable(
+            503, detail=f"{type(error).__name__} reaching the token endpoint"
+        ) from error
 
 
 async def refresh_tokens(tokens: OAuthTokens) -> OAuthTokens:
@@ -409,7 +683,7 @@ async def refresh_tokens(tokens: OAuthTokens) -> OAuthTokens:
     refresh token a second time.
     """
     if not tokens.has_refresh_token:
-        raise AnthropicOAuthRefreshError(400)
+        raise AnthropicOAuthRefreshRejected(400)
     assert tokens.refresh_token is not None
 
     async with _refresh_lock():
@@ -425,13 +699,30 @@ async def refresh_tokens(tokens: OAuthTokens) -> OAuthTokens:
 
         response = await _post_refresh(tokens.refresh_token)
         if response.status_code >= 400:
-            raise AnthropicOAuthRefreshError(response.status_code)
+            failure = classify_refresh_failure(response)
+            logger.warning(
+                "Claude subscription refresh failed: status={} definitive={} source={}",
+                failure.status_code,
+                failure.definitive,
+                tokens.source,
+            )
+            if failure.definitive and tokens.source == "mcc":
+                # Only a definitive rejection may retire a store, and only the
+                # one MCC owns -- Claude Code's file is never touched.
+                quarantine_managed_store()
+            raise failure
 
         refreshed = _tokens_from_refresh(response.json(), previous=tokens)
+        # Always into MCC's own store, whatever the credential was read from:
+        # a token refreshed off Claude Code's file must not be written back
+        # into it. This is also what upgrades a pre-6.36.0 store to the current
+        # shape (millisecond ``expiresAt``, ``refreshTokenExpiresAt``,
+        # ``rateLimitTier``) on the first successful refresh.
         store_tokens(refreshed)
 
     logger.info(
-        "Refreshed Claude subscription OAuth credential (expires_at={})",
+        "Refreshed Claude subscription OAuth credential (source={} expires_at={})",
+        tokens.source,
         refreshed.expires_at,
     )
     return refreshed

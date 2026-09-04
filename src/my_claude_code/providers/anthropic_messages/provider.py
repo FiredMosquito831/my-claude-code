@@ -25,7 +25,10 @@ from my_claude_code.core.wire_capture import (
     start_response_shape,
 )
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
-from my_claude_code.providers.failure_policy import classify_provider_failure
+from my_claude_code.providers.failure_policy import (
+    ProviderFailureOverride,
+    classify_provider_failure,
+)
 from my_claude_code.providers.http import close_provider_stream
 from my_claude_code.providers.model_listing import model_infos_from_ids
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
@@ -112,6 +115,12 @@ class AnthropicMessagesProvider(BaseProvider):
         # a rejected token must cost one retry, not a new rung on the ladder.
         self._response_observer: Callable[[Mapping[str, str], int], None] | None = None
         self._auth_retry: Callable[[int], Awaitable[bool]] | None = None
+        # ``_failure_override`` lets the owning provider classify an error it
+        # understands better than the shared policy does -- the Claude
+        # subscription provider uses it for token-endpoint failures, which
+        # surface from the same ``try`` as an inference error and would
+        # otherwise be reported as a generic upstream 502.
+        self._failure_override: ProviderFailureOverride | None = None
         # What this host has taught this process about itself. Same two tables,
         # same lifetime and the same matchers as the OpenAI-chat family's --
         # only the body keys differ, because this dialect spells the output
@@ -149,6 +158,16 @@ class AnthropicMessagesProvider(BaseProvider):
     def set_auth_retry(self, retry: Callable[[int], Awaitable[bool]] | None) -> None:
         """Let a credential refresh itself once on an auth rejection."""
         self._auth_retry = retry
+
+    def set_failure_override(self, override: ProviderFailureOverride | None) -> None:
+        """Classify provider-specific errors ahead of the shared policy.
+
+        The override is threaded into *both* the retry ladder and the final
+        classification, because they have to agree about what an error means:
+        wiring only one produces a failure that is retried but reported wrong,
+        or reported right and never retried.
+        """
+        self._failure_override = override
 
     def throttle_remaining(self, model: str | None = None) -> float:
         return self._rate_limiter.remaining_wait()
@@ -304,6 +323,7 @@ class AnthropicMessagesProvider(BaseProvider):
                     response = await self._rate_limiter.execute_with_retry(
                         self._send_stream_request,
                         body,
+                        provider_failure_override=self._failure_override,
                     )
                     stream_opened = True
                     if stripped_reasoning is not None:
@@ -355,6 +375,7 @@ class AnthropicMessagesProvider(BaseProvider):
                         mark_rate_limited_enabled=(
                             not self._config.routes_around_model
                         ),
+                        provider_failure_override=self._failure_override,
                     )
                     trace_event(
                         stage="provider",

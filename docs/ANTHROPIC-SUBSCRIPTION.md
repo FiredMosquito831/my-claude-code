@@ -191,6 +191,131 @@ Then point a model reference at it:
 MODEL="anthropic_oauth/claude-sonnet-4-6"
 ```
 
+### Signing in
+
+`mcc-anthropic-oauth-login` prints the consent notice, waits for you to type
+`yes`, and then opens your browser. There are two ways it can finish, and it
+picks for you:
+
+- **Loopback (the default).** A callback server binds an ephemeral port on
+  `127.0.0.1`, and approving in the browser is the whole interaction — there is
+  nothing to copy. This is what Claude Code itself does
+  (`redirect_uri=http://localhost:<port>/callback`).
+- **Paste (`--paste`, and the automatic fallback).** Anthropic's hosted
+  callback page shows a code; you paste it back. Used whenever the browser
+  cannot reach this machine's `localhost` — under WSL, over SSH, in a
+  container, or on a remote desktop. The command detects those cases up front
+  and says so, rather than waiting five minutes for a callback that can never
+  arrive.
+
+  In the paste flow you may paste any of: the `code#state` string the page
+  shows, the bare code, or **the whole callback URL out of your address bar**.
+  All three work.
+
+```
+mcc-anthropic-oauth-login --help          # the flow and the flags; prompts for nothing
+mcc-anthropic-oauth-login --paste         # skip the callback server
+mcc-anthropic-oauth-login --no-browser    # print the URL instead of opening it
+```
+
+The command never shows you a traceback. A refused code, a closed pipe and a
+Ctrl-C are each one line and exit status 1.
+
+The dashboard offers the same two flows behind **Sign in with Anthropic**: it
+tries the loopback transport, and falls back to a paste field if the browser
+and MCC do not share a `localhost`.
+
+### Which credential MCC uses, and when it changes its mind
+
+MCC can see up to two credentials, and picks between them **on viability, not
+on existence**:
+
+1. **MCC's own store** (`~/.fcc/anthropic_oauth.json`) — preferred *while it is
+   usable*: either the access token has not expired, or it has expired but the
+   refresh token is not itself past a stated expiry.
+2. **Claude Code's own file** (`~/.claude/.credentials.json`) — used whenever
+   the first is not viable. Still read-only. If it needs refreshing, the result
+   is written to *MCC's* store; Claude Code's file is never rotated.
+
+If it falls back, it says so once, in `server.log`, naming both the source it
+chose and the one it skipped:
+
+```
+Claude subscription credential: using claude-code (access token still valid);
+skipped mcc (access token expired and no refresh token)
+```
+
+> **Fixed in 6.43.0.** Before this, the first file holding a non-empty access
+> token won, whether or not that token was years dead. A stale
+> `~/.fcc/anthropic_oauth.json` therefore masked a perfectly healthy Claude
+> Code credential sitting next to it *permanently*, and the provider served
+> nothing for the life of that file. If that is the state you are in, upgrading
+> is the entire fix — there is nothing for you to do.
+
+### A failed refresh is not a dead credential
+
+Anthropic's token endpoint rate-limits refresh attempts and answers **429**:
+
+```json
+{"error": {"type": "rate_limit_error", "message": "Rate limited. Please try again later."}}
+```
+
+That means *wait*. It does not mean your credential is finished, and signing in
+again in response to it **rotates a working refresh token away** — turning a
+five-minute hiccup into a real outage.
+
+MCC classifies refresh failures into two classes and reports them differently:
+
+| Response | Class | What MCC does |
+| --- | --- | --- |
+| `400`/`401`/`403` **with a JSON OAuth error body** | definitive | Sets the store aside as `anthropic_oauth.json.dead-<epoch>`, falls back to any other source, and tells you to sign in again |
+| `408`, `429`, `5xx`, a transport error | transient | Keeps the credential, says "the stored credential was kept", and hands the failure to the same retry ladder, backoff and provider-health machinery an API-key provider's `429`/`5xx` goes through |
+| `400`/`401`/`403` **without** a JSON error body | transient | Keeps the credential — see below |
+
+That last row is not pedantry. The edge in front of the token endpoint answers
+a short non-JSON `403` for reasons that have nothing to do with your grant (an
+unrecognised `User-Agent`, for one — measured, not guessed). A request that
+never reached the OAuth handler is not evidence about your credential, and
+retiring one on that basis would be the same bug this rule exists to prevent.
+
+A quarantined store is **renamed, never deleted**. If a credential is set aside
+and you think that was wrong, the file is still there.
+
+### The Refresh now and Disconnect buttons
+
+The dashboard's Anthropic card has two controls, both local-only:
+
+- **Refresh now** renews MCC's stored credential immediately and reports the
+  new expiry. If Anthropic is rate-limiting, it says so and leaves the
+  credential alone; it does not tell you to sign in again.
+- **Disconnect** sets MCC's own store aside as
+  `anthropic_oauth.json.dead-<epoch>`. Your Claude Code login is untouched, so
+  if that credential is healthy MCC simply falls back to it. Nothing needs
+  restarting.
+
+Neither button can renew or remove Claude Code's own file.
+
+### Changes take effect without a restart
+
+Importing a credential from the dashboard, signing in, pressing **Refresh
+now**, pressing **Disconnect**, or running `mcc-anthropic-oauth-login` in
+another terminal all take effect on the **next request**. The running provider
+watches the store's `(mtime, size)` and re-resolves when it changes — the same
+thing Claude Code does with its own credential file.
+
+> **Fixed in 6.43.0.** Before this, the provider read the store once and cached
+> it for the life of the process. The dashboard's Import button wrote the file
+> and reported success while the live provider went on using the old, broken
+> credential, and nothing said a restart was needed. The import was not broken;
+> it was invisible.
+
+### On macOS
+
+Claude Code on macOS usually keeps its credential in the **login keychain**
+rather than in `~/.claude/.credentials.json`. MCC cannot read the keychain, so
+"Use Claude Code credentials" will report that no credential was found, and
+that is expected rather than a bug. Sign in directly instead.
+
 ### Settings
 
 | Setting | Default | What it does |
@@ -216,3 +341,35 @@ MODEL="anthropic_oauth/claude-sonnet-4-6"
 - The request log's `key_label` for this provider is the plan and the
   credential's origin — `max · mcc`, `max · claude-code`. No email: MCC never
   fetches the profile.
+- A credential that is set aside — by a definitive rejection or by
+  **Disconnect** — is renamed to `anthropic_oauth.json.dead-<epoch>` in the
+  same directory. It is never deleted. Remove them yourself once you are
+  satisfied nothing was lost.
+- The refresh token's own expiry is honoured without a network call: a store
+  whose `refreshTokenExpiresAt` has passed is not viable, and the dashboard
+  card says **"Refresh token expired — sign in again"** rather than showing a
+  stale date beside a Refresh button that cannot help.
+- A store written by MCC before 6.36.0 holds `expiresAt` in *seconds* and no
+  `refreshTokenExpiresAt` or `rateLimitTier`. It is read correctly as-is, and
+  the first successful refresh rewrites it in the current shape.
+
+### What MCC sends to the token endpoint
+
+Matched against Claude Code 2.1.260's own bundle (`$U` at offset 182768825,
+`EAn` at offset 182768091) — see `providers/anthropic_oauth/constants.py`,
+which cites an offset and a quoted snippet for every value:
+
+| | Value |
+| --- | --- |
+| `Content-Type` | `application/json` |
+| `User-Agent` | `claude-cli/2.1.260 (external, cli)` |
+| `anthropic-beta` | **not sent** |
+| refresh body | `grant_type`, `refresh_token`, `client_id`, `scope` |
+| refresh `scope` | `user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload` |
+
+Claude Code sets only `Content-Type` explicitly; its HTTP client supplies the
+`User-Agent`. Sending none is answered by a `403` at the edge, so MCC sends the
+same Claude Code identity it presents on `/v1/messages` — which the entrypoint
+gate is what keeps honest. Before 6.43.0 MCC sent `anthropic-beta:
+oauth-2025-04-20` and `User-Agent: anthropic` here, and omitted `scope`
+entirely; none of those three matches any Claude Code login path.

@@ -26,13 +26,20 @@ from my_claude_code.application.errors import InvalidRequestError
 from my_claude_code.config.constants import ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.client_fingerprint import current_fingerprint
+from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.providers.anthropic import AnthropicProvider
 from my_claude_code.providers.base import ProviderConfig
+from my_claude_code.providers.failure_policy import retry_after_from_error
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .auth import AnthropicOAuthAuth
-from .credentials import OAuthTokens, load_tokens
+from .credentials import (
+    AnthropicOAuthRefreshError,
+    AnthropicOAuthUnavailableError,
+    OAuthTokens,
+    load_tokens,
+)
 from .entrypoint import (
     CLAUDE_CODE_ENTRYPOINTS,
     detect_entrypoint,
@@ -116,6 +123,7 @@ class AnthropicOAuthProvider(AnthropicProvider):
         # pass corrupted any *content* that happened to contain the literal.
         self._messages.set_response_observer(self._observe_response_headers)
         self._messages.set_auth_retry(self._retry_after_auth_failure)
+        self.set_failure_override(self._classify_credential_failure)
 
     # -- entrypoint gate ---------------------------------------------------
 
@@ -167,6 +175,84 @@ class AnthropicOAuthProvider(AnthropicProvider):
         response said so. Nothing here infers a window from a status code.
         """
         OBSERVER.observe(headers, status_code=status_code, now=time.time())
+
+    # -- failure classification --------------------------------------------
+
+    def _classify_credential_failure(self, error: Exception) -> ExecutionFailure | None:
+        """Classify a *credential-endpoint* failure, which the shared policy cannot.
+
+        A refresh happens inside the request path, so an
+        :class:`AnthropicOAuthRefreshError` surfaces from the same ``try`` as an
+        inference error and is otherwise indistinguishable from one. Left to the
+        shared classifier it falls through every branch to
+        ``FailureKind.UPSTREAM`` with status 502 -- which loses the real status,
+        loses any published ``Retry-After``, reports ``api_error`` on the wire
+        instead of ``rate_limit_error``, and benches the *model* for something
+        that was never the model's fault.
+
+        The binding rule for 6.43.0 is that this provider behaves like every
+        other one: a transient token-endpoint failure is classified with the
+        *existing* kinds and handed to the *existing* retry ladder, backoff and
+        provider-health machinery. No new ``FailureKind``, and no OAuth-only
+        retry loop.
+
+        The mapping, and why each one:
+
+        ``429`` -> ``RATE_LIMIT``
+            Exactly what an API-key provider's 429 becomes. Retryable, carries
+            the endpoint's own ``Retry-After`` when it published one, and the
+            ladder's reactive block applies. The credential is not dead -- this
+            is the case the operator actually hit.
+        ``5xx``/transport -> ``OVERLOADED``
+            Capacity pressure at the token endpoint. Retryable, and deliberately
+            *not* credential-shaped, so a bad ten minutes at Anthropic does not
+            charge the credential or rotate it away.
+        ``400``/``401``/``403`` **with an OAuth error body** -> ``AUTHENTICATION``
+            The only definitive class. Not retryable, credential-shaped, so
+            rotation and the "reconnect" path engage. ``credentials.py`` has
+            already set the store aside by the time this runs.
+        no credential at all -> ``UNAVAILABLE``
+            Nothing to retry and nothing to charge; matches what
+            ``chatgpt_oauth`` reports for the same situation.
+        """
+        if isinstance(error, AnthropicOAuthUnavailableError):
+            return ExecutionFailure(
+                kind=FailureKind.UNAVAILABLE,
+                status_code=503,
+                message=str(error),
+                retryable=False,
+            )
+        if not isinstance(error, AnthropicOAuthRefreshError):
+            return None
+
+        status = error.status_code
+        if error.definitive:
+            return ExecutionFailure(
+                kind=FailureKind.AUTHENTICATION,
+                status_code=401,
+                message=str(error),
+                retryable=False,
+            )
+        if status == 429:
+            return ExecutionFailure(
+                kind=FailureKind.RATE_LIMIT,
+                status_code=429,
+                message=str(error),
+                retryable=True,
+                # ``retry_after_from_error`` reads ``error.response.headers``,
+                # which the refresh exceptions now carry precisely so that a
+                # published Retry-After is honoured here the same way it is for
+                # every other provider. ``None`` when the endpoint published
+                # none, which the ladder treats as "use the default backoff".
+                retry_after_seconds=retry_after_from_error(error),
+            )
+        return ExecutionFailure(
+            kind=FailureKind.OVERLOADED,
+            status_code=529 if status >= 500 else 503,
+            message=str(error),
+            retryable=True,
+            retry_after_seconds=retry_after_from_error(error),
+        )
 
     # -- 401 -> refresh once, retry once ------------------------------------
 

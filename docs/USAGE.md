@@ -1425,6 +1425,16 @@ If you enable it anyway, MCC refuses by default to use the subscription for anyt
 
 The Claude subscription card on the **Providers** page reports the plan and rate-limit tier, when the access and refresh tokens expire, the scopes (flagged if `user:inference` is missing, without which the credential cannot answer at all), and the 5-hour and weekly usage windows. Those windows are read from Anthropic's own `anthropic-ratelimit-unified-*` response headers and are never computed: until a real response has carried one, the card says *not yet observed* rather than guessing.
 
+The card has four buttons, and the flow through them is:
+
+1. **Use Claude Code credentials** copies the credential Claude Code already stored into MCC's own store, or **Sign in with Anthropic** gets a fresh one. The sign-in finishes by itself — a callback server on `127.0.0.1` catches the redirect, so there is nothing to copy. If your browser cannot reach MCC's `localhost` (WSL, SSH, a container) it falls back to a paste field, and there you may paste the code, the `code#state` string, or the whole callback URL from the address bar.
+2. **Apply settings** — both actions fill `ANTHROPIC_OAUTH_ACCESS_TOKEN` with a non-secret marker, and Apply is what activates the provider. The success message says so.
+3. That is all. **No restart.** The running provider notices the new credential on its next request.
+
+The other two buttons are for a credential you already have. **Refresh now** renews it immediately and reports the new expiry. **Disconnect** sets MCC's own store aside — renamed, never deleted — and leaves your Claude Code login alone, so MCC falls back to it if it is healthy.
+
+If a refresh reports that Anthropic is **rate-limiting** (a 429), that means wait. It does not mean your credential is dead, and signing in again in response would rotate a working refresh token away. MCC will not tell you to sign in again for a 429; when it does say that, it means it.
+
 **Read [ANTHROPIC-SUBSCRIPTION.md](ANTHROPIC-SUBSCRIPTION.md) first.** It is the full disclaimer, the settings, and the credential handling.
 
 Claude models also reach you through `bedrock`, `vertex`, and gateways such as `kilo`, `nous_portal` and `cline` — all pay-per-token, none with a policy question attached.
