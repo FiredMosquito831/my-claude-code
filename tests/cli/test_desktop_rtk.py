@@ -170,7 +170,14 @@ def test_checked_reflects_persisted_state(monkeypatch, tmp_path):
 
 
 def _real_state_tray(monkeypatch, tmp_path):
-    """Build a tray against the real desktop-state file under a temp home."""
+    """Build a tray against the real desktop-state file under a temp home.
+
+    Callers must also take the ``fake_winreg`` fixture: the toggles below drive
+    the *real* ``set_start_at_login``, whose Windows branch writes
+    ``HKCU\\...\\Run``. Redirecting HOME isolates the state file and nothing
+    else, which is how two runs of this suite deleted the developer's own
+    autostart registration.
+    """
     _set_home(monkeypatch, tmp_path)
     monkeypatch.setattr(
         "my_claude_code.cli.desktop_tray.apply_rtk_state",
@@ -182,7 +189,9 @@ def _real_state_tray(monkeypatch, tmp_path):
     return PystrayDesktopTray(controller)
 
 
-def test_start_at_login_toggle_reads_disk_not_the_stale_cache(monkeypatch, tmp_path):
+def test_start_at_login_toggle_reads_disk_not_the_stale_cache(
+    monkeypatch, tmp_path, fake_winreg
+):
     """An externally changed field must toggle in the right direction.
 
     The tray caches desktop state at construction. If the dashboard enables
@@ -203,7 +212,9 @@ def test_start_at_login_toggle_reads_disk_not_the_stale_cache(monkeypatch, tmp_p
     assert tray._start_at_login is False
 
 
-def test_tray_enabled_toggle_reads_disk_not_the_stale_cache(monkeypatch, tmp_path):
+def test_tray_enabled_toggle_reads_disk_not_the_stale_cache(
+    monkeypatch, tmp_path, fake_winreg
+):
     tray = _real_state_tray(monkeypatch, tmp_path)
     assert load_desktop_state().tray_enabled is True
 

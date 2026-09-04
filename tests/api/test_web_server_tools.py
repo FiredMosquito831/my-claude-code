@@ -67,6 +67,7 @@ from my_claude_code.websearch.errors import (
     WebSearchUpstreamError,
 )
 from my_claude_code.websearch.registry import SearchOutcome, SearchRouteOutcome
+from tests.support.websearch_credentials import NO_WEB_SEARCH_CREDENTIALS
 
 _STRICT_EGRESS = WebFetchEgressPolicy(
     allow_private_network_targets=False,
@@ -1278,8 +1279,12 @@ async def test_explicit_provider_is_strict_under_default_auto_policy(monkeypatch
 
 @pytest.mark.asyncio
 async def test_explicit_missing_credentials_surfaces_config_error(monkeypatch):
+    # Stated, not inherited: the case is "exa is selected and has no key", and
+    # a developer with EXA_API_KEY exported turned it into "exa is selected and
+    # works", so this test passed or failed on whose machine ran it.
     settings = Settings.model_validate(
         {
+            **NO_WEB_SEARCH_CREDENTIALS,
             "WEB_SEARCH_PROVIDER": "exa",
             "WEB_SEARCH_FALLBACK_POLICY": "legacy",
         }
@@ -1382,7 +1387,9 @@ async def test_explicit_legacy_policy_runs_complete_fallback_chain(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_web_search_ddgs_failure_skips_second_ddgs_attempt(monkeypatch):
-    settings = Settings.model_validate({})
+    # The auto route is "ddgs alone" only when nothing else is keyed, and an
+    # ambient EXA_API_KEY put ``exa`` in front of it.
+    settings = Settings.model_validate(dict(NO_WEB_SEARCH_CREDENTIALS))
     requested: list[str] = []
 
     async def fake_runtime_provider(_settings: Settings, provider_id: str):

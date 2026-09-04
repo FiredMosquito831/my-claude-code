@@ -232,8 +232,15 @@ def _stub_download(monkeypatch, payload: bytes):
     monkeypatch.setattr(release_updates.httpx, "stream", lambda *a, **k: _Stream())
 
 
-def test_upgrade_refuses_a_wheel_whose_checksum_does_not_match(monkeypatch) -> None:
+def test_upgrade_refuses_a_wheel_whose_checksum_does_not_match(
+    monkeypatch, tmp_path
+) -> None:
     """Same refusal the install scripts make, so the UI path is not weaker."""
+    # The Windows branch stages the download under ``_stage_dir()``, which is
+    # ``config_dir_path()/"updates"``. Its three siblings each redirect that
+    # (or turn ``_WINDOWS`` off); this one did neither, and wrote a real
+    # ``~/.fcc/updates/wheel/w.whl`` on every run.
+    monkeypatch.setattr(release_updates, "_stage_dir", lambda: tmp_path)
     monkeypatch.setattr(release_updates.shutil, "which", lambda _n: "/usr/bin/uv")
     _stub_download(monkeypatch, b"actual-bytes")
     ran = False

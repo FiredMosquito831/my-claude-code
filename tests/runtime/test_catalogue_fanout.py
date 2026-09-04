@@ -18,6 +18,7 @@ from my_claude_code.config.proxy_auth import PROXY_NO_AUTH_SENTINEL
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 from my_claude_code.core.model_ids import ResolutionTier
+from my_claude_code.runtime import harness_catalogues
 from my_claude_code.runtime.harness_catalogues import HarnessCatalogueFanoutPublisher
 
 
@@ -107,6 +108,30 @@ def _runtime(context_lengths: dict[str, int] | None = None) -> FakeRuntime:
         settings=settings,
         cached_infos=(ProviderModelInfo("open_router/discovered"),),
         context_lengths=context_lengths,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _every_catalogue_lands_in_tmp_path(monkeypatch, tmp_path: Path):
+    """Give all twelve documents a destination, not just the overridden one.
+
+    A publisher built with ``{"codex": tmp_path / "..."}`` still fans out over
+    every other harness, and each of those resolves through
+    ``harness_catalogue_path()`` -- i.e. into the real config directory. Nine
+    tests in this file rewrote the developer's own Crush and Cline catalogues
+    that way while looking, at review, perfectly isolated: they all take
+    ``tmp_path``. Individual cases still override this with the ``patch(...)``
+    idiom below when they need to assert on the resolved name.
+    """
+
+    monkeypatch.setattr(
+        harness_catalogues,
+        "harness_catalogue_path",
+        # ``name`` is a config-dir-relative path such as ``crush/crush.json``
+        # or ``cline/data/settings/providers.json``. Keeping its shape below a
+        # sub-directory both preserves the two-deep layouts and keeps the
+        # generated documents from colliding with the file a test built itself.
+        lambda name: tmp_path / "catalogues" / name,
     )
 
 

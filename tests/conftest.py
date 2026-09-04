@@ -12,6 +12,30 @@ import pytest
 from my_claude_code.config.settings import Settings
 from tests.providers.support import passthrough_rate_limiter
 
+# Any test whose subject is the Windows autostart registration takes the
+# ``fake_winreg`` fixture. It lives in one place rather than beside its tests so
+# that both files driving ``set_start_at_login`` share the same fake;
+# ``tests/cli/test_desktop_rtk.py`` not having one is what deleted the
+# developer's real ``Run`` value, twice.
+from tests.support.fake_winreg import fake_winreg  # noqa: F401  (shared fixture)
+
+# The hermeticity guard. Importing its fixtures and hook implementations here is
+# what installs them for the whole suite: ``isolate_the_machine`` gives every
+# test its own HOME/APPDATA, ``hermetic_marker_gates`` projects the opt-in
+# markers into the process-wide interceptors, ``pytest_configure`` installs
+# those interceptors, and ``pytest_runtest_teardown`` fails a test that resolved
+# the developer's real config directory. ``isolate_the_machine`` is bound before
+# any fixture defined below, on purpose: autouse fixtures run in collection
+# order and every one of those resolves a path that must already be redirected.
+# See ``tests/support/hermetic.py`` and ``tests/README.md``.
+from tests.support.hermetic import (  # noqa: F401  (re-exported fixtures/hooks)
+    hermetic_marker_gates,
+    isolate_the_machine,
+    pytest_configure,
+    pytest_runtest_teardown,
+)
+from tests.support.hermetic import under_real_config_dir as _under_real_home
+
 # Set mock environment BEFORE any imports that use Settings
 os.environ.setdefault("NVIDIA_NIM_API_KEY", "test_key")
 os.environ.setdefault("MODEL", "nvidia_nim/test-model")
@@ -182,132 +206,6 @@ def _reset_config_dir_cache():
     paths.reset_config_dir_cache()
     yield
     paths.reset_config_dir_cache()
-
-
-# The developer's real home, captured once at import time -- before any test
-# has had a chance to monkeypatch ``Path.home`` or redirect ``HOME`` -- so the
-# guard below always compares against the true user profile.
-_REAL_HOME = Path.home().resolve()
-# The three directories the config-dir rule and ``mcc-migrate`` can create,
-# rename or remove. A test must never touch any of them in the real home.
-_REAL_HOME_MCC_DIRS = (
-    _REAL_HOME / ".mcc",
-    _REAL_HOME / ".fcc",
-    _REAL_HOME / ".fcc-old",
-)
-
-
-def _is_real_home_config_dir(candidate) -> bool:
-    """True for ``~/.mcc``, ``~/.fcc`` and ``~/.fcc-old`` in the *real* home."""
-
-    try:
-        return Path(candidate) in _REAL_HOME_MCC_DIRS
-    except OSError, ValueError, TypeError:
-        return False
-
-
-def _under_real_home(candidate) -> bool:
-    """True for one of the real home's config directories, or anything inside it.
-
-    Deliberately *not* "anywhere under the user profile": on Windows pytest's
-    own ``tmp_path`` lives under the user's AppData/Local/Temp, so the
-    broader test would call every correctly isolated directory a violation.
-    """
-
-    try:
-        resolved = Path(candidate).resolve()
-    except OSError, ValueError:
-        return False
-    return any(
-        resolved == directory or directory in resolved.parents
-        for directory in _REAL_HOME_MCC_DIRS
-    )
-
-
-@pytest.fixture(autouse=True)
-def _never_touch_the_real_home(monkeypatch):
-    """No test may resolve, rename or create a config directory in the real home.
-
-    ``tests/cli/test_migrate_config_dir.py`` once shipped a case that forgot to
-    patch ``Path.home``, so ``migrate_config_dir()`` ran against the developer's
-    own machine and renamed their live ``~/.fcc`` to ``~/.mcc``. That is data
-    loss from a green test run, and no amount of care in review reliably catches
-    a missing fixture argument. This guard makes the class of bug impossible:
-
-    * ``os.replace``/``os.rename`` refuse when either side is one of the three
-      real-home config directories, failing at the call that would do the damage;
-    * ``Path.mkdir``/``os.mkdir``/``os.makedirs`` refuse to create one. This is
-      not hypothetical: on a machine with no config directory at all, the suite
-      used to create a real ``~/.mcc`` (the web-search analytics store builds
-      its parent on construction), and an empty ``~/.mcc`` then outranks a
-      legacy ``~/.fcc`` for good;
-    * the cached config-dir resolution is checked at teardown, so a test that
-      merely *resolved* the real home (and would have read the real ``.env`` or
-      ``requests.db``) fails too.
-
-    Each check blames the test that actually did it, rather than comparing a
-    directory listing before and after -- under ``xdist`` a shared-filesystem
-    comparison reports whichever three workers happened to be mid-test.
-
-    Declared after ``_reset_config_dir_cache`` on purpose: autouse fixtures tear
-    down in reverse setup order, so this one still sees the cached resolution.
-    """
-
-    real_replace = os.replace
-    real_rename = os.rename
-    real_mkdir = Path.mkdir
-    real_os_mkdir = os.mkdir
-    real_makedirs = os.makedirs
-
-    def _refuse(operation: str, target) -> None:
-        raise AssertionError(
-            f"{operation} refused: {target} is a My Claude Code config directory "
-            f"in the real home. Patch ``Path.home`` (or redirect "
-            f"HOME/USERPROFILE, or set MCC_CONFIG_DIR to a tmp_path) in this "
-            f"test -- the suite must never read or write the developer's own "
-            f"configuration."
-        )
-
-    def _guard_two_sided(name, func):
-        def guarded(src, dst, *args, **kwargs):
-            for side in (src, dst):
-                if _is_real_home_config_dir(side):
-                    _refuse(f"os.{name}()", side)
-            return func(src, dst, *args, **kwargs)
-
-        return guarded
-
-    def _guarded_path_mkdir(self, *args, **kwargs):
-        if _is_real_home_config_dir(self):
-            _refuse("Path.mkdir()", self)
-        return real_mkdir(self, *args, **kwargs)
-
-    def _guard_one_sided(name, func):
-        def guarded(path, *args, **kwargs):
-            if _is_real_home_config_dir(path):
-                _refuse(f"os.{name}()", path)
-            return func(path, *args, **kwargs)
-
-        return guarded
-
-    monkeypatch.setattr(os, "replace", _guard_two_sided("replace", real_replace))
-    monkeypatch.setattr(os, "rename", _guard_two_sided("rename", real_rename))
-    monkeypatch.setattr(Path, "mkdir", _guarded_path_mkdir)
-    monkeypatch.setattr(os, "mkdir", _guard_one_sided("mkdir", real_os_mkdir))
-    monkeypatch.setattr(os, "makedirs", _guard_one_sided("makedirs", real_makedirs))
-
-    yield
-
-    from my_claude_code.config import paths
-
-    resolution = paths._resolution
-    if resolution is not None and _under_real_home(resolution.path):
-        raise AssertionError(
-            f"This test resolved the config directory to {resolution.path}, "
-            f"which is inside the real home. It would read the developer's own "
-            f"``.env``/``requests.db``. Patch ``Path.home`` or set "
-            f"``MCC_CONFIG_DIR`` to a tmp_path."
-        )
 
 
 @pytest.fixture(autouse=True)

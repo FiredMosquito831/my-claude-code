@@ -271,52 +271,6 @@ class TestSaveDesktopState:
             save_desktop_state(load_desktop_state())
 
 
-class _FakeWinreg:
-    """Minimal winreg stand-in exercising the same call surface."""
-
-    HKEY_CURRENT_USER = object()
-    KEY_SET_VALUE = 1
-    REG_SZ = 1
-
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-        self.closed = False
-
-    def OpenKey(self, root, subkey, reserved, access):
-        assert root is self.HKEY_CURRENT_USER
-        assert subkey == r"Software\Microsoft\Windows\CurrentVersion\Run"
-        return self
-
-    def SetValueEx(self, key, name, reserved, kind, value):
-        assert key is self
-        assert name == WINDOWS_RUN_VALUE
-        self.values[name] = value
-
-    def DeleteValue(self, key, name):
-        assert key is self
-        assert name == WINDOWS_RUN_VALUE
-        self.values.pop(name, None)
-
-    def CloseKey(self, key):
-        assert key is self
-        self.closed = True
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return None
-
-
-@pytest.fixture
-def fake_winreg(monkeypatch):
-    fake = _FakeWinreg()
-    monkeypatch.setitem(sys.modules, "winreg", fake)
-    monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(desktop_config, "native_origin", lambda: "windows")
-    return fake
-
-
 class TestWindowsStartAtLogin:
     def test_apply_writes_run_key(self, monkeypatch, tmp_path, fake_winreg):
         _set_home(monkeypatch, tmp_path)

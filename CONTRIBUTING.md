@@ -8,6 +8,7 @@ Thanks for helping improve My Claude Code. Keep changes focused, test the behavi
 - Do not open Docker integration pull requests.
 - For bugs, include every model mapping, the active model when the failure occurred, the complete error, and reproducible steps.
 - Add focused tests for behavior changes and relevant edge cases.
+- Read [tests/README.md](tests/README.md) before adding a test that touches the filesystem, the registry, a subprocess or a socket. The suite is hermetic and enforces it; a test that reaches the real machine fails rather than damaging it.
 - Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing package boundaries, providers, protocol conversion, launchers, or messaging.
 
 ## Development Setup

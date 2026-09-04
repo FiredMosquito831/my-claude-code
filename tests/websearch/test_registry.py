@@ -18,11 +18,15 @@ from my_claude_code.websearch.registry import (
     search,
     search_with_logging,
 )
+from tests.support.websearch_credentials import forget_web_search_credentials
 from tests.websearch.support import StubWebSearchProvider, build_config
 
 
 def _settings(monkeypatch, **env: str) -> Settings:
     monkeypatch.setitem(Settings.model_config, "env_file", ())
+    # Only the credentials the case names may be visible. Otherwise "nothing is
+    # configured" means "nothing is configured on the machine that ran this".
+    forget_web_search_credentials(monkeypatch)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     return Settings()

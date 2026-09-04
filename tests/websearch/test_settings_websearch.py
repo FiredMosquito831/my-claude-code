@@ -5,10 +5,12 @@ from pydantic import ValidationError
 
 from my_claude_code.config.settings import Settings
 from my_claude_code.config.websearch_catalog import WEBSEARCH_CATALOG
+from tests.support.websearch_credentials import forget_web_search_credentials
 
 
 def _settings(monkeypatch, **env: str) -> Settings:
     monkeypatch.setitem(Settings.model_config, "env_file", ())
+    forget_web_search_credentials(monkeypatch)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     return Settings()
@@ -16,8 +18,7 @@ def _settings(monkeypatch, **env: str) -> Settings:
 
 class TestWebSearchSettings:
     def test_defaults(self, monkeypatch) -> None:
-        monkeypatch.setitem(Settings.model_config, "env_file", ())
-        settings = Settings()
+        settings = _settings(monkeypatch)
         assert settings.web_search_provider == "auto"
         assert settings.web_search_fallback_policy == "auto"
         assert settings.exa_api_key is None

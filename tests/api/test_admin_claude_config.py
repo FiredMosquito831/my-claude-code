@@ -8,9 +8,25 @@ do those things.
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.api.support import create_test_app
+
+
+@pytest.fixture(autouse=True)
+def _no_real_wsl(monkeypatch):
+    """Never shell out to ``wsl.exe`` to answer a settings-discovery question.
+
+    ``discover_settings_files`` enumerates WSL distributions, so every request
+    to these routes launched ``wsl.exe --list --quiet`` on the developer's
+    machine: real machine state queried as a side effect of an assertion about
+    a JSON document.
+    """
+
+    from my_claude_code.config import claude_discovery
+
+    monkeypatch.setattr(claude_discovery, "wsl_distributions", lambda: ())
 
 
 def _local_client(app):
