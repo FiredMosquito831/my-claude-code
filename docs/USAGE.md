@@ -35,6 +35,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [The RTK token optimizer](#the-rtk-token-optimizer)
 - [12. Limits and resilience](#12-limits-and-resilience)
 - [13. Updating](#13-updating)
+  - [Stopping and restarting, and how long it takes](#stopping-and-restarting-and-how-long-it-takes)
 - [14. Security and networking](#14-security-and-networking)
 - [15. Troubleshooting](#15-troubleshooting)
 - [Appendix: what changed in 6.x](#appendix-what-changed-in-6x)
@@ -2275,6 +2276,37 @@ Stop `mcc-server`, the update applies itself, start it again on the new version.
 
 WSL, Linux and macOS install in place, because they can replace files that are still open.
 
+### Stopping and restarting, and how long it takes
+
+Every stop is the same operation underneath — Ctrl+C, the reload that follows
+**Apply** on a settings page, the restart that finishes an update, and the tray's
+**Restart Server**. Since 6.41.0 all of them are bounded by one number,
+`SERVER_GRACEFUL_SHUTDOWN_SECONDS` on **Limits & Resilience**, and that number
+means what it says:
+
+- At the instant a stop begins the server stops taking new work. A request that
+  arrives during the drain gets `503` with `Connection: close` and a
+  `Retry-After` hint, so a busy client can no longer keep a closing server alive
+  by making ordinary requests.
+- Requests already in flight get the whole budget to finish.
+- At the bound, whatever is still open is closed. An in-flight stream simply
+  ends — there is no special error frame on the wire — and your coding agent's
+  own retry finds the restarted server a moment later.
+- The process exits a few seconds past the bound whatever is still running.
+
+**The default is 20 seconds.** If you carried `SERVER_GRACEFUL_SHUTDOWN_SECONDS=300`
+over from an older install, consider lowering it. Before 6.41.0 this number
+bounded only one wait inside the stop and everything after it was unbounded, so
+a large value cost nothing in practice; now it is the time you spend watching a
+tray icon after pressing Restart.
+
+The tray and the update helper follow the same budget rather than numbers of
+their own. The tray asks the server to stop, waits that budget, and only then
+terminates the process it launched — by the exact process id, never by name. The
+Windows deferred-update helper does the same with the server it is waiting for,
+and then installs; it used to poll for a full hour and give up without
+installing anything.
+
 ### From the command line
 
 Re-running the install command does exactly the same thing and always fetches the newest release.
@@ -2391,6 +2423,7 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `FALLBACK_RESUME_AFTER_COMMIT` | `true` | **New in 6.18.0.** Rather than only ending a half-written answer, hand the text already sent to the next model on the route and splice its continuation into the same message. Falls back to the row above whenever the continuation is unusable, so it can only lengthen an answer, never break one. `false` stops at the short message. |
 | `STREAM_COMMIT_HOLDBACK_CHARS` | `0` | **New in 6.18.0.** Visible characters that must arrive before output is released, on top of `STREAM_COMMIT_HOLDBACK_SECONDS`. Raising it means a model that writes a word and dies has shown you nothing, so the route restarts on the next model invisibly; the cost is that much time-to-first-visible-word on every request. `0` uses the clock alone. |
 | `HARNESS_TIER_ALIASES` | `true` | **New in 6.38.0.** Lists `mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` at the top of every coding agent's generated picker, each a name for one of MCC's own routes rather than a model of its own. Off keeps those pickers to concrete refs; the router still resolves an alias a client sends anyway, so an agent already configured on one keeps working. Per-agent chains live in `~/.mcc/harness_tiers.json`, written by the **Coding agents** page. See [Tiers for every other coding agent](#tiers-for-every-other-coding-agent). |
+| `SERVER_GRACEFUL_SHUTDOWN_SECONDS` | `20` | **Changed in 6.41.0** — was `300`, and it used to bound only uvicorn's connection wait while the response cleanup, the provider drain and the ASGI lifespan had no bound at all (a request against a silent upstream meant a server that never exited). It is now one deadline for the whole stop, new requests are refused with `503` for its duration, and the process exits a few seconds past it. Lower an inherited `300` unless you would rather wait five minutes for a restart than cut a long request. |
 | `CREDENTIAL_CIRCUIT_THRESHOLD` | **removed at 6.0.0** | The circuit breaker it configured no longer exists for provider pools. A stale line is ignored, not fatal — delete it. |
 
 **Settings that moved page, not meaning:** the nine `REQUEST_LOG_*` keys are at the bottom of **Analytics**, the nine `DESKTOP_*` keys are on **Providers**, `LOG_LEVEL` joined the logging flags under **Diagnostics**, and `HTTP_*_TIMEOUT`, `PROVIDER_RATE_LIMIT`, `PROVIDER_RATE_WINDOW` and `PROVIDER_MAX_CONCURRENCY` came *onto* **Limits & Resilience**. `FALLBACK_SKIP_KINDS` stays on **Model Config**, cross-linked, because which failures abort a chain is a routing decision rather than a resilience one.

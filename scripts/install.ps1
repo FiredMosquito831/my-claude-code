@@ -1349,10 +1349,20 @@ function Start-DeferredInstall {
         "'" + ($_ -replace "'", "''") + "'"
     }) -join ", ") + ")"
     $stageDirLiteral = "'" + ($stageDir -replace "'", "''") + "'"
+    $DeferredWaitSeconds = 600
+    $DeferredWaitMinutes = [int]($DeferredWaitSeconds / 60)
 
     $script = @"
 `$ErrorActionPreference = 'Stop'
-`$deadline = (Get-Date).AddHours(6)
+# Ten minutes, not six hours. The old deadline meant a helper could sit
+# resident for the rest of the day behind a launcher that was never going to
+# exit -- and then not install anyway. Ten minutes is long enough for a user
+# who has just been told "stop the running app" to do so, and short enough that
+# a forgotten helper is a nuisance rather than a resident process. Past it the
+# helper escalates to the EXACT pids recorded below, whose identity is pinned
+# by creation time, and then installs. Mirrors the bound the server itself and
+# the dashboard updater's helper now apply to a stop.
+`$deadline = (Get-Date).AddSeconds($DeferredWaitSeconds)
 `$targets = @($pidsLiteral)
 function Test-TargetAlive {
     param([hashtable] `$Target)
@@ -1369,8 +1379,20 @@ while ((Get-Date) -lt `$deadline) {
     if (`$alive.Count -eq 0) { break }
     Start-Sleep -Milliseconds 500
 }
+`$stuck = @(`$targets | Where-Object { Test-TargetAlive -Target `$_ })
+if (`$stuck.Count -gt 0) {
+    Write-Host "My Claude Code did not stop within $DeferredWaitMinutes minutes; stopping it to apply the update."
+    foreach (`$target in `$stuck) {
+        Stop-Process -Id `$target.Id -Force -ErrorAction SilentlyContinue
+    }
+    `$killDeadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt `$killDeadline) {
+        if (@(`$targets | Where-Object { Test-TargetAlive -Target `$_ }).Count -eq 0) { break }
+        Start-Sleep -Milliseconds 250
+    }
+}
 if (@(`$targets | Where-Object { Test-TargetAlive -Target `$_ }).Count -gt 0) {
-    Write-Host "My Claude Code did not stop within 6 hours; install not applied."
+    Write-Host "My Claude Code could not be stopped; install not applied."
     exit 1
 }
 Start-Sleep -Seconds 2
@@ -1403,10 +1425,10 @@ else {
     $helperPath = Join-Path $stageDir "apply-update.ps1"
     Set-Content -LiteralPath $helperPath -Value $script -Encoding UTF8
 
-    # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP, same as the dashboard updater:
-    # the child needs a console to run but must not be signalled when the console
-    # this installer was launched from closes.
-    $flags = 0x08000000 -bor 0x00000200
+    # Start-Process has no creation-flags parameter, so the flags this comment
+    # used to compute were never applied to anything. Ask for the window state
+    # we can actually get and drop the dead value rather than keep a constant
+    # that documents a behaviour the child does not have.
     $process = Start-Process `
         -FilePath "powershell.exe" `
         -ArgumentList @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $helperPath) `

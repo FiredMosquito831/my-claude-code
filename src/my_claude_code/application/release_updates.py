@@ -45,6 +45,11 @@ from my_claude_code.core.process_handoff import (
     reset_process_handoff_for_tests,
     set_external_upgrade_helper_pending,
 )
+from my_claude_code.core.stop_deadline import (
+    HARD_EXIT_GRACE_SECONDS,
+    STOP_TEARDOWN_MARGIN_SECONDS,
+    clamp_stop_budget,
+)
 from my_claude_code.core.version import (
     LEGACY_DISTRIBUTION,
     NATIVE_DISTRIBUTION,
@@ -62,9 +67,27 @@ _WHEEL_SUFFIX = ".whl"
 _WINDOWS = os.name == "nt"
 _STAGE_DIRNAME = "updates"
 _PENDING_RESULT_FILENAME = "pending-upgrade.json"
-# Bound on how long the helper waits for this process to exit before giving up,
-# so a server left running forever does not leave a helper resident forever.
-_HELPER_WAIT_SECONDS = 3600
+# Bound on how long the helper waits for this process to exit before it stops
+# waiting and ends the parent itself. It is the SERVER'S OWN stop budget, not a
+# number of the helper's own: the parent bounds its stop at
+# ``SERVER_GRACEFUL_SHUTDOWN_SECONDS`` plus a fixed teardown margin and
+# hard-exits one beat later, so a parent still alive past that is not draining
+# any more and no amount of further waiting will change that. The old value was
+# a flat 3600, which is why deferred helpers sat resident for an hour behind a
+# server that could never finish its stop.
+_HELPER_WAIT_FLOOR_SECONDS = 30.0
+
+
+def _helper_wait_seconds() -> float:
+    """Seconds the deferred helper waits for this server to exit."""
+
+    budget = clamp_stop_budget(get_settings().server_graceful_shutdown_seconds)
+    return max(
+        _HELPER_WAIT_FLOOR_SECONDS,
+        budget + STOP_TEARDOWN_MARGIN_SECONDS + HARD_EXIT_GRACE_SECONDS,
+    )
+
+
 # Extra seconds the dashboard waits beyond install + graceful drain for the
 # new process to bind and come back online.
 _DASHBOARD_RECONNECT_STARTUP_MARGIN_SECONDS = 120.0
@@ -545,6 +568,7 @@ def _deferred_helper_script(
     bin_dir: Path | None = None,
     tool_dir: Path | None = None,
     commands: list[str] | None = None,
+    wait_seconds: float | None = None,
 ) -> str:
     """PowerShell that waits for this process to exit, then installs.
 
@@ -559,6 +583,9 @@ def _deferred_helper_script(
     """
 
     quoted_args = ", ".join(_powershell_literal(arg) for arg in command[1:])
+    wait_budget = (
+        _helper_wait_seconds() if wait_seconds is None else float(wait_seconds)
+    )
     names = commands if commands is not None else _published_commands()
     quoted_names = ", ".join(_powershell_literal(name) for name in names)
     bin_dir_literal = _powershell_literal(str(bin_dir) if bin_dir else "")
@@ -581,13 +608,27 @@ function Test-ParentAlive {{
     try {{ return $proc.StartTime.ToFileTimeUtc() -eq $parentStart }}
     catch {{ return $false }}   # access denied reading StartTime => not ours
 }}
-$deadline = (Get-Date).AddSeconds({_HELPER_WAIT_SECONDS})
+$deadline = (Get-Date).AddSeconds({wait_budget:.1f})
 while ((Get-Date) -lt $deadline) {{
     if (-not (Test-ParentAlive)) {{ break }}
     Start-Sleep -Milliseconds 500
 }}
+# The parent was given its whole configured stop budget plus the teardown
+# margin its own watchdog uses. Still alive past that means it is not draining,
+# it is stuck -- and the old behaviour (wait an hour, then write a failure
+# receipt and exit) left the user with neither a running new version nor an
+# installed one. Escalate to the EXACT pid we were given, whose identity is
+# still pinned by its creation time, then install.
 if (Test-ParentAlive) {{
-    $result = @{{ ok = $false; message = 'Timed out waiting for the server to stop.' }}
+    Stop-Process -Id $parent -Force -ErrorAction SilentlyContinue
+    $killDeadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $killDeadline) {{
+        if (-not (Test-ParentAlive)) {{ break }}
+        Start-Sleep -Milliseconds 250
+    }}
+}}
+if (Test-ParentAlive) {{
+    $result = @{{ ok = $false; message = 'The server could not be stopped, so the update was not applied.' }}
     [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
     exit 1
 }}

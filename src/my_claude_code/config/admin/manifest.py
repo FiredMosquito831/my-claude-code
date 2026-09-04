@@ -1124,15 +1124,21 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="server_graceful_shutdown_seconds",
-        default="300",
+        default="20",
         restart_required=True,
         description=(
-            "Seconds a closing process gives in-flight requests to finish "
-            "before the supervisor force-drops them during a reload or process "
-            "replace. Sits just over the measured p99.9 whole-request budget so "
-            "a healthy long request usually drains; longer ones (up to the 600s total "
-            "budget) may still be cut. 1s is the floor; "
-            "0 would be an immediate, no-drain shutdown rather than waiting."
+            "Seconds a stop may take, end to end -- a Ctrl+C, the reload after "
+            "you apply a setting, or the restart that finishes an update. At the "
+            "bound the server closes whatever is still open: an in-flight stream "
+            "simply ends and your coding agent retries onto the restarted "
+            "server. From the instant a stop begins, new requests are refused "
+            "with 503 so they cannot extend it, and the process exits a few "
+            "seconds past the bound whatever is still running. Raise it if long "
+            "requests matter more than a fast restart; 1s is the floor and 600s "
+            "the ceiling. If you set 300 here on an earlier version, consider "
+            "20: before 6.41.0 this bounded only one wait inside the stop and "
+            "the rest was unbounded, so a large value cost nothing -- now it is "
+            "the time you wait for a restart."
         ),
     ),
     ConfigFieldSpec(

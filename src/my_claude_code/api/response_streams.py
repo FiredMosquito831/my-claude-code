@@ -23,6 +23,7 @@ from my_claude_code.core.anthropic.streaming import (
 from my_claude_code.core.async_iterators import try_close_async_iterator
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import find_execution_failure
+from my_claude_code.core.stop_deadline import stop_deadline
 from my_claude_code.core.trace import close_stream_input, trace_event
 
 TERMINAL_EXECUTION_ERROR_HEADERS = {"x-should-retry": "false"}
@@ -97,13 +98,28 @@ class ManagedStreamingResponse(StreamingResponse):
             await self._close(preserved_error=preserved_error)
 
     async def _cleanup(self, *, preserved_error: BaseException | None) -> None:
+        close_body = close_stream_input(
+            self.body_iterator,
+            owner="ManagedStreamingResponse",
+            source="api",
+            preserved_error=preserved_error,
+        )
+        budget = _cleanup_wait_budget()
         try:
-            await close_stream_input(
-                self.body_iterator,
-                owner="ManagedStreamingResponse",
-                source="api",
-                preserved_error=preserved_error,
-            )
+            if budget is None:
+                await close_body
+            else:
+                # Closing the body means closing the upstream response, and an
+                # upstream that is open but silent -- with no read deadline in
+                # force, which is the shipped default -- can hold that close
+                # open indefinitely. Bounding it HERE rather than only around
+                # the whole cleanup is what keeps the release below reachable:
+                # the lease this response holds is the thing the provider drain
+                # is waiting for, so abandoning the close without releasing it
+                # would trade one unbounded wait for another.
+                await asyncio.wait_for(close_body, budget)
+        except TimeoutError:
+            _trace_response_cleanup_failure("close_body", TimeoutError())
         except Exception as exc:
             _trace_response_cleanup_failure("close_body", exc)
 
@@ -117,13 +133,43 @@ class ManagedStreamingResponse(StreamingResponse):
 
 
 async def _wait_for_cleanup(task: asyncio.Task[None]) -> None:
-    """Wait through repeated caller cancellation, then restore cancellation."""
+    """Wait through repeated caller cancellation, then restore cancellation.
+
+    The shield and the re-awaiting loop are deliberate: a caller cancelled
+    mid-cleanup must not leave the body iterator half-closed, so the cleanup is
+    always allowed to finish. What was missing is a way out. With every
+    per-request deadline at 0 (the 6.16.0 decision, and the shipped default) a
+    cleanup blocked on a silent upstream never finished, so uvicorn's
+    force-cancel at the graceful-shutdown bound was absorbed here and the lease
+    this response holds was never released -- which is what made the provider
+    drain, and therefore the whole process, hang forever.
+
+    A stop that has been requested therefore bounds this wait against the shared
+    stop deadline. Past it the cleanup task is cancelled and abandoned, the
+    caller's cancellation is restored, and the stop proceeds. Nothing changes
+    for a request cancelled while the server is running normally.
+    """
     cancellation: asyncio.CancelledError | None = None
     while not task.done():
+        budget = _cleanup_wait_budget()
         try:
-            await asyncio.shield(task)
+            if budget is None:
+                await asyncio.shield(task)
+            else:
+                await asyncio.wait_for(asyncio.shield(task), budget)
+        except TimeoutError:
+            _abandon_cleanup(task)
+            break
         except asyncio.CancelledError as exc:
             cancellation = exc
+
+    if not task.done():
+        # Abandoned at the stop deadline. There is no result to read; restore
+        # the caller's cancellation so uvicorn's force-cancel does what it was
+        # for, and let the supervisor's own bound finish the stop.
+        if cancellation is not None:
+            raise cancellation
+        return
 
     # Ordinary defensive failures are trace-only; cancellation remains control flow.
     try:
@@ -137,6 +183,37 @@ async def _wait_for_cleanup(task: asyncio.Task[None]) -> None:
 
     if cancellation is not None:
         raise cancellation
+
+
+def _cleanup_wait_budget() -> float | None:
+    """Seconds this cleanup may still take, or ``None`` while not stopping."""
+
+    deadline = stop_deadline()
+    if not deadline.requested:
+        return None
+    return deadline.teardown_remaining()
+
+
+def _abandon_cleanup(task: asyncio.Task[None]) -> None:
+    """Cancel a cleanup that outlived the stop deadline and stop waiting on it."""
+
+    task.cancel()
+    # The task outlives this await, so nothing would otherwise retrieve its
+    # outcome and asyncio would log "exception was never retrieved" during an
+    # already-noisy shutdown.
+    task.add_done_callback(_consume_cleanup_outcome)
+    trace_event(
+        stage="egress",
+        event="my_claude_code.api.response.cleanup_abandoned",
+        source="api",
+        operation="close_body",
+    )
+
+
+def _consume_cleanup_outcome(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    task.exception()
 
 
 def _trace_response_cleanup_failure(operation: str, exc: BaseException) -> None:
