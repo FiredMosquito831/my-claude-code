@@ -2232,3 +2232,93 @@ def test_install_ps1_does_not_rely_on_script_scope_for_release_state() -> None:
     assert "$script:FccWheelSha256" not in powershell
     assert "return [pscustomobject]@{" in powershell
     assert "Get-VerifiedReleaseWheel -Release" in powershell
+
+
+# --------------------------------------------------------------------------
+# The Linux launcher reconciliation (spec S6).
+#
+# Two things now write a `.desktop` entry on Linux: `install.sh --desktop`,
+# which registers `mcc-desktop` (the tray/launcher), and the desktop app's own
+# installers -- the .deb and the tarball's `install-desktop.sh` -- which
+# register the window. A machine can have both halves, and if both wrote an
+# entry the applications menu would carry two tiles that look the same.
+#
+# The rule: the *app's* entry wins, and `install.sh` steps aside for it. It
+# steps aside only; removing either entry is `scripts/uninstall.sh`'s job.
+# --------------------------------------------------------------------------
+
+DESKTOP_APP_ENTRY_NAME = "my-claude-code-desktop.desktop"
+
+
+def _create_linux_desktop_entry_body() -> str:
+    """Return just that one function, so a test can run it in isolation.
+
+    `install.sh` is a straight-line script with no `main`, so sourcing it
+    would run an install. Cutting the function out at its closing brace in
+    column one is the same trick `_braced_body` plays on the PowerShell side.
+    """
+
+    text = (_repo_root() / "scripts" / "install.sh").read_text(encoding="utf-8")
+    start = text.index("create_linux_desktop_entry() {")
+    end = text.index("\n}\n", start) + 3
+    body = text[start:end]
+    assert body.rstrip().endswith("}"), body[-120:]
+    return body
+
+
+def _run_create_linux_desktop_entry(home: Path) -> subprocess.CompletedProcess[str]:
+    script = f"{_create_linux_desktop_entry_body()}\ncreate_linux_desktop_entry /nowhere/mcc-desktop\n"
+    return subprocess.run(
+        ["/bin/sh", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=os.environ | {"HOME": str(home)},
+    )
+
+
+def test_the_desktop_entry_function_is_still_extractable() -> None:
+    """A rename would make both tests below silently vacuous."""
+
+    body = _create_linux_desktop_entry_body()
+    assert "my-claude-code.desktop" in body
+    assert DESKTOP_APP_ENTRY_NAME in body
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX installer scenarios need /bin/sh")
+def test_install_sh_writes_its_launcher_when_the_desktop_app_is_absent(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = _run_create_linux_desktop_entry(home)
+
+    assert result.returncode == 0, result.stderr
+    entry = home / ".local" / "share" / "applications" / "my-claude-code.desktop"
+    assert entry.is_file(), result.stdout
+    assert "Exec=/nowhere/mcc-desktop" in entry.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX installer scenarios need /bin/sh")
+def test_install_sh_steps_aside_when_the_desktop_app_is_registered(
+    tmp_path: Path,
+) -> None:
+    """One machine, one tile. The app's entry is the better launcher."""
+
+    home = tmp_path / "home"
+    applications = home / ".local" / "share" / "applications"
+    applications.mkdir(parents=True)
+    (applications / DESKTOP_APP_ENTRY_NAME).write_text(
+        "[Desktop Entry]\n", encoding="utf-8"
+    )
+
+    result = _run_create_linux_desktop_entry(home)
+
+    assert result.returncode == 0, result.stderr
+    assert "not adding a second launcher" in result.stdout
+    assert not (applications / "my-claude-code.desktop").exists(), (
+        "install.sh wrote a second, near-identical launcher beside the app's"
+    )
+    # And it removed nothing: the app's entry belongs to the app's installer.
+    assert (applications / DESKTOP_APP_ENTRY_NAME).is_file()

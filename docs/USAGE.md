@@ -12,6 +12,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
 - [2. Install](#2-install)
   - [Two ways in](#two-ways-in)
   - [The Windows desktop-app installer](#the-windows-desktop-app-installer)
+  - [The Linux desktop-app installers](#the-linux-desktop-app-installers)
 - [3. First run](#3-first-run)
   - [Where your configuration lives](#where-your-configuration-lives)
   - [Legacy `~/.fcc`: migrating with `mcc-migrate`](#legacy-fcc-migrating-with-mcc-migrate)
@@ -84,7 +85,7 @@ Both end at the same place: one server, one dashboard, one configuration directo
 | You get | `mcc-server` plus the 16 `mcc-*` launchers on your `PATH`; the dashboard opens in a browser tab. | A window with its own icon and tray icon, rendering the same dashboard. |
 | You install it by | running the one-liner below. | downloading an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest). |
 | The other half | — | is installed **by the app**, on first launch, in front of you: no `mcc-desktop` on the machine means the window prints the exact install command and runs it, streaming the output. Nothing is bundled. |
-| Available | Windows, WSL, Linux, macOS — today. | **Windows today**: `MyClaudeCode-Setup-windows-x86_64.exe`. A Linux `.deb`/tarball and a macOS `.dmg` are planned for the next releases; until they exist, Linux and macOS get the same app through `mcc-desktop` itself ([The desktop app](#the-desktop-app-fetched-verified-installed)). |
+| Available | Windows, WSL, Linux, macOS — today. | **Windows and Linux today**: `MyClaudeCode-Setup-windows-x86_64.exe`, `MyClaudeCode-linux-x86_64.deb` and `MyClaudeCode-linux-x86_64.tar.gz`. macOS has no `.dmg` (an unsigned one is worse than no app at all) and gets the same window through `mcc-desktop` itself ([The desktop app](#the-desktop-app-fetched-verified-installed)). |
 
 Neither excludes the other. The desktop app is a window onto the server, not a second
 copy of it, and one machine can have both.
@@ -124,6 +125,49 @@ certificate would not remove it either: Microsoft's own guidance since 2024 is t
 no longer bypasses the prompt. On a machine with **Smart App Control** enabled the
 installer is blocked outright with no override; there, use the one-liner below, which
 downloads a wheel and verifies the SHA-256 GitHub publishes for it.
+
+<a id="the-linux-desktop-app-installers"></a>
+
+### The Linux desktop-app installers
+
+Two artefacts, one binary. Both digests are in `SHA256SUMS-desktop-shell.txt`.
+
+| | `MyClaudeCode-linux-x86_64.deb` | `MyClaudeCode-linux-x86_64.tar.gz` |
+| --- | --- | --- |
+| For | Ubuntu 22.04+, Debian 12+ | Fedora 40+, Arch, openSUSE, or no root at all |
+| Install | `sudo apt install ./MyClaudeCode-linux-x86_64.deb` | `tar -xzf …` then `./install-desktop.sh` |
+| Where | `/usr/bin/MyClaudeCode`, `/usr/share/applications`, `/usr/share/icons/hicolor` | `~/.local/bin`, `~/.local/share/applications`, `~/.local/share/icons/hicolor` |
+| Root | yes, once, through `apt` | **never** |
+| Dependencies | `apt` resolves `libwebkit2gtk-4.1-0`, `libgtk-3-0t64 \| libgtk-3-0` and `libayatana-appindicator3-1 \| libappindicator3-1` | yours to install; on Fedora that is `webkit2gtk4.1` and `libayatana-appindicator-gtk3` |
+| Uninstall | `sudo apt remove my-claude-code-desktop` | `./install-desktop.sh --uninstall` |
+
+The `| libgtk-3-0` and `| libappindicator3-1` alternatives are not decoration: Ubuntu
+24.04 and Debian 13 renamed both packages during the 64-bit `time_t` transition, so a
+package naming only one spelling is uninstallable on half the supported distributions.
+
+**Neither installer carries a server.** The payload is the window, its entry and its
+icons. On first launch, if `mcc-desktop` is not on the machine, the window prints the
+official install command and runs it in front of you (nothing is bundled, nothing is
+hidden).
+
+**Three uninstallers, three lanes.**
+
+| Uninstaller | Removes |
+| --- | --- |
+| `sudo apt remove my-claude-code-desktop` | Everything the `.deb` installed under `/usr`. Nothing else. |
+| `./install-desktop.sh --uninstall` | Everything the tarball installer wrote under `~/.local`. Nothing else. |
+| [`scripts/uninstall.sh`](../scripts/uninstall.sh) | My Claude Code itself — the shims, the configuration directory, the launcher entries, the start-at-login registration **and** the per-user desktop app (`~/.local/bin/MyClaudeCode`, its receipts, its entry and its icons). It does not remove the `.deb`; it names it, with the `apt` command, if it finds it installed. |
+
+**No AppImage, and no `.rpm` this release.** Tauri's own documentation puts an AppImage
+of this shell at 70+ MB (against ~3 MB here) and its recurring failure mode is a silent
+one — WebKitWebProcess aborts and no window appears. Fedora gets the tarball instead,
+which is the same binary without the packaging risk.
+
+**One icon, not two.** `install.sh --desktop` writes its own applications entry for
+`mcc-desktop`. When the desktop app's entry is already present — either the `.deb`'s in
+`/usr/share/applications` or the tarball's in `~/.local/share/applications` — it steps
+aside instead of adding a second tile that looks the same. It never deletes the other
+one; that is `uninstall.sh`'s job.
 
 ### The server and the web dashboard
 

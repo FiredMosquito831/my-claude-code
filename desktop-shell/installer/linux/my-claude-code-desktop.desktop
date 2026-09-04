@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=My Claude Code (desktop app)
+GenericName=AI proxy dashboard
+Comment=The My Claude Code dashboard, in its own window
+Exec=MyClaudeCode
+Icon=my-claude-code-desktop
+Terminal=false
+Categories=Development;Utility;
+Keywords=AI;proxy;claude;dashboard;LLM;
+StartupNotify=true
+StartupWMClass=MyClaudeCode

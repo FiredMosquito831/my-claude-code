@@ -149,6 +149,21 @@ smoke/linux.sh      src-tauri/target/x86_64-unknown-linux-gnu/release/MyClaudeCo
 smoke/macos.sh      src-tauri/target/aarch64-apple-darwin/release/MyClaudeCode
 ```
 
+Three more smoke the *installers* rather than the binary. They snapshot, install,
+assert, uninstall and diff:
+
+```
+smoke/windows-installer.ps1 -Setup ../dist/MyClaudeCode-Setup-windows-x86_64.exe
+smoke/linux-deb.sh              ../dist/MyClaudeCode-linux-x86_64.deb
+smoke/linux-tarball.sh          ../dist/MyClaudeCode-linux-x86_64.tar.gz
+```
+
+`linux-deb.sh` needs passwordless `sudo` (a runner has it; a laptop usually
+does not) and re-runs `smoke/linux.sh` against the *installed*
+`/usr/bin/MyClaudeCode`, so a package that ships a file list but not a working
+program fails. `linux-tarball.sh` needs nothing at all: it points `HOME` at a
+scratch directory, which is the whole claim `install-desktop.sh` makes.
+
 Each one, in order: checks the artifact exists; stands up a fake `mcc-desktop`
 and asserts *its* exit codes (`0` and a `schema: 1` document for
 `--print-status`, `3` for anything else); launches the real binary against that
@@ -221,12 +236,19 @@ blind to everything else on a release —
 | `macos-latest` | `aarch64-apple-darwin` | `MyClaudeCode-macos-aarch64.tar.gz` |
 | `macos-15-intel` | `x86_64-apple-darwin` | `MyClaudeCode-macos-x86_64.tar.gz` |
 
-The Windows leg produces one more file from the same binary:
-`MyClaudeCode-Setup-windows-x86_64.exe`, the downloadable installer (delivery
-path B). It is described in **The Windows installer** below.
+The Windows and Linux legs each produce one more file from the same binary:
+`MyClaudeCode-Setup-windows-x86_64.exe` and `MyClaudeCode-linux-x86_64.deb`,
+the downloadable installers (delivery path B). They are described in **The
+Windows installer** and **The Linux packages** below.
 
-Each archive contains the executable and nothing else. The zip holds
-`MyClaudeCode.exe`; each tarball holds `MyClaudeCode`, mode preserved.
+The Windows zip and both macOS tarballs contain the executable and nothing
+else. **The Linux tarball carries four more members** — `install-desktop.sh`,
+`my-claude-code-desktop.desktop` and `icons/{512x512,256x256,128x128,32x32}.png`
+— so the same archive is both what delivery path A fetches and what a Fedora
+user extracts and installs. Path A is unaffected: it takes the one member whose
+basename is `MyClaudeCode` and ignores the rest, which
+`tests/config/test_desktop_shell.py` pins from the Python side and
+`smoke/linux-tarball.sh` pins from the archive's.
 
 **The names carry no version** (decision Q5). A Start Menu shortcut, a
 `.desktop` `Exec=` line and the per-target table S4 pins in Python all name a
@@ -239,7 +261,8 @@ Alongside them, one more asset:
 SHA256SUMS-desktop-shell.txt
 ```
 
-Five lines — the four archives and the Windows installer — sorted by filename,
+Six lines — the four archives, the Windows installer and the Linux `.deb` —
+sorted by filename,
 in exactly the format `sha256sum -c` reads —
 64 hex characters, **two spaces**, the filename, and nothing else:
 
@@ -249,6 +272,7 @@ in exactly the format `sha256sum -c` reads —
 648460de2d3df68292a7e83401d12345b24b734073fd1405b99aa3ccba953238  MyClaudeCode-macos-x86_64.tar.gz
 b4d8255397bc8000278665c92fd6196035cc5c030554784c1b6eb37094eea478  MyClaudeCode-windows-x86_64.zip
 7d0d5b1fa9c2f0c1e9a6d3b7c2e1f4a8b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1  MyClaudeCode-Setup-windows-x86_64.exe
+3f9e1c7a5b2d8e4f0a6c3b9d5e2f8a1c4b7d0e3f6a9c2b5d8e1f4a7c0b3d6e9f  MyClaudeCode-linux-x86_64.deb
 ```
 
 (The digests above are an illustration of the shape, not of any one release.)
@@ -422,3 +446,124 @@ There is none (decision Q9), and the honest version is:
 This is written down rather than worked around because the alternative — an
 installer that claims to be signed, or a document that pretends the warning does
 not happen — costs more trust than the warning does.
+
+## The Linux packages
+
+Two artefacts on the `ubuntu-22.04` leg, from one binary: the `.deb` for Ubuntu
+and Debian, and the tarball — which now carries its own per-user installer — for
+everything else.
+
+### `MyClaudeCode-linux-x86_64.deb`
+
+Built by `installer/linux/build-deb.sh`, which is a `dpkg-deb --build` and not
+`cargo tauri build --bundles deb`. That is a deliberate choice, and the four
+reasons are written at the top of the script: the Tauri bundler needs
+`tauri-cli` (which this workflow deliberately does not compile on four
+runners), names the file `My Claude Code_0.1.0_amd64.deb` (a space and a
+version, both of which decision Q5 forbids in an asset name), takes its version
+from `tauri.conf.json` rather than from the release tag, and appends its own
+entries to `depends` — which is the one field this package exists to control.
+
+The layout, in full:
+
+| Path | Mode |
+| --- | --- |
+| `/usr/bin/MyClaudeCode` | 0755 |
+| `/usr/share/applications/my-claude-code-desktop.desktop` | 0644 |
+| `/usr/share/icons/hicolor/{512x512,256x256,128x128,32x32}/apps/my-claude-code-desktop.png` | 0644 |
+| `/usr/share/doc/my-claude-code-desktop/copyright` | 0644 |
+| `/usr/share/doc/my-claude-code-desktop/changelog.gz` | 0644 |
+
+There is no 48x48 icon because there is no 48px source in this tree, and
+resampling one in CI would put a slightly different image in every build.
+hicolor scales between the sizes that are there.
+
+The control fields that matter:
+
+```
+Package: my-claude-code-desktop
+Architecture: amd64
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0t64 | libgtk-3-0, libayatana-appindicator3-1 | libappindicator3-1
+```
+
+Every alternative is load-bearing. Ubuntu 24.04 and Debian 13 renamed
+`libgtk-3-0` to `libgtk-3-0t64` and `libappindicator3-1` to
+`libayatana-appindicator3-1` during the 64-bit `time_t` transition, so naming
+one spelling makes the package uninstallable on half the supported
+distributions. The tray library is a **Depends** and not a Recommends (which is
+what the spec's first draft said) because `apt install
+--no-install-recommends` is common and a tray that silently is not there is
+precisely the failure this arc exists to remove.
+
+`postinst` and `postrm` do one thing each — `update-desktop-database` and
+`gtk-update-icon-cache`, both `|| true` — so a machine without
+`desktop-file-utils` still configures the package. Nothing else in either
+script writes anything, and `tests/contracts/test_uninstaller_parity.py`
+asserts that.
+
+`lintian` runs over the package in CI and is **advisory**: its output is in
+the log, with four suppressions for tags that are true of this package by
+design (no man page for a GUI, no debhelper token in a hand-written maintainer
+script, an unstripped binary -- release builds keep symbols so a crash report
+is readable). It does not gate the release. It ships new tags with new
+versions, and a policy checker turning a working package red on a Tuesday is
+not a trade worth making when the actual gate -- install the package, run the
+program out of it, remove it, diff the filesystem -- runs in the two steps
+after it.
+
+### The tarball's `install-desktop.sh`
+
+POSIX `sh`, per-user, no root, and reversible:
+
+```bash
+tar -xzf MyClaudeCode-linux-x86_64.tar.gz
+./install-desktop.sh
+./install-desktop.sh --uninstall
+```
+
+It writes `~/.local/bin/MyClaudeCode`, a receipt beside it, an entry under
+`~/.local/share/applications` and icons under `~/.local/share/icons/hicolor`,
+and `--uninstall` removes exactly those. The entry's `Exec=` is rewritten to
+the **absolute** installed path: a GUI launcher does not inherit a login
+shell's `PATH`, and on Debian and Ubuntu `~/.profile` only adds
+`~/.local/bin` to it when the directory already existed at login, so a relative
+`Exec=` works from a terminal and fails from the menu.
+
+### One icon, not two
+
+The desktop app's entry is `my-claude-code-desktop.desktop`, `Name=My Claude
+Code (desktop app)`, `Icon=my-claude-code-desktop`. The *server's* launcher —
+written by `create_linux_desktop_entry` in `scripts/install.sh` — is
+`my-claude-code.desktop`, `Name=My Claude Code`, `Icon=…/my-claude-code.png`.
+
+Three separations, because each one alone is escapable:
+
+1. **different filenames**, so neither installer overwrites the other's file;
+2. **different `Name=`**, so a machine that ends up with both shows which is
+   which rather than two identical tiles;
+3. **different icon names** — a per-user icon *shadows* a system one of the
+   same name, so sharing `my-claude-code` would mean the `.deb`'s icon silently
+   never rendering.
+
+And the common case never gets there at all: `install.sh --desktop` checks for
+the app's entry, in `/usr/share/applications` and in
+`~/.local/share/applications`, and steps aside if it finds one. It steps aside
+only — removing either entry belongs to `scripts/uninstall.sh`.
+
+### Uninstall, three lanes
+
+| Command | Removes |
+| --- | --- |
+| `sudo apt remove my-claude-code-desktop` | everything the `.deb` put under `/usr` |
+| `./install-desktop.sh --uninstall` | everything the tarball put under `~/.local` |
+| `scripts/uninstall.sh` | My Claude Code itself, **plus** the per-user desktop app (binary, both receipts, entry, icons). Never the `.deb`: it detects the package with `dpkg-query` and prints the `apt remove` line instead, because deleting a dpkg-owned file behind dpkg's back leaves its database claiming a file that is gone. |
+
+### No AppImage, no `.rpm`
+
+AppImage was rejected for v1 on the spec's evidence: Tauri's own documentation
+puts the bundle at 70+ MB against ~3 MB here, its bundler has to binary-patch
+hardcoded WebKit paths out of `libwebkit2gtk*.so`, and the recurring failure
+mode across Tauri issues #12463, #6992, #15665 and #15781 is a *silent* one —
+WebKitWebProcess aborts and no window appears. An `.rpm` is not in this release
+either; Fedora 40+ gets the tarball, which is the same binary without a second
+packaging format to keep green.

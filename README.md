@@ -89,7 +89,7 @@ want to use it.
 | How you install it | The one-line command below. | Download an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest). |
 | Does it need the other half? | No. This is the whole product. | It **installs the server for you** on first launch: if `mcc-desktop` is not there, the window shows the exact install command and runs it in front of you. Nothing is bundled and nothing is hidden. |
 | Best for | Terminal-first work, WSL, servers, headless boxes. | "I just want to double-click something." |
-| Availability | Windows, Linux, macOS, WSL — today. | **Windows today** (`MyClaudeCode-Setup-windows-x86_64.exe`). Linux `.deb`/tarball and a macOS `.dmg` are coming in the next releases; until then Linux and macOS get the app through `mcc-desktop` itself — see [Desktop App](#desktop-app). |
+| Availability | Windows, Linux, macOS, WSL — today. | **Windows and Linux today** — `MyClaudeCode-Setup-windows-x86_64.exe`, `MyClaudeCode-linux-x86_64.deb` (Ubuntu 22.04+/Debian 12+) and `MyClaudeCode-linux-x86_64.tar.gz` (Fedora 40+, Arch, anywhere without root). A macOS `.dmg` is not planned for now; macOS gets the app through `mcc-desktop` itself — see [Desktop App](#desktop-app). |
 
 Both paths can coexist on one machine. The desktop app is a window onto the server;
 installing it does not give you a second copy of anything.
@@ -121,6 +121,61 @@ back for every new release, because every new release is a new file. Machines wi
 **Smart App Control** turned on block unsigned installers outright with no "run anyway";
 there, use the server one-liner above, which downloads a wheel and checks the SHA-256
 GitHub publishes for it.
+
+#### Path B: the desktop app (Linux)
+
+Two files on the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest),
+for two kinds of machine. Both carry the same binary, and their SHA-256 digests are in
+`SHA256SUMS-desktop-shell.txt` beside them.
+
+**Ubuntu 22.04+ / Debian 12+ — the `.deb`:**
+
+```bash
+sudo apt install ./MyClaudeCode-linux-x86_64.deb
+```
+
+It installs `/usr/bin/MyClaudeCode`, one applications-menu entry ("My Claude Code
+(desktop app)") and its icons. `apt` pulls the three libraries it needs —
+`libwebkit2gtk-4.1-0`, GTK 3 and the AppIndicator tray library — and the package names
+both spellings of the last two, so it installs on 22.04 and on 24.04/Debian 13, which
+renamed them.
+
+**Fedora 40+, Arch, openSUSE, or any machine without root — the tarball:**
+
+```bash
+tar -xzf MyClaudeCode-linux-x86_64.tar.gz
+./install-desktop.sh
+```
+
+That is a **per-user** install: `~/.local/bin/MyClaudeCode`, an entry under
+`~/.local/share/applications`, icons under `~/.local/share/icons`. Nothing outside your
+home directory, no `sudo`, no package manager. Your distribution needs
+`webkit2gtk4.1` and `libayatana-appindicator-gtk3` (Fedora's names) installed.
+
+Either way, **launch "My Claude Code (desktop app)" from your applications menu**. If
+the server is not installed yet, the window shows the exact install command and runs it
+in front of you, then loads the dashboard.
+
+**To remove just the window:**
+
+| Installed with | Removed with |
+| --- | --- |
+| the `.deb` | `sudo apt remove my-claude-code-desktop` |
+| the tarball | `./install-desktop.sh --uninstall` |
+
+[`scripts/uninstall.sh`](scripts/uninstall.sh) removes the tarball install too, along
+with everything else My Claude Code put on the machine. It never removes the `.deb` —
+files under `/usr` belong to `dpkg` — but it prints the `apt remove` line if it finds
+the package installed.
+
+**Distribution floor: webkit2gtk 4.1.** That means Ubuntu 22.04+, Debian 12+ and
+Fedora 40+. RHEL/Alma/Rocky 8–9, Debian 11 and Ubuntu 20.04 ship only 4.0 and are out of
+scope; there, use the server one-liner below and the browser tab. There is **no
+AppImage** and there is no `.rpm` in this release.
+
+**One icon, not two.** `install.sh --desktop` also writes an applications entry (for
+`mcc-desktop`, the tray). When the desktop app is already registered it steps aside
+rather than adding a second, near-identical tile.
 
 #### Path A: the server and the web dashboard
 

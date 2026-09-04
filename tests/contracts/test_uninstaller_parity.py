@@ -46,6 +46,14 @@ INSTALL_SH = REPO_ROOT / "scripts" / "install.sh"
 INSTALL_PS1 = REPO_ROOT / "scripts" / "install.ps1"
 DESKTOP_CONFIG = REPO_ROOT / "src" / "my_claude_code" / "config" / "desktop.py"
 INNO_SCRIPT = REPO_ROOT / "desktop-shell" / "installer" / "windows" / "MyClaudeCode.iss"
+DESKTOP_SHELL_CONFIG = (
+    REPO_ROOT / "src" / "my_claude_code" / "config" / "desktop_shell.py"
+)
+LINUX_INSTALLER_DIR = REPO_ROOT / "desktop-shell" / "installer" / "linux"
+BUILD_DEB = LINUX_INSTALLER_DIR / "build-deb.sh"
+INSTALL_DESKTOP_SH = LINUX_INSTALLER_DIR / "install-desktop.sh"
+LINUX_DESKTOP_ENTRY_TEMPLATE = LINUX_INSTALLER_DIR / "my-claude-code-desktop.desktop"
+SHELL_CARGO_TOML = REPO_ROOT / "desktop-shell" / "src-tauri" / "Cargo.toml"
 
 
 @dataclass(frozen=True)
@@ -172,6 +180,90 @@ ARTEFACTS: tuple[Artefact, ...] = (
         remover_markers=(
             'LINUX_AUTOSTART_ENTRY=".config/autostart/mcc-server.desktop"',
             'remove_home_path "$LINUX_AUTOSTART_ENTRY"',
+        ),
+    ),
+    Artefact(
+        name="desktop app binary (delivery path A)",
+        location="~/.local/bin/MyClaudeCode",
+        creator=DESKTOP_SHELL_CONFIG,
+        creator_markers=(
+            'DESKTOP_SHELL_BINARY_STEM = "MyClaudeCode"',
+            'return Path.home() / ".local" / "bin"',
+        ),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'DESKTOP_APP_BINARY=".local/bin/MyClaudeCode"',
+            'remove_home_path "$DESKTOP_APP_BINARY"',
+        ),
+    ),
+    Artefact(
+        name="desktop app install receipt (delivery path A)",
+        location="~/.local/bin/MyClaudeCode.receipt.json",
+        creator=DESKTOP_SHELL_CONFIG,
+        creator_markers=(
+            'DESKTOP_SHELL_RECEIPT_FILENAME = "MyClaudeCode.receipt.json"',
+            "def _write_receipt(",
+        ),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'DESKTOP_APP_RECEIPT=".local/bin/MyClaudeCode.receipt.json"',
+            'remove_home_path "$DESKTOP_APP_RECEIPT"',
+        ),
+    ),
+    Artefact(
+        name="desktop app binary (tarball installer)",
+        location="~/.local/bin/MyClaudeCode",
+        creator=INSTALL_DESKTOP_SH,
+        creator_markers=(
+            'BINARY_NAME="MyClaudeCode"',
+            'binary_path="$bin_dir/$BINARY_NAME"',
+        ),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'DESKTOP_APP_BINARY=".local/bin/MyClaudeCode"',
+            'remove_home_path "$DESKTOP_APP_BINARY"',
+        ),
+    ),
+    Artefact(
+        name="desktop app tarball receipt",
+        location="~/.local/bin/MyClaudeCode.tarball.receipt.json",
+        creator=INSTALL_DESKTOP_SH,
+        creator_markers=(
+            'RECEIPT_NAME="MyClaudeCode.tarball.receipt.json"',
+            'receipt_path="$bin_dir/$RECEIPT_NAME"',
+        ),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'DESKTOP_APP_TARBALL_RECEIPT=".local/bin/MyClaudeCode.tarball.receipt.json"',
+            'remove_home_path "$DESKTOP_APP_TARBALL_RECEIPT"',
+        ),
+    ),
+    Artefact(
+        name="desktop app .desktop entry (tarball installer)",
+        location="~/.local/share/applications/my-claude-code-desktop.desktop",
+        creator=INSTALL_DESKTOP_SH,
+        creator_markers=(
+            'ENTRY_NAME="my-claude-code-desktop.desktop"',
+            'entry_path="$applications_dir/$ENTRY_NAME"',
+        ),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'DESKTOP_APP_ENTRY=".local/share/applications/my-claude-code-desktop.desktop"',
+            'remove_home_path "$DESKTOP_APP_ENTRY"',
+        ),
+    ),
+    Artefact(
+        name="desktop app icons (tarball installer)",
+        location="~/.local/share/icons/hicolor/<size>/apps/my-claude-code-desktop.png",
+        creator=INSTALL_DESKTOP_SH,
+        creator_markers=(
+            'ICON_NAME="my-claude-code-desktop"',
+            'cp "$source_icon" "$icons_root/$size/apps/$ICON_NAME.png"',
+        ),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'DESKTOP_APP_ICON_NAME="my-claude-code-desktop"',
+            'remove_home_path "$DESKTOP_APP_ICONS_ROOT/$_size/apps/$DESKTOP_APP_ICON_NAME.png"',
         ),
     ),
     Artefact(
@@ -728,3 +820,242 @@ def test_the_installer_smoke_runs_the_winget_switches() -> None:
     assert "MyClaudeCode-Setup-windows-x86_64.exe" in workflow, (
         "the release workflow no longer uploads the Windows installer"
     )
+
+
+# --------------------------------------------------------------------------
+# The Linux desktop-app installers (spec S6): a .deb and a per-user tarball.
+#
+# The two halves are asymmetric on purpose, and the asymmetry is the contract:
+#
+#   * the .deb writes only under /usr, and dpkg removes exactly what dpkg
+#     installed. `scripts/uninstall.sh` must therefore NAME it and never touch
+#     it -- deleting a dpkg-owned file behind dpkg's back leaves the package
+#     database claiming a file that is gone;
+#   * `install-desktop.sh` writes only under $HOME, so both it (`--uninstall`)
+#     and `scripts/uninstall.sh` must remove every one of those paths. The
+#     ARTEFACTS rows above cover the second; the tests here cover the first,
+#     and cover the two ways the two entries could collide with the *server's*
+#     own `.desktop` entry.
+# --------------------------------------------------------------------------
+
+#: The Debian binary package the .deb declares. It is also the name
+#: `scripts/uninstall.sh` prints in its `apt remove` hint.
+DEB_PACKAGE = "my-claude-code-desktop"
+
+#: The server's own launcher, written by `create_linux_desktop_entry` in
+#: `scripts/install.sh`. The desktop app's entry must not be this file and
+#: must not carry this Name.
+SERVER_ENTRY_FILENAME = "my-claude-code.desktop"
+SERVER_ENTRY_NAME = "Name=My Claude Code"
+
+
+def _shell_code(path: Path) -> str:
+    """Return a shell script's executable lines, with comments dropped.
+
+    The forbidden-token assertions below are about what a script *does*, and
+    these files explain themselves at length -- "anywhere with no sudo" in a
+    comment is the opposite of a `sudo` call, and a check that cannot tell
+    them apart is a check nobody can write documentation around.
+    """
+
+    return "\n".join(
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+
+
+def _linux_entry() -> dict[str, str]:
+    """Parse the shared `.desktop` template into `{key: value}`."""
+
+    fields: dict[str, str] = {}
+    for raw in LINUX_DESKTOP_ENTRY_TEMPLATE.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("["):
+            continue
+        key, _, value = line.partition("=")
+        fields[key] = value
+    return fields
+
+
+def test_the_linux_installers_are_all_present() -> None:
+    """A missing file would make every assertion below vacuous."""
+
+    for path in (BUILD_DEB, INSTALL_DESKTOP_SH, LINUX_DESKTOP_ENTRY_TEMPLATE):
+        assert path.is_file(), f"{path} is missing"
+    fields = _linux_entry()
+    for key in ("Type", "Name", "Exec", "Icon", "Categories", "StartupWMClass"):
+        assert key in fields, f"the desktop entry has no {key}="
+
+
+def test_the_deb_and_the_tarball_share_one_desktop_entry() -> None:
+    """Two copies of the entry would drift; there is one file, used twice."""
+
+    template = LINUX_DESKTOP_ENTRY_TEMPLATE.name
+    assert template in BUILD_DEB.read_text(encoding="utf-8"), (
+        "build-deb.sh must install the shared entry rather than writing its own"
+    )
+    assert (
+        'ENTRY_NAME="my-claude-code-desktop.desktop"'
+        in INSTALL_DESKTOP_SH.read_text(encoding="utf-8")
+    )
+
+
+def test_the_apps_entry_can_never_be_confused_with_the_servers() -> None:
+    """One machine may carry both; neither may hide or duplicate the other.
+
+    Two defences, because either alone is escapable. The filenames differ, so
+    neither installer overwrites the other's file; and the `Name=` differs, so
+    a user who somehow ends up with both sees which is which rather than two
+    identical tiles.
+    """
+
+    fields = _linux_entry()
+    assert LINUX_DESKTOP_ENTRY_TEMPLATE.name != SERVER_ENTRY_FILENAME
+    assert f"Name={fields['Name']}" != SERVER_ENTRY_NAME, (
+        "the desktop app's entry has the same Name= as the server's launcher; "
+        "a machine with both would show two identical menu entries"
+    )
+    assert "desktop app" in fields["Name"]
+
+    # And the icon name differs too. A per-user icon shadows a system one of
+    # the same name, so sharing `my-claude-code` between the server's exported
+    # PNG and the .deb's would mean the .deb's icon silently never renders.
+    assert fields["Icon"] == "my-claude-code-desktop"
+    assert fields["Icon"] != "my-claude-code"
+
+
+def test_the_server_installer_steps_aside_for_the_desktop_app() -> None:
+    """`install.sh --desktop` must not add a second tile beside the app's."""
+
+    install_sh = INSTALL_SH.read_text(encoding="utf-8")
+    for guarded in (
+        "/usr/share/applications/my-claude-code-desktop.desktop",
+        '"$applications_dir/my-claude-code-desktop.desktop"',
+    ):
+        assert guarded in install_sh, (
+            "create_linux_desktop_entry must skip its own entry when the "
+            f"desktop app is already registered; {guarded!r} is not checked"
+        )
+    assert "not adding a second launcher" in install_sh
+
+
+def test_the_startup_wm_class_is_the_shipped_binary_name() -> None:
+    """A wrong StartupWMClass detaches the window from its launcher icon.
+
+    GTK derives WM_CLASS from the program name, which is the executable's
+    basename. That name is `[[bin]] name` in the shell's Cargo.toml and
+    `mainBinaryName` in its Tauri config, and all three must agree.
+    """
+
+    cargo = SHELL_CARGO_TOML.read_text(encoding="utf-8")
+    binary = re.search(r'^\[\[bin\]\]\s*\nname = "([^"]+)"', cargo, re.MULTILINE)
+    assert binary is not None, "could not find [[bin]] name in the shell's Cargo.toml"
+
+    assert _linux_entry()["StartupWMClass"] == binary.group(1)
+    assert _linux_entry()["Exec"] == binary.group(1)
+
+
+def test_the_deb_depends_carry_both_renamed_alternatives() -> None:
+    """Ubuntu 24.04 and Debian 13 renamed gtk3 in the time_t transition.
+
+    Naming only `libgtk-3-0` makes the package uninstallable on every
+    distribution released since; naming only `libgtk-3-0t64` makes it
+    uninstallable on the 22.04 floor it is built against.
+    """
+
+    build = BUILD_DEB.read_text(encoding="utf-8")
+    depends = re.search(r"^Depends: (.+)$", build, re.MULTILINE)
+    assert depends is not None, "build-deb.sh writes no Depends field"
+    line = depends.group(1)
+    for required in (
+        "libwebkit2gtk-4.1-0",
+        "libgtk-3-0t64 | libgtk-3-0",
+        "libayatana-appindicator3-1 | libappindicator3-1",
+    ):
+        assert required in line, f"Depends is missing {required!r}: {line}"
+
+
+def test_the_deb_writes_nothing_outside_usr() -> None:
+    """A package that wrote under $HOME could not be uninstalled by dpkg."""
+
+    build = BUILD_DEB.read_text(encoding="utf-8")
+    staged = re.findall(r'"\$staging/([^"]+)"', build)
+    assert staged, "could not find any staged paths in build-deb.sh"
+    stray = sorted(
+        {
+            path
+            for path in staged
+            if path not in ("usr", "DEBIAN")
+            and not path.startswith(("usr/", "DEBIAN/"))
+        }
+    )
+    assert not stray, f"the .deb stages files outside /usr and DEBIAN: {stray}"
+    code = _shell_code(BUILD_DEB)
+    for forbidden in ("$HOME", "~/.local", "~/.mcc", "~/.fcc"):
+        assert forbidden not in code, (
+            f"build-deb.sh names {forbidden}; the package must not reach into a home"
+        )
+
+
+def test_the_debs_maintainer_scripts_only_refresh_caches() -> None:
+    """postinst/postrm are the one place a package can do anything at all."""
+
+    build = BUILD_DEB.read_text(encoding="utf-8")
+    for script in ("postinst", "postrm"):
+        assert f"DEBIAN/{script}" in build, f"the package declares no {script}"
+
+    # Two cache refreshes, each written twice (once per script), each guarded
+    # with `|| true` so a machine without desktop-file-utils still configures.
+    assert (
+        build.count("update-desktop-database -q /usr/share/applications || true") == 2
+    )
+    assert (
+        build.count("gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true")
+        == 2
+    )
+    for forbidden in ("rm -rf /", "systemctl", "useradd", "chown -R", "curl ", "wget "):
+        assert forbidden not in _shell_code(BUILD_DEB), (
+            f"a maintainer script would run {forbidden!r}; they may only refresh caches"
+        )
+
+
+def test_the_tarball_installer_removes_everything_it_writes() -> None:
+    """`--uninstall` is the only removal a no-root user has."""
+
+    text = INSTALL_DESKTOP_SH.read_text(encoding="utf-8")
+    for target in (
+        "$binary_path",
+        "$receipt_path",
+        "$entry_path",
+        "$icons_root/$size/apps/$ICON_NAME.png",
+    ):
+        assert f'remove_path "{target}"' in text, (
+            f"install-desktop.sh writes {target} but --uninstall does not remove it"
+        )
+
+
+def test_the_tarball_installer_stays_inside_the_home_directory() -> None:
+    """It is the no-root path; a `sudo` or a /usr path in it is a bug."""
+
+    text = _shell_code(INSTALL_DESKTOP_SH)
+    for forbidden in ("sudo ", "/usr/bin", "/usr/share", "/etc/"):
+        assert forbidden not in text, (
+            f"install-desktop.sh names {forbidden!r}; it must be per-user only"
+        )
+
+
+def test_the_uninstaller_names_the_deb_and_never_deletes_its_files() -> None:
+    """Removing dpkg-owned files behind dpkg's back corrupts its database."""
+
+    text = UNINSTALL_SH.read_text(encoding="utf-8")
+    code = _shell_code(UNINSTALL_SH)
+    assert f'DESKTOP_APP_DEB_PACKAGE="{DEB_PACKAGE}"' in text
+    assert "sudo apt remove %s" in text, (
+        "uninstall.sh must tell the user the command that removes the package"
+    )
+    assert "dpkg-query -W" in text, "uninstall.sh must detect the package first"
+    for forbidden in ("/usr/bin/MyClaudeCode", "/usr/share/applications", "dpkg -r"):
+        assert forbidden not in code, (
+            f"uninstall.sh names {forbidden!r}; the .deb is dpkg's to remove"
+        )

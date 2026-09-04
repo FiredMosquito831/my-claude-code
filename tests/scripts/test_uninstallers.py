@@ -68,6 +68,19 @@ POSIX_DESKTOP_ARTEFACTS = (
     "Library/LaunchAgents/com.myclaudecode.tray.plist",
     ".config/autostart/mcc-server.desktop",
     ".config/systemd/user/mcc-server.service",
+    # The desktop app's per-user footprint (spec S4 and S6). The binary and
+    # the receipt are written either by delivery path A
+    # (config/desktop_shell.py) or by the tarball's install-desktop.sh; the
+    # entry and the icons only by the latter. The .deb writes to /usr and is
+    # deliberately not removed from here.
+    ".local/bin/MyClaudeCode",
+    ".local/bin/MyClaudeCode.receipt.json",
+    ".local/bin/MyClaudeCode.tarball.receipt.json",
+    ".local/share/applications/my-claude-code-desktop.desktop",
+    ".local/share/icons/hicolor/512x512/apps/my-claude-code-desktop.png",
+    ".local/share/icons/hicolor/256x256/apps/my-claude-code-desktop.png",
+    ".local/share/icons/hicolor/128x128/apps/my-claude-code-desktop.png",
+    ".local/share/icons/hicolor/32x32/apps/my-claude-code-desktop.png",
 )
 
 

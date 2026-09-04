@@ -299,6 +299,52 @@ class TestUnsafeArchives:
         with pytest.raises(DesktopShellError, match="exactly one"):
             fetch_desktop_shell()
 
+    def test_a_second_copy_of_the_executable_is_refused(
+        self, release, shell_dir
+    ) -> None:
+        """Two candidates is ambiguous, and ambiguity here means a wrong exe."""
+
+        name = desktop_shell.desktop_shell_binary_name()
+        build = _zip_archive if release.asset.endswith(".zip") else _tar_archive
+        self._install_archive(
+            release, build({name: _PAYLOAD, f"nested/{name}": b"another one"})
+        )
+
+        with pytest.raises(DesktopShellError, match="exactly one"):
+            fetch_desktop_shell()
+
+    def test_the_release_archives_extra_members_are_ignored(
+        self, release, shell_dir
+    ) -> None:
+        """S6 put more than a binary in the Linux tarball, and that is fine.
+
+        ``shell-release.yml`` now packs ``install-desktop.sh``, a ``.desktop``
+        entry and four icons alongside the executable so the archive doubles as
+        the Fedora/no-root installer. Delivery path A keeps working because the
+        rule was never "one member": it is "exactly one member named
+        ``MyClaudeCode``, and no links". The binary is listed last here on
+        purpose -- order must not matter either.
+        """
+
+        name = desktop_shell.desktop_shell_binary_name()
+        build = _zip_archive if release.asset.endswith(".zip") else _tar_archive
+        self._install_archive(
+            release,
+            build(
+                {
+                    "install-desktop.sh": b"#!/bin/sh\nexit 0\n",
+                    "my-claude-code-desktop.desktop": b"[Desktop Entry]\n",
+                    "icons/256x256.png": b"\x89PNG\r\n",
+                    "icons/32x32.png": b"\x89PNG\r\n",
+                    name: _PAYLOAD,
+                }
+            ),
+        )
+
+        fetch_desktop_shell()
+
+        assert desktop_shell_path().read_bytes() == _PAYLOAD
+
 
 class TestEnsure:
     def test_an_unchanged_pin_never_downloads_again(self, release, shell_dir) -> None:

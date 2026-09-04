@@ -34,6 +34,25 @@ MACOS_LAUNCH_AGENT="Library/LaunchAgents/com.myclaudecode.tray.plist"
 LINUX_AUTOSTART_ENTRY=".config/autostart/mcc-server.desktop"
 LINUX_SYSTEMD_UNIT_NAME="mcc-server.service"
 LINUX_SYSTEMD_UNIT=".config/systemd/user/mcc-server.service"
+# The desktop app (spec S4 and S6), which is a second thing under
+# ~/.local/bin that "uv tool uninstall" cannot see:
+#   * the binary and its receipt are written by fetch_desktop_shell in
+#     src/my_claude_code/config/desktop_shell.py (delivery path A) and by
+#     desktop-shell/installer/linux/install-desktop.sh (the tarball);
+#   * the entry and the icons are written by install-desktop.sh only. The
+#     .deb writes to /usr and is removed with `apt remove`, never from here.
+# Pinned by tests/contracts/test_uninstaller_parity.py.
+DESKTOP_APP_BINARY=".local/bin/MyClaudeCode"
+DESKTOP_APP_RECEIPT=".local/bin/MyClaudeCode.receipt.json"
+DESKTOP_APP_TARBALL_RECEIPT=".local/bin/MyClaudeCode.tarball.receipt.json"
+DESKTOP_APP_ENTRY=".local/share/applications/my-claude-code-desktop.desktop"
+DESKTOP_APP_ICONS_ROOT=".local/share/icons/hicolor"
+DESKTOP_APP_ICON_NAME="my-claude-code-desktop"
+DESKTOP_APP_ICON_SIZES="512x512 256x256 128x128 32x32"
+# The Debian package. It is detected and named, never removed: files under
+# /usr belong to dpkg, and an uninstaller that deleted them behind dpkg's back
+# would leave the package database claiming they are still there.
+DESKTOP_APP_DEB_PACKAGE="my-claude-code-desktop"
 # Must mirror every entry in [project.scripts] + [project.gui-scripts] (the
 # same list as Get-LauncherCommands in scripts/install.ps1); pinned by
 # tests/contracts/test_uninstaller_parity.py.
@@ -47,10 +66,12 @@ show_usage() {
 Usage: uninstall.sh [options]
 
 Removes the My Claude Code uv tool (plus any legacy Free Claude Code tool),
-the desktop launcher (.desktop entry or .app bundle) and the start-at-login
+the desktop launcher (.desktop entry or .app bundle), the per-user desktop app
+(~/.local/bin/MyClaudeCode, its entry and its icons) and the start-at-login
 registration, and deletes ~/.mcc/ and ~/.fcc/ after removal is verified.
 Does not remove uv, Claude Code, Codex, Pi, the uv-managed Python runtime, shared
-PATH entries, or ~/.fcc-old (which holds the rollback note).
+PATH entries, ~/.fcc-old (which holds the rollback note), or a desktop app
+installed as a system package -- that one is named, with its apt command.
 
 Options:
   --dry-run                Print commands without running them.
@@ -272,8 +293,42 @@ remove_start_at_login_registration() {
     remove_home_path "$MACOS_LAUNCH_AGENT" || true
 }
 
+remove_desktop_app() {
+    # Everything the desktop app leaves in this user's home, whichever of the
+    # two per-user paths put it there. Both write the same binary to the same
+    # place, so removing it once is right in both cases.
+    if remove_home_path "$DESKTOP_APP_ENTRY"; then
+        if [ "$dry_run" -eq 0 ] && command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database "$HOME/$LINUX_APPLICATIONS_DIR" >/dev/null 2>&1 || true
+        fi
+    fi
+    remove_home_path "$DESKTOP_APP_BINARY" || true
+    remove_home_path "$DESKTOP_APP_RECEIPT" || true
+    remove_home_path "$DESKTOP_APP_TARBALL_RECEIPT" || true
+    for _size in $DESKTOP_APP_ICON_SIZES; do
+        remove_home_path "$DESKTOP_APP_ICONS_ROOT/$_size/apps/$DESKTOP_APP_ICON_NAME.png" || true
+    done
+    report_desktop_app_package
+}
+
+report_desktop_app_package() {
+    # A .deb install is not this script's to undo. Say so, with the command,
+    # rather than either ignoring it or reaching into /usr.
+    if ! command -v dpkg-query >/dev/null 2>&1; then
+        return 0
+    fi
+    if ! dpkg-query -W -f='${Status}' "$DESKTOP_APP_DEB_PACKAGE" 2>/dev/null \
+        | grep -q '^install ok installed$'; then
+        return 0
+    fi
+    printf '\nThe desktop app is also installed as a system package.\n'
+    printf 'This uninstaller does not remove it. To remove it too, run:\n'
+    printf '  sudo apt remove %s\n' "$DESKTOP_APP_DEB_PACKAGE"
+}
+
 remove_desktop_artifacts() {
     remove_desktop_launcher
+    remove_desktop_app
     remove_start_at_login_registration
 }
 
@@ -339,7 +394,7 @@ uninstall_uv_tool "$LEGACY_PACKAGE_NAME"
 step "Verifying My Claude Code entry points were removed"
 verify_fcc_commands_removed
 
-step "Removing the desktop launcher and the start-at-login registration"
+step "Removing the desktop launcher, the desktop app and the start-at-login registration"
 remove_desktop_artifacts
 
 step "Purging FCC config and data from ~/.fcc"
@@ -349,6 +404,6 @@ if [ "$dry_run" -eq 1 ]; then
     printf '\nDry run complete. No changes were made.\n'
 else
     printf '\nMy Claude Code has been removed and verified.\n'
-    printf 'The desktop launcher and the start-at-login registration were removed with it.\n'
+    printf 'The desktop launcher, the desktop app and the start-at-login registration were removed with it.\n'
     printf 'uv, Claude Code, Codex, Pi, the uv-managed Python runtime, and shared PATH entries were left installed.\n'
 fi

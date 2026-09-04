@@ -570,6 +570,26 @@ create_linux_desktop_entry() {
     icon_path="$icons_dir/my-claude-code.png"
     desktop_file="$applications_dir/my-claude-code.desktop"
 
+    # ONE icon, not two. The desktop app (the .deb, or the tarball's
+    # install-desktop.sh) writes my-claude-code-desktop.desktop, and it is the
+    # better launcher of the two: it opens the dashboard in its own window,
+    # and it installs My Claude Code itself if it is missing. This entry --
+    # which only runs `mcc-desktop` -- steps aside for it rather than putting
+    # a second, near-identical tile in the applications menu.
+    #
+    # It steps aside; it does not remove anything. The app's entry belongs to
+    # the app's installer, and `scripts/uninstall.sh` is the only thing here
+    # that deletes either of them.
+    for app_entry in \
+        "/usr/share/applications/my-claude-code-desktop.desktop" \
+        "$applications_dir/my-claude-code-desktop.desktop"
+    do
+        if [ -f "$app_entry" ]; then
+            printf 'The desktop app is already registered (%s); not adding a second launcher.\n' "$app_entry"
+            return 0
+        fi
+    done
+
     mkdir -p "$icons_dir" "$applications_dir" || return 1
 
     # An entry whose Icon= points at a missing file renders as a blank tile, so

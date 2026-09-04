@@ -197,7 +197,7 @@ when that vendor changes its UI, not when MCC does.
 The desktop shell is a Rust binary, so it is not in the wheel. It rides the
 **same GitHub release** (decision Q6): publishing a release fires
 `.github/workflows/shell-release.yml` on `release: published`, which builds the
-shell on four runners and attaches six more assets to the release you just
+shell on four runners and attaches seven more assets to the release you just
 made. Nothing is required of the releaser except to look, and -- once, on
 Windows -- to install the installer.
 
@@ -205,13 +205,14 @@ Windows -- to install the installer.
 open Actions -> *Desktop shell release*. There is one run per release. Confirm
 all four legs are green, and that the assets are on the release page within
 about 15 minutes (a cold cargo cache is the long pole; a warm one is nearer
-five). Then check the release page carries exactly these six:
+five). Then check the release page carries exactly these seven:
 
 | Asset | Runner | Rust target |
 | --- | --- | --- |
 | `MyClaudeCode-windows-x86_64.zip` | `windows-latest` | `x86_64-pc-windows-msvc` |
 | `MyClaudeCode-Setup-windows-x86_64.exe` | `windows-latest` | (the same binary, in an Inno Setup 6 installer) |
-| `MyClaudeCode-linux-x86_64.tar.gz` | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` |
+| `MyClaudeCode-linux-x86_64.tar.gz` | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` (the archive also carries `install-desktop.sh`, the `.desktop` entry and four icons) |
+| `MyClaudeCode-linux-x86_64.deb` | `ubuntu-22.04` | (the same binary, in a `dpkg-deb` package) |
 | `MyClaudeCode-macos-aarch64.tar.gz` | `macos-latest` | `aarch64-apple-darwin` |
 | `MyClaudeCode-macos-x86_64.tar.gz` | `macos-15-intel` | `x86_64-apple-darwin` |
 | `SHA256SUMS-desktop-shell.txt` | the aggregating job | -- |
@@ -245,6 +246,18 @@ commit explicitly:
 gh workflow run shell-release.yml --repo FiredMosquito831/my-claude-code \
     -f tag=v6.43.0 -f ref=main
 ```
+
+**The Linux installers are smoked in CI, end to end.** The `ubuntu-22.04` leg
+builds the `.deb`, runs `lintian` over it, installs it with
+`dpkg -i` under `DEBIAN_FRONTEND=noninteractive`, asserts every path
+`dpkg-deb --contents` declares (with its declared mode), validates the
+`.desktop` entry with `desktop-file-validate`, runs the *installed*
+`/usr/bin/MyClaudeCode` under Xvfb through `smoke/linux.sh`, removes the
+package with `dpkg -r`, and diffs `/usr/bin`, `/usr/share/applications`,
+`/usr/share/icons` and `/usr/share/doc` back to what they were. The tarball's
+`install-desktop.sh` gets the same treatment against a scratch `HOME`. If
+either leg is red, the `.deb` is not on the release -- and the wheel is still
+fine.
 
 **Smoke the Windows installer once per release.** The workflow already runs
 `desktop-shell/smoke/windows-installer.ps1` on the runner -- silent install,
