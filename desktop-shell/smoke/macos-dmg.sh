@@ -113,14 +113,30 @@ app="$mount/$APP_NAME"
 [ "$(readlink "$mount/Applications")" = "/Applications" ] \
     || fail "the Applications symlink points at $(readlink "$mount/Applications")"
 
-entries="$(ls -1 "$mount" | LC_ALL=C sort | tr '\n' ',')"
-[ "$entries" = "$APP_NAME,Applications," ] \
-    || fail "the image root is '$entries', not exactly the app and the symlink"
+# "and nothing else" is a count, not a string. The first version of this
+# compared a sorted, comma-joined listing against "My Claude Code.app,
+# Applications," -- and `LC_ALL=C sort` puts `Applications` first, because `A`
+# sorts before `M`. The image was right and the assertion was wrong, which is
+# the worst way for a check to fail. The two members are asserted by name
+# immediately above; all that is left to say is that there is no third.
+#
+# `ls -1` and not `ls -1a`: an HFS+ volume carries `.fseventsd` and `.Trashes`
+# of its own, which are filesystem bookkeeping rather than anything this
+# project put in the image.
+entries="$(ls -1 "$mount" | wc -l | tr -d ' ')"
+[ "$entries" -eq 2 ] \
+    || fail "the image root has $entries entries, not just the app and the symlink: $(ls -1 "$mount" | tr '\n' ' ')"
 ok "the image carries the app and the /Applications symlink, and nothing else"
 
 # `hdiutil imageinfo` reads the image itself rather than the mount, so this is
 # the format claim and not a property of how it happens to be mounted.
-format="$(hdiutil imageinfo -format "$dmg")"
+# `hdiutil imageinfo -format` prints just the format word. If a future
+# hdiutil stops accepting that option the fallback reads the same value out
+# of the full report, so a changed CLI surface is not a red release.
+format="$(hdiutil imageinfo -format "$dmg" 2>/dev/null || true)"
+if [ -z "$format" ]; then
+    format="$(hdiutil imageinfo "$dmg" | awk -F': *' '/^Format:/ {print $2; exit}')"
+fi
 [ "$format" = "UDZO" ] || fail "the image format is '$format', not UDZO"
 ok "format UDZO"
 

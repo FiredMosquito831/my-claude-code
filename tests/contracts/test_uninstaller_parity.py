@@ -1369,6 +1369,14 @@ def test_the_dmg_smokes_snapshot_survives_a_missing_applications_directory() -> 
             f"assertion run: {listing.strip()}"
         )
 
+    # The image-root check must count, not compare a joined listing: the two
+    # members are `My Claude Code.app` and `Applications`, and which one sorts
+    # first is a property of the locale rather than of the image.
+    assert 'entries="$(ls -1 "$mount" | wc -l | tr -d \' \')"' in text, (
+        "the image-root assertion compares a sorted listing again; count the "
+        "entries instead, and name the two members separately"
+    )
+
     # The same class of bug, two lines down: an assignment whose command
     # substitution fails ends the script silently.
     assert 'defaults read "$plist" "$1" 2>/dev/null || true' in text, (
