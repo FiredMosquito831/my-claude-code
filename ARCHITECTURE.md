@@ -282,8 +282,13 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
 
 [scripts/install.sh](scripts/install.sh) and [scripts/install.ps1](scripts/install.ps1)
 install or update the uv tool plus optional voice extras. [scripts/uninstall.sh](scripts/uninstall.sh)
-and [scripts/uninstall.ps1](scripts/uninstall.ps1) remove only the FCC uv tool and always
-delete the managed `~/.fcc/` tree from [config/paths.py](src/my_claude_code/config/paths.py); they do not remove
+and [scripts/uninstall.ps1](scripts/uninstall.ps1) remove only the `my-claude-code` uv tool
+and the managed config tree [config/paths.py](src/my_claude_code/config/paths.py) resolves
+(`~/.mcc`, or a legacy `~/.fcc` on an install that never ran `mcc-migrate`), plus everything
+the installers and the tray created -- the desktop binary and its receipts under
+`~/.local/bin`, the Linux `.desktop` entry and icons, the Windows Start Menu shortcut and the
+`MyClaudeCodeDesktop` autostart value. `tests/contracts/test_uninstaller_parity.py` pins the
+two scripts to each other. They do not remove
 uv, Claude Code, Codex, Pi, or uv-managed Python runtimes. [scripts/ci.sh](scripts/ci.sh) and
 [scripts/ci.ps1](scripts/ci.ps1) mirror [.github/workflows/tests.yml](.github/workflows/tests.yml)
 for local pre-push verification.
@@ -370,7 +375,7 @@ each result through the shared content-aware writer in
 [config/atomic_json.py](src/my_claude_code/config/atomic_json.py), so identical
 bytes are never rewritten. It refreshes only files that already exist — a
 catalogue is created by that harness's own launcher — with one declared
-exception: `~/.fcc/codex-model-catalog.json` is created at startup because the
+exception: `~/.mcc/codex-model-catalog.json` is created at startup because the
 Codex App reads persistent `~/.codex` config and has no launcher to create it.
 Because the records come from the ladder rather than from
 `build_models_list_response()`, a capability change with no change to the model
@@ -412,8 +417,10 @@ model-ref parsing, launcher defaults, or web-tool policy. Dotenv discovery lives
 in [config/env_files.py](src/my_claude_code/config/env_files.py) and uses this order:
 
 1. repo-local `.env`;
-2. managed `~/.fcc/.env`;
-3. optional `FCC_ENV_FILE`, appended when present.
+2. managed `~/.mcc/.env`;
+3. optional `MCC_ENV_FILE`, appended when present (the pre-6.40.0
+   `FCC_ENV_FILE` is still honoured as an alias and logs one deprecation
+   line).
 
 Later dotenv files override earlier dotenv files. Process environment variables
 also participate through Pydantic settings resolution. `ANTHROPIC_AUTH_TOKEN`
@@ -421,21 +428,31 @@ has an extra guard after settings are built: if any configured dotenv file
 defines it, that dotenv value replaces a stale inherited shell token. Auth-token
 source detection for startup warnings also belongs to `src/my_claude_code/config/env_files.py`.
 
-[config/paths.py](src/my_claude_code/config/paths.py) defines managed paths:
+[config/paths.py](src/my_claude_code/config/paths.py) defines managed paths. Since
+6.40.0 the config directory is **resolved once per process** by
+`resolve_config_dir()` rather than being a constant, and every path below hangs off
+that answer. The order is: `MCC_CONFIG_DIR` when set; else `~/.mcc` when it exists
+(and if a legacy `~/.fcc` exists too, `~/.mcc` wins and the other is left untouched --
+nothing is ever merged); else the legacy `~/.fcc` when it exists; else a fresh `~/.mcc`.
+A failed health check never changes that answer, only the wording of the startup
+notice. The one command that moves a legacy directory is `mcc-migrate`, which is a
+single same-volume `os.replace` and refuses while a server or tray is live; there is
+deliberately no dashboard route that writes it. Paths, with the resolved directory
+written as `~/.mcc`:
 
-- config directory: `~/.fcc`;
-- managed env file: `~/.fcc/.env`;
+- config directory: `~/.mcc`;
+- managed env file: `~/.mcc/.env`;
 - generated harness catalogues and configs, resolved through
-  `harness_catalogue_path()`: `~/.fcc/codex-model-catalog.json`,
-  `~/.fcc/opencode-config.json`, `~/.fcc/opencode2-config.json` and
-  `~/.fcc/kilo-config.json`. Each is created by its own `mcc-<id>` launcher on
+  `harness_catalogue_path()`: `~/.mcc/codex-model-catalog.json`,
+  `~/.mcc/opencode-config.json`, `~/.mcc/opencode2-config.json` and
+  `~/.mcc/kilo-config.json`. Each is created by its own `mcc-<id>` launcher on
   first run (the Codex one also at server startup, because the Codex *App*
   reads it and has no launcher) and refreshed by the fan-out publisher
   thereafter. Command Code has no file here: it reads only its own
   `~/.commandcode/providers.json`, so MCC merges one key into that document
   instead — see the harness registry section;
-- messaging state directory: `~/.fcc/agent_workspace`;
-- server log: `~/.fcc/logs/server.log`.
+- messaging state directory: `~/.mcc/agent_workspace`;
+- server log: `~/.mcc/logs/server.log`.
 
 Model routing configuration is tiered:
 
@@ -448,11 +465,11 @@ Model routing configuration is tiered:
 
 [config/reasoning.py](src/my_claude_code/config/reasoning.py) owns the typed
 configuration vocabulary. FCC-owned dotenv files receive a one-time rename and
-value migration from the retired boolean settings; explicit `FCC_ENV_FILE`
+value migration from the retired boolean settings; explicit `MCC_ENV_FILE`
 files are never rewritten and instead receive an actionable startup warning.
 
 [config/desktop.py](src/my_claude_code/config/desktop.py) owns the persisted desktop deployment state
-(`~/.fcc/desktop.json`) and its per-platform start-at-login registration. It
+(`~/.mcc/desktop.json`) and its per-platform start-at-login registration. It
 defines the three `server_mode` values (`spawn` / `attach` / `off`, with a
 one-time migration from the retired `server_auto_start` boolean), the tray
 preferences (`tray_enabled`, `start_at_login`, `minimize_to_tray`), and the
@@ -462,7 +479,7 @@ LaunchAgent, and a `systemd --user` unit falling back to an XDG autostart
 card and the tray menu both read and write this state.
 
 [config/rtk.py](src/my_claude_code/config/rtk.py) owns the persisted RTK token-optimizer state
-(`~/.fcc/rtk.json`) and machine reconciliation. It pins a RTK release
+(`~/.mcc/rtk.json`) and machine reconciliation. It pins a RTK release
 (v0.45.0) with per-platform SHA-256 digests, downloads and verifies the binary
 into `~/.local/bin`, and runs the per-agent `init` commands (`claude`, `codex`,
 `pi`) that patch each agent's own config — always with telemetry disabled.
@@ -709,7 +726,7 @@ answer and none of them may own it alone:
   serialisers), `api` (`/v1/models`) and `cli` (the launchers) all need it — the
   same argument `core/catalogue_refs.py` makes for itself.
 - [config/harness_tiers.py](src/my_claude_code/config/harness_tiers.py) owns
-  `~/.fcc/harness_tiers.json`, the per-agent override store, parsed
+  `~/.mcc/harness_tiers.json`, the per-agent override store, parsed
   defensively and cached on the file's own `stat` so a dashboard write lands
   without a restart. `config` is a leaf package that imports nothing, so
   `TIER_NAMESPACE` and `MODEL_TIER_NAMES` are mirrored in `config/constants.py`
@@ -809,7 +826,7 @@ state.
 A user-defined OpenAI-compatible endpoint is not a second kind of provider; it
 is an ordinary descriptor injected from a different source.
 [config/provider_registry.py](src/my_claude_code/config/provider_registry.py)
-persists `CustomProviderEntry` rows in `~/.fcc/custom_providers.json` -- never
+persists `CustomProviderEntry` rows in `~/.mcc/custom_providers.json` -- never
 in `.env`, because the static credential travels on the descriptor rather than
 through a settings field -- and `all_descriptors()` merges them with the frozen
 `PROVIDER_CATALOG`. From there
@@ -1670,7 +1687,7 @@ harness needing something other than an ephemeral flag list. MCC does not merge
 into the user's document: each CLI publishes an environment variable naming an
 *extra* config file that joins its precedence chain rather than replacing it
 (`OPENCODE_CONFIG`, `KILO_CONFIG`), so the launcher writes an MCC-owned file
-under `~/.fcc` and hands over its path. `~/.config/opencode/opencode.json` is
+under `~/.mcc` and hands over its path. `~/.config/opencode/opencode.json` is
 never read, written or backed up. The proxy token stays off disk as well: the
 generated document writes `options.apiKey` as OpenCode's own
 `{env:MCC_OPENCODE_API_KEY}` substitution and the launcher sets that variable in
@@ -1703,7 +1720,7 @@ is `$KIMI_SHARE_DIR` or `~/.kimi`. That variable is deliberately *not* the
 lever used: the share directory also holds the user's sessions, credentials,
 plugins and background-worker state, so redirecting it to serve one config file
 would hide every session they have. `kimi --config-file PATH` moves the config
-alone, so the launcher writes `~/.fcc/kimi-code-config.toml` and passes that
+alone, so the launcher writes `~/.mcc/kimi-code-config.toml` and passes that
 path ahead of the user's arguments — ahead, because the flag binds to Kimi's
 root Typer callback and would otherwise be read as an argument to a subcommand.
 `~/.kimi/config.toml` is never read, written or backed up. The trade is that
@@ -1782,7 +1799,7 @@ makes `getAuthTypeFromEnv` infer the auth type `gateway`, which the CLI's own
 `validateAuthMethod` then refuses with "Invalid auth method selected." before a
 request is made. One settings key, `security.auth.selectedType:
 "gemini-api-key"`, short-circuits that inference; everything else stays in the
-environment. That key lives in a document MCC owns under `~/.fcc`, handed over
+environment. That key lives in a document MCC owns under `~/.mcc`, handed over
 through the CLI's own `GEMINI_CLI_SYSTEM_SETTINGS_PATH`, because
 `mergeSettings` merges the *system* scope last -- so MCC's three keys win while
 the user's `~/.gemini/settings.json` still supplies everything MCC does not
@@ -1817,7 +1834,7 @@ that filters on the flag.
 
 **Cline** publishes `--config`, which moves its whole configuration
 *directory* — and Cline derives its data directory back out of the settings
-file inside it, so one flag is enough. MCC owns `~/.fcc/cline/` and writes
+file inside it, so one flag is enough. MCC owns `~/.mcc/cline/` and writes
 `data/settings/providers.json`, which is why that catalogue's `filename` spells
 the whole tree. The declared provider is `openai-compatible`, not the
 `openai-native` the survey proposed: `openai-native` is OpenAI's own hosted
@@ -1841,7 +1858,7 @@ launch rather than before one.
 reason is measured rather than structural.** Cline *does* fall back to
 `process.env.OPENAI_API_KEY` when `apiKey` is absent — and on 3.0.61 that path
 neither authenticated nor terminated, while the same run with the key in the
-document answered in 885 ms. The file is MCC's own under `~/.fcc/cline`, mode
+document answered in 885 ms. The file is MCC's own under `~/.mcc/cline`, mode
 `0600`, in the same directory tree as the `.env` that already holds the
 identical value; nothing is written into `~/.cline`.
 
@@ -1899,7 +1916,7 @@ instantiates the bundled `@anthropic-ai/sdk` against it and reaches
 `POST <baseUrl>/v1/messages`, so `HarnessProtocol.ANTHROPIC_MESSAGES` is what
 its spec declares and its base URL is the proxy root. `--settings` is a runtime
 overlay merged into Droid's settings hierarchy for that process only, so MCC
-owns `~/.fcc/droid-settings.json` and neither `~/.factory/settings.json` nor
+owns `~/.mcc/droid-settings.json` and neither `~/.factory/settings.json` nor
 its legacy `config.json` is read, merged into or backed up. The key is Droid's
 own documented `${VAR}` reference, expanded by its `expandSettingsEnvVarRefs`
 pass from the launched environment, and `authMode: "bearer"` moves the SDK off
@@ -1913,8 +1930,8 @@ reference form, and `augment_provider_with_env_vars` overrides `api_key` from
 the environment only for provider types `kimi`, `openai_legacy` and
 `openai_responses` — an `anthropic` provider hits its `case _: pass`. There is
 no out-of-band channel, so the choice was a literal or no Kimi Code support.
-The literal is written into a file MCC owns under `~/.fcc`, chmod `0600`, in
-the same directory as the `~/.fcc/.env` that already stores the identical
+The literal is written into a file MCC owns under `~/.mcc`, chmod `0600`, in
+the same directory as the `~/.mcc/.env` that already stores the identical
 `ANTHROPIC_AUTH_TOKEN` in clear; nothing is written into a document the user
 owns, and with proxy auth off the value is the non-credential `fcc-no-auth`
 marker. Both values are emitted by the serialiser as sentinels
@@ -1951,7 +1968,7 @@ both are present, and `anthropic-auth-token` is still not read.
   a base URL pointing at the local proxy `/v1` path.
 - After proxy health succeeds, it fetches `/admin/api/catalogue-models`, writes
   the Codex document that route already serialised to a
-  `model_catalog_json` file under `~/.fcc/`, and injects that path so Codex's
+  `model_catalog_json` file under `~/.mcc/`, and injects that path so Codex's
   native `/model` picker lists FCC provider slugs with each model's real limits.
   It fetches that route rather than `/v1/models` because a launcher runs in its
   own process with no `RequestRuntimePort` and `/v1/models` carries no
@@ -2016,7 +2033,7 @@ setting selects either client for Discord or Telegram.
 
 A generated catalogue is a **file on disk that this server owns and a launcher
 only reads.** Every catalogue-carrying harness gets its document written under
-`~/.fcc` when the server starts, and rewritten whenever the model list or any
+`~/.mcc` when the server starts, and rewritten whenever the model list or any
 model's resolved capabilities change. `mcc-<agent>` therefore opens a file that
 is already there and execs — no HTTP call, no wait, and no dependency on the
 server being reachable at launch time.

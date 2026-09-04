@@ -69,6 +69,19 @@ Two of them have to be answered rather than skipped:
    the reason there is no `.dmg` (decision Q7): a browser-downloaded unsigned
    `.dmg` on current macOS can offer the user nothing but "Move to Trash".
 
+   > **Q7 was revised later the same day, and this record is left standing so
+   > the reversal is visible.** The revised answer is *ship one, unsigned, and
+   > document Gatekeeper honestly*: `MyClaudeCode-macos-universal.dmg` is built
+   > by the `macos-dmg` job and attached to every release. The reasoning above
+   > was never wrong about the mechanism — a browser-downloaded unsigned `.dmg`
+   > really is quarantined — it was wrong that the right response was to ship
+   > nothing. `xattr -d com.apple.quarantine "/Applications/My Claude Code.app"`
+   > is one line, and a person who wants to double-click something on a Mac is
+   > better served by that line than by an absence. Path A (`mcc-desktop`
+   > fetching the tarball with `urllib`) still avoids the gate entirely and is
+   > still the recommended route. See `desktop-shell/README.md` §*The macOS disk
+   > image*.
+
 ## Consequences
 
 - Linux is supported for the first time, conditionally: a display *and* an

@@ -257,6 +257,16 @@ def test_the_guide_warns_before_it_explains() -> None:
 
     assert 'id="guide-claude-models"' in html
     assert "not permitted by" in html
-    assert "cc_entrypoint=cli" in html
+    # The marker MCC reads, and the gate it feeds. Until 6.45.4 this asserted the
+    # literal ``cc_entrypoint=cli``, which is the marker Claude Code's *CLI*
+    # writes -- and the Guide grew a sentence around it saying an Agent SDK
+    # script is refused. The gate has admitted ``sdk-cli``, ``sdk-py`` and
+    # ``sdk-ts`` since 6.36.0, so the assertion was pinning the wrong half of
+    # the sentence in place. Assert the marker and the admitted set instead.
+    assert "cc_entrypoint" in html
+    for entrypoint in ("cli-bg", "sdk-cli", "sdk-py", "sdk-ts"):
+        assert entrypoint in html, (
+            f"the Guide names the entrypoint gate without listing {entrypoint}"
+        )
     # Rendered as a warning, not as ordinary prose.
     assert "guide-note-warn" in html

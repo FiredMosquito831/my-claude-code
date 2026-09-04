@@ -230,7 +230,8 @@ and MCC do not share a `localhost`.
 MCC can see up to two credentials, and picks between them **on viability, not
 on existence**:
 
-1. **MCC's own store** (`~/.fcc/anthropic_oauth.json`) — preferred *while it is
+1. **MCC's own store** (`~/.mcc/anthropic_oauth.json`, or `~/.fcc/anthropic_oauth.json`
+   on a legacy install that has not run `mcc-migrate`) — preferred *while it is
    usable*: either the access token has not expired, or it has expired but the
    refresh token is not itself past a stated expiry.
 2. **Claude Code's own file** (`~/.claude/.credentials.json`) — used whenever
@@ -247,7 +248,7 @@ skipped mcc (access token expired and no refresh token)
 
 > **Fixed in 6.43.0.** Before this, the first file holding a non-empty access
 > token won, whether or not that token was years dead. A stale
-> `~/.fcc/anthropic_oauth.json` therefore masked a perfectly healthy Claude
+> `~/.mcc/anthropic_oauth.json` therefore masked a perfectly healthy Claude
 > Code credential sitting next to it *permanently*, and the provider served
 > nothing for the life of that file. If that is the state you are in, upgrading
 > is the entire fix — there is nothing for you to do.
@@ -327,7 +328,9 @@ that is expected rather than a bug. Sign in directly instead.
 
 ### Credential handling
 
-- MCC's own credential lives at `~/.fcc/anthropic_oauth.json`, mode `0600`.
+- MCC's own credential lives at `~/.mcc/anthropic_oauth.json`, mode `0600` — in
+  whichever config directory this install resolved, so a legacy install that has
+  not run `mcc-migrate` has it under `~/.fcc/` instead.
 - Claude Code's file (`~/.claude/.credentials.json`) is **read-only** to MCC and
   never refreshed in place — rotating it would log out your real client.
 - Tokens are never written to the request log, an HTTP response, or a log line.

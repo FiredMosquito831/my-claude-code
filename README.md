@@ -831,7 +831,7 @@ If any of that fails — no network, a proxy, an architecture nothing is built f
 
 **How to opt out.** Set `DESKTOP_SHELL=off` in the environment, or pin the window explicitly with `mcc-desktop --window app-mode`. An explicit `--window` never degrades *into* the app; the app is only ever chosen by `auto`. Override where it installs with `MCC_DESKTOP_SHELL_DIR`.
 
-**It is unsigned, and we say so.** On Windows, SmartScreen may warn on first run; reputation accrues per file hash from real download volume, and since a 2024 Microsoft policy change even an EV certificate no longer skips the prompt. Some Windows 11 machines with **Smart App Control** block unsigned apps outright with no "run anyway" — `install.ps1` and app-mode remain the supported path there. On macOS the app is unsigned too, but a file **Python downloaded is not quarantined** — quarantine is applied by browsers, and nothing here goes through one — so it never meets Gatekeeper's download gate. That is a real difference and it is why there is no macOS `.dmg`; if you download the archive yourself in a browser, you will meet Gatekeeper and no amount of documentation changes that.
+**It is unsigned, and we say so.** On Windows, SmartScreen may warn on first run; reputation accrues per file hash from real download volume, and since a 2024 Microsoft policy change even an EV certificate no longer skips the prompt. Some Windows 11 machines with **Smart App Control** block unsigned apps outright with no "run anyway" — `install.ps1` and app-mode remain the supported path there. On macOS the app is unsigned too, but a file **Python downloaded is not quarantined** — quarantine is applied by browsers, and nothing here goes through one — so it never meets Gatekeeper's download gate. Download the same archive yourself in a browser and you *will* meet it. That asymmetry was the original reason for shipping no `.dmg` at all; since 6.45.3 there is one — `MyClaudeCode-macos-universal.dmg` — and the honest answer moved into it instead: it is unsigned, Gatekeeper blocks it on first open, and the one-line `xattr` fix is spelled out under [Path B: the desktop app (macOS)](#path-b-the-desktop-app-macos). Installing with the command above and running `mcc-desktop` still avoids the question entirely.
 
 **Linux is supported now.** The old refusal (`no Linux tray backend is packaged`) was about the tray, not the window: `pystray` is Windows/macOS only. The app carries its own tray, so `mcc-desktop` on a Linux desktop session now runs — and still refuses, correctly, when there is no `DISPLAY`/`WAYLAND_DISPLAY` or when the app cannot be installed. It needs webkit2gtk-4.1 (Ubuntu 22.04+, Debian 12+, Fedora 40+); older distributions keep app-mode.
 
@@ -896,7 +896,7 @@ Enter the listed setting in the Admin UI, open **Model Config**, then search the
 | Provider | Admin UI setting | Example `MODEL` |
 | --- | --- | --- |
 | [Anthropic (Claude API)](https://platform.claude.com/settings/keys) | `ANTHROPIC_API_KEY` | `anthropic/claude-sonnet-4-6` |
-| [Anthropic Claude subscription](https://claude.com/pricing) (OAuth — **not permitted by Anthropic**, see [docs](docs/ANTHROPIC-SUBSCRIPTION.md)) | *discovered / `mcc-anthropic-oauth-login`* | `anthropic_oauth/claude-sonnet-4-6` |
+| [Anthropic Claude subscription](https://claude.com/pricing) (OAuth, **Caution** — **not permitted by Anthropic**, see [docs](docs/ANTHROPIC-SUBSCRIPTION.md)) | *discovered / `mcc-anthropic-oauth-login`* | `anthropic_oauth/claude-sonnet-4-6` |
 | [NVIDIA NIM](https://build.nvidia.com/settings/api-keys) | `NVIDIA_NIM_API_KEY` | `nvidia_nim/nvidia/nemotron-3-super-120b-a12b` |
 | [OpenAI / ChatGPT](https://github.com/openai/codex) | `CHATGPT_OAUTH_ACCESS_TOKEN` | `openai/gpt-5.5` |
 | [OpenRouter](https://openrouter.ai/keys) | `OPENROUTER_API_KEY` | `open_router/openrouter/free` |
@@ -1794,7 +1794,7 @@ Your first Save after 6.2.0 will rewrite `~/.mcc/.env` with six section headings
 
 ## OAuth Providers
 
-### Anthropic Claude subscription (OAuth) — not permitted by Anthropic
+### Anthropic Claude subscription (OAuth, Caution) — not permitted by Anthropic
 
 > **Read [docs/ANTHROPIC-SUBSCRIPTION.md](docs/ANTHROPIC-SUBSCRIPTION.md) before enabling this.** It is the disclaimer, and this section is only the summary.
 
@@ -1819,6 +1819,49 @@ Since 6.36.0 the upstream request is Claude Code's own shape: the token goes in 
 MCC's own credential lives at `~/.mcc/anthropic_oauth.json` (mode `0600`). Claude Code's file is read-only to MCC and is never refreshed in place — rotating it would log out your real client. The access token is refreshed ahead of expiry in the background, single-flight per credential file, and a 401 refreshes once and retries once. A raw `ANTHROPIC_OAUTH_ACCESS_TOKEN` works as a single-value override but cannot be refreshed, and a comma-separated list of them is rejected.
 
 The Claude subscription card on the **Providers** page reports the plan, the rate-limit tier, both token expiries, the scopes, and the 5-hour/weekly usage windows — the last of these only when a real Anthropic response carried the header, and otherwise the literal *not yet observed*.
+
+**Signing in, and the two buttons beside it (6.43.0).** *Sign in with Anthropic*
+opens a loopback callback when one can work, and falls back on its own to a paste
+prompt under WSL, over SSH, and anywhere else localhost is not shared — you can
+paste **either the code Anthropic shows you or the whole callback URL out of the
+address bar**; both are parsed. `mcc-anthropic-oauth-login` does the same from a
+terminal, takes `--paste` and `--no-browser`, answers `--help` without starting
+anything, and reports every failure as one line on stderr rather than a traceback.
+The card also has **Refresh now** and **Disconnect**, both enabled only once MCC
+has a credential of its own. **An import, a sign-in and a Disconnect all take
+effect on the next request — no restart.** MCC watches the store's mtime and size
+and re-resolves when either moves. (The one thing on this card that *does* need a
+restart is `ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE`, which is read when the provider
+is constructed.)
+
+**A dead store no longer masks a working credential (6.43.0).** MCC can see two
+credentials — its own and Claude Code's — and picks between them **on viability,
+not on existence**: if MCC's own access token is expired and its refresh token is
+past its stated expiry, it falls through to `~/.claude/.credentials.json` and says
+so once in `server.log`, naming both the source it chose and the one it skipped.
+Before 6.43.0 the first file holding a non-empty token won even if that token was
+years dead, and a stale store masked a healthy Claude Code login permanently.
+*On macOS, Claude Code usually keeps its credential in the login keychain instead
+of that file, which MCC cannot read — sign in rather than import there.*
+
+**A rate-limited refresh is not a dead credential.** Only `400`, `401` and `403`
+*with an OAuth error body* are treated as definitive. A `429` or a `5xx` or a
+dropped connection is a transient failure: the stored credential is kept, the
+provider reports it as an ordinary rate limit or overload exactly as it would for
+any other provider, and **you are not told to sign in again** — signing in again
+there would rotate a working credential away for nothing. When a refresh *is*
+definitive, the store is **renamed aside to `anthropic_oauth.json.dead-<epoch>`,
+never deleted**, so the evidence survives; Claude Code's own file is never touched
+either way. *Disconnect* does the same rename.
+
+**What "Caution" on the provider label means.** Not "experimental" — the code
+works. It is three standing restrictions: Anthropic's terms forbid this and
+enforcement is account-level (above); the credential serves **only** the
+`cli`, `cli-bg`, `sdk-cli`, `sdk-py` and `sdk-ts` entrypoints, so every other
+harness routed through MCC is refused; and it is **one credential, never a
+rotation pool** — a comma-separated `ANTHROPIC_OAUTH_ACCESS_TOKEN` is rejected at
+construction, because rotating subscription credentials is the "unusual traffic
+pattern" Anthropic's own policy names.
 
 **The supported alternative is already here:** the `anthropic` provider with a [Claude Console API key](https://platform.claude.com/settings/keys), billed per token. Claude models also arrive through `bedrock`, `vertex`, and several gateways. And the two-door pattern still works — native `claude` for your subscription, `mcc-claude` for everything else.
 
@@ -1885,13 +1928,13 @@ Add the matching model-catalog path and replace `YOUR_USERNAME`.
 Windows:
 
 ```toml
-model_catalog_json = "C:/Users/YOUR_USERNAME/.fcc/codex-model-catalog.json"
+model_catalog_json = "C:/Users/YOUR_USERNAME/.mcc/codex-model-catalog.json"
 ```
 
 macOS:
 
 ```toml
-model_catalog_json = "/Users/YOUR_USERNAME/.fcc/codex-model-catalog.json"
+model_catalog_json = "/Users/YOUR_USERNAME/.mcc/codex-model-catalog.json"
 ```
 
 Then add the shared MCC settings:

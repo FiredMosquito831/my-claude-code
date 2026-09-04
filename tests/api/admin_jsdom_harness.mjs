@@ -197,7 +197,7 @@ const FIELDS = [
     ["HTTP_READ_TIMEOUT", "deadlines", "300", "1 to 3600"],
     ["HTTP_WRITE_TIMEOUT", "deadlines", "60", "1 to 3600"],
     ["HTTP_CONNECT_TIMEOUT", "deadlines", "60", "1 to 600"],
-    ["SERVER_GRACEFUL_SHUTDOWN_SECONDS", "deadlines", "300", "0 to 3600"],
+    ["SERVER_GRACEFUL_SHUTDOWN_SECONDS", "deadlines", "20", "1 to 600"],
     ["FALLBACK_EJECT_WINDOW", "benching", "10", "1 to 1000"],
     ["FALLBACK_EJECT_FAILURE_RATE", "benching", "0.5", "0 to 1"],
     ["FALLBACK_EJECT_MIN_SAMPLES", "benching", "8", "1 to 1000"],

@@ -49,6 +49,21 @@
                     provider you configure below &mdash; your provider keys stay on this
                     machine and never reach Anthropic or anywhere else.
                   </p>
+                  <p>
+                    <strong>There are two ways to run it, and this page is the same
+                    either way.</strong> The <strong>server with its web dashboard</strong>
+                    is what the one-line installer gives you: <code>mcc-server</code> plus
+                    the <code>mcc-*</code> agent launchers on your <code>PATH</code>, and
+                    this dashboard in a browser tab. The <strong>desktop app</strong> is a
+                    real window with its own icon and tray, downloaded as an installer
+                    from the release page &mdash; and it <em>installs and starts the
+                    server for you</em> on first launch, in front of you, then renders
+                    exactly this page inside itself. Neither excludes the other; the app
+                    is a window onto the server, not a second copy of it. If you are
+                    reading this in a browser tab you are on the first path, and
+                    <code>mcc-desktop</code> gets you the second without downloading
+                    anything else.
+                  </p>
                 </div>
               </div>
               <div id="getStartedProgress" class="get-started-progress" aria-live="polite"></div>
@@ -1666,8 +1681,9 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                 </p>
                 <div class="guide-note guide-note-warn">
                   <p>
-                    <strong>Anthropic Claude subscription (OAuth) is not permitted by
-                    Anthropic.</strong> Their terms state that Free, Pro and Max OAuth
+                    <strong>Anthropic Claude subscription (OAuth, Caution) is
+                    not permitted by Anthropic.</strong> That is the card's own
+                    label, and the reason for it: their terms state that Free, Pro and Max OAuth
                     credentials are for Claude Code and Claude.ai only, and that
                     third-party products may not route requests through them. There is
                     no &ldquo;inside Claude Code&rdquo; exemption &mdash; once My Claude
@@ -1676,15 +1692,55 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                     and the risk is to your Claude account.
                   </p>
                   <p>
-                    If you enable it anyway, this provider refuses by default to serve
-                    anything that did not come from the Claude Code CLI: it reads the
-                    <code>cc_entrypoint=cli</code> marker Claude Code writes into the
-                    request body, so an Agent SDK script pointed at your proxy is
-                    refused rather than quietly billed to your plan.
+                    <strong>&ldquo;Caution&rdquo; is three standing restrictions, not
+                    &ldquo;experimental&rdquo;.</strong> The policy above is the first.
+                    The second: the credential serves <em>only</em> Anthropic's own
+                    entrypoints &mdash; <code>cli</code>, <code>cli-bg</code>,
+                    <code>sdk-cli</code>, <code>sdk-py</code> and <code>sdk-ts</code>,
+                    which is the Claude Code CLI and the Claude Agent SDK. MCC reads the
+                    <code>cc_entrypoint</code> marker Claude Code writes into the request
+                    body, and every other harness pointed at your proxy &mdash; OpenCode,
+                    Cline, Crush, a bare API call &mdash; is refused rather than quietly
+                    billed to your plan. (Until 6.36.0 the gate admitted the CLI alone
+                    and wrongly refused the Agent SDK.) The third: it is <em>one</em>
+                    credential and never a rotation pool &mdash; a comma-separated
+                    <code>ANTHROPIC_OAUTH_ACCESS_TOKEN</code> is rejected outright,
+                    because rotating subscription credentials is the &ldquo;unusual
+                    traffic pattern&rdquo; Anthropic's own policy names.
                   </p>
                   <p>
-                    Read <code>docs/ANTHROPIC-SUBSCRIPTION.md</code> before switching it
-                    on. The supported alternative is the Claude API card above.
+                    <strong>If you do enable it, four buttons matter.</strong>
+                    <em>Sign in with Anthropic</em> opens a loopback callback where one
+                    can work and falls back on its own to a paste prompt under WSL or
+                    over SSH &mdash; paste either the code Anthropic shows you
+                    <em>or the whole callback URL from the address bar</em>, both are
+                    accepted. <em>Use Claude Code credentials</em> imports the login you
+                    already have (on macOS that usually lives in the login keychain,
+                    which MCC cannot read &mdash; sign in instead). <em>Refresh now</em>
+                    and <em>Disconnect</em> light up once MCC holds a credential of its
+                    own. <strong>None of these needs a server restart</strong>; they take
+                    effect on the next request.
+                  </p>
+                  <p>
+                    <strong>Two failures that look alike and are not.</strong> If MCC's
+                    own store is dead &mdash; access token expired and the refresh token
+                    past its own expiry &mdash; MCC falls through to Claude Code's
+                    <code>~/.claude/.credentials.json</code> and logs which source it
+                    chose and which it skipped. A refresh that fails with
+                    <strong>429 or 5xx is transient</strong>: the credential is kept, it
+                    is reported as an ordinary rate limit or overload like any other
+                    provider's, and it does <em>not</em> mean sign in again &mdash; doing
+                    so would rotate a working credential away. Only a 400/401/403 with a
+                    real OAuth error body is definitive, and then the store is
+                    <em>renamed aside</em> to
+                    <code>anthropic_oauth.json.dead-&lt;epoch&gt;</code> rather than
+                    deleted. <em>Disconnect</em> does the same. Claude Code's own file is
+                    never written to in any of these paths.
+                  </p>
+                  <p>
+                    Read <code>docs/ANTHROPIC-SUBSCRIPTION.md</code> &mdash; it is on the
+                    <strong>Docs</strong> tab &mdash; before switching it on. The
+                    supported alternative is the Claude API card above.
                   </p>
                 </div>
                 <p>
@@ -2846,8 +2902,58 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   an architecture with no build &mdash; the launch is
                   <strong>not blocked</strong>: it warns once and falls back to app-mode.
                   Opt out with <code>DESKTOP_SHELL=off</code> or by picking
-                  <em>App-mode window</em> here. It is unsigned, so Windows SmartScreen
-                  may warn on first run.
+                  <em>App-mode window</em> here; <code>MCC_DESKTOP_SHELL_DIR</code> moves
+                  the install somewhere other than <code>~/.local/bin</code>. It is
+                  unsigned, so Windows SmartScreen may warn on first run.
+                </p>
+                <p>
+                  <strong>You do not have to start the server first.</strong>
+                  <code>mcc-desktop</code> in <code>spawn</code> mode probes the port:
+                  a healthy server means it simply attaches to the one already running,
+                  a free port means it starts one as its own child, and a
+                  <em>stranger</em> on the port is an error rather than a silent
+                  attach. It also no longer leaves a browser tab behind &mdash; the
+                  server it spawns is told not to open one, so one launch produces one
+                  window rather than a window and a tab. Launching it a second time
+                  raises the window you already have. Closing the window does not stop
+                  the server; the tray's <em>Quit</em> does.
+                </p>
+                <p>
+                  <strong>Getting the app without the command line.</strong> Every
+                  release carries an installer for all three systems:
+                  <strong>MyClaudeCode-Setup-windows-x86_64.exe</strong> (per-user, no
+                  administrator rights, SmartScreen's <em>More info &rarr; Run
+                  anyway</em> on first run),
+                  <strong>MyClaudeCode-linux-x86_64.deb</strong> for Debian/Ubuntu and
+                  <strong>MyClaudeCode-linux-x86_64.tar.gz</strong> with an
+                  <code>install-desktop.sh</code> (and
+                  <code>install-desktop.sh --uninstall</code>) for Fedora, Arch and
+                  anywhere without root, and
+                  <strong>MyClaudeCode-macos-universal.dmg</strong>, one file for Apple
+                  silicon and Intel. Each digest is in
+                  <code>SHA256SUMS-desktop-shell.txt</code> on the same release page.
+                  The <code>.dmg</code> is <strong>unsigned</strong>, so Gatekeeper
+                  blocks it: drag the app to Applications, then run
+                  <code>xattr -d com.apple.quarantine "/Applications/My Claude
+                  Code.app"</code> once and open it. Letting
+                  <code>mcc-desktop</code> fetch the binary instead avoids that
+                  entirely, because a file Python downloaded is never quarantined.
+                  A <code>winget</code> manifest exists in the repository but has
+                  <strong>not</strong> been submitted, so
+                  <code>winget install</code> will not find this yet.
+                </p>
+                <p class="guide-note">
+                  <strong>Two uninstallers, on purpose.</strong>
+                  &ldquo;My Claude Code (desktop app)&rdquo; in Apps &amp; Features (or
+                  <code>install-desktop.sh --uninstall</code> on Linux) removes the
+                  window and nothing else &mdash; your keys, your history and
+                  <code>mcc-server</code> are untouched. Removing <em>those</em> is
+                  <code>uninstall.ps1</code> / <code>uninstall.sh</code>, which is a
+                  separate, deliberate step. Set
+                  <code>MCC_DESKTOP_SKIP_AUTOSTART=1</code> to stop a launch
+                  reconciling the machine-wide start-at-login registration &mdash;
+                  useful when you run a second config directory and do not want it
+                  fighting the first over one registry value.
                 </p>
                 <p>
                   The <strong>Window</strong> control on the same Deployment card picks
@@ -2902,9 +3008,15 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   reads them once at start.
                 </p>
                 <p>
-                  <strong>No tray on WSL or headless Linux.</strong> Run
+                  <strong>WSL and headless Linux still have no tray.</strong> Run
                   <code>mcc-server</code> there instead and reach the dashboard from a
-                  Windows browser at the URL it prints on startup.
+                  Windows browser at the URL it prints on startup. <strong>A Linux
+                  desktop session now does</strong>, which is new: the old refusal was
+                  about the tray rather than the window, and the fetched app carries its
+                  own. It needs webkit2gtk-4.1 &mdash; Ubuntu 22.04+, Debian 12+,
+                  Fedora 40+ &mdash; and still refuses correctly when there is no
+                  <code>DISPLAY</code> or <code>WAYLAND_DISPLAY</code>, naming the
+                  reason.
                 </p>
                 <p>
                   The <strong>Token optimizer</strong> card on the
@@ -3095,6 +3207,35 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   The token-optimizer controls moved earlier, to the
                   <a href="#guide-optimizer">Token Optimizer</a> page.
                 </p>
+                <h4>How long a stop may take</h4>
+                <p>
+                  <strong>Graceful shutdown budget</strong>
+                  (<code>SERVER_GRACEFUL_SHUTDOWN_SECONDS</code>, on
+                  <strong>Deadlines</strong>) is the one field on this page that does not
+                  bound a request &mdash; it bounds a <em>stop</em>, end to end, and
+                  since 6.41.0 it is the only number that does. Ctrl+C, the reload that
+                  follows <em>Apply</em>, the tray's <em>Restart Server</em>, and the
+                  restart that finishes an update are all the same operation underneath
+                  and all obey it. <strong>It ships at 20 seconds.</strong> At the
+                  instant a stop begins the server stops taking new work: a request
+                  arriving during the drain gets <code>503</code> with
+                  <code>Connection: close</code> and a <code>Retry-After</code>, so a
+                  busy client can no longer keep a closing server alive. Requests already
+                  in flight get the whole budget; at the bound whatever is still open is
+                  closed, an in-flight stream simply ends with no special frame, and your
+                  agent's own retry finds the restarted server a moment later. The
+                  process exits a few seconds past the bound whatever is still running.
+                  The floor is 1&nbsp;s and the ceiling 600&nbsp;s.
+                </p>
+                <p class="guide-note">
+                  <strong>If you set 300 here on an older install, lower it.</strong>
+                  Before 6.41.0 this bounded only one wait inside the stop and everything
+                  after it was unbounded, so a large value cost nothing in practice. Now
+                  it is the time you spend watching a tray icon after pressing Restart
+                  &mdash; and it is the number the tray and the Windows update helper
+                  both wait before they terminate the server themselves.
+                </p>
+
                 <h4>What one answer may cost</h4>
                 <p>
                   <strong>Budgets</strong> bounds the tokens one reply may spend.
@@ -3403,6 +3544,20 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   installs it once you stop the server. Your working install is untouched
                   until then, so a failed update cannot strand you.
                 </p>
+                <p>
+                  <strong>If updating used to appear to do nothing, 6.41.0 is the
+                  fix.</strong> The helper that waits for the server used to poll for a
+                  full hour and then give up without installing anything, and the stop it
+                  was waiting for could never finish: a client retrying against a
+                  draining server kept handing it new work. Both halves are closed now.
+                  New requests are refused with <code>503</code> from the moment a stop
+                  begins, and the helper waits the
+                  <a href="#guide-limits">graceful shutdown budget</a> &mdash; not an
+                  hour &mdash; then terminates the server it was waiting for by its exact
+                  process id, never by name, and installs. The tray's
+                  <em>Restart Server</em> follows the same budget, and the installer
+                  script waits 600&nbsp;s rather than six hours.
+                </p>
 
                 <h3 id="guide-security">Lock it down</h3>
                 <table class="guide-table">
@@ -3438,6 +3593,27 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   <li><strong>Two configs on Windows</strong> &mdash; installing under both
                     PowerShell and WSL gives separate <code>.mcc</code> directories. The
                     startup log prints which one is in use.</li>
+                  <li><strong>Update now finishes, but nothing updates and nothing
+                    restarts</strong> &mdash; fixed in 6.41.0; upgrade once by hand
+                    (re-run the install command) and it will not recur. If you carried
+                    <code>SERVER_GRACEFUL_SHUTDOWN_SECONDS=300</code> across from an older
+                    install, set it back to 20 on
+                    <a href="#guide-limits">Limits &amp; Resilience</a> &mdash; that is
+                    now how long every restart waits.</li>
+                  <li><strong>My data is still in a legacy directory</strong> &mdash; an
+                    install from before 6.40.0 keeps using <code>~/.fcc</code>, which is
+                    fully supported with no deadline. To move it: stop the server and
+                    quit the tray, run <code>mcc-migrate</code>, start the server again.
+                    It is one atomic rename, it refuses while a server or tray is live,
+                    and it leaves a rollback note. There is deliberately no button for
+                    it here.</li>
+                  <li><strong>macOS refuses to open the downloaded app</strong> &mdash;
+                    the <code>.dmg</code> is unsigned, so Gatekeeper blocks it. Drag the
+                    app into Applications, run
+                    <code>xattr -d com.apple.quarantine "/Applications/My Claude
+                    Code.app"</code> once, then open it. Installing the server with the
+                    one-line command and running <code>mcc-desktop</code> avoids this
+                    entirely.</li>
                   <li><strong>Web search returns nothing useful</strong> &mdash; open the
                     attempt detail; it shows exactly what was sent and returned.</li>
                   <li><strong>&ldquo;Request exceeds this model's context window.&rdquo;</strong>

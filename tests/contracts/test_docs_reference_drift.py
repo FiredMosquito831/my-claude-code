@@ -520,6 +520,52 @@ _MUST_BE_DOCUMENTED: tuple[tuple[str, str], ...] = (
         "every pre-6.40.0 install still lives there; docs that never mention "
         "it describe paths those users do not have",
     ),
+    (
+        "SERVER_GRACEFUL_SHUTDOWN_SECONDS",
+        "6.41.0 changed its default from 300 to 20 and made it bound the whole "
+        "stop; an install carrying 300 over now waits five minutes for every "
+        "restart, and the only way to know that is to read it here",
+    ),
+    (
+        "DESKTOP_SHELL",
+        "the one switch that stops mcc-desktop fetching a binary from the "
+        "network on launch; an air-gapped or policy-bound machine needs it",
+    ),
+    (
+        "MCC_DESKTOP_SHELL_DIR",
+        "where that binary is installed; the default ~/.local/bin is not "
+        "writable everywhere",
+    ),
+    (
+        "MCC_DESKTOP_SKIP_AUTOSTART",
+        "start-at-login is registered machine-wide while the preference is "
+        "per config directory, so a second install needs a way not to fight "
+        "the first over one registry value",
+    ),
+    (
+        "--print-status",
+        "the only scriptable view of what mcc-desktop thinks the world looks "
+        "like; a JSON contract nobody is told about is a contract with nobody",
+    ),
+    (
+        "MyClaudeCode-Setup-windows-x86_64.exe",
+        "the Windows installer asset. A release that ships an installer no "
+        "document names has not shipped it",
+    ),
+    (
+        "MyClaudeCode-linux-x86_64.deb",
+        "the Debian/Ubuntu installer asset",
+    ),
+    (
+        "MyClaudeCode-linux-x86_64.tar.gz",
+        "the installer asset for every Linux that is not Debian-derived, and "
+        "the only one that needs no root",
+    ),
+    (
+        "MyClaudeCode-macos-universal.dmg",
+        "the macOS installer asset. It is unsigned, so a reader who cannot "
+        "find it documented also cannot find the xattr line that opens it",
+    ),
 )
 
 

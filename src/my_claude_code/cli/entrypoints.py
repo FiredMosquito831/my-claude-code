@@ -66,8 +66,8 @@ Manage and inspect:
   mcc-init                Create or repair ~/.mcc/.env with the config template
   mcc-chatgpt-oauth-login Log in to ChatGPT/Codex via OAuth device flow
   mcc-anthropic-oauth-login Log in to a Claude subscription via OAuth
-                          (unsupported by Anthropic -- see
-                          docs/ANTHROPIC-SUBSCRIPTION.md)
+                          (not permitted by Anthropic -- read
+                          docs/ANTHROPIC-SUBSCRIPTION.md first)
   mcc-compact-log         Compact the request log (deduplicate + compress)
   mcc-rtk                 Manage the RTK token optimizer
   mcc-help                Show this command reference

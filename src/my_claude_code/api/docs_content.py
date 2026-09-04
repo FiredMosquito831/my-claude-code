@@ -91,7 +91,10 @@ DOCUMENTS: tuple[Document, ...] = (
     Document(
         slug="anthropic-subscription",
         title="Anthropic Subscription",
-        summary="Using an Anthropic Console key, and why subscription OAuth is not offered.",
+        summary=(
+            "Using an Anthropic Console key, and what signing in with a "
+            "Claude subscription costs you."
+        ),
         repo_path="docs/ANTHROPIC-SUBSCRIPTION.md",
     ),
     Document(

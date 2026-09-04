@@ -601,8 +601,10 @@ an EV certificate no longer skips the prompt. Windows 11 machines with **Smart A
 Control** may block it outright with no "run anyway"; there, `DESKTOP_SHELL=off` and
 app-mode are the answer. On macOS the app is equally unsigned, but a file **Python
 downloaded is not quarantined** — quarantine is applied by browsers, and `urllib` is not
-one — so it never meets Gatekeeper's download gate. Download the archive yourself in a
-browser and you *will* meet it; that asymmetry is precisely why there is no `.dmg`.
+one — so it never meets Gatekeeper's download gate. Download the same archive yourself in a
+browser and you *will* meet it. That asymmetry was the original reason for shipping no
+`.dmg`; since 6.45.3 there is one, and it carries the consequence rather than
+ducking it — see [The macOS desktop-app disk image](#the-macos-desktop-app-disk-image).
 
 **Linux.** The app carries its own tray, which is the one thing Linux never had, so
 `mcc-desktop` runs there now. It needs webkit2gtk-4.1: Ubuntu 22.04+, Debian 12+,
@@ -2013,8 +2015,8 @@ Two agents work differently, on purpose:
 The Codex App has no launcher — it reads a persistent `~/.codex/config.toml` rather than an environment built per command. Its catalogue is written the same way every other agent's is: `mcc-server` writes `~/.mcc/codex-model-catalog.json` at startup and rewrites it whenever the model inventory *or any model's resolved capabilities* change. The Codex App points at that stable path from its config:
 
 ```toml
-model_catalog_json = "/Users/YOUR_USERNAME/.fcc/codex-model-catalog.json"   # macOS
-# model_catalog_json = "C:/Users/YOUR_USERNAME/.fcc/codex-model-catalog.json"  # Windows
+model_catalog_json = "/Users/YOUR_USERNAME/.mcc/codex-model-catalog.json"   # macOS
+# model_catalog_json = "C:/Users/YOUR_USERNAME/.mcc/codex-model-catalog.json"  # Windows
 
 model_provider = "fcc"
 model = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"

@@ -236,7 +236,7 @@ def anthropic_oauth_login_command(argv: Sequence[str] | None = None) -> None:
         print(f"Subscription: {subscription}")
     print(
         "\nMCC will only use this credential for requests that come from the\n"
-        "Claude Code CLI. Anything else is refused; set\n"
+        "Claude Code CLI or the Claude Agent SDK. Anything else is refused; set\n"
         "ANTHROPIC_OAUTH_REQUIRE_CLAUDE_CODE=false to change that, having read\n"
         "docs/ANTHROPIC-SUBSCRIPTION.md."
     )
