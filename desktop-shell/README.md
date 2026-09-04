@@ -136,3 +136,131 @@ pushed in from Rust, which read it from `--print-status`.
 The page talks back through exactly one command, `shell_retry`, because a Retry
 button is the only thing a user can ask of this window. The remote dashboard is
 granted no capability at all: it is rendered, never talked to.
+
+## Testing the release build itself
+
+Three scripts under `smoke/` run the *real* binary. They are what
+`shell-release.yml` runs on each platform after `cargo test`, and they are the
+only tests in this tree that open a window.
+
+```
+smoke/windows.ps1 -Binary src-tauri/target/x86_64-pc-windows-msvc/release/MyClaudeCode.exe
+smoke/linux.sh      src-tauri/target/x86_64-unknown-linux-gnu/release/MyClaudeCode
+smoke/macos.sh      src-tauri/target/aarch64-apple-darwin/release/MyClaudeCode
+```
+
+Each one, in order: checks the artifact exists; stands up a fake `mcc-desktop`
+and asserts *its* exit codes (`0` and a `schema: 1` document for
+`--print-status`, `3` for anything else); launches the real binary against that
+fake; waits for the shell to have run it; asserts the window is still up;
+asserts that **nothing was started** — the fake status says
+`server_presence: foreign`, so the port-conflict page is the whole of the
+ladder and the fake `mcc-server` must never run; then stops the shell by its
+exact process id and asserts it went.
+
+Everything is pointed at a scratch directory through
+`MCC_SHELL_DESKTOP_COMMAND`, `MCC_SHELL_SERVER_COMMAND` and
+`MCC_SHELL_DATA_DIR`, so running a smoke on a machine that has a real MCC
+install does not read or write that install, contact a port, or touch the
+geometry of the window its owner actually uses. No process is ever stopped by
+name.
+
+Per-platform differences, and why:
+
+- **Linux** starts `Xvfb` itself rather than using `xvfb-run`, so the pid the
+  smoke signals is the shell's own and not a wrapper's, and exports
+  `WEBKIT_DISABLE_COMPOSITING_MODE` and `WEBKIT_DISABLE_DMABUF_RENDERER` —
+  without them WebKitGTK aborts on a virtual framebuffer and no window appears,
+  silently. It also fails early, naming the package, if webkit2gtk **4.1** is
+  absent.
+- **macOS** needs no display, and adds `codesign --verify --strict`. On Apple
+  silicon all code must carry at least an ad-hoc signature; a broken seal is
+  reported to the user as "damaged", which no log explains. On x86_64 the
+  absence of a signature is noted and permitted.
+- **Windows** passes the fake through `cmd /c`, because `Command::new` cannot
+  start a `.cmd` directly, and therefore requires a scratch path with no
+  spaces (`MCC_SHELL_DESKTOP_COMMAND` is split on whitespace so it can carry
+  arguments).
+
+What a smoke cannot prove, and what the PR should not claim: that the window
+*looks* right, that the tray icon appears (a CI image runs no status-area
+host), or how SmartScreen and Gatekeeper greet a first launch — reputation is
+per file hash and accrues from real download volume.
+
+## The release layout
+
+The shell is built by `.github/workflows/shell-release.yml`, which runs on
+`release: published` and can be re-run for any existing tag with
+`workflow_dispatch`. There is one release stream (decision Q6): the shell's
+archives attach to the **same** GitHub release as the Python wheel. That is
+safe because the updater selects the first asset whose name ends `.whl` and is
+blind to everything else on a release —
+`tests/application/test_release_updates_ignores_shell_assets.py` pins it.
+
+| Runner | Rust target | Asset |
+| --- | --- | --- |
+| `windows-latest` | `x86_64-pc-windows-msvc` | `MyClaudeCode-windows-x86_64.zip` |
+| `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | `MyClaudeCode-linux-x86_64.tar.gz` |
+| `macos-latest` | `aarch64-apple-darwin` | `MyClaudeCode-macos-aarch64.tar.gz` |
+| `macos-15-intel` | `x86_64-apple-darwin` | `MyClaudeCode-macos-x86_64.tar.gz` |
+
+Each archive contains the executable and nothing else. The zip holds
+`MyClaudeCode.exe`; each tarball holds `MyClaudeCode`, mode preserved.
+
+**The names carry no version** (decision Q5). A Start Menu shortcut, a
+`.desktop` `Exec=` line and the per-target table S4 pins in Python all name a
+file that never changes, so an upgrade never orphans them. The release tag is
+the version; the asset name is the platform.
+
+Alongside them, one more asset:
+
+```
+SHA256SUMS-desktop-shell.txt
+```
+
+Four lines, sorted by filename, in exactly the format `sha256sum` emits and
+`sha256sum -c` reads — the digest, **two spaces**, the filename:
+
+```
+3f...c1  MyClaudeCode-linux-x86_64.tar.gz
+9a...7e  MyClaudeCode-macos-aarch64.tar.gz
+...
+```
+
+That format is a contract, not an accident. S4 fetches this file and parses it
+into the `(platform, arch) -> (asset, sha256)` table that `config/rtk.py`
+already establishes as the shape for a pinned, verified download; two spaces
+and no leading `*` is what lets the same file serve both a human running
+`sha256sum -c` and the Python side reading it.
+
+Four runners cover four of the five targets `config/rtk.py` knows about.
+`linux/aarch64` is deliberately absent — add an `ubuntu-22.04-arm` leg when
+somebody asks for it.
+
+Two dated notes, so the next person does not have to rediscover them:
+`ubuntu-22.04` retires **17 April 2027** (it is used because glibc is
+forward-compatible only, so the oldest supported base is the right place to
+build; before that date, move the leg into an older-glibc container on
+`ubuntu-latest`), and `macos-13` was retired **4 December 2025** — the Intel
+runner is `macos-15-intel`.
+
+### Why `cargo build`, not `cargo tauri build --no-bundle`
+
+The workflow builds with
+
+```
+cargo build --release --locked --features custom-protocol --target <target>
+```
+
+The Tauri CLI's `build` does three things: run `beforeBuildCommand`, run cargo
+with `--features custom-protocol`, and bundle. This project has no
+`beforeBuildCommand` — `ui/` is one static HTML file and there is no frontend
+build step — and `--no-bundle` switches the bundling off, so the CLI reduces to
+exactly the line above, at the cost of compiling `tauri-cli` on four runners.
+
+The feature is not optional. `tauri::is_dev()` is `!cfg!(feature =
+"custom-protocol")`, and in a dev context the generated context reads
+`frontendDist` off the disk at run time instead of embedding it — a binary
+built without it would look for a `ui/` directory the user does not have. That
+one flag is the whole difference between a release build and a development one,
+which is why it is spelled out here rather than left to a CLI to remember.

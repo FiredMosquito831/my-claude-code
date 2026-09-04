@@ -121,4 +121,10 @@ jobs:
 
       - name: cargo build
         working-directory: desktop-shell/src-tauri
-        run: cargo build --release --locked
+        # `--features custom-protocol` so this gate compiles the configuration
+        # that actually ships. `tauri::is_dev()` is `!cfg!(feature =
+        # "custom-protocol")`, and a dev context reads `frontendDist` off the
+        # disk at run time instead of embedding it -- without the feature this
+        # job would happily pass on a build no release would ever make.
+        # `shell-release.yml` uses the same line.
+        run: cargo build --release --locked --features custom-protocol

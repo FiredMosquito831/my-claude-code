@@ -169,6 +169,7 @@ when that vendor changes its UI, not when MCC does.
 - ] Wheel contains `my_claude_code/` and `free_claude_code/`
 - [ ] Dashboard screenshots refreshed from a scratch `mcc-server` (§4), written to **both** image directories, and scanned for `sk-`
 - [ ] README quickstart uses `mcc-server`; `fcc-server` still documented as alias
+- [ ] After publishing: the **Desktop shell release** workflow (`shell-release.yml`) ran automatically on `release: published`. Check all four legs are green and that the assets appear on the release within about 15 minutes (§7)
 
 ## 6. Wheel end-to-end guard (`wheel-e2e.yml`)
 
@@ -188,3 +189,52 @@ when that vendor changes its UI, not when MCC does.
   Docs page while source checkouts render fine. Fix the
   `[tool.hatch.build.targets.wheel.force-include]` table (see section 3),
   then re-dispatch the workflow before releasing.
+
+
+## 7. The desktop shell's release assets (`shell-release.yml`)
+
+The desktop shell is a Rust binary, so it is not in the wheel. It rides the
+**same GitHub release** (decision Q6): publishing a release fires
+`.github/workflows/shell-release.yml` on `release: published`, which builds the
+shell on four runners and attaches five more assets to the release you just
+made. Nothing is required of the releaser except to look.
+
+**The step, at release time:** publish the release with the wheel as usual, then
+open Actions -> *Desktop shell release*. There is one run per release. Confirm
+all four legs are green, and that the assets are on the release page within
+about 15 minutes (a cold cargo cache is the long pole; a warm one is nearer
+five). Then check the release page carries exactly these five:
+
+| Asset | Runner | Rust target |
+| --- | --- | --- |
+| `MyClaudeCode-windows-x86_64.zip` | `windows-latest` | `x86_64-pc-windows-msvc` |
+| `MyClaudeCode-linux-x86_64.tar.gz` | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` |
+| `MyClaudeCode-macos-aarch64.tar.gz` | `macos-latest` | `aarch64-apple-darwin` |
+| `MyClaudeCode-macos-x86_64.tar.gz` | `macos-15-intel` | `x86_64-apple-darwin` |
+| `SHA256SUMS-desktop-shell.txt` | the aggregating job | -- |
+
+The names carry no version (decision Q5). The checksum file is plain
+`sha256  filename` lines, so `sha256sum -c SHA256SUMS-desktop-shell.txt` next to
+the downloaded archives is the whole verification, and the Python-side pin
+(spec S4) parses the same file.
+
+**If a leg is red, the release is still fine.** The wheel is already published
+and the update path is untouched -- `_select_wheel_asset` returns the first
+asset whose name ends `.whl` and cannot see an archive or a checksum file, which
+`tests/application/test_release_updates_ignores_shell_assets.py` pins. Fix the
+platform, then re-run just the shell:
+
+```bash
+gh workflow run shell-release.yml --repo FiredMosquito831/my-claude-code -f tag=v6.43.0
+```
+
+The dispatch takes the tag of an existing release and uploads with `--clobber`,
+so re-running is safe and idempotent. Do not cut a new version to fix a shell
+build.
+
+**What the release must not be asked to prove:** the workflow runs each
+platform's real-binary smoke (`desktop-shell/smoke/`) -- the binary launches,
+reads a fake `mcc-desktop --print-status`, shows the port-conflict page and
+starts nothing -- but a smoke on a headless runner is not a human looking at a
+window. First-launch SmartScreen and Gatekeeper behaviour cannot be observed in
+CI at all: reputation is per file hash and accrues from real downloads.

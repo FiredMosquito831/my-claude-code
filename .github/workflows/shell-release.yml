@@ -1,0 +1,254 @@
+# The desktop shell's release build: four runners, one release.
+#
+# Branch protection does not gate on this workflow -- it runs *after* a release
+# is published, not on a pull request. The pull-request gate for the shell is
+# the `desktop-shell (cargo)` job in `tests.yml`, which still compiles, lints
+# and unit-tests it on every change.
+#
+# There is one release stream (decision Q6). The Python release flow publishes
+# the release with the wheel on it; this workflow then builds the shell on each
+# supported platform and attaches the archives and a checksum file to that same
+# release. That is provably safe: `_select_wheel_asset`
+# (`application/release_updates.py`) returns the first asset whose name ends
+# `.whl` and ignores every other asset, which
+# `tests/application/test_release_updates_ignores_shell_assets.py` pins.
+
+name: Desktop shell release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The existing release tag to build and attach the shell to, e.g. v6.43.0"
+        required: true
+        type: string
+
+concurrency:
+  # Per tag, and never cancelled: a half-uploaded set of release assets is
+  # worse than a queued run.
+  group: shell-release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+# Read-only by default. Only the upload job is granted `contents: write`.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      # Every leg runs even when one fails, so a release produces one report
+      # naming all the broken platforms rather than the first one. The
+      # workflow still fails: `release` needs `build`, so a failed leg means no
+      # upload happens at all. Nothing here is `continue-on-error`.
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: MyClaudeCode.exe
+            asset: MyClaudeCode-windows-x86_64.zip
+          - name: linux-x86_64
+            # The oldest supported base, because glibc is forward-compatible
+            # only: a binary built here runs on newer distributions, and one
+            # built on `ubuntu-latest` would not run on 22.04. NOTE: this
+            # runner label retires 17 April 2027 -- before then, move this leg
+            # into an older-glibc container on `ubuntu-latest`.
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            binary: MyClaudeCode
+            asset: MyClaudeCode-linux-x86_64.tar.gz
+          - name: macos-aarch64
+            # `macos-latest` is macOS 26 on Apple silicon.
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            binary: MyClaudeCode
+            asset: MyClaudeCode-macos-aarch64.tar.gz
+          - name: macos-x86_64
+            # `macos-13` was retired on 4 December 2025; `macos-15-intel` is
+            # the Intel runner. Do not write `macos-13` here again.
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            binary: MyClaudeCode
+            asset: MyClaudeCode-macos-x86_64.tar.gz
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          # The tag being released, so a re-run of an old release rebuilds
+          # that release's source rather than whatever `main` is now.
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          fetch-depth: 1
+
+      - name: Install the webview, tray and virtual-display packages
+        if: runner.os == 'Linux'
+        # webkit2gtk **4.1**, not 4.0: Ubuntu 24.04 does not ship 4.0 at all,
+        # and 4.1 is the declared distribution floor. `xvfb` is for the smoke,
+        # which runs a real window.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            xvfb
+
+      - name: Install Rust
+        # Pinned by commit SHA, as every other action in this repository is.
+        # That SHA is the head of the action's `stable` branch, which installs
+        # whatever Rust stable is on the day the job runs -- the pin fixes the
+        # action, not the compiler.
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: desktop-shell/src-tauri
+          key: ${{ matrix.target }}
+
+      - name: cargo test
+        working-directory: desktop-shell/src-tauri
+        run: cargo test --locked --target ${{ matrix.target }}
+
+      - name: cargo build
+        working-directory: desktop-shell/src-tauri
+        # `cargo build --release --features custom-protocol` and not
+        # `cargo tauri build --no-bundle`, deliberately. The Tauri CLI's
+        # `build` does three things: run `beforeBuildCommand`, run cargo with
+        # `--features custom-protocol`, and bundle. This project has no
+        # `beforeBuildCommand` (`ui/` is one static HTML file, there is no
+        # frontend build), and `--no-bundle` switches the third off -- so the
+        # CLI would reduce to exactly the line below, at the cost of compiling
+        # `tauri-cli` on four runners.
+        #
+        # The feature is not optional. Without it `tauri::is_dev()` is true and
+        # the generated context reads `frontendDist` off the disk at runtime
+        # instead of embedding it, so a shipped binary would look for a `ui/`
+        # directory the user does not have. This is the single line that
+        # separates a release build from a development one.
+        run: cargo build --release --locked --features custom-protocol --target ${{ matrix.target }}
+
+      - name: Smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: desktop-shell
+        run: ./smoke/windows.ps1 -Binary "src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }}"
+
+      - name: Smoke (Linux)
+        if: runner.os == 'Linux'
+        working-directory: desktop-shell
+        run: ./smoke/linux.sh "src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }}"
+
+      - name: Smoke (macOS)
+        if: runner.os == 'macOS'
+        working-directory: desktop-shell
+        run: ./smoke/macos.sh "src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }}"
+
+      # Both packaging steps put the executable, and nothing else, in the
+      # archive: no installer, no `.app`, no `.dmg` (decision Q7), no
+      # AppImage. The name carries the platform and the architecture but never
+      # a version (decision Q5), so a shortcut or a `.desktop` `Exec=` line
+      # survives every upgrade and the Python-side pin in S4 can name one
+      # asset per target forever.
+      - name: Package (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Force `
+            -Path "desktop-shell/src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }}" `
+            -DestinationPath "dist/${{ matrix.asset }}"
+
+      - name: Package (tar)
+        if: runner.os != 'Windows'
+        env:
+          # macOS `tar` otherwise writes an AppleDouble `._MyClaudeCode`
+          # sidecar for any file carrying extended attributes, which would put
+          # a second, junk member in an archive S4 extracts expecting one.
+          COPYFILE_DISABLE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -czf "dist/${{ matrix.asset }}" \
+            -C "desktop-shell/src-tauri/target/${{ matrix.target }}/release" \
+            "${{ matrix.binary }}"
+
+      - name: Checksum
+        working-directory: dist
+        # One `sha256  filename` line, exactly the shape `sha256sum -c` reads
+        # and exactly the shape the Python pin in S4 parses. Two spaces.
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          else
+            shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          fi
+          cat "${{ matrix.asset }}.sha256"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: shell-${{ matrix.name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Attach to the release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The only job in this workflow that may write. It builds nothing.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: staging
+          pattern: shell-*
+          merge-multiple: true
+
+      - name: Assemble the checksum file
+        working-directory: staging
+        # Sorted, so the file is byte-identical whichever order the four legs
+        # happened to finish in.
+        run: |
+          set -euo pipefail
+          cat ./*.sha256 | LC_ALL=C sort -k2 > SHA256SUMS-desktop-shell.txt
+          rm -f ./*.sha256
+          test "$(wc -l < SHA256SUMS-desktop-shell.txt)" -eq 4 \
+            || { echo "::error::expected four checksum lines"; exit 1; }
+          cat SHA256SUMS-desktop-shell.txt
+          sha256sum -c SHA256SUMS-desktop-shell.txt
+
+      - name: Upload to the release
+        working-directory: staging
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        # `--clobber`, so re-running a leg replaces its asset rather than
+        # failing on a name that already exists.
+        run: |
+          set -euo pipefail
+          ls -l
+          gh release upload "$TAG" \
+            MyClaudeCode-windows-x86_64.zip \
+            MyClaudeCode-linux-x86_64.tar.gz \
+            MyClaudeCode-macos-aarch64.tar.gz \
+            MyClaudeCode-macos-x86_64.tar.gz \
+            SHA256SUMS-desktop-shell.txt \
+            --clobber --repo "$GITHUB_REPOSITORY"
