@@ -1890,7 +1890,24 @@ Re-run the matching command from [Install Or Update](#install).
 
 ### Uninstall
 
-Stop every running MCC command first. The uninstaller removes the MCC uv tool, verifies every MCC command is gone, and then deletes `~/.mcc/`. It leaves uv, Python, Claude Code, Codex, Pi, and shared PATH entries intact.
+Stop every running MCC command first. The uninstaller removes the MCC uv tool, verifies every MCC command is gone, removes the desktop integration the installer created, and only then deletes `~/.mcc/`.
+
+**Removed:**
+
+| Artefact | Where | Created by |
+|---|---|---|
+| Every MCC command shim (`mcc-*`, `fcc-*`, `my-claude-code`) | the uv tool bin directory | `uv tool install` |
+| Config, logs and data | `~/.mcc/` (and a legacy `~/.fcc/`, including the exported `app-icon.ico`) | normal use |
+| Start Menu shortcut | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\My Claude Code.lnk` | `install.ps1 -Desktop` |
+| Start-at-login value | `HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\MyClaudeCodeDesktop` | tray → **Start at Login** |
+| Desktop entry and icon | `~/.local/share/applications/my-claude-code.desktop`, `~/.local/share/icons/hicolor/256x256/apps/my-claude-code.png` | `install.sh --desktop` |
+| App bundle | `~/Applications/My Claude Code.app` | `install.sh --desktop` (macOS) |
+| LaunchAgent | `~/Library/LaunchAgents/com.myclaudecode.tray.plist` | tray → **Start at Login** (macOS) |
+| Autostart entry / systemd user unit | `~/.config/autostart/mcc-server.desktop`, `~/.config/systemd/user/mcc-server.service` (disabled first) | tray -> **Start at Login** (Linux/WSL) |
+
+**Kept:** uv, the uv-managed Python runtime, Claude Code, Codex, Pi, shared `PATH` entries, and the retired `~/.fcc-old/` — the legacy directory that holds your rollback note. Nothing under `~/.claude/` is touched.
+
+If the tool removal cannot be verified, the uninstaller stops before deleting anything: config and desktop artefacts are left exactly as they were. `--dry-run` / `-DryRun` prints every command without running it.
 
 macOS/Linux:
 

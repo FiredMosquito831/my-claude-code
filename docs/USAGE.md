@@ -346,6 +346,30 @@ curl -fsSL <install-script-url> | sh -s -- --desktop
 
 This writes a Start Menu `.lnk` on Windows, a `.desktop` entry on Linux, and a minimal `.app` bundle on macOS. It's opt-in — a plain install is unchanged — and if the shortcut can't be created, the installer warns and continues rather than failing the whole install.
 
+<a id="what-the-uninstaller-removes"></a>
+
+### What the uninstaller removes
+
+`scripts/uninstall.sh` and `scripts/uninstall.ps1` remove everything the installers and the tray create, not just the command shims. Until 6.41.3 they removed the shims and the config directory only, which left a Start Menu entry pointing at a deleted `mcc-desktop.exe` and an autostart registration relaunching a package that was no longer installed.
+
+**Removed:**
+
+| Artefact | Path or key | Created by |
+| --- | --- | --- |
+| Command shims | the uv tool bin directory | `uv tool install` |
+| Config, logs, data and the exported icon | `~/.mcc/` and a legacy `~/.fcc/` | normal use |
+| Start Menu shortcut | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\My Claude Code.lnk` | `install.ps1 -Desktop` |
+| Start-at-login value | `HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\MyClaudeCodeDesktop` | **Start at Login** |
+| Desktop entry and icon | `~/.local/share/applications/my-claude-code.desktop`, `~/.local/share/icons/hicolor/256x256/apps/my-claude-code.png` | `install.sh --desktop` |
+| App bundle | `~/Applications/My Claude Code.app` | `install.sh --desktop` |
+| LaunchAgent | `~/Library/LaunchAgents/com.myclaudecode.tray.plist` | **Start at Login** (macOS) |
+| systemd user unit | `~/.config/systemd/user/mcc-server.service` — `systemctl --user disable --now` runs first | **Start at Login** (Linux/WSL) |
+| XDG autostart entry | `~/.config/autostart/mcc-server.desktop` | **Start at Login** (Linux/WSL, no systemd) |
+
+**Kept:** uv, the uv-managed Python runtime, Claude Code, Codex, Pi, shared `PATH` entries, the shared XDG directories the entry and icon lived in, and the retired `~/.fcc-old/` (the legacy directory holding your rollback note). `~/.claude/` is never touched.
+
+Ordering and safety are unchanged: the desktop artefacts are removed only **after** every shim is verified gone, so a failed or unverified tool removal leaves your config *and* your shortcut alone. A shortcut or registry value that cannot be deleted (a file the shell has open, a locked key) is reported as a warning rather than aborting an uninstall that has already removed the tool. `--dry-run` / `-DryRun` prints every removal without performing it.
+
 <a id="desktop-settings-apply-on-the-next-launch"></a>
 
 ### DESKTOP_* settings apply on the next launch

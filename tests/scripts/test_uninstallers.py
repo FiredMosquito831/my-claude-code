@@ -7,6 +7,14 @@ published entry point is gone before touching user data, and preserves
 derived from ``pyproject.toml`` so the scenarios always cover exactly the
 entry points a real wheel publishes; the cross-file parity contract lives in
 tests/contracts/test_uninstaller_parity.py.
+
+The desktop-integration scenarios exercise the artefacts the installers write
+outside the config directory -- the Start Menu shortcut, the ``.desktop``
+entry and its icon, the macOS ``.app`` bundle, the LaunchAgent plist, the XDG
+autostart entry, the systemd user unit and the HKCU ``Run`` value. Every one
+of them is created inside the redirected ``HOME``/``APPDATA`` (or, for the
+registry, behind a stubbed cmdlet), so no scenario here can reach the real
+Start Menu, the real ``Run`` key or the real home directory.
 """
 
 import os
@@ -49,6 +57,20 @@ def _powershells() -> tuple[str, ...]:
     return tuple(dict.fromkeys(path for path in candidates if path is not None))
 
 
+# Every desktop artefact an installer (or the Python autostart reconciliation)
+# writes under $HOME on POSIX, relative to $HOME. Mirrors the declarations at
+# the top of scripts/uninstall.sh; tests/contracts/test_uninstaller_parity.py
+# keeps that mirror honest.
+POSIX_DESKTOP_ARTEFACTS = (
+    ".local/share/applications/my-claude-code.desktop",
+    ".local/share/icons/hicolor/256x256/apps/my-claude-code.png",
+    "Applications/My Claude Code.app",
+    "Library/LaunchAgents/com.myclaudecode.tray.plist",
+    ".config/autostart/mcc-server.desktop",
+    ".config/systemd/user/mcc-server.service",
+)
+
+
 @dataclass
 class PosixUninstallHarness:
     home: Path
@@ -57,6 +79,28 @@ class PosixUninstallHarness:
     fcc_home: Path
     log: Path
     env: dict[str, str]
+
+    def desktop_artefacts(self) -> tuple[Path, ...]:
+        return tuple(self.home / relative for relative in POSIX_DESKTOP_ARTEFACTS)
+
+    def create_desktop_artefacts(self) -> tuple[Path, ...]:
+        """Lay down every artefact an installed desktop launcher leaves.
+
+        The .app bundle is a directory with contents, so a plain unlink would
+        pass this fixture and fail on a real machine.
+        """
+
+        created = self.desktop_artefacts()
+        for path in created:
+            if path.suffix == ".app":
+                (path / "Contents" / "MacOS").mkdir(parents=True, exist_ok=True)
+                (path / "Contents" / "MacOS" / "my-claude-code").write_text(
+                    "#!/bin/sh\nexit 0\n", encoding="utf-8"
+                )
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("artefact\n", encoding="utf-8")
+        return created
 
     def run(
         self,
@@ -277,6 +321,67 @@ def test_uninstall_sh_reports_purge_failure_after_verified_tool_removal(
     assert "My Claude Code has been removed and verified." not in result.stdout
 
 
+def test_uninstall_sh_removes_every_desktop_artefact(
+    posix_uninstall_harness: PosixUninstallHarness,
+) -> None:
+    """install.sh --desktop and start-at-login write outside the config dir.
+
+    Purging ~/.mcc never reached the .desktop entry, the .app bundle, the
+    LaunchAgent plist or the autostart entry, so an uninstalled MCC kept a
+    launcher pointing at a deleted shim and relaunched itself at login.
+    """
+
+    artefacts = posix_uninstall_harness.create_desktop_artefacts()
+
+    result = posix_uninstall_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert "My Claude Code has been removed and verified." in result.stdout
+    still_there = [str(path) for path in artefacts if path.exists()]
+    assert not still_there, f"uninstall.sh left desktop artefacts behind: {still_there}"
+    for path in artefacts:
+        assert f"rm:-rf {path}" in posix_uninstall_harness.calls()
+
+
+def test_uninstall_sh_desktop_removal_is_quiet_when_nothing_was_installed(
+    posix_uninstall_harness: PosixUninstallHarness,
+) -> None:
+    """The launcher is opt-in; its absence is the normal case, not an error."""
+
+    result = posix_uninstall_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert not any(
+        call.startswith("rm:-rf") and "applications" in call
+        for call in posix_uninstall_harness.calls()
+    )
+
+
+def test_uninstall_sh_dry_run_keeps_every_desktop_artefact(
+    posix_uninstall_harness: PosixUninstallHarness,
+) -> None:
+    artefacts = posix_uninstall_harness.create_desktop_artefacts()
+
+    result = posix_uninstall_harness.run("--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert all(path.exists() for path in artefacts)
+    assert posix_uninstall_harness.calls() == []
+
+
+def test_uninstall_sh_keeps_desktop_artefacts_when_removal_is_unconfirmed(
+    posix_uninstall_harness: PosixUninstallHarness,
+) -> None:
+    """Same contract as ~/.fcc: unverified removal must not destroy anything."""
+
+    artefacts = posix_uninstall_harness.create_desktop_artefacts()
+
+    result = posix_uninstall_harness.run(fail_step="uninstall")
+
+    assert result.returncode != 0
+    assert all(path.exists() for path in artefacts)
+
+
 def test_uninstall_sh_dry_run_is_non_mutating(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
@@ -302,6 +407,14 @@ def test_uninstall_sh_rejects_invalid_options_before_mutation(
     assert posix_uninstall_harness.calls() == []
 
 
+# Written by New-DesktopShortcut in scripts/install.ps1 -Desktop, relative to
+# %APPDATA%. The Run value below is written by _apply_windows_start_at_login in
+# src/my_claude_code/config/desktop.py (WINDOWS_RUN_VALUE).
+WINDOWS_START_MENU_SHORTCUT = "Microsoft/Windows/Start Menu/Programs/My Claude Code.lnk"
+WINDOWS_RUN_KEY = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+WINDOWS_RUN_VALUE = "MyClaudeCodeDesktop"
+
+
 @dataclass
 class PowerShellUninstallHarness:
     home: Path
@@ -312,6 +425,16 @@ class PowerShellUninstallHarness:
     env: dict[str, str]
     powershell: str
     wrapper: Path
+    app_data: Path
+
+    @property
+    def shortcut(self) -> Path:
+        return self.app_data / WINDOWS_START_MENU_SHORTCUT
+
+    def create_start_menu_shortcut(self) -> Path:
+        self.shortcut.parent.mkdir(parents=True, exist_ok=True)
+        self.shortcut.write_text("shortcut", encoding="utf-8")
+        return self.shortcut
 
     def run(
         self,
@@ -320,6 +443,7 @@ class PowerShellUninstallHarness:
         include_uv: bool = True,
         dry_run: bool = False,
         fake_running_process: str = "",
+        run_value_present: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         uv = self.bin_dir / "uv.cmd"
         if not include_uv and uv.exists():
@@ -341,6 +465,7 @@ class PowerShellUninstallHarness:
                 "FAIL_STEP": fail_step,
                 "FAKE_RUNNING_PROCESS": fake_running_process,
                 "UNINSTALL_DRY_RUN": "1" if dry_run else "0",
+                "FAKE_RUN_VALUE": "1" if run_value_present else "0",
             },
         )
 
@@ -370,8 +495,10 @@ def powershell_uninstall_harness(
     bin_dir = home / ".local" / "bin"
     tool_bin = tmp_path / "tool-bin"
     fcc_home = home / ".fcc"
+    app_data = tmp_path / "appdata"
+    local_app_data = tmp_path / "localappdata"
     log = tmp_path / "calls.log"
-    for path in (bin_dir, tool_bin, fcc_home):
+    for path in (bin_dir, tool_bin, fcc_home, app_data, local_app_data):
         path.mkdir(parents=True)
     (fcc_home / "config.json").write_text("{}", encoding="utf-8")
     for name in PUBLISHED_COMMANDS:
@@ -443,6 +570,34 @@ function Get-Process {
         }
     }
 }
+function Get-ItemProperty {
+    # The uninstaller reads HKCU:\...\Run to decide whether an autostart value
+    # exists. Stubbed so the suite can never see -- let alone delete -- the real
+    # value on the machine running the tests. Deliberately unlogged: the
+    # existing scenarios assert the call log exactly.
+    [CmdletBinding()]
+    param(
+        [string] $LiteralPath,
+        [string[]] $Name
+    )
+    if ($env:FAKE_RUN_VALUE -ne "1") {
+        throw "Property $($Name -join ',') does not exist at path $LiteralPath."
+    }
+    return [pscustomobject] @{ MyClaudeCodeDesktop = "fake-autostart-command" }
+}
+function Remove-ItemProperty {
+    [CmdletBinding()]
+    param(
+        [string] $LiteralPath,
+        [string] $Name,
+        [switch] $Force
+    )
+    Add-Content -LiteralPath $env:CALL_LOG -Value "reg-remove:$LiteralPath\$Name"
+    if ($env:FAIL_STEP -eq "registry") {
+        throw "simulated registry failure"
+    }
+    $env:FAKE_RUN_VALUE = "0"
+}
 $installer = [scriptblock]::Create([IO.File]::ReadAllText($env:FCC_UNINSTALLER))
 if ($env:UNINSTALL_DRY_RUN -eq "1") {
     & $installer -DryRun
@@ -464,15 +619,22 @@ else {
             "PATHEXT": ".COM;.EXE;.BAT;.CMD",
             "HOME": str(home),
             "USERPROFILE": str(home),
+            # Redirected, and asserted below: without this the uninstaller
+            # would compute the REAL Start Menu path and a passing test would
+            # delete the developer's own shortcut.
+            "APPDATA": str(app_data),
+            "LOCALAPPDATA": str(local_app_data),
             "CALL_LOG": str(log),
             "FAKE_TOOL_BIN": str(tool_bin),
             "FCC_UNINSTALLER": str(_repo_root() / "scripts" / "uninstall.ps1"),
             "FAIL_STEP": "",
             "UNINSTALL_DRY_RUN": "0",
+            "FAKE_RUN_VALUE": "0",
         }
     )
+    assert Path(env["APPDATA"]) == app_data, "APPDATA must be redirected into tmp_path"
     return PowerShellUninstallHarness(
-        home, bin_dir, tool_bin, fcc_home, log, env, powershell, wrapper
+        home, bin_dir, tool_bin, fcc_home, log, env, powershell, wrapper, app_data
     )
 
 
@@ -587,6 +749,92 @@ def test_uninstall_ps1_reports_purge_failure_after_verified_tool_removal(
         f"uv:tool uninstall {PRIMARY_PACKAGE}" in powershell_uninstall_harness.calls()
     )
     assert "My Claude Code has been removed and verified." not in result.stdout
+
+
+def test_uninstall_ps1_removes_the_start_menu_shortcut(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    """install.ps1 -Desktop creates a .lnk that uv tool uninstall cannot see.
+
+    It survived every uninstall and kept pointing at a deleted mcc-desktop
+    shim, so the Start Menu entry stayed forever and did nothing when clicked.
+    """
+
+    shortcut = powershell_uninstall_harness.create_start_menu_shortcut()
+
+    result = powershell_uninstall_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert not shortcut.exists(), "uninstall.ps1 left the Start Menu shortcut behind"
+    assert f"remove:{shortcut}" in powershell_uninstall_harness.calls()
+
+
+def test_uninstall_ps1_removes_the_start_at_login_registration(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    """The HKCU Run value relaunches a package that is no longer installed."""
+
+    result = powershell_uninstall_harness.run(run_value_present=True)
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        f"reg-remove:{WINDOWS_RUN_KEY}\\{WINDOWS_RUN_VALUE}"
+        in powershell_uninstall_harness.calls()
+    )
+
+
+def test_uninstall_ps1_leaves_the_run_key_alone_when_no_value_is_registered(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    """Autostart is off by default; an absent value is not an error."""
+
+    result = powershell_uninstall_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert not any(
+        call.startswith("reg-remove:") for call in powershell_uninstall_harness.calls()
+    )
+    assert "No start-at-login registration to remove" in result.stdout
+
+
+def test_uninstall_ps1_dry_run_keeps_the_shortcut_and_the_run_value(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    shortcut = powershell_uninstall_harness.create_start_menu_shortcut()
+
+    result = powershell_uninstall_harness.run(dry_run=True, run_value_present=True)
+
+    assert result.returncode == 0, result.stderr
+    assert shortcut.exists()
+    assert powershell_uninstall_harness.calls() == []
+
+
+def test_uninstall_ps1_keeps_the_shortcut_when_removal_is_unconfirmed(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    shortcut = powershell_uninstall_harness.create_start_menu_shortcut()
+
+    result = powershell_uninstall_harness.run(fail_step="uninstall")
+
+    assert result.returncode != 0
+    assert shortcut.exists()
+    assert not any(
+        call.startswith("reg-remove:") for call in powershell_uninstall_harness.calls()
+    )
+
+
+def test_uninstall_ps1_survives_a_registry_removal_failure(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    """The tool and the config are already gone; refusing here strands the user."""
+
+    result = powershell_uninstall_harness.run(
+        fail_step="registry", run_value_present=True
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "My Claude Code has been removed and verified." in result.stdout
+    assert not powershell_uninstall_harness.fcc_home.exists()
 
 
 def test_uninstall_ps1_dry_run_is_non_mutating(

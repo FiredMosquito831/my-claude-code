@@ -13,6 +13,27 @@ FCC_HOME_DIRNAME=".fcc"
 # present, the legacy ~/.fcc; ~/.fcc-old (the rollback-note dir) is left alone.
 MCC_HOME_DIRNAME=".mcc"
 RETIRED_HOME_DIRNAME=".fcc-old"
+# Desktop integration artefacts, all relative to $HOME. They live OUTSIDE the
+# config directory, so purging ~/.mcc and ~/.fcc never reached them: an
+# uninstall used to leave a launcher pointing at a deleted shim and an
+# autostart registration that relaunched a package that is no longer
+# installed.
+#   * the .desktop entry and its icon are written by create_linux_desktop_entry
+#     in scripts/install.sh (install.sh --desktop);
+#   * the .app bundle is written by create_macos_app_bundle in the same script;
+#   * the LaunchAgent plist, the XDG autostart entry and the systemd user unit
+#     are written by _apply_macos_start_at_login / _apply_linux_start_at_login
+#     in src/my_claude_code/config/desktop.py.
+# The exported icons inside ~/.mcc are removed by purge_fcc_home. Every pairing
+# here is pinned by tests/contracts/test_uninstaller_parity.py.
+LINUX_DESKTOP_ENTRY=".local/share/applications/my-claude-code.desktop"
+LINUX_DESKTOP_ICON=".local/share/icons/hicolor/256x256/apps/my-claude-code.png"
+LINUX_APPLICATIONS_DIR=".local/share/applications"
+MACOS_APP_BUNDLE="Applications/My Claude Code.app"
+MACOS_LAUNCH_AGENT="Library/LaunchAgents/com.myclaudecode.tray.plist"
+LINUX_AUTOSTART_ENTRY=".config/autostart/mcc-server.desktop"
+LINUX_SYSTEMD_UNIT_NAME="mcc-server.service"
+LINUX_SYSTEMD_UNIT=".config/systemd/user/mcc-server.service"
 # Must mirror every entry in [project.scripts] + [project.gui-scripts] (the
 # same list as Get-LauncherCommands in scripts/install.ps1); pinned by
 # tests/contracts/test_uninstaller_parity.py.
@@ -25,9 +46,11 @@ show_usage() {
     cat <<'USAGE'
 Usage: uninstall.sh [options]
 
-Removes the My Claude Code uv tool (plus any legacy Free Claude Code tool)
-and deletes ~/.fcc/ after removal is verified.
-Does not remove uv, Claude Code, Codex, Pi, the uv-managed Python runtime, or shared PATH entries.
+Removes the My Claude Code uv tool (plus any legacy Free Claude Code tool),
+the desktop launcher (.desktop entry or .app bundle) and the start-at-login
+registration, and deletes ~/.mcc/ and ~/.fcc/ after removal is verified.
+Does not remove uv, Claude Code, Codex, Pi, the uv-managed Python runtime, shared
+PATH entries, or ~/.fcc-old (which holds the rollback note).
 
 Options:
   --dry-run                Print commands without running them.
@@ -202,6 +225,58 @@ verify_fcc_commands_removed() {
     fi
 }
 
+remove_home_path() {
+    # Removes one artefact under $HOME, file or directory, if it is there.
+    # Absence is the normal case (the launcher is opt-in, autostart is off by
+    # default) and is never an error.
+    _relative="$1"
+    _target="$HOME/$_relative"
+    if [ ! -e "$_target" ] && [ ! -L "$_target" ]; then
+        return 1
+    fi
+    printf 'Removing %s\n' "$_target"
+    run rm -rf "$_target"
+    if [ "$dry_run" -eq 0 ] && { [ -e "$_target" ] || [ -L "$_target" ]; }; then
+        fail "could not remove $_target"
+    fi
+    return 0
+}
+
+remove_desktop_launcher() {
+    # create_linux_desktop_entry writes both the entry and its icon; the icon
+    # is useless on its own, so both go. create_macos_app_bundle writes a whole
+    # directory, hence rm -rf rather than an unlink.
+    if remove_home_path "$LINUX_DESKTOP_ENTRY"; then
+        if [ "$dry_run" -eq 0 ] && command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database "$HOME/$LINUX_APPLICATIONS_DIR" >/dev/null 2>&1 || true
+        fi
+    fi
+    remove_home_path "$LINUX_DESKTOP_ICON" || true
+    remove_home_path "$MACOS_APP_BUNDLE" || true
+}
+
+remove_start_at_login_registration() {
+    # Mirrors remove_start_at_login() in src/my_claude_code/config/desktop.py.
+    # systemctl is asked to forget the unit only when the unit file we wrote is
+    # actually there, so an uninstall on a machine that never enabled autostart
+    # (or has no user bus at all) touches nothing and cannot fail here.
+    if [ -e "$HOME/$LINUX_SYSTEMD_UNIT" ] && command -v systemctl >/dev/null 2>&1; then
+        print_command systemctl --user disable --now "$LINUX_SYSTEMD_UNIT_NAME"
+        if [ "$dry_run" -eq 0 ]; then
+            systemctl --user disable --now "$LINUX_SYSTEMD_UNIT_NAME" >/dev/null 2>&1 || true
+            systemctl --user daemon-reload >/dev/null 2>&1 || true
+        fi
+    fi
+    remove_home_path "$LINUX_SYSTEMD_UNIT" || true
+    remove_home_path "$LINUX_AUTOSTART_ENTRY" || true
+    remove_home_path "$MACOS_LAUNCH_AGENT" || true
+}
+
+remove_desktop_artifacts() {
+    remove_desktop_launcher
+    remove_start_at_login_registration
+}
+
 purge_config_dir() {
     # Removes one config directory if present. The refuse-while-running guard
     # already ran, so anything still here is safe to delete. The retired
@@ -264,6 +339,9 @@ uninstall_uv_tool "$LEGACY_PACKAGE_NAME"
 step "Verifying My Claude Code entry points were removed"
 verify_fcc_commands_removed
 
+step "Removing the desktop launcher and the start-at-login registration"
+remove_desktop_artifacts
+
 step "Purging FCC config and data from ~/.fcc"
 purge_fcc_home
 
@@ -271,5 +349,6 @@ if [ "$dry_run" -eq 1 ]; then
     printf '\nDry run complete. No changes were made.\n'
 else
     printf '\nMy Claude Code has been removed and verified.\n'
+    printf 'The desktop launcher and the start-at-login registration were removed with it.\n'
     printf 'uv, Claude Code, Codex, Pi, the uv-managed Python runtime, and shared PATH entries were left installed.\n'
 fi

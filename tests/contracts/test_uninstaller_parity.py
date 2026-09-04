@@ -10,10 +10,21 @@ package names are embedded directly in each uninstaller; this contract makes
 any future drift fail here instead of on a user's machine, in both
 directions, exactly like test_installer_knows_every_launcher.py does for
 install.ps1.
+
+The second half of this file covers the *other* half of parity: the artefacts
+the installers write outside the uv tool directory. ``uv tool uninstall``
+removes shims and nothing else, and purging ~/.mcc / ~/.fcc reaches only what
+is inside the config directory -- so the Start Menu shortcut, the ``.desktop``
+entry and its icon, the macOS ``.app`` bundle, the LaunchAgent plist, the XDG
+autostart entry, the systemd user unit and the HKCU ``Run`` value all used to
+survive an uninstall. ARTEFACTS below enumerates every one of them together
+with the code that creates it and the code that removes it, so adding a
+creator without a remover fails here.
 """
 
 import re
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +32,154 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 UNINSTALL_SH = REPO_ROOT / "scripts" / "uninstall.sh"
 UNINSTALL_PS1 = REPO_ROOT / "scripts" / "uninstall.ps1"
+INSTALL_SH = REPO_ROOT / "scripts" / "install.sh"
+INSTALL_PS1 = REPO_ROOT / "scripts" / "install.ps1"
+DESKTOP_CONFIG = REPO_ROOT / "src" / "my_claude_code" / "config" / "desktop.py"
+
+
+@dataclass(frozen=True)
+class Artefact:
+    """One thing an install creates outside the uv tool bin directory."""
+
+    name: str
+    #: Where the artefact ends up, for the failure message.
+    location: str
+    #: The file that creates it, and text proving it still does.
+    creator: Path
+    creator_markers: tuple[str, ...]
+    #: The uninstaller that must remove it, and text proving it does.
+    remover: Path
+    remover_markers: tuple[str, ...]
+
+
+ARTEFACTS: tuple[Artefact, ...] = (
+    Artefact(
+        name="Start Menu shortcut",
+        location=r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\My Claude Code.lnk",
+        creator=INSTALL_PS1,
+        creator_markers=(
+            'Join-Path $env:APPDATA "Microsoft\\Windows\\Start Menu\\Programs"',
+            'Join-Path $startMenuDir "My Claude Code.lnk"',
+        ),
+        remover=UNINSTALL_PS1,
+        remover_markers=(
+            '$StartMenuRelativeDir = "Microsoft\\Windows\\Start Menu\\Programs"',
+            '$StartMenuShortcutName = "My Claude Code.lnk"',
+            "function Remove-StartMenuShortcut {",
+            "Remove-Item -LiteralPath $shortcutPath -Force",
+        ),
+    ),
+    Artefact(
+        name="Windows start-at-login registration",
+        location=r"HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\MyClaudeCodeDesktop",
+        creator=DESKTOP_CONFIG,
+        creator_markers=(
+            'WINDOWS_RUN_VALUE = "MyClaudeCodeDesktop"',
+            r'return r"Software\Microsoft\Windows\CurrentVersion\Run"',
+        ),
+        remover=UNINSTALL_PS1,
+        remover_markers=(
+            '$WindowsRunKeyPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"',
+            '$WindowsRunValueName = "MyClaudeCodeDesktop"',
+            "function Remove-StartAtLoginRegistration {",
+            "Remove-ItemProperty -LiteralPath $WindowsRunKeyPath -Name $WindowsRunValueName -Force",
+        ),
+    ),
+    Artefact(
+        name="Windows shortcut icon",
+        location="~/.mcc/app-icon.ico (inside the config directory)",
+        creator=INSTALL_PS1,
+        creator_markers=('$iconPath = Join-Path $configDir "app-icon.ico"',),
+        # Not removed on its own: it lives inside ~/.mcc, which Purge-FccHome
+        # deletes whole. This row exists so a future icon written OUTSIDE the
+        # config directory cannot slip through unnoticed.
+        remover=UNINSTALL_PS1,
+        remover_markers=('Purge-ConfigDir -DirName ".mcc"',),
+    ),
+    Artefact(
+        name="Linux .desktop entry",
+        location="~/.local/share/applications/my-claude-code.desktop",
+        creator=INSTALL_SH,
+        creator_markers=(
+            'desktop_file="$applications_dir/my-claude-code.desktop"',
+            'applications_dir="$HOME/.local/share/applications"',
+        ),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'LINUX_DESKTOP_ENTRY=".local/share/applications/my-claude-code.desktop"',
+            'remove_home_path "$LINUX_DESKTOP_ENTRY"',
+        ),
+    ),
+    Artefact(
+        name="Linux .desktop icon",
+        location="~/.local/share/icons/hicolor/256x256/apps/my-claude-code.png",
+        creator=INSTALL_SH,
+        creator_markers=(
+            'icons_dir="$HOME/.local/share/icons/hicolor/256x256/apps"',
+            'icon_path="$icons_dir/my-claude-code.png"',
+        ),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'LINUX_DESKTOP_ICON=".local/share/icons/hicolor/256x256/apps/my-claude-code.png"',
+            'remove_home_path "$LINUX_DESKTOP_ICON"',
+        ),
+    ),
+    Artefact(
+        name="macOS .app bundle",
+        location="~/Applications/My Claude Code.app",
+        creator=INSTALL_SH,
+        creator_markers=('app_dir="$HOME/Applications/My Claude Code.app"',),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'MACOS_APP_BUNDLE="Applications/My Claude Code.app"',
+            'remove_home_path "$MACOS_APP_BUNDLE"',
+        ),
+    ),
+    Artefact(
+        name="macOS LaunchAgent plist",
+        location="~/Library/LaunchAgents/com.myclaudecode.tray.plist",
+        creator=DESKTOP_CONFIG,
+        creator_markers=(
+            'LAUNCH_AGENT_LABEL = "com.myclaudecode.tray"',
+            'Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"',
+        ),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'MACOS_LAUNCH_AGENT="Library/LaunchAgents/com.myclaudecode.tray.plist"',
+            'remove_home_path "$MACOS_LAUNCH_AGENT"',
+        ),
+    ),
+    Artefact(
+        name="Linux XDG autostart entry",
+        location="~/.config/autostart/mcc-server.desktop",
+        creator=DESKTOP_CONFIG,
+        creator_markers=(
+            'LINUX_AUTOSTART_ID = "mcc-server"',
+            'Path.home() / ".config" / "autostart" / f"{LINUX_AUTOSTART_ID}.desktop"',
+        ),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'LINUX_AUTOSTART_ENTRY=".config/autostart/mcc-server.desktop"',
+            'remove_home_path "$LINUX_AUTOSTART_ENTRY"',
+        ),
+    ),
+    Artefact(
+        name="Linux systemd user unit",
+        location="~/.config/systemd/user/mcc-server.service",
+        creator=DESKTOP_CONFIG,
+        creator_markers=(
+            'LINUX_SYSTEMD_UNIT = "mcc-server.service"',
+            'Path.home() / ".config" / "systemd" / "user" / LINUX_SYSTEMD_UNIT',
+        ),
+        remover=UNINSTALL_SH,
+        remover_markers=(
+            'LINUX_SYSTEMD_UNIT=".config/systemd/user/mcc-server.service"',
+            'LINUX_SYSTEMD_UNIT_NAME="mcc-server.service"',
+            'remove_home_path "$LINUX_SYSTEMD_UNIT"',
+            'systemctl --user disable --now "$LINUX_SYSTEMD_UNIT_NAME"',
+        ),
+    ),
+)
 
 _SH_VARIABLE = re.compile(
     r'^(?P<name>PACKAGE_NAME|LEGACY_PACKAGE_NAME|FCC_COMMANDS)="(?P<body>[^"]*)"$',
@@ -204,3 +363,78 @@ def test_windows_guard_covers_gui_script_process_images() -> None:
         f"FccCommands: {sorted(images & published)}. Keep interpreter image "
         "names separate from the parity-checked launcher list."
     )
+
+
+def test_every_artefact_row_names_a_creator_that_still_creates_it() -> None:
+    """A stale creator marker makes the removal assertion below vacuous."""
+
+    stale: list[str] = []
+    for artefact in ARTEFACTS:
+        source = artefact.creator.read_text(encoding="utf-8")
+        stale.extend(
+            f"{artefact.name}: {artefact.creator.name} no longer contains {marker!r}"
+            for marker in artefact.creator_markers
+            if marker not in source
+        )
+
+    assert not stale, (
+        "the installer-artefact table in this file has drifted from the code "
+        f"that creates the artefacts: {stale}. Update the markers (and the "
+        "matching uninstaller) rather than deleting the row -- a row removed "
+        "here is an artefact nobody checks any more."
+    )
+
+
+def test_every_installer_created_artefact_is_removed_by_an_uninstaller() -> None:
+    """uv tool uninstall removes shims; everything else must be removed here.
+
+    The Start Menu shortcut, the .desktop entry, the .app bundle and the three
+    autostart registrations all live outside both the tool bin directory and
+    the config directory, so nothing in the old uninstall path ever touched
+    them: uninstalling MCC left a launcher pointing at a deleted shim and an
+    autostart entry relaunching a package that was gone.
+    """
+
+    unremoved: list[str] = []
+    for artefact in ARTEFACTS:
+        source = artefact.remover.read_text(encoding="utf-8")
+        unremoved.extend(
+            f"{artefact.name} ({artefact.location}) is created by "
+            f"{artefact.creator.name} but {artefact.remover.name} does not "
+            f"contain {marker!r}"
+            for marker in artefact.remover_markers
+            if marker not in source
+        )
+
+    assert not unremoved, (
+        "these installer-created artefacts survive an uninstall: "
+        f"{unremoved}. Every artefact an installer writes outside the uv tool "
+        "bin directory must be removed by the matching uninstaller."
+    )
+
+
+def test_the_artefact_table_covers_both_platforms() -> None:
+    """A one-sided table would let the other platform rot unnoticed."""
+
+    removers = {artefact.remover for artefact in ARTEFACTS}
+
+    assert UNINSTALL_PS1 in removers
+    assert UNINSTALL_SH in removers
+
+
+def test_neither_uninstaller_touches_the_retired_rollback_directory() -> None:
+    """~/.fcc-old holds the user's rollback note and is deliberately kept.
+
+    The desktop-artefact cleanup added a second class of removals; this pins
+    the purge semantics that were already settled so they cannot drift with it.
+    """
+
+    shell = UNINSTALL_SH.read_text(encoding="utf-8")
+    powershell = UNINSTALL_PS1.read_text(encoding="utf-8")
+
+    assert 'RETIRED_HOME_DIRNAME=".fcc-old"' in shell
+    assert 'purge_config_dir "$RETIRED_HOME_DIRNAME"' in shell
+    assert 'if [ "$_dir_name" = "$RETIRED_HOME_DIRNAME" ]; then' in shell
+    assert 'Purge-ConfigDir -DirName ".fcc-old" -LeaveAlone' in powershell
+    assert 'Purge-ConfigDir -DirName ".mcc"' in powershell
+    assert 'purge_config_dir "$MCC_HOME_DIRNAME"' in shell

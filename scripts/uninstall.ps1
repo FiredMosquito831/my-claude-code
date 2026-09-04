@@ -37,6 +37,21 @@ $FccCommands = @(
 # tool environment rather than under a shim named after the command, so the
 # process guard must also look at interpreter image names.
 $GuardProcessImages = @("pythonw")
+# Desktop integration artefacts. These live OUTSIDE the config directory, so
+# purging ~/.mcc and ~/.fcc never reaches them and an uninstall used to leave
+# a Start Menu entry pointing at a deleted shim plus an autostart value that
+# relaunched a package that is no longer installed.
+#   * the shortcut is written by New-DesktopShortcut in scripts/install.ps1
+#     (install.ps1 -Desktop) under %APPDATA%;
+#   * the HKCU Run value is written by _apply_windows_start_at_login in
+#     src/my_claude_code/config/desktop.py (WINDOWS_RUN_VALUE).
+# The exported icon (~/.mcc/app-icon.ico) is inside the config directory and
+# is removed by Purge-FccHome. Every pairing here is pinned by
+# tests/contracts/test_uninstaller_parity.py.
+$StartMenuRelativeDir = "Microsoft\Windows\Start Menu\Programs"
+$StartMenuShortcutName = "My Claude Code.lnk"
+$WindowsRunKeyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$WindowsRunValueName = "MyClaudeCodeDesktop"
 $script:UvPath = ""
 $script:UvToolBin = ""
 
@@ -44,9 +59,11 @@ function Show-Usage {
     @"
 Usage: uninstall.ps1 [options]
 
-Removes the My Claude Code uv tool (plus any legacy Free Claude Code tool)
-and deletes ~/.fcc/ after removal is verified.
-Does not remove uv, Claude Code, Codex, Pi, the uv-managed Python runtime, or shared PATH entries.
+Removes the My Claude Code uv tool (plus any legacy Free Claude Code tool),
+the Start Menu shortcut and the start-at-login registration, and deletes
+~/.mcc/ and ~/.fcc/ after removal is verified.
+Does not remove uv, Claude Code, Codex, Pi, the uv-managed Python runtime, shared
+PATH entries, or ~/.fcc-old (which holds the rollback note).
 
 Options:
   -DryRun                Print commands without running them.
@@ -236,6 +253,94 @@ function Confirm-FccCommandsRemoved {
     }
 }
 
+function Remove-StartMenuShortcut {
+    # install.ps1 -Desktop writes "%APPDATA%\...\Start Menu\Programs\My Claude
+    # Code.lnk" targeting the mcc-desktop shim. uv tool uninstall deletes the
+    # shim; the .lnk survived it and stayed in the Start Menu forever.
+    if ([string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        Write-Host "APPDATA is not set; skipping the Start Menu shortcut."
+        return
+    }
+
+    $startMenuDir = Join-Path $env:APPDATA $StartMenuRelativeDir
+    $shortcutPath = Join-Path $startMenuDir $StartMenuShortcutName
+    if (-not (Test-Path -LiteralPath $shortcutPath)) {
+        Write-Host "No Start Menu shortcut to remove: $shortcutPath"
+        return
+    }
+
+    $commandText = @(
+        "Remove-Item",
+        "-LiteralPath",
+        (Format-Argument $shortcutPath),
+        "-Force"
+    ) -join " "
+    Write-Host "+ $commandText"
+    if ($DryRun) {
+        return
+    }
+
+    try {
+        Remove-Item -LiteralPath $shortcutPath -Force
+    }
+    catch {
+        # A shortcut the shell has open is annoying, not fatal: the tool and
+        # the config are already gone, so refusing here would strand the user
+        # mid-uninstall with nothing left to retry.
+        Write-Warning "Could not remove the Start Menu shortcut ($shortcutPath): $($_.Exception.Message)"
+        return
+    }
+    if (Test-Path -LiteralPath $shortcutPath) {
+        Write-Warning "The Start Menu shortcut still exists after deletion: $shortcutPath"
+        return
+    }
+    Write-Host "Removed Start Menu shortcut: $shortcutPath"
+}
+
+function Remove-StartAtLoginRegistration {
+    # mcc-desktop --start-at-login writes the HKCU Run value named by
+    # WINDOWS_RUN_VALUE in src/my_claude_code/config/desktop.py. Left behind,
+    # Windows tries to launch an uninstalled package at every login.
+    $valueDescription = "$WindowsRunKeyPath\$WindowsRunValueName"
+    $existing = $null
+    try {
+        $existing = Get-ItemProperty -LiteralPath $WindowsRunKeyPath -Name $WindowsRunValueName -ErrorAction Stop
+    }
+    catch {
+        $existing = $null
+    }
+    if ($null -eq $existing) {
+        Write-Host "No start-at-login registration to remove: $valueDescription"
+        return
+    }
+
+    $commandText = @(
+        "Remove-ItemProperty",
+        "-LiteralPath",
+        (Format-Argument $WindowsRunKeyPath),
+        "-Name",
+        (Format-Argument $WindowsRunValueName)
+    ) -join " "
+    Write-Host "+ $commandText"
+    if ($DryRun) {
+        return
+    }
+
+    try {
+        Remove-ItemProperty -LiteralPath $WindowsRunKeyPath -Name $WindowsRunValueName -Force
+    }
+    catch {
+        Write-Warning "Could not remove the start-at-login registration ($valueDescription): $($_.Exception.Message)"
+        return
+    }
+    Write-Host "Removed start-at-login registration: $valueDescription"
+}
+
+function Remove-DesktopArtifacts {
+    Remove-StartMenuShortcut
+    Remove-StartAtLoginRegistration
+}
+
 function Purge-ConfigDir {
     # Removes one config directory ($dirName) if it exists. The refuse-while-
     # running guard already ran (Assert-NoMccProcessesRunning), so anything still
@@ -309,6 +414,9 @@ Uninstall-MccTool -ToolName $LegacyPackageName
 Write-Step "Verifying My Claude Code entry points were removed"
 Confirm-FccCommandsRemoved
 
+Write-Step "Removing the Start Menu shortcut and the start-at-login registration"
+Remove-DesktopArtifacts
+
 Write-Step "Purging FCC config and data from ~/.fcc"
 Purge-FccHome
 
@@ -318,5 +426,6 @@ if ($DryRun) {
 }
 else {
     Write-Host "My Claude Code has been removed and verified."
+    Write-Host "The Start Menu shortcut and the start-at-login registration were removed with it."
     Write-Host "uv, Claude Code, Codex, Pi, the uv-managed Python runtime, and shared PATH entries were left installed."
 }
