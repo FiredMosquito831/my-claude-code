@@ -10,18 +10,13 @@ from typing import Any
 
 from loguru import logger
 
+from my_claude_code.core.token_encoder import cl100k_encoder
+
 from .emitter import AnthropicSseEmitter
 from .recovery import (
     ToolSchema,
     parse_complete_tool_input,
 )
-
-try:
-    import tiktoken
-
-    ENCODER = tiktoken.get_encoding("cl100k_base")
-except Exception:
-    ENCODER = None
 
 
 def _safe_usage_int(value: object) -> int:
@@ -446,14 +441,15 @@ class AnthropicStreamLedger:
         return "".join(self._thinking_parts)
 
     def estimate_output_tokens(self) -> int:
-        if ENCODER:
-            text_tokens = len(ENCODER.encode(self.accumulated_text))
-            reasoning_tokens = len(ENCODER.encode(self.accumulated_reasoning))
+        encoder = cl100k_encoder()
+        if encoder:
+            text_tokens = len(encoder.encode(self.accumulated_text))
+            reasoning_tokens = len(encoder.encode(self.accumulated_reasoning))
             tool_tokens = 0
             tool_count = 0
             for name, content in self._iter_tool_token_payloads():
-                tool_tokens += len(ENCODER.encode(name))
-                tool_tokens += len(ENCODER.encode(content))
+                tool_tokens += len(encoder.encode(name))
+                tool_tokens += len(encoder.encode(content))
                 tool_tokens += 15
                 tool_count += 1
 

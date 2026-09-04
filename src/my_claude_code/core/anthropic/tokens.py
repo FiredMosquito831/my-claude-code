@@ -2,13 +2,12 @@
 
 import json
 
-import tiktoken
 from loguru import logger
+
+from my_claude_code.core.token_encoder import cl100k_encoder
 
 from .content import get_block_attr
 from .models import Message, SystemContent, Tool
-
-ENCODER = tiktoken.get_encoding("cl100k_base")
 
 _DISALLOWED_SPECIAL: tuple[str, ...] = ()
 
@@ -19,7 +18,14 @@ def count_text_tokens(text: str) -> int:
     ``get_token_count`` bills a fixed overhead per message, which is right for
     a request and wrong for a lone reply -- it scores the empty string at 4.
     """
-    return len(ENCODER.encode(text, disallowed_special=_DISALLOWED_SPECIAL))
+    encoder = cl100k_encoder()
+    if encoder is None:
+        # Before 6.41.2 this module built the encoder at import, so a broken
+        # tiktoken stopped the server outright. Counting is an estimate, so
+        # fall back to the same 4-chars-per-token rule the OpenAI usage
+        # estimator already uses rather than failing a live request.
+        return max(1, len(text) // 4)
+    return len(encoder.encode(text, disallowed_special=_DISALLOWED_SPECIAL))
 
 
 def get_token_count(

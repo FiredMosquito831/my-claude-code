@@ -37,7 +37,6 @@ from my_claude_code.api.web_tools.request import (
     is_web_server_tool_request,
     unsupported_server_tool_error,
 )
-from my_claude_code.api.web_tools.streaming import stream_web_server_tool_response
 from my_claude_code.application.errors import ApplicationError, InvalidRequestError
 from my_claude_code.application.execution import (
     ProviderExecutor,
@@ -456,6 +455,13 @@ class MessagesHandler:
                 self._settings.web_fetch_allowed_schemes
             ),
         )
+        # Deferred import: the outbound web-tool stack pulls aiohttp
+        # (~0.2 s) and only a request that carries a web server tool
+        # reaches this line.
+        from my_claude_code.api.web_tools.streaming import (
+            stream_web_server_tool_response,
+        )
+
         return _MessagesStreamResult(
             stream_web_server_tool_response(
                 routed.request,

@@ -121,6 +121,23 @@ server does not require an optional extra. Static AST enforcement cannot observe
 dynamic imports. Deliberate provider factory loading is instead protected by the
 provider catalog, supported-ID, and factory synchronization contract.
 
+Four *required* dependencies are also imported below a function boundary, for
+cost rather than optionality. Building the ASGI app must not load them, because
+nothing between process launch and the first `/health` 200 asks any of them a
+question:
+
+| Dependency | First caller that loads it |
+| --- | --- |
+| `openai` | `providers.openai_chat.provider.OpenAIChatProvider.__init__` builds the client through a module-level `__getattr__`, so `provider.AsyncOpenAI` is still the patchable seam every provider test uses; the exception-class questions in `providers.failure_policy`, `providers.credential_rotation`, `providers.stream_recovery`, `providers.recovery.complaint`, `providers.openai_chat.usage` and `providers.nvidia_nim.client` import the SDK inside the function that asks |
+| `openpyxl` | `core.export.render_xlsx` |
+| `aiohttp` | `api.web_tools.outbound`, reached from `api.handlers.messages` only for a request carrying a web server tool, and never through the `api.web_tools` package facade (its re-exports resolve through `__getattr__`) |
+| `tiktoken` | `core.token_encoder.cl100k_encoder`, the one shared `cl100k_base` build behind every token count |
+
+`tests/contracts/test_startup_import_cost.py` pins this: a fresh interpreter
+that imports `runtime.bootstrap` and `api.app` must have loaded none of the
+four. Adding an eager import of any of them, anywhere the app builder reaches,
+fails that contract.
+
 [core/version.py](src/my_claude_code/core/version.py) is the sole runtime owner
 of the FCC release version. It reads installed distribution metadata for
 FastAPI/OpenAPI, FCC-owned CLI `--version` output, and the outbound web-tools
@@ -260,6 +277,16 @@ configures logging, constructs the runtime owners and the configured voice
   returns the ASGI application. Provider request leases and task control satisfy
   the consumer-owned ports in [application/ports.py](src/my_claude_code/application/ports.py); Admin operations retain
   their inbound-adapter port in [api/ports.py](src/my_claude_code/api/ports.py).
+
+A cold start is dominated by imports, not by startup logic. Measured on a
+one-provider scratch install (6.41.2, Windows, warm page cache): importing
+`runtime.bootstrap` costs about 2.2 s across 1,138 modules; `ApplicationRuntime.start`
+adds about 1 s validating the configured models; and the first background
+discovery refresh holds the event loop for a further ~2.5 s before `/health`
+can answer. Deferring the four heavyweight dependencies above took the whole
+process-launch-to-first-`/health`-200 wall clock from 9.39 s to 8.54 s and the
+import half of it from 4.66 s to 2.23 s. Anything added to the app-build import
+graph is paid on every start, by every user, before the server is reachable.
 
 [api/app.py](src/my_claude_code/api/app.py) registers routers and exception
 handlers around an explicit `ApiServices` value, then wraps the application in a

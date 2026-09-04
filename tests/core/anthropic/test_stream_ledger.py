@@ -122,5 +122,8 @@ def test_output_token_estimate_uses_encoder_when_available() -> None:
         def encode(self, text: str) -> list[int]:
             return list(range(len(text)))
 
-    with patch("my_claude_code.core.anthropic.streaming.ledger.ENCODER", Encoder()):
+    with patch(
+        "my_claude_code.core.anthropic.streaming.ledger.cl100k_encoder",
+        return_value=Encoder(),
+    ):
         assert ledger.estimate_output_tokens() == 8

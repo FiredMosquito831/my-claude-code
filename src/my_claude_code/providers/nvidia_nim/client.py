@@ -3,7 +3,6 @@
 from collections.abc import Mapping
 from typing import Any
 
-import openai
 from loguru import logger
 
 from my_claude_code.config.nim import NimSettings
@@ -216,6 +215,9 @@ class NvidiaNimProvider(OpenAIChatProvider):
 
     def _provider_failure_override(self, error: Exception) -> ExecutionFailure | None:
         """Map NVIDIA Cloud Function deployment failure onto canonical overload."""
+        # Deferred: ~2 s to import, and no startup path asks it anything.
+        import openai
+
         if not isinstance(error, openai.BadRequestError):
             return None
         if getattr(error, "status_code", None) != 400:

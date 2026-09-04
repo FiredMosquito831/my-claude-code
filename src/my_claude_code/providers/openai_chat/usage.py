@@ -4,8 +4,6 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-import openai
-
 _USAGE_OPTION_KEYS = ("stream_options", "include_usage")
 _USAGE_REJECTION_WORDS = (
     "unsupported",
@@ -74,6 +72,9 @@ def usage_int(usage_info: Any, key: str) -> int | None:
 
 
 def _is_bad_request_like(error: Exception) -> bool:
+    # Deferred: ~2 s to import, and no startup path asks it anything.
+    import openai
+
     if isinstance(error, openai.BadRequestError):
         return True
     status = getattr(error, "status_code", None)

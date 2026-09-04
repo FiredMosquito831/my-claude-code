@@ -8,7 +8,6 @@ from dataclasses import replace
 from typing import Any
 
 import httpx
-import openai
 
 from my_claude_code.core.diagnostics import (
     extract_upstream_error_detail,
@@ -244,6 +243,13 @@ def overloaded_provider_failure() -> ExecutionFailure:
 
 def retryable_transient_status(exc: BaseException) -> int | None:
     """Infer a retryable HTTP-like status from one upstream exception."""
+    # Deferred import: the OpenAI SDK costs ~2 s in a cold interpreter
+    # (it pulls its whole Assistants type tree) and nothing between
+    # process launch and the first /health answer asks it a question.
+    # ARCHITECTURE.md names every deferred dependency and its first
+    # caller; tests/contracts/test_startup_import_cost.py pins them.
+    import openai
+
     if isinstance(exc, ExecutionFailure):
         status = exc.status_code
         return status if exc.retryable and _is_retryable_status(status) else None
@@ -293,6 +299,9 @@ def transient_error_text(exc: BaseException) -> str:
 
 def is_retryable_provider_error(exc: BaseException) -> bool:
     """Return whether provider policy permits stream retry or recovery."""
+    # Deferred: ~2 s to import, and no startup path asks it anything.
+    import openai
+
     if isinstance(exc, ExecutionFailure):
         return exc.retryable
     if isinstance(exc, openai.AuthenticationError | openai.BadRequestError):
@@ -345,6 +354,9 @@ def upstream_status(exc: BaseException) -> int | None:
 
 def retryable_upstream_transport_error(exc: BaseException) -> bool:
     """Return whether a pre-response transport failure can be retried."""
+    # Deferred: ~2 s to import, and no startup path asks it anything.
+    import openai
+
     if isinstance(exc, ExecutionFailure):
         return exc.retryable and retryable_transient_status(exc) is None
     if isinstance(exc, openai.AuthenticationError | openai.BadRequestError):
@@ -371,6 +383,9 @@ def provider_error_message(
     read_timeout_s: float | None = None,
 ) -> str:
     """Map raw provider exception types to stable customer-facing wording."""
+    # Deferred: ~2 s to import, and no startup path asks it anything.
+    import openai
+
     if isinstance(exc, ExecutionFailure):
         return exc.message
     if isinstance(exc, httpx.ReadTimeout):
@@ -476,6 +491,9 @@ def _classify_provider_failure(
     cooldown_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
     mark_rate_limited_enabled: bool = True,
 ) -> ExecutionFailure:
+    # Deferred: ~2 s to import, and no startup path asks it anything.
+    import openai
+
     if isinstance(exc, ExecutionFailure):
         if exc.kind == FailureKind.RATE_LIMIT:
             if mark_rate_limited_enabled:

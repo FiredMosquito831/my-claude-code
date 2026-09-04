@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 import httpx
-import openai
 
 from my_claude_code.core.anthropic.stream_contracts import (
     REASONING_HEARTBEAT,
@@ -339,6 +338,9 @@ class RecoveryController:
 
 def is_retryable_stream_error(exc: BaseException) -> bool:
     """Return whether one stream failure qualifies for retry or recovery."""
+    # Deferred: ~2 s to import, and no startup path asks it anything.
+    import openai
+
     if isinstance(exc, TruncatedProviderStreamError):
         return True
     if isinstance(exc, ExecutionFailure):

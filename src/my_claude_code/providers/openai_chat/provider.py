@@ -5,11 +5,10 @@ import sys
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from loguru import logger
-from openai import AsyncOpenAI
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.core.anthropic import (
@@ -100,6 +99,41 @@ from .usage import (
 OpenAIAsyncCredentialProvider = Callable[[], Awaitable[str]]
 
 
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
+
+
+def __getattr__(name: str) -> object:
+    """Import the OpenAI SDK the first time ``AsyncOpenAI`` is asked for.
+
+    The SDK costs ~2 s to import in a cold interpreter -- it pulls its whole
+    Assistants type tree -- and only a configured OpenAI-compatible provider
+    needs it, so nothing between process launch and the first ``/health``
+    answer should pay for it. The name stays a real module attribute rather
+    than a function-local import so that reaching for
+    ``openai_chat.provider.AsyncOpenAI`` -- which every provider test does,
+    through ``unittest.mock.patch`` -- still finds the class, and still
+    replaces what the constructor builds.
+    """
+    if name != "AsyncOpenAI":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from openai import AsyncOpenAI as client_class
+
+    globals()[name] = client_class
+    return client_class
+
+
+def _async_openai_client_class() -> type[AsyncOpenAI]:
+    """The client class the constructor builds, honouring a patched module attribute."""
+    global AsyncOpenAI
+    try:
+        return AsyncOpenAI
+    except NameError:
+        from openai import AsyncOpenAI
+
+        return AsyncOpenAI
+
+
 class OpenAIChatProvider(BaseProvider):
     """OpenAI-compatible ``/chat/completions`` provider configured by a profile."""
 
@@ -165,7 +199,7 @@ class OpenAIChatProvider(BaseProvider):
                     write=config.http_write_timeout,
                 ),
             )
-        self._client = AsyncOpenAI(
+        self._client = _async_openai_client_class()(
             api_key=api_key_provider or self._api_key,
             base_url=self._base_url,
             max_retries=0,

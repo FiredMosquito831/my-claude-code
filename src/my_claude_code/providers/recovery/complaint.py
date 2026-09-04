@@ -28,7 +28,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import httpx
-import openai
 
 # Keys whose values carry the provider's own words about what was wrong.
 _COMPLAINT_KEYS = frozenset(
@@ -113,6 +112,9 @@ def upstream_status_code(error: Exception) -> int | None:
 
 def is_bad_request(error: Exception) -> bool:
     """Whether an upstream error is a request-validation rejection."""
+    # Deferred: ~2 s to import, and no startup path asks it anything.
+    import openai
+
     if isinstance(error, openai.BadRequestError):
         return True
     return upstream_status_code(error) in _BAD_REQUEST_STATUSES

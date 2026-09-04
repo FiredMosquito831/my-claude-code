@@ -15,8 +15,6 @@ import tempfile
 from collections.abc import Iterable, Iterator
 from typing import Any, Literal, cast
 
-import openpyxl
-
 from my_claude_code.core.request_log import PROVIDER_KEY_SQL
 
 Format = Literal["json", "csv", "xlsx", "txt"]
@@ -850,6 +848,10 @@ def render_xlsx(
     ``headers`` are the human-readable labels (the first row); ``columns`` are
     the row-dict keys each data cell is read from (see :func:`render_csv`).
     """
+    # Deferred import: openpyxl costs ~0.25 s and only this one renderer
+    # needs it, so a server that never exports an XLSX never pays it.
+    import openpyxl
+
     workbook = openpyxl.Workbook(write_only=True)
     sheet = workbook.create_sheet(title=sheet_title[:31])
     sheet.append(headers)

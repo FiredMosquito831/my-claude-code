@@ -63,7 +63,6 @@ from dataclasses import replace
 from typing import Any
 
 import httpx
-import openai
 
 from my_claude_code.core.credential_attribution import current_credential
 from my_claude_code.core.credential_rotation import (
@@ -122,6 +121,13 @@ ROTATING_KINDS = CREDENTIAL_SHAPED_KINDS | {
 
 
 def _status_from_error(error: BaseException) -> int | None:
+    # Deferred import: the OpenAI SDK costs ~2 s in a cold interpreter
+    # (it pulls its whole Assistants type tree) and nothing between
+    # process launch and the first /health answer asks it a question.
+    # ARCHITECTURE.md names every deferred dependency and its first
+    # caller; tests/contracts/test_startup_import_cost.py pins them.
+    import openai
+
     if isinstance(error, httpx.HTTPStatusError):
         return error.response.status_code
     if isinstance(error, openai.APIStatusError):
@@ -194,6 +200,9 @@ def credential_failure_class(error: BaseException) -> str | None:
     them, so the canonical kind is read first; raw SDK and ``httpx`` errors
     that reach this layer unclassified are matched on their status code.
     """
+    # Deferred: ~2 s to import, and no startup path asks it anything.
+    import openai
+
     failure = find_execution_failure(error)
     if failure is not None:
         if failure.kind is FailureKind.QUOTA:
@@ -232,6 +241,9 @@ def error_justifies_rotation(error: BaseException) -> bool:
     the same model and would meet the same answer. Those raise out of the
     rotating loop so the *fallback chain* gets its turn instead.
     """
+    # Deferred: ~2 s to import, and no startup path asks it anything.
+    import openai
+
     failure = find_execution_failure(error)
     if failure is not None:
         return (
