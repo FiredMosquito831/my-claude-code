@@ -21,8 +21,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "The existing release tag to build and attach the shell to, e.g. v6.43.0"
+        description: "Where the assets go: the existing release tag to upload to, e.g. v6.43.0"
         required: true
+        type: string
+      ref:
+        description: "What to build: a branch, tag or SHA. Leave empty to build the source at `tag`."
+        required: false
+        default: ""
         type: string
 
 concurrency:
@@ -85,10 +90,34 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          # The tag being released, so a re-run of an old release rebuilds
-          # that release's source rather than whatever `main` is now.
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          # What is *built*, which is not always what is uploaded to.
+          #
+          # On `release: published` these are the same thing and must be: the
+          # tag carries the source that release is made of, so the shell
+          # attached to it is built from it.
+          #
+          # A dispatch can separate them, and has to be able to. Backfilling a
+          # release published before the shell existed -- or before a fix to
+          # this very workflow landed -- means uploading to that tag while
+          # building something newer, and pretending otherwise produces a
+          # checkout with no `desktop-shell/` in it and four legs that fail on
+          # a missing directory. `ref` says what to build; empty means the tag.
+          ref: ${{ inputs.ref || github.event.release.tag_name || inputs.tag }}
           fetch-depth: 1
+
+      - name: Check the shell is in this checkout
+        # A directory that is not there produces "the directory name is
+        # invalid" from the shell four steps later, which names neither the
+        # cause nor the fix. Say both, once, here.
+        env:
+          BUILDING: ${{ inputs.ref || github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ ! -f desktop-shell/src-tauri/Cargo.toml ]; then
+            echo "::error::desktop-shell/ is not present at '$BUILDING'. The shell landed after that point in history. Re-dispatch naming a commit that has it, for example -f ref=main."
+            exit 1
+          fi
+          echo "building the shell from $BUILDING"
 
       - name: Install the webview, tray and virtual-display packages
         if: runner.os == 'Linux'

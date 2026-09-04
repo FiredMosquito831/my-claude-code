@@ -232,6 +232,17 @@ The dispatch takes the tag of an existing release and uploads with `--clobber`,
 so re-running is safe and idempotent. Do not cut a new version to fix a shell
 build.
 
+A second, optional input separates *what is built* from *where it goes*. `ref`
+defaults to `tag`, which is what a real release wants: the tag carries the
+source that release is made of. To backfill a release published before the
+shell existed -- or before a fix to the workflow itself landed -- name a newer
+commit explicitly:
+
+```bash
+gh workflow run shell-release.yml --repo FiredMosquito831/my-claude-code \
+    -f tag=v6.43.0 -f ref=main
+```
+
 **What the release must not be asked to prove:** the workflow runs each
 platform's real-binary smoke (`desktop-shell/smoke/`) -- the binary launches,
 reads a fake `mcc-desktop --print-status`, shows the port-conflict page and

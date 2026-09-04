@@ -191,7 +191,24 @@ per file hash and accrues from real download volume.
 
 The shell is built by `.github/workflows/shell-release.yml`, which runs on
 `release: published` and can be re-run for any existing tag with
-`workflow_dispatch`. There is one release stream (decision Q6): the shell's
+`workflow_dispatch`.
+
+The dispatch takes two inputs, because "where the assets go" and "what gets
+built" are not always the same question. `tag` is the release to upload to.
+`ref` is what to build, and defaults to `tag` — which is what a real release
+wants, since the tag carries the source that release is made of. Backfilling a
+release published *before* the shell existed needs them separated:
+
+```
+gh workflow run shell-release.yml --repo FiredMosquito831/my-claude-code \
+    -f tag=v6.43.0 -f ref=main
+```
+
+Without `ref` that dispatch checks out a tree with no `desktop-shell/` in it,
+and the workflow says so in one line rather than failing four legs on a missing
+directory.
+
+There is one release stream (decision Q6): the shell's
 archives attach to the **same** GitHub release as the Python wheel. That is
 safe because the updater selects the first asset whose name ends `.whl` and is
 blind to everything else on a release —
