@@ -1459,9 +1459,10 @@
                     <code>curl -fsSL
                     "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh"
                     | sh</code>. Pick <em>one</em> environment and stay in it &mdash;
-                    PowerShell and WSL keep separate <code>.fcc</code> directories, and
-                    installing in both is the usual way to end up editing the config
-                    your server is not reading.
+                    PowerShell and WSL keep separate config directories
+                    (<code>C:\Users\&lt;you&gt;\.mcc</code> and <code>~/.mcc</code> inside
+                    WSL), and installing in both is the usual way to end up editing the
+                    config your server is not reading.
                   </li>
                   <li>
                     <strong>Reopen the terminal, then start the server:</strong>
@@ -1600,6 +1601,26 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                 <p>
                   Everything is stored in <code>~/.mcc/.env</code>. Edit that file directly
                   if you prefer, then restart the server &mdash; config is read at startup.
+                </p>
+                <p>
+                  <strong>If you installed before 6.40.0</strong>, your configuration
+                  is in the legacy <code>~/.fcc</code> instead &mdash; the same file,
+                  the same everything, just the older directory name. It stays fully
+                  supported and MCC never moves it for you. The startup log names the
+                  directory actually in use, and so does the banner at the top of
+                  Get Started.
+                </p>
+                <p>
+                  To move it, stop the server and quit the tray, run
+                  <code>mcc-migrate</code> in a terminal, then start the server again.
+                  That renames the directory in one atomic step &mdash; nothing is
+                  copied, deleted or merged &mdash; and leaves a
+                  <code>~/.fcc-old/RESTORE.txt</code> note saying how to undo it. There
+                  is deliberately no button here for it: relocating your keys and your
+                  request history should not be one click away in a browser tab, and on
+                  Windows the rename cannot succeed while this server is running
+                  anyway. To pin a directory instead, set the <code>MCC_CONFIG_DIR</code>
+                  environment variable to an absolute path before starting the server.
                 </p>
                 <p>
                   The file records what you chose, not what the defaults are. A
@@ -3374,7 +3395,7 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   <li><strong>Desktop test buttons fail</strong> &mdash; the server must be
                     running; they make real calls.</li>
                   <li><strong>Two configs on Windows</strong> &mdash; installing under both
-                    PowerShell and WSL gives separate <code>.fcc</code> directories. The
+                    PowerShell and WSL gives separate <code>.mcc</code> directories. The
                     startup log prints which one is in use.</li>
                   <li><strong>Web search returns nothing useful</strong> &mdash; open the
                     attempt detail; it shows exactly what was sent and returned.</li>

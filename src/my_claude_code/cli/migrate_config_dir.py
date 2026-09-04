@@ -2,17 +2,28 @@
 
 The resolution rule (see ``config.paths.resolve_config_dir``) never moves
 anything on its own: an existing ``~/.fcc`` keeps working as the legacy home
-until the user asks for this. That ask is ``mcc-migrate`` (and its ``fcc-migrate``
-alias), and the ``POST /admin/api/migrate-config-dir`` dashboard button.
+until the user asks for this. That ask is ``mcc-migrate`` (and its
+``fcc-migrate`` alias) -- and only that. There is no dashboard button and no
+write route: relocating a user's keys and history is not something a page they
+happen to have open, or a stray local POST, should be able to trigger.
 
 The move is a single same-volume ``os.rename(~/.fcc, ~/.mcc)``. On one volume
 that is atomic and O(1) -- it either relocates the whole directory tree at once
 or it raises before anything is moved, so there is no half-moved state to roll
-back. On Windows the rename refuses with ``PermissionError`` if *any* file
-inside the directory is held open by *any* process (the spec proved this
-empirically), which is the safety check: a refusal means an MCC process is
-still using the legacy home, and we report which processes those are instead of
-moving anything.
+back.
+
+Two guards sit in front of it, because a migration under a running server ends
+with that server writing its cached ``~/.fcc/logs`` path straight back into a
+freshly recreated legacy home:
+
+* **Every OS:** an explicit liveness probe -- the tray's ``desktop.lock`` and a
+  ``/health`` request to the configured port -- refuses while MCC is running.
+  This used to be a Windows-only guarantee that the docs stated unconditionally;
+  on POSIX ``os.rename`` succeeds with open handles, so the probe is what makes
+  the promise true there.
+* **Windows, additionally:** the rename itself refuses with ``PermissionError``
+  if *any* file inside the directory is held open by *any* process, and we
+  report which MCC processes those are instead of moving anything.
 
 The module is a thin, dependency-free command so it can run before the rest of
 the application is composed; ``cli.entrypoints`` delegates to it.
@@ -24,46 +35,48 @@ import platform
 import subprocess
 import sys
 import textwrap
+import urllib.error
+import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
 
 from loguru import logger
 
 from my_claude_code.config.paths import (
-    MCC_CONFIG_DIRNAME,
+    DESKTOP_LOCK_FILENAME,
+    FCC_ENV_FILENAME,
     legacy_config_dir_path,
+    new_config_dir_path,
     retired_config_dir_path,
 )
 
-# Process names (image bases) that legitimately hold files inside the legacy
-# config directory while they run. The tray holds ``desktop.lock`` for its whole
-# lifetime; the server writes the request log and the current server log; a
-# ``mcc-*`` launcher session reads its harness catalogue at startup; the
-# deferred Windows updater stages into ``updates/``. We surface these on a
-# refusal so the user knows exactly what to close. Matched case-insensitively
-# against the command line / image name.
-_MCC_PROCESS_HINTS = (
-    "mcc-desktop",
-    "mcc-server",
+#: Seconds allowed for the ``/health`` liveness probe. The server is on
+#: loopback, so anything that has not answered by now is not answering.
+HEALTH_PROBE_TIMEOUT_SECONDS = 2.0
+
+# What actually holds files inside the legacy config directory: the tray holds
+# ``desktop.lock`` for its whole lifetime; the server writes the request log and
+# the current server log; an ``mcc-*``/``fcc-*`` launcher session reads its
+# harness catalogue at startup; the deferred Windows updater stages into
+# ``updates/``. Every one of those runs as a console script whose image name (or
+# POSIX command line) starts with ``mcc-``/``fcc-``, or names the package.
+#
+# 6.40.0 also listed ``python``, ``pythonw`` and ``uv`` here, which made the
+# refusal name every unrelated interpreter on the machine -- and a list a user
+# is told to "close and re-run" is a list they may act on, so it has to be
+# right. A bare interpreter running MCC in-process is still matched by
+# ``my_claude_code`` on POSIX (where we see the full command line); on Windows
+# ``tasklist`` gives only the image name, so such a process goes unnamed rather
+# than being wrongly accused. The rename's own refusal is the guarantee; this
+# list is only the explanation of it.
+_MCC_PROCESS_PREFIXES = ("mcc-", "fcc-", "my-claude-code", "free-claude-code")
+_MCC_PROCESS_SUBSTRINGS = (
+    "mcc-",
+    "fcc-",
+    "my_claude_code",
     "my-claude-code",
-    "mcc-claude",
-    "mcc-codex",
-    "mcc-pi",
-    "mcc-opencode",
-    "mcc-kimi",
-    "mcc-qwen",
-    "mcc-crush",
-    "mcc-cline",
-    "mcc-aider",
-    "mcc-droid",
-    "mcc-gemini",
-    "mcc-goose",
-    "mcc-kilo",
-    "mcc-opencode2",
-    "mcc-commandcode",
-    "python",
-    "pythonw",
-    "uv",
+    "free_claude_code",
+    "free-claude-code",
 )
 
 
@@ -80,11 +93,29 @@ def _now_iso() -> str:
 
 
 def _restore_text(new_home: Path, legacy_home: Path) -> str:
+    """Return the rollback note left in ``~/.fcc-old``.
+
+    The command in it must **fail** if the legacy home has come back, and it
+    comes back easily: a server still running from before the migration holds a
+    cached ``~/.fcc/logs`` path and recreates the directory the moment it next
+    configures logging. Both of the obvious commands do the wrong thing there --
+    ``Move-Item -Force "<new>" "<legacy>"`` and ``mv "<new>" "<legacy>"`` move
+    the source *inside* an existing target, silently nesting the data as
+    ``~/.fcc/.mcc`` and leaving two half-configs and no error message. So the
+    note tests for the target first and refuses out loud instead.
+    """
+
     date = _now_iso()
     if platform.system() == "Windows":
-        move_back = f'Move-Item -Force "{new_home}" "{legacy_home}"'
+        move_back = (
+            f'if (Test-Path "{legacy_home}") '
+            f'{{ throw "{legacy_home} exists again - inspect it first" }} '
+            f'else {{ Move-Item "{new_home}" "{legacy_home}" }}'
+        )
     else:
-        move_back = f'mv "{new_home}" "{legacy_home}"'
+        # ``-T`` treats the destination as the name to create rather than a
+        # directory to move into, so an existing target is an error, not a nest.
+        move_back = f'[ ! -e "{legacy_home}" ] && mv -T "{new_home}" "{legacy_home}"'
     return textwrap.dedent(
         f"""\
         My Claude Code moved its config directory on {date}.
@@ -96,6 +127,12 @@ def _restore_text(new_home: Path, legacy_home: Path) -> str:
         and any coding agent) and run:
 
             {move_back}
+
+        That command deliberately refuses if {legacy_home} exists again. A server
+        left running across the migration recreates it, because it caches its log
+        path at startup. If that happened: stop the server, look at what is inside
+        the recreated directory, remove it if it holds nothing but an empty
+        ``logs/``, and run the command again.
 
         Version 6.40.0 and later will simply use the directory wherever it finds
         it; to pin the directory instead, set MCC_CONFIG_DIR to the path you want.
@@ -141,10 +178,8 @@ def _running_mcc_processes_windows() -> list[str]:
             continue
         image = parts[0].strip('"').lower()
         pid = parts[1].strip('"').strip() if len(parts) > 1 else "?"
-        for hint in _MCC_PROCESS_HINTS:
-            if image == hint.lower() or image.startswith(hint.lower()):
-                hints.append(f"{image} (PID {pid})")
-                break
+        if image.startswith(_MCC_PROCESS_PREFIXES):
+            hints.append(f"{image} (PID {pid})")
     return hints
 
 
@@ -165,9 +200,94 @@ def _running_mcc_processes_posix() -> list[str]:
             continue
         argv = cmdline.replace(b"\0", b" ").decode("utf-8", errors="replace")
         needle = argv.lower()
-        if any(hint in needle for hint in _MCC_PROCESS_HINTS):
+        if any(hint in needle for hint in _MCC_PROCESS_SUBSTRINGS):
             hints.append(f"PID {entry.name}: {argv.strip()[:120]}")
     return hints
+
+
+def _read_env_setting(env_path: Path, name: str) -> str | None:
+    """Return one ``KEY=value`` from a ``.env``, or ``None``.
+
+    A deliberately tiny reader. Building a real ``Settings`` here would load the
+    directory we are about to rename, and the only thing we need is the port to
+    knock on. The last assignment wins, matching dotenv semantics.
+    """
+
+    try:
+        text = env_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    value: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, candidate = line.partition("=")
+        if key.strip().upper() != name:
+            continue
+        value = candidate.split(" #")[0].strip().strip('"').strip("'")
+    return value or None
+
+
+def _configured_port(legacy_home: Path) -> int | None:
+    """The port a server started from ``legacy_home`` would be listening on."""
+
+    raw = _read_env_setting(legacy_home / FCC_ENV_FILENAME, "PORT")
+    if raw is not None:
+        try:
+            return int(raw)
+        except ValueError:
+            logger.debug("Ignoring unparseable PORT={} in {}", raw, legacy_home)
+    try:
+        from my_claude_code.config.settings import Settings
+
+        default = Settings.model_fields["port"].default
+    except Exception:  # pragma: no cover - only if Settings stops importing
+        return None
+    return default if isinstance(default, int) else None
+
+
+def _mcc_is_running(legacy_home: Path) -> str:
+    """Return why MCC still looks alive, or ``""`` when it does not.
+
+    Two independent signals, both cheap and both read-only:
+
+    * the tray's ``desktop.lock`` -- if it exists and we cannot take the lock,
+      a tray owns it. We never create the file, because creating anything
+      inside a directory we are about to rename is exactly the wrong move;
+    * a ``/health`` request to the port the legacy ``.env`` configures. The
+      body has to say ``healthy``, so an unrelated program squatting on the
+      port does not block a migration.
+
+    On Windows the rename would refuse anyway; on POSIX ``os.rename`` succeeds
+    with every handle in the directory still open, and the running server then
+    recreates ``~/.fcc/logs`` from its cached path. This probe is what makes
+    "it refuses while MCC is running" true on both.
+    """
+
+    lock_path = legacy_home / DESKTOP_LOCK_FILENAME
+    if lock_path.is_file():
+        from my_claude_code.core.interprocess_lock import InterprocessFileLock
+
+        lock = InterprocessFileLock(lock_path)
+        if not lock.acquire():
+            return f"the desktop tray still holds {lock_path}"
+        lock.release()
+
+    port = _configured_port(legacy_home)
+    if port is None:
+        return ""
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/health",
+            timeout=HEALTH_PROBE_TIMEOUT_SECONDS,
+        ) as response:
+            body = response.read(256).decode("utf-8", errors="replace")
+    except urllib.error.URLError, OSError, ValueError:
+        return ""
+    if "healthy" not in body:
+        return ""
+    return f"an MCC server is answering on http://127.0.0.1:{port}/health"
 
 
 def _describe_holders() -> str:
@@ -188,18 +308,25 @@ def _describe_holders() -> str:
     )
 
 
-def migrate_config_dir(*, force: bool = False) -> str:
+def migrate_config_dir() -> str:
     """Rename ``~/.fcc`` to ``~/.mcc`` atomically, or explain why not.
 
     Returns a short human-readable summary of the outcome (printed by the
-    command). The rename only happens when the new home does not already exist
-    and the rename succeeds; on any error nothing is moved and the message
-    names the likely holders. After a success an empty ``~/.fcc-old/`` is
-    created holding only ``RESTORE.txt``.
+    command). The rename only happens when the new home does not already exist,
+    no MCC process is running, and the rename succeeds; on any error nothing is
+    moved and the message names the likely holders. After a success an empty
+    ``~/.fcc-old/`` is created holding only ``RESTORE.txt``.
+
+    There is no ``force``. 6.40.0 accepted ``--force`` on the command line and
+    in the dashboard payload and read it nowhere -- a user told "``~/.mcc``
+    already exists, refusing" was offered an escape hatch that did nothing.
+    There is no safe automatic behaviour to hang on such a flag either: when
+    both directories exist, only the user knows which one holds the data they
+    want, and merging is the one thing this command promises never to do.
     """
 
     legacy_home = legacy_config_dir_path()
-    new_home = Path.home() / MCC_CONFIG_DIRNAME
+    new_home = new_config_dir_path()
     retired_home = retired_config_dir_path()
 
     if not legacy_home.is_dir():
@@ -221,7 +348,32 @@ def migrate_config_dir(*, force: bool = False) -> str:
             f"first, or just keep using it."
         )
 
+    blocker = _mcc_is_running(legacy_home)
+    if blocker:
+        raise MigrationError(
+            f"Refusing to migrate: {blocker}. Stop the server and the tray "
+            f"first, then re-run mcc-migrate. Nothing was moved -- a rename "
+            f"under a running server leaves it writing to a path that no "
+            f"longer exists and recreating {legacy_home} behind you."
+        )
+
     try:
+        # Re-checked here, in the same step as the rename, rather than only at
+        # the top of the function: POSIX ``rename`` silently replaces an
+        # *empty* target directory, so a ``~/.mcc`` created between the two
+        # would vanish without a word. There is no portable atomic
+        # rename-if-absent (``RENAME_NOREPLACE`` is Linux-only), and reserving
+        # the name with ``mkdir(exist_ok=False)`` would be worse: a crash
+        # between the reservation and the rename leaves an empty ``~/.mcc``,
+        # which then wins resolution forever. A non-empty target is refused by
+        # the rename itself on every platform, so what remains uncovered is an
+        # empty directory created inside a few microseconds -- and swallowing
+        # an empty ``~/.mcc`` produces exactly the state the user asked for.
+        if new_home.exists():
+            raise MigrationError(
+                f"Refusing to migrate: {new_home} appeared while this command "
+                f"was running. Nothing was moved."
+            )
         os.replace(legacy_home, new_home)
     except PermissionError as exc:
         # Windows: any open handle inside the directory makes the rename fail.
@@ -271,9 +423,8 @@ def migrate_config_dir(*, force: bool = False) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     """``mcc-migrate`` / ``fcc-migrate`` console entry point."""
 
-    force = "--force" in (argv or ())
     try:
-        summary = migrate_config_dir(force=force)
+        summary = migrate_config_dir()
     except MigrationError as exc:
         print(str(exc), file=sys.stderr)
         return 1

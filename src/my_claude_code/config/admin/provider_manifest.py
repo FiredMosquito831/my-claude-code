@@ -184,7 +184,7 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
         "label": "ChatGPT OAuth Credential",
         "description": (
             "Experimental/unsanctioned: managed by the login/import buttons. "
-            "MCC stores renewable credentials privately under ~/.fcc/auth. "
+            "MCC stores renewable credentials privately under ~/.mcc/auth. "
             "A raw access token may still be entered as an advanced override, "
             "but it cannot be refreshed. "
             "Use at your own risk; this flow is not an official OpenAI API product."

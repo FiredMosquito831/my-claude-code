@@ -14,7 +14,7 @@ with MCC's limits.
 file that is "loaded between global and project configs in the precedence
 order", and "configuration files are merged together, not replaced"
 (https://opencode.ai/docs/config/). So MCC writes a file of its own under
-``~/.fcc`` and points the launched process at it. Nothing under
+``~/.mcc`` and points the launched process at it. Nothing under
 ``~/.config/opencode`` is read, written, merged or backed up, and a user who
 stops launching through MCC is left with exactly the document they wrote.
 

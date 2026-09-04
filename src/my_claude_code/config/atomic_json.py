@@ -1,6 +1,6 @@
 """Atomic JSON document writes for user-owned configuration files.
 
-Every file under ``~/.fcc`` that the proxy rewrites is read back by the same
+Every file under ``~/.mcc`` that the proxy rewrites is read back by the same
 process -- and, for the Claude settings file, by an editor the user may have
 open. A partial write is therefore not a cosmetic problem: a truncated document
 fails to parse, and the reader has no way to tell "the user emptied this" from
@@ -16,6 +16,12 @@ import json
 import os
 from pathlib import Path
 
+# Deliberately still ``fcc``-branded, unlike the config directory. This suffix
+# names files on the user's disk beside documents other tools also read, and a
+# rename would mean two staging conventions coexisting: a crash mid-write under
+# the old name leaves a ``.fcc-tmp`` orphan that new code would no longer
+# recognise or clean up. The string is internal plumbing, visible only in the
+# half-second a write is in flight, so the churn buys nothing.
 FCC_TEMP_SUFFIX = ".fcc-tmp"
 
 

@@ -34,7 +34,7 @@ way Command Code does, and ``augment_provider_with_env_vars`` overrides
 ``openai_legacy`` and ``openai_responses`` -- an ``anthropic`` provider hits
 its ``case _: pass``. There is no out-of-band channel to use, so the choice is
 between a literal value and no Kimi Code support at all. The literal goes into
-a file MCC owns under ``~/.fcc``, in the same directory as ``~/.fcc/.env``,
+a file MCC owns under ``~/.mcc``, in the same directory as ``~/.mcc/.env``,
 which already stores the identical ``ANTHROPIC_AUTH_TOKEN`` in clear -- so
 nothing is disclosed that was not disclosed already, and nothing is written
 into a document the user owns. When no proxy token is configured at all the

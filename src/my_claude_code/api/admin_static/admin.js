@@ -685,11 +685,15 @@ async function updateOnboarding(patch) {
   return data;
 }
 
-// The config-dir banner tells a user on the legacy ``~/.fcc`` home (or one
-// whose legacy dir failed the health check) how to migrate to ``~/.mcc``. It is
-// purely informational unless the server can migrate right now, in which case
-// it offers the button that calls ``POST /admin/api/migrate-config-dir``. The
-// action is opt-in and atomic; the route reports the outcome and we re-render.
+// The config-dir banner tells a user on the legacy ``~/.fcc`` home where their
+// configuration actually lives and what to type to move it. It is purely
+// informational and always has been safe to ignore: moving the directory is a
+// single atomic rename that only ``mcc-migrate`` performs, from a shell, with
+// the server stopped. A dashboard button could not do it -- on Windows the
+// server serving this page holds the request log open, so the rename refuses --
+// and a one-click route that relocates a user's keys and history is not
+// something a stray local POST should be able to reach. So there is no button
+// and no write route; there is this sentence.
 async function loadConfigDir() {
   try {
     const data = await api("/admin/api/config-dir");
@@ -702,8 +706,6 @@ async function loadConfigDir() {
   }
   return state.configDir;
 }
-
-let configDirBannerListenersWired = false;
 
 function renderConfigDirBanner() {
   const banner = byId("configDirBanner");
@@ -721,39 +723,6 @@ function renderConfigDirBanner() {
   text.className = "config-dir-banner-text";
   text.textContent = data.banner;
   banner.appendChild(text);
-
-  if (data.canMigrate) {
-    const button = document.createElement("button");
-    button.className = "primary-button config-dir-migrate-button";
-    button.type = "button";
-    button.textContent = "Move to ~/.mcc now";
-    button.addEventListener("click", async () => {
-      button.disabled = true;
-      button.textContent = "Moving…";
-      try {
-        const result = await api("/admin/api/migrate-config-dir", {
-          method: "POST",
-          body: JSON.stringify({}),
-        });
-        state.configDir = result;
-        renderConfigDirBanner();
-        if (result && result.summary) {
-          const summary = document.createElement("p");
-          summary.className = "config-dir-banner-summary";
-          summary.textContent = result.summary;
-          banner.appendChild(summary);
-        }
-      } catch (err) {
-        button.disabled = false;
-        button.textContent = "Move to ~/.mcc now";
-        const error = document.createElement("p");
-        error.className = "config-dir-banner-error";
-        error.textContent = String(err);
-        banner.appendChild(error);
-      }
-    });
-    banner.appendChild(button);
-  }
 }
 
 // The first incomplete required step is "next" — the one worth walking
@@ -12264,6 +12233,10 @@ byId("reqAutoRefreshInterval").addEventListener("change", () => {
   updateRequestAutoRefresh();
   persistDashboardState();
 });
+// Must match ``REQUEST_LOG_CLEAR_CONFIRMATION`` in api/admin_routes.py;
+// ``tests/contracts/test_config_dir_is_single_sourced.py`` pins the two.
+const REQUEST_LOG_CLEAR_CONFIRMATION = "delete-all-request-log-rows";
+
 byId("reqExportButton").addEventListener("click", openExportModal);
 byId("reqClearButton").addEventListener("click", () => {
   if (
@@ -12273,7 +12246,11 @@ byId("reqClearButton").addEventListener("click", () => {
   ) {
     return;
   }
-  api("/admin/api/requests", { method: "DELETE" })
+  // The confirmation literal is required by the route itself, not just by
+  // the dialog above: a dialog only guards the path through this page.
+  api(`/admin/api/requests?confirm=${REQUEST_LOG_CLEAR_CONFIRMATION}`, {
+    method: "DELETE",
+  })
     .then(() => {
       reqState.offset = 0;
       return loadRequestsView();

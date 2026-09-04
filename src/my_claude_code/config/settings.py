@@ -1049,7 +1049,7 @@ class Settings(BaseSettings):
     searxng_base_url: str | None = Field(
         default=None, validation_alias="SEARXNG_BASE_URL"
     )
-    # Web search usage analytics (SQLite under ~/.fcc/logs/).
+    # Web search usage analytics (SQLite under ~/.mcc/logs/).
     websearch_log_enabled: bool = Field(
         default=True, validation_alias="WEBSEARCH_LOG_ENABLED"
     )
@@ -1090,8 +1090,12 @@ class Settings(BaseSettings):
     # cap are removed, both when a new rotation happens and at startup. ``0``
     # keeps every rotated file. Defaults to 10 because an unbounded rotation is
     # what produced a 17 GB ``logs/`` on an earlier install.
+    # Bounded on the field, not only clamped in ``configure_logging``: a
+    # negative value there quietly became "keep all", and an absurd one
+    # disabled the sweep's own safety guard. 100,000 is the point beyond which
+    # the sweep refuses to act at all, so the setting cannot reach it.
     server_log_retain_files: int = Field(
-        default=10, validation_alias="SERVER_LOG_RETAIN_FILES"
+        default=10, ge=0, le=100_000, validation_alias="SERVER_LOG_RETAIN_FILES"
     )
     # When false (default), API and SSE helpers log only metadata (counts, lengths, ids).
     log_raw_api_payloads: bool = Field(
@@ -1124,7 +1128,7 @@ class Settings(BaseSettings):
     )
 
     # ==================== Request Analytics Log ====================
-    # Persistent per-request log (SQLite at ~/.fcc/logs/requests.db) feeding the
+    # Persistent per-request log (SQLite at ~/.mcc/logs/requests.db) feeding the
     # admin Requests/Analytics tab. Writes are non-blocking (background writer).
     request_log_enabled: bool = Field(
         default=True, validation_alias="REQUEST_LOG_ENABLED"

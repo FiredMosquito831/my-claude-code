@@ -2,7 +2,7 @@
 
 Two sources, in precedence order:
 
-1. **MCC's own store** (``~/.fcc/anthropic_oauth.json``), written by
+1. **MCC's own store** (``~/.mcc/anthropic_oauth.json``), written by
    ``mcc-anthropic-oauth-login``. Preferred, because MCC may refresh it without
    touching state Claude Code owns.
 2. **Claude Code's own credential file** (``~/.claude/.credentials.json``,

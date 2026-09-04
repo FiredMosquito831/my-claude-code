@@ -106,6 +106,7 @@ from my_claude_code.config.paths import (
     config_dir_path,
     config_dir_resolution,
     legacy_config_dir_path,
+    new_config_dir_path,
     retired_config_dir_path,
 )
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
@@ -362,6 +363,50 @@ def require_loopback_admin(request: Request) -> None:
     origin = request.headers.get("origin")
     if not _origin_is_local(origin):
         raise HTTPException(status_code=403, detail="Admin UI is local-only")
+
+
+#: The literal a caller must send to destroy the request log. It is not a
+#: secret and is not meant to be one -- everything reaching an admin route is
+#: already on loopback. It exists because the only thing standing between the
+#: whole request history and one line of shell was a ``window.confirm()`` in a
+#: page the caller need never load, and a browser dialog is not a guard on an
+#: HTTP endpoint. Spelling the intent out on the wire means no request deletes
+#: the log unless deleting the log is exactly what it was written to do.
+REQUEST_LOG_CLEAR_CONFIRMATION = "delete-all-request-log-rows"
+
+
+def require_destructive_admin_confirmation(
+    request: Request, confirm: str | None, expected: str
+) -> None:
+    """Gate a state-destroying admin route behind an explicit, deliberate call.
+
+    Two conditions, and they fail differently on purpose:
+
+    * ``confirm`` must equal ``expected``. A missing or wrong value is a 400,
+      and the message says what to send -- this is a usability speed bump
+      against replay and against a half-remembered curl, not an auth check.
+    * an ``Origin`` header must be present and local. Browsers attach one to
+      every non-GET request, so the dashboard satisfies this for free, while a
+      bare ``curl -X DELETE`` does not send one at all. Read routes still
+      accept a missing ``Origin`` (``_origin_is_local(None)`` is ``True``),
+      because non-browser tooling legitimately reads the admin API; nothing
+      legitimately empties the log without meaning to.
+    """
+
+    if confirm != expected:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"This action is irreversible and must be confirmed explicitly: "
+                f"resend with ?confirm={expected}"
+            ),
+        )
+    origin = request.headers.get("origin")
+    if origin is None or not _origin_is_local(origin):
+        raise HTTPException(
+            status_code=403,
+            detail="This action requires a local Origin header",
+        )
 
 
 @lru_cache(maxsize=1)
@@ -918,58 +963,64 @@ async def update_onboarding(
     return _onboarding_state_response(state)
 
 
-# --------------------------------------------------------------------- config-dir migration
+# --------------------------------------------------------------------- config-dir status
 class ConfigDirStatusPayload(BaseModel):
-    """Read-only snapshot of the config-dir decision, for the Get Started banner."""
+    """Read-only snapshot of the config-dir decision, for the Get Started banner.
+
+    Read-only in the strongest sense: there is no companion write route. The
+    only thing that ever turns ``~/.fcc`` into ``~/.mcc`` is the user running
+    ``mcc-migrate`` from a shell with the server stopped, so this endpoint tells
+    them where their configuration lives and what to type -- nothing more.
+    """
 
     current_dir: str = Field(..., alias="currentDir")
+    new_dir: str = Field(..., alias="newDir")
     legacy_dir: str = Field(..., alias="legacyDir")
     retired_dir: str = Field(..., alias="retiredDir")
     uses_legacy_home: bool = Field(..., alias="usesLegacyHome")
-    legacy_rejected: bool = Field(..., alias="legacyRejected")
+    legacy_unhealthy: bool = Field(..., alias="legacyUnhealthy")
     failed_check: str | None = Field(None, alias="failedCheck")
-    can_migrate: bool = Field(..., alias="canMigrate")
     notice: str = ""
     banner: str = ""
 
     model_config = ConfigDict(populate_by_name=True)
 
 
-class MigrateConfigDirPayload(BaseModel):
-    force: bool = False
-
-
 def _config_dir_status_payload() -> ConfigDirStatusPayload:
     resolution = config_dir_resolution()
-    legacy_home = legacy_config_dir_path()
-    can_migrate = (
-        not resolution.uses_legacy_home and resolution.legacy_rejected
-    ) or resolution.uses_legacy_home
+    current_dir = config_dir_path()
+    new_home = new_config_dir_path()
     banner = ""
     if resolution.uses_legacy_home:
         banner = (
-            f"Your data lives in the legacy {legacy_home}. Run mcc-migrate to "
-            f"move it to {config_dir_path()}."
+            f"Your configuration lives in {current_dir} (the legacy directory). "
+            f"Nothing needs to change -- it stays fully supported. To move it to "
+            f"{new_home}: stop the server and the tray, run mcc-migrate in a "
+            f"terminal, then start the server again."
         )
-    elif resolution.legacy_rejected:
-        health = resolution.legacy_health
-        check = health.failed_check if health else "unknown"
-        banner = (
-            f"{legacy_home} exists but failed the '{check}' check and was left "
-            f"untouched. Starting fresh in {config_dir_path()}."
-        )
+        if resolution.legacy_unhealthy:
+            health = resolution.legacy_health
+            check = health.failed_check if health else "unknown"
+            detail = health.detail if health else ""
+            banner = (
+                f"{current_dir} failed the '{check}' check ({detail}). It is "
+                f"still the directory in use and nothing was moved, renamed or "
+                f"created. Fix the problem in place; {new_home} is created only "
+                f"by running mcc-migrate."
+            )
+    elif resolution.warning:
+        # The dual-directory case: both homes exist, ~/.mcc wins, neither is
+        # merged. The resolution already phrases that precisely.
+        banner = resolution.warning
+    health = resolution.legacy_health
     return ConfigDirStatusPayload(
-        currentDir=str(config_dir_path()),
-        legacyDir=str(legacy_home),
+        currentDir=str(current_dir),
+        newDir=str(new_home),
+        legacyDir=str(legacy_config_dir_path()),
         retiredDir=str(retired_config_dir_path()),
         usesLegacyHome=resolution.uses_legacy_home,
-        legacyRejected=resolution.legacy_rejected,
-        failedCheck=resolution.legacy_health.failed_check
-        if resolution.legacy_health
-        else None,
-        canMigrate=can_migrate
-        and legacy_home.is_dir()
-        and not config_dir_path().exists(),
+        legacyUnhealthy=resolution.legacy_unhealthy,
+        failedCheck=health.failed_check if health else None,
         notice=resolution.notice,
         banner=banner,
     )
@@ -977,27 +1028,9 @@ def _config_dir_status_payload() -> ConfigDirStatusPayload:
 
 @router.get("/admin/api/config-dir")
 async def get_config_dir_status(request: Request):
-    """Config-dir decision, for the Get Started banner and the migrate button."""
+    """Config-dir decision, for the informational Get Started banner."""
     require_loopback_admin(request)
     return _config_dir_status_payload().model_dump(by_alias=True)
-
-
-@router.post("/admin/api/migrate-config-dir")
-async def migrate_config_dir(request: Request, payload: MigrateConfigDirPayload):
-    """Run the opt-in ``~/.fcc`` -> ``~/.mcc`` rename from the dashboard."""
-    require_loopback_admin(request)
-    from my_claude_code.cli.migrate_config_dir import (
-        MigrationError,
-        migrate_config_dir,
-    )
-
-    try:
-        summary = await asyncio.to_thread(migrate_config_dir, force=payload.force)
-    except MigrationError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    status = _config_dir_status_payload().model_dump(by_alias=True)
-    status["summary"] = summary
-    return status
 
 
 def _models_page_payload(services: ApiServices) -> dict[str, Any]:
@@ -2544,10 +2577,14 @@ async def get_request_log_entry(
 @router.delete("/admin/api/requests")
 async def clear_request_log(
     request: Request,
+    confirm: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
-    """Delete every persisted request log row."""
+    """Delete every persisted request log row. Irreversible; see the guard."""
     require_loopback_admin(request)
+    require_destructive_admin_confirmation(
+        request, confirm, REQUEST_LOG_CLEAR_CONFIRMATION
+    )
     store = _request_log_store_or_none(settings)
     cleared = await asyncio.to_thread(store.clear) if store is not None else 0
     return {"cleared": cleared}

@@ -467,3 +467,102 @@ def test_docs_default_to_dot_mcc_not_dot_fcc(doc_name: str) -> None:
         f"the new default is ~/.mcc. Move the mention into a Legacy ~/.fcc "
         f"subsection, or update it to ~/.mcc."
     )
+
+
+# ------------------------------------------------- the two failure modes 6.40.0 had
+
+#: A code span broken by a mechanical search-and-replace. The 6.40.0 rename
+#: rewrote the literal ``.fcc`` to a *backticked* ``` `.mcc` ``` wherever it
+#: appeared, including inside code spans that already had backticks around
+#: them, so ``` `~/.fcc` ``` became ``` `~/`.mcc` ``` -- 19 of them across
+#: README and USAGE, every one of them a path a reader would copy. Every check
+#: above passed the whole time: they parse identifiers *inside* code voice, and
+#: a code span with a stray backtick simply stops being one.
+_BROKEN_CODE_SPAN = re.compile(r"[\\/]`\.(?:mcc|fcc)")
+
+
+@pytest.mark.parametrize("doc_name", sorted(_doc_surfaces()))
+def test_no_code_span_was_broken_by_a_mechanical_rename(doc_name: str) -> None:
+    """A backticked ``.mcc``/``.fcc`` hanging off a path is a corrupted span."""
+    text = _doc_surfaces()[doc_name]
+    broken = [
+        text[max(0, match.start() - 40) : match.end() + 10].replace("\n", " ")
+        for match in _BROKEN_CODE_SPAN.finditer(text)
+    ]
+
+    assert not broken, (
+        f"{doc_name} has code spans a search-and-replace broke: {broken}. "
+        f"A path is written `~/.mcc/...`, never `~/`.mcc`."
+    )
+
+
+#: Names this project added or changed that a user has to be able to look up.
+#: A setting nobody can find is a setting nobody has. Every entry is a
+#: (name, why it matters) pair, and the rule for adding one is simple: if a
+#: release gives a user a new thing to type, it goes here.
+_MUST_BE_DOCUMENTED: tuple[tuple[str, str], ...] = (
+    (
+        "MCC_CONFIG_DIR",
+        "the only way to pin the config directory; it is an environment "
+        "variable, so it cannot be discovered from the dashboard at all",
+    ),
+    (
+        "SERVER_LOG_RETAIN_FILES",
+        "the cap that stops logs/ growing without bound; an earlier install "
+        "reached 17 GB without it",
+    ),
+    (
+        "mcc-migrate",
+        "the one and only way a legacy ~/.fcc becomes ~/.mcc",
+    ),
+    (
+        "~/.fcc",
+        "every pre-6.40.0 install still lives there; docs that never mention "
+        "it describe paths those users do not have",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "reason"), _MUST_BE_DOCUMENTED, ids=[n for n, _ in _MUST_BE_DOCUMENTED]
+)
+def test_user_facing_names_are_actually_documented(name: str, reason: str) -> None:
+    """A name a user must type has to appear in README or USAGE.
+
+    6.40.0 introduced ``mcc-migrate``, ``MCC_CONFIG_DIR`` and
+    ``SERVER_LOG_RETAIN_FILES`` and mentioned none of them in either document,
+    while rewriting every ``~/.fcc`` to ``~/.mcc`` -- so the existing users the
+    migration was for were reading about paths they did not have and a command
+    they had never heard of. The checks above guard names that exist in the
+    docs but not in the product; this one guards the opposite.
+    """
+    surfaces = {doc: _read(REPO_ROOT / doc) for doc in MARKDOWN_DOCS}
+    found = [doc for doc, text in surfaces.items() if name in text]
+
+    assert found, (
+        f"{name} appears in neither {' nor '.join(MARKDOWN_DOCS)}, and it "
+        f"needs to: {reason}."
+    )
+
+
+def test_the_migration_walkthrough_tells_the_reader_to_stop_the_server() -> None:
+    """``mcc-migrate`` under a running server is the one way to get it wrong.
+
+    The rename refuses while it can see a live MCC, but a walkthrough that does
+    not say so leaves the reader to discover the refusal instead of avoiding it
+    -- and on POSIX, before the liveness probe existed, the rename simply
+    succeeded and the running server recreated the directory behind them.
+    """
+    for doc in MARKDOWN_DOCS:
+        text = _read(REPO_ROOT / doc)
+        mentions = [match.start() for match in re.finditer(r"mcc-migrate", text)]
+        assert mentions, f"{doc} does not document mcc-migrate"
+        # Any one mention may be a table-of-contents entry or a passing
+        # reference; what has to exist is a passage that says both things.
+        assert any(
+            "stop the server" in text[max(0, start - 1500) : start + 1500].lower()
+            for start in mentions
+        ), (
+            f"{doc} documents mcc-migrate without telling the reader to stop "
+            f"the server first."
+        )

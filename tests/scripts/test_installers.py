@@ -599,6 +599,7 @@ if "%1"=="--version" goto version
 if "%1"=="tool" if "%2"=="install" goto install
 if "%1"=="tool" if "%2"=="update-shell" goto update_shell
 if "%1"=="tool" if "%2"=="dir" if "%3"=="--bin" goto tool_bin
+if "%1"=="tool" if "%2"=="dir" goto tool_dir
 exit /b 59
 :version
 if "%FAIL_STEP%"=="uv-verify" exit /b 52
@@ -607,7 +608,7 @@ exit /b 0
 :install
 if "%FAIL_STEP%"=="fcc-install" exit /b 53
 if not exist "%FAKE_TOOL_BIN%" mkdir "%FAKE_TOOL_BIN%"
-for %%N in (mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi mcc-qwen mcc-crush mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-help mcc-rtk mcc-migrate mcc-desktop my-claude-code fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init fcc-chatgpt-oauth-login fcc-compact-log fcc-migrate free-claude-code) do copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%FAKE_TOOL_BIN%\%%N.cmd" >nul
+for %%N in (fcc-anthropic-oauth-login fcc-chatgpt-oauth-login fcc-claude fcc-claude-old fcc-codex fcc-compact-log fcc-desktop fcc-help fcc-init fcc-migrate fcc-pi fcc-rtk fcc-server free-claude-code mcc-aider mcc-anthropic-oauth-login mcc-chatgpt-oauth-login mcc-claude mcc-claude-old mcc-cline mcc-codex mcc-commandcode mcc-compact-log mcc-crush mcc-desktop mcc-droid mcc-gemini mcc-goose mcc-help mcc-init mcc-kilo mcc-kimi mcc-migrate mcc-opencode mcc-opencode2 mcc-pi mcc-qwen mcc-rtk mcc-server my-claude-code) do copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%FAKE_TOOL_BIN%\%%N.cmd" >nul
 if "%FAIL_STEP%"=="fcc-missing" del /q "%FAKE_TOOL_BIN%\mcc-server.cmd" >nul
 exit /b 0
 :update_shell
@@ -615,6 +616,9 @@ if "%FAIL_STEP%"=="path-update" exit /b 54
 exit /b 0
 :tool_bin
 echo %FAKE_TOOL_BIN%
+exit /b 0
+:tool_dir
+echo %FAKE_TOOL_DIR%
 exit /b 0
 """
 
@@ -663,6 +667,32 @@ class PowerShellHarness:
             timeout=120,
         )
 
+    def require_mockable_file_hash(self) -> None:
+        """Skip when this shell will not let the harness shadow ``Get-FileHash``.
+
+        Windows PowerShell 5.1 runs the *real* ``Get-FileHash`` from inside the
+        installer scriptblock even though the harness defines a function of that
+        name in the enclosing scope -- verified by making the double ``throw``:
+        PowerShell 7 raises from the double, 5.1 never enters it and hashes the
+        placeholder wheel for real, so the digest in the fake release feed can
+        never match. (``Invoke-RestMethod`` *is* shadowed in both, so this is
+        specific to how 5.1 resolves that one command.) Only the cases that
+        need the checksum to *succeed* are affected; the failure paths, the
+        dry-run and every function-level case still run under both shells.
+
+        The installer itself is fine on 5.1 -- there the hashes are real.
+        """
+
+        if "windowspowershell" in self.powershell.lower().replace("\\", "/").replace(
+            "/", ""
+        ):
+            pytest.skip(
+                "Windows PowerShell 5.1 does not resolve the harness's "
+                "Get-FileHash double inside the installer scriptblock, so a "
+                "successful checksum cannot be simulated; PowerShell 7 covers "
+                "these cases."
+            )
+
     def calls(self) -> list[str]:
         if not self.log.exists():
             return []
@@ -697,7 +727,16 @@ def powershell_harness(
     local_app_data = tmp_path / "local-app-data"
     app_data = tmp_path / "app-data"
     log = tmp_path / "calls.log"
-    for path in (bin_dir, fixtures, tool_bin, home, local_app_data, app_data):
+    tool_root = tmp_path / "uv-tools"
+    for path in (
+        bin_dir,
+        fixtures,
+        tool_bin,
+        tool_root,
+        home,
+        local_app_data,
+        app_data,
+    ):
         path.mkdir(parents=True)
 
     (fixtures / "claude-command.cmd").write_text(
@@ -796,7 +835,7 @@ function Get-FileHash {
         "0000000000000000000000000000000000000000000000000000000000000000"
     }
     else {
-        "679565810225215AE3C045CC5C8EF43E4FA53676179DDB1583A25412E811B770"
+        "91AAEC9D83E2E931DBAD653E74FAA3C106ACD6F8BD30A21A7985D77D870AEF8B"
     }
     return [pscustomobject]@{ Hash = $hash }
 }
@@ -820,6 +859,11 @@ $installer = [scriptblock]::Create([IO.File]::ReadAllText($env:FCC_INSTALLER))
             "CALL_LOG": str(log),
             "FAKE_FIXTURES": str(fixtures),
             "FAKE_TOOL_BIN": str(tool_bin),
+            # ``uv tool dir`` (no ``--bin``) is what Get-UvToolDir asks for
+            # before the rename-aside path; the fake used to answer only
+            # ``tool dir --bin`` and exited 59 for everything else, which is
+            # why the three full-run PowerShell cases failed on this machine.
+            "FAKE_TOOL_DIR": str(tool_root),
             "FCC_INSTALLER": str(_repo_root() / "scripts" / "install.ps1"),
             "FAIL_STEP": "",
         }
@@ -832,6 +876,7 @@ $installer = [scriptblock]::Create([IO.File]::ReadAllText($env:FCC_INSTALLER))
 def test_install_ps1_fresh_install_is_verified(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.require_mockable_file_hash()
     result = powershell_harness.run()
 
     assert result.returncode == 0, result.stderr
@@ -861,6 +906,7 @@ def test_install_ps1_fresh_install_is_verified(
 def test_install_ps1_replaces_obsolete_uv(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.require_mockable_file_hash()
     powershell_harness.add_uv("0.5.9")
 
     result = powershell_harness.run()
@@ -899,7 +945,12 @@ def test_install_ps1_stops_without_success_on_each_failure(
         "fcc-download": "sha256:",
         "fcc-checksum": "uv:tool install",
         "fcc-install": "uv:tool update-shell",
-        "path-update": "uv:tool dir --bin",
+        # ``uv tool dir --bin`` now also runs *before* the install, as part of
+        # the rename-aside path that lets uv replace a running launcher, so it
+        # no longer marks "the installer carried on past the failure". What
+        # must not be reached after a failed PATH update is the verification
+        # run of the installed shim.
+        "path-update": "mcc-server:--version",
         "fcc-missing": "mcc-server:--version",
     }.get(failure)
     if forbidden is not None:
@@ -946,6 +997,7 @@ def test_install_ps1_rejects_unparseable_existing_uv(
 def test_install_ps1_voice_flags_only_change_fcc_spec(
     powershell_harness: PowerShellHarness,
 ) -> None:
+    powershell_harness.require_mockable_file_hash()
     result = powershell_harness.run("-VoiceAll", "-TorchBackend", "cu130")
 
     assert result.returncode == 0, result.stderr

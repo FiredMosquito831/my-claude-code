@@ -3,6 +3,7 @@ import contextlib
 import logging
 import os
 import threading
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -123,6 +124,91 @@ def _reset_config_dir_cache():
     paths.reset_config_dir_cache()
     yield
     paths.reset_config_dir_cache()
+
+
+# The developer's real home, captured once at import time -- before any test
+# has had a chance to monkeypatch ``Path.home`` or redirect ``HOME`` -- so the
+# guard below always compares against the true user profile.
+_REAL_HOME = Path.home().resolve()
+# The three directories the config-dir rule and ``mcc-migrate`` can create,
+# rename or remove. A test must never touch any of them in the real home.
+_REAL_HOME_MCC_DIRS = (
+    _REAL_HOME / ".mcc",
+    _REAL_HOME / ".fcc",
+    _REAL_HOME / ".fcc-old",
+)
+
+
+def _under_real_home(candidate) -> bool:
+    try:
+        resolved = Path(candidate).resolve()
+    except OSError, ValueError:
+        return False
+    return resolved == _REAL_HOME or _REAL_HOME in resolved.parents
+
+
+@pytest.fixture(autouse=True)
+def _never_touch_the_real_home(monkeypatch, request):
+    """No test may resolve, rename or create a config directory in the real home.
+
+    ``tests/cli/test_migrate_config_dir.py`` once shipped a case that forgot to
+    patch ``Path.home``, so ``migrate_config_dir()`` ran against the developer's
+    own machine and renamed their live ``~/.fcc`` to ``~/.mcc``. That is data
+    loss from a green test run, and no amount of care in review reliably catches
+    a missing fixture argument. This guard makes the class of bug impossible:
+
+    * ``os.replace``/``os.rename`` refuse when either side is one of the three
+      real-home config directories, failing at the call that would do the damage;
+    * the three directories are inventoried before and after every test, so any
+      other route to creating or removing one is caught at teardown;
+    * the cached config-dir resolution is checked at teardown, so a test that
+      merely *resolved* the real home (and would have read the real ``.env`` or
+      ``requests.db``) fails too.
+
+    Declared after ``_reset_config_dir_cache`` on purpose: autouse fixtures tear
+    down in reverse setup order, so this one still sees the cached resolution.
+    """
+
+    real_replace = os.replace
+    real_rename = os.rename
+
+    def _guard(name, func):
+        def guarded(src, dst, *args, **kwargs):
+            for side in (src, dst):
+                if Path(side) in _REAL_HOME_MCC_DIRS:
+                    raise AssertionError(
+                        f"os.{name}() refused: {side} is a config directory in "
+                        f"the real home. Patch ``Path.home`` (or redirect "
+                        f"HOME/USERPROFILE) in this test."
+                    )
+            return func(src, dst, *args, **kwargs)
+
+        return guarded
+
+    monkeypatch.setattr(os, "replace", _guard("replace", real_replace))
+    monkeypatch.setattr(os, "rename", _guard("rename", real_rename))
+
+    before = {path: path.exists() for path in _REAL_HOME_MCC_DIRS}
+    yield
+
+    from my_claude_code.config import paths
+
+    resolution = paths._resolution
+    if resolution is not None and _under_real_home(resolution.path):
+        raise AssertionError(
+            f"This test resolved the config directory to {resolution.path}, "
+            f"which is inside the real home. It would read the developer's own "
+            f"``.env``/``requests.db``. Patch ``Path.home`` or set "
+            f"``MCC_CONFIG_DIR`` to a tmp_path."
+        )
+
+    after = {path: path.exists() for path in _REAL_HOME_MCC_DIRS}
+    changed = [str(path) for path in _REAL_HOME_MCC_DIRS if before[path] != after[path]]
+    if changed:
+        raise AssertionError(
+            f"This test created or removed config directories in the real "
+            f"home: {changed}. Nothing under {_REAL_HOME} may be touched."
+        )
 
 
 @pytest.fixture(autouse=True)

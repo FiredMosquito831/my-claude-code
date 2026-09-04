@@ -13,7 +13,7 @@ command at all, and ``crush schema`` (undocumented; not in ``--help``) still
 publishes the full JSON schema, so ``crush.json`` is a supported input rather
 than a dead one. More importantly Crush names its own override:
 ``CRUSH_GLOBAL_CONFIG`` replaces the global configuration *directory*, so MCC
-can own a directory under ``~/.fcc``, write one ``crush.json`` into it and
+can own a directory under ``~/.mcc``, write one ``crush.json`` into it and
 point the launched process there. ``~/.config/crush`` is never read for a
 provider, never written and never backed up -- so no merge and no backup file,
 which is what the brief allowed for only if no override existed.

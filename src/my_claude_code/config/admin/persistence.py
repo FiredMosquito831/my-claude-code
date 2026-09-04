@@ -308,6 +308,28 @@ def settings_env_aliases() -> frozenset[str]:
     )
 
 
+def superseded_env_aliases() -> frozenset[str]:
+    """Legacy env names that a canonical name on the same field replaces.
+
+    ``open_admin_browser`` reads ``AliasChoices("MCC_OPEN_BROWSER",
+    "FCC_OPEN_BROWSER")`` and the canonical name wins whenever both are set.
+    ``settings_env_aliases`` keys on the first choice, so ``FCC_OPEN_BROWSER``
+    is not in the managed set and survived a Save only because it matches the
+    ``FCC_`` owned prefix -- leaving the file carrying both lines, with the one
+    the user last edited in the dashboard silently overriding the one they may
+    still be reading. Writing the canonical key retires the legacy one.
+    """
+
+    from pydantic import AliasChoices
+
+    superseded: set[str] = set()
+    for field in Settings.model_fields.values():
+        alias = field.validation_alias
+        if isinstance(alias, AliasChoices) and len(alias.choices) > 1:
+            superseded.update(str(choice).upper() for choice in alias.choices[1:])
+    return frozenset(superseded)
+
+
 def unmanaged_env_values(path: Path | None = None) -> dict[str, str]:
     """Return entries in the managed env file that no admin field owns.
 
@@ -315,15 +337,21 @@ def unmanaged_env_values(path: Path | None = None) -> dict[str, str]:
     know about used to disappear the next time anyone pressed Save -- silently,
     and including hand-written operational settings. Reading them back means a
     save can only change what the UI actually showed.
+
+    The exception is a legacy alias of a name we are about to write ourselves
+    (see ``superseded_env_aliases``): keeping it would leave the file holding
+    two lines for one setting, one of which is dead.
     """
 
     existing = dotenv_values_from_file(path or managed_env_path())
     managed = {field.key for field in FIELDS}
     aliases = settings_env_aliases()
+    superseded = superseded_env_aliases()
     return {
         key: value
         for key, value in existing.items()
         if key not in managed
+        and key not in superseded
         and value is not None
         and (key in aliases or (key.startswith(_OWNED_ENV_PREFIXES) and value != ""))
     }

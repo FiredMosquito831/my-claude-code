@@ -330,7 +330,7 @@ class ModelRouter:
         self._settings = settings
         # A callable, not a table: the router is built once per settings
         # generation and lives for thousands of requests, while
-        # ``~/.fcc/harness_tiers.json`` is rewritten by the dashboard between
+        # ``~/.mcc/harness_tiers.json`` is rewritten by the dashboard between
         # any two of them. ``current_harness_tiers`` re-reads only when the
         # file's own mtime changed, so this costs a stat per tier request and a
         # dashboard edit lands without a restart.

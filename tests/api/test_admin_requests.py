@@ -257,11 +257,73 @@ def test_admin_requests_loopback_guard_pulse(seeded_store) -> None:
     assert remote.get("/admin/api/requests/pulse").status_code == 403
 
 
+#: What a caller must send to empty the log. Mirrors the route's constant; the
+#: test below pins them together so the literal cannot drift silently.
+CLEAR_CONFIRMED = "?confirm=delete-all-request-log-rows"
+#: Browsers attach an ``Origin`` to every non-GET request; the route requires
+#: one, so a bare ``curl -X DELETE`` cannot reach the delete.
+BROWSER_HEADERS = {"Origin": "http://127.0.0.1:8082"}
+
+
 def test_clear_requests(client, seeded_store) -> None:
-    response = client.request("DELETE", "/admin/api/requests")
+    response = client.request(
+        "DELETE", f"/admin/api/requests{CLEAR_CONFIRMED}", headers=BROWSER_HEADERS
+    )
     assert response.status_code == 200
     assert response.json()["cleared"] == 5
     assert client.get("/admin/api/requests").json()["total"] == 0
+
+
+def test_clear_requests_refuses_without_the_confirmation(client, seeded_store) -> None:
+    """The whole request history must not be one unqualified verb away.
+
+    On 2026-09-03 the log was emptied and nothing in the server could say what
+    did it: the only guard was a ``window.confirm()`` in a page the caller need
+    never load. A browser dialog is not a guard on an HTTP endpoint.
+    """
+    response = client.request("DELETE", "/admin/api/requests", headers=BROWSER_HEADERS)
+
+    assert response.status_code == 400
+    assert "confirm=" in response.json()["detail"]
+    assert client.get("/admin/api/requests").json()["total"] == 5
+
+
+def test_clear_requests_refuses_a_wrong_confirmation(client, seeded_store) -> None:
+    response = client.request(
+        "DELETE", "/admin/api/requests?confirm=yes", headers=BROWSER_HEADERS
+    )
+
+    assert response.status_code == 400
+    assert client.get("/admin/api/requests").json()["total"] == 5
+
+
+def test_clear_requests_refuses_a_request_with_no_origin(client, seeded_store) -> None:
+    """``curl -X DELETE http://127.0.0.1:8082/admin/api/requests`` sends none.
+
+    Read routes still accept a missing ``Origin`` -- non-browser tooling
+    legitimately reads the admin API. Nothing legitimately empties the log by
+    accident.
+    """
+    response = client.request("DELETE", f"/admin/api/requests{CLEAR_CONFIRMED}")
+
+    assert response.status_code == 403
+    assert client.get("/admin/api/requests").json()["total"] == 5
+
+
+def test_clear_confirmation_literal_matches_the_dashboard(client) -> None:
+    """The page and the route must agree, or Clear log 400s for real users."""
+    from my_claude_code.api.admin_routes import REQUEST_LOG_CLEAR_CONFIRMATION
+
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "src/my_claude_code/api/admin_static/admin.js"
+    ).read_text(encoding="utf-8")
+
+    assert CLEAR_CONFIRMED.endswith(REQUEST_LOG_CLEAR_CONFIRMATION)
+    assert (
+        f'const REQUEST_LOG_CLEAR_CONFIRMATION = "{REQUEST_LOG_CLEAR_CONFIRMATION}";'
+        in script
+    )
 
 
 def test_request_log_disabled(tmp_path, monkeypatch) -> None:
@@ -276,7 +338,9 @@ def test_request_log_disabled(tmp_path, monkeypatch) -> None:
     assert payload["rows"] == []
     stats = disabled_client.get("/admin/api/requests/stats").json()
     assert stats["enabled"] is False
-    cleared = disabled_client.request("DELETE", "/admin/api/requests").json()
+    cleared = disabled_client.request(
+        "DELETE", f"/admin/api/requests{CLEAR_CONFIRMED}", headers=BROWSER_HEADERS
+    ).json()
     assert cleared["cleared"] == 0
 
 
@@ -285,7 +349,12 @@ def test_admin_requests_loopback_guard(seeded_store) -> None:
     assert remote.get("/admin/api/requests").status_code == 403
     assert remote.get("/admin/api/requests/stats").status_code == 403
     assert remote.get("/admin/api/requests/r0").status_code == 403
-    assert remote.request("DELETE", "/admin/api/requests").status_code == 403
+    assert (
+        remote.request(
+            "DELETE", f"/admin/api/requests{CLEAR_CONFIRMED}", headers=BROWSER_HEADERS
+        ).status_code
+        == 403
+    )
 
 
 def test_admin_serves_only_bundled_guide_images(tmp_path) -> None:
@@ -347,7 +416,9 @@ def test_stats_endpoint_exposes_the_retention_cap_and_coverage(
 
 def test_clearing_the_log_also_clears_all_time(client, seeded_store) -> None:
     assert client.get("/admin/api/requests/lifetime").json()["requests"] == 5
-    client.request("DELETE", "/admin/api/requests")
+    client.request(
+        "DELETE", f"/admin/api/requests{CLEAR_CONFIRMED}", headers=BROWSER_HEADERS
+    )
     assert client.get("/admin/api/requests/lifetime").json()["requests"] == 0
 
 

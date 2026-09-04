@@ -37,7 +37,7 @@ from my_claude_code.config.desktop import (
     remove_start_at_login,
     set_window_open,
 )
-from my_claude_code.config.paths import config_dir_path
+from my_claude_code.config.paths import DESKTOP_LOCK_FILENAME, config_dir_path
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 from my_claude_code.core.interprocess_lock import InterprocessFileLock
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 _SERVER_MODULE = "my_claude_code.cli.entrypoints"
 
-LOCK_FILENAME = "desktop.lock"
+LOCK_FILENAME = DESKTOP_LOCK_FILENAME
 ACTIVATION_FILENAME = "desktop.activate"
 
 #: How often the close watcher samples ``window.is_open`` (seconds).

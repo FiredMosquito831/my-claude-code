@@ -6,7 +6,7 @@ is an invented limit (WORKING-NOTES 53). That left no way for a user to say
 "send ``top_p: 0.95`` to this one model, which pins it" -- the only remaining
 lever was editing the code.
 
-This module is that lever. ``~/.fcc/model_overrides.json``::
+This module is that lever. ``~/.mcc/model_overrides.json``::
 
     {
       "providers": {"nvidia_nim": {"top_p": 0.95}},

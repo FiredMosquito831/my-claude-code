@@ -79,7 +79,7 @@ Everything is configured through the same `.env` file (see [.env.example](.env.e
 
 ### 1. Install Or Update
 
-**Pick one environment and stay in it.** On Windows you can install either in **PowerShell** or in **WSL** — both work, but install in the one where you'll actually run your coding agent. Installing in both is the most common way to end up confused, because you get two separate configs (`C:\Users\<you>\`.mcc` and `~/`.mcc` inside WSL) and only one of them is the one your server is reading.
+**Pick one environment and stay in it.** On Windows you can install either in **PowerShell** or in **WSL** — both work, but install in the one where you'll actually run your coding agent. Installing in both is the most common way to end up confused, because you get two separate configs (`C:\Users\<you>\.mcc` and `~/.mcc` inside WSL) and only one of them is the one your server is reading.
 
 > Not sure? If you already do your development inside WSL, install in WSL. Otherwise use PowerShell.
 
@@ -220,7 +220,7 @@ mcc-codex exec "hello"
 `mcc-pi` registers MCC only for that Pi process; your existing Pi settings, sessions, credentials, and extensions remain unchanged. `mcc-codex` is the same idea one layer down: it passes ephemeral `-c` assignments on the command line, so your own `~/.codex/config.toml` is never rewritten. The legacy `fcc-claude`, `fcc-codex`, and `fcc-pi` aliases behave identically.
 
 The OpenCode family reads its configuration from a file rather than from
-arguments, so MCC writes **its own** file under `~/`.mcc` and points the launched
+arguments, so MCC writes **its own** file under `~/.mcc` and points the launched
 process at it with the CLI's own documented variable — `OPENCODE_CONFIG` for
 OpenCode and OpenCode 2, `KILO_CONFIG` for Kilo. Your
 `~/.config/opencode/opencode.json` is never read, written or backed up, and your
@@ -274,7 +274,7 @@ Kimi Code is Moonshot's `kimi` CLI — a Python tool on PyPI, installed with `uv
 tool install kimi-cli` or `pipx`, not npm. It reads one config document,
 `~/.kimi/config.toml`, but unlike Command Code it publishes a flag naming
 another: `kimi --config-file PATH`. So MCC writes a `config.toml` of its own
-under `~/`.mcc` and passes that path for the launch. **Your own
+under `~/.mcc` and passes that path for the launch. **Your own
 `~/.kimi/config.toml` is never read, written or backed up.** Your sessions,
 skills and MCP servers are untouched too — those come from `~/.kimi` and from
 Kimi's own MCP defaults, neither of which MCC moves. The one thing that does
@@ -286,7 +286,7 @@ This is also the one agent whose generated file holds the proxy token. Kimi's
 `api_key` is a plain string — there is no `"$VAR"` reference form, and Kimi's
 environment overrides do not apply to an `anthropic`-type provider at all — so
 there is no out-of-band channel to use. The token goes into a file MCC owns
-under `~/`.mcc`, mode `0600`, in the same directory as the `~/.mcc/.env` that
+under `~/.mcc`, mode `0600`, in the same directory as the `~/.mcc/.env` that
 already holds the identical value; nothing is written into a file you own. With
 proxy auth switched off, the value written is the `fcc-no-auth` marker, which
 is not a credential.
@@ -308,7 +308,7 @@ mcc-qwen
 
 Qwen Code is Alibaba's `qwen` CLI (`npm install -g @qwen-code/qwen-code`). It
 publishes `QWEN_CODE_SYSTEM_SETTINGS_PATH`, a variable naming a settings
-document it reads, so MCC writes one of its own under `~/`.mcc` and points the
+document it reads, so MCC writes one of its own under `~/.mcc` and points the
 launch at it. **Your own `~/.qwen/settings.json` is never read for MCC's sake,
 never written and never backed up.** The document carries a
 `modelProviders.anthropic` array — every routable model with the context
@@ -422,7 +422,7 @@ output ceiling onto the model you asked for. It is also the second generated
 file that holds the proxy token literally, and for a measured reason: with
 `apiKey` absent and `OPENAI_API_KEY` set, a headless run did not authenticate
 and did not terminate. Same treatment as Kimi Code's — mode `0600`, under
-`~/`.mcc`, beside the `.env` that already holds the same value.
+`~/.mcc`, beside the `.env` that already holds the same value.
 
 **Goose** (Block, from its GitHub releases) is the one agent MCC configures
 without writing anything, anywhere. `OPENAI_HOST` plus
@@ -440,7 +440,7 @@ flag for each. `--model-metadata-file` takes a LiteLLM `model_cost` map with
 every model's context window, output ceiling, per-token prices and vision
 support; `--model-settings-file` takes a list saying what each model *accepts*
 — whether `--reasoning-effort` and `--thinking-tokens` will be honoured,
-whether `temperature` may be sent at all. MCC owns both under `~/`.mcc`, so no
+whether `temperature` may be sent at all. MCC owns both under `~/.mcc`, so no
 `.aider.model.*` file of yours is read or written. `OPENAI_BASE_URL` and
 `OPENAI_API_KEY` are set in the launched process only, so the token is in
 neither file. Models appear as `openai/anthropic/<provider>/<model>` — the
@@ -491,7 +491,7 @@ Every catalogue MCC generates for an agent carries that model's **real** metadat
 Where a CLI's schema requires a value and no provider published one, MCC fills in **that CLI's own documented default** — never a number MCC invented — and records it. You can see which numbers are guesses three ways: a `_mcc_defaulted` block in the generated file, a line on stderr when the launcher starts, and a count on the agent's dashboard card.
 
 **The server owns those files; the launcher only reads them.** Every agent's
-document lives under `~/`.mcc` (`~/.mcc/opencode-config.json`,
+document lives under `~/.mcc` (`~/.mcc/opencode-config.json`,
 `~/.mcc/crush/crush.json`, and so on), it is written when the server starts and
 rewritten every time the model catalogue is republished, and `mcc-<agent>` reads
 whichever one it needs and launches. No HTTP, no wait. A launcher asks the
@@ -505,7 +505,7 @@ launch and never written behind your back.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `CATALOGUE_FETCH_TIMEOUT_SECONDS` | `20` | Seconds an `mcc-<agent>` launcher waits for the server to build that agent's model list the first time, when no document for it exists under `~/`.mcc` yet. Every later launch reads the file and spends none of it. Read by the launcher process, so a change applies to the next `mcc-<agent>` you run. Floor `1`. |
+| `CATALOGUE_FETCH_TIMEOUT_SECONDS` | `20` | Seconds an `mcc-<agent>` launcher waits for the server to build that agent's model list the first time, when no document for it exists under `~/.mcc` yet. Every later launch reads the file and spends none of it. Read by the launcher process, so a change applies to the next `mcc-<agent>` you run. Floor `1`. |
 
 <a id="install-troubleshooting"></a>
 
@@ -526,6 +526,65 @@ launch and never written behind your back.
 | `address already in use` on startup | A server is already running on that port. Stop it first, or set `PORT` to something else. |
 
 Still stuck? Run the installer with `--dry-run` (PowerShell: `-DryRun`) and share the output — it prints every command it would run without changing anything.
+
+## Where Your Configuration Lives
+
+One directory holds everything: `.env`, custom providers, OAuth tokens under
+`auth/`, the per-agent documents the launchers write, and `logs/` (the server
+log and the request-analytics database).
+
+| Install | Directory |
+| --- | --- |
+| A new install | `~/.mcc` — on Windows, `C:\Users\<you>\.mcc` |
+| Installed before 6.40.0 | `~/.fcc`, the legacy directory, used exactly as it always was |
+| `MCC_CONFIG_DIR` set | the absolute path you gave it, overriding everything else |
+
+The server prints the directory it chose on startup, and the Get Started page
+repeats it. That is the authoritative answer to "which config am I editing".
+
+If both `~/.mcc` and a legacy `~/.fcc` exist, `~/.mcc` wins, the startup log
+names both, and the legacy one is left untouched. They are never merged.
+
+**Nothing is ever migrated for you.** An install from before 6.40.0 keeps using
+its legacy `~/.fcc` indefinitely — it is fully supported and there is no
+deadline. The only thing that turns `~/.fcc` into `~/.mcc` is you running
+`mcc-migrate`. There is no dashboard button and no HTTP route for it: moving
+your keys and request history is not an action a web page should be able to
+take.
+
+### Migrating with `mcc-migrate`
+
+`mcc-migrate` (or `fcc-migrate`) renames the legacy `~/.fcc` to `~/.mcc` in one
+atomic step. Nothing is copied and nothing is deleted; it either moves the whole
+tree or refuses and changes nothing.
+
+**Stop the server and the tray first** — a server left running caches its log
+path at startup and recreates the old directory behind you. The command refuses
+while it can see a live MCC (it checks the tray's lock file and the server's
+`/health` port), but stop them yourself rather than relying on that.
+
+```bash
+# Stop the server (Ctrl-C) and quit the tray from its menu, then:
+mcc-migrate
+mcc-server
+```
+
+Afterwards a `~/.fcc-old` directory holds a single `RESTORE.txt` — the date and
+the exact command to move everything back, written to fail loudly rather than
+nest your config if the legacy directory has reappeared. It contains no data;
+delete it whenever you like.
+
+To pin a directory instead of moving anything, set the `MCC_CONFIG_DIR`
+environment variable (not a `.env` setting — the directory has to be known
+before there is a `.env` to read) to an absolute path, in every shell that
+starts a server *or* a launcher.
+
+`logs/` is swept at startup as well as on rotation: `SERVER_LOG_RETAIN_FILES`
+(default `10`) is how many rotated `server.*.log` files to keep, `0` keeps them
+all. The current log and `logs/requests.db` are never touched by it.
+
+Full walkthrough, including every refusal message and what to do about it:
+[USAGE — Where your configuration lives](docs/USAGE.md#where-your-configuration-lives).
 
 ## Connect Claude Code (CLI & Desktop)
 

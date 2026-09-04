@@ -34,6 +34,7 @@ from my_claude_code.config.paths import (
     config_dir_resolution,
     legacy_env_paths,
     managed_env_path,
+    new_config_dir_path,
     request_log_path,
 )
 from my_claude_code.config.proxy_auth import open_proxy_without_auth_error
@@ -249,25 +250,27 @@ def _emit_config_dir_banner() -> None:
         return
     _config_dir_banner_emitted = True
     resolution = config_dir_resolution()
-    if not resolution.uses_legacy_home and not resolution.legacy_rejected:
+    if not resolution.uses_legacy_home:
         return
-    if resolution.uses_legacy_home:
-        logger.info(
-            "Your data lives in the legacy {}. Run mcc-migrate to move it to {}.",
-            resolution.path,
-            config_dir_path(),
-        )
-    elif resolution.legacy_rejected:
+    if resolution.legacy_unhealthy:
         health = resolution.legacy_health
         check = health.failed_check if health else "unknown"
         logger.warning(
-            "{} exists but failed the '{}' check ({}); it was left untouched. "
-            "Starting fresh in {}.",
-            resolution.legacy_path,
+            "{} failed the '{}' check ({}); it is still the config directory in "
+            "use and nothing was moved, renamed or created. Fix it in place -- "
+            "{} is created only by running mcc-migrate.",
+            resolution.path,
             check,
             health.detail if health else "unknown",
-            resolution.path,
+            new_config_dir_path(),
         )
+        return
+    logger.info(
+        "Your data lives in the legacy {}. To move it to {}: stop the server "
+        "and the tray, run mcc-migrate, then start the server again.",
+        resolution.path,
+        new_config_dir_path(),
+    )
 
 
 def serve() -> None:
@@ -500,7 +503,7 @@ def _migrate_legacy_env_if_missing() -> Path | None:
     if env_file.exists():
         return None
 
-    # TODO: Remove after the ~/.fcc/.env migration has had a release cycle.
+    # TODO: Remove after the managed-config-path migration has had a release cycle.
     for legacy_env in legacy_env_paths():
         if not legacy_env.is_file():
             continue

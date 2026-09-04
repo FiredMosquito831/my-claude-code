@@ -179,7 +179,7 @@ _ROUTE_COLUMNS = (
 
 
 def default_websearch_db_path() -> Path:
-    """Default analytics database path: ``~/.fcc/logs/websearch.db``."""
+    """Default analytics database path: ``~/.mcc/logs/websearch.db``."""
 
     return config_dir_path() / FCC_LOGS_DIRNAME / WEBSEARCH_DB_FILENAME
 

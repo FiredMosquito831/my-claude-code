@@ -63,7 +63,7 @@ def build_openai_chat_request_body(
     guessing, because a wrong id would apply somebody else's settings.
 
     ``overrides`` defaults to the process-wide table read from
-    ``~/.fcc/model_overrides.json``; tests pass their own.
+    ``~/.mcc/model_overrides.json``; tests pass their own.
     """
     logger.debug(
         "{}_REQUEST: conversion start model={} msgs={}",
