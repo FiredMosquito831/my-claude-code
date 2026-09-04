@@ -71,12 +71,49 @@ def _isolate_websearch_analytics(monkeypatch, tmp_path):
     """
     from my_claude_code.websearch import analytics
 
+    real_default = analytics.default_websearch_db_path
+
+    def redirect_only_if_it_would_hit_the_real_home() -> Path:
+        # Evaluated lazily, so a test that patches ``Path.home`` itself (and
+        # then asserts on ``default_websearch_db_path()``) still sees its own
+        # answer; only an unredirected resolution is diverted.
+        path = real_default()
+        return tmp_path / "websearch.db" if _under_real_home(path) else path
+
     monkeypatch.setattr(
-        analytics, "default_websearch_db_path", lambda: tmp_path / "websearch.db"
+        analytics,
+        "default_websearch_db_path",
+        redirect_only_if_it_would_hit_the_real_home,
     )
     analytics.reset_analytics_state()
     yield
     analytics.reset_analytics_state()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_messaging_state_dir(monkeypatch, tmp_path):
+    """Keep ``<config dir>/agent_workspace`` out of the real config directory.
+
+    ``ApplicationRuntime._start_messaging_workflow`` calls ``os.makedirs`` on
+    it, so a test that composes the runtime created a real directory tree --
+    including, on a machine with no config directory yet, the ``~/.mcc`` that
+    then outranks a legacy ``~/.fcc`` for good. Redirected lazily so a test that
+    points the config dir somewhere itself still gets its own answer.
+    """
+    from my_claude_code.runtime import application
+
+    real_default = application.messaging_state_dir_path
+
+    def redirect_only_if_it_would_hit_the_real_home() -> Path:
+        path = real_default()
+        return tmp_path / "agent_workspace" if _under_real_home(path) else path
+
+    monkeypatch.setattr(
+        application,
+        "messaging_state_dir_path",
+        redirect_only_if_it_would_hit_the_real_home,
+    )
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -170,11 +207,21 @@ def _is_real_home_config_dir(candidate) -> bool:
 
 
 def _under_real_home(candidate) -> bool:
+    """True for one of the real home's config directories, or anything inside it.
+
+    Deliberately *not* "anywhere under the user profile": on Windows pytest's
+    own ``tmp_path`` lives under the user's AppData/Local/Temp, so the
+    broader test would call every correctly isolated directory a violation.
+    """
+
     try:
         resolved = Path(candidate).resolve()
     except OSError, ValueError:
         return False
-    return resolved == _REAL_HOME or _REAL_HOME in resolved.parents
+    return any(
+        resolved == directory or directory in resolved.parents
+        for directory in _REAL_HOME_MCC_DIRS
+    )
 
 
 @pytest.fixture(autouse=True)
