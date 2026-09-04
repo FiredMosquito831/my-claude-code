@@ -17,6 +17,7 @@ from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.reasoning import ReasoningDialect
+from my_claude_code.core.stop_deadline import stop_deadline
 from my_claude_code.core.trace import trace_event
 from my_claude_code.providers.base import BaseProvider
 from my_claude_code.providers.runtime import ProviderRuntime
@@ -139,7 +140,13 @@ class ProviderRuntimeManager:
         return self._current.generation_id
 
     async def acquire(self) -> ProviderGenerationLease:
-        if self._closing or self._closed:
+        # ``_closing`` is set inside ``close()``, i.e. in the lifespan shutdown,
+        # i.e. only AFTER the whole drain window has already passed. The stop
+        # deadline is set at the instant the stop is requested, so this is what
+        # actually keeps a new lease from being taken during the drain -- and a
+        # lease taken during the drain re-clears ``drained`` below, which is
+        # precisely how new work used to push the finish line out forever.
+        if self._closing or self._closed or stop_deadline().requested:
             raise ApplicationUnavailableError("Provider runtime is shutting down.")
         generation = self._current
         generation.active_leases += 1
@@ -597,9 +604,7 @@ class ProviderRuntimeManager:
                     self._trace_retired(current, reason="shutdown")
                 generations = tuple(self._retired.values())
 
-            await asyncio.gather(
-                *(generation.drained.wait() for generation in generations)
-            )
+            await self._drain(generations)
             generation_results = await asyncio.gather(
                 *(
                     self._close_generation(generation, forced=False)
@@ -611,6 +616,38 @@ class ProviderRuntimeManager:
                 raise RuntimeError("One or more provider runtimes failed to close.")
             self._model_cache.clear()
             self._closed = True
+
+    async def _drain(self, generations: tuple[_ProviderGeneration, ...]) -> None:
+        """Wait for every generation's leases to be released, bounded.
+
+        ``drained`` is set only when ``active_leases`` reaches 0, and a lease is
+        released only after the response that holds it finishes cleaning up. A
+        response blocked on a silent upstream therefore made this wait -- which
+        had no timeout at all before 6.41.0 -- the place a stop hung forever.
+        The bound is the time the shared stop deadline has left, so a drain that
+        overruns leaves the generation unclosed and ``close()`` reports failure
+        rather than never returning.
+        """
+
+        waits = [generation.drained.wait() for generation in generations]
+        if not waits:
+            return
+        deadline = stop_deadline()
+        if not deadline.requested:
+            await asyncio.gather(*waits)
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*waits), deadline.teardown_remaining()
+            )
+        except TimeoutError:
+            held = sum(max(0, generation.active_leases) for generation in generations)
+            logger.warning(
+                "Provider drain did not finish within the graceful shutdown "
+                "budget; {} lease(s) still held across {} generation(s).",
+                held,
+                len(generations),
+            )
 
     async def _release(self, generation: _ProviderGeneration) -> None:
         if generation.active_leases <= 0:

@@ -1209,11 +1209,14 @@ class Settings(BaseSettings):
     anthropic_auth_token: str = Field(
         default="", validation_alias="ANTHROPIC_AUTH_TOKEN"
     )
-    # Seconds each server generation is given to finish in-flight requests during
-    # a RELOAD or REPLACE_PROCESS handoff before the supervisor force-drops them.
-    # A bounded, configurable field surfaced through the Limits manifest. The
-    # floor is 1s because uvicorn treats 0 as an immediate, no-drain shutdown
-    # rather than waiting indefinitely for in-flight work to drain.
+    # Seconds a stop may take, end to end: the connection drain, the streaming
+    # response cleanup, the provider-generation drain and the ASGI lifespan all
+    # share this one deadline (core/stop_deadline.py), and the process
+    # hard-exits a few seconds past it. New requests are refused with 503 from
+    # the instant the stop is requested, so they cannot extend it. A bounded,
+    # configurable field surfaced through the Limits manifest. The floor is 1s
+    # because uvicorn treats 0 as an immediate, no-drain shutdown rather than
+    # waiting indefinitely for in-flight work to drain.
     server_graceful_shutdown_seconds: float = Field(
         default=SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
         validation_alias="SERVER_GRACEFUL_SHUTDOWN_SECONDS",

@@ -8,8 +8,10 @@ import sys
 import threading
 import time
 import webbrowser
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
+from types import FrameType
 
 import uvicorn
 from loguru import logger
@@ -38,6 +40,7 @@ from my_claude_code.config.proxy_auth import open_proxy_without_auth_error
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.process_handoff import external_upgrade_helper_pending
+from my_claude_code.core.stop_deadline import stop_deadline
 from my_claude_code.runtime.bootstrap import build_asgi_app
 
 _WINDOWS = os.name == "nt"
@@ -138,6 +141,44 @@ def _replace_server_process(settings: Settings) -> None:
         )
         logger.complete()
         return
+
+
+def _start_stop_clock_on_signal(
+    server: uvicorn.Server, arm: Callable[[], None]
+) -> None:
+    """Make uvicorn's own signal handler start the supervisor's stop clock.
+
+    Shadowing the bound method on the instance rather than subclassing keeps
+    this one line away from uvicorn's constructor signature, which the
+    supervisor does not own and which changes between releases.
+    """
+
+    original = getattr(server, "handle_exit", None)
+    if not callable(original):
+        # A server object with no signal handler of its own has nothing to
+        # wrap; the in-process RELOAD / REPLACE_PROCESS paths still arm the
+        # clock through the supervisor's own request().
+        return
+
+    def handle_exit(sig: int, frame: FrameType | None) -> None:
+        arm()
+        original(sig, frame)
+
+    # Written into the instance dict, which is what shadowing a bound method
+    # actually is; a plain attribute assignment says the same thing but reads
+    # as a redefinition of uvicorn's method, which this is not.
+    server.__dict__["handle_exit"] = handle_exit
+
+
+def _log_hard_exit() -> None:
+    """Last words before the stop watchdog terminates this process."""
+
+    logger.error(
+        "Shutdown did not complete within the graceful shutdown budget plus "
+        "its teardown margin; exiting now. Lower or raise "
+        "SERVER_GRACEFUL_SHUTDOWN_SECONDS to change how long a stop may take."
+    )
+    logger.complete()
 
 
 def _address_in_use_error(settings: Settings) -> OSError:
@@ -294,6 +335,8 @@ def _run_supervised_server(
 
     requested = ServerExitAction.STOP
     server_holder: dict[str, uvicorn.Server] = {}
+    deadline = stop_deadline()
+    deadline.clear()
 
     def request(action: ServerExitAction) -> None:
         nonlocal requested
@@ -301,8 +344,32 @@ def _run_supervised_server(
         # downgrade an already-requested REPLACE_PROCESS.
         if _ACTION_PRIORITY[action] > _ACTION_PRIORITY[requested]:
             requested = action
+        # One wall-clock deadline for the WHOLE stop, computed once, here.
+        # Every later stage -- uvicorn's connection drain, the response
+        # cleanup, the provider drain, the ASGI lifespan -- measures what it
+        # has left against this instant instead of starting a budget of its
+        # own, so the total stop time is the number on the box however the
+        # time was spent. A second request cannot move it.
+        deadline.request(settings.server_graceful_shutdown_seconds)
+        # New work is refused from this instant (runtime/asgi.py's gate and
+        # ProviderRuntimeManager.acquire), so a busy client can no longer keep
+        # a closing server alive by making ordinary requests.
+        if requested is not ServerExitAction.RELOAD:
+            # A terminal stop must end the process even if a stage ignores its
+            # bound outright. A RELOAD must NOT: when its drain overruns the
+            # supervisor keeps the server up on a fresh generation instead.
+            deadline.arm_hard_exit(on_exit=_log_hard_exit)
         if server := server_holder.get("server"):
             server.should_exit = True
+
+    def start_the_stop_clock_for_a_signal() -> None:
+        # uvicorn owns the signal handlers (MCC installs none of its own), and
+        # they set ``should_exit`` directly without going through ``request``.
+        # A Ctrl+C, a SIGTERM, or the tray's CTRL_BREAK is by far the commonest
+        # way this server is stopped, so arming the shared deadline only on the
+        # in-process RELOAD / REPLACE_PROCESS paths would leave every bound
+        # this release adds inert in exactly the case the user reported.
+        request(ServerExitAction.STOP)
 
     def request_restart() -> None:
         request(ServerExitAction.RELOAD)
@@ -323,6 +390,7 @@ def _run_supervised_server(
         timeout_graceful_shutdown=round(settings.server_graceful_shutdown_seconds),
     )
     server = uvicorn.Server(config)
+    _start_stop_clock_on_signal(server, start_the_stop_clock_for_a_signal)
     server_holder["server"] = server
     if open_admin_browser:
         _schedule_open_admin_browser(settings)
@@ -338,7 +406,13 @@ def _run_supervised_server(
         _log_bind_failure(settings, _address_in_use_error(settings))
         raise SystemExit(1)
     try:
-        server.run()
+        try:
+            server.run()
+        finally:
+            # Control is back in the supervisor, so the ordered stop path won
+            # and the watchdog has nothing left to guard. Anything after this
+            # point carries its own bound.
+            deadline.disarm_hard_exit()
     except (OSError, SystemExit) as exc:
         # uvicorn turns a bind failure into SystemExit(1), but it can also exit
         # for other reasons (SSL, etc.), and those surface as OSError. Only
@@ -354,9 +428,14 @@ def _run_supervised_server(
                 err=exc,
             )
         raise
+    # Past this point the socket is closed and no request can arrive, so the
+    # gate has nothing left to guard; clearing keeps the next generation (and,
+    # in-process, the next test) from inheriting a stop that already happened.
     if requested is ServerExitAction.STOP:
+        deadline.clear()
         return requested
     if asgi_app.runtime.is_closed:
+        deadline.clear()
         return requested
     # The runtime did not finish closing in-flight requests within the graceful
     # shutdown budget. A process replacement would execv into the new image
@@ -380,6 +459,11 @@ def _run_supervised_server(
     # process (which is what "the server crashed after I applied a setting"
     # looked like). Writer threads are daemon, so an old runtime still closing
     # does not block the fresh generation.
+    #
+    # Clearing the deadline is what re-opens the door: the ASGI gate and
+    # ProviderRuntimeManager.acquire both read it, so the fresh generation
+    # would otherwise be born refusing every request.
+    deadline.clear()
     return ServerExitAction.RELOAD
 
 

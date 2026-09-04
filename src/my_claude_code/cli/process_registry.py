@@ -17,6 +17,12 @@ _lock = threading.Lock()
 _pids: set[int] = set()
 _atexit_registered = False
 
+# ``taskkill`` is a process that can itself hang (a wedged driver, a suspended
+# child, an antivirus hook). This runs at ``atexit`` and on the supervisor's way
+# out, so an unbounded call here is one more place a stop can never finish --
+# the same class of bug as the unbounded drain this release bounds.
+_KILL_TIMEOUT_SECONDS = 10.0
+
 
 def ensure_atexit_registered() -> None:
     global _atexit_registered
@@ -54,7 +60,10 @@ def kill_pid_tree_best_effort(pid: int) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
+                timeout=_KILL_TIMEOUT_SECONDS,
             )
+        except subprocess.TimeoutExpired:
+            logger.debug("process_registry: taskkill timed out pid=%s", pid)
         except Exception as e:
             logger.debug("process_registry: taskkill failed pid=%s: %s", pid, e)
         return

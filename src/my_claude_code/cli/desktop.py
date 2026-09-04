@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -40,6 +41,11 @@ from my_claude_code.config.paths import config_dir_path
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 from my_claude_code.core.interprocess_lock import InterprocessFileLock
+from my_claude_code.core.stop_deadline import (
+    HARD_EXIT_GRACE_SECONDS,
+    STOP_TEARDOWN_MARGIN_SECONDS,
+    clamp_stop_budget,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +59,28 @@ WINDOW_CLOSE_POLL_SECONDS = 1.0
 
 #: Three distinguishable states of the configured host:port.
 type ServerPresence = Literal["healthy", "foreign", "free"]
+
+
+#: Seconds allowed for the OS to reap a process after the final ``kill``.
+FORCE_KILL_REAP_SECONDS = 5.0
+
+
+def server_stop_wait_seconds(settings: Any) -> float:
+    """Seconds the tray waits between "please stop" and "you are being killed".
+
+    The child's own supervisor bounds its stop at
+    ``SERVER_GRACEFUL_SHUTDOWN_SECONDS`` plus a fixed teardown margin, and its
+    watchdog hard-exits one beat after that. Waiting exactly that long -- rather
+    than the hard-coded 5s the tray used to wait -- means the tray never kills a
+    server that is legitimately mid-drain under its own configured budget, and
+    never waits on one that has stopped honouring it.
+    """
+
+    budget = clamp_stop_budget(
+        getattr(settings, "server_graceful_shutdown_seconds", 0.0)
+    )
+    return budget + STOP_TEARDOWN_MARGIN_SECONDS + HARD_EXIT_GRACE_SECONDS
+
 
 SERVER_DOWN_NOTIFICATION = (
     "The MCC server stopped answering. Choose Restart Server in this menu, "
@@ -239,7 +267,15 @@ class DesktopController:
                 "server command is on PATH, or start it manually."
             )
         try:
-            self._process = subprocess.Popen(command)
+            # CREATE_NEW_PROCESS_GROUP is what makes a graceful stop possible at
+            # all on Windows: MCC installs no signal handlers of its own, so the
+            # only cooperative stop is uvicorn's, and uvicorn's Windows handler
+            # is on SIGBREAK. A console control event can only be sent to a
+            # process GROUP, so the child has to be the leader of its own.
+            creationflags = (
+                subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+            )
+            self._process = subprocess.Popen(command, creationflags=creationflags)
         except OSError as exc:
             raise DesktopError(f"Could not start the MCC server: {exc}") from exc
 
@@ -288,16 +324,70 @@ class DesktopController:
         return Path(path) if completed.returncode == 0 and path else None
 
     def _stop_child(self) -> None:
+        """Ask the server child to stop, wait its own budget, then escalate.
+
+        Three steps, in order, and every one of them addressed to the exact PID
+        this controller launched -- never a name, never a path match:
+
+        1. **Ask.** A console control event (Windows) or ``SIGTERM`` (POSIX)
+           reaches uvicorn's handler and starts a real graceful drain. The tray
+           used to skip this entirely: ``terminate()`` on Windows is
+           ``TerminateProcess``, which is a kill, so a tray stop cut every
+           in-flight request instantly however long the operator's budget was.
+        2. **Wait the server's own bound**, not a hard-coded 5 seconds. The
+           child stops within ``SERVER_GRACEFUL_SHUTDOWN_SECONDS`` plus its
+           teardown margin, and hard-exits itself one beat later.
+        3. **Escalate.** A child that outlived its whole configured budget is
+           not draining any more, so terminate and then kill it. A tray that
+           hangs forever is worse than a server killed after it was given every
+           second it asked for.
+        """
+
         process = self._process
         self._process = None
         if process is None:
             return
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
+        if process.poll() is not None:
+            return
+        budget = server_stop_wait_seconds(get_settings())
+        self._request_graceful_stop(process)
+        try:
+            process.wait(timeout=budget)
+            return
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "MCC server pid %s did not stop within %.1fs; terminating it.",
+                process.pid,
+                budget,
+            )
+        process.terminate()
+        try:
+            process.wait(timeout=FORCE_KILL_REAP_SECONDS)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        process.kill()
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=FORCE_KILL_REAP_SECONDS)
+
+    @staticmethod
+    def _request_graceful_stop(process: subprocess.Popen[bytes]) -> None:
+        """Send the cooperative stop signal to exactly this child."""
+
+        try:
+            if os.name == "nt":
+                # Delivered to the group the child leads (see _spawn_server);
+                # on Windows a console control event can only be addressed to a
+                # group, never to a single process.
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                process.send_signal(signal.SIGTERM)
+        except (OSError, ValueError) as exc:
+            # A child that is already gone, or a platform that refuses the
+            # event, simply falls through to the escalation below.
+            logger.debug(
+                "Graceful stop request failed for pid %s: %s", process.pid, exc
+            )
 
     # -- admin API ---------------------------------------------------------
 

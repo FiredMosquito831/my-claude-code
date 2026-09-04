@@ -31,6 +31,22 @@ def _isolate_from_dotenv(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_stop_deadline():
+    """No test may inherit another test's "the server is stopping" state.
+
+    The stop deadline is process-wide on purpose -- the supervisor sets it once
+    and the ASGI gate, the provider drain and the response cleanup all read the
+    same clock -- so a test that requests a stop would otherwise make every
+    later test in the same worker refuse its own provider leases.
+    """
+    from my_claude_code.core.stop_deadline import stop_deadline
+
+    stop_deadline().clear()
+    yield
+    stop_deadline().clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_request_log(monkeypatch, tmp_path):
     """Keep request-log writes out of the real ~/.fcc directory during tests."""
     from my_claude_code.core import request_log

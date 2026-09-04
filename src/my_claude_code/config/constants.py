@@ -99,6 +99,15 @@ ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-anthropic-oauth"
 # FALLBACK_FIRST_TOKEN_TIMEOUT / FALLBACK_STALL_TIMEOUT /
 # FALLBACK_TOTAL_TIMEOUT to get time-based failover back. An install that
 # already sets any of these keys keeps its own value.
+#
+# One thing these zeros deliberately do NOT decide, since 6.41.0: how long
+# the server may take to STOP. A request with no deadline of its own used to
+# mean a shutdown with no deadline either -- the response cleanup, the
+# provider drain and the ASGI lifespan all waited on that request forever.
+# Those waits are now bounded by SERVER_GRACEFUL_SHUTDOWN_SECONDS, which is a
+# property of the stop rather than of the request. Leaving every deadline
+# here at 0 is still the shipped behaviour and still means MCC never ends a
+# stalled upstream on its own; it no longer means the process cannot exit.
 FALLBACK_FIRST_TOKEN_TIMEOUT_DEFAULT = 0.0
 # Whole-request budget across every attempt, retry and recovery. 0 disables it,
 # which also makes the share division below moot: with no budget there is
@@ -292,19 +301,27 @@ PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT = 2.0
 PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT = 10.0
 PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT = 1.0
 
-# Graceful shutdown budget (seconds) handed to the supervisor for each server
-# generation. It bounds how long in-flight requests get to finish while the
-# runtime is closing (RELOAD or REPLACE_PROCESS) before the supervisor force-drops
-# them. This is a deployment choice, not a protocol fact, so it is a configurable,
-# bounded Settings field (see config/limits.py) rather than a fixed module value.
+# Graceful shutdown budget (seconds). Since 6.41.0 this bounds the WHOLE stop,
+# not one wait inside it: at the instant a stop is requested it becomes a single
+# wall-clock deadline (core/stop_deadline.py) shared by uvicorn's connection
+# drain, the streaming-response cleanup, the provider-generation drain and the
+# ASGI lifespan shutdown. A small fixed teardown margin sits past it for the
+# forced close, and a watchdog hard-exits the process one beat after that, so a
+# stop takes at most this number plus a few seconds however the time was spent.
+# New requests are refused with 503 from the same instant, so a busy client
+# cannot extend the drain. This is a deployment choice, not a protocol fact, so
+# it is a configurable, bounded Settings field (see config/limits.py).
 #
-# Grounding for the default and bounds: the same ~51,000-request log behind the
-# fallback budgets shows whole-request durations at p50 7.5s and p99.9 255.7s. The
-# default sits just over that p99.9 (300s) so an update/reload handoff lets nearly
-# all healthy requests drain; only requests longer than the budget (up to the 600s
-# total-request budget) can still be force-cut. The floor is 1s because uvicorn
-# treats 0 as an immediate, no-drain shutdown rather than "wait forever".
-SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT = 300.0
+# Grounding for the default: it used to be 300s, chosen to sit just over the
+# p99.9 whole-request duration (255.7s) measured on a ~51,000-request log, so
+# that a handoff let nearly every healthy request drain. That reasoning was
+# sound while the number bounded only uvicorn's connection wait and the rest of
+# the stop was unbounded anyway -- but as the bound on the whole stop it is the
+# time an operator waits, staring at a tray icon, for a restart to happen. 20s
+# is the trade taken instead: an update or reload completes in a handful of
+# seconds, and the rare request still running at 20s is cut. Raise it if long
+# requests matter more than a fast restart; the range is 1s to 600s.
+SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT = 20.0
 
 # Dashboard reconnect budget (seconds) the admin UI waits for the server to come
 # back after a self-triggered update. Composed from the real phases of the handoff
