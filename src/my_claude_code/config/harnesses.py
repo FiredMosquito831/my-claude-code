@@ -112,8 +112,8 @@ COMMANDCODE_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
 #: and ``openai_responses``; an ``anthropic`` provider falls through its
 #: ``case _: pass``. So the value has to be literal in the document, and
 #: ``ARCHITECTURE.md`` records why that is acceptable here and nowhere else:
-#: the document is MCC's own file under ``~/.fcc``, in the same directory as
-#: ``~/.fcc/.env``, which already holds the identical ``ANTHROPIC_AUTH_TOKEN``
+#: the document is MCC's own file under ``~/.mcc``, in the same directory as
+#: ``~/.mcc/.env``, which already holds the identical ``ANTHROPIC_AUTH_TOKEN``
 #: in clear. Nothing is written into a file the user owns.
 KIMI_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
 KIMI_API_KEY_SENTINEL = "mcc-proxy-token-placeholder"
@@ -146,7 +146,7 @@ CRUSH_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
 #: CLI blocking indefinitely rather than authenticating. So the value is
 #: literal, and ``ARCHITECTURE.md`` records why that is acceptable here for the
 #: same reason it is for Kimi Code: the document is MCC's own file under
-#: ``~/.fcc/cline``, in the same directory tree as ``~/.fcc/.env``, which
+#: ``~/.mcc/cline``, in the same directory tree as ``~/.mcc/.env``, which
 #: already holds the identical ``ANTHROPIC_AUTH_TOKEN`` in clear. Nothing is
 #: written into a file the user owns -- ``~/.cline`` is never read or touched,
 #: because ``cline --config`` moves the whole configuration directory.
@@ -409,12 +409,12 @@ class HarnessCatalogue:
 
     #: Serialiser key under ``application/catalogues``.
     format_id: str
-    #: File written under ``~/.fcc``, or ``None`` for a process-local delivery.
+    #: File written under ``~/.mcc``, or ``None`` for a process-local delivery.
     filename: str | None = None
     #: The CLI's own documented environment variable naming a config file it
     #: should read *in addition to* the user's own. Set for a harness that
     #: takes its provider block from a file rather than from argv or env: MCC
-    #: then owns a file of its own under ``~/.fcc`` and never edits, merges
+    #: then owns a file of its own under ``~/.mcc`` and never edits, merges
     #: into or backs up the document the user wrote.
     config_env_var: str | None = None
     #: The CLI's own command-line option naming a config file, for a harness
@@ -478,7 +478,7 @@ class HarnessCatalogue:
     def delivery(self) -> str:
         """Return how this harness receives its model list.
 
-        ``file`` -- MCC owns a document under ``~/.fcc`` and the CLI is told
+        ``file`` -- MCC owns a document under ``~/.mcc`` and the CLI is told
         its path. ``process_local`` -- registered in memory at launch, nothing
         on disk. ``merge`` -- the CLI reads only its own document, so MCC owns
         one key inside it.

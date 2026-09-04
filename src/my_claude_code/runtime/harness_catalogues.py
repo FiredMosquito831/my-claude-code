@@ -13,13 +13,13 @@ first ``mcc-<id>`` run and only *refreshed* here, on the reasoning that writing
 a catalogue for a CLI the user does not use leaves MCC's files behind for a tool
 they never installed. That rule cost a user every OpenCode session they tried to
 start. The launcher was the only thing that could create
-``~/.fcc/opencode-config.json``; its fetch was given the ``/health`` preflight's
+``~/.mcc/opencode-config.json``; its fetch was given the ``/health`` preflight's
 1.5 s budget for a route that measured 1.8-4.0 s; so the fetch failed, the file
 was never created, this publisher never refreshed a file that did not exist, and
 the next launch failed identically. A deadlock, not a flake.
 
 The concern the old rule answered was real but misplaced: these files live under
-``~/.fcc``, which is MCC's own directory, not inside any CLI's configuration.
+``~/.mcc``, which is MCC's own directory, not inside any CLI's configuration.
 Nothing is left in a tool's own directory by materialising them, and the file
 being there is what makes a launch cost no HTTP at all.
 
@@ -92,7 +92,7 @@ class HarnessCatalogueFanoutPublisher:
     def __init__(self, catalogue_paths: Mapping[str, Path] | None = None) -> None:
         #: Per-harness path override, for tests. Production resolves through
         #: ``harness_catalogue_path`` so every generated file stays under
-        #: ``~/.fcc``.
+        #: ``~/.mcc``.
         self._catalogue_paths = dict(catalogue_paths or {})
 
     def ensure_exists(self, runtime: RequestRuntimePort) -> None:
@@ -145,7 +145,7 @@ class HarnessCatalogueFanoutPublisher:
     def _is_writable_target(self, spec: HarnessSpec, path: Path) -> bool:
         """Return whether this publisher may write this harness's document.
 
-        For a document MCC owns under ``~/.fcc`` the answer is always yes: the
+        For a document MCC owns under ``~/.mcc`` the answer is always yes: the
         file is the launcher's whole input, and one that does not exist is a
         launch with no MCC models in the picker. For a merge target the file
         belongs to the *user*, so its existence proves nothing -- a Command Code
@@ -198,7 +198,7 @@ class HarnessCatalogueFanoutPublisher:
                 # the proxy token literally: its schema has no ``"$VAR"``
                 # form and its environment overrides skip the ``anthropic``
                 # provider type entirely. The file is MCC's own, under
-                # ``~/.fcc`` beside the ``.env`` that already holds the same
+                # ``~/.mcc`` beside the ``.env`` that already holds the same
                 # value; nothing is written into a file the user owns.
                 write_toml_document_atomically_if_changed(
                     path,

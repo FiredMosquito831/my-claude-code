@@ -6,7 +6,7 @@ first time an MCC harness has needed something other than an ephemeral flag
 list. None of them is edited in place: each CLI documents an environment
 variable naming an *extra* config file that is merged into the precedence
 chain rather than replacing it (``OPENCODE_CONFIG`` for OpenCode, ``KILO_CONFIG``
-for Kilo), so MCC writes a document of its own under ``~/.fcc`` and points the
+for Kilo), so MCC writes a document of its own under ``~/.mcc`` and points the
 launched process at it. The user's ``~/.config/opencode/opencode.json`` is
 never read, never written, never backed up and never needs to be: stop
 launching through MCC and the file you wrote is the file you have.

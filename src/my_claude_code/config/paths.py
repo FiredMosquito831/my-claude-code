@@ -41,6 +41,11 @@ ANTHROPIC_OAUTH_MANAGED_STORE_FILENAME = "anthropic_oauth.json"
 CLAUDE_CONFIG_DIRNAME = ".claude"
 CLAUDE_SETTINGS_FILENAME = "settings.json"
 ONBOARDING_STATE_FILENAME = "onboarding.json"
+# The tray's single-instance lock. Named here rather than in ``cli.desktop``
+# because ``cli.migrate_config_dir`` has to look for it to decide whether the
+# tray is still running, and importing the desktop module for one string
+# would drag the GUI stack into a dependency-free command.
+DESKTOP_LOCK_FILENAME = "desktop.lock"
 MODEL_OVERRIDES_FILENAME = "model_overrides.json"
 HARNESS_TIERS_FILENAME = "harness_tiers.json"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
@@ -125,9 +130,17 @@ class ConfigDirResolution:
         return self.source == "legacy"
 
     @property
-    def legacy_rejected(self) -> bool:
+    def legacy_unhealthy(self) -> bool:
+        """The legacy home is in use *and* failed a check.
+
+        A failed check is a warning, never a relocation: since 6.41.1 the only
+        thing that ever turns ``~/.fcc`` into ``~/.mcc`` is running
+        ``mcc-migrate`` explicitly. Resolution reports the problem and keeps
+        using the directory the user's data is actually in.
+        """
+
         health = self.legacy_health
-        return self.source == "created" and health is not None and not health.healthy
+        return health is not None and not health.healthy
 
 
 def display_path(path: Path) -> str:
@@ -287,9 +300,13 @@ def resolve_config_dir(
     1. ``MCC_CONFIG_DIR`` when set.
     2. ``~/.mcc`` when it exists -- and if ``~/.fcc`` also exists, one warning
        naming both and saying which wins.
-    3. otherwise ``~/.fcc`` when it exists *and* passes ``check_legacy_home``.
-    4. otherwise ``~/.mcc``, created fresh. A legacy directory that failed a
-       check is named in the warning and left exactly as it is.
+    3. otherwise ``~/.fcc`` when it exists. The health check still runs and a
+       failure is reported in the warning, but it does **not** change the
+       answer: a directory holding the user's keys and history is never
+       abandoned because a probe could not open a locked database or build a
+       ``Settings`` this minute. ``~/.fcc`` becomes ``~/.mcc`` only when the
+       user runs ``mcc-migrate``.
+    4. otherwise ``~/.mcc``, created fresh -- a genuinely new install.
     """
 
     source_env = os.environ if env is None else env
@@ -330,20 +347,28 @@ def resolve_config_dir(
                 legacy_path=legacy,
                 legacy_health=health,
                 notice=(
-                    f"Your data lives in the legacy {display_path(legacy)}. Run "
-                    f"mcc-migrate to move it to {display_path(current)}."
+                    f"Your data lives in the legacy {display_path(legacy)}. To "
+                    f"move it to {display_path(current)}: stop the server and "
+                    f"the tray, run mcc-migrate, then start the server again."
                 ),
             )
+        # The check failed -- and that changes nothing about which directory is
+        # used. A lock on ``requests.db``, a transient I/O error or an ``.env``
+        # a future validator rejects would otherwise start the user on an empty
+        # ``~/.mcc``, and rule 2 above would then make that permanent: apparent
+        # total loss of keys and history from one bad five-second probe. So the
+        # failure is a warning about a directory that stays in use.
         return ConfigDirResolution(
-            path=current,
-            source="created",
+            path=legacy,
+            source="legacy",
             legacy_path=legacy,
             legacy_health=health,
             warning=(
-                f"{display_path(legacy)} exists but failed the "
-                f"'{health.failed_check}' check ({health.detail}). It was left "
-                f"untouched -- nothing was moved, renamed or deleted. Starting "
-                f"fresh in {display_path(current)}."
+                f"{display_path(legacy)} failed the '{health.failed_check}' "
+                f"check ({health.detail}). It is still the config directory in "
+                f"use -- nothing was moved, renamed, created or deleted. Fix "
+                f"the problem in place; {display_path(current)} is created only "
+                f"by running mcc-migrate."
             ),
         )
 
@@ -353,15 +378,37 @@ def resolve_config_dir(
 _resolution: ConfigDirResolution | None = None
 
 
+def provisional_resolution(
+    env: Mapping[str, str] | None = None, home: Path | None = None
+) -> ConfigDirResolution:
+    """The answer ``resolve_config_dir`` reaches without the legacy health check.
+
+    The check builds a ``Settings`` from the directory it is probing, and
+    ``Settings`` resolves its dotenv list back through ``config_dir_path()``.
+    Something has to be published before the check runs so that nested call sees
+    a directory instead of recursing -- and it must be the *right* directory.
+    Publishing ``~/.fcc`` unconditionally (as 6.40.0 did) meant an
+    ``MCC_CONFIG_DIR`` override or a ``~/.mcc``-only install briefly resolved to
+    a legacy home the user may not even have.
+    """
+
+    source_env = os.environ if env is None else env
+    override = source_env.get(CONFIG_DIR_ENV)
+    if override:
+        return ConfigDirResolution(path=Path(override).expanduser(), source="env")
+    base = Path.home() if home is None else home
+    current = base / MCC_CONFIG_DIRNAME
+    if current.is_dir():
+        return ConfigDirResolution(path=current, source="current")
+    legacy = base / LEGACY_CONFIG_DIRNAME
+    if legacy.is_dir():
+        return ConfigDirResolution(path=legacy, source="legacy")
+    return ConfigDirResolution(path=current, source="created")
+
+
 def _resolve_and_log() -> ConfigDirResolution:
     global _resolution
-    # The legacy health check builds a ``Settings`` from the legacy ``.env``,
-    # and ``Settings`` resolves its dotenv list back through this function.
-    # Publishing the legacy home as the provisional answer first means that
-    # nested call sees the directory being probed instead of recursing.
-    _resolution = ConfigDirResolution(
-        path=Path.home() / LEGACY_CONFIG_DIRNAME, source="legacy"
-    )
+    _resolution = provisional_resolution()
     try:
         resolution = resolve_config_dir()
     finally:
@@ -398,6 +445,19 @@ def config_dir_path() -> Path:
     """
 
     return config_dir_resolution().path
+
+
+def new_config_dir_path() -> Path:
+    """Return ``~/.mcc``, whether or not it exists.
+
+    The directory a fresh install creates and the one ``mcc-migrate`` moves a
+    legacy home to. Distinct from ``config_dir_path()``, which is the directory
+    actually in use -- for a legacy user those are different, and confusing the
+    two is what made 6.40.0's Get Started banner test ``~/.fcc`` for the
+    existence of ``~/.mcc``.
+    """
+
+    return Path.home() / MCC_CONFIG_DIRNAME
 
 
 def legacy_config_dir_path() -> Path:

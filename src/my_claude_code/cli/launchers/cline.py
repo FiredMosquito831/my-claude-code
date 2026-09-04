@@ -11,7 +11,7 @@ one wrong assumption:
 
 * ``cline --config <dir>`` moves the whole configuration directory, and Cline
   derives its data directory from the settings file inside it -- so a single
-  flag is enough for MCC to own a tree under ``~/.fcc/cline`` and never read,
+  flag is enough for MCC to own a tree under ``~/.mcc/cline`` and never read,
   write or back up anything under ``~/.cline``. Measured: passing only
   ``--config`` produced the full ``data/{cache,logs,settings}`` layout there.
 * ``openai-native`` is the wrong provider. It is OpenAI's own hosted entry;
@@ -35,7 +35,7 @@ back to ``process.env.OPENAI_API_KEY`` only when ``apiKey`` is absent, and on
 3.0.61 that path did not authenticate and did not terminate -- the run hung.
 With the key in the document the same run answered in 885 ms. So it is written
 into MCC's own file, narrowed to ``0600``, in the same directory tree as
-``~/.fcc/.env`` which already holds the identical token in clear. Nothing is
+``~/.mcc/.env`` which already holds the identical token in clear. Nothing is
 written into a file the user owns.
 
 **Nothing of MCC's own survives in that file.** Cline validates

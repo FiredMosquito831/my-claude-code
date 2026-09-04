@@ -11,7 +11,7 @@ The rule is pointer semantics, three states deep, and each step is a decision
 that was made somewhere else and is only *applied* here:
 
 1. the harness's own entry names a ``model`` -- its chain leads
-   (``~/.fcc/harness_tiers.json``, ``config/harness_tiers``);
+   (``~/.mcc/harness_tiers.json``, ``config/harness_tiers``);
 2. the harness has an entry with no ``model`` -- the global primary leads and
    the harness's own fallbacks follow it;
 3. no entry, or no harness identity at all -- the global chain, which is byte
@@ -81,7 +81,7 @@ def harness_tier_pause_label(harness: str | None, tier: ModelTier) -> str:
     """Name the place a per-harness tier's pause list actually lives.
 
     A per-harness override's paused refs are not in an env var at all -- they
-    are one list inside ``~/.fcc/harness_tiers.json`` -- so telling the operator
+    are one list inside ``~/.mcc/harness_tiers.json`` -- so telling the operator
     to change ``MODEL_HAIKU_PAUSED`` would send them to a setting that has no
     effect on this agent.
     """

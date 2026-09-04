@@ -39,7 +39,8 @@ _TRACE_PAYLOAD_BINDING = "trace_payload"
 # Beyond this many rotated files the sweep is skipped entirely: a directory with
 # an enormous number of files is more likely a misconfiguration (wrong glob,
 # wrong directory) than a real retention problem, and we refuse to bulk-delete
-# on a guess. ``retain_files`` itself is capped well below this.
+# on a guess. ``retain_files`` itself is capped well below this by the
+# ``server_log_retain_files`` field's own range.
 _MAX_ROTATED_FILES = 100_000
 
 # Context keys we promote to top-level JSON for traceability / grep
@@ -162,8 +163,6 @@ def _sweep_rotated_logs(log_path: Path, retain_files: int) -> None:
 
     if retain_files <= 0:
         return
-    if retain_files >= _MAX_ROTATED_FILES:
-        return
     stem = log_path.stem
     suffix = log_path.suffix
     try:
@@ -173,6 +172,21 @@ def _sweep_rotated_logs(log_path: Path, retain_files: int) -> None:
         )
     except OSError as exc:
         logger.warning("Rotated-log sweep could not list {}: {}", log_path.parent, exc)
+        return
+    # The guard is on what we *found*, not on the cap. Until 6.41.1 this read
+    # ``if retain_files >= _MAX_ROTATED_FILES`` -- a comparison between a small
+    # user setting and 100,000, so it could never fire and the "refuse to
+    # bulk-delete on a guess" protection the comment promised did not exist.
+    if len(rotated) >= _MAX_ROTATED_FILES:
+        logger.warning(
+            "Rotated-log sweep skipped: {} holds {} files matching {}.*{}, "
+            "which is more likely a wrong directory than a retention problem. "
+            "Nothing was deleted.",
+            log_path.parent,
+            len(rotated),
+            stem,
+            suffix,
+        )
         return
     excess = len(rotated) - retain_files
     if excess <= 0:

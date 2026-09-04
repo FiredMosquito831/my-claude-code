@@ -18,7 +18,7 @@ a model picker that is empty for reasons nobody can see.
 draft was to merge MCC's tables into the user's own ``config.toml`` the way
 ``config/harness_config_merge.py`` merges one key into Command Code's
 ``providers.json``. It is not needed: ``kimi --config-file PATH`` names the
-config document outright, so MCC owns a file of its own under ``~/.fcc`` and
+config document outright, so MCC owns a file of its own under ``~/.mcc`` and
 the user's ``~/.kimi/config.toml`` is never read, written or backed up. A TOML
 merge writer that preserved comments and layout byte-for-byte would have been
 the single most delicate thing in this package, and the flag makes it

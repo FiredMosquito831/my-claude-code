@@ -53,3 +53,37 @@ def test_admin_persists_mcc_prefixed_keys(monkeypatch) -> None:
     assert "FCC_" in persistence._OWNED_ENV_PREFIXES
     # A populated MCC_ key is treated as project-owned and preserved.
     assert "MCC_SOMETHING".startswith(persistence._OWNED_ENV_PREFIXES)
+
+
+def test_saving_retires_the_legacy_alias_line(tmp_path) -> None:
+    """A Save must not leave the file holding both spellings of one setting.
+
+    ``settings_env_aliases()`` keys on the first ``AliasChoices`` entry, so
+    ``FCC_OPEN_BROWSER`` is not in the managed set; it survived only because it
+    matches the ``FCC_`` owned prefix. The result was an ``.env`` with a
+    ``FCC_OPEN_BROWSER`` line the user could still see and a
+    ``MCC_OPEN_BROWSER`` line that silently outranked it.
+    """
+    from my_claude_code.config.admin import persistence
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "FCC_OPEN_BROWSER=false\nFCC_SMOKE_SOMETHING=keep-me\n", encoding="utf-8"
+    )
+
+    preserved = persistence.unmanaged_env_values(env_file)
+
+    assert "FCC_OPEN_BROWSER" not in preserved
+    # An FCC_* key that is nobody's alias is still project-owned and kept.
+    assert preserved["FCC_SMOKE_SOMETHING"] == "keep-me"
+
+
+def test_superseded_aliases_are_derived_not_listed() -> None:
+    """The retired set comes from ``AliasChoices``, so it cannot go stale."""
+    from my_claude_code.config.admin import persistence
+
+    superseded = persistence.superseded_env_aliases()
+
+    assert "FCC_OPEN_BROWSER" in superseded
+    # The canonical name is never retired by itself.
+    assert "MCC_OPEN_BROWSER" not in superseded

@@ -112,7 +112,7 @@ def with_api_key(
     Cline stores a plain string and its environment fallback does not work for
     a headless run (measured: 3.0.61 blocked indefinitely with ``apiKey``
     absent and ``OPENAI_API_KEY`` set), so the value has to be literal. The
-    file it lands in is MCC's own under ``~/.fcc/cline``, narrowed to ``0600``
+    file it lands in is MCC's own under ``~/.mcc/cline``, narrowed to ``0600``
     by the launcher; nothing is written into ``~/.cline``.
     """
 

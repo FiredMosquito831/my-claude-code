@@ -176,7 +176,13 @@ def build_model_catalog_config_args(catalog_path: str) -> list[str]:
 
 
 def codex_config_args(*, api_url: str, model: str | None = None) -> list[str]:
-    """Return Codex `-c` assignments for the ephemeral FCC provider."""
+    """Return Codex `-c` assignments for the ephemeral MCC provider.
+
+    The provider id stays ``fcc``: it is a key inside the user's own Codex
+    configuration, passed on the command line for one launch, and any Codex
+    profile or history referring to it by name keeps working only while the id
+    does not move. It is not a config-directory name.
+    """
 
     args = [
         "-c",

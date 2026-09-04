@@ -8,7 +8,7 @@ not install it; the registry's install hint is printed and the launcher exits
 each of them in the working directory, the git root *and* the home directory --
 so simply writing them would mean writing into the user's own ``~``. Both have
 a flag: ``--model-metadata-file`` and ``--model-settings-file``. MCC owns
-``~/.fcc/aider-model-metadata.json`` and ``~/.fcc/aider-model-settings.yml``,
+``~/.mcc/aider-model-metadata.json`` and ``~/.mcc/aider-model-settings.yml``,
 passes both flags, and never creates a ``.aider.model.*`` file anywhere.
 
 The two carry different kinds of fact. The metadata file is LiteLLM's

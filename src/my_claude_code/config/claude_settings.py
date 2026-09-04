@@ -12,6 +12,10 @@ from my_claude_code.config.paths import (
 
 CLAUDE_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
 CLAUDE_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
+# Kept ``fcc``-branded on purpose (see ``config.atomic_json``): this names a
+# backup file that already exists on users' disks next to their
+# ``~/.claude/settings.json``. Renaming it would orphan every backup taken
+# before the change -- the one file whose whole job is to still be findable.
 CLAUDE_SETTINGS_BACKUP_SUFFIX = ".fcc-backup"
 
 

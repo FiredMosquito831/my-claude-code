@@ -18,7 +18,7 @@ MCC's own native protocol, so it is the one used.
 *runtime settings overlay*, merged into the same hierarchy for that process
 only. Measured on a machine with no ``~/.factory`` at all, a file containing
 nothing but ``customModels`` was enough for the model to appear and dispatch.
-So MCC owns ``~/.fcc/droid-settings.json`` outright and never reads, merges
+So MCC owns ``~/.mcc/droid-settings.json`` outright and never reads, merges
 into or backs up the user's own settings. (Droid's persistent file is
 ``~/.factory/settings.json`` in current versions, with ``config.json`` kept as
 a legacy snake_case fallback -- MCC touches neither.)

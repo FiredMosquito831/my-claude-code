@@ -47,7 +47,7 @@ is the same shape. A root without ``/v1`` would produce
 missing ``apiKey`` from ``process.env.OPENAI_API_KEY``. Measured on 3.0.61:
 with ``apiKey`` absent and the variable set, the run did not authenticate and
 did not terminate. With the key in the document, the same run answered in
-885 ms. So MCC writes it -- into ``~/.fcc/cline/data/settings/providers.json``,
+885 ms. So MCC writes it -- into ``~/.mcc/cline/data/settings/providers.json``,
 a file MCC owns and narrows to ``0600``, never into ``~/.cline``.
 
 **Unknown stays unknown.** ``contextWindow`` and ``maxTokens`` are optional

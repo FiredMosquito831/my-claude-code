@@ -53,7 +53,7 @@ def _help_text() -> str:
     return f"""My Claude Code -- commands
 
 The proxy runs on your machine and routes your coding agents to the models and
-providers you configure. Everything is local: your keys stay in ~/.fcc.
+providers you configure. Everything is local: your keys stay in ~/.mcc.
 
 Start the proxy:
   mcc-server              Start the local proxy and admin dashboard
@@ -63,7 +63,7 @@ Use a coding agent through the proxy:
 {_harness_command_lines()}
 
 Manage and inspect:
-  mcc-init                Create or repair ~/.fcc/.env with the config template
+  mcc-init                Create or repair ~/.mcc/.env with the config template
   mcc-chatgpt-oauth-login Log in to ChatGPT/Codex via OAuth device flow
   mcc-anthropic-oauth-login Log in to a Claude subscription via OAuth
                           (unsupported by Anthropic -- see
@@ -174,7 +174,7 @@ def rtk(argv: Sequence[str] | None = None) -> None:
 
 
 def migrate_config_dir(argv: Sequence[str] | None = None) -> int:
-    """Move the legacy ``~/.fcc`` home to ``~/.mcc`` (opt-in)."""
+    """Move the legacy ``~/.mcc`` home to ``~/.mcc`` (opt-in)."""
     if _print_version_if_requested(argv):
         return 0
 

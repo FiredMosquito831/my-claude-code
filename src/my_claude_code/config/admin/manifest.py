@@ -1151,7 +1151,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Seconds an mcc-<agent> launcher waits for this server to build a "
             "coding agent's model list the first time, when no document for "
-            "that agent exists under ~/.fcc yet. Every later launch reads the "
+            "that agent exists under ~/.mcc yet. Every later launch reads the "
             "file the server keeps up to date and spends none of this. Read by "
             "the launcher process, so a change applies to the next mcc-<agent> "
             "you run, not to the server. 1s is the floor."

@@ -1073,7 +1073,7 @@ def set_request_log_path(path: Path | None) -> None:
 
     Every MCC entrypoint calls this (via ``cli.entrypoints``) right after the
     config directory is resolved and before any store is opened, so the path
-    honours ``MCC_CONFIG_DIR`` and the ``~/.mcc``/``~/.fcc`` rule. Tests call it
+    honours ``MCC_CONFIG_DIR`` and the ``~/.mcc``/legacy-``~/.fcc`` rule. Tests call it
     directly to point the log at a scratch directory; pass ``None`` to clear
     the recorded path (used in test teardown).
     """

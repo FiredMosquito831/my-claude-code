@@ -435,7 +435,10 @@ class TestSingleInstance:
         assert windows == []
         assert ActivationSignal(tmp_path / "desktop.activate").poll() is True
 
-    def test_signal_shows_the_running_instance_window(self, tmp_path):
+    def test_signal_shows_the_running_instance_window(self, tmp_path, monkeypatch):
+        # ``show_window`` persists the open state, which lands in
+        # ``<config dir>/desktop.json`` -- the developer's real one without this.
+        _set_home(monkeypatch, tmp_path)
         window = _FakeWindow()
         controller = DesktopController.__new__(DesktopController)
         object.__setattr__(controller, "_window", window)

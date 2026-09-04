@@ -11,6 +11,9 @@ The [README](../README.md) is the overview. This is the long-form manual.
 - [1. How it works](#1-how-it-works)
 - [2. Install](#2-install)
 - [3. First run](#3-first-run)
+  - [Where your configuration lives](#where-your-configuration-lives)
+  - [Legacy `~/.fcc`: migrating with `mcc-migrate`](#legacy-fcc-migrating-with-mcc-migrate)
+  - [Pinning a directory with `MCC_CONFIG_DIR`](#pinning-a-directory-with-mcc_config_dir)
   - [Running the server with the desktop tray](#running-the-server-with-the-desktop-tray)
   - [Picking a window](#picking-a-window)
   - [Installing the desktop shortcut](#installing-the-desktop-shortcut)
@@ -67,7 +70,7 @@ Three consequences worth internalising before you start:
 
 ## 2. Install
 
-> **Pick one environment and stay in it.** On Windows you can install under PowerShell *or* WSL. Both work — but they keep **separate configs** (`C:\Users\<you>\`.mcc` versus `~/`.mcc` inside WSL). Installing in both is the most common way to end up editing one config while the server reads the other.
+> **Pick one environment and stay in it.** On Windows you can install under PowerShell *or* WSL. Both work — but they keep **separate configs** (`C:\Users\<you>\.mcc` versus `~/.mcc` inside WSL). Installing in both is the most common way to end up editing one config while the server reads the other.
 >
 > Already develop inside WSL? Install in WSL. Otherwise use PowerShell.
 
@@ -146,6 +149,120 @@ That file records **choices, not defaults**. A setting you have never touched ap
 There is also a **Guide** tab inside the dashboard with a condensed version of this document, available offline.
 
 On first run, the dashboard opens straight to a **Get Started** checklist instead of the Providers tab. It walks through configuring a provider, mapping model tiers, connecting Claude Code, and then points at the optional web search and analytics pages. Dismiss it once you're set up — the Get Started tab stays in the nav if you want it back.
+
+### Where your configuration lives
+
+Everything MCC keeps for you sits in one directory: the `.env` above, your
+custom providers, the OAuth tokens under `auth/`, the per-agent documents the
+`mcc-*` launchers write, and `logs/` (the server log plus the request-analytics
+database).
+
+| Install | Directory |
+| --- | --- |
+| A new install | `~/.mcc` — on Windows, `C:\Users\<you>\.mcc` |
+| Installed before 6.40.0 | `~/.fcc`, the legacy directory, still used exactly as it always was |
+| `MCC_CONFIG_DIR` set | whatever absolute path you gave it, override everything else |
+
+The server prints which directory it chose on the first line of its startup
+log, and the Get Started page repeats it. If you are ever unsure which config
+you are editing, that is the authoritative answer.
+
+The rule is short and it never moves anything:
+
+1. `MCC_CONFIG_DIR` wins whenever it is set.
+2. Otherwise `~/.mcc`, if it exists. If a legacy `~/.fcc` exists too, `~/.mcc`
+   wins, the startup log names both, and the legacy one is left completely
+   untouched — the two are never merged.
+3. Otherwise the legacy `~/.fcc`, if it exists.
+4. Otherwise a fresh `~/.mcc` is created.
+
+**Nothing is ever migrated for you.** If you have been running MCC since before
+6.40.0 your data stays in the legacy `~/.fcc` for as long as you like; the
+directory is fully supported and there is no deadline. The *only* thing that
+turns `~/.fcc` into `~/.mcc` is you running `mcc-migrate` yourself. There is no
+dashboard button and no HTTP route for it, on purpose: relocating your keys and
+your request history is not an action a web page you happen to have open should
+be able to take.
+
+#### Legacy `~/.fcc`: migrating with `mcc-migrate`
+
+`mcc-migrate` (`fcc-migrate` is the same command) renames `~/.fcc` to `~/.mcc`
+in a single atomic step. Nothing is copied, nothing is deleted, and nothing is
+merged — it either relocates the whole tree at once or it refuses and leaves
+everything as it was.
+
+**Stop the server and the tray first.** This is not optional. A server that is
+still running cached its log path at startup; it goes on writing to the old
+location and recreates the legacy directory behind you, leaving you with two
+half-configs. The command refuses to run while it can see a live MCC — it
+checks the tray's lock file and knocks on the server's `/health` port — but
+stop them yourself rather than relying on that.
+
+```bash
+# 1. Stop the server (Ctrl-C in its terminal) and quit the tray from its menu.
+# 2. Then:
+mcc-migrate
+# 3. Start the server again:
+mcc-server
+```
+
+Windows PowerShell is identical — the command is on your `PATH` after any
+install.
+
+What you should see:
+
+```text
+Moved C:\Users\you\.fcc to C:\Users\you\.mcc. Nothing was copied and nothing
+was deleted.
+
+Rollback note written to C:\Users\you\.fcc-old\RESTORE.txt.
+```
+
+The command creates one more directory, `~/.fcc-old`, containing a single
+`RESTORE.txt` and no data at all. That file records the date and the exact
+command to move everything back, written so that it **fails loudly** if the
+legacy directory has reappeared instead of quietly nesting your config inside
+it. Delete `~/.fcc-old` whenever you are satisfied; nothing reads it.
+
+Reasons the command will refuse, all of which leave every file where it is:
+
+| Message | What to do |
+| --- | --- |
+| `Refusing to migrate: … already exists` | Both directories are present. Only you know which holds the data you want — move the unwanted one aside, or just keep using `~/.mcc`. |
+| `Refusing to migrate: an MCC server is answering …` | Stop the server, then re-run. |
+| `Refusing to migrate: the desktop tray still holds …` | Quit the tray from its menu, then re-run. |
+| `Could not move …: a file inside the legacy home is still open` | Windows only. The message lists the `mcc-*`/`fcc-*` processes holding files; close them and re-run. |
+
+If you would rather not move anything, you do not have to. Setting
+`MCC_CONFIG_DIR=C:\Users\you\.fcc` (or `~/.fcc`) pins the legacy directory
+explicitly and silences the startup notice.
+
+#### Pinning a directory with `MCC_CONFIG_DIR`
+
+`MCC_CONFIG_DIR` is an environment variable, not a `.env` setting — the
+directory has to be known before there is a `.env` to read. Set it in your
+shell (or in the service definition that starts the server) to an absolute
+path, and every process that reads it uses that directory and nothing else:
+
+```bash
+export MCC_CONFIG_DIR=/srv/mcc/config      # bash/zsh
+$env:MCC_CONFIG_DIR = "D:\mcc\config"      # PowerShell, current session
+```
+
+It has to be set for the launchers too, not just the server — an `mcc-claude`
+started in a shell without it reads a different directory than the server does.
+There is no legacy FCC_-prefixed spelling of it; the variable was introduced
+with the `MCC_` name and has only ever had that one.
+
+#### Server logs under `logs/`
+
+`logs/server.log` is the current log; older ones rotate to `server.<date>.log`.
+`SERVER_LOG_RETAIN_FILES` (default `10`) is how many rotated files to keep —
+the current one is never counted and never deleted. `0` keeps every rotated
+file, which is how an earlier install grew a 17 GB `logs/` directory. The sweep
+runs at startup as well as on each rotation, so lowering the number cleans up a
+backlog on the next restart. `logs/requests.db` is the request-analytics
+database and is never touched by log rotation.
 
 ### The two addresses that matter
 
@@ -528,7 +645,7 @@ names an *extra* config file, merged into its precedence chain rather than
 replacing it — `OPENCODE_CONFIG` for OpenCode
 ([docs](https://opencode.ai/docs/config/)) and `KILO_CONFIG` for Kilo
 ([docs](https://kilo.ai/docs/code-with-ai/platforms/cli)) — so MCC writes a
-document of its own under `~/`.mcc` and hands the launched process its path:
+document of its own under `~/.mcc` and hands the launched process its path:
 
 | Command | File MCC owns | Variable it is handed with |
 | --- | --- | --- |
@@ -541,7 +658,7 @@ backed up. Stop launching through MCC and the file you wrote is the file you
 have.
 
 **The server owns the file; the launcher reads it.** `mcc-server` writes every
-agent's document under `~/`.mcc` when it starts, and rewrites it whenever the
+agent's document under `~/.mcc` when it starts, and rewrites it whenever the
 model inventory or any model's resolved capabilities change. `mcc-opencode`
 opens the file it needs and launches — no HTTP, no wait. It asks the server to
 build one only when the file is not there at all, which on a machine where the
@@ -666,7 +783,7 @@ reason is in the table above: `api_key` is a plain string with no `"$VAR"`,
 `"{env:VAR}"` or `"!command"` form, and Kimi's environment overrides do not
 reach an `anthropic` provider. There is no out-of-band channel, so the choice
 was a literal value or no Kimi Code support at all. The literal goes into a
-file MCC owns under `~/`.mcc`, mode `0600`, in the same directory as the
+file MCC owns under `~/.mcc`, mode `0600`, in the same directory as the
 `~/.mcc/.env` that already holds the identical `ANTHROPIC_AUTH_TOKEN` in
 clear — nothing is disclosed that was not disclosed already, and nothing is
 written into a document you own. With proxy auth off, the value written is the
@@ -1514,7 +1631,7 @@ global route. Nothing about the log's schema changed and exports are unchanged.
 
 ### How an agent's model list gets to disk
 
-Every agent's generated document lives under `~/`.mcc` — `~/.mcc/opencode-config.json`,
+Every agent's generated document lives under `~/.mcc` — `~/.mcc/opencode-config.json`,
 `~/.mcc/crush/crush.json`, `~/.mcc/kimi-code-config.toml` and the rest, one per
 agent, all listed on the **Coding agents** page with the path and the time it was
 last written. They are MCC's files in MCC's own directory; nothing is ever
@@ -1664,7 +1781,7 @@ It means exactly one thing: this host answered a real request with a 400 whose o
 
 The same holds for the output cap a host states in a 400: the number is read out of the host's own message, applied to that request, and used to clamp later ones. It only ever lowers what is asked for.
 
-**Both memories are per process, and that is deliberate.** They live on the provider instance, so a config reload, a restart, or an update rebuilds the provider and forgets everything it had learned. Nothing is written to `~/`.mcc`. A host that was briefly misconfigured therefore heals by itself rather than staying blacklisted until someone notices — at the cost of paying each 400 once more after a restart, which is one request per model.
+**Both memories are per process, and that is deliberate.** They live on the provider instance, so a config reload, a restart, or an update rebuilds the provider and forgets everything it had learned. Nothing is written to `~/.mcc`. A host that was briefly misconfigured therefore heals by itself rather than staying blacklisted until someone notices — at the cost of paying each 400 once more after a restart, which is one request per model.
 
 A 400 that names a **sampling** parameter — `top_p`, `temperature`, `seed` — is never treated as a reasoning rejection: dropping thinking would not have fixed it, so the error is raised. So is a 400 that names nothing recognisable at all; Command Code's Anthropic endpoint answers a malformed `thinking` value with a bare `Invalid input`, and a gateway that vague gets a visible failure rather than a guess.
 
@@ -2354,7 +2471,7 @@ If Windows refuses to move a launcher aside (an antivirus scan, the search index
 That means a command the release publishes is genuinely absent, not merely stale. Close the `mcc-claude` window(s) and the tray, then re-run the install command. The installer exits non-zero in that case — it never reports "verified" for a command that does not exist.
 
 **Two configs on Windows.**
-If you installed under both PowerShell and WSL you have `C:\Users\<you>\`.mcc` *and* `~/`.mcc` inside WSL. The server prints which config directory it is using at startup — check that against the one you've been editing.
+If you installed under both PowerShell and WSL you have `C:\Users\<you>\.mcc` *and* `~/.mcc` inside WSL. The server prints which config directory it is using at startup — check that against the one you've been editing.
 
 **Claude Code still talks to Anthropic.**
 `~/.claude/settings.json` wins over shell exports. Confirm with `/status` — it should show `http://127.0.0.1:8082`. Check the JSON is valid and that you edited the path for your platform.

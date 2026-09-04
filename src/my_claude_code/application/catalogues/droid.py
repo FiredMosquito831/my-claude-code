@@ -19,7 +19,7 @@ and therefore a ``<root>/v1`` base URL; it is simply the longer way round.
 settings overlay*, merged for that process only into the same hierarchy as
 ``~/.factory/settings.json``. Measured on a machine with no ``~/.factory`` at
 all, a file containing nothing but ``customModels`` was enough for the model to
-appear and dispatch. So MCC owns ``~/.fcc/droid-settings.json`` outright and
+appear and dispatch. So MCC owns ``~/.mcc/droid-settings.json`` outright and
 never reads, merges into or backs up the user's own settings.
 
 **Base URL shape.** ``baseUrl`` goes to the Anthropic SDK, which appends

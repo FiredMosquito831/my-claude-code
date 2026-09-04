@@ -220,3 +220,118 @@ def test_configure_logging_updates_verbosity_on_same_level(tmp_path) -> None:
     logger.info("still logging")
     logger.complete()
     assert "still logging" in Path(log_file).read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------- the sweep's own guard
+
+
+def _rotated(directory: Path, count: int, *, stem: str = "server") -> list[Path]:
+    """Create ``count`` rotated ``<stem>.<n>.log`` files, oldest first."""
+    import os
+    import time
+
+    files = []
+    base = time.time() - count
+    for index in range(count):
+        path = directory / f"{stem}.{index}.log"
+        path.write_text(f"rotated {index}\n", encoding="utf-8")
+        os.utime(path, (base + index, base + index))
+        files.append(path)
+    return files
+
+
+def test_sweep_removes_only_the_oldest_beyond_the_cap(tmp_path) -> None:
+    log_file = tmp_path / "server.log"
+    log_file.write_text("current\n", encoding="utf-8")
+    rotated = _rotated(tmp_path, 6)
+
+    logging_config._sweep_rotated_logs(log_file, 2)
+
+    assert log_file.exists()
+    assert [path.name for path in sorted(tmp_path.glob("server.*.log"))] == [
+        "server.4.log",
+        "server.5.log",
+    ]
+    assert not rotated[0].exists()
+
+
+def test_sweep_is_skipped_when_the_directory_holds_absurdly_many_files(
+    tmp_path, monkeypatch
+) -> None:
+    """The guard tests what was *found*, not the cap.
+
+    Until 6.41.1 the code read ``if retain_files >= _MAX_ROTATED_FILES`` --
+    comparing a small user setting against 100,000, so it could never fire.
+    The documented "refuse to bulk-delete on a guess" protection did not exist:
+    a wrong glob or a wrong directory would have been swept anyway.
+    """
+    log_file = tmp_path / "server.log"
+    log_file.write_text("current\n", encoding="utf-8")
+    _rotated(tmp_path, 5)
+    monkeypatch.setattr(logging_config, "_MAX_ROTATED_FILES", 3)
+
+    logging_config._sweep_rotated_logs(log_file, 1)
+
+    assert len(list(tmp_path.glob("server.*.log"))) == 5
+
+
+def test_sweep_still_runs_just_below_the_guard(tmp_path, monkeypatch) -> None:
+    """The guard must not be so eager that ordinary retention stops working."""
+    log_file = tmp_path / "server.log"
+    log_file.write_text("current\n", encoding="utf-8")
+    _rotated(tmp_path, 4)
+    monkeypatch.setattr(logging_config, "_MAX_ROTATED_FILES", 5)
+
+    logging_config._sweep_rotated_logs(log_file, 1)
+
+    assert len(list(tmp_path.glob("server.*.log"))) == 1
+
+
+def test_sweep_never_touches_the_request_database(tmp_path) -> None:
+    """The glob is ``server.*.log``; ``logs/`` also holds the analytics store."""
+    log_file = tmp_path / "server.log"
+    log_file.write_text("current\n", encoding="utf-8")
+    _rotated(tmp_path, 5)
+    database = tmp_path / "requests.db"
+    database.write_bytes(b"sqlite")
+    wal = tmp_path / "requests.db-wal"
+    wal.write_bytes(b"wal")
+    websearch = tmp_path / "websearch.db"
+    websearch.write_bytes(b"sqlite")
+
+    logging_config._sweep_rotated_logs(log_file, 1)
+
+    assert database.exists()
+    assert wal.exists()
+    assert websearch.exists()
+
+
+def test_retain_files_setting_rejects_a_value_outside_its_range(monkeypatch) -> None:
+    """The bound lives on the field, not only in ``configure_logging``.
+
+    A negative value was silently clamped to "keep all"; a value at or above
+    the sweep's own guard disabled the sweep. Neither is a thing a user can
+    mean, and neither said so.
+    """
+    import pytest
+    from pydantic import ValidationError
+
+    from my_claude_code.config.settings import Settings
+
+    field = Settings.model_fields["server_log_retain_files"]
+    bounds = {
+        type(metadata).__name__: getattr(metadata, "ge", getattr(metadata, "le", None))
+        for metadata in field.metadata
+    }
+    assert bounds, "server_log_retain_files must carry a range"
+
+    def build(value: str) -> Settings:
+        monkeypatch.setenv("SERVER_LOG_RETAIN_FILES", value)
+        return Settings()
+
+    with pytest.raises(ValidationError):
+        build("-1")
+    with pytest.raises(ValidationError):
+        build("100001")
+    assert build("0").server_log_retain_files == 0
+    assert build("100000").server_log_retain_files == 100_000

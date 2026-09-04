@@ -1,4 +1,4 @@
-"""Per-coding-agent tier overrides: ``~/.fcc/harness_tiers.json``.
+"""Per-coding-agent tier overrides: ``~/.mcc/harness_tiers.json``.
 
 The five tier aliases (``core/tier_refs``) point at the global Claude routes by
 default, so ``mcc/medium`` from OpenCode and ``claude-sonnet-5`` from Claude Code
@@ -34,8 +34,8 @@ entry present, no `model`   inherit the global primary, but honour this
 A JSON document rather than settings fields, deliberately. Thirteen harnesses
 carry a catalogue; 13 x 5 tiers x 3 keys is 195 new ``Settings`` fields, each
 needing its own ``ConfigFieldSpec`` and its own consumer-contract hop. That is
-not a manifest, it is a second product. ``~/.fcc/model_overrides.json`` and
-``~/.fcc/rtk.json`` already set the precedent for "structured per-key config
+not a manifest, it is a second product. ``~/.mcc/model_overrides.json`` and
+``~/.mcc/rtk.json`` already set the precedent for "structured per-key config
 that is not an env var", and the dashboard rule is "settable on the dashboard",
 which the Coding agents card's Tiers section satisfies directly.
 
