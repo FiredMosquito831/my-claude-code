@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The shell's own pages may reach the shell's own commands. No capability is granted to any remote page: the dashboard is rendered, never talked to.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

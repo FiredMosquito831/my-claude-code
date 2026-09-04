@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>My Claude Code</title>
+    <!--
+      Every byte of this page ships inside the binary and it makes no network
+      request of any kind. That is contract C8: the admin API refuses a
+      non-loopback origin, so a page the shell serves itself must never fetch
+      it. Everything shown here was pushed in by Rust, which read it from
+      `mcc-desktop --print-status`.
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        --ink: #10131a;
+        --muted: #5a6273;
+        --ground: #f6f7fb;
+        --card: #ffffff;
+        --line: #e2e5ee;
+        --accent: #6c8dff;
+        --warn: #b25b16;
+        --bad: #b3261e;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ink: #e8ebf3;
+          --muted: #99a1b3;
+          --ground: #12151c;
+          --card: #191d26;
+          --line: #2a303c;
+          --warn: #e2a45f;
+          --bad: #f2857c;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 32px;
+        background: var(--ground);
+        color: var(--ink);
+        font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      main {
+        width: min(680px, 100%);
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 28px 30px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 19px;
+        letter-spacing: -0.01em;
+      }
+      p {
+        margin: 0 0 14px;
+        color: var(--muted);
+      }
+      p.lead {
+        color: var(--ink);
+      }
+      .spinner {
+        width: 22px;
+        height: 22px;
+        margin-bottom: 14px;
+        border: 2px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .spinner {
+          animation-duration: 3s;
+        }
+      }
+      code,
+      pre {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 13px;
+      }
+      code.command {
+        display: block;
+        padding: 10px 12px;
+        margin-bottom: 14px;
+        overflow-x: auto;
+        white-space: pre;
+        background: var(--ground);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      pre#output {
+        max-height: 320px;
+        overflow: auto;
+        margin: 0;
+        padding: 10px 12px;
+        background: var(--ground);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: var(--muted);
+      }
+      .path {
+        display: block;
+        padding: 8px 10px;
+        margin-bottom: 14px;
+        overflow-x: auto;
+        white-space: pre;
+        background: var(--ground);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      button {
+        font: inherit;
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+      button:hover {
+        filter: brightness(1.06);
+      }
+      .warn h1 {
+        color: var(--warn);
+      }
+      .bad h1 {
+        color: var(--bad);
+      }
+      #ipc {
+        display: none;
+        margin: 16px 0 0;
+        color: var(--warn);
+        font-size: 13px;
+      }
+      body[data-ipc="broken"] #ipc {
+        display: block;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="card">
+      <div class="spinner" id="spinner"></div>
+      <h1 id="title">My Claude Code</h1>
+      <p class="lead" id="message">Checking the server...</p>
+
+      <code class="command" id="command" hidden></code>
+      <pre id="output" hidden></pre>
+
+      <p id="log-label" hidden>The server log is at:</p>
+      <code class="path" id="log" hidden></code>
+
+      <button id="retry" hidden>Retry</button>
+      <p id="ipc">
+        This window cannot reach its own controls. Quit it from the tray icon
+        and start it again.
+      </p>
+    </main>
+
+    <script>
+      (function () {
+        var card = document.getElementById("card");
+        var spinner = document.getElementById("spinner");
+        var title = document.getElementById("title");
+        var message = document.getElementById("message");
+        var command = document.getElementById("command");
+        var output = document.getElementById("output");
+        var logLabel = document.getElementById("log-label");
+        var log = document.getElementById("log");
+        var retry = document.getElementById("retry");
+
+        var TITLES = {
+          checking: "My Claude Code",
+          starting: "Starting the server",
+          installing: "Installing My Claude Code",
+          "not-our-server": "The server is not running",
+          "port-conflict": "Something else is on the port",
+          reconnecting: "Reconnecting",
+          error: "My Claude Code could not start",
+        };
+
+        function render(state) {
+          if (!state || !state.kind) {
+            return;
+          }
+          var kind = state.kind;
+          title.textContent = TITLES[kind] || "My Claude Code";
+          message.textContent = state.message || "Checking the server...";
+          card.className = "";
+          if (kind === "not-our-server" || kind === "reconnecting") {
+            card.className = "warn";
+          } else if (kind === "port-conflict" || kind === "error") {
+            card.className = "bad";
+          }
+          spinner.hidden = !(
+            kind === "checking" ||
+            kind === "starting" ||
+            kind === "installing" ||
+            kind === "reconnecting"
+          );
+
+          var installing = kind === "installing";
+          command.hidden = !installing;
+          output.hidden = !installing;
+          if (installing) {
+            command.textContent = state.command || "";
+          }
+
+          var hasLog = !!state.server_log;
+          logLabel.hidden = !hasLog;
+          log.hidden = !hasLog;
+          if (hasLog) {
+            log.textContent = state.server_log;
+          }
+
+          // Retry is offered wherever waiting again could change the answer.
+          retry.hidden = !(
+            kind === "error" ||
+            kind === "port-conflict" ||
+            kind === "not-our-server"
+          );
+        }
+
+        function append(line) {
+          output.textContent += line + "\n";
+          output.scrollTop = output.scrollHeight;
+        }
+
+        window.__mccShell = { render: render, append: append };
+
+        // Rust may have pushed a state before this document existed.
+        if (window.__mccShellPending) {
+          render(window.__mccShellPending);
+        }
+        if (window.__mccShellOutput) {
+          window.__mccShellOutput.forEach(append);
+        }
+
+        function invoke(name) {
+          var internals = window.__TAURI_INTERNALS__;
+          if (!internals || !internals.invoke) {
+            return Promise.reject(new Error("no control channel"));
+          }
+          return internals.invoke(name, {});
+        }
+
+        retry.addEventListener("click", function () {
+          retry.disabled = true;
+          message.textContent = "Checking again...";
+          spinner.hidden = false;
+          invoke("shell_retry").catch(function () {
+            document.body.dataset.ipc = "broken";
+            retry.disabled = false;
+          });
+        });
+
+        // One round trip on load, so a control channel that is not working is
+        // visible in the window rather than only at the moment it is needed.
+        invoke("shell_ready").catch(function () {
+          document.body.dataset.ipc = "broken";
+        });
+      })();
+    </script>
+  </body>
+</html>

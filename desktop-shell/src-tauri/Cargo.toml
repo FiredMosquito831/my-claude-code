@@ -1,0 +1,40 @@
+[package]
+name = "my-claude-code-shell"
+version = "0.1.0"
+description = "The My Claude Code desktop window: it renders the admin dashboard the server serves."
+authors = ["My Claude Code"]
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+# The binary is version-agnostic on purpose (decision Q5): a Start Menu
+# shortcut and a .desktop Exec= line point at this name forever, so an upgrade
+# never orphans them.
+[[bin]]
+name = "MyClaudeCode"
+path = "src/main.rs"
+
+[lib]
+name = "mcc_shell"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.11.5", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "=2.3.4"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+url = "=2.5.7"
+
+[features]
+# Tauri's own convention: `cargo build --features custom-protocol` for release.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

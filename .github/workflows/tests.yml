@@ -72,3 +72,53 @@ jobs:
 
       - name: Run
         run: ${{ matrix.run }}
+
+  desktop-shell:
+    # The shell is a Rust binary, so nothing above would ever compile it. This
+    # job exists to prove the Linux build now, ahead of the multi-OS release
+    # matrix (spec S3): Linux is the platform the shell is new work on, and a
+    # break there would otherwise only surface at release time.
+    name: desktop-shell (cargo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 1
+
+      - name: Install the webview and tray system libraries
+        # webkit2gtk **4.1**, not 4.0: Ubuntu 24.04 no longer ships 4.0 at all,
+        # and 4.1 is the declared distribution floor (Ubuntu 22.04+, Debian 12+,
+        # Fedora 40+).
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y             libwebkit2gtk-4.1-dev             libgtk-3-dev             libayatana-appindicator3-dev             librsvg2-dev
+
+      - name: Cache cargo
+        uses: actions/cache@640a1c2554105b57832a23eea0b4672fc7a790d5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop-shell/src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('desktop-shell/src-tauri/Cargo.lock') }}
+
+      - name: cargo fmt
+        working-directory: desktop-shell/src-tauri
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        working-directory: desktop-shell/src-tauri
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: cargo test
+        working-directory: desktop-shell/src-tauri
+        run: cargo test --locked
+
+      - name: cargo build
+        working-directory: desktop-shell/src-tauri
+        run: cargo build --release --locked

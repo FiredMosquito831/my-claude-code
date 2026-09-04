@@ -1,0 +1,2 @@
+desktop-shell/** text=auto eol=lf
+desktop-shell/src-tauri/icons/** binary
