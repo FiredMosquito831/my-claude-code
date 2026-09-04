@@ -1348,6 +1348,35 @@ def test_the_dmg_smoke_expects_gatekeeper_to_reject_the_app() -> None:
     assert "/Applications or ~/Applications changed" in text
 
 
+def test_the_dmg_smokes_snapshot_survives_a_missing_applications_directory() -> None:
+    """`set -euo pipefail` plus a `~/Applications` that is not there.
+
+    A runner has no `~/Applications`, `ls` exits non-zero for it, and a
+    failing command in a pipeline is a failing pipeline -- so the unguarded
+    form exits 1 on the smoke's second line, before a single assertion has
+    run. That is not hypothetical: it is what the v6.45.2 release did.
+    """
+
+    text = MACOS_DMG_SMOKE.read_text(encoding="utf-8")
+    snapshot = text.split("snapshot() {")[1].split("\n}")[0]
+    for directory in ("/Applications", '"$HOME/Applications"'):
+        listing = next(
+            line for line in snapshot.splitlines() if f"ls -1a {directory}" in line
+        )
+        assert "|| true" in listing, (
+            f"the snapshot's listing of {directory} is not guarded; under "
+            "set -euo pipefail a missing directory ends the smoke with no "
+            f"assertion run: {listing.strip()}"
+        )
+
+    # The same class of bug, two lines down: an assignment whose command
+    # substitution fails ends the script silently.
+    assert 'defaults read "$plist" "$1" 2>/dev/null || true' in text, (
+        "read_key must return empty for a missing key, so the assertion that "
+        "follows can name it"
+    )
+
+
 def test_the_server_installer_steps_aside_for_the_macos_desktop_app() -> None:
     """`install.sh --desktop` must not overwrite the application.
 

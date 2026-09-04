@@ -70,10 +70,15 @@ ok "image present: $(stat -f %z "$dmg") bytes, $(shasum -a 256 "$dmg" | cut -d' 
 # Both application directories, before anything is mounted. `~/Applications`
 # usually does not exist on a runner, and "absent" is a state this compares
 # just as happily as a listing.
+# Every `ls` carries `|| true`, and it is not decoration: this script runs
+# under `set -euo pipefail`, `~/Applications` does not exist on a runner, and
+# a failing `ls` inside a pipeline is a failing pipeline. Without it the smoke
+# exits 1 on its second line, before it has asserted anything -- which is
+# exactly what happened on the first release that ran it.
 snapshot() {
     {
-        ls -1a /Applications 2>/dev/null | sed 's|^|/Applications/|'
-        ls -1a "$HOME/Applications" 2>/dev/null | sed 's|^|~/Applications/|'
+        { ls -1a /Applications 2>/dev/null || true; } | sed 's|^|/Applications/|'
+        { ls -1a "$HOME/Applications" 2>/dev/null || true; } | sed 's|^|~/Applications/|'
     } | LC_ALL=C sort
 }
 
@@ -150,7 +155,10 @@ plutil -lint "$app/Contents/Info.plist" || fail "Info.plist does not lint"
 
 plist="$app/Contents/Info"
 read_key() {
-    defaults read "$plist" "$1" 2>/dev/null
+    # `|| true`: a missing key must produce an empty string and a *named*
+    # assertion failure below, not a bare `set -e` exit from inside a command
+    # substitution.
+    defaults read "$plist" "$1" 2>/dev/null || true
 }
 
 [ "$(read_key CFBundleIdentifier)" = "$IDENTIFIER" ] \
@@ -197,7 +205,7 @@ ok "codesign --verify --deep --strict passes (ad-hoc seal intact)"
 # The seal is ad-hoc, which means it has no identity. Assert that too, so the
 # day somebody quietly adds a certificate the documentation gets updated with
 # it rather than after it.
-authority="$(codesign --display --verbose=4 "$app" 2>&1 | sed -n 's/^Authority=//p' | head -n 1)"
+authority="$(codesign --display --verbose=4 "$app" 2>&1 | sed -n 's/^Authority=//p' || true)"
 [ -z "$authority" ] \
     || fail "the bundle carries a signing authority ('$authority'); the docs say it is ad-hoc"
 ok "no signing authority: the signature is ad-hoc, as documented"
