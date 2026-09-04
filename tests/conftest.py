@@ -59,6 +59,27 @@ def _isolate_request_log(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_websearch_analytics(monkeypatch, tmp_path):
+    """Keep the web-search analytics database out of the real config directory.
+
+    ``WebSearchAnalytics`` defaults to ``<config dir>/logs/websearch.db`` and
+    creates that directory on construction. The request log has been isolated
+    since forever; this store never was, so on a machine with no redirected
+    HOME the suite wrote a real ``websearch.db`` into the developer's config
+    directory -- and on a machine with neither config directory it *created*
+    one, which then wins resolution over the legacy home for good.
+    """
+    from my_claude_code.websearch import analytics
+
+    monkeypatch.setattr(
+        analytics, "default_websearch_db_path", lambda: tmp_path / "websearch.db"
+    )
+    analytics.reset_analytics_state()
+    yield
+    analytics.reset_analytics_state()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_harness_tiers(monkeypatch, tmp_path):
     """No test may read the developer's own per-agent tier overrides.
 
@@ -139,6 +160,15 @@ _REAL_HOME_MCC_DIRS = (
 )
 
 
+def _is_real_home_config_dir(candidate) -> bool:
+    """True for ``~/.mcc``, ``~/.fcc`` and ``~/.fcc-old`` in the *real* home."""
+
+    try:
+        return Path(candidate) in _REAL_HOME_MCC_DIRS
+    except OSError, ValueError, TypeError:
+        return False
+
+
 def _under_real_home(candidate) -> bool:
     try:
         resolved = Path(candidate).resolve()
@@ -148,7 +178,7 @@ def _under_real_home(candidate) -> bool:
 
 
 @pytest.fixture(autouse=True)
-def _never_touch_the_real_home(monkeypatch, request):
+def _never_touch_the_real_home(monkeypatch):
     """No test may resolve, rename or create a config directory in the real home.
 
     ``tests/cli/test_migrate_config_dir.py`` once shipped a case that forgot to
@@ -159,11 +189,18 @@ def _never_touch_the_real_home(monkeypatch, request):
 
     * ``os.replace``/``os.rename`` refuse when either side is one of the three
       real-home config directories, failing at the call that would do the damage;
-    * the three directories are inventoried before and after every test, so any
-      other route to creating or removing one is caught at teardown;
+    * ``Path.mkdir``/``os.mkdir``/``os.makedirs`` refuse to create one. This is
+      not hypothetical: on a machine with no config directory at all, the suite
+      used to create a real ``~/.mcc`` (the web-search analytics store builds
+      its parent on construction), and an empty ``~/.mcc`` then outranks a
+      legacy ``~/.fcc`` for good;
     * the cached config-dir resolution is checked at teardown, so a test that
       merely *resolved* the real home (and would have read the real ``.env`` or
       ``requests.db``) fails too.
+
+    Each check blames the test that actually did it, rather than comparing a
+    directory listing before and after -- under ``xdist`` a shared-filesystem
+    comparison reports whichever three workers happened to be mid-test.
 
     Declared after ``_reset_config_dir_cache`` on purpose: autouse fixtures tear
     down in reverse setup order, so this one still sees the cached resolution.
@@ -171,24 +208,47 @@ def _never_touch_the_real_home(monkeypatch, request):
 
     real_replace = os.replace
     real_rename = os.rename
+    real_mkdir = Path.mkdir
+    real_os_mkdir = os.mkdir
+    real_makedirs = os.makedirs
 
-    def _guard(name, func):
+    def _refuse(operation: str, target) -> None:
+        raise AssertionError(
+            f"{operation} refused: {target} is a My Claude Code config directory "
+            f"in the real home. Patch ``Path.home`` (or redirect "
+            f"HOME/USERPROFILE, or set MCC_CONFIG_DIR to a tmp_path) in this "
+            f"test -- the suite must never read or write the developer's own "
+            f"configuration."
+        )
+
+    def _guard_two_sided(name, func):
         def guarded(src, dst, *args, **kwargs):
             for side in (src, dst):
-                if Path(side) in _REAL_HOME_MCC_DIRS:
-                    raise AssertionError(
-                        f"os.{name}() refused: {side} is a config directory in "
-                        f"the real home. Patch ``Path.home`` (or redirect "
-                        f"HOME/USERPROFILE) in this test."
-                    )
+                if _is_real_home_config_dir(side):
+                    _refuse(f"os.{name}()", side)
             return func(src, dst, *args, **kwargs)
 
         return guarded
 
-    monkeypatch.setattr(os, "replace", _guard("replace", real_replace))
-    monkeypatch.setattr(os, "rename", _guard("rename", real_rename))
+    def _guarded_path_mkdir(self, *args, **kwargs):
+        if _is_real_home_config_dir(self):
+            _refuse("Path.mkdir()", self)
+        return real_mkdir(self, *args, **kwargs)
 
-    before = {path: path.exists() for path in _REAL_HOME_MCC_DIRS}
+    def _guard_one_sided(name, func):
+        def guarded(path, *args, **kwargs):
+            if _is_real_home_config_dir(path):
+                _refuse(f"os.{name}()", path)
+            return func(path, *args, **kwargs)
+
+        return guarded
+
+    monkeypatch.setattr(os, "replace", _guard_two_sided("replace", real_replace))
+    monkeypatch.setattr(os, "rename", _guard_two_sided("rename", real_rename))
+    monkeypatch.setattr(Path, "mkdir", _guarded_path_mkdir)
+    monkeypatch.setattr(os, "mkdir", _guard_one_sided("mkdir", real_os_mkdir))
+    monkeypatch.setattr(os, "makedirs", _guard_one_sided("makedirs", real_makedirs))
+
     yield
 
     from my_claude_code.config import paths
@@ -200,14 +260,6 @@ def _never_touch_the_real_home(monkeypatch, request):
             f"which is inside the real home. It would read the developer's own "
             f"``.env``/``requests.db``. Patch ``Path.home`` or set "
             f"``MCC_CONFIG_DIR`` to a tmp_path."
-        )
-
-    after = {path: path.exists() for path in _REAL_HOME_MCC_DIRS}
-    changed = [str(path) for path in _REAL_HOME_MCC_DIRS if before[path] != after[path]]
-    if changed:
-        raise AssertionError(
-            f"This test created or removed config directories in the real "
-            f"home: {changed}. Nothing under {_REAL_HOME} may be touched."
         )
 
 
