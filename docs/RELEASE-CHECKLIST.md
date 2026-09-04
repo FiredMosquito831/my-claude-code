@@ -197,15 +197,18 @@ when that vendor changes its UI, not when MCC does.
 The desktop shell is a Rust binary, so it is not in the wheel. It rides the
 **same GitHub release** (decision Q6): publishing a release fires
 `.github/workflows/shell-release.yml` on `release: published`, which builds the
-shell on four runners and attaches seven more assets to the release you just
-made. Nothing is required of the releaser except to look, and -- once, on
-Windows -- to install the installer.
+shell on four runners, merges the two macOS binaries into one universal `.dmg`
+on a fifth, and attaches eight more assets to the release you just made.
+Nothing is required of the releaser except to look, and -- once, on Windows --
+to install the installer.
 
 **The step, at release time:** publish the release with the wheel as usual, then
 open Actions -> *Desktop shell release*. There is one run per release. Confirm
-all four legs are green, and that the assets are on the release page within
-about 15 minutes (a cold cargo cache is the long pole; a warm one is nearer
-five). Then check the release page carries exactly these seven:
+all four build legs and the `macos-universal (dmg)` job are green, and that the
+assets are on the release page within about 20 minutes (a cold cargo cache is
+the long pole; a warm one is nearer five, plus two or three for the dmg job,
+which runs after the two macOS legs and compiles nothing). Then check the
+release page carries exactly these eight:
 
 | Asset | Runner | Rust target |
 | --- | --- | --- |
@@ -215,6 +218,7 @@ five). Then check the release page carries exactly these seven:
 | `MyClaudeCode-linux-x86_64.deb` | `ubuntu-22.04` | (the same binary, in a `dpkg-deb` package) |
 | `MyClaudeCode-macos-aarch64.tar.gz` | `macos-latest` | `aarch64-apple-darwin` |
 | `MyClaudeCode-macos-x86_64.tar.gz` | `macos-15-intel` | `x86_64-apple-darwin` |
+| `MyClaudeCode-macos-universal.dmg` | `macos-latest` (the `macos-dmg` job) | both macOS targets, merged with `lipo` into one universal `.app` |
 | `SHA256SUMS-desktop-shell.txt` | the aggregating job | -- |
 
 The names carry no version (decision Q5). The checksum file is plain
@@ -258,6 +262,29 @@ package with `dpkg -r`, and diffs `/usr/bin`, `/usr/share/applications`,
 `install-desktop.sh` gets the same treatment against a scratch `HOME`. If
 either leg is red, the `.deb` is not on the release -- and the wheel is still
 fine.
+
+**The macOS `.dmg` is smoked in CI too, and one of its assertions is a
+failure.** The `macos-dmg` job downloads the two macOS legs' binaries, merges
+them with `lipo`, builds `My Claude Code.app` (ad-hoc signed) and the UDZO
+image, then mounts the image read-only and asserts: the bundle layout and
+every `Info.plist` key (`plutil -lint` plus `defaults read`), a universal
+executable with both slices, `codesign --verify --deep --strict` passing, no
+signing authority at all, **`spctl --assess --type execute` rejecting the app**
+-- which is expected and is asserted, because a green `spctl` would mean the
+Gatekeeper paragraph in README.md and the release notes had become wrong --
+no `com.apple.quarantine` on a CI-built file, the documented
+`xattr -dr com.apple.quarantine` running cleanly on a copy, and the program
+itself starting out of the image through `smoke/macos.sh`. It then detaches
+and diffs `/Applications` and `~/Applications` back: this smoke installs
+nothing, so both must be untouched.
+
+**Every release page must carry the Gatekeeper paragraph.** The macOS `.dmg` is
+unsigned and un-notarised, and the release notes say so in the same words the
+README does: a browser-downloaded copy is quarantined, current macOS offers no
+Control-click bypass, the one-time fix is
+`xattr -d com.apple.quarantine "/Applications/My Claude Code.app"`, and the
+zero-friction macOS route remains the install script plus `mcc-desktop`, which
+fetches the binary from Python and is never quarantined.
 
 **Smoke the Windows installer once per release.** The workflow already runs
 `desktop-shell/smoke/windows-installer.ps1` on the runner -- silent install,
@@ -312,8 +339,8 @@ one:
 
 1. Cut release *N* as usual. The pin still names *N-1*, and that is correct: the
    shell it names is real, published and verified.
-2. Wait for `shell-release.yml` on *N* to be green and the five assets attached
-   (section 7).
+2. Wait for `shell-release.yml` on *N* to be green and the eight assets
+   attached (section 7).
 3. Read the published digests:
 
    ```bash
@@ -321,7 +348,8 @@ one:
    ```
 
 4. In `src/my_claude_code/config/desktop_shell.py`, move
-   `DESKTOP_SHELL_RELEASE_TAG` to `vN` and replace **all four** digests in
+   `DESKTOP_SHELL_RELEASE_TAG` to `vN` and replace **all four** archive digests
+   (delivery path A fetches archives, never the installers or the `.dmg`) in
    `_RELEASES` with the lines from that file, in one commit. Never move the tag
    without the digests: the two are one fact.
 5. Ship that as the next PATCH. `tests/config/test_desktop_shell_pin.py` checks

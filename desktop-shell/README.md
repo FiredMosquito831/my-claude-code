@@ -103,8 +103,10 @@ this PR promises.
       libayatana-appindicator3-dev librsvg2-dev
   ```
 
-- **macOS** — Xcode command line tools. Untested: no macOS machine was
-  available for this PR, and no `.dmg` ships in v1 (decision Q7).
+- **macOS** — Xcode command line tools (`lipo`, `codesign`, `iconutil`,
+  `hdiutil` and `plutil` all come from them). Still untested by hand: no macOS
+  machine was available for any PR in this arc, so every macOS claim here is
+  what CI asserts, not what somebody saw.
 
 There is **no Node build step and no bundler**. `ui/` is one static HTML file,
 which is the honest shape for an application whose job is to render a URL.
@@ -156,7 +158,14 @@ assert, uninstall and diff:
 smoke/windows-installer.ps1 -Setup ../dist/MyClaudeCode-Setup-windows-x86_64.exe
 smoke/linux-deb.sh              ../dist/MyClaudeCode-linux-x86_64.deb
 smoke/linux-tarball.sh          ../dist/MyClaudeCode-linux-x86_64.tar.gz
+smoke/macos-dmg.sh              ../dist/MyClaudeCode-macos-universal.dmg
 ```
+
+`macos-dmg.sh` needs neither root nor a display: a `.dmg` is not an installer,
+so it mounts the image read-only, asserts the bundle, runs the program out of a
+copy, detaches, and diffs `/Applications` and `~/Applications` back — both of
+which it must never have touched. It is the only smoke here whose *expected*
+result includes a failing command; see **The macOS disk image** below.
 
 `linux-deb.sh` needs passwordless `sudo` (a runner has it; a laptop usually
 does not) and re-runs `smoke/linux.sh` against the *installed*
@@ -241,6 +250,15 @@ The Windows and Linux legs each produce one more file from the same binary:
 the downloadable installers (delivery path B). They are described in **The
 Windows installer** and **The Linux packages** below.
 
+A fifth job, `macos-dmg`, runs after the matrix rather than inside it. It
+downloads both macOS legs' binaries, merges them with `lipo` into one universal
+executable, and produces `MyClaudeCode-macos-universal.dmg` — the macOS half of
+delivery path B. It has to be a separate job: the two macOS legs are two
+machines running at the same time, and `lipo` needs both to have finished,
+which is what `needs: build` says and what a matrix leg cannot. It compiles
+nothing, so it costs two or three minutes of a macOS runner. See **The macOS
+disk image** below.
+
 The Windows zip and both macOS tarballs contain the executable and nothing
 else. **The Linux tarball carries four more members** — `install-desktop.sh`,
 `my-claude-code-desktop.desktop` and `icons/{512x512,256x256,128x128,32x32}.png`
@@ -261,8 +279,8 @@ Alongside them, one more asset:
 SHA256SUMS-desktop-shell.txt
 ```
 
-Six lines — the four archives, the Windows installer and the Linux `.deb` —
-sorted by filename,
+Seven lines — the four archives, the Windows installer, the Linux `.deb` and
+the macOS `.dmg` — sorted by filename,
 in exactly the format `sha256sum -c` reads —
 64 hex characters, **two spaces**, the filename, and nothing else:
 
@@ -273,6 +291,7 @@ in exactly the format `sha256sum -c` reads —
 b4d8255397bc8000278665c92fd6196035cc5c030554784c1b6eb37094eea478  MyClaudeCode-windows-x86_64.zip
 7d0d5b1fa9c2f0c1e9a6d3b7c2e1f4a8b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1  MyClaudeCode-Setup-windows-x86_64.exe
 3f9e1c7a5b2d8e4f0a6c3b9d5e2f8a1c4b7d0e3f6a9c2b5d8e1f4a7c0b3d6e9f  MyClaudeCode-linux-x86_64.deb
+5c2a8f1d4b7e0a3c6f9b2d5e8a1c4f7b0d3e6a9c2f5b8d1e4a7c0f3b6d9e2a5c  MyClaudeCode-macos-universal.dmg
 ```
 
 (The digests above are an illustration of the shape, not of any one release.)
@@ -567,3 +586,130 @@ mode across Tauri issues #12463, #6992, #15665 and #15781 is a *silent* one —
 WebKitWebProcess aborts and no window appears. An `.rpm` is not in this release
 either; Fedora 40+ gets the tarball, which is the same binary without a second
 packaging format to keep green.
+
+
+## The macOS disk image
+
+`installer/macos/build-app.sh` and `installer/macos/build-dmg.sh` turn the two
+macOS legs' binaries into one `MyClaudeCode-macos-universal.dmg` (spec S9,
+decision **Q7 as revised on 2026-09-04**: the original answer was "no `.dmg` in
+v1"; the revision is "ship one, unsigned, and document Gatekeeper honestly").
+
+### One universal image, not two per-arch ones
+
+`build-app.sh` accepts `--binary` more than once and runs `lipo -create` over
+what it is given, so the shipped `.app` carries both an `arm64` and an
+`x86_64` slice. A person downloading a Mac app should not have to know which
+processor their Mac has, and Apple's own answer to that question has been the
+universal binary since 2020.
+
+The cost is one extra CI job, because `lipo` cannot run until both macOS legs
+have finished and a matrix leg has no way to wait for a sibling. The per-arch
+**tarballs are still built and still uploaded**: delivery path A fetches
+exactly one of them per machine and would gain nothing from downloading an
+architecture it cannot execute.
+
+### The bundle
+
+| Path | Mode | Written by |
+| --- | --- | --- |
+| `My Claude Code.app/Contents/Info.plist` | 0644 | `build-app.sh` |
+| `My Claude Code.app/Contents/PkgInfo` | 0644 | `build-app.sh` (`APPL????`, eight bytes, no newline) |
+| `My Claude Code.app/Contents/MacOS/MyClaudeCode` | 0755 | `lipo -create` |
+| `My Claude Code.app/Contents/Resources/MyClaudeCode.icns` | 0644 | `iconutil`, from `icons/icon.png` |
+| `My Claude Code.app/Contents/_CodeSignature/CodeResources` | 0644 | `codesign` |
+
+The icon is *generated* rather than copied from the checked-in `icon.icns`, so
+it derives from the one source image the rest of this tree uses and cannot
+drift from it: `sips -z` resamples the ten sizes `iconutil` wants into an
+`.iconset`, `iconutil -c icns` folds them into one file. The fallbacks are
+`sips -s format icns` (one representation, renders but does not scale as well)
+and then the checked-in `icon.icns`, so a build never fails for want of an
+icon. Which path was taken is printed, because "the icon looks slightly wrong"
+is otherwise an unsearchable bug.
+
+The `Info.plist` keys that are not decoration:
+
+| Key | Why |
+| --- | --- |
+| `CFBundleIdentifier` = `com.myclaudecode.desktop` | The app's identity to macOS — **and** how `scripts/install.sh --desktop` recognises it and steps aside, and how `scripts/uninstall.sh` knows not to delete it. The launcher bundle `install.sh` writes carries `com.my-claude-code.desktop`; those two strings are the only thing separating two same-named applications at one path. |
+| `CFBundleExecutable` = `MyClaudeCode` | Must equal `[[bin]] name` in `Cargo.toml`. |
+| `CFBundleShortVersionString` / `CFBundleVersion` | The release tag without its `v`. **The bundle is versioned even though the executable is not** (decision Q5): Finder's Get Info shows this string, and an app that says `0.1.0` forever is an app nobody can report a bug against. Nothing points at a plist key, so there is no shortcut to orphan. |
+| `LSMinimumSystemVersion` = `10.13` | Tauri v2's own bundler default for `minimumSystemVersion`; claiming lower would claim more than the framework does. The arm64 slice's real floor is 11.0, because Apple silicon did not exist before Big Sur — there is no plist key that can say that, and no need for one. |
+| `NSHighResolutionCapable` | Without it macOS runs the window through the 1x magnifier and the whole dashboard is blurry on every Mac made since 2012. |
+| `NSAppTransportSecurity` > `NSAllowsLocalNetworking` | The shell renders `http://127.0.0.1:<port>` and App Transport Security blocks cleartext HTTP by default. This is Apple's narrow exemption for loopback and `.local`; `NSAllowsArbitraryLoads`, which would exempt the whole internet, is deliberately absent and a contract test asserts it stays absent. |
+| `LSApplicationCategoryType` | How Launchpad and Finder file it. |
+
+### The image
+
+`hdiutil create -volname "My Claude Code" -srcfolder <staging> -fs HFS+
+-format UDZO -ov`, where the staging directory is the `.app` and a symlink to
+`/Applications`. Two items and a symlink, and nothing else: a styled image
+needs a window position baked into a `.DS_Store`, which means mounting
+read-write and driving Finder over AppleScript — three flaky steps on a
+headless runner, for an arrangement Finder overrides the first time anyone
+opens the image anyway.
+
+`-fs HFS+` is explicit because newer macOS versions have started defaulting
+`hdiutil` to APFS, which older systems cannot mount at all; an image the app's
+own `LSMinimumSystemVersion` could not open would make that claim false. The
+`.app` is copied in with `ditto` and not `cp -R`, because a code signature
+lives partly in extended attributes and only `ditto` preserves them — a broken
+seal presents to the user as "the application is damaged", which no log
+explains.
+
+### Ad-hoc signed, and what that does and does not buy
+
+`codesign --force --deep --sign - --timestamp=none` seals the bundle. That is
+mandatory rather than decorative: on Apple silicon every Mach-O must carry at
+least an ad-hoc signature, and `lipo` produces a fresh file whose inherited
+signature was computed over something else. `--timestamp=none` because a
+trusted timestamp needs Apple's timestamp server and is meaningless without an
+identity to attach it to.
+
+**Ad-hoc is a seal, not an identity.** There is no Developer ID behind it,
+nothing for Gatekeeper to attribute the app to, and `spctl --assess` rejects
+it. The honest version, which the README, `docs/USAGE.md` and every release
+page say in the same words:
+
+* a copy of the `.dmg` downloaded in a browser carries `com.apple.quarantine`,
+  and Gatekeeper refuses to launch a quarantined app with no Developer ID;
+* **the Control-click → Open bypass is gone** — Apple removed it in Sequoia,
+  and on current macOS the dialog offers little more than *Move to Trash*;
+* the one-time fix, after dragging the app across, is one Terminal command:
+  `xattr -d com.apple.quarantine "/Applications/My Claude Code.app"`;
+* the friction-free macOS route is therefore still the install script plus
+  `mcc-desktop` (delivery path A), which fetches the same binary over HTTPS
+  from Python — quarantine is applied by browsers, so a file Python downloads
+  never has it and Gatekeeper is never involved;
+* notarisation needs a Developer ID certificate, which needs a paid Apple
+  Developer account at $99/year. This project does not have one, and an app
+  claiming a signature it does not have would cost more trust than the warning
+  does.
+
+`smoke/macos-dmg.sh` **asserts the rejection**. `spctl --assess --type execute`
+failing is what the paragraph above rests on, and a smoke that tolerated a
+green `spctl` would be a smoke that never noticed the day that documentation
+stopped being true. It also asserts there is no signing authority at all, so
+the day somebody quietly adds a certificate, the docs get updated with it
+rather than after it.
+
+### One name, two applications
+
+`scripts/install.sh --desktop` writes a launcher bundle at
+`~/Applications/My Claude Code.app` whose executable simply execs
+`mcc-desktop`. The `.dmg`'s application has the same display name, and a user
+may drag it into `~/Applications` rather than `/Applications` — the same path.
+In `/Applications` a second bundle would be a duplicate; in `~/Applications` it
+would be an *overwrite*, a working application replaced by a shell wrapper.
+
+Both scripts therefore read the `CFBundleIdentifier` and never the name:
+
+| | |
+| --- | --- |
+| `install.sh --desktop` | Checks `/Applications` and `~/Applications` for a bundle carrying `com.myclaudecode.desktop` and prints "not adding a second launcher" if it finds one — the same sentence, and the same behaviour, as `create_linux_desktop_entry` stepping aside for the `.deb`'s menu entry. |
+| `scripts/uninstall.sh` | Removes `~/Applications/My Claude Code.app` **only** when it is not the app, and prints the app's path, its contents and "drag it to the Trash" when it is. A bundle with no readable `Info.plist` is treated as the launcher, because `build-app.sh` always writes one. |
+
+`tests/contracts/test_uninstaller_parity.py` pins both identifiers, pins that
+they differ, parses `build-app.sh`'s bundle layout and asserts the
+uninstaller's message covers every part of it.

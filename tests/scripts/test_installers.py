@@ -551,6 +551,162 @@ def test_install_sh_voice_flags_only_change_fcc_spec(
     )
 
 
+# --------------------------------------------------------------------------
+# `install.sh --desktop` and the macOS desktop app (spec S9).
+#
+# `create_macos_app_bundle` writes `~/Applications/My Claude Code.app`, a small
+# bundle whose executable execs `mcc-desktop`. The .dmg's application has the
+# same display name, so it can occupy exactly that path -- and in /Applications
+# it certainly does. Writing over it would replace a working application with a
+# shell wrapper, so the installer steps aside instead, exactly as
+# `create_linux_desktop_entry` steps aside for the .deb's menu entry.
+#
+# The function is extracted and run on its own rather than driving the whole
+# installer: it needs no uv, no network and no wheel, and running it directly
+# is what makes "what happens when the app is already there" a two-line test.
+# --------------------------------------------------------------------------
+
+MACOS_DESKTOP_APP_IDENTIFIER = "com.myclaudecode.desktop"
+MACOS_LAUNCHER_IDENTIFIER = "com.my-claude-code.desktop"
+
+
+def _extract_macos_bundle_functions() -> str:
+    """Pull the macOS bundle code out of scripts/install.sh, verbatim."""
+
+    text = (_repo_root() / "scripts" / "install.sh").read_text(encoding="utf-8")
+    wanted = (
+        'MACOS_DESKTOP_APP_IDENTIFIER="',
+        "macos_bundle_is_the_desktop_app() {",
+        "create_macos_app_bundle() {",
+    )
+    chunks: list[str] = []
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.startswith(wanted[0]):
+            chunks.append(line)
+            index += 1
+            continue
+        if line in wanted[1:]:
+            block = [line]
+            index += 1
+            while index < len(lines) and lines[index] != "}":
+                block.append(lines[index])
+                index += 1
+            block.append("}")
+            chunks.append("\n".join(block))
+        index += 1
+    assert len(chunks) == 3, f"install.sh no longer defines all three ({len(chunks)})"
+    return "\n\n".join(chunks) + "\n"
+
+
+def _write_app_bundle(bundle: Path, identifier: str) -> None:
+    contents = bundle / "Contents"
+    (contents / "MacOS").mkdir(parents=True, exist_ok=True)
+    (contents / "Info.plist").write_text(
+        "<plist><dict><key>CFBundleIdentifier</key>"
+        f"<string>{identifier}</string></dict></plist>\n",
+        encoding="utf-8",
+    )
+
+
+def _run_create_macos_app_bundle(
+    tmp_path: Path, home: Path
+) -> subprocess.CompletedProcess[str]:
+    script = tmp_path / "bundle.sh"
+    launcher = tmp_path / "mcc-desktop"
+    _write_executable(launcher, "#!/bin/sh\nexit 1\n")
+    script.write_text(
+        "#!/bin/sh\nset -eu\n"
+        + _extract_macos_bundle_functions()
+        + f'create_macos_app_bundle "{launcher}"\n',
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        ["/bin/sh", str(script)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=os.environ | {"HOME": str(home)},
+    )
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX installer scenarios run on POSIX hosts"
+)
+def test_install_sh_writes_the_launcher_bundle_when_the_app_is_absent(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = _run_create_macos_app_bundle(tmp_path, home)
+
+    assert result.returncode == 0, result.stderr
+    bundle = home / "Applications" / "My Claude Code.app"
+    assert (bundle / "Contents" / "MacOS" / "my-claude-code").is_file()
+    plist = (bundle / "Contents" / "Info.plist").read_text(encoding="utf-8")
+    assert MACOS_LAUNCHER_IDENTIFIER in plist
+    assert MACOS_DESKTOP_APP_IDENTIFIER not in plist, (
+        "the launcher bundle must not claim the desktop app's identity"
+    )
+    assert "Created macOS app bundle" in result.stdout
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX installer scenarios run on POSIX hosts"
+)
+def test_install_sh_steps_aside_for_the_desktop_app_in_the_home_directory(
+    tmp_path: Path,
+) -> None:
+    """It would be an overwrite, not a duplicate: the names are identical."""
+
+    home = tmp_path / "home"
+    bundle = home / "Applications" / "My Claude Code.app"
+    _write_app_bundle(bundle, MACOS_DESKTOP_APP_IDENTIFIER)
+
+    result = _run_create_macos_app_bundle(tmp_path, home)
+
+    assert result.returncode == 0, result.stderr
+    assert "not adding a second launcher" in result.stdout
+    assert not (bundle / "Contents" / "MacOS" / "my-claude-code").exists(), (
+        "install.sh wrote its launcher over the desktop app"
+    )
+    plist = (bundle / "Contents" / "Info.plist").read_text(encoding="utf-8")
+    assert MACOS_DESKTOP_APP_IDENTIFIER in plist
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="POSIX installer scenarios run on POSIX hosts"
+)
+def test_install_sh_replaces_its_own_earlier_launcher_bundle(tmp_path: Path) -> None:
+    """Stepping aside is for the app only; its own bundle is rewritten."""
+
+    home = tmp_path / "home"
+    bundle = home / "Applications" / "My Claude Code.app"
+    _write_app_bundle(bundle, MACOS_LAUNCHER_IDENTIFIER)
+
+    result = _run_create_macos_app_bundle(tmp_path, home)
+
+    assert result.returncode == 0, result.stderr
+    assert "not adding a second launcher" not in result.stdout
+    assert (bundle / "Contents" / "MacOS" / "my-claude-code").is_file()
+
+
+def test_install_sh_reads_the_bundle_identifier_and_not_the_bundle_name() -> None:
+    """The two bundles share a name; only the identifier can separate them.
+
+    A check on the path or the display name would match both, which is how a
+    reconciliation like this quietly becomes a deletion.
+    """
+
+    text = (_repo_root() / "scripts" / "install.sh").read_text(encoding="utf-8")
+    assert f'MACOS_DESKTOP_APP_IDENTIFIER="{MACOS_DESKTOP_APP_IDENTIFIER}"' in text
+    assert 'grep -Fq "$MACOS_DESKTOP_APP_IDENTIFIER" "$_bundle_plist"' in text
+    assert '_bundle_plist="$1/Contents/Info.plist"' in text
+
+
 def test_install_sh_rejects_invalid_options_before_mutation(
     posix_harness: PosixHarness,
 ) -> None:

@@ -93,6 +93,12 @@ esac
 command -v dpkg-deb >/dev/null 2>&1 || die "dpkg-deb is not installed"
 
 staging="$(mktemp -d)"
+# `mktemp -d` makes the directory 0700, and `dpkg-deb --build` packages the
+# staging root itself as `./`. A package whose `./` is drwx------ is one
+# lintian reports and one that, on a machine whose dpkg does not correct it,
+# would make every path under it unreadable. 0755 is what every other
+# directory in the package is.
+chmod 0755 "$staging"
 trap 'rm -rf "$staging"' EXIT
 
 install -d -m 0755 "$staging/DEBIAN"
@@ -144,6 +150,16 @@ installed_size="$(du -ks "$staging/usr" | cut -f1)"
 
 # DEPENDS, and why each alternative is not optional:
 #
+#   libc6 (>= 2.35)            glibc, versioned at the build floor. This
+#                              package is built on ubuntu-22.04 (glibc 2.35)
+#                              and glibc is forward-compatible only, so the
+#                              binary needs 2.35 or newer. Without the field
+#                              `apt` happily installs it on Debian 11 (2.31),
+#                              where it then dies at exec with a
+#                              `GLIBC_2.34 not found` linker message that
+#                              names no package and suggests no fix. lintian
+#                              says `E: missing-dependency-on-libc` about
+#                              exactly this, and lintian is right.
 #   libwebkit2gtk-4.1-0        the webview. 4.0 is not a substitute and
 #                              Ubuntu 24.04 does not ship it at all.
 #   libgtk-3-0t64 | libgtk-3-0 Ubuntu 24.04 and Debian 13 renamed the package
@@ -169,7 +185,7 @@ Section: utils
 Priority: optional
 Maintainer: My Claude Code <my-claude-code@users.noreply.github.com>
 Homepage: https://github.com/FiredMosquito831/my-claude-code
-Depends: libwebkit2gtk-4.1-0, libgtk-3-0t64 | libgtk-3-0, libayatana-appindicator3-1 | libappindicator3-1
+Depends: libc6 (>= 2.35), libwebkit2gtk-4.1-0, libgtk-3-0t64 | libgtk-3-0, libayatana-appindicator3-1 | libappindicator3-1
 Installed-Size: $installed_size
 Description: My Claude Code dashboard in its own window
  A desktop window and a tray icon for My Claude Code, the local proxy that

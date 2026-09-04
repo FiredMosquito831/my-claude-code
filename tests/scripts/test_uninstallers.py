@@ -356,6 +356,109 @@ def test_uninstall_sh_removes_every_desktop_artefact(
         assert f"rm:-rf {path}" in posix_uninstall_harness.calls()
 
 
+#: The CFBundleIdentifier `desktop-shell/installer/macos/build-app.sh` writes
+#: into the real application. `scripts/install.sh` writes a launcher bundle at
+#: the same path under a *different* identifier, and that difference is the
+#: only thing standing between "uninstall My Claude Code" and "delete the
+#: application the user dragged out of the .dmg".
+MACOS_DESKTOP_APP_IDENTIFIER = "com.myclaudecode.desktop"
+
+MACOS_APP_INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>{identifier}</string>
+    <key>CFBundleExecutable</key>
+    <string>MyClaudeCode</string>
+</dict>
+</plist>
+"""
+
+
+def _make_app_bundle(bundle: Path, identifier: str) -> None:
+    """Lay down a bundle that looks like the .dmg's application."""
+
+    contents = bundle / "Contents"
+    (contents / "MacOS").mkdir(parents=True, exist_ok=True)
+    (contents / "Info.plist").write_text(
+        MACOS_APP_INFO_PLIST.format(identifier=identifier), encoding="utf-8"
+    )
+    (contents / "MacOS" / "MyClaudeCode").write_text("binary\n", encoding="utf-8")
+
+
+def test_uninstall_sh_keeps_the_real_desktop_app_and_names_it(
+    posix_uninstall_harness: PosixUninstallHarness,
+) -> None:
+    """A user who dragged the .dmg's app into ~/Applications keeps it.
+
+    Both bundles are called "My Claude Code.app" and both may live at that
+    path. Removing the one this project did not install would be deleting an
+    application on the strength of a shared name.
+    """
+
+    posix_uninstall_harness.create_desktop_artefacts()
+    bundle = posix_uninstall_harness.home / "Applications" / "My Claude Code.app"
+    _make_app_bundle(bundle, MACOS_DESKTOP_APP_IDENTIFIER)
+
+    result = posix_uninstall_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert bundle.is_dir(), "uninstall.sh deleted the desktop app"
+    assert (bundle / "Contents" / "MacOS" / "MyClaudeCode").is_file()
+    assert f"rm:-rf {bundle}" not in posix_uninstall_harness.calls()
+
+    assert "that is the desktop app" in result.stdout
+    assert "The desktop app is also installed at" in result.stdout
+    assert "does not remove it" in result.stdout
+    # The message describes what is being left behind, so the reader knows
+    # what they would be dragging to the Trash.
+    for part in (
+        "Contents/MacOS/MyClaudeCode",
+        "Contents/Info.plist",
+        "Contents/Resources/MyClaudeCode.icns",
+        "Contents/PkgInfo",
+    ):
+        assert part in result.stdout
+
+
+def test_uninstall_sh_still_removes_the_launcher_bundle_it_wrote(
+    posix_uninstall_harness: PosixUninstallHarness,
+) -> None:
+    """The launcher bundle carries a different identifier, so it goes."""
+
+    posix_uninstall_harness.create_desktop_artefacts()
+    bundle = posix_uninstall_harness.home / "Applications" / "My Claude Code.app"
+    _make_app_bundle(bundle, "com.my-claude-code.desktop")
+
+    result = posix_uninstall_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert not bundle.exists(), "the launcher bundle survived the uninstall"
+    assert f"rm:-rf {bundle}" in posix_uninstall_harness.calls()
+    assert "The desktop app is also installed at" not in result.stdout
+
+
+def test_uninstall_sh_removes_a_bundle_with_no_readable_plist(
+    posix_uninstall_harness: PosixUninstallHarness,
+) -> None:
+    """ "Unreadable" is not "the app".
+
+    A bundle with no Info.plist cannot be the .dmg's application -- build-app.sh
+    always writes one -- and treating it as such would make the uninstaller
+    refuse to clean up a half-written launcher forever.
+    """
+
+    artefacts = posix_uninstall_harness.create_desktop_artefacts()
+    bundle = posix_uninstall_harness.home / "Applications" / "My Claude Code.app"
+    assert bundle.is_dir() and not (bundle / "Contents" / "Info.plist").exists()
+
+    result = posix_uninstall_harness.run()
+
+    assert result.returncode == 0, result.stderr
+    assert not bundle.exists()
+    assert not [str(path) for path in artefacts if path.exists()]
+
+
 def test_uninstall_sh_desktop_removal_is_quiet_when_nothing_was_installed(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:

@@ -13,6 +13,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [Two ways in](#two-ways-in)
   - [The Windows desktop-app installer](#the-windows-desktop-app-installer)
   - [The Linux desktop-app installers](#the-linux-desktop-app-installers)
+  - [The macOS desktop-app disk image](#the-macos-desktop-app-disk-image)
 - [3. First run](#3-first-run)
   - [Where your configuration lives](#where-your-configuration-lives)
   - [Legacy `~/.fcc`: migrating with `mcc-migrate`](#legacy-fcc-migrating-with-mcc-migrate)
@@ -85,7 +86,7 @@ Both end at the same place: one server, one dashboard, one configuration directo
 | You get | `mcc-server` plus the 16 `mcc-*` launchers on your `PATH`; the dashboard opens in a browser tab. | A window with its own icon and tray icon, rendering the same dashboard. |
 | You install it by | running the one-liner below. | downloading an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest). |
 | The other half | — | is installed **by the app**, on first launch, in front of you: no `mcc-desktop` on the machine means the window prints the exact install command and runs it, streaming the output. Nothing is bundled. |
-| Available | Windows, WSL, Linux, macOS — today. | **Windows and Linux today**: `MyClaudeCode-Setup-windows-x86_64.exe`, `MyClaudeCode-linux-x86_64.deb` and `MyClaudeCode-linux-x86_64.tar.gz`. macOS has no `.dmg` (an unsigned one is worse than no app at all) and gets the same window through `mcc-desktop` itself ([The desktop app](#the-desktop-app-fetched-verified-installed)). |
+| Available | Windows, WSL, Linux, macOS — today. | **All three**: `MyClaudeCode-Setup-windows-x86_64.exe`, `MyClaudeCode-linux-x86_64.deb`, `MyClaudeCode-linux-x86_64.tar.gz` and `MyClaudeCode-macos-universal.dmg`. The macOS image is **unsigned and un-notarised**, so its first launch needs one `xattr` command ([The macOS desktop-app disk image](#the-macos-desktop-app-disk-image)); `mcc-desktop` fetching the same binary avoids that entirely ([The desktop app](#the-desktop-app-fetched-verified-installed)). |
 
 Neither excludes the other. The desktop app is a window onto the server, not a second
 copy of it, and one machine can have both.
@@ -144,6 +145,70 @@ Two artefacts, one binary. Both digests are in `SHA256SUMS-desktop-shell.txt`.
 The `| libgtk-3-0` and `| libappindicator3-1` alternatives are not decoration: Ubuntu
 24.04 and Debian 13 renamed both packages during the 64-bit `time_t` transition, so a
 package naming only one spelling is uninstallable on half the supported distributions.
+
+The `.deb` also declares `libc6 (>= 2.35)`, the glibc of the `ubuntu-22.04` runner it is
+built on. glibc is forward-compatible only, so without that field `apt` would install it
+happily on Debian 11 and the binary would then die at exec with a `GLIBC_2.34 not found`
+message that names no package and suggests no fix.
+
+<a id="the-macos-desktop-app-disk-image"></a>
+
+### The macOS desktop-app disk image
+
+One file, `MyClaudeCode-macos-universal.dmg`, and its digest is in
+`SHA256SUMS-desktop-shell.txt`.
+
+| | |
+| --- | --- |
+| What is in it | `My Claude Code.app` and a symlink to `/Applications` to drag it into. Nothing else — no background image, no licence agreement. |
+| The binary | **Universal**: one executable with an `arm64` and an `x86_64` slice, merged with `lipo` from the two macOS build runners. There is no per-architecture download to choose. |
+| Where it goes | `/Applications`, by dragging. The `.dmg` is not an installer and writes nothing itself. |
+| What it installs | The window, its icon and its `Info.plist`. No Python, no `uv`, no server, no configuration. On first launch, if `mcc-desktop` is not on the machine, the window prints the official install command and runs it in front of you. |
+| Minimum macOS | 10.13 for the Intel slice — Tauri v2's own bundler default — and, unavoidably, 11.0 for the Apple silicon one, because Apple silicon did not exist before Big Sur. |
+| Signing | **Ad-hoc only.** See below; this is the part that costs a Terminal command. |
+| Uninstall | Drag `/Applications/My Claude Code.app` to the Trash. |
+
+**Ad-hoc signed is not "signed".** The `.app` carries an ad-hoc signature, which is a
+*seal*: every file in the bundle is hashed, so a corrupted or tampered copy is refused by
+the loader instead of crashing strangely, and Apple silicon — which requires every
+executable to carry at least an ad-hoc signature — will run it at all. What an ad-hoc
+signature is not is an *identity*. There is no Developer ID behind it, nothing for
+Gatekeeper to attribute the app to, and `spctl --assess` rejects it. The release
+workflow asserts that rejection on every build rather than hoping it away.
+
+**macOS will refuse to open it the first time, and here is exactly why.** The app is
+not signed with an Apple Developer ID and it is not notarised, because this project has
+no Apple Developer account ($99/year). macOS quarantines anything a browser downloads,
+and Gatekeeper refuses to launch a quarantined app that carries no Developer ID. There
+is **no Control-click → Open workaround any more** — Apple removed it in macOS Sequoia,
+and on current macOS the dialog offers little more than *Move to Trash*. The supported
+one-time fix is one command in Terminal, after you have dragged the app across:
+
+```bash
+xattr -d com.apple.quarantine "/Applications/My Claude Code.app"
+```
+
+Then open it normally; the quarantine flag is per-copy, so you never run it again for
+that install. (Run it again after replacing the app with a newer download.)
+
+**If that is a step too far, take the server one-liner instead.** It is the recommended
+macOS route for exactly this reason: `mcc-desktop` downloads the same window binary over
+HTTPS from Python, and a file fetched by Python is never quarantined, so Gatekeeper is
+never involved at all. Same app, no Terminal command — see [Desktop App](#desktop-app).
+
+**Why not just notarise it?** Notarisation needs a Developer ID certificate, which needs
+a paid Apple Developer account at $99/year. The project does not have one, and a
+half-done job — an app claiming a signature it does not have — would cost more trust
+than the honest warning does.
+
+**One name, two programs, and how they are kept apart.** `install.sh --desktop` writes a
+small launcher bundle at `~/Applications/My Claude Code.app` that simply runs
+`mcc-desktop`. The `.dmg`'s application has the same display name and can occupy the
+same path if you drag it there. They carry different `CFBundleIdentifier`s
+(`com.my-claude-code.desktop` for the launcher, `com.myclaudecode.desktop` for the app),
+and both scripts read that identifier rather than the name: `install.sh --desktop` steps
+aside when it finds the app instead of writing over it, and `uninstall.sh` removes only
+the launcher bundle it wrote and prints the app's path instead of deleting it.
 
 **Neither installer carries a server.** The payload is the window, its entry and its
 icons. On first launch, if `mcc-desktop` is not on the machine, the window prints the

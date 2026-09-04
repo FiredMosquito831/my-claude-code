@@ -618,10 +618,54 @@ DESKTOP_ENTRY
     printf 'Created desktop launcher: %s\n' "$desktop_file"
 }
 
+# The CFBundleIdentifier the *desktop app* carries -- the real .app, built by
+# desktop-shell/installer/macos/build-app.sh and dragged out of the .dmg into
+# /Applications. The launcher bundle written below deliberately carries a
+# different one (com.my-claude-code.desktop), which is the whole mechanism by
+# which the two can be told apart at the same path and under the same name.
+# Pinned by tests/contracts/test_uninstaller_parity.py.
+MACOS_DESKTOP_APP_IDENTIFIER="com.myclaudecode.desktop"
+
+macos_bundle_is_the_desktop_app() {
+    # True when the bundle at $1 is the desktop app rather than the launcher
+    # bundle this script writes. A bundle with no readable Info.plist is not
+    # the desktop app: build-app.sh always writes one, and treating an
+    # unreadable bundle as "the app" would make this script refuse to install
+    # its launcher because of a directory somebody left behind.
+    _bundle_plist="$1/Contents/Info.plist"
+    [ -f "$_bundle_plist" ] || return 1
+    grep -Fq "$MACOS_DESKTOP_APP_IDENTIFIER" "$_bundle_plist"
+}
+
 create_macos_app_bundle() {
     launcher_path=$1
     app_dir="$HOME/Applications/My Claude Code.app"
     contents_dir="$app_dir/Contents"
+
+    # ONE application, not two. The desktop app (the .dmg) installs
+    # "My Claude Code.app" into /Applications -- or into ~/Applications, if
+    # that is where the user dragged it -- and it is the better launcher of
+    # the two: it opens the dashboard in its own window, and it installs My
+    # Claude Code itself if it is missing. This bundle, which only runs
+    # `mcc-desktop`, steps aside for it rather than writing a second
+    # application with the same name and icon.
+    #
+    # In ~/Applications it would not merely be a duplicate: it would be an
+    # overwrite. The two bundles have the same name, so writing this one over
+    # the real app would replace a working application with a shell wrapper.
+    #
+    # It steps aside; it does not remove anything. The app belongs to whoever
+    # dragged it there, and `scripts/uninstall.sh` never deletes it either.
+    # This mirrors create_linux_desktop_entry above.
+    for app_bundle in \
+        "/Applications/My Claude Code.app" \
+        "$HOME/Applications/My Claude Code.app"
+    do
+        if macos_bundle_is_the_desktop_app "$app_bundle"; then
+            printf 'The desktop app is already installed (%s); not adding a second launcher.\n' "$app_bundle"
+            return 0
+        fi
+    done
     macos_dir="$contents_dir/MacOS"
     resources_dir="$contents_dir/Resources"
     icns_path="$resources_dir/app-icon.icns"

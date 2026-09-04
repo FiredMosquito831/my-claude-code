@@ -1462,14 +1462,20 @@
                     PowerShell and WSL keep separate config directories
                     (<code>C:\Users\&lt;you&gt;\.mcc</code> and <code>~/.mcc</code> inside
                     WSL), and installing in both is the usual way to end up editing the
-                    config your server is not reading. On Windows there is a
-                    second way in: download
-                    <strong>MyClaudeCode-Setup-windows-x86_64.exe</strong> from the
-                    latest release and run it. That installs the desktop app only
-                    &mdash; no Python, no server, no admin rights &mdash; and the app
-                    runs the command above for you, in its own window, the first time
-                    you launch it. Linux and macOS installers are coming; today those
-                    two platforms get the same app through <code>mcc-desktop</code>.
+                    config your server is not reading. There is a second way in on
+                    every platform: download the desktop app from the latest release
+                    &mdash; <strong>MyClaudeCode-Setup-windows-x86_64.exe</strong>,
+                    <strong>MyClaudeCode-linux-x86_64.deb</strong> (or the
+                    <code>.tar.gz</code>), or
+                    <strong>MyClaudeCode-macos-universal.dmg</strong> &mdash; and run
+                    it. That installs the desktop app only &mdash; no Python, no
+                    server, no admin rights &mdash; and the app runs the command above
+                    for you, in its own window, the first time you launch it. The
+                    macOS image is unsigned, so after dragging the app into
+                    Applications run
+                    <code>xattr -d com.apple.quarantine "/Applications/My Claude
+                    Code.app"</code> once; installing with the command above and
+                    running <code>mcc-desktop</code> avoids that step entirely.
                   </li>
                   <li>
                     <strong>Reopen the terminal, then start the server:</strong>

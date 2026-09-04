@@ -89,7 +89,7 @@ want to use it.
 | How you install it | The one-line command below. | Download an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest). |
 | Does it need the other half? | No. This is the whole product. | It **installs the server for you** on first launch: if `mcc-desktop` is not there, the window shows the exact install command and runs it in front of you. Nothing is bundled and nothing is hidden. |
 | Best for | Terminal-first work, WSL, servers, headless boxes. | "I just want to double-click something." |
-| Availability | Windows, Linux, macOS, WSL — today. | **Windows and Linux today** — `MyClaudeCode-Setup-windows-x86_64.exe`, `MyClaudeCode-linux-x86_64.deb` (Ubuntu 22.04+/Debian 12+) and `MyClaudeCode-linux-x86_64.tar.gz` (Fedora 40+, Arch, anywhere without root). A macOS `.dmg` is not planned for now; macOS gets the app through `mcc-desktop` itself — see [Desktop App](#desktop-app). |
+| Availability | Windows, Linux, macOS, WSL — today. | **All three** — `MyClaudeCode-Setup-windows-x86_64.exe`, `MyClaudeCode-linux-x86_64.deb` (Ubuntu 22.04+/Debian 12+), `MyClaudeCode-linux-x86_64.tar.gz` (Fedora 40+, Arch, anywhere without root) and `MyClaudeCode-macos-universal.dmg` (Apple silicon and Intel in one file). The macOS `.dmg` is **unsigned**: the first launch needs one Terminal command, and the reason is spelled out below. |
 
 Both paths can coexist on one machine. The desktop app is a window onto the server;
 installing it does not give you a second copy of anything.
@@ -172,6 +172,46 @@ the package installed.
 Fedora 40+. RHEL/Alma/Rocky 8–9, Debian 11 and Ubuntu 20.04 ship only 4.0 and are out of
 scope; there, use the server one-liner below and the browser tab. There is **no
 AppImage** and there is no `.rpm` in this release.
+
+#### Path B: the desktop app (macOS)
+
+One file on the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest),
+for every Mac made since 2013. Its SHA-256 is in `SHA256SUMS-desktop-shell.txt` beside
+it.
+
+```bash
+shasum -a 256 MyClaudeCode-macos-universal.dmg   # compare with SHA256SUMS-desktop-shell.txt
+```
+
+Open `MyClaudeCode-macos-universal.dmg` and drag **My Claude Code** onto the
+**Applications** folder shown next to it. The app inside is a *universal* binary — one
+bundle with both an Apple silicon and an Intel slice — so there is no version of it to
+choose. It carries the window and nothing else: no Python, no server, no configuration.
+
+**macOS will refuse to open it the first time, and here is exactly why.** The app is
+not signed with an Apple Developer ID and it is not notarised, because this project has
+no Apple Developer account ($99/year). macOS quarantines anything a browser downloads,
+and Gatekeeper refuses to launch a quarantined app that carries no Developer ID. There
+is **no Control-click → Open workaround any more** — Apple removed it in macOS Sequoia,
+and on current macOS the dialog offers little more than *Move to Trash*. The supported
+one-time fix is one command in Terminal, after you have dragged the app across:
+
+```bash
+xattr -d com.apple.quarantine "/Applications/My Claude Code.app"
+```
+
+Then open it normally; the quarantine flag is per-copy, so you never run it again for
+that install. (Run it again after replacing the app with a newer download.)
+
+**If that is a step too far, take the server one-liner instead.** It is the recommended
+macOS route for exactly this reason: `mcc-desktop` downloads the same window binary over
+HTTPS from Python, and a file fetched by Python is never quarantined, so Gatekeeper is
+never involved at all. Same app, no Terminal command — see [Desktop App](#desktop-app).
+
+**To remove it,** drag `/Applications/My Claude Code.app` to the Trash. That removes the
+window and nothing else. [`scripts/uninstall.sh`](scripts/uninstall.sh) never deletes it
+— it is an application you installed by hand, not a file this project wrote — but it
+does detect it and print the path.
 
 **One icon, not two.** `install.sh --desktop` also writes an applications entry (for
 `mcc-desktop`, the tray). When the desktop app is already registered it steps aside

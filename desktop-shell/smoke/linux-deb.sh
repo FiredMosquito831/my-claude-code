@@ -83,6 +83,7 @@ ok "control: $PACKAGE $version amd64"
 
 depends="$(field Depends)"
 for required in \
+    "libc6 (>= 2.35)" \
     "libwebkit2gtk-4.1-0" \
     "libgtk-3-0t64 | libgtk-3-0" \
     "libayatana-appindicator3-1 | libappindicator3-1"
@@ -92,7 +93,7 @@ do
         *) fail "Depends is missing '$required'; it is: $depends" ;;
     esac
 done
-ok "Depends carries both renamed-package alternatives"
+ok "Depends carries the glibc floor and both renamed-package alternatives"
 
 # -- the snapshot ----------------------------------------------------------
 # The three directories the package writes into. They are machine-global and

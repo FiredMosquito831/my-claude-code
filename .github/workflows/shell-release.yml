@@ -418,9 +418,110 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # ---------------------------------------------------------------
+  # macOS, delivery path B (spec S9): one universal .dmg from the two macOS
+  # legs' binaries.
+  #
+  # WHY THIS IS A SEPARATE JOB AND NOT A STEP ON A macOS LEG
+  #
+  #   A universal bundle needs both slices, and the two macOS legs are two
+  #   different machines running at the same time. `lipo` cannot run until
+  #   both have finished, which is what `needs: build` says. Doing it on the
+  #   aarch64 leg instead would mean that leg waiting on the Intel one -- the
+  #   matrix has no way to express that, so it would have to poll for an
+  #   artifact that may never arrive, and a red Intel leg would hang the
+  #   aarch64 one for its full timeout rather than failing it.
+  #
+  #   The trade is one extra macOS runner for two or three minutes (no cargo,
+  #   no cache: it downloads two binaries and runs two shell scripts) against
+  #   two per-arch images on the release page. One image is the better
+  #   product: a person downloading a Mac app should not have to know which
+  #   processor their Mac has, and Apple's own answer to that question has
+  #   been the universal binary since 2020.
+  #
+  # The per-arch tarballs are still built and still uploaded: delivery path A
+  # (`config/desktop_shell.py`) fetches exactly one of them per machine and
+  # would gain nothing from downloading a second architecture it cannot run.
+  macos-dmg:
+    name: macos-universal (dmg)
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ inputs.ref || github.event.release.tag_name || inputs.tag }}
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: legs
+          pattern: shell-macos-*
+          merge-multiple: true
+
+      - name: Merge the two slices into one .app, then into a .dmg
+        env:
+          # Where the assets go, which is what the bundle must claim to be --
+          # the same rule the Windows installer and the .deb follow.
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+(\.[0-9]+){1,3}$'; then
+            echo "::warning::'$TAG' is not a numeric version; stamping 0.0.0"
+            version="0.0.0"
+          fi
+
+          mkdir -p slices/aarch64 slices/x86_64 dist
+          tar -xzf legs/MyClaudeCode-macos-aarch64.tar.gz -C slices/aarch64
+          tar -xzf legs/MyClaudeCode-macos-x86_64.tar.gz -C slices/x86_64
+          chmod 0755 slices/aarch64/MyClaudeCode slices/x86_64/MyClaudeCode
+
+          desktop-shell/installer/macos/build-app.sh \
+            --binary slices/aarch64/MyClaudeCode \
+            --binary slices/x86_64/MyClaudeCode \
+            --version "$version" \
+            --output staging
+
+          desktop-shell/installer/macos/build-dmg.sh \
+            --app "staging/My Claude Code.app" \
+            --output "dist/MyClaudeCode-macos-universal.dmg"
+
+      # The proof, and the reason this job is not just two shell scripts:
+      # mount the image, assert the bundle layout and every Info.plist key,
+      # verify the ad-hoc seal, assert that `spctl` REJECTS it (it is unsigned;
+      # a green spctl would mean the README's Gatekeeper paragraph is wrong),
+      # run the program out of the image, detach, and diff /Applications and
+      # ~/Applications back -- this smoke installs nothing at all.
+      - name: Smoke the .dmg (mount, assert, run, detach, diff)
+        working-directory: desktop-shell
+        run: ./smoke/macos-dmg.sh "../dist/MyClaudeCode-macos-universal.dmg"
+
+      - name: Checksum
+        working-directory: dist
+        # The same rebuilt-from-the-digest line every other leg writes, for
+        # the same reason: the printers disagree about mode markers.
+        run: |
+          set -euo pipefail
+          for artefact in *; do
+            case "$artefact" in *.sha256) continue ;; esac
+            digest="$(shasum -a 256 "$artefact" | cut -d' ' -f1)"
+            printf '%s  %s\n' "$digest" "$artefact" > "$artefact.sha256"
+          done
+          cat ./*.sha256
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: shell-macos-universal
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     name: Attach to the release
-    needs: build
+    needs: [build, macos-dmg]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The only job in this workflow that may write. It builds nothing.
@@ -441,9 +542,10 @@ jobs:
           set -euo pipefail
           cat ./*.sha256 | LC_ALL=C sort -k2 > SHA256SUMS-desktop-shell.txt
           rm -f ./*.sha256
-          # Four archives, the Windows installer and the Linux .deb.
-          test "$(wc -l < SHA256SUMS-desktop-shell.txt)" -eq 6 \
-            || { echo "::error::expected six checksum lines"; exit 1; }
+          # Four archives, the Windows installer, the Linux .deb and the
+          # universal macOS .dmg.
+          test "$(wc -l < SHA256SUMS-desktop-shell.txt)" -eq 7 \
+            || { echo "::error::expected seven checksum lines"; exit 1; }
           cat SHA256SUMS-desktop-shell.txt
           sha256sum -c SHA256SUMS-desktop-shell.txt
           # The format is a published contract -- S4 parses this file to get
@@ -458,7 +560,9 @@ jobs:
             || { echo "::error::the Windows installer is missing from the checksum file"; exit 1; }
           grep -q '  MyClaudeCode-linux-x86_64\.deb$' SHA256SUMS-desktop-shell.txt \
             || { echo "::error::the Linux .deb is missing from the checksum file"; exit 1; }
-          echo "the checksum file is six 'sha256  filename' lines"
+          grep -q '  MyClaudeCode-macos-universal\.dmg$' SHA256SUMS-desktop-shell.txt \
+            || { echo "::error::the macOS .dmg is missing from the checksum file"; exit 1; }
+          echo "the checksum file is seven 'sha256  filename' lines"
 
       - name: Upload to the release
         working-directory: staging
@@ -477,5 +581,6 @@ jobs:
             MyClaudeCode-linux-x86_64.deb \
             MyClaudeCode-macos-aarch64.tar.gz \
             MyClaudeCode-macos-x86_64.tar.gz \
+            MyClaudeCode-macos-universal.dmg \
             SHA256SUMS-desktop-shell.txt \
             --clobber --repo "$GITHUB_REPOSITORY"

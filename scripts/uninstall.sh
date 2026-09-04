@@ -30,6 +30,15 @@ LINUX_DESKTOP_ENTRY=".local/share/applications/my-claude-code.desktop"
 LINUX_DESKTOP_ICON=".local/share/icons/hicolor/256x256/apps/my-claude-code.png"
 LINUX_APPLICATIONS_DIR=".local/share/applications"
 MACOS_APP_BUNDLE="Applications/My Claude Code.app"
+# The *desktop app* -- the real .app built by
+# desktop-shell/installer/macos/build-app.sh, dragged out of the .dmg. It is
+# detected and named, never removed: this uninstaller wrote a launcher bundle
+# with the same name, and the only thing that tells them apart is the
+# identifier. Deleting an application a person dragged into /Applications
+# because it happens to share a name with something we wrote would be the
+# macOS equivalent of deleting a dpkg-owned file.
+MACOS_DESKTOP_APP_IDENTIFIER="com.myclaudecode.desktop"
+MACOS_DESKTOP_APP_BUNDLE="/Applications/My Claude Code.app"
 MACOS_LAUNCH_AGENT="Library/LaunchAgents/com.myclaudecode.tray.plist"
 LINUX_AUTOSTART_ENTRY=".config/autostart/mcc-server.desktop"
 LINUX_SYSTEMD_UNIT_NAME="mcc-server.service"
@@ -49,6 +58,9 @@ DESKTOP_APP_ENTRY=".local/share/applications/my-claude-code-desktop.desktop"
 DESKTOP_APP_ICONS_ROOT=".local/share/icons/hicolor"
 DESKTOP_APP_ICON_NAME="my-claude-code-desktop"
 DESKTOP_APP_ICON_SIZES="512x512 256x256 128x128 32x32"
+# The macOS desktop app is the same shape of exception as the .deb below: it
+# is detected and named, never removed. See MACOS_DESKTOP_APP_IDENTIFIER.
+#
 # The Debian package. It is detected and named, never removed: files under
 # /usr belong to dpkg, and an uninstaller that deleted them behind dpkg's back
 # would leave the package database claiming they are still there.
@@ -263,17 +275,60 @@ remove_home_path() {
     return 0
 }
 
+macos_bundle_is_the_desktop_app() {
+    # True when the bundle at $1 is the desktop app rather than the launcher
+    # bundle scripts/install.sh writes. The two share a name and a path, and
+    # the CFBundleIdentifier is the only thing that distinguishes them: the
+    # launcher carries com.my-claude-code.desktop, the app
+    # com.myclaudecode.desktop. A bundle with no readable Info.plist is not
+    # the app -- build-app.sh always writes one -- so an unreadable directory
+    # is removed as the launcher it almost certainly is.
+    _bundle_plist="$1/Contents/Info.plist"
+    [ -f "$_bundle_plist" ] || return 1
+    grep -Fq "$MACOS_DESKTOP_APP_IDENTIFIER" "$_bundle_plist"
+}
+
+remove_macos_launcher_bundle() {
+    # ~/Applications/My Claude Code.app is written by create_macos_app_bundle
+    # in scripts/install.sh -- a wrapper that execs `mcc-desktop`. But a user
+    # who dragged the .dmg's app into ~/Applications instead of /Applications
+    # has a *different* program at exactly that path, and removing it would
+    # delete an application this script never installed.
+    if macos_bundle_is_the_desktop_app "$HOME/$MACOS_APP_BUNDLE"; then
+        printf 'Keeping %s: that is the desktop app, not the launcher install.sh wrote.\n' \
+            "$HOME/$MACOS_APP_BUNDLE"
+        return 0
+    fi
+    remove_home_path "$MACOS_APP_BUNDLE" || true
+}
+
+report_macos_desktop_app() {
+    # The .dmg is not this script's to undo, exactly as the .deb is not. Say
+    # so, name the bundle and say what is in it, rather than either ignoring
+    # it or deleting somebody's application.
+    for _bundle in "$MACOS_DESKTOP_APP_BUNDLE" "$HOME/$MACOS_APP_BUNDLE"; do
+        macos_bundle_is_the_desktop_app "$_bundle" || continue
+        printf '\nThe desktop app is also installed at %s.\n' "$_bundle"
+        printf 'This uninstaller does not remove it. Drag it to the Trash, or run:\n'
+        printf '  rm -rf "%s"\n' "$_bundle"
+        printf 'It contains Contents/MacOS/MyClaudeCode, Contents/Info.plist,\n'
+        printf 'Contents/Resources/MyClaudeCode.icns and Contents/PkgInfo -- the window\n'
+        printf 'and nothing else. Removing it does not remove My Claude Code.\n'
+    done
+}
+
 remove_desktop_launcher() {
     # create_linux_desktop_entry writes both the entry and its icon; the icon
     # is useless on its own, so both go. create_macos_app_bundle writes a whole
-    # directory, hence rm -rf rather than an unlink.
+    # directory, hence rm -rf rather than an unlink -- unless the directory at
+    # that path is the desktop app, which remove_macos_launcher_bundle checks.
     if remove_home_path "$LINUX_DESKTOP_ENTRY"; then
         if [ "$dry_run" -eq 0 ] && command -v update-desktop-database >/dev/null 2>&1; then
             update-desktop-database "$HOME/$LINUX_APPLICATIONS_DIR" >/dev/null 2>&1 || true
         fi
     fi
     remove_home_path "$LINUX_DESKTOP_ICON" || true
-    remove_home_path "$MACOS_APP_BUNDLE" || true
+    remove_macos_launcher_bundle
 }
 
 remove_start_at_login_registration() {
@@ -330,6 +385,7 @@ remove_desktop_artifacts() {
     remove_desktop_launcher
     remove_desktop_app
     remove_start_at_login_registration
+    report_macos_desktop_app
 }
 
 purge_config_dir() {

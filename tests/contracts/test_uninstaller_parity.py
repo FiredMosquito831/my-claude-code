@@ -30,6 +30,17 @@ second script names each file". The ``.iss`` assertions at the bottom of this
 file check exactly that, plus the boundary that matters more: the desktop
 app's uninstaller must not reach into the *server's* artefacts. Removing the
 window is not removing My Claude Code.
+
+The fourth -- there are four -- is the macOS ``.dmg`` (spec S9), and it is the
+sharpest case of the same boundary. ``install.sh --desktop`` writes a launcher
+bundle at ``~/Applications/My Claude Code.app``; the ``.dmg`` puts a *real*
+application with the same display name at ``/Applications/My Claude Code.app``,
+and a user may drag it into ``~/Applications`` instead. Two different programs,
+one path, one name. The only thing that tells them apart is the
+``CFBundleIdentifier``, so the tests at the bottom of this file pin both
+identifiers, pin that they differ, pin that the installer steps aside when it
+finds the app, and pin that the uninstaller names the app instead of deleting
+it.
 """
 
 import re
@@ -54,6 +65,12 @@ BUILD_DEB = LINUX_INSTALLER_DIR / "build-deb.sh"
 INSTALL_DESKTOP_SH = LINUX_INSTALLER_DIR / "install-desktop.sh"
 LINUX_DESKTOP_ENTRY_TEMPLATE = LINUX_INSTALLER_DIR / "my-claude-code-desktop.desktop"
 SHELL_CARGO_TOML = REPO_ROOT / "desktop-shell" / "src-tauri" / "Cargo.toml"
+SMOKE_DIR = REPO_ROOT / "desktop-shell" / "smoke"
+LINUX_DEB_SMOKE = SMOKE_DIR / "linux-deb.sh"
+MACOS_INSTALLER_DIR = REPO_ROOT / "desktop-shell" / "installer" / "macos"
+BUILD_APP = MACOS_INSTALLER_DIR / "build-app.sh"
+BUILD_DMG = MACOS_INSTALLER_DIR / "build-dmg.sh"
+MACOS_DMG_SMOKE = SMOKE_DIR / "macos-dmg.sh"
 
 
 @dataclass(frozen=True)
@@ -976,6 +993,40 @@ def test_the_deb_depends_carry_both_renamed_alternatives() -> None:
         assert required in line, f"Depends is missing {required!r}: {line}"
 
 
+def test_the_deb_declares_the_glibc_floor_it_was_built_against() -> None:
+    """`E: missing-dependency-on-libc`, and lintian is right about it.
+
+    The package is built on ubuntu-22.04 and glibc is forward-compatible
+    only. Without a versioned `libc6`, apt installs it happily on Debian 11
+    and the binary then dies at exec with a `GLIBC_2.34 not found` message
+    that names no package and offers no fix.
+    """
+
+    build = BUILD_DEB.read_text(encoding="utf-8")
+    depends = re.search(r"^Depends: (.+)$", build, re.MULTILINE)
+    assert depends is not None
+    assert "libc6 (>= 2.35)" in depends.group(1), (
+        "Depends must pin the build floor's glibc: " + depends.group(1)
+    )
+    # And the smoke must assert it on the built package, not just here.
+    assert '"libc6 (>= 2.35)"' in LINUX_DEB_SMOKE.read_text(encoding="utf-8"), (
+        "smoke/linux-deb.sh does not check the glibc dependency on the real package"
+    )
+
+
+def test_the_deb_staging_root_is_world_readable() -> None:
+    """`mktemp -d` is 0700, and dpkg-deb packages the staging root as `./`.
+
+    A package whose own `./` is drwx------ is a lintian finding and, on a
+    machine whose dpkg does not silently correct it, an unreadable install.
+    """
+
+    build = BUILD_DEB.read_text(encoding="utf-8")
+    assert 'chmod 0755 "$staging"' in build, (
+        "build-deb.sh must widen the mktemp staging root to 0755"
+    )
+
+
 def test_the_deb_writes_nothing_outside_usr() -> None:
     """A package that wrote under $HOME could not be uninstalled by dpkg."""
 
@@ -1058,4 +1109,315 @@ def test_the_uninstaller_names_the_deb_and_never_deletes_its_files() -> None:
     for forbidden in ("/usr/bin/MyClaudeCode", "/usr/share/applications", "dpkg -r"):
         assert forbidden not in code, (
             f"uninstall.sh names {forbidden!r}; the .deb is dpkg's to remove"
+        )
+
+
+# --------------------------------------------------------------------------
+# The macOS desktop app (spec S9): an ad-hoc-signed `.app` in an unsigned
+# `.dmg`.
+#
+# The asymmetry here is the same one the .deb has, for a sharper reason. The
+# .deb writes under /usr and dpkg owns those files. The .dmg writes nothing at
+# all -- the "install" is a human dragging an icon -- so nothing owns the
+# result except the person who dragged it. `scripts/uninstall.sh` must
+# therefore NAME the application and never delete it, and it must not delete
+# it *by accident either*: the launcher bundle it does own has the same name
+# and can sit at the same path.
+# --------------------------------------------------------------------------
+
+#: What `build-app.sh` names the bundle, its executable and its identifier.
+#: The identifier is the load-bearing one -- it is how both scripts tell the
+#: app apart from the launcher bundle.
+MACOS_APP_IDENTIFIER = "com.myclaudecode.desktop"
+
+#: What `create_macos_app_bundle` in scripts/install.sh writes instead. These
+#: two strings must never converge.
+MACOS_LAUNCHER_IDENTIFIER = "com.my-claude-code.desktop"
+
+
+def _shell_assignments(path: Path) -> dict[str, str]:
+    """Return the script's top-level ``NAME="value"`` assignments."""
+
+    return {
+        match.group(1): match.group(2)
+        for match in re.finditer(
+            r'^([A-Za-z_][A-Za-z0-9_]*)="([^"$]*)"$',
+            path.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+    }
+
+
+def _app_bundle_layout() -> tuple[str, ...]:
+    """Every path inside `Contents/` that `build-app.sh` actually writes.
+
+    Parsed out of the script rather than restated here, so a fifth file
+    appearing in the bundle fails the uninstaller message that does not
+    mention it. `_CodeSignature/CodeResources` is deliberately not found by
+    this: `codesign` writes it, `build-app.sh` does not.
+    """
+
+    text = BUILD_APP.read_text(encoding="utf-8")
+    names = _shell_assignments(BUILD_APP)
+    found: set[str] = set()
+    for raw in re.findall(r'"\$contents/([^"]+)"', text):
+        resolved = raw
+        for variable, value in names.items():
+            resolved = resolved.replace(f"${variable}", value)
+        if "$" in resolved:
+            continue
+        found.add(resolved)
+    return tuple(sorted(found))
+
+
+def test_the_macos_installers_are_all_present() -> None:
+    """A missing file would make every assertion below vacuous."""
+
+    for path in (BUILD_APP, BUILD_DMG, MACOS_DMG_SMOKE):
+        assert path.is_file(), f"{path} is missing"
+    layout = _app_bundle_layout()
+    assert len(layout) >= 4, f"only {layout} was parsed out of build-app.sh"
+
+
+def test_the_bundle_layout_is_the_one_the_smoke_asserts() -> None:
+    """The script and its proof must describe the same application."""
+
+    smoke = MACOS_DMG_SMOKE.read_text(encoding="utf-8")
+    for path in _app_bundle_layout():
+        # The smoke spells the executable and the icns through its own
+        # $EXECUTABLE, so compare on the stable part of each path.
+        stem = path.split("/")[0]
+        assert stem in smoke, f"smoke/macos-dmg.sh never mentions Contents/{stem}"
+    assert "Contents/_CodeSignature/CodeResources" in smoke, (
+        "the smoke does not assert the bundle was sealed at all"
+    )
+
+
+def test_the_app_and_the_launcher_bundle_carry_different_identifiers() -> None:
+    """One name, one path, two programs -- the identifier is the only tell.
+
+    `install.sh --desktop` writes `~/Applications/My Claude Code.app`. The
+    `.dmg` puts an application of the same name in `/Applications`, and a user
+    may drag it into `~/Applications` instead. If these two strings ever
+    became equal, the installer would overwrite the application and the
+    uninstaller would delete it.
+    """
+
+    build_app = _shell_assignments(BUILD_APP)
+    assert build_app.get("IDENTIFIER") == MACOS_APP_IDENTIFIER, (
+        f"build-app.sh's IDENTIFIER is {build_app.get('IDENTIFIER')!r}"
+    )
+
+    install_sh = INSTALL_SH.read_text(encoding="utf-8")
+    assert f"<string>{MACOS_LAUNCHER_IDENTIFIER}</string>" in install_sh, (
+        "create_macos_app_bundle no longer writes the launcher identifier"
+    )
+    assert MACOS_APP_IDENTIFIER != MACOS_LAUNCHER_IDENTIFIER
+    # And the launcher's identifier must not merely *contain* the app's, since
+    # both scripts detect the app with a fixed-string grep.
+    assert MACOS_APP_IDENTIFIER not in MACOS_LAUNCHER_IDENTIFIER
+
+
+def test_the_bundle_executable_is_the_shipped_binary_name() -> None:
+    """CFBundleExecutable must name the file in Contents/MacOS.
+
+    That file is `[[bin]] name` in the shell's Cargo.toml, which is
+    version-agnostic on purpose (decision Q5). The *bundle* is versioned --
+    CFBundleShortVersionString carries the tag -- and the two do not conflict,
+    because nothing points at a plist key.
+    """
+
+    cargo = SHELL_CARGO_TOML.read_text(encoding="utf-8")
+    binary = re.search(r'^\[\[bin\]\]\s*\nname = "([^"]+)"', cargo, re.MULTILINE)
+    assert binary is not None, "could not find [[bin]] name in the shell's Cargo.toml"
+
+    build_app = _shell_assignments(BUILD_APP)
+    assert build_app.get("EXECUTABLE") == binary.group(1)
+    text = BUILD_APP.read_text(encoding="utf-8")
+    assert "<key>CFBundleExecutable</key>" in text
+    assert "<string>$EXECUTABLE</string>" in text
+    for key in ("CFBundleShortVersionString", "CFBundleVersion"):
+        assert f"<key>{key}</key>" in text, f"the bundle declares no {key}"
+    assert text.count("<string>$version</string>") == 2, (
+        "both version keys must carry the release tag, and only those two"
+    )
+
+
+def test_the_bundle_declares_the_keys_the_window_depends_on() -> None:
+    """Three of these are not cosmetic.
+
+    Without `NSAppTransportSecurity > NSAllowsLocalNetworking` the webview
+    refuses the cleartext `http://127.0.0.1:<port>` the whole product is;
+    without `NSHighResolutionCapable` the dashboard renders through the 1x
+    magnifier on every Mac made since 2012; without `LSMinimumSystemVersion`
+    macOS makes its own guess about where the app will run.
+    """
+
+    text = BUILD_APP.read_text(encoding="utf-8")
+    for key in (
+        "CFBundleIdentifier",
+        "CFBundleName",
+        "CFBundleDisplayName",
+        "CFBundleExecutable",
+        "CFBundleIconFile",
+        "CFBundlePackageType",
+        "LSApplicationCategoryType",
+        "LSMinimumSystemVersion",
+        "NSAppTransportSecurity",
+        "NSHighResolutionCapable",
+    ):
+        assert f"<key>{key}</key>" in text, f"Info.plist has no {key}"
+
+    assert "<key>NSAllowsLocalNetworking</key>" in text
+    assert "NSAllowsArbitraryLoads" not in _shell_code(BUILD_APP), (
+        "the bundle would exempt the whole internet from App Transport "
+        "Security; it needs loopback only"
+    )
+    assert "public.app-category.developer-tools" in text
+    assert 'MINIMUM_SYSTEM_VERSION="10.13"' in text, (
+        "the minimum system version moved; Tauri v2's own bundler default is "
+        "10.13, and the README quotes whatever is here"
+    )
+    assert "plutil -lint" in text, "build-app.sh does not validate the plist it wrote"
+
+
+def test_the_bundle_is_ad_hoc_signed_and_claims_nothing_more() -> None:
+    """Ad-hoc is a seal, not an identity, and the docs say so.
+
+    On Apple silicon every Mach-O must carry at least an ad-hoc signature, and
+    `lipo` produces a fresh file whose inherited signature no longer matches
+    it -- so the signing step is mandatory, not decorative. It is also the
+    limit of what this project can do: a Developer ID certificate and
+    notarisation need a paid Apple Developer account.
+    """
+
+    code = _shell_code(BUILD_APP)
+    assert "codesign --force --deep --sign - --timestamp=none" in code
+    assert "codesign --verify --deep --strict" in code, (
+        "build-app.sh signs but never checks the seal it just made"
+    )
+    for forbidden in ("notarytool", "altool", "stapler", "--entitlements", '--sign "'):
+        assert forbidden not in code, (
+            f"build-app.sh names {forbidden!r}; v1 ships unsigned and "
+            "un-notarised, and the documentation says so"
+        )
+    # And the script says out loud what it did, so a build log cannot be
+    # mistaken for evidence of a Developer ID signature.
+    assert "NOT Developer ID, NOT notarised" in code
+
+
+def test_the_dmg_is_a_udzo_image_a_person_can_drag_out_of() -> None:
+    """`-format UDZO` and an /Applications symlink, or it is not a Mac dmg."""
+
+    text = BUILD_DMG.read_text(encoding="utf-8")
+    for required in (
+        "hdiutil create",
+        "-format UDZO",
+        '-volname "$volume_name"',
+        "-fs HFS+",
+        'ln -s /Applications "$staging/Applications"',
+    ):
+        assert required in text, f"build-dmg.sh does not use {required!r}"
+    assert 'ditto "$app"' in text, (
+        "build-dmg.sh must copy the bundle with ditto; cp -R can break the seal"
+    )
+    assert 'chmod 0755 "$staging"' in text, (
+        "mktemp -d is 0700, so the mounted volume would look empty to anyone "
+        "but its owner"
+    )
+
+
+def test_the_dmg_smoke_expects_gatekeeper_to_reject_the_app() -> None:
+    """The proof asserts the documented failure, rather than skipping it.
+
+    `spctl --assess` rejecting this app is what the Gatekeeper paragraph in
+    README.md, docs/USAGE.md and the release notes is about. A smoke that
+    merely tolerated a green `spctl` would be a smoke that never noticed the
+    day that documentation became wrong.
+    """
+
+    text = MACOS_DMG_SMOKE.read_text(encoding="utf-8")
+    assert "spctl --assess --type execute" in text
+    assert "spctl ACCEPTED an unsigned app" in text, (
+        "the smoke does not fail when Gatekeeper accepts the app"
+    )
+    assert "com.apple.quarantine" in text, (
+        "the smoke does not exercise the workaround the docs give users"
+    )
+    # And it must prove it installed nothing: a dmg is not an installer.
+    assert "/Applications or ~/Applications changed" in text
+
+
+def test_the_server_installer_steps_aside_for_the_macos_desktop_app() -> None:
+    """`install.sh --desktop` must not overwrite the application.
+
+    In `/Applications` writing the launcher bundle would be a duplicate. In
+    `~/Applications` it would be an *overwrite*, because the two bundles have
+    the same name -- a working application replaced by a shell wrapper.
+    """
+
+    install_sh = INSTALL_SH.read_text(encoding="utf-8")
+    assert f'MACOS_DESKTOP_APP_IDENTIFIER="{MACOS_APP_IDENTIFIER}"' in install_sh
+    assert "macos_bundle_is_the_desktop_app() {" in install_sh
+    for guarded in (
+        '"/Applications/My Claude Code.app"',
+        '"$HOME/Applications/My Claude Code.app"',
+    ):
+        assert guarded in install_sh, (
+            "create_macos_app_bundle must step aside when the desktop app is "
+            f"already installed; {guarded!r} is not checked"
+        )
+    assert install_sh.count("not adding a second launcher") == 2, (
+        "both create_linux_desktop_entry and create_macos_app_bundle must "
+        "step aside, with the same sentence"
+    )
+
+
+def test_the_uninstaller_names_the_macos_app_and_never_deletes_it() -> None:
+    """It removes the launcher bundle it wrote, and only that.
+
+    The message it prints must describe the whole bundle, so somebody reading
+    it knows what they are dragging to the Trash. The layout is parsed out of
+    `build-app.sh`, so a file added to the bundle fails here.
+    """
+
+    text = UNINSTALL_SH.read_text(encoding="utf-8")
+    assert f'MACOS_DESKTOP_APP_IDENTIFIER="{MACOS_APP_IDENTIFIER}"' in text
+    assert 'MACOS_DESKTOP_APP_BUNDLE="/Applications/My Claude Code.app"' in text
+    assert "macos_bundle_is_the_desktop_app() {" in text
+    assert "remove_macos_launcher_bundle() {" in text
+    assert "report_macos_desktop_app() {" in text
+    assert (
+        "report_macos_desktop_app"
+        in _shell_code(UNINSTALL_SH).split("remove_desktop_artifacts() {")[1]
+    ), "report_macos_desktop_app is defined but never called"
+
+    # The removal of the launcher bundle is guarded, not unconditional.
+    guarded = text.split("remove_macos_launcher_bundle() {")[1].split("\n}")[0]
+    assert 'macos_bundle_is_the_desktop_app "$HOME/$MACOS_APP_BUNDLE"' in guarded
+    assert 'remove_home_path "$MACOS_APP_BUNDLE"' in guarded
+
+    # And the message covers every part of the bundle build-app.sh writes.
+    message = text.split("report_macos_desktop_app() {")[1].split("\n}")[0]
+    for path in _app_bundle_layout():
+        assert f"Contents/{path}" in message, (
+            f"the uninstaller's message does not mention Contents/{path}, "
+            "which build-app.sh puts in the bundle"
+        )
+    assert "does not remove it" in message
+    assert "Trash" in message
+
+
+def test_the_uninstaller_never_reaches_into_the_system_applications_folder() -> None:
+    """Only detection may name /Applications; nothing may remove from it."""
+
+    code = _shell_code(UNINSTALL_SH)
+    for forbidden in (
+        'rm -rf "/Applications',
+        'remove_home_path "/Applications',
+        'run rm -rf "$MACOS_DESKTOP_APP_BUNDLE"',
+    ):
+        assert forbidden not in code, (
+            f"uninstall.sh names {forbidden!r}; the .dmg's app belongs to "
+            "whoever dragged it there"
         )

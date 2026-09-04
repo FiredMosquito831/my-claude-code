@@ -44,6 +44,21 @@ SHELL_ASSETS = [
         "size": 3_000_000,
     },
     {
+        "name": "MyClaudeCode-linux-x86_64.deb",
+        "browser_download_url": "https://example.invalid/MyClaudeCode-linux-x86_64.deb",
+        "size": 3_200_000,
+    },
+    {
+        "name": "MyClaudeCode-macos-universal.dmg",
+        "browser_download_url": "https://example.invalid/MyClaudeCode-macos-universal.dmg",
+        "size": 6_100_000,
+    },
+    {
+        "name": "MyClaudeCode-Setup-windows-x86_64.exe",
+        "browser_download_url": "https://example.invalid/MyClaudeCode-Setup-windows-x86_64.exe",
+        "size": 3_400_000,
+    },
+    {
         "name": "MyClaudeCode-windows-x86_64.zip",
         "browser_download_url": "https://example.invalid/MyClaudeCode-windows-x86_64.zip",
         "size": 2_800_000,
