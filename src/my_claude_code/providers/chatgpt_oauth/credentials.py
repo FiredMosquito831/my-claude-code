@@ -20,6 +20,10 @@ from my_claude_code.config.paths import chatgpt_oauth_auth_path
 CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 CODEX_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
 CODEX_OAUTH_ORIGINATOR = "codex_cli_rs"
+#: The namespaced claim bag OpenAI puts its ChatGPT identity into. Codex reads
+#: the same key -- its own error literal is "JWT payload missing expected
+#: 'https://api.openai.com/auth' object".
+CHATGPT_AUTH_CLAIM = "https://api.openai.com/auth"
 CODEX_OAUTH_SCOPE = (
     "openid profile email offline_access api.connectors.read api.connectors.invoke"
 )
@@ -171,7 +175,7 @@ def _extract_account_id_from_claims(claims: dict[str, Any]) -> str:
     account_id = claims.get("chatgpt_account_id")
     if isinstance(account_id, str) and account_id:
         return account_id
-    auth_claim = claims.get("https://api.openai.com/auth") or {}
+    auth_claim = claims.get(CHATGPT_AUTH_CLAIM) or {}
     account_id = auth_claim.get("chatgpt_account_id")
     if isinstance(account_id, str) and account_id:
         return account_id
@@ -203,6 +207,50 @@ def extract_account_id_from_tokens(
             return account_id
     if access_token:
         return _extract_account_id_from_claims(_decode_jwt_claims(access_token))
+    return ""
+
+
+def _extract_plan_type_from_claims(claims: dict[str, Any]) -> str:
+    """Read ``chatgpt_plan_type`` out of already-decoded claims.
+
+    The plan is the only claim this project reads beyond the account id and
+    the expiry. It is never logged, never returned to a client and never
+    stored: it is consulted in memory to answer "may this subscription use
+    this model?", which is the same question Codex answers client-side from
+    the same claim.
+    """
+    plan = claims.get("chatgpt_plan_type")
+    if isinstance(plan, str) and plan.strip():
+        return plan.strip()
+    auth_claim = claims.get(CHATGPT_AUTH_CLAIM) or {}
+    if isinstance(auth_claim, dict):
+        plan = auth_claim.get("chatgpt_plan_type")
+        if isinstance(plan, str) and plan.strip():
+            return plan.strip()
+    return ""
+
+
+def stored_chatgpt_plan_type(*, auth_path: Path | None = None) -> str:
+    """Return this credential's ChatGPT plan, decoded locally, or ``""``.
+
+    Strictly local: it reads the stored ID token that is already on disk and
+    base64-decodes its payload through the same helper the account-id
+    extraction uses. **No network call and no token refresh**, on purpose --
+    a model list must never be able to spend a refresh, rotate a refresh token
+    or wake a credential that was quietly working.
+
+    ``""`` means unknown, which callers must treat as "do not filter": an
+    unreadable plan can never be allowed to hide a model the subscription can
+    actually use.
+    """
+    try:
+        source = _load_managed_source(auth_path)
+    except ChatGPTOAuthError:
+        return ""
+    for token in (source.id_token, source.access_token):
+        plan = _extract_plan_type_from_claims(_decode_jwt_claims(token))
+        if plan:
+            return plan
     return ""
 
 

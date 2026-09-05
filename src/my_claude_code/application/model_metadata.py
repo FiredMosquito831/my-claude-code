@@ -1,8 +1,70 @@
 """Application-owned model metadata."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from my_claude_code.core.reasoning import ReasoningEffort
+
+
+class ModelListingProvenance(StrEnum):
+    """Why one model id is in a provider's catalogue at all.
+
+    Existence provenance, deliberately separate from the per-field
+    :class:`~my_claude_code.core.model_ids.ResolutionTier` a capability value
+    carries. The two answer different questions: the tier says where a
+    *number* came from, this says why the row is on the page. A provider whose
+    gateway publishes no ``/models`` has to answer the second question from
+    somewhere, and the honest answer is not always the same rung.
+
+    Ordered strongest-first, and that order is the merge order in
+    :mod:`my_claude_code.providers.runtime.served_models`.
+    """
+
+    #: The provider's own ``/models`` endpoint answered.
+    GATEWAY = "gateway"
+    #: The backend's official client ships a catalogue, read from disk. No
+    #: network, no credential, and it updates when the user updates that
+    #: client.
+    VENDOR_CLIENT = "vendor_client"
+    #: This credential has already been served this id successfully. The
+    #: strongest claim available offline: it is proof rather than a document.
+    OBSERVED = "observed"
+    #: A reference catalogue (models.dev) that describes the same vendor but
+    #: not necessarily the same deployment.
+    MODELS_DEV = "models_dev"
+    #: A literal list compiled by hand. Nobody stands behind it; it exists so
+    #: a fresh offline install has a non-empty picker.
+    SEED = "seed"
+
+
+@dataclass(frozen=True, slots=True)
+class ModelListingEvidence:
+    """Why one model id is listed, and what its own catalogue said about it.
+
+    Existence facts only. Nothing here is a capability, a limit or a price:
+    those keep coming off the resolution ladder, whatever this says. A rung
+    that can name a model but not measure it must be able to say so without
+    smuggling a number in beside the name.
+
+    ``retirement_at`` and ``replacement_model_id`` are the vendor's own words,
+    stored verbatim as they were published; ``offered_by_default`` is the
+    vendor's ``visibility`` hint, carried through rather than applied -- a
+    model the vendor hides is still servable, and this project's own
+    visibility globs are the operator's mechanism for hiding.
+    """
+
+    provenance: ModelListingProvenance
+    #: One sentence naming the source, for the admin page. Never a credential,
+    #: never a token, never a path outside the vendor's own install.
+    detail: str = ""
+    #: The vendor's published retirement instant, verbatim. ``None`` means no
+    #: retirement was published, never "not retired soon".
+    retirement_at: str | None = None
+    #: What the vendor says replaces this model once it retires.
+    replacement_model_id: str | None = None
+    #: ``False`` when the vendor's own catalogue marks the model hidden.
+    #: ``None`` when no source said either way.
+    offered_by_default: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +190,12 @@ class ProviderModelInfo:
     # models.dev fallback field by field. ``None`` means the provider published
     # no reasoning block at all.
     reasoning_capability: ModelReasoningCapability | None = None
+    # Why this id is in the catalogue at all, for providers that have to
+    # answer that from something other than a gateway ``/models``. Never read
+    # by routing and never consulted by the capability ladder: it is a
+    # provenance record for the admin page and for the operator's own
+    # judgement. ``None`` means nobody recorded one.
+    listing: ModelListingEvidence | None = None
 
 
 @dataclass(frozen=True, slots=True)

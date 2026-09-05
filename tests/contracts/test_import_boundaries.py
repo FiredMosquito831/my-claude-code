@@ -119,6 +119,24 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     ),
     (
         "my_claude_code.api.admin_routes",
+        "my_claude_code.providers.chatgpt_oauth.codex_catalogue",
+    ): (
+        "Owner: admin dashboard ChatGPT subscription card. "
+        "Reason: the card names the vendor catalogue the model list was built "
+        "from -- which Codex version, how many models, which of them OpenAI "
+        "has already retired -- and the provider is what reads it."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
+        "my_claude_code.providers.chatgpt_oauth.response_headers",
+    ): (
+        "Owner: admin dashboard ChatGPT subscription card. "
+        "Reason: the card reports the usage windows OpenAI sent on a real "
+        "response, and the provider is what observed them. Same shape and "
+        "same justification as the anthropic_oauth entry above."
+    ),
+    (
+        "my_claude_code.api.admin_routes",
         "my_claude_code.providers.chatgpt_oauth.browser_login",
     ): (
         "Owner: admin dashboard ChatGPT OAuth browser login API. "

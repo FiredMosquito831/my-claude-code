@@ -6430,6 +6430,38 @@ details.turn-pane > summary:focus-visible {
   color: var(--warn);
 }
 
+/* Existence provenance. Four quiet variants and one loud one: `seed` is the
+   only value nobody stands behind, so it borrows the warning colour the
+   approximate tier already uses rather than reading as a neutral fact. */
+.models-chip-provenance {
+  border-color: var(--neutral-border);
+  background: var(--neutral-bg);
+  color: var(--muted);
+}
+
+.models-chip-provenance-vendor-client,
+.models-chip-provenance-gateway {
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.models-chip-provenance-observed {
+  border-color: var(--ok-border, var(--accent-border));
+  color: var(--ok, var(--accent));
+}
+
+.models-chip-provenance-seed {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.models-chip-retiring,
+.models-chip-vendor-hidden {
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
 .models-chip-forced {
   border-color: var(--reasoning-border);
   background: var(--reasoning-bg);
@@ -6580,6 +6612,22 @@ details.turn-pane > summary:focus-visible {
    with a resolution tier, and giving it tier-shaped rows would blur exactly
    the distinction this block exists to draw. */
 .models-dialect {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+
+/* The ChatGPT subscription readout. Same layout as the Anthropic card it
+   sits beside; the extra top margin separates it from the import button
+   directly above, which the Anthropic card does not have. */
+.chatgpt-oauth-details {
+  margin-top: var(--space-2);
+}
+
+/* Why the row exists at all, drawn like the dialect panel rather than like
+   the capability table: it is a record of which source answered, not a vote
+   between sources, so it gets prose and no tier badges. */
+.models-listing {
   margin-top: var(--space-3);
   padding-top: var(--space-3);
   border-top: 1px solid var(--line);
