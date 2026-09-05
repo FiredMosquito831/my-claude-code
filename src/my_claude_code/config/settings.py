@@ -1,6 +1,7 @@
 """Flat application settings schema loaded by Pydantic Settings."""
 
 from functools import lru_cache
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .constants import (
+    ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     CATALOGUE_FETCH_TIMEOUT_SECONDS,
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
@@ -45,6 +47,7 @@ from .constants import (
     MAX_OUTPUT_TOKENS_CEILING,
     MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
     MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
+    MAX_OUTPUT_TOKENS_FLOOR,
     MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
     MODEL_VISIBILITY_ALLOW_DEFAULT,
     MODEL_VISIBILITY_DENY_DEFAULT,
@@ -55,6 +58,7 @@ from .constants import (
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
     RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
     REASONING_ANSWER_FLOOR_MAX,
+    REASONING_EFFORT_BUDGET_RATIOS_DEFAULT,
     REQUEST_LOG_COMPRESSION_LEVEL_DEFAULT,
     REQUEST_LOG_IMAGE_MAX_PIXELS_DEFAULT,
     REQUEST_LOG_LADDER_BODY_MAX_CHARS_DEFAULT,
@@ -179,6 +183,60 @@ def _no_ceiling_when_zero(value: int | None) -> int | None:
     """
 
     return None if value == 0 else value
+
+
+def _off_when_zero(value: int | None) -> int | None:
+    """Read a bound's 0 sentinel as "off", for the keys whose floor *is* 0.
+
+    Every one of these has the shape :func:`_no_ceiling_when_zero` documents:
+    the range clamp in :meth:`Settings.keep_limits_inside_their_usable_range`
+    lands on the minimum, ``setattr`` does not re-run a field validator, and
+    for these keys the minimum is the sentinel rather than a value. So each
+    one is re-applied after the clamp as well as before it.
+    """
+
+    return None if value == 0 else value
+
+
+def parse_effort_budget_ratios(value: str) -> tuple[float, ...]:
+    """Turn ``REASONING_EFFORT_BUDGET_RATIOS`` into six shares of the allowance.
+
+    One share per :class:`ReasoningEffort`, in declaration order. The rules are
+    the arithmetic's, not taste:
+
+    * exactly six, because a missing effort has no budget to be priced at;
+    * strictly between 0 and 1, because ``budget_for_effort`` multiplies the
+      allowance by the ratio and Anthropic requires the thinking budget to stay
+      strictly below ``max_tokens``;
+    * non-decreasing, because ``effort_for_budget`` inverts the table by
+      picking the strongest effort that fits. Nothing compares one ratio to
+      another at runtime, so an out-of-order set makes that inversion able to
+      return an effort whose budget does not actually fit.
+    """
+
+    parts = [part.strip() for part in (value or "").split(",")]
+    kept = [part for part in parts if part]
+    expected = 6
+    if len(kept) != expected:
+        raise ValueError(
+            f"needs exactly {expected} ratios (minimal, low, medium, high, "
+            f"xhigh, max); got {len(kept)}"
+        )
+    ratios: list[float] = []
+    for part in kept:
+        try:
+            ratio = float(part)
+        except ValueError as exc:
+            raise ValueError(f"{part!r} is not a number") from exc
+        if not 0.0 < ratio < 1.0:
+            raise ValueError(f"{part!r} must be greater than 0 and less than 1")
+        ratios.append(ratio)
+    for earlier, later in pairwise(ratios):
+        if later < earlier:
+            raise ValueError(
+                f"ratios must not decrease: {earlier} is followed by {later}"
+            )
+    return tuple(ratios)
 
 
 class Settings(BaseSettings):
@@ -550,9 +608,22 @@ class Settings(BaseSettings):
     # A fallback for a missing client value, never a cap on a present one:
     # capping an explicit request against a number nobody published would be an
     # invented limit.
-    max_output_tokens_unknown_default: int = Field(
+    #
+    # Optional since 6.47.0: 0 sends no ``max_tokens`` at all, which is what an
+    # operator on a provider that sizes its own answers wants. It is the same
+    # "0 is off" its four neighbours already use.
+    max_output_tokens_unknown_default: int | None = Field(
         default=MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
         validation_alias="MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT",
+    )
+    # The smallest allowance a request is sent with, applied after the model's
+    # own published limit has had its say and before the context-headroom
+    # bound, so it can raise a small ask to something workable but can never
+    # ask a model for more than it can emit or more than the context can hold.
+    # 0 applies no minimum.
+    max_output_tokens_floor: int | None = Field(
+        default=MAX_OUTPUT_TOKENS_FLOOR,
+        validation_alias="MAX_OUTPUT_TOKENS_FLOOR",
     )
     # An absolute head on one answer, shipped set because a thinking turn now
     # asks for the routed model's own maximum rather than for the client's
@@ -581,6 +652,22 @@ class Settings(BaseSettings):
     reasoning_answer_floor_max: int = Field(
         default=REASONING_ANSWER_FLOOR_MAX,
         validation_alias="REASONING_ANSWER_FLOOR_MAX",
+    )
+    # The per-profile last resort, reached only when nothing published a limit
+    # for the routed model *and* the client sent no max_tokens. It has no
+    # knowledge of the model, so it is a fallback and never a cap; 0 sends no
+    # max_tokens at all and leaves the provider's own default in charge.
+    anthropic_default_max_output_tokens: int | None = Field(
+        default=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        validation_alias="ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS",
+    )
+    # Share of one request's output allowance each named reasoning effort may
+    # spend on thinking, in ReasoningEffort declaration order. A ladder rather
+    # than six knobs, for the same reason CREDENTIAL_LOCKOUT_TIERS is one
+    # field: the values only mean anything in relation to each other.
+    reasoning_effort_budget_ratios: str = Field(
+        default=REASONING_EFFORT_BUDGET_RATIOS_DEFAULT,
+        validation_alias="REASONING_EFFORT_BUDGET_RATIOS",
     )
 
     # ==================== Fallback timing ====================
@@ -1521,6 +1608,61 @@ class Settings(BaseSettings):
         """
         return _no_ceiling_when_zero(value)
 
+    @field_validator("max_output_tokens_floor", mode="after")
+    @classmethod
+    def a_zero_floor_means_no_minimum(cls, value: int | None) -> int | None:
+        """0 is how an operator says "raise nothing", i.e. 6.46.0's behaviour.
+
+        The field ships set (8,192), so blank resolves to the default rather
+        than to off -- the same edge :meth:`a_zero_ceiling_means_no_ceiling`
+        documents. 0 is the way out.
+        """
+        return _off_when_zero(value)
+
+    @field_validator("max_output_tokens_unknown_default", mode="after")
+    @classmethod
+    def a_zero_unknown_default_sends_no_max_tokens(
+        cls, value: int | None
+    ) -> int | None:
+        """0 is how an operator says "send no max_tokens when nobody knows".
+
+        ``_fall_back_when_unknown`` already no-ops on ``None``, so the sentinel
+        is the whole change: the request goes out without a ``max_tokens`` and
+        the provider's own default sizes the answer.
+        """
+        return _off_when_zero(value)
+
+    @field_validator("anthropic_default_max_output_tokens", mode="after")
+    @classmethod
+    def a_zero_profile_default_sends_no_max_tokens(
+        cls, value: int | None
+    ) -> int | None:
+        """0 is how an operator says "never supply a last-resort max_tokens"."""
+        return _off_when_zero(value)
+
+    @field_validator("reasoning_effort_budget_ratios", mode="before")
+    @classmethod
+    def validate_reasoning_effort_budget_ratios(cls, v: Any) -> Any:
+        """Reject a ladder the arithmetic cannot walk, at load rather than at 400.
+
+        Stored as the operator typed it so the admin form round-trips the same
+        string it showed; :func:`parse_effort_budget_ratios` turns it into
+        floats where it is used. A ladder is not a range, so it has no
+        LIMIT_RANGES entry to clamp it -- this is the check that stands in for
+        one. Blank restores the shipped default, because ``text`` fields are
+        blank-tolerant on the admin write path (config/admin/values.py) and a
+        cleared box must not stop the server from starting.
+        """
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return REASONING_EFFORT_BUDGET_RATIOS_DEFAULT
+        if not isinstance(v, str):
+            return v
+        try:
+            parse_effort_budget_ratios(v)
+        except ValueError as exc:
+            raise ValueError(f"REASONING_EFFORT_BUDGET_RATIOS: {exc}") from exc
+        return v
+
     @model_validator(mode="after")
     def keep_limits_inside_their_usable_range(self) -> Settings:
         """Clamp a limit rather than refuse to start.
@@ -1555,6 +1697,40 @@ class Settings(BaseSettings):
         # before the clamp, not after it.
         self.max_output_tokens_ceiling = _no_ceiling_when_zero(
             self.max_output_tokens_ceiling
+        )
+        # Same shape, same reason, for the three keys added in 6.47.0 whose
+        # range floor is also their sentinel.
+        self.max_output_tokens_floor = _off_when_zero(self.max_output_tokens_floor)
+        self.max_output_tokens_unknown_default = _off_when_zero(
+            self.max_output_tokens_unknown_default
+        )
+        self.anthropic_default_max_output_tokens = _off_when_zero(
+            self.anthropic_default_max_output_tokens
+        )
+        return self
+
+    @model_validator(mode="after")
+    def warn_when_the_output_floor_is_above_the_ceiling(self) -> Settings:
+        """Say the floor is inert rather than refuse to start.
+
+        The ceiling is applied after the floor and clamps unconditionally, so
+        a floor above it simply never survives to the wire. That is a
+        configuration mistake worth naming, but a value typed on the dashboard
+        must never become an outage -- so this logs and returns.
+        """
+
+        floor = self.max_output_tokens_floor
+        ceiling = self.max_output_tokens_ceiling
+        if floor is None or ceiling is None or floor <= ceiling:
+            return self
+        logger.warning(
+            "MAX_OUTPUT_TOKENS_FLOOR ({}) is above MAX_OUTPUT_TOKENS_CEILING"
+            " ({}). The ceiling is applied last and lowers unconditionally, so"
+            " the floor is inert: every request resolves to {} or less. Lower"
+            " the floor or raise the ceiling.",
+            floor,
+            ceiling,
+            ceiling,
         )
         return self
 
@@ -1654,3 +1830,16 @@ def _log_legacy_fcc_env_names_once() -> None:
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
+
+
+def configured_default_max_output_tokens() -> int | None:
+    """The operator's last-resort per-profile ``max_tokens``, or ``None``.
+
+    Read per request rather than captured when the profile table is built:
+    ``providers/openai_chat/profiles.py`` is a module-level dict literal, so a
+    value baked in at import would need a restart to change, and the dashboard
+    applies configuration without one. ``get_settings`` is cached, so this is a
+    dict lookup.
+    """
+
+    return get_settings().anthropic_default_max_output_tokens

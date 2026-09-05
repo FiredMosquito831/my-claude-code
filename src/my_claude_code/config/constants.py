@@ -61,6 +61,28 @@ MAX_OUTPUT_TOKENS_CONTEXT_MARGIN = 1024
 #    2,048 answer tokens. A quarter leaves the split its full working range and
 #    still refuses the arbitrarily small budgets this floor exists to stop.
 MAX_OUTPUT_TOKENS_CONTEXT_FLOOR = 4096
+# 5. The smallest allowance one request may be sent with. The three clamps
+#    above can only lower or supply; nothing raised a small ask to a workable
+#    size, so a client that hardcoded ``max_tokens: 512`` got 512 tokens from a
+#    model that can emit 131,072 and a truncated answer to show for it.
+#
+#    It raises, and it raises exactly once, *before* the context-headroom bound
+#    so it can never re-inflate a budget the remaining context cannot hold. It
+#    is bounded by the routed model's own published limit wherever one is
+#    known: an unconditional floor above what a 16,384-output model can emit
+#    (nvidia_nim/minimaxai/minimax-m3 is one, and live) would be a guaranteed
+#    upstream 400, which is the exact defect application/output_tokens.py
+#    exists to prevent. It also stands down on an explicit ``max_tokens: 0``
+#    and wherever MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT=0 asked for no max_tokens
+#    at all -- both are statements, not omissions.
+#
+#    8,192 because it is the smallest allowance that fits a real tool call plus
+#    a genuine answer, it is at or below every published output limit in the
+#    catalogue (the smallest is 4,096, and there the model's own limit wins),
+#    and it is half of the smallest limit any model this project routes to in
+#    anger publishes. Set MAX_OUTPUT_TOKENS_FLOOR=0 to apply no minimum at all
+#    and restore the pre-6.47.0 behaviour.
+MAX_OUTPUT_TOKENS_FLOOR: int | None = 8192
 
 # Upper bound on the slice of the output allowance held back for the visible
 # answer when thinking is enabled. Thinking tokens and answer tokens come out of
@@ -73,6 +95,16 @@ MAX_OUTPUT_TOKENS_CONTEXT_FLOOR = 4096
 # budget of zero and silently disable reasoning; the halving gives a large
 # reserve on a large model and an even split on a small one.
 REASONING_ANSWER_FLOOR_MAX = 16384
+
+# Share of the effective output allowance one named reasoning effort may spend
+# on thinking, in ReasoningEffort declaration order: minimal, low, medium,
+# high, xhigh, max. Comma-separated because it is one ladder, not six knobs --
+# the same shape CREDENTIAL_LOCKOUT_TIERS uses, and the shape that makes an
+# out-of-order set visible at a glance.
+#
+# These are the published industry ratios rather than FCC inventions; see the
+# citation in application/reasoning_budget.py, which is where they are read.
+REASONING_EFFORT_BUDGET_RATIOS_DEFAULT = "0.10,0.20,0.50,0.80,0.95,0.95"
 
 # Non-secret marker stored in Settings when FCC owns renewable ChatGPT credentials.
 CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-oauth"

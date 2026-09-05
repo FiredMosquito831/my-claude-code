@@ -929,6 +929,7 @@ class ModelRouter:
             limit=self._model_output_limit(resolved),
             context_length=self._model_context_length(resolved),
             unknown_default=self._settings.max_output_tokens_unknown_default,
+            floor=self._settings.max_output_tokens_floor,
             ceiling=self._settings.max_output_tokens_ceiling,
             context_margin=self._settings.max_output_tokens_context_margin,
             context_floor=self._settings.max_output_tokens_context_floor,

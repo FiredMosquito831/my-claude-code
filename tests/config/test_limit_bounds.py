@@ -16,6 +16,19 @@ from my_claude_code.config.settings import Settings
 
 LIMIT_ATTRS = tuple(LIMIT_RANGES)
 
+# The limits whose range floor IS their sentinel: 0 does not mean "zero of
+# this", it means "this bound is off". Clamping a hand-typed negative up to the
+# minimum therefore has to resolve to None rather than to a literal 0, which
+# for every one of these would be a bound that stops the answer dead. Each is
+# re-applied after the clamp in ``keep_limits_inside_their_usable_range``; this
+# tuple is what stops the parametrised clamp test below asserting the opposite.
+SENTINEL_ZERO_ATTRS = (
+    "max_output_tokens_ceiling",
+    "max_output_tokens_floor",
+    "max_output_tokens_unknown_default",
+    "anthropic_default_max_output_tokens",
+)
+
 
 def _alias(attr: str) -> str:
     """Settings fields are populated by env alias, not by field name."""
@@ -52,11 +65,12 @@ def test_a_value_below_the_range_is_clamped_not_fatal(attr: str) -> None:
     """A proxy that will not start is worse than one running a sane number."""
     limit = LIMIT_RANGES[attr]
     resolved = getattr(_with(attr, str(limit.minimum - 1000)), attr)
-    if attr == "max_output_tokens_ceiling":
-        # This key's floor IS its sentinel: 0 means "no head at all", so
-        # clamping up to it resolves to None rather than to a ceiling of zero,
-        # which would cap every answer at nothing. Pinned on its own in
-        # test_a_negative_output_ceiling_lands_on_the_sentinel_not_on_zero.
+    if attr in SENTINEL_ZERO_ATTRS:
+        # See SENTINEL_ZERO_ATTRS above. The ceiling is pinned on its own in
+        # test_a_negative_output_ceiling_lands_on_the_sentinel_not_on_zero and
+        # the other three in
+        # test_every_sentinel_zero_limit_lands_on_the_sentinel_not_on_zero.
+        assert limit.minimum == 0
         assert resolved is None
         return
     assert resolved == type(resolved)(limit.minimum)
@@ -72,6 +86,50 @@ def test_a_negative_output_ceiling_lands_on_the_sentinel_not_on_zero() -> None:
     limit = LIMIT_RANGES["max_output_tokens_ceiling"]
     assert limit.minimum == 0
     assert _with("max_output_tokens_ceiling", "-1000").max_output_tokens_ceiling is None
+
+
+@pytest.mark.parametrize("attr", SENTINEL_ZERO_ATTRS)
+def test_every_sentinel_zero_limit_lands_on_the_sentinel_not_on_zero(
+    attr: str,
+) -> None:
+    """The 6.8.0 edge, now shared by four keys instead of one.
+
+    ``keep_limits_inside_their_usable_range`` clamps with ``setattr`` and
+    ``Settings`` does not set ``validate_assignment``, so the field validator
+    that reads the sentinel never sees the clamped value. For a key whose range
+    floor is 0 and whose 0 means "off", that is the difference between "no
+    bound" and a bound of zero -- an output ceiling of zero caps every answer
+    at nothing, and an output floor of zero is merely the old behaviour. Both
+    have to come back as None.
+    """
+
+    assert LIMIT_RANGES[attr].minimum == 0
+    assert getattr(_with(attr, "0"), attr) is None
+    assert getattr(_with(attr, "-1000"), attr) is None
+
+
+@pytest.mark.parametrize("attr", SENTINEL_ZERO_ATTRS)
+def test_a_blank_sentinel_limit_means_the_default_not_off(attr: str) -> None:
+    """Blank is not the sentinel: a cleared box restores the shipped value."""
+
+    default = Settings.model_fields[attr].default
+    assert default is not None
+    assert getattr(_with(attr, ""), attr) == default
+
+
+def test_the_shipped_output_floor_is_the_reaffirmed_8192() -> None:
+    """A product decision, not a tuning knob, so changing it changes a test.
+
+    8,192 was chosen against a measurement: on the reference install, 3,635
+    upstream requests in 11 days carried a client ``max_tokens`` of 16 and are
+    raised by it. That is a deliberate override of an explicit client value on
+    roughly 9% of requests, accepted because ``max_tokens`` is a ceiling and
+    those routes stop at ~15 tokens anyway.
+    """
+
+    assert Settings.model_fields["max_output_tokens_floor"].default == 8192
+    assert LIMIT_RANGES["max_output_tokens_floor"].contains(8192)
+    assert LIMIT_RANGES["max_output_tokens_floor"].minimum == 0
 
 
 @pytest.mark.parametrize("attr", LIMIT_ATTRS)

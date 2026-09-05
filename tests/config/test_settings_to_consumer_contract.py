@@ -15,7 +15,11 @@ from my_claude_code.application.execution import route_execution_policy
 from my_claude_code.cli.harnesses.catalogue_client import fetch_catalogue_models
 from my_claude_code.config.limits import range_for
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
-from my_claude_code.config.settings import Settings, parse_lockout_tiers
+from my_claude_code.config.settings import (
+    Settings,
+    parse_effort_budget_ratios,
+    parse_lockout_tiers,
+)
 from my_claude_code.core.credential_rotation import PROVIDER_TUNING
 from my_claude_code.core.failures import FailureKind
 from my_claude_code.core.rate_limit import MAX_RATE_LIMIT_COOLDOWN_SECONDS
@@ -230,3 +234,197 @@ def test_the_catalogue_fetch_budget_is_clamped_to_a_usable_floor() -> None:
         _settings(CATALOGUE_FETCH_TIMEOUT_SECONDS=0).catalogue_fetch_timeout_seconds
         == bounds.minimum
     )
+
+
+# --------------------------------------------------------------------------- #
+# ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS (6.47.0)
+# --------------------------------------------------------------------------- #
+
+
+def _profile_body(**overrides):
+    """Build one OpenAI-dialect body through a profile that carries a default."""
+
+    from my_claude_code.core.anthropic.models import Message, MessagesRequest
+    from my_claude_code.core.reasoning import ReasoningPolicy
+    from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
+    from my_claude_code.providers.openai_chat.request_policy import (
+        build_openai_chat_request_body,
+    )
+
+    profile = OPENAI_CHAT_PROFILES["kimi"]
+    assert profile.request_policy.default_max_tokens is not None
+    request = MessagesRequest(
+        model="kimi-k2",
+        messages=[Message(role="user", content="hi")],
+    )
+    with patch.dict("os.environ", overrides, clear=False):
+        from my_claude_code.config.settings import get_settings
+
+        get_settings.cache_clear()
+        try:
+            return build_openai_chat_request_body(
+                request,
+                reasoning=ReasoningPolicy.off(),
+                policy=profile.request_policy,
+            )
+        finally:
+            get_settings.cache_clear()
+
+
+def test_the_last_resort_output_default_reaches_a_provider_profile() -> None:
+    """The 81,920 in ~25 profile literals is now one operator-settable number.
+
+    Read per request rather than captured when the profile table is built, so
+    a dashboard save takes effect without a restart. This is the hop that
+    proves it: the profile still says "I want a last resort", and the number it
+    gets comes from Settings.
+    """
+
+    assert (
+        _profile_body(ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS="4096")["max_tokens"] == 4096
+    )
+
+
+def test_a_zero_last_resort_output_default_sends_no_max_tokens() -> None:
+    assert "max_tokens" not in _profile_body(ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS="0")
+
+
+def test_the_shipped_last_resort_output_default_is_unchanged() -> None:
+    from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+
+    assert _settings(_env_file=None).anthropic_default_max_output_tokens == (
+        ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+    )
+
+
+# --------------------------------------------------------------------------- #
+# REASONING_EFFORT_BUDGET_RATIOS (6.47.0)
+# --------------------------------------------------------------------------- #
+
+
+def test_the_shipped_ratios_are_todays_table_element_for_element() -> None:
+    """The setting's default has to be exactly what the code used before it.
+
+    Asserted elementwise rather than as a string so a reordering shows up as
+    the effort it belongs to.
+    """
+
+    from my_claude_code.application.reasoning_budget import EFFORT_BUDGET_RATIOS
+    from my_claude_code.core.reasoning import ReasoningEffort
+
+    shipped = parse_effort_budget_ratios(
+        _settings(_env_file=None).reasoning_effort_budget_ratios
+    )
+    assert len(shipped) == len(tuple(ReasoningEffort))
+    for effort, ratio in zip(tuple(ReasoningEffort), shipped, strict=True):
+        assert EFFORT_BUDGET_RATIOS[effort] == pytest.approx(ratio)
+
+
+def test_the_operators_ratios_reach_the_budget_arithmetic() -> None:
+    """One knob, one consumer: budget_for_effort's only dereference."""
+
+    from my_claude_code.application.reasoning_budget import (
+        budget_for_effort,
+        effort_budget_ratios,
+    )
+    from my_claude_code.config.settings import get_settings
+    from my_claude_code.core.reasoning import ReasoningEffort
+
+    with patch.dict(
+        "os.environ",
+        {"REASONING_EFFORT_BUDGET_RATIOS": "0.10,0.10,0.10,0.10,0.10,0.10"},
+        clear=False,
+    ):
+        get_settings.cache_clear()
+        try:
+            assert effort_budget_ratios()[ReasoningEffort.HIGH] == pytest.approx(0.10)
+            # 100,000 * 0.10, well clear of both the answer floor and the
+            # 1,024-token minimum, so the ratio is what decides.
+            assert budget_for_effort(ReasoningEffort.HIGH, 100_000) == 10_000
+        finally:
+            get_settings.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "0.10,0.20,0.50,0.80,0.95",
+        "0.10,0.20,0.50,0.80,0.95,0.95,0.95",
+        "0,0.20,0.50,0.80,0.95,0.95",
+        "0.10,0.20,0.50,0.80,0.95,1",
+        "0.10,0.20,0.50,0.80,0.95,1.5",
+        "0.10,0.20,0.50,0.80,0.95,-0.1",
+        "0.10,0.20,0.50,0.80,0.95,nope",
+    ],
+)
+def test_a_ratio_ladder_that_cannot_be_walked_is_refused(value: str) -> None:
+    with pytest.raises(ValueError):
+        parse_effort_budget_ratios(value)
+
+
+def test_a_decreasing_ratio_ladder_names_the_offending_pair() -> None:
+    """effort_for_budget inverts the table, so order is arithmetic, not taste."""
+
+    with pytest.raises(ValueError, match=r"0\.8 is followed by 0\.3"):
+        parse_effort_budget_ratios("0.10,0.20,0.50,0.80,0.30,0.95")
+
+
+def test_a_bad_ratio_ladder_is_refused_at_load() -> None:
+    with pytest.raises(ValueError, match="REASONING_EFFORT_BUDGET_RATIOS"):
+        _settings(_env_file=None, REASONING_EFFORT_BUDGET_RATIOS="0.5,0.5")
+
+
+def test_a_cleared_ratio_ladder_restores_the_shipped_default() -> None:
+    """``text`` fields are blank-tolerant on the admin write path, so blank has
+    to be a value the server can start on."""
+
+    from my_claude_code.config.constants import REASONING_EFFORT_BUDGET_RATIOS_DEFAULT
+
+    resolved = _settings(_env_file=None, REASONING_EFFORT_BUDGET_RATIOS="")
+    assert resolved.reasoning_effort_budget_ratios == (
+        REASONING_EFFORT_BUDGET_RATIOS_DEFAULT
+    )
+
+
+# --------------------------------------------------------------------------- #
+# MAX_OUTPUT_TOKENS_FLOOR above MAX_OUTPUT_TOKENS_CEILING (6.47.0)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_floor_above_the_ceiling_warns_and_does_not_refuse_to_start(caplog) -> None:
+    """A number typed on the dashboard must never become an outage.
+
+    The ceiling is applied after the floor and lowers unconditionally, so the
+    contradiction resolves itself; what it cannot do is explain itself, which
+    is what the warning is for.
+    """
+
+    with caplog.at_level("WARNING"):
+        resolved = _settings(
+            _env_file=None,
+            MAX_OUTPUT_TOKENS_FLOOR="65536",
+            MAX_OUTPUT_TOKENS_CEILING="8192",
+        )
+    assert resolved.max_output_tokens_floor == 65_536
+    assert resolved.max_output_tokens_ceiling == 8_192
+    assert "MAX_OUTPUT_TOKENS_FLOOR" in caplog.text
+    assert "inert" in caplog.text
+
+
+def test_a_floor_under_the_ceiling_says_nothing(caplog) -> None:
+    with caplog.at_level("WARNING"):
+        _settings(_env_file=None, MAX_OUTPUT_TOKENS_FLOOR="8192")
+    assert "inert" not in caplog.text
+
+
+def test_a_lifted_ceiling_leaves_the_floor_alone(caplog) -> None:
+    """0 on the ceiling is "no ceiling", which no floor can contradict."""
+
+    with caplog.at_level("WARNING"):
+        resolved = _settings(
+            _env_file=None,
+            MAX_OUTPUT_TOKENS_FLOOR="65536",
+            MAX_OUTPUT_TOKENS_CEILING="0",
+        )
+    assert resolved.max_output_tokens_ceiling is None
+    assert "inert" not in caplog.text

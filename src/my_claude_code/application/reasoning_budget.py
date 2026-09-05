@@ -29,6 +29,7 @@ particular the *same* ``effective_output`` that became the request's
 recomputing it here is how the two would drift apart.
 """
 
+from collections.abc import Mapping
 from dataclasses import replace
 
 from loguru import logger
@@ -53,6 +54,9 @@ from my_claude_code.core.reasoning import (
 # than ``max_tokens``; the answer floor below usually binds first anyway.
 #
 # This is the ONLY place these numbers exist. Do not inline them elsewhere.
+# Since 6.47.0 they are also the *default* of REASONING_EFFORT_BUDGET_RATIOS,
+# which an operator may retune; :func:`effort_budget_ratios` reads that setting
+# and falls back to this table.
 EFFORT_BUDGET_RATIOS: dict[ReasoningEffort, float] = {
     ReasoningEffort.MINIMAL: 0.10,
     ReasoningEffort.LOW: 0.20,
@@ -101,15 +105,41 @@ def bound_budget(
     return max(1, min(bounded, effective_output - 1))
 
 
+def effort_budget_ratios() -> dict[ReasoningEffort, float]:
+    """Return the operator's ratio table, or the shipped one.
+
+    The setting is a ladder of six floats in ``ReasoningEffort`` declaration
+    order, already validated at load (``config.settings``), so this only has to
+    pair them up. Imported inside the function so this module keeps importing
+    without configuration, which is what lets the arithmetic above be tested
+    against literal numbers.
+    """
+
+    from my_claude_code.config.settings import (
+        get_settings,
+        parse_effort_budget_ratios,
+    )
+
+    ratios = parse_effort_budget_ratios(get_settings().reasoning_effort_budget_ratios)
+    return dict(zip(tuple(ReasoningEffort), ratios, strict=True))
+
+
 def budget_for_effort(
     effort: ReasoningEffort,
     effective_output: int,
     floor_max: int = REASONING_ANSWER_FLOOR_MAX,
+    ratios: Mapping[ReasoningEffort, float] | None = None,
 ) -> int:
-    """Return this effort priced against ``effective_output`` tokens."""
+    """Return this effort priced against ``effective_output`` tokens.
 
+    ``ratios`` defaults to the operator's configured table. Callers pass one
+    only to price an effort against something other than the live
+    configuration, which is what the tests below the module do.
+    """
+
+    table = effort_budget_ratios() if ratios is None else ratios
     return bound_budget(
-        int(effective_output * EFFORT_BUDGET_RATIOS[effort]),
+        int(effective_output * table[effort]),
         effective_output,
         floor_max,
     )

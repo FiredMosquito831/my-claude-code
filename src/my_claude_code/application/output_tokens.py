@@ -37,14 +37,20 @@ class OutputTokenLimits:
 
     ``limit`` and ``context_length`` are what a source actually published for
     this model. ``None`` means unknown -- never unlimited, and never zero.
-    ``unknown_default``, ``ceiling`` and ``context_margin`` are operator
-    configuration, carried alongside so :func:`resolve_max_output_tokens` stays
-    a pure function of its arguments and can be tested without Settings.
+    ``unknown_default``, ``floor``, ``ceiling`` and ``context_margin`` are
+    operator configuration, carried alongside so
+    :func:`resolve_max_output_tokens` stays a pure function of its arguments
+    and can be tested without Settings.
+
+    ``floor`` defaults to ``None`` rather than to its shipped constant for the
+    same reason ``ceiling`` does: this record is the argument list of a pure
+    function, and a bound nobody passed must change nothing.
     """
 
     limit: int | None = None
     context_length: int | None = None
     unknown_default: int | None = None
+    floor: int | None = None
     ceiling: int | None = None
     context_margin: int = MAX_OUTPUT_TOKENS_CONTEXT_MARGIN
     # Smallest budget the headroom bound may produce. Travels with the margin
@@ -83,11 +89,28 @@ def resolve_max_output_tokens(
     client chose for an answer it did not know would be sharing the allowance.
     Every clamp then applies unchanged, in the same order, to the same kind of
     value -- a request, from whatever origin.
+
+    The order of the six steps is load-bearing::
+
+        1. _widen_for_reasoning      raises only
+        2. _apply_model_limit        lowers, or supplies
+        3. _fall_back_when_unknown   supplies only
+        4. _apply_floor              raises only, never past the model's limit
+        5. _apply_ceiling            lowers only
+        6. _apply_context_headroom   lowers only
+
+    The floor sits at 4 and nowhere else. Above 2 it would raise an ask past
+    what the model published; below 6 -- the only other place it reads
+    sensibly -- it would re-inflate a budget the remaining context cannot hold,
+    which is the single thing step 6 exists to prevent. Steps 5 and 6 lowering
+    the result back below the floor is correct: a bound that cannot be lowered
+    is not a bound.
     """
 
     resolved = _widen_for_reasoning(requested, limits.limit, for_reasoning, model_ref)
     resolved = _apply_model_limit(resolved, limits.limit, model_ref)
     resolved = _fall_back_when_unknown(resolved, limits.unknown_default, model_ref)
+    resolved = _apply_floor(resolved, requested, limits, model_ref)
     resolved = _apply_ceiling(resolved, limits.ceiling, model_ref)
     return _apply_context_headroom(resolved, limits, input_tokens, model_ref)
 
@@ -177,6 +200,63 @@ def _apply_model_limit(
         requested,
     )
     return limit
+
+
+def _apply_floor(
+    resolved: int | None,
+    requested: int | None,
+    limits: OutputTokenLimits,
+    model_ref: str,
+) -> int | None:
+    """Raise a small allowance to something worth sending, and no further.
+
+    The three clamps above this one can lower or supply; none of them can
+    raise. A client that hardcoded ``max_tokens: 512`` therefore got 512
+    tokens out of a model that can emit 131,072, and a truncated answer to
+    show for it. This is the one step that answers that, and it is bounded
+    twice over.
+
+    *Never above what the model published.* When a limit is known the result is
+    ``min(max(resolved, floor), limit)``, so the operator's floor cannot ask a
+    16,384-output model for 32,768 however it is set. That is the exact defect
+    this module exists to prevent (see the module docstring), and it is why the
+    clamp is written here rather than left to the caller.
+
+    *Three stand-downs.* A ``requested`` of zero or less is an explicit client
+    statement, the same reading :func:`_widen_for_reasoning` already applies.
+    A ``resolved`` of ``None`` means nothing published a limit, the client sent
+    nothing, and ``MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT`` is 0 -- "send no
+    max_tokens" is an instruction, and a floor must not resurrect one. A floor
+    of ``None`` is the operator saying to raise nothing at all.
+
+    The ceiling needs no case of its own: it runs next and lowers
+    unconditionally, so it wins by ordering. Settings logs a warning at startup
+    when the two are configured to contradict each other.
+    """
+
+    floor = limits.floor
+    if floor is None or resolved is None:
+        return resolved
+    if requested is not None and requested <= 0:
+        return resolved
+    raised = max(resolved, floor)
+    if limits.limit is not None:
+        raised = min(raised, limits.limit)
+    if raised == resolved:
+        return resolved
+    # INFO for the same reason the reasoning widening is INFO: nothing was
+    # refused and nothing was invented past what the model itself published.
+    logger.info(
+        "MAX TOKENS RAISED TO FLOOR: '{}' was allowed {} output tokens;"
+        " raising to {} to meet MAX_OUTPUT_TOKENS_FLOOR={}"
+        " (the model's published limit is {})",
+        model_ref,
+        resolved,
+        raised,
+        floor,
+        limits.limit if limits.limit is not None else "unknown",
+    )
+    return raised
 
 
 def _apply_ceiling(

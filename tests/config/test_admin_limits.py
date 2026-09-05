@@ -45,10 +45,13 @@ def isolated_config(monkeypatch, tmp_path):
 SECTION_KEYS: dict[str, tuple[str, ...]] = {
     "budgets": (
         "MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT",
+        "MAX_OUTPUT_TOKENS_FLOOR",
         "MAX_OUTPUT_TOKENS_CEILING",
         "MAX_OUTPUT_TOKENS_CONTEXT_MARGIN",
         "MAX_OUTPUT_TOKENS_CONTEXT_FLOOR",
         "REASONING_ANSWER_FLOOR_MAX",
+        "ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS",
+        "REASONING_EFFORT_BUDGET_RATIOS",
     ),
     "deadlines": (
         "FALLBACK_FIRST_TOKEN_TIMEOUT",

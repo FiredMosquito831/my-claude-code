@@ -116,7 +116,10 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
         "Output & thinking budgets",
         "How many tokens one answer may be, and how they are split between "
         "thinking and the answer. A per-model limit published by the provider "
-        "always wins over anything here.",
+        "always wins over anything here. One bound is not on this card: "
+        "NVIDIA NIM carries its own max_tokens in the nested NIM settings, and "
+        "where it is set it lowers whatever this card resolved, for NIM "
+        "routes only.",
     ),
     ConfigSectionSpec(
         "deadlines",
@@ -824,7 +827,29 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "for the routed model. Whenever one does -- the provider's own "
             "/models payload or the models.dev catalogue -- that number is "
             "used instead, so a capable model is never held to this one. It "
-            "also never reduces a max_tokens the client asked for."
+            "also never reduces a max_tokens the client asked for. Set 0 to "
+            "send no max_tokens at all in that case and let the provider size "
+            "its own answer."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MAX_OUTPUT_TOKENS_FLOOR",
+        "Minimum output tokens",
+        "budgets",
+        "number",
+        settings_attr="max_output_tokens_floor",
+        default="8192",
+        description=(
+            "Smallest allowance any request is sent with. A client that "
+            "hardcodes a tiny max_tokens gets a truncated answer out of a "
+            "model that could have finished it, and nothing else in this card "
+            "can raise a number -- the other five only lower. This one raises, "
+            "and it is bounded by the routed model's own published limit, so "
+            "it can never ask a 16,384-token model for more than 16,384. It "
+            "stands down on an explicit max_tokens of 0, and the ceiling below "
+            'still wins over it. Not the same setting as "Smallest bounded '
+            'budget", which decides when the prompt reserve gives up. Set 0 '
+            "to raise nothing, which is the behaviour before 6.47.0."
         ),
     ),
     ConfigFieldSpec(
@@ -886,6 +911,44 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "thinking budget can consume the whole allowance. Applied as the "
             "smaller of this and half the model's output allowance, so a "
             "16,384-token model still gets a working budget."
+        ),
+    ),
+    ConfigFieldSpec(
+        "ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS",
+        "Last-resort output default",
+        "budgets",
+        "number",
+        settings_attr="anthropic_default_max_output_tokens",
+        default="81920",
+        description=(
+            "The max_tokens written onto a request that reached a provider "
+            "with none of its own and no published limit to take one from. It "
+            "knows nothing about the model, so it is only ever a fallback and "
+            "never a cap: a routed request has already been bound to the "
+            "model's real limit long before this applies. Set 0 to send no "
+            "max_tokens at all on those paths."
+        ),
+    ),
+    ConfigFieldSpec(
+        "REASONING_EFFORT_BUDGET_RATIOS",
+        "Thinking share per effort (comma-separated)",
+        "budgets",
+        "text",
+        settings_attr="reasoning_effort_budget_ratios",
+        default="0.10,0.20,0.50,0.80,0.95,0.95",
+        advanced=True,
+        description=(
+            "Share of one request's output allowance each reasoning effort may "
+            "spend on thinking, in order: minimal, low, medium, high, xhigh, "
+            "max. Six values, each above 0 and below 1, and never decreasing -- "
+            "the inverse lookup that turns a token budget back into an effort "
+            "picks the strongest one that fits, so an out-of-order ladder can "
+            "return an effort whose budget does not. Two surprises worth "
+            "knowing: a small ratio does not disable thinking, because "
+            "Anthropic's 1,024-token minimum is applied afterwards and wins on "
+            "any allowance above 1,025; and the 0.95 at the top is not what "
+            "keeps the budget under max_tokens -- a separate clamp does that -- "
+            "so raising it only eats into the answer reserve above."
         ),
     ),
     # ---- Deadlines: when to stop waiting ---------------------------------

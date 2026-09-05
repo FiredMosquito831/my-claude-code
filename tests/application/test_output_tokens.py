@@ -51,11 +51,13 @@ def resolve(
     limit: int | None = None,
     context_length: int | None = None,
     unknown_default: int | None = MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
+    floor: int | None = None,
     ceiling: int | None = MAX_OUTPUT_TOKENS_CEILING,
     context_margin: int = MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
     context_floor: int = MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
     input_tokens: int = 0,
     for_reasoning: bool = False,
+    model_ref: str = "nvidia_nim/minimaxai/minimax-m3",
 ) -> int | None:
     """Resolve one budget against the shipped configuration defaults.
 
@@ -64,6 +66,12 @@ def resolve(
     ``ceiling=None`` explicitly, so they keep testing the thing they are named
     for rather than passing because the head happened to land on the same
     value.
+
+    ``floor`` is the exception: it defaults to *off* rather than to the shipped
+    8,192, because every case above it was written before the floor existed and
+    is a statement about one of the other five steps. The floor's own cases
+    pass it explicitly, and the two wiring tests at the bottom of the file
+    check that a real install carries the shipped value into this record.
     """
 
     return resolve_max_output_tokens(
@@ -72,12 +80,13 @@ def resolve(
             limit=limit,
             context_length=context_length,
             unknown_default=unknown_default,
+            floor=floor,
             ceiling=ceiling,
             context_margin=context_margin,
             context_floor=context_floor,
         ),
         input_tokens=input_tokens,
-        model_ref="nvidia_nim/minimaxai/minimax-m3",
+        model_ref=model_ref,
         for_reasoning=for_reasoning,
     )
 
@@ -664,3 +673,157 @@ async def test_a_learned_cap_never_raises_a_smaller_catalogue_limit(groq_provide
         _stream, used_body = await groq_provider._create_stream(body)
 
     assert used_body["max_completion_tokens"] == MINIMAX_M3
+
+
+# --------------------------------------------------------------------------- #
+# MAX_OUTPUT_TOKENS_FLOOR (6.47.0)
+#
+# The floor is the only step in the chain that raises, so it is the only one
+# that can ask a provider for more than it agreed to give. Every test below
+# pins one of the bounds that stops it.
+# --------------------------------------------------------------------------- #
+
+FLOOR = 8_192
+
+
+def test_the_floor_raises_a_small_client_ask_to_something_worth_sending():
+    """The point of the setting: 512 tokens out of a 131,072-token model."""
+
+    assert resolve(512, limit=LONGCAT, floor=FLOOR) == FLOOR
+
+
+def test_the_floor_never_raises_past_what_the_model_published():
+    """A 16,384-output model asked for 32,768 is a guaranteed upstream 400."""
+
+    assert resolve(512, limit=MINIMAX_M3, floor=32_768) == MINIMAX_M3
+    assert resolve(512, limit=4_096, floor=FLOOR) == 4_096
+
+
+def test_the_floor_leaves_an_ask_already_above_it_alone():
+    assert resolve(64_000, limit=LONGCAT, floor=FLOOR) == 64_000
+
+
+def test_the_floor_stands_down_on_an_explicit_client_zero():
+    """An explicit zero is a statement, the same reading the widening takes."""
+
+    assert resolve(0, limit=LONGCAT, floor=FLOOR) == 0
+
+
+def test_the_floor_does_not_resurrect_a_max_tokens_the_operator_switched_off():
+    """unknown_default=0 says "send none at all"; a floor must not undo that."""
+
+    assert resolve(None, limit=None, unknown_default=None, floor=FLOOR) is None
+
+
+def test_the_ceiling_beats_the_floor():
+    """No cross-field validator: step 5 runs after step 4 and lowers."""
+
+    assert resolve(512, limit=LONGCAT, floor=FLOOR, ceiling=2_048) == 2_048
+
+
+def test_the_context_headroom_still_lowers_below_the_floor(caplog):
+    """A bound that cannot be lowered is not a bound.
+
+    The prompt has left 6,024 tokens of a 100,000-token window; the floor says
+    8,192. The request that fits is the one that goes out.
+    """
+
+    with caplog.at_level("WARNING"):
+        resolved = resolve(
+            512,
+            limit=LONGCAT,
+            context_length=100_000,
+            input_tokens=92_976,
+            floor=FLOOR,
+        )
+    assert resolved == 100_000 - 92_976 - MAX_OUTPUT_TOKENS_CONTEXT_MARGIN
+    assert resolved < FLOOR
+    assert "MAX TOKENS BOUNDED BY CONTEXT" in caplog.text
+
+
+def test_the_floor_applies_when_the_model_published_nothing_but_a_default_did():
+    """Rule 3's None case is about a *resolved* None, not an unknown model."""
+
+    assert resolve(512, limit=None, unknown_default=32_768, floor=FLOOR) == FLOOR
+
+
+def test_the_floor_says_which_model_it_raised_at_info(caplog):
+    with caplog.at_level("INFO"):
+        resolve(512, limit=LONGCAT, floor=FLOOR, model_ref="meituan/longcat-2.0:free")
+    assert "MAX TOKENS RAISED TO FLOOR" in caplog.text
+    assert "meituan/longcat-2.0:free" in caplog.text
+
+
+def test_a_floor_of_zero_is_the_pre_6_47_0_behaviour():
+    assert resolve(512, limit=LONGCAT, floor=None) == 512
+
+
+def test_the_probe_sized_ask_a_real_install_now_raises(settings):
+    """The measured case behind the shipped 8,192, end to end through routing.
+
+    3,635 upstream requests in eleven days on the reference install carried
+    ``max_tokens: 16``. This is what they become.
+    """
+
+    request = MessagesRequest(
+        model="claude-sonnet-4",
+        max_tokens=16,
+        messages=[Message(role="user", content="hi")],
+    )
+    assert route(settings, request, output_limit=LONGCAT).request.max_tokens == 8_192
+
+
+def test_the_shipped_floor_reaches_the_resolver_from_settings(settings):
+    """The wiring, not the arithmetic: Settings -> OutputTokenLimits.floor."""
+
+    router = ModelRouter(settings, output_limit_lookup=lambda _p, _m: LONGCAT)
+    limits = router._output_limits(
+        router.resolve_messages_request(
+            MessagesRequest(
+                model="claude-sonnet-4",
+                messages=[Message(role="user", content="hi")],
+            )
+        ).resolved
+    )
+    assert limits.floor == 8_192
+
+
+def test_switching_the_floor_off_reaches_the_resolver_too(settings):
+    settings.max_output_tokens_floor = None
+    request = MessagesRequest(
+        model="claude-sonnet-4",
+        max_tokens=16,
+        messages=[Message(role="user", content="hi")],
+    )
+    assert route(settings, request, output_limit=LONGCAT).request.max_tokens == 16
+
+
+# --------------------------------------------------------------------------- #
+# MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT = 0 (6.47.0)
+# --------------------------------------------------------------------------- #
+
+
+def test_a_zero_unknown_default_sends_no_max_tokens_at_all(settings):
+    """No resolver change was needed: _fall_back_when_unknown no-ops on None.
+
+    Verified by reading it rather than editing it -- the field was already
+    ``int | None`` and the step already returned early. The sentinel is the
+    whole change.
+    """
+
+    settings.max_output_tokens_unknown_default = None
+    request = MessagesRequest(
+        model="claude-sonnet-4",
+        messages=[Message(role="user", content="hi")],
+    )
+    assert route(settings, request).request.max_tokens is None
+
+
+def test_a_zero_unknown_default_still_leaves_a_published_limit_in_charge(settings):
+    settings.max_output_tokens_unknown_default = None
+    request = MessagesRequest(
+        model="claude-sonnet-4",
+        messages=[Message(role="user", content="hi")],
+    )
+    routed = route(settings, request, output_limit=MINIMAX_M3)
+    assert routed.request.max_tokens == MINIMAX_M3
