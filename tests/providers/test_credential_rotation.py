@@ -27,6 +27,8 @@ from my_claude_code.core.upstream_ladder import (
 )
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.credential_rotation import (
+    CREDENTIAL_SHAPED_KINDS,
+    ROTATING_KINDS,
     CredentialRotationState,
     error_justifies_rotation,
 )
@@ -783,6 +785,15 @@ def _invalid_request() -> ExecutionFailure:
     )
 
 
+def _model_rejected() -> ExecutionFailure:
+    # 6.46.0 split the NIM wording above out of INVALID_REQUEST. It must
+    # charge a credential exactly as little as it did before the split.
+    return _request_failure(
+        FailureKind.MODEL_REJECTED,
+        'Model "stealth/ox-alpha" is not supported on this endpoint.',
+    )
+
+
 def _context_length() -> ExecutionFailure:
     return _request_failure(
         FailureKind.CONTEXT_LENGTH,
@@ -818,8 +829,8 @@ def _health(state: CredentialRotationState) -> list[dict[str, object]]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error_factory",
-    [_invalid_request, _context_length],
-    ids=["invalid_request", "context_length"],
+    [_invalid_request, _model_rejected, _context_length],
+    ids=["invalid_request", "model_rejected", "context_length"],
 )
 async def test_request_shaped_failure_leaves_health_byte_identical(
     error_factory,
@@ -1428,3 +1439,32 @@ async def test_a_mixed_pool_does_not_claim_every_key_ran_out_of_credits():
 def test_quota_justifies_rotation_with_or_without_a_phrase():
     assert error_justifies_rotation(_quota(retry_after=60.0)) is True
     assert error_justifies_rotation(_quota(retry_after=None, status=402)) is True
+
+
+def test_a_rejected_request_is_neither_credential_shaped_nor_rotating() -> None:
+    """The two policy sets are allow-lists, so a new kind is inert by default.
+
+    Inert is correct here and must be pinned rather than assumed. Another key
+    will not make a model serve a ref it does not have, so rotating costs a
+    round trip and a lockout ladder entry for nothing; the next *model* is the
+    answer, and that is the fallback chain's job, not the pool's.
+    """
+    assert FailureKind.MODEL_REJECTED not in CREDENTIAL_SHAPED_KINDS
+    assert FailureKind.MODEL_REJECTED not in ROTATING_KINDS
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_request_leaves_the_whole_pool_untouched() -> None:
+    """Asserted on the whole health record, the way 5.69.1 strengthened this.
+
+    A single-field assertion is how the previous regression hid: the state
+    stayed ``HEALTHY`` while the consecutive-failure counter behind it climbed.
+    """
+    state = rotation_state(2, "round_robin")
+    before = _health(state)
+
+    for _ in range(10):
+        assert await state.report_failure(0, _model_rejected()) is False
+
+    assert _health(state) == before
+    assert all(entry["state"] == "HEALTHY" for entry in state.get_metrics())

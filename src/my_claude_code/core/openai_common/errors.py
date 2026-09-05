@@ -15,6 +15,7 @@ from my_claude_code.core.failures import ExecutionFailure, FailureKind
 
 _FAILURE_ERROR_TYPES = {
     FailureKind.INVALID_REQUEST: "invalid_request_error",
+    FailureKind.MODEL_REJECTED: "invalid_request_error",
     FailureKind.CONTEXT_LENGTH: "invalid_request_error",
     FailureKind.AUTHENTICATION: "authentication_error",
     FailureKind.PERMISSION: "permission_error",

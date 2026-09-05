@@ -22,6 +22,7 @@ from my_claude_code.core.failures import ExecutionFailure, FailureKind
 #: google.rpc.Code's, which is what Google's own HTTP mapping emits.
 _FAILURE_STATUSES: dict[FailureKind, str] = {
     FailureKind.INVALID_REQUEST: "INVALID_ARGUMENT",
+    FailureKind.MODEL_REJECTED: "INVALID_ARGUMENT",
     FailureKind.CONTEXT_LENGTH: "INVALID_ARGUMENT",
     FailureKind.AUTHENTICATION: "UNAUTHENTICATED",
     FailureKind.PERMISSION: "PERMISSION_DENIED",

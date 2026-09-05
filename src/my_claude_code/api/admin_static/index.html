@@ -1897,6 +1897,21 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   defaults to <code>invalid_request</code>.
                 </p>
                 <p class="guide-note">
+                  <strong>Neither does a model refusing the request.</strong> Since
+                  6.46.0 a <code>400</code> only ends the route when the provider&rsquo;s
+                  own message says the request is <em>malformed</em>. Every other
+                  <code>400</code> &mdash; a model that host does not serve on that
+                  endpoint, a sampling value one model pins, a tool name longer than
+                  that dialect allows &mdash; is the new <code>model_rejected</code>
+                  kind, which is not in <code>FALLBACK_SKIP_KINDS</code> by default, so
+                  the next model gets its turn. Measured over 274,375 requests, every
+                  <code>400</code> this install ever received was one of the latter,
+                  and each one ended a chain with healthy models still in it. Your
+                  client sees no change: both kinds still go out as
+                  <code>invalid_request_error</code>. To restore the old behaviour, set
+                  <code>FALLBACK_SKIP_KINDS=invalid_request,model_rejected</code>.
+                </p>
+                <p class="guide-note">
                   <strong>Neither does running out of credits.</strong> Several
                   gateways answer an account with no balance left with an HTTP
                   <strong>400</strong> that calls itself an invalid request
@@ -3374,7 +3389,8 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                     <strong>401/403</strong> from the provider. Those say
                     something about the model. Timeouts (first token, stall,
                     budget), <strong>429</strong>s,
-                    <code>quota</code>, <code>context_length</code> and malformed
+                    <code>quota</code>, <code>context_length</code>,
+                    <code>model_rejected</code> and malformed
                     requests are facts
                     about the <em>request</em> — they fail identically on a
                     healthy model — and never bench one. Counting them is how a
@@ -3622,6 +3638,13 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                     <a href="#guide-models">fallback chain</a> carries these through to a
                     roomier model automatically; if you have set
                     <code>FALLBACK_SKIP_KINDS=context_length</code>, it will not.</li>
+                  <li><strong>&ldquo;This model rejected the request.&rdquo;</strong>
+                    The provider answered <code>400</code> without saying the request
+                    was malformed &mdash; a model it does not serve on that endpoint, a
+                    parameter that model pins, a field longer than that host allows.
+                    A <a href="#guide-models">fallback chain</a> carries these to the
+                    next model automatically; the attempt detail names the provider&rsquo;s
+                    own words.</li>
                 </ul>
                 <p class="guide-note">
                   Every document that ships with this install &mdash; the README, the full

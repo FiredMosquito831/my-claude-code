@@ -20,6 +20,10 @@ _ANTHROPIC_ERROR_STATUS_CODES = {
 
 _FAILURE_ERROR_TYPES = {
     FailureKind.INVALID_REQUEST: "invalid_request_error",
+    # A 400 the *model* refused, not a body the host could not parse.
+    # Same wire type on purpose: the split is a routing decision, and a
+    # client must see no change at all.
+    FailureKind.MODEL_REJECTED: "invalid_request_error",
     FailureKind.CONTEXT_LENGTH: "invalid_request_error",
     FailureKind.AUTHENTICATION: "authentication_error",
     FailureKind.PERMISSION: "permission_error",

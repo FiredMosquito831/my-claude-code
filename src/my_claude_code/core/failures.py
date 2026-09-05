@@ -1,5 +1,6 @@
 """Protocol-neutral execution failure semantics."""
 
+import re
 from dataclasses import FrozenInstanceError, dataclass
 from enum import StrEnum
 
@@ -8,6 +9,7 @@ class FailureKind(StrEnum):
     """Stable failure categories shared across execution and wire adapters."""
 
     INVALID_REQUEST = "invalid_request"
+    MODEL_REJECTED = "model_rejected"
     CONTEXT_LENGTH = "context_length"
     AUTHENTICATION = "authentication"
     PERMISSION = "permission"
@@ -103,4 +105,43 @@ def parse_failure_kinds(value: str | None) -> frozenset[FailureKind]:
         known[name]
         for name in (part.strip().lower() for part in (value or "").split(","))
         if name in known
+    )
+
+
+#: The two words the user's rule names, as whole words. Both must be present;
+#: order does not matter, so "the request is malformed", "malformed JSON in
+#: request" and "malformed_request" all qualify.
+#:
+#: Compiled once at import: this runs on the failure path, which must be total
+#: and cheap, and building a pattern per rejection is neither.
+_MALFORMED_WORD = re.compile(r"\bmalformed\b")
+_REQUEST_WORD = re.compile(r"\brequest\b")
+#: A machine code spells the same thing with a separator -- ``malformed_request``,
+#: ``malformed-request``. ``_`` is a word character, so ``\brequest\b`` does not
+#: match inside it; normalising the separators to spaces first is what lets one
+#: rule cover the prose and the code.
+_WORD_SEPARATORS = re.compile(r"[-_]+")
+
+
+def says_malformed_request(text: str) -> bool:
+    """Whether an upstream's own words say the request body itself is malformed.
+
+    The one 400 no other model can serve: a body the host cannot parse is a
+    body no host can parse, so the chain has nothing to offer. Every other 400
+    -- a model that does not exist on that endpoint, a parameter that model
+    pins, a per-host field limit -- is about *this* model and is exactly what a
+    chain is for.
+
+    Deliberately a test on words rather than on a machine code: there is no
+    cross-vendor code for "malformed", and the operators who asked for this
+    read the same sentence the log shows them.
+
+    Callers must hand this the provider's *complaint*, never the raw response
+    text. A prompt that contains the words "malformed request" is not a
+    malformed request, and reading the echoed request back is exactly how it
+    would become one (the 5.69.2 lesson).
+    """
+    normalised = _WORD_SEPARATORS.sub(" ", text.lower())
+    return bool(_MALFORMED_WORD.search(normalised)) and bool(
+        _REQUEST_WORD.search(normalised)
     )

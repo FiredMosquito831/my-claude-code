@@ -181,6 +181,7 @@ MODEL_TIER_NAMES: tuple[str, ...] = ("best", "good", "medium", "cheap", "vision"
 FAILURE_KIND_NAMES: frozenset[str] = frozenset(
     {
         "invalid_request",
+        "model_rejected",
         "context_length",
         "authentication",
         "permission",

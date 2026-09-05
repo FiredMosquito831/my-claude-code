@@ -93,6 +93,11 @@ def failure_counts_toward_bench(kind: FailureKind) -> bool:
       provider's own cooldown already steps the chain over it.
     * ``CONTEXT_LENGTH`` / ``INVALID_REQUEST`` -- properties of the request.
       They fail identically on a healthy model and on a dead one.
+    * ``MODEL_REJECTED`` -- a 400 this model objected to: a ref it does
+      not serve, a sampling value it pins, a field longer than its host
+      allows. It is a property of *this pairing* of request and model and
+      says nothing about whether the model is up, so counting it would
+      bench a healthy model for a request it was never going to take.
     * ``UNAVAILABLE`` -- the executor's own no-credential sentinel shares this
       kind with a refused socket, so it cannot be read as a verdict on a model.
 

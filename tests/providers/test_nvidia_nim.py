@@ -514,7 +514,10 @@ async def test_stream_response_does_not_retry_unrelated_bad_request(provider_con
             [e async for e in provider.stream_response(req)]
 
     assert mock_create.await_count == 1
-    assert "Invalid request sent to provider" in exc_info.value.message
+    # 6.46.0: a 400 whose words do not say the request is malformed is this
+    # model's refusal, so it carries the model-rejected message. What this
+    # test pins -- the ladder does not retry it -- is unchanged.
+    assert "This model rejected the request" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -910,7 +913,10 @@ async def test_stream_response_bad_request_without_reasoning_budget_does_not_ret
             [e async for e in nim_provider.stream_response(req)]
 
     assert mock_create.await_count == 1
-    assert "Invalid request sent to provider" in exc_info.value.message
+    # 6.46.0: a 400 whose words do not say the request is malformed is this
+    # model's refusal, so it carries the model-rejected message. What this
+    # test pins -- the ladder does not retry it -- is unchanged.
+    assert "This model rejected the request" in exc_info.value.message
 
 
 @pytest.mark.asyncio

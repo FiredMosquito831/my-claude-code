@@ -9,7 +9,11 @@ from unittest.mock import MagicMock
 import pytest
 from loguru import logger
 
-from my_claude_code.application.errors import ModelRateLimited
+from my_claude_code.application.errors import (
+    InvalidRequestError,
+    ModelRateLimited,
+    UnknownProviderError,
+)
 from my_claude_code.application.execution import (
     AttemptResultObserver,
     ProviderExecutor,
@@ -4481,3 +4485,139 @@ def test_first_usable_attempt_refuses_an_all_paused_route() -> None:
         executor.first_usable_attempt(plan)
 
     assert "MODEL_PAUSED" in caught.value.message
+
+
+class _ModelRejectedProvider(FakeProvider):
+    """The measured case: Command Code does not serve that ref on that endpoint."""
+
+    def preflight_stream(
+        self, request: MessagesRequest, *, reasoning: ReasoningPolicy
+    ) -> None:
+        raise ExecutionFailure(
+            kind=FailureKind.MODEL_REJECTED,
+            status_code=400,
+            message='Model "stealth/ox-alpha" is not supported on this endpoint.',
+            retryable=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_refuses_a_400_hands_the_request_to_the_next_one() -> None:
+    """T14 -- the user-visible behaviour of the whole 6.46.0 change.
+
+    Before the split this 400 classified ``invalid_request``, which is in the
+    default skip list, so a twelve-model chain reported the first model's
+    refusal and never tried the eleven behind it.
+    """
+    attempts, observer = _attempt_log()
+    healthy = FakeProvider()
+
+    stream = _taxonomy_executor(
+        {"first": _ModelRejectedProvider(), "second": healthy},
+        skip_kinds=frozenset({FailureKind.INVALID_REQUEST}),
+    ).stream(
+        _plan(
+            _routed_request(provider_id="first"),
+            _routed_request(provider_id="second"),
+        ),
+        wire_api="messages",
+        raw_log_label="FULL_PAYLOAD",
+        raw_log_payload={},
+        request_id="req_model_rejected",
+        on_attempt_result=observer,
+    )
+
+    assert [chunk async for chunk in stream] == ["event: message_stop\ndata: {}\n\n"]
+    assert healthy.stream_calls, "the next model must actually be tried"
+    assert [(a.attempt, a.outcome, a.error_kind) for a in attempts] == [
+        (0, "failed", "model_rejected"),
+        (1, "succeeded", None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_body_still_ends_the_route_under_the_default() -> None:
+    """T15 -- the narrowing must not have widened the chain for a real body fault."""
+    healthy = FakeProvider()
+    attempts, observer = _attempt_log()
+
+    with pytest.raises(ExecutionFailure):
+        _taxonomy_executor(
+            {"first": _MalformedRequestProvider(), "second": healthy},
+            skip_kinds=RouteExecutionPolicy().skip_kinds,
+        ).stream(
+            _plan(
+                _routed_request(provider_id="first"),
+                _routed_request(provider_id="second"),
+            ),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id="req_still_ends",
+            on_attempt_result=observer,
+        )
+
+    assert healthy.preflight_calls == []
+    assert [(a.attempt, a.outcome, a.error_kind) for a in attempts] == [
+        (0, "failed", "invalid_request"),
+        (1, "skipped", "route_ended"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_operator_can_restore_the_pre_6_46_0_behaviour() -> None:
+    """T16 -- the rollback, and it has to be provable, not merely documented.
+
+    ``FALLBACK_SKIP_KINDS=invalid_request,model_rejected`` puts the two halves
+    of the old catch-all back together, which is byte for byte what 6.45.4 did
+    with the single name.
+    """
+    settings = Settings()
+    settings.fallback_skip_kinds = "invalid_request,model_rejected"
+    assert settings.fallback_skip_kinds == "invalid_request,model_rejected"
+
+    attempts, observer = _attempt_log()
+    healthy = FakeProvider()
+
+    with pytest.raises(ExecutionFailure):
+        _taxonomy_executor(
+            {"first": _ModelRejectedProvider(), "second": healthy},
+            skip_kinds=parse_failure_kinds(settings.fallback_skip_kinds),
+        ).stream(
+            _plan(
+                _routed_request(provider_id="first"),
+                _routed_request(provider_id="second"),
+            ),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id="req_rollback",
+            on_attempt_result=observer,
+        )
+
+    assert healthy.preflight_calls == []
+    assert [(a.attempt, a.outcome, a.error_kind) for a in attempts] == [
+        (0, "failed", "model_rejected"),
+        (1, "skipped", "route_ended"),
+    ]
+    assert "model_rejected failure ends the route" in (attempts[1].error_message or "")
+
+
+def test_the_shipped_default_does_not_end_a_route_on_a_refused_model() -> None:
+    """The default is what the user's route actually uses, so pin it directly."""
+    assert RouteExecutionPolicy().skip_kinds == frozenset({FailureKind.INVALID_REQUEST})
+    assert FailureKind.MODEL_REJECTED not in RouteExecutionPolicy().skip_kinds
+
+
+def test_mccs_own_rejections_still_end_the_route() -> None:
+    """The narrowing must not reach MCC's own deterministic refusals.
+
+    ``InvalidRequestError`` and its ``UnknownProviderError`` subclass are raised
+    before a provider is reached -- ``n > 1`` on ``/v1/chat/completions``, an
+    unparseable image data URL, a chain entry naming a provider that is not
+    registered. No model can fix any of those, so they keep the narrow kind and
+    keep ending the route.
+    """
+    assert InvalidRequestError.kind is FailureKind.INVALID_REQUEST
+    assert UnknownProviderError.kind is FailureKind.INVALID_REQUEST
+    assert InvalidRequestError.kind in RouteExecutionPolicy().skip_kinds
