@@ -186,10 +186,10 @@ def test_the_models_page_carries_the_provenance_and_the_vendors_own_dates():
             model_id="chatgpt_oauth/gpt-5.4",
             listing=ModelListingEvidence(
                 provenance=ModelListingProvenance.OBSERVED,
-                detail="served 145x, last 2026-08-04",
-                retirement_at="2026-08-31T19:00:00Z",
+                detail="served 145x, last 2026-09-04",
+                retirement_at="2026-09-30T19:00:00Z",
                 replacement_model_id="gpt-5.6-terra",
-                offered_by_default=False,
+                offered_by_default=True,
             ),
         ),
         ProviderModelInfo(model_id="open_router/plain"),
@@ -207,10 +207,14 @@ def test_the_models_page_carries_the_provenance_and_the_vendors_own_dates():
     listing = rows["chatgpt_oauth/gpt-5.4"]["listing"]
     assert listing["provenance"] == "observed"
     assert listing["provenance_label"] == (payload["provenance_labels"]["observed"])
-    assert listing["detail"] == "served 145x, last 2026-08-04"
-    assert listing["retirement_at"] == "2026-08-31T19:00:00Z"
+    assert listing["detail"] == "served 145x, last 2026-09-04"
+    assert listing["retirement_at"] == "2026-09-30T19:00:00Z"
     assert listing["replacement_model_id"] == "gpt-5.6-terra"
-    assert listing["offered_by_default"] is False
+    # ``False`` is unreachable since 6.48.1: an entry the vendor marked
+    # ``visibility: hide`` never reaches a listing, so nothing in a listing
+    # can be badged "not offered by default" -- and the badge that said so
+    # went with it.
+    assert listing["offered_by_default"] is True
     # Every other provider is untouched: a gateway that answers /models has no
     # existence question to answer, so it gets no badge.
     assert rows["open_router/plain"]["listing"] is None

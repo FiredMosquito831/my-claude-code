@@ -18,13 +18,17 @@ from my_claude_code.application.model_metadata import (
     ModelListingEvidence,
     ModelListingProvenance,
 )
-from my_claude_code.core.request_log import observed_served_models
+from my_claude_code.core.request_log import (
+    ServedModelObservation,
+    observed_served_models,
+)
 from my_claude_code.providers.chatgpt_oauth import codex_catalogue
 from my_claude_code.providers.chatgpt_oauth.codex_catalogue import (
     CodexCatalogue,
     CodexCatalogueEntry,
     catalogue_evidence,
     embedded_json_document,
+    listing_vetoes,
     load_codex_catalogue,
     parse_codex_catalogue,
     retired_entries,
@@ -75,6 +79,20 @@ DOCUMENT = {
             "slug": "gpt-daybreak-red-latest",
             "visibility": "hide",
             "available_in_plans": ["plus"],
+        },
+        {
+            # Synthetic, and deliberately so: every really-retired id in
+            # Codex 0.151.0 is also ``visibility: hide``, which would let the
+            # hide filter pass a retirement test it never exercised. This
+            # entry is retired and still ``list``, so the two fixes are
+            # proved independently of each other.
+            "slug": "listed-and-retired",
+            "visibility": "list",
+            "available_in_plans": ["plus"],
+            "upgrade": {
+                "model": "gpt-5.6-terra",
+                "retirement_at": "2026-08-31T19:00:00Z",
+            },
         },
         {
             "slug": "enterprise-only",
@@ -168,9 +186,16 @@ def test_load_codex_catalogue_memoises_per_file_identity(tmp_path, monkeypatch):
 
 def test_a_retired_model_leaves_the_listing_on_the_vendors_schedule(catalogue):
     evidence = catalogue_evidence(catalogue, plan_type="plus", now=NOW)
-    assert "gpt-5.4" not in evidence
-    (retired,) = retired_entries(catalogue, now=NOW)
-    assert retired.slug == "gpt-5.4"
+    assert "listed-and-retired" not in evidence
+    assert {entry.slug for entry in retired_entries(catalogue, now=NOW)} == {
+        "gpt-5.4",
+        "listed-and-retired",
+    }
+    (retired,) = [
+        entry
+        for entry in retired_entries(catalogue, now=NOW)
+        if entry.slug == "listed-and-retired"
+    ]
     assert retired.replacement_model_id == "gpt-5.6-terra"
 
 
@@ -178,8 +203,8 @@ def test_a_model_not_yet_retired_is_kept_with_its_date(catalogue):
     """Before the instant passes, the model is listed and the date is shown."""
     early = datetime(2026, 8, 1, tzinfo=UTC)
     evidence = catalogue_evidence(catalogue, plan_type="plus", now=early)
-    assert evidence["gpt-5.4"].retirement_at == "2026-08-31T19:00:00Z"
-    assert evidence["gpt-5.4"].replacement_model_id == "gpt-5.6-terra"
+    assert evidence["listed-and-retired"].retirement_at == "2026-08-31T19:00:00Z"
+    assert evidence["listed-and-retired"].replacement_model_id == "gpt-5.6-terra"
 
 
 def test_the_plan_gate_only_fires_when_both_halves_are_known(catalogue):
@@ -192,13 +217,70 @@ def test_the_plan_gate_only_fires_when_both_halves_are_known(catalogue):
     assert "enterprise-only" in unknown_plan
 
 
-def test_visibility_is_a_hint_not_a_filter(catalogue):
-    """A vendor-hidden model is still servable, so it is listed and labelled."""
+def test_a_vendor_hidden_model_is_not_listed_at_all(catalogue):
+    """``visibility: hide`` means not listed -- OpenAI saying do not show this.
+
+    Replaces ``test_visibility_is_a_hint_not_a_filter``, which asserted the
+    opposite and is why 6.48.0 put three unreleased internals
+    (``gpt-daybreak-blue-latest``, ``gpt-daybreak-red-latest``,
+    ``codex-auto-review``) in the operator picker badged "not offered by
+    default". The model stays routable; it just stops being advertised.
+    """
     evidence = catalogue_evidence(catalogue, plan_type="plus", now=NOW)
-    assert evidence["gpt-daybreak-red-latest"].offered_by_default is False
+    assert "gpt-daybreak-red-latest" not in evidence
     assert evidence["gpt-5.6-luna"].offered_by_default is True
-    # An entry that published no visibility says nothing either way.
+    # An entry that published no visibility says nothing either way, and
+    # unknown is never read as hidden.
     assert CodexCatalogueEntry(slug="x").visibility == ""
+    assert CodexCatalogueEntry(slug="x").hidden is False
+    assert CodexCatalogueEntry(slug="x").listed is False
+    no_visibility = parse_codex_catalogue(
+        {"models": [{"slug": "x"}]}, version="", source_path=""
+    )
+    assert no_visibility is not None
+    evidence = catalogue_evidence(no_visibility, plan_type="plus", now=NOW)
+    assert evidence["x"].offered_by_default is None
+
+
+def test_the_vetoes_say_which_facts_an_observation_may_overturn(catalogue):
+    """A retirement is a dated fact; ``hide`` is not a fact with a date.
+
+    The whole of Fix A lives in this asymmetry. A logged success beats a
+    retirement it postdates -- that is the safety property the observed rung
+    exists for, and a stale vendor catalogue must never hide a model the
+    operator is actively using. It does not beat a retirement it predates,
+    and nothing beats ``hide``.
+    """
+    vetoes = listing_vetoes(catalogue, now=NOW)
+
+    assert set(vetoes) == {
+        "gpt-5.4",
+        "gpt-daybreak-red-latest",
+        "listed-and-retired",
+    }
+    # Hidden wins when an entry is both, because it is the stronger claim.
+    assert vetoes["gpt-5.4"].reason == "hidden"
+    assert vetoes["gpt-5.4"].retirement_at is None
+    assert vetoes["gpt-5.4"].overturned_by("2099-01-01T00:00:00+00:00") is False
+
+    retired = vetoes["listed-and-retired"]
+    assert retired.reason == "retired"
+    assert retired.overturned_by("2026-09-01T00:00:00+00:00") is True
+    assert retired.overturned_by("2026-08-04T22:22:55.191619+00:00") is False
+    # Exactly at the instant is not after it.
+    assert retired.overturned_by("2026-08-31T19:00:00Z") is False
+    # Unparseable or missing overturns nothing.
+    assert retired.overturned_by("") is False
+    assert retired.overturned_by("last tuesday") is False
+    # A naive timestamp is read as UTC, never as this machine local time --
+    # +03:00 here, which would flip the two assertions below.
+    assert retired.overturned_by("2026-08-31T20:00:00") is True
+    assert retired.overturned_by("2026-08-31T18:00:00") is False
+
+
+def test_a_retirement_still_in_the_future_vetoes_nothing(catalogue):
+    early = datetime(2026, 8, 1, tzinfo=UTC)
+    assert "listed-and-retired" not in listing_vetoes(catalogue, now=early)
 
 
 def test_the_vendor_rung_publishes_no_numbers_at_all(catalogue):
@@ -326,6 +408,174 @@ def test_the_observed_rung_declines_rather_than_raising(tmp_path):
     broken = tmp_path / "broken.db"
     sqlite3.connect(broken).close()
     assert observed_served_models("chatgpt_oauth", db_path=broken) == ()
+
+
+# ------------------------------------ the observed rung against the vetoes
+
+#: Codex 0.151.0 verbatim, trimmed: the two ids Fix A and Fix B each turn on,
+#: plus a plain listed one as the control.
+VETO_CATALOGUE = CodexCatalogue(
+    version="0.151.0",
+    source_path="codex.exe",
+    entries=(
+        CodexCatalogueEntry(slug="gpt-5.6-luna", visibility="list"),
+        CodexCatalogueEntry(
+            slug="gpt-5.4",
+            visibility="hide",
+            retirement_at="2026-08-31T19:00:00Z",
+            replacement_model_id="gpt-5.6-terra",
+        ),
+        CodexCatalogueEntry(
+            slug="listed-and-retired",
+            visibility="list",
+            retirement_at="2026-08-31T19:00:00Z",
+            replacement_model_id="gpt-5.6-terra",
+        ),
+    ),
+)
+
+
+def _observed_rung(monkeypatch, observations, *, catalogue=VETO_CATALOGUE):
+    """Drive ``observed_evidence`` off synthetic rows and a synthetic catalogue.
+
+    Neither the developer request log nor their 300 MB Codex binary is
+    touched: a rung whose answer depends on what the developer happens to
+    have installed is not a test.
+    """
+    from my_claude_code.providers.chatgpt_oauth import provider as provider_module
+
+    monkeypatch.setattr(provider_module, "load_codex_catalogue", lambda: catalogue)
+    monkeypatch.setattr(
+        provider_module,
+        "observed_served_models",
+        lambda provider_id: (
+            tuple(
+                ServedModelObservation(
+                    model_id=model_id, successes=successes, last_ts_iso=last
+                )
+                for model_id, successes, last in observations
+            )
+            if provider_id == "chatgpt_oauth"
+            else ()
+        ),
+    )
+    return provider_module.observed_evidence()
+
+
+def test_an_observation_newer_than_the_retirement_keeps_the_model_listed(
+    monkeypatch,
+):
+    """The safety property, and the reason the observed rung exists at all.
+
+    A vendor catalogue that is stale or simply wrong must never hide a model
+    the operator is actively and successfully using.
+    """
+    evidence = _observed_rung(
+        monkeypatch, [("listed-and-retired", 3, "2026-09-01T10:00:00+00:00")]
+    )
+
+    assert set(evidence) == {"listed-and-retired"}
+    assert "newer than the vendor retirement" in evidence["listed-and-retired"].detail
+
+
+def test_an_observation_older_than_the_retirement_does_not(monkeypatch):
+    """The ``gpt-5.4`` case, on its real dates, with ``hide`` taken out of it.
+
+    145 successes, every one dated 2026-08-04, against a retirement dated
+    2026-08-31. Evidence 27 days older than the fact contradicting it does not
+    get to win.
+    """
+    evidence = _observed_rung(
+        monkeypatch, [("listed-and-retired", 145, "2026-08-04T22:22:55.191619+00:00")]
+    )
+
+    assert evidence == {}
+
+
+def test_a_vendor_hidden_model_is_not_listed_however_recent_the_success(
+    monkeypatch,
+):
+    """Fix B, proved independently of Fix A: ``hide`` has no date to beat."""
+    evidence = _observed_rung(
+        monkeypatch, [("gpt-5.4", 145, "2099-01-01T00:00:00+00:00")]
+    )
+
+    assert evidence == {}
+
+
+def test_an_unvetoed_observation_is_untouched(monkeypatch):
+    evidence = _observed_rung(
+        monkeypatch, [("gpt-5.6-luna", 8337, "2026-09-05T08:59:39+00:00")]
+    )
+
+    assert set(evidence) == {"gpt-5.6-luna"}
+    assert evidence["gpt-5.6-luna"].provenance is ModelListingProvenance.OBSERVED
+    assert evidence["gpt-5.6-luna"].detail.startswith("served 8337x, last ")
+    assert "retirement" not in evidence["gpt-5.6-luna"].detail
+
+
+def test_with_no_vendor_catalogue_every_observation_stands(monkeypatch):
+    """A rung going quiet must cost its own ids and never veto another one.
+
+    Uninstall Codex and the retirement facts are simply not available; the
+    log is then the only evidence there is, and it is not overruled by a
+    document nobody can read.
+    """
+    evidence = _observed_rung(
+        monkeypatch,
+        [
+            ("gpt-5.4", 145, "2026-08-04T22:22:55.191619+00:00"),
+            ("listed-and-retired", 1, "2026-08-04T00:00:00+00:00"),
+        ],
+        catalogue=None,
+    )
+
+    assert set(evidence) == {"gpt-5.4", "listed-and-retired"}
+
+
+def test_a_model_the_vendor_retired_with_no_observation_is_not_listed(monkeypatch):
+    """Neither rung answers for it, so nothing puts it in the picker."""
+    from my_claude_code.providers.chatgpt_oauth import provider as provider_module
+
+    monkeypatch.setattr(provider_module, "load_codex_catalogue", lambda: VETO_CATALOGUE)
+    monkeypatch.setattr(provider_module, "stored_chatgpt_plan_type", lambda: "plus")
+    monkeypatch.setattr(provider_module, "observed_served_models", lambda _: ())
+    monkeypatch.setattr(
+        provider_module, "WITHHELD_MODEL_IDS", provider_module.WithheldModelIds()
+    )
+
+    served = provider_module.chatgpt_oauth_served_models()
+
+    assert set(served) == {"gpt-5.6-luna"}
+    assert "gpt-5.4" not in served
+    assert "listed-and-retired" not in served
+
+
+def test_the_seed_ids_are_never_vetoed_by_this(monkeypatch):
+    """The five seed ids and ``gpt-5.2`` are outside both fixes.
+
+    ``gpt-5.2`` is the id the heuristic 6.48.0 deleted used to drop; nothing
+    in this change may put it back in the bin.
+    """
+    assert CHATGPT_OAUTH_SEED_MODELS == (
+        "gpt-5.2",
+        "gpt-5.5",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+    )
+    listed = CodexCatalogue(
+        version="0.151.0",
+        source_path="codex.exe",
+        entries=tuple(
+            CodexCatalogueEntry(slug=slug, visibility="list")
+            for slug in CHATGPT_OAUTH_SEED_MODELS
+        ),
+    )
+    assert listing_vetoes(listed, now=NOW) == {}
+    assert set(catalogue_evidence(listed, plan_type="plus", now=NOW)) == set(
+        CHATGPT_OAUTH_SEED_MODELS
+    )
 
 
 # ------------------------------------------------------------- learned 404

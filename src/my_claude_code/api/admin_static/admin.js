@@ -14627,14 +14627,6 @@ function appendListingChips(summary, listing) {
       : "The vendor published a retirement date for this model.";
     summary.appendChild(retiring);
   }
-  if (listing.offered_by_default === false) {
-    const hidden = buildModelsChip("vendor-hidden", "not offered by default");
-    hidden.title =
-      "The vendor's own catalogue marks this model hidden. It is still " +
-      "servable, so MCC lists it rather than deleting it — use the " +
-      "visibility controls if you do not want to see it.";
-    summary.appendChild(hidden);
-  }
 }
 
 /* Existence provenance, drawn as prose rather than as a tier-badged row: none
@@ -14658,9 +14650,6 @@ function buildListingPanel(listing) {
             `${listing.replacement_model_id} as its replacement`
         : `the vendor retires it at ${listing.retirement_at}`,
     );
-  }
-  if (listing.offered_by_default === false) {
-    parts.push("the vendor's catalogue marks it hidden, but it is servable");
   }
   if (listing.provenance === "seed") {
     parts.push(

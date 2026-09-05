@@ -479,6 +479,34 @@ def test_visibility_patterns_never_change_a_resolved_route(settings):
     )
 
 
+def test_a_de_listed_provider_model_still_resolves_in_a_configured_chain(settings):
+    """The load-bearing guarantee of 6.48.1, on the operator own three refs.
+
+    6.48.1 stopped listing the ids the vendor catalogue marks
+    ``visibility: hide`` and the ones it retired before this credential last
+    used them. ``gpt-5.4``, ``gpt-5.4-mini`` and ``gpt-5.3-codex-spark`` all
+    leave ``/v1/models``, the Models page and the Admin pickers because of
+    that -- and all three are named in a real ``.env`` on the machine this was
+    written on.
+
+    De-listing must not rewrite, remove or break any of them. Nothing on the
+    resolution path consults a listing at all: ``ModelRouter`` validates the
+    *provider* half against the registry and takes the model half verbatim.
+    This pins that, so a later change that starts filtering routes by the
+    catalogue fails here rather than in somebody chain at 3am.
+    """
+    settings.model = "chatgpt_oauth/gpt-5.4"
+    settings.model_fallbacks = (
+        "chatgpt_oauth/gpt-5.4-mini,chatgpt_oauth/gpt-5.3-codex-spark"
+    )
+
+    assert _refs(ModelRouter(settings), _request()) == (
+        "chatgpt_oauth/gpt-5.4",
+        "chatgpt_oauth/gpt-5.4-mini",
+        "chatgpt_oauth/gpt-5.3-codex-spark",
+    )
+
+
 # ------------------------------------------------------------------- pause --
 # A paused ref stays in the plan on purpose. Filtering it out here would remove
 # it from the request log as well, and the whole point of pausing rather than

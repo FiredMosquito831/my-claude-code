@@ -50,7 +50,11 @@ from my_claude_code.providers.recovery import (
 )
 from my_claude_code.providers.runtime.served_models import resolve_served_models
 
-from .codex_catalogue import catalogue_evidence, load_codex_catalogue
+from .codex_catalogue import (
+    catalogue_evidence,
+    listing_vetoes,
+    load_codex_catalogue,
+)
 from .conversion import build_chatgpt_oauth_request_body
 from .credentials import (
     CODEX_OAUTH_ORIGINATOR,
@@ -187,6 +191,18 @@ def observed_evidence() -> dict[str, ModelListingEvidence]:
     The one rung that is proof rather than a document, and the reason S2 and
     S3 union instead of one shadowing the other: a catalogue can be stale
     about a model the user is using right now.
+
+    **It is proof with a date on it, though, and the date decides.** A logged
+    success outranks the vendor own ``retirement_at`` only when it was logged
+    *after* it -- otherwise the observation is the older of two contradicting
+    facts and loses. ``gpt-5.4`` is the case that forced this: 145 successes,
+    every one of them dated 2026-08-04, against a retirement dated
+    2026-08-31. "I used this last month" is not evidence that it works today.
+
+    ``visibility: hide`` is not overturnable at all: no local evidence turns a
+    model the vendor declines to offer into one it offers. Both of those are
+    :func:`listing_vetoes`, and both are *listing* decisions -- an id dropped
+    here stays routable and keeps serving when a route names it.
     """
     successes: dict[str, int] = {}
     last_seen: dict[str, str] = {}
@@ -197,17 +213,33 @@ def observed_evidence() -> dict[str, ModelListingEvidence]:
             )
             if observation.last_ts_iso > last_seen.get(observation.model_id, ""):
                 last_seen[observation.model_id] = observation.last_ts_iso
-    return {
-        model_id: ModelListingEvidence(
-            provenance=ModelListingProvenance.OBSERVED,
-            detail=(
-                f"served {count}x, last {last_seen[model_id]}"
-                if last_seen.get(model_id)
-                else f"served {count}x"
-            ),
+    catalogue = load_codex_catalogue()
+    vetoes = {} if catalogue is None else listing_vetoes(catalogue)
+    evidence: dict[str, ModelListingEvidence] = {}
+    for model_id, count in sorted(successes.items()):
+        seen_at = last_seen.get(model_id, "")
+        veto = vetoes.get(model_id)
+        if veto is not None and not veto.overturned_by(seen_at):
+            logger.info(
+                "CHATGPT_OAUTH: not listing {} -- the vendor catalogue marks it"
+                " {}{}, and the newest success is {}. It stays routable.",
+                model_id,
+                veto.reason,
+                f" at {veto.retirement_at}" if veto.retirement_at else "",
+                seen_at or "undated",
+            )
+            continue
+        detail = f"served {count}x, last {seen_at}" if seen_at else f"served {count}x"
+        if veto is not None:
+            # Worth saying on the page: this row is the safety property doing
+            # its job, not the vendor rung being ignored.
+            detail = (
+                f"{detail} -- newer than the vendor retirement {veto.retirement_at}"
+            )
+        evidence[model_id] = ModelListingEvidence(
+            provenance=ModelListingProvenance.OBSERVED, detail=detail
         )
-        for model_id, count in successes.items()
-    }
+    return evidence
 
 
 def seed_evidence() -> dict[str, ModelListingEvidence]:

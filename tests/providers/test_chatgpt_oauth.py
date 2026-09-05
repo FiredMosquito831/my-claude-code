@@ -361,6 +361,11 @@ async def test_list_model_ids_unions_the_vendor_catalogue_and_the_log(
     the real ones read this machine's Codex install and request log, and a
     test that changes answer depending on what the developer has installed is
     not a test.
+
+    What this pins is the *merge*: three rungs union, and the strongest wins a
+    shared id. Whether any particular observation survives the vendor own
+    vetoes is decided inside ``observed_evidence`` -- stubbed out here, and
+    tested on its own in ``test_chatgpt_oauth_catalogue.py``.
     """
     from my_claude_code.providers.chatgpt_oauth import provider as provider_module
 
@@ -380,10 +385,10 @@ async def test_list_model_ids_unions_the_vendor_catalogue_and_the_log(
         provider_module,
         "observed_evidence",
         lambda: {
-            # Already retired upstream and therefore absent from the vendor
-            # rung, but this credential has been served it: proof outranks a
-            # catalogue, so it stays listed.
-            "gpt-5.4": ModelListingEvidence(
+            # Absent from the vendor rung -- a catalogue that never named it,
+            # or named it and was overruled by a newer success -- but this
+            # credential has been served it. The log is proof, so it lists.
+            "gpt-5.6-nova": ModelListingEvidence(
                 provenance=ModelListingProvenance.OBSERVED, detail="served 145x"
             )
         },
@@ -391,9 +396,9 @@ async def test_list_model_ids_unions_the_vendor_catalogue_and_the_log(
 
     models = await chatgpt_oauth_provider.list_model_ids()
 
-    assert models == frozenset({"gpt-5.6-luna", "gpt-5.2", "gpt-5.4"})
+    assert models == frozenset({"gpt-5.6-luna", "gpt-5.2", "gpt-5.6-nova"})
     evidence = await chatgpt_oauth_provider.list_model_evidence()
-    assert evidence["gpt-5.4"].provenance is ModelListingProvenance.OBSERVED
+    assert evidence["gpt-5.6-nova"].provenance is ModelListingProvenance.OBSERVED
     assert evidence["gpt-5.2"].provenance is ModelListingProvenance.VENDOR_CLIENT
 
 
