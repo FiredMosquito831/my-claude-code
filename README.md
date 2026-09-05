@@ -4,7 +4,7 @@
 
 # My Claude Code
 
-An Anthropic-compatible local proxy for Claude Code, Codex, Pi, and their IDE extensions — backed by 56 model providers, with multi-key rotation everywhere, built-in web search providers, and full request analytics.
+An Anthropic-compatible local proxy for Claude Code, Codex, opencode, opencode2, Cline, Pi, QwenCode and their IDE extensions — backed by 56 model providers, with multi-key rotation everywhere, built-in web search providers, and full request analytics.
 
 [![License: AGPL v3 or commercial](https://img.shields.io/badge/License-AGPL%20v3%20or%20commercial-blue.svg?style=for-the-badge)](LICENSE)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776ab.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
