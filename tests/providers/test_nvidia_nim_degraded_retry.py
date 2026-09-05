@@ -222,7 +222,10 @@ async def test_unrelated_nim_bad_request_is_not_retried(detail: str) -> None:
     assert create.await_count == 1
     extend_block.assert_not_called()
     sleep.assert_not_awaited()
-    assert exc_info.value.kind is FailureKind.INVALID_REQUEST
+    # 6.46.0: a 400 whose words do not say the request is malformed is
+    # this model's refusal. What this test pins is that the ladder does
+    # not retry it, which is unchanged.
+    assert exc_info.value.kind is FailureKind.MODEL_REJECTED
     assert exc_info.value.status_code == 400
     assert exc_info.value.retryable is False
 
@@ -256,7 +259,10 @@ async def test_degraded_wording_remains_non_retryable_for_other_providers() -> N
     assert create.await_count == 1
     extend_block.assert_not_called()
     sleep.assert_not_awaited()
-    assert exc_info.value.kind is FailureKind.INVALID_REQUEST
+    # 6.46.0: a 400 whose words do not say the request is malformed is
+    # this model's refusal. What this test pins is that the ladder does
+    # not retry it, which is unchanged.
+    assert exc_info.value.kind is FailureKind.MODEL_REJECTED
     assert exc_info.value.status_code == 400
 
 

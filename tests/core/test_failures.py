@@ -16,12 +16,14 @@ from my_claude_code.core.failures import (
     failure_kind_name,
     find_execution_failure,
     parse_failure_kinds,
+    says_malformed_request,
 )
 
 
 def test_failure_kind_has_only_protocol_neutral_semantics() -> None:
     assert tuple(FailureKind) == (
         FailureKind.INVALID_REQUEST,
+        FailureKind.MODEL_REJECTED,
         FailureKind.CONTEXT_LENGTH,
         FailureKind.AUTHENTICATION,
         FailureKind.PERMISSION,
@@ -34,6 +36,7 @@ def test_failure_kind_has_only_protocol_neutral_semantics() -> None:
     )
     assert tuple(kind.value for kind in FailureKind) == (
         "invalid_request",
+        "model_rejected",
         "context_length",
         "authentication",
         "permission",
@@ -174,3 +177,53 @@ def test_parsing_kind_lists_is_forgiving_about_shape_only():
     assert parse_failure_kinds("") == frozenset()
     assert parse_failure_kinds(None) == frozenset()
     assert parse_failure_kinds("not_a_kind") == frozenset()
+
+
+# --------------------------------------- what "malformed" means, in two words
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "the request body is malformed",
+        "malformed request",
+        "malformed_request",
+        "malformed-request",
+        "MALFORMED REQUEST",
+        "your request is malformed json",
+        "malformed json in the request",
+    ),
+)
+def test_both_words_in_any_order_or_spelling_say_malformed(text: str) -> None:
+    """Order does not matter and a separator is not a hiding place.
+
+    ``_`` is a word character, so a bare ``\brequest\b`` never matches inside
+    ``malformed_request``; the separators are normalised to spaces first, which
+    is what lets one rule cover a host that answers in prose and a host that
+    answers in codes.
+    """
+    assert says_malformed_request(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "",
+        "malformed",
+        "invalid request",
+        "bad request",
+        'model "stealth/ox-alpha" is not supported on this endpoint.',
+        "validation: `top_p` is immutable for this model and must be 0.95",
+        "`name` must be at most 64 characters, got 68",
+        "check the model name and other parameters. additional info: missing tags",
+        "requests to this model are malformedly rated",
+    ),
+)
+def test_one_word_alone_is_not_the_rule(text: str) -> None:
+    """Both words, as whole words. A 400 that only complains is not malformed.
+
+    The last case is the whole-word pin: ``malformedly`` and ``requests`` are
+    different words, and a substring test would have called that sentence a
+    malformed request.
+    """
+    assert says_malformed_request(text) is False

@@ -2,7 +2,11 @@
 
 from collections.abc import Mapping
 
-from my_claude_code.core.failures import ExecutionFailure, FailureKind
+from my_claude_code.core.failures import (
+    ExecutionFailure,
+    FailureKind,
+    says_malformed_request,
+)
 
 
 def anthropic_stream_failure(payload: Mapping[str, object] | None) -> ExecutionFailure:
@@ -27,7 +31,19 @@ def anthropic_stream_failure(payload: Mapping[str, object] | None) -> ExecutionF
     kind, status, retryable = {
         "authentication_error": (FailureKind.AUTHENTICATION, 401, False),
         "permission_error": (FailureKind.PERMISSION, 403, False),
-        "invalid_request_error": (FailureKind.INVALID_REQUEST, 400, False),
+        # The Anthropic dialect has one 400 type for every rejection, so
+        # the split between a body no host can parse and a refusal by
+        # this model is made on the host's own words -- the same test the
+        # OpenAI-dialect classifier applies. Skipping it here would leave
+        # the fix half-applied: this is the path Command Code's Anthropic
+        # half and the two first-party Anthropic providers take.
+        "invalid_request_error": (
+            FailureKind.INVALID_REQUEST
+            if says_malformed_request(safe_message)
+            else FailureKind.MODEL_REJECTED,
+            400,
+            False,
+        ),
         "rate_limit_error": (FailureKind.RATE_LIMIT, 429, True),
         "overloaded_error": (FailureKind.OVERLOADED, 529, True),
     }.get(error_type, (FailureKind.UPSTREAM, 502, True))

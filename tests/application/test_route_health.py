@@ -28,6 +28,10 @@ KIND_BENCHES = {
     FailureKind.QUOTA: False,
     FailureKind.CONTEXT_LENGTH: False,
     FailureKind.INVALID_REQUEST: False,
+    # A 400 this model objected to says nothing about whether the model
+    # is up: benching it would park a healthy model over a request it
+    # was never going to take.
+    FailureKind.MODEL_REJECTED: False,
     FailureKind.UNAVAILABLE: False,
 }
 
@@ -252,6 +256,7 @@ def test_only_model_shaped_failures_count_toward_the_bench(kind: FailureKind) ->
         FailureKind.RATE_LIMIT,
         FailureKind.CONTEXT_LENGTH,
         FailureKind.INVALID_REQUEST,
+        FailureKind.MODEL_REJECTED,
         FailureKind.UNAVAILABLE,
     ],
 )

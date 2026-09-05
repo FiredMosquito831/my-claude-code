@@ -728,7 +728,10 @@ async def test_stream_response_unrelated_bad_request_does_not_retry(mistral_prov
             [e async for e in mistral_provider.stream_response(req)]
 
     assert mock_create.await_count == 1
-    assert "Invalid request sent to provider" in exc_info.value.message
+    # 6.46.0: a sampling-parameter complaint is the model's refusal, not a
+    # malformed body, so it carries the model-rejected message and falls
+    # through to the next model instead of ending the route.
+    assert "This model rejected the request" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -747,7 +750,10 @@ async def test_stream_response_generic_thinking_error_does_not_retry(
             [e async for e in mistral_provider.stream_response(req)]
 
     assert mock_create.await_count == 1
-    assert "Invalid request sent to provider" in exc_info.value.message
+    # 6.46.0: a sampling-parameter complaint is the model's refusal, not a
+    # malformed body, so it carries the model-rejected message and falls
+    # through to the next model instead of ending the route.
+    assert "This model rejected the request" in exc_info.value.message
 
 
 def test_retry_body_without_reasoning_returns_none(mistral_provider):

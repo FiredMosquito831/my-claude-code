@@ -18,6 +18,7 @@ from my_claude_code.core.failures import (
     ExecutionFailure,
     FailureKind,
     find_execution_failure,
+    says_malformed_request,
 )
 from my_claude_code.core.rate_limit import (
     DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
@@ -43,6 +44,7 @@ _INTERNAL_ERROR_MARKERS = frozenset({"internal_server_error", "internal server e
 _AUTHENTICATION_MESSAGE = "Provider authentication failed. Check API key."
 _RATE_LIMIT_MESSAGE = "Provider rate limit reached. Please retry shortly."
 _INVALID_REQUEST_MESSAGE = "Invalid request sent to provider."
+_MODEL_REJECTED_MESSAGE = "This model rejected the request."
 _CONTEXT_LENGTH_MESSAGE = "Request exceeds this model's context window."
 # Substrings that hold across every vendor wording measured in production:
 # NVIDIA NIM "This model's maximum context length is ...", Nous Portal and
@@ -451,6 +453,25 @@ def is_context_length_error(exc: BaseException) -> bool:
     return _has_marker(transient_error_text(exc), _CONTEXT_LENGTH_MARKERS)
 
 
+def is_malformed_request_error(exc: Exception) -> bool:
+    """Whether the upstream said, in words, that the body itself is malformed.
+
+    The one 400 no other model can serve, and since 6.46.0 the only one
+    that ends the route by default.
+
+    Read through :func:`~my_claude_code.providers.recovery.complaint
+    .upstream_complaint` and nothing else: that reader prefers the
+    structured error body and prunes the ``input``/``body``/``ctx``/
+    ``value`` keys under which a validation error echoes the submitted
+    request straight back. ``transient_error_text`` concatenates the
+    response text and would read that echo as evidence, so a prompt
+    containing the words *malformed request* would end its own route
+    (the 5.69.2 lesson). The reader is the rule; swapping it is the
+    footgun.
+    """
+    return says_malformed_request(upstream_complaint(exc))
+
+
 def context_length_failure(exc: BaseException) -> ExecutionFailure:
     """Return the canonical context-overflow failure, naming the numbers if given.
 
@@ -535,9 +556,16 @@ def _classify_provider_failure(
     if isinstance(exc, openai.BadRequestError):
         if is_context_length_error(exc):
             return context_length_failure(exc)
-        return _failure(
-            FailureKind.INVALID_REQUEST, 400, _INVALID_REQUEST_MESSAGE, False
-        )
+        if is_malformed_request_error(exc):
+            return _failure(
+                FailureKind.INVALID_REQUEST, 400, _INVALID_REQUEST_MESSAGE, False
+            )
+        # Every other 400 is this model's own objection -- a model that
+        # does not exist on that endpoint, a sampling knob it pins, a
+        # per-host field cap -- and the next model on the chain may well
+        # take the same body. ``retryable`` stays False either way: it
+        # means "safe to retry the same credential", and it is not.
+        return _failure(FailureKind.MODEL_REJECTED, 400, _MODEL_REJECTED_MESSAGE, False)
     if isinstance(exc, openai.APITimeoutError):
         return _failure(FailureKind.TIMEOUT, 500, _stable_upstream(500), True)
     if isinstance(exc, openai.APIConnectionError):
@@ -601,8 +629,15 @@ def _classify_provider_failure(
         if status == 400:
             if is_context_length_error(exc):
                 return context_length_failure(exc)
+            if is_malformed_request_error(exc):
+                return _failure(
+                    FailureKind.INVALID_REQUEST,
+                    400,
+                    _INVALID_REQUEST_MESSAGE,
+                    False,
+                )
             return _failure(
-                FailureKind.INVALID_REQUEST, 400, _INVALID_REQUEST_MESSAGE, False
+                FailureKind.MODEL_REJECTED, 400, _MODEL_REJECTED_MESSAGE, False
             )
         if status in (502, 503, 504):
             return overloaded_provider_failure()

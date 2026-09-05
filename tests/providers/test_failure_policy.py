@@ -101,7 +101,9 @@ _CASES = (
             status_code=400,
             message="bad tool shape",
         ),
-        FailureKind.INVALID_REQUEST,
+        # 6.46.0: a 400 whose words do not say the request is malformed
+        # is this model's refusal, and the chain gets its turn.
+        FailureKind.MODEL_REJECTED,
         400,
         False,
     ),
@@ -256,7 +258,10 @@ def test_classification_preserves_useful_body_while_redacting_credentials() -> N
         mark_rate_limited=Mock(),
     )
 
-    assert failure.kind is FailureKind.INVALID_REQUEST
+    # 6.46.0: an unexplained 400 is the model's refusal, not a body fault.
+    # What this test is about is the line below it -- the words survive and
+    # the credential does not.
+    assert failure.kind is FailureKind.MODEL_REJECTED
     assert failure.status_code == 400
     assert "Upstream provider LOCAL returned HTTP 400." in failure.message
     assert "unsupported model format" in failure.message
@@ -458,8 +463,17 @@ def test_a_context_overflow_names_both_numbers(
     assert f"this model holds {limit}" in failure.message, vendor
 
 
-def test_an_ordinary_malformed_request_still_ends_the_route() -> None:
-    """The narrow match is the point: a real 400 must keep aborting the chain."""
+def test_an_ordinary_400_is_the_models_refusal_and_falls_through() -> None:
+    """Changed in 6.46.0, deliberately: these two wordings now fall back.
+
+    Until 6.46.0 both were ``INVALID_REQUEST`` and ended the route, on the
+    premise that a 400 is a fault in the body and fails everywhere. Neither
+    of these is: ``messages: field required`` and a refused ``temperature``
+    are one dialect's complaints, and the next model on the chain may take
+    the same body unchanged. The narrow kind is now reserved for a host
+    that says ``malformed`` in words -- pinned in
+    ``test_malformed_request_classification.py``.
+    """
     for error in (
         _openai_status_error(
             openai.BadRequestError,
@@ -469,9 +483,12 @@ def test_an_ordinary_malformed_request_still_ends_the_route() -> None:
         _http_status_error(400, "Unsupported value for parameter 'temperature'."),
     ):
         failure = _classify(error)
-        assert failure.kind is FailureKind.INVALID_REQUEST
+        assert failure.kind is FailureKind.MODEL_REJECTED
         assert failure.status_code == 400
         assert failure.retryable is False
+        # Both kinds keep the same wire type, so no client sees the split.
+        assert anthropic_error_type_for_failure(failure) == ("invalid_request_error")
+        assert openai_error_type_for_failure(failure) == ("invalid_request_error")
 
 
 def test_a_context_overflow_still_serializes_on_both_wire_protocols() -> None:
@@ -662,7 +679,12 @@ def test_an_echoed_request_containing_the_word_credits_is_not_quota() -> None:
     }
     failure = _classify(_quota_body_error(400, echoed))
 
-    assert failure.kind is FailureKind.INVALID_REQUEST
+    # 6.46.0 renamed the not-quota outcome for this body: the objection is
+    # "string too long", which is one dialect's cap and not a body fault,
+    # so it now falls through to the next model instead of ending the route.
+    # The point of this test is unchanged -- the echoed prompt is not
+    # evidence of anything.
+    assert failure.kind is FailureKind.MODEL_REJECTED
     assert failure.status_code == 400
 
 
@@ -708,7 +730,7 @@ def test_the_bare_word_billing_is_not_a_quota_phrase() -> None:
     cannot meet it: a provider that points at its own documentation in an
     ordinary rejection uses the word without saying anything at all about the
     account's balance. Classifying that as ``quota`` would bench the whole key
-    pool for a request that was merely malformed.
+    pool for a request the model simply refused.
     """
     body = {
         "error": {
@@ -719,5 +741,8 @@ def test_the_bare_word_billing_is_not_a_quota_phrase() -> None:
 
     assert quota_phrase(_quota_body_error(400, body)) is None
     assert is_quota_error(_quota_body_error(400, body)) is False
-    assert _classify(_quota_body_error(400, body)).kind is FailureKind.INVALID_REQUEST
+    # Not quota -- which is what this test proves. Since 6.46.0 the
+    # not-quota outcome for an "Unsupported parameter" 400 is the model's
+    # refusal rather than the old catch-all.
+    assert _classify(_quota_body_error(400, body)).kind is FailureKind.MODEL_REJECTED
     assert "billing" not in QUOTA_PHRASES
