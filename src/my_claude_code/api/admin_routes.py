@@ -184,9 +184,14 @@ from my_claude_code.providers.chatgpt_oauth.browser_login import (
     browser_login_status,
     start_browser_login,
 )
+from my_claude_code.providers.chatgpt_oauth.codex_catalogue import (
+    load_codex_catalogue,
+    retired_entries,
+)
 from my_claude_code.providers.chatgpt_oauth.credentials import (
     ChatGPTOAuthError,
     import_codex_cli_tokens,
+    stored_chatgpt_plan_type,
 )
 from my_claude_code.providers.chatgpt_oauth.oauth_login import (
     CHATGPT_OAUTH_DEVICE_VERIFICATION_URL,
@@ -195,6 +200,9 @@ from my_claude_code.providers.chatgpt_oauth.oauth_login import (
 )
 from my_claude_code.providers.chatgpt_oauth.oauth_login import (
     ChatGPTOAuthLoginError as ChatGPTOAuthLoginFlowError,
+)
+from my_claude_code.providers.chatgpt_oauth.response_headers import (
+    OBSERVER as CHATGPT_RESPONSE_OBSERVER,
 )
 from my_claude_code.providers.runtime.rotating import RotatingProvider
 from my_claude_code.websearch.errors import WebSearchError
@@ -2109,6 +2117,111 @@ async def anthropic_oauth_sources(request: Request):
         claude_code=_anthropic_oauth_source_info(claude_code_tokens),
         mcc=_anthropic_oauth_source_info(mcc_tokens),
         windows=_anthropic_oauth_windows(),
+    )
+
+
+class _ChatGPTOAuthWindows(BaseModel):
+    """Codex's own response headers, as last received.
+
+    Every field is either a string OpenAI sent on a real response or
+    :data:`NOT_YET_OBSERVED`. Nothing here is computed, inferred from a 429, or
+    carried forward past the next response.
+    """
+
+    observed: bool = False
+    observed_at: float | None = None
+    primary_used_percent: str = NOT_YET_OBSERVED
+    primary_window_minutes: str = NOT_YET_OBSERVED
+    primary_reset_at: str = NOT_YET_OBSERVED
+    secondary_used_percent: str = NOT_YET_OBSERVED
+    secondary_window_minutes: str = NOT_YET_OBSERVED
+    secondary_reset_at: str = NOT_YET_OBSERVED
+    credits_balance: str = NOT_YET_OBSERVED
+    credits_unlimited: str = NOT_YET_OBSERVED
+    limit_name: str = NOT_YET_OBSERVED
+    rate_limit_reached_type: str = NOT_YET_OBSERVED
+    upstream_model: str = NOT_YET_OBSERVED
+    models_etag: str = NOT_YET_OBSERVED
+
+
+class _ChatGPTOAuthCatalogue(BaseModel):
+    """Which vendor catalogue rung S2 found, if any."""
+
+    available: bool = False
+    version: str = ""
+    model_count: int = 0
+    #: File name only. The full path is a local detail the card does not need
+    #: and would only make the readout longer.
+    source_name: str = ""
+    retired_model_ids: list[str] = []
+
+
+class _ChatGPTOAuthStatusResponse(BaseModel):
+    #: Decoded locally out of the stored ID token's claims -- no network call
+    #: and no token refresh. Empty means unknown, which applies no plan filter
+    #: at all. The token itself, ``sub`` and ``email`` are never read out here.
+    plan_type: str = ""
+    catalogue: _ChatGPTOAuthCatalogue = _ChatGPTOAuthCatalogue()
+    windows: _ChatGPTOAuthWindows = _ChatGPTOAuthWindows()
+
+
+def _chatgpt_oauth_windows() -> _ChatGPTOAuthWindows:
+    """Report the last observed Codex response headers, or that there are none."""
+    snapshot = CHATGPT_RESPONSE_OBSERVER.latest
+    if snapshot is None:
+        return _ChatGPTOAuthWindows()
+    values = snapshot.values
+
+    def read(name: str) -> str:
+        return values.get(name, NOT_YET_OBSERVED)
+
+    return _ChatGPTOAuthWindows(
+        observed=True,
+        observed_at=snapshot.observed_at,
+        primary_used_percent=read("x-codex-primary-used-percent"),
+        primary_window_minutes=read("x-codex-primary-window-minutes"),
+        primary_reset_at=read("x-codex-primary-reset-at"),
+        secondary_used_percent=read("x-codex-secondary-used-percent"),
+        secondary_window_minutes=read("x-codex-secondary-window-minutes"),
+        secondary_reset_at=read("x-codex-secondary-reset-at"),
+        credits_balance=read("x-codex-credits-balance"),
+        credits_unlimited=read("x-codex-credits-unlimited"),
+        limit_name=read("x-codex-limit-name"),
+        rate_limit_reached_type=read("x-codex-rate-limit-reached-type"),
+        upstream_model=read("openai-model"),
+        models_etag=read("x-models-etag"),
+    )
+
+
+def _chatgpt_oauth_catalogue() -> _ChatGPTOAuthCatalogue:
+    catalogue = load_codex_catalogue()
+    if catalogue is None:
+        return _ChatGPTOAuthCatalogue()
+    return _ChatGPTOAuthCatalogue(
+        available=True,
+        version=catalogue.version,
+        model_count=len(catalogue.entries),
+        source_name=Path(catalogue.source_path).name,
+        retired_model_ids=[entry.slug for entry in retired_entries(catalogue)],
+    )
+
+
+@router.get("/admin/api/chatgpt-oauth/status")
+async def chatgpt_oauth_status(request: Request):
+    """Report what MCC knows about this ChatGPT subscription, offline.
+
+    Nothing here contacts OpenAI. The plan comes from the stored ID token's
+    claims, decoded locally; the catalogue comes from the installed Codex
+    CLI's own bundled document; the windows are headers a real response
+    already carried. No token, no ``sub`` and no ``email`` is read out.
+    """
+    require_loopback_admin(request)
+    plan_type = await asyncio.to_thread(stored_chatgpt_plan_type)
+    catalogue = await asyncio.to_thread(_chatgpt_oauth_catalogue)
+    return _ChatGPTOAuthStatusResponse(
+        plan_type=plan_type,
+        catalogue=catalogue,
+        windows=_chatgpt_oauth_windows(),
     )
 
 

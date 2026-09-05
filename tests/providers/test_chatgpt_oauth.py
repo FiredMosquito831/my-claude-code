@@ -1,6 +1,7 @@
 """Tests for the direct ChatGPT OAuth Responses API provider."""
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import httpx
@@ -8,6 +9,10 @@ import pytest
 
 from my_claude_code.application.errors import (
     InvalidRequestError,
+)
+from my_claude_code.application.model_metadata import (
+    ModelListingEvidence,
+    ModelListingProvenance,
 )
 from my_claude_code.config.provider_catalog import CHATGPT_OAUTH_DEFAULT_BASE
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
@@ -344,20 +349,93 @@ def test_stream_converter_emits_tool_call():
 
 
 @pytest.mark.asyncio
-async def test_list_model_ids_returns_known_models(chatgpt_oauth_provider):
+async def test_list_model_ids_unions_the_vendor_catalogue_and_the_log(
+    chatgpt_oauth_provider, monkeypatch
+):
+    """Existence comes from evidence now, not from a hand-written allowlist.
+
+    Replaces ``test_list_model_ids_returns_known_models``, which asserted the
+    OpenCode-derived allowlist verbatim -- including ``gpt-5.3-codex-spark``,
+    which appears in no OpenAI artefact, and ``gpt-5.4``/``gpt-5.4-mini``,
+    which OpenAI retired on 2026-08-31. Both rungs are stubbed here because
+    the real ones read this machine's Codex install and request log, and a
+    test that changes answer depending on what the developer has installed is
+    not a test.
+    """
+    from my_claude_code.providers.chatgpt_oauth import provider as provider_module
+
+    monkeypatch.setattr(
+        provider_module,
+        "vendor_client_evidence",
+        lambda: {
+            "gpt-5.6-luna": ModelListingEvidence(
+                provenance=ModelListingProvenance.VENDOR_CLIENT
+            ),
+            "gpt-5.2": ModelListingEvidence(
+                provenance=ModelListingProvenance.VENDOR_CLIENT
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        provider_module,
+        "observed_evidence",
+        lambda: {
+            # Already retired upstream and therefore absent from the vendor
+            # rung, but this credential has been served it: proof outranks a
+            # catalogue, so it stays listed.
+            "gpt-5.4": ModelListingEvidence(
+                provenance=ModelListingProvenance.OBSERVED, detail="served 145x"
+            )
+        },
+    )
+
     models = await chatgpt_oauth_provider.list_model_ids()
-    # OpenCode-aligned allowlist: explicit allows, disallowed pro, and a
-    # version heuristic that keeps GPT-5.x models newer than 5.4.
-    assert "gpt-5.5" in models
-    assert "gpt-5.4" in models
-    assert "gpt-5.4-mini" in models
-    assert "gpt-5.3-codex-spark" in models
-    assert "gpt-5.5-pro" not in models
-    assert "gpt-5.2-codex" not in models
-    # "gpt-5.6" is a family name on this plan, not a servable id: only the
-    # -luna, -sol and -terra variants exist, and the bare id 404s.
-    assert "gpt-5.6" not in models
-    assert {"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"} <= models
+
+    assert models == frozenset({"gpt-5.6-luna", "gpt-5.2", "gpt-5.4"})
+    evidence = await chatgpt_oauth_provider.list_model_evidence()
+    assert evidence["gpt-5.4"].provenance is ModelListingProvenance.OBSERVED
+    assert evidence["gpt-5.2"].provenance is ModelListingProvenance.VENDOR_CLIENT
+
+
+@pytest.mark.asyncio
+async def test_list_model_infos_carries_provenance_and_no_numbers(
+    chatgpt_oauth_provider, monkeypatch
+):
+    """Rung S2 supplies existence facts only; every limit stays unresolved here.
+
+    Codex's own catalogue publishes ``context_window: 272000`` for the models
+    below, and models.dev publishes 1,050,000 for the same ids. Reading the
+    vendor number here would move it from tier 3 to tier 1 -- a change to the
+    resolution ladder, which this change deliberately does not make. The guard
+    is this assertion: nothing but the id and the provenance may be set.
+    """
+    from my_claude_code.providers.chatgpt_oauth import provider as provider_module
+
+    monkeypatch.setattr(
+        provider_module,
+        "vendor_client_evidence",
+        lambda: {
+            "gpt-5.6-luna": ModelListingEvidence(
+                provenance=ModelListingProvenance.VENDOR_CLIENT,
+                detail="Codex CLI 0.151.0",
+            )
+        },
+    )
+    monkeypatch.setattr(provider_module, "observed_evidence", dict)
+
+    infos = await chatgpt_oauth_provider.list_model_infos()
+
+    (info,) = infos
+    assert info.model_id == "gpt-5.6-luna"
+    assert info.listing is not None
+    assert info.listing.detail == "Codex CLI 0.151.0"
+    assert info.context_length is None
+    assert info.max_output_tokens is None
+    assert info.input_price is None
+    assert info.output_price is None
+    assert info.supports_vision is None
+    assert info.reasoning_capability is None
+    assert info.supported_parameters is None
 
 
 @pytest.mark.asyncio
@@ -716,22 +794,28 @@ def test_session_id_is_stable_per_provider():
     assert provider1._session_id != provider2._session_id
 
 
-def test_model_filter_logic():
-    from my_claude_code.providers.chatgpt_oauth.provider import (
-        _is_chatgpt_oauth_model,
-    )
+def test_the_hand_written_filter_is_gone():
+    """``_is_chatgpt_oauth_model`` and its three literals no longer exist.
 
-    assert _is_chatgpt_oauth_model("gpt-5.5") is True
-    assert _is_chatgpt_oauth_model("gpt-5.4") is True
-    assert _is_chatgpt_oauth_model("gpt-5.4-mini") is True
-    assert _is_chatgpt_oauth_model("gpt-5.7") is True
-    assert _is_chatgpt_oauth_model("gpt-5.5-pro") is False
-    assert _is_chatgpt_oauth_model("gpt-5.6") is False
-    assert _is_chatgpt_oauth_model("gpt-5.6-luna") is True
-    assert _is_chatgpt_oauth_model("gpt-5.6-sol") is True
-    assert _is_chatgpt_oauth_model("gpt-5.6-terra") is True
-    assert _is_chatgpt_oauth_model("gpt-5.2-codex") is False
-    assert _is_chatgpt_oauth_model("codex-mini-latest") is False
+    Replaces ``test_model_filter_logic``, which asserted the filter's answers
+    one id at a time -- and passed, including for ``gpt-5.4-mini``, five days
+    after OpenAI retired it. A test can only pin what the code claims, and
+    what the code claimed was wrong; the replacement pins that the claim is no
+    longer being made anywhere.
+    """
+    from my_claude_code.providers.chatgpt_oauth import provider as provider_module
+
+    source = Path(provider_module.__file__).read_text(encoding="utf-8")
+    assert not hasattr(provider_module, "_is_chatgpt_oauth_model")
+    for banned in (
+        "_CHATGPT_OAUTH_ALLOWED_MODELS",
+        "_CHATGPT_OAUTH_DISALLOWED_MODELS",
+        "_CHATGPT_OAUTH_MIN_GPT_VERSION",
+        "_CHATGPT_OAUTH_STATIC_MODELS",
+    ):
+        assert banned not in source
+    # The version heuristic that could not read "gpt-5.10" is gone with it.
+    assert "gpt-(" not in source
 
 
 def test_perform_chatgpt_oauth_login_writes_managed_auth_file(tmp_path, monkeypatch):
@@ -914,46 +998,31 @@ async def test_stream_response_refreshes_managed_credentials_once_after_401(
 
 
 @pytest.mark.asyncio
-async def test_list_model_ids_discovers_new_models_from_models_dev(
+async def test_list_model_ids_falls_back_to_the_seed_when_nothing_answers(
     chatgpt_oauth_provider, monkeypatch
 ):
-    """The catalog comes from models.dev, so a new GPT-5.x needs no code change.
+    """No Codex, no log, no network: the picker is still drawn, and says so.
 
-    The backend's own models endpoint answers 401 for an OAuth session, which
-    is why discovery reads the models.dev index FCC already caches.
+    Replaces the pair of models.dev tests that used to live here. models.dev
+    is no longer an *existence* rung for this provider -- its ``openai``
+    bucket describes the paid API deployment and carries 44 ids this surface
+    has never served -- but it is still the source of every number, through
+    the alias that was already there and is untouched.
     """
     from my_claude_code.providers.chatgpt_oauth import provider as provider_module
 
-    monkeypatch.setattr(
-        provider_module,
-        "models_dev_provider_model_ids",
-        lambda _provider: frozenset({"gpt-5.9-nova", "gpt-4o", "gpt-5.5-pro"}),
+    monkeypatch.setattr(provider_module, "vendor_client_evidence", dict)
+    monkeypatch.setattr(provider_module, "observed_evidence", dict)
+
+    evidence = await chatgpt_oauth_provider.list_model_evidence()
+
+    assert set(evidence) == set(provider_module.CHATGPT_OAUTH_SEED_MODELS)
+    assert all(
+        item.provenance is ModelListingProvenance.SEED for item in evidence.values()
     )
-
-    models = await chatgpt_oauth_provider.list_model_ids()
-
-    assert "gpt-5.9-nova" in models
-    assert "gpt-4o" not in models
-    assert "gpt-5.5-pro" not in models
-    # The static ids remain, so an empty or stale cache never empties the picker.
-    assert "gpt-5.5" in models
-
-
-@pytest.mark.asyncio
-async def test_list_model_ids_falls_back_when_models_dev_is_unavailable(
-    chatgpt_oauth_provider, monkeypatch
-):
-    from my_claude_code.providers.chatgpt_oauth import provider as provider_module
-
-    monkeypatch.setattr(
-        provider_module,
-        "models_dev_provider_model_ids",
-        lambda _provider: frozenset(),
-    )
-
-    models = await chatgpt_oauth_provider.list_model_ids()
-
-    assert {"gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna"} <= models
+    # The seed is not filtered by anything: the list it replaced held fifteen
+    # ids of which the filter reading it deleted eight.
+    assert len(provider_module.CHATGPT_OAUTH_SEED_MODELS) == len(evidence)
 
 
 def _record_body_builder(monkeypatch, calls: list):

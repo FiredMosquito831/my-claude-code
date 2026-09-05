@@ -27,6 +27,8 @@ from fnmatch import fnmatchcase
 from typing import Any
 
 from my_claude_code.application.model_metadata import (
+    ModelListingEvidence,
+    ModelListingProvenance,
     ModelReasoningCapability,
     ProviderModelInfo,
 )
@@ -79,6 +81,19 @@ SOURCE_LABELS: dict[str, str] = {
     SOURCE_APPROXIMATE: "approximate cross-provider",
     SOURCE_HOST_DIALECT: "host dialect",
     SOURCE_UNKNOWN: "unknown",
+}
+
+# Why a model is in the picker at all -- a different question from where any
+# one of its numbers came from, and one the page could not answer before. A
+# provider whose gateway has no ``/models`` has to source existence from
+# somewhere, and "somewhere" ranges from the vendor's own shipped catalogue to
+# a list somebody typed.
+PROVENANCE_LABELS: dict[str, str] = {
+    ModelListingProvenance.GATEWAY: "the provider's own /models",
+    ModelListingProvenance.VENDOR_CLIENT: "the vendor's own client catalogue",
+    ModelListingProvenance.OBSERVED: "served successfully for this credential",
+    ModelListingProvenance.MODELS_DEV: "models.dev reference catalogue",
+    ModelListingProvenance.SEED: "offline seed list -- unconfirmed",
 }
 
 # Where a host dialect came from, in the operator's words. Provenance, not
@@ -851,6 +866,32 @@ def effective_parameters(
     return rows
 
 
+def listing_payload(evidence: ModelListingEvidence | None) -> dict[str, Any] | None:
+    """Why one model id is listed, for the row's provenance badge.
+
+    ``None`` when nothing recorded a provenance, which is every provider whose
+    gateway answers ``/models`` and every model the page reached through a
+    configured route rather than through discovery. Absent rather than
+    ``"unknown"``: a badge that says nothing is worse than no badge.
+    """
+    if evidence is None:
+        return None
+    return {
+        "provenance": str(evidence.provenance),
+        "provenance_label": PROVENANCE_LABELS.get(
+            evidence.provenance, str(evidence.provenance)
+        ),
+        "detail": evidence.detail,
+        # The vendor's own words, verbatim. A model with a retirement date is
+        # still listed and still servable until that date passes; the page
+        # says when, and what replaces it, rather than letting it vanish one
+        # day with no explanation.
+        "retirement_at": evidence.retirement_at,
+        "replacement_model_id": evidence.replacement_model_id,
+        "offered_by_default": evidence.offered_by_default,
+    }
+
+
 def _row_state(row: Mapping[str, Any]) -> dict[str, Any]:
     """Render one override row so absent, null and value stay distinguishable.
 
@@ -899,6 +940,10 @@ def _model_entry(
         "hidden_by": hiding_pattern(visibility, model_ref),
         "configured": model_ref in configured_refs,
         "has_metadata": info is not None,
+        # Existence provenance, distinct from the per-field capability tiers
+        # below it: this answers "why is this model in my picker", they answer
+        # "where did this number come from".
+        "listing": listing_payload(None if info is None else info.listing),
         "override": _row_state(model_row),
         "effective": effective_parameters(overrides, provider_id, model_ref),
         # What the log measured for this model over the window, or None
@@ -975,6 +1020,7 @@ def build_models_page_payload(
         "visibility": visibility_payload(visibility, tuple(by_ref), configured_list),
         "overrides": overrides_payload(overrides),
         "source_labels": dict(SOURCE_LABELS),
+        "provenance_labels": dict(PROVENANCE_LABELS),
         "measured_days": measured_days,
     }
 

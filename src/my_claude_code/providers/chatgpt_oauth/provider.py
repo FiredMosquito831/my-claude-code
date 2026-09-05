@@ -2,16 +2,19 @@
 
 import asyncio
 import platform
-import re
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 import httpx
 from loguru import logger
 
 from my_claude_code.application.errors import ApplicationUnavailableError
-from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.application.model_metadata import (
+    ModelListingEvidence,
+    ModelListingProvenance,
+    ProviderModelInfo,
+)
 from my_claude_code.config.constants import HTTP_CONNECT_TIMEOUT_DEFAULT
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
@@ -28,6 +31,7 @@ from my_claude_code.core.reasoning import (
     ReasoningPolicy,
     narrow_dialect_by_rejections,
 )
+from my_claude_code.core.request_log import observed_served_models
 from my_claude_code.core.trace import trace_event
 from my_claude_code.core.version import package_version
 from my_claude_code.core.wire_capture import (
@@ -38,24 +42,24 @@ from my_claude_code.core.wire_capture import (
 )
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
-from my_claude_code.providers.model_listing import model_infos_from_ids
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
     ReasoningStripRecovery,
     RecoveryLadder,
     RecoveryMemory,
 )
-from my_claude_code.providers.runtime.models_dev import (
-    models_dev_provider_model_ids,
-)
+from my_claude_code.providers.runtime.served_models import resolve_served_models
 
+from .codex_catalogue import catalogue_evidence, load_codex_catalogue
 from .conversion import build_chatgpt_oauth_request_body
 from .credentials import (
     CODEX_OAUTH_ORIGINATOR,
     ChatGPTOAuthError,
     force_refresh_managed_chatgpt_oauth_credentials,
     load_chatgpt_oauth_credentials,
+    stored_chatgpt_plan_type,
 )
+from .response_headers import OBSERVER as RESPONSE_HEADER_OBSERVER
 from .streaming import (
     ChatGPTOAuthStreamConverter,
     iter_chatgpt_oauth_sse_events,
@@ -63,45 +67,97 @@ from .streaming import (
 )
 
 CHATGPT_OAUTH_DEFAULT_BASE = "https://chatgpt.com/backend-api"
+#: Both ids this same provider is registered under. ``provider_catalog.py``
+#: gives ``openai`` the *same* credential env and the same factory entry
+#: (``runtime/factory.py`` maps both to ``_create_chatgpt_oauth``), so one
+#: subscription can be routed as either and the request log records whichever
+#: id the route named. The observed rung has to look under both or it would
+#: lose half its evidence depending on how the operator spelled the route.
+CHATGPT_OAUTH_PROVIDER_IDS: tuple[str, ...] = ("chatgpt_oauth", "openai")
 
-# Model allowlist aligned with OpenCode's ChatGPT/Codex OAuth filter.
-# https://github.com/anomalyco/opencode/blob/main/packages/opencode/src/plugin/openai/codex.ts
-_CHATGPT_OAUTH_ALLOWED_MODELS = frozenset(
-    {
-        "gpt-5.5",
-        "gpt-5.3-codex-spark",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-    }
+#: Last resort, and nothing else: the five ids Codex CLI 0.151.0 publishes with
+#: ``visibility: "list"``. It exists so a brand-new offline install with no
+#: Codex and no request log still draws a picker, and it is labelled ``seed``
+#: on the Models page precisely because nobody stands behind it. No filter is
+#: applied to it -- the list that preceded it held fifteen ids of which the
+#: filter reading it deleted eight, so more than half of it was unreachable.
+CHATGPT_OAUTH_SEED_MODELS: tuple[str, ...] = (
+    "gpt-5.2",
+    "gpt-5.5",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
 )
-# Published by models.dev under ``openai`` but not served by the ChatGPT/Codex
-# OAuth backend. ``gpt-5.6`` is a family name here: only the -luna, -sol and
-# -terra variants exist on this plan, and the bare id 404s.
-_CHATGPT_OAUTH_DISALLOWED_MODELS = frozenset({"gpt-5.5-pro", "gpt-5.6"})
-_CHATGPT_OAUTH_GPT_VERSION_RE = re.compile(r"^gpt-(\d+\.\d+)")
-_CHATGPT_OAUTH_MIN_GPT_VERSION = 5.4
 
-# Known ids to fall back on when the models.dev catalog is unavailable -- a
-# fresh install with no network still gets a usable picker.
-_CHATGPT_OAUTH_STATIC_MODELS = frozenset(
-    {
-        "gpt-5",
-        "gpt-5.2",
-        "gpt-5.4",
-        "gpt-5.5",
-        "gpt-5.6-luna",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5-codex",
-        "gpt-5.1-codex",
-        "gpt-5.2-codex",
-        "gpt-5.3-codex",
-        "gpt-5.3-codex-spark",
-        "gpt-5.4-mini",
-        "gpt-5.5-pro",
-        "codex-mini-latest",
-    }
+#: What the backend says when it does not have a model, in its own words.
+#: Matched case-insensitively against the error body beside a 404.
+MODEL_DENIAL_MARKERS: tuple[str, ...] = (
+    "model_not_found",
+    "unsupported_model",
+    "does not exist",
 )
+
+
+class WithheldModelIds:
+    """Model ids this process has watched the backend refuse, by name.
+
+    Deliberately the weakest possible form of a negative:
+
+    * **per-process and never persisted** -- a restart forgets it, so a model
+      OpenAI adds (or a 404 that was really an outage) costs one wasted
+      request per process rather than a permanent hole in the catalogue;
+    * **withheld from listings only**. It never benches a credential, never
+      marks a model unsupported, and never removes a ref the operator
+      configured: exactly the hide-only contract this project's visibility
+      globs already have. A route that names a withheld id still resolves and
+      still serves.
+
+    It replaces a hand-written blocklist whose two entries happened to be
+    right for a reason the code never recorded.
+    """
+
+    __slots__ = ("_ids",)
+
+    def __init__(self) -> None:
+        self._ids: set[str] = set()
+
+    def remember(self, model_id: str) -> bool:
+        """Record one refusal; ``True`` the first time this id is seen."""
+        if not model_id.strip() or model_id in self._ids:
+            return False
+        self._ids.add(model_id)
+        return True
+
+    def __contains__(self, model_id: object) -> bool:
+        return model_id in self._ids
+
+    def snapshot(self) -> frozenset[str]:
+        return frozenset(self._ids)
+
+    def clear(self) -> None:
+        self._ids.clear()
+
+
+#: Process-wide, because a provider instance is rebuilt on every config apply
+#: while the backend's opinion of a model id is not.
+WITHHELD_MODEL_IDS = WithheldModelIds()
+
+
+def is_model_denial(status_code: int, error_text: str) -> bool:
+    """Whether one upstream refusal was about the *model*, not the request.
+
+    A 404 on this endpoint can only be about the model: the path is fixed and
+    every other 4xx names a field. The three markers cover the wording seen in
+    OpenAI's Responses errors elsewhere; a 400 that merely mentions one is
+    accepted too, because the status a gateway chooses for an unknown model is
+    not consistent and the body is the part that actually says so.
+    """
+    haystack = error_text.lower()
+    if status_code == 404:
+        return True
+    return status_code == 400 and any(
+        marker in haystack for marker in MODEL_DENIAL_MARKERS
+    )
 
 
 def _user_agent() -> str:
@@ -112,20 +168,86 @@ def _user_agent() -> str:
     )
 
 
-def _is_chatgpt_oauth_model(model_id: str) -> bool:
-    """Return True when ``model_id`` is exposed by the ChatGPT/Codex backend.
+def vendor_client_evidence() -> dict[str, ModelListingEvidence]:
+    """Rung S2 -- Codex CLI's own bundled catalogue, read off disk.
 
-    Mirrors OpenCode's model filter: a small allowlist, an explicit blocklist,
-    and a version heuristic for future GPT-5.x models.
+    The plan is decoded from the stored ID token locally; no network call and
+    no token refresh happen here or anywhere below. An unknown plan applies no
+    plan filter at all, because unknown is not excluded.
     """
-    if model_id in _CHATGPT_OAUTH_DISALLOWED_MODELS:
-        return False
-    if model_id in _CHATGPT_OAUTH_ALLOWED_MODELS:
-        return True
-    match = _CHATGPT_OAUTH_GPT_VERSION_RE.match(model_id)
-    if match:
-        return float(match.group(1)) > _CHATGPT_OAUTH_MIN_GPT_VERSION
-    return False
+    catalogue = load_codex_catalogue()
+    if catalogue is None:
+        return {}
+    return catalogue_evidence(catalogue, plan_type=stored_chatgpt_plan_type())
+
+
+def observed_evidence() -> dict[str, ModelListingEvidence]:
+    """Rung S3 -- ids this credential has already been served successfully.
+
+    The one rung that is proof rather than a document, and the reason S2 and
+    S3 union instead of one shadowing the other: a catalogue can be stale
+    about a model the user is using right now.
+    """
+    successes: dict[str, int] = {}
+    last_seen: dict[str, str] = {}
+    for provider_id in CHATGPT_OAUTH_PROVIDER_IDS:
+        for observation in observed_served_models(provider_id):
+            successes[observation.model_id] = (
+                successes.get(observation.model_id, 0) + observation.successes
+            )
+            if observation.last_ts_iso > last_seen.get(observation.model_id, ""):
+                last_seen[observation.model_id] = observation.last_ts_iso
+    return {
+        model_id: ModelListingEvidence(
+            provenance=ModelListingProvenance.OBSERVED,
+            detail=(
+                f"served {count}x, last {last_seen[model_id]}"
+                if last_seen.get(model_id)
+                else f"served {count}x"
+            ),
+        )
+        for model_id, count in successes.items()
+    }
+
+
+def seed_evidence() -> dict[str, ModelListingEvidence]:
+    """Rung S5 -- the literal list, reached only when nothing else answered."""
+    return {
+        model_id: ModelListingEvidence(
+            provenance=ModelListingProvenance.SEED,
+            detail="offline seed list; no source on this machine confirmed it",
+        )
+        for model_id in CHATGPT_OAUTH_SEED_MODELS
+    }
+
+
+def chatgpt_oauth_served_models() -> dict[str, ModelListingEvidence]:
+    """Resolve this provider's model ids from every offline source it has.
+
+    No gateway rung: the backend publishes no model-list endpoint, and its own
+    client does not call one either -- Codex 0.151.0 contains zero occurrences
+    of ``backend-api/models``. Nothing here is added speculatively.
+
+    **No models.dev rung either, and that is a deliberate departure.** The
+    ``chatgpt_oauth -> openai`` alias stays exactly where it is and keeps
+    supplying every capability and every limit, but it is the wrong source for
+    *existence*: its bucket describes OpenAI's paid API deployment, so it
+    carries 44 ids this surface has never served -- embeddings, image models,
+    the whole ``*-codex`` family -- and the hand filter that used to trim them
+    is what this change removes. Using it as a fallback id set would put those
+    44 ids in the picker the moment Codex was uninstalled.
+    """
+    resolved = resolve_served_models(
+        vendor_client=vendor_client_evidence,
+        observed=observed_evidence,
+        seed=seed_evidence,
+        log_tag="CHATGPT_OAUTH",
+    )
+    return {
+        model_id: evidence
+        for model_id, evidence in resolved.items()
+        if model_id not in WITHHELD_MODEL_IDS
+    }
 
 
 def _build_headers(credentials: Any, session_id: str) -> dict[str, str]:
@@ -238,22 +360,47 @@ class ChatGPTOAuthProvider(BaseProvider):
         await self._client.aclose()
 
     async def list_model_ids(self) -> frozenset[str]:
-        """Return the ChatGPT/Codex OAuth model ids, discovered where possible.
+        """Return the ChatGPT/Codex OAuth model ids this credential may use.
 
-        The backend's own models endpoint answers 401 for an OAuth session, so
-        the catalog cannot come from the gateway. It comes from models.dev's
-        ``openai`` catalog instead -- which FCC already fetches and caches for
-        other providers -- filtered by the same allowlist rule. That keeps new
-        GPT-5.x releases appearing without a code change, and falls back to the
-        known static ids when the cache is absent.
+        What this replaced: a four-id allowlist copied from OpenCode plus a
+        ``float(version) > 5.4`` heuristic. Of the seven ids it admitted,
+        ``gpt-5.3-codex-spark`` appears in no vendor artefact on this machine,
+        and ``gpt-5.4`` / ``gpt-5.4-mini`` were retired by OpenAI on
+        2026-08-31; meanwhile ``gpt-5.2`` -- currently listed by OpenAI's own
+        client -- was excluded because ``5.2`` is not greater than ``5.4``.
+        The heuristic also could not survive ``gpt-5.10``, which parses as
+        ``5.1``.
+
+        See :func:`chatgpt_oauth_served_models` for what answers instead.
         """
-        candidates = models_dev_provider_model_ids("openai") | (
-            _CHATGPT_OAUTH_STATIC_MODELS
-        )
-        return frozenset(m for m in candidates if _is_chatgpt_oauth_model(m))
+        return frozenset(await self.list_model_evidence())
+
+    async def list_model_evidence(self) -> dict[str, ModelListingEvidence]:
+        """The served ids plus why each one is listed.
+
+        Off the event loop: rung S2 memory-maps a 300 MB executable on its
+        first call per Codex version and rung S3 runs a read-only SQL query,
+        and neither belongs on a thread that is also serving ``/v1/messages``.
+        Both run inside discovery, never on the request path.
+        """
+        return await asyncio.to_thread(chatgpt_oauth_served_models)
 
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
-        return model_infos_from_ids(await self.list_model_ids())
+        """Model infos carrying provenance and lifecycle facts -- no numbers.
+
+        Every capability field is left ``None`` on purpose. The evidence chain
+        answers "which ids exist"; the resolution ladder answers "what are they
+        like", and it keeps answering it through the existing
+        ``chatgpt_oauth -> openai`` models.dev alias exactly as before. Codex's
+        catalogue does publish a ``context_window`` that disagrees with
+        models.dev, and reading it here would move a number from tier 3 to
+        tier 1 -- a change to the ladder, which is out of scope for this
+        change and was decided against explicitly.
+        """
+        return frozenset(
+            ProviderModelInfo(model_id=model_id, listing=evidence)
+            for model_id, evidence in (await self.list_model_evidence()).items()
+        )
 
     def preflight_stream(
         self,
@@ -280,16 +427,46 @@ class ChatGPTOAuthProvider(BaseProvider):
         """
         request = self._client.build_request("POST", url, headers=headers, json=body)
         response = await self._client.send(request, stream=True)
+        # Every response, success or refusal: the quota windows and the credits
+        # balance ride on both, and until now this provider threw all of them
+        # away. Allow-listed, stored verbatim, never computed.
+        RESPONSE_HEADER_OBSERVER.observe(
+            response.headers, status_code=response.status_code
+        )
         if response.status_code >= 400 and response.status_code != 401:
             error_body = await response.aread()
             await response.aclose()
             error_text = error_body.decode("utf-8", errors="replace")
+            self._remember_model_denial(body, response.status_code, error_text)
             raise httpx.HTTPStatusError(
                 f"ChatGPT OAuth API error {response.status_code}: {error_text[:1000]}",
                 request=request,
                 response=response,
             )
         return response
+
+    def _remember_model_denial(
+        self, body: Mapping[str, Any], status_code: int, error_text: str
+    ) -> None:
+        """Withhold a model the backend has just said it does not have.
+
+        A read signal, not an invented threshold: the id leaves future
+        listings because the backend refused it by name, and it comes back on
+        the next restart. Nothing else changes -- the credential is untouched
+        and a route that names this id still resolves and still serves.
+        """
+        model = body.get("model")
+        if not isinstance(model, str) or not is_model_denial(status_code, error_text):
+            return
+        if not WITHHELD_MODEL_IDS.remember(model):
+            return
+        logger.warning(
+            "CHATGPT_OAUTH: {} was refused by the backend (HTTP {}) and will be "
+            "withheld from model listings for the rest of this process. "
+            "Routes naming it still resolve.",
+            model,
+            status_code,
+        )
 
     def stream_response(
         self,

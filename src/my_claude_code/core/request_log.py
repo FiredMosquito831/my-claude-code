@@ -5097,6 +5097,88 @@ def _vacuum(path: Path) -> bool:
         conn.close()
 
 
+@dataclass(frozen=True, slots=True)
+class ServedModelObservation:
+    """One model id this log has seen a provider answer with, and how often.
+
+    Proof of entitlement, obtainable with no network and no credential: a
+    model that has already answered successfully for this credential exists on
+    this plan, whatever a catalogue says. ``successes`` and ``last_ts_iso``
+    are what the log recorded, never a derived or rounded figure.
+    """
+
+    model_id: str
+    successes: int
+    last_ts_iso: str
+
+
+def observed_served_models(
+    provider_id: str,
+    *,
+    db_path: Path | str | None = None,
+    limit: int = 500,
+) -> tuple[ServedModelObservation, ...]:
+    """Model ids one provider has successfully served, newest activity first.
+
+    Opened read-only and never through the shared store: this is a discovery
+    read, it must not create a writer thread, must not migrate a schema and
+    must not keep a handle open. Every failure -- no log registered, no file,
+    a schema older than the columns below, a lock -- returns an empty tuple,
+    because a rung that cannot answer declines rather than emptying a picker.
+    """
+    if not provider_id.strip():
+        return ()
+    try:
+        path = Path(db_path) if db_path is not None else default_request_log_path()
+    except RuntimeError:
+        return ()
+    if not path.is_file():
+        return ()
+    # ``mode=ro`` first, then ``immutable=1``. A WAL database needs a shared
+    # -shm segment even to be read, and a reader that cannot get one would
+    # otherwise decline outright; ``immutable=1`` reads the main file alone,
+    # deliberately ignoring the WAL. The newest rows can be missing under the
+    # fallback, which for "has this model ever answered?" costs nothing --
+    # and is far better than the rung going silent on every live install.
+    conn = None
+    for query in ("mode=ro", "mode=ro&immutable=1"):
+        try:
+            conn = sqlite3.connect(
+                f"file:{path.as_posix()}?{query}", uri=True, timeout=1.0
+            )
+            break
+        except sqlite3.Error:
+            continue
+    if conn is None:
+        return ()
+    try:
+        rows = conn.execute(
+            "SELECT resolved_model, COUNT(*) AS n, MAX(ts_iso) AS last_iso"
+            " FROM requests"
+            " WHERE provider = ? AND status = 'success'"
+            "   AND resolved_model IS NOT NULL AND resolved_model <> ''"
+            " GROUP BY resolved_model"
+            " ORDER BY last_iso DESC"
+            " LIMIT ?",
+            (provider_id, int(limit)),
+        ).fetchall()
+    except sqlite3.Error as error:
+        logger.debug("Served-model observation query failed: {}", error)
+        return ()
+    finally:
+        with contextlib.suppress(sqlite3.Error):
+            conn.close()
+    return tuple(
+        ServedModelObservation(
+            model_id=str(row[0]),
+            successes=int(row[1] or 0),
+            last_ts_iso=str(row[2] or ""),
+        )
+        for row in rows
+        if str(row[0]).strip()
+    )
+
+
 def store_from_settings(settings: Any) -> RequestLogStore | None:
     """Resolve the shared store for the active settings, if logging is enabled."""
     if not getattr(settings, "request_log_enabled", True):

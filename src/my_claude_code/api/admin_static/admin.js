@@ -3632,6 +3632,14 @@ function inputForField(field) {
         importChatGPTOAuthCodexTokens(button);
       });
       wrapper.appendChild(button);
+      const details = document.createElement("dl");
+      // Shares the Anthropic card's definition-list layout on purpose -- the
+      // two subscription cards answer the same shape of question -- and
+      // carries its own class so tests and stylesheets can address it.
+      details.className = "anthropic-oauth-details chatgpt-oauth-details";
+      details.hidden = true;
+      wrapper.appendChild(details);
+      refreshChatGPTOAuthStatus(details);
       return wrapper;
     }
 
@@ -4992,6 +5000,68 @@ function promptForAnthropicOAuthCode(paste) {
       if (event.key === "Enter") finish(paste.input.value.trim() || null);
     };
   });
+}
+
+/* Everything below is offline. The plan is decoded from the credential
+   already on disk, the catalogue is the installed Codex CLI's own document,
+   and the windows are headers a real OpenAI response carried. Nothing here
+   contacts OpenAI, and no token, sub or email is ever fetched or shown. */
+async function refreshChatGPTOAuthStatus(details) {
+  if (!details) return;
+  let status;
+  try {
+    status = await api("/admin/api/chatgpt-oauth/status");
+  } catch (error) {
+    details.hidden = true;
+    return;
+  }
+  details.replaceChildren();
+  details.hidden = false;
+  appendOAuthDetail(details, "Plan", status.plan_type || "unknown");
+  const catalogue = status.catalogue || {};
+  if (catalogue.available) {
+    appendOAuthDetail(
+      details,
+      "Model catalogue",
+      `Codex CLI ${catalogue.version || "?"} (${catalogue.model_count} models, ` +
+        `read from ${catalogue.source_name})`,
+    );
+    if ((catalogue.retired_model_ids || []).length) {
+      appendOAuthDetail(
+        details,
+        "Retired upstream",
+        catalogue.retired_model_ids.join(", "),
+      );
+    }
+  } else {
+    appendOAuthDetail(
+      details,
+      "Model catalogue",
+      "Codex CLI not found — the model list falls back to what this " +
+        "credential has already been served, then to the offline seed list.",
+    );
+  }
+  const windows = status.windows || {};
+  if (!windows.observed) {
+    appendOAuthDetail(
+      details,
+      "Usage windows",
+      "not yet observed — no OpenAI response has carried a usage header yet",
+    );
+    return;
+  }
+  appendOAuthDetail(details, "Primary window used", windows.primary_used_percent);
+  appendOAuthDetail(details, "Primary window resets", windows.primary_reset_at);
+  appendOAuthDetail(
+    details,
+    "Secondary window used",
+    windows.secondary_used_percent,
+  );
+  appendOAuthDetail(details, "Secondary window resets", windows.secondary_reset_at);
+  appendOAuthDetail(details, "Credits balance", windows.credits_balance);
+  if (windows.limit_name && windows.limit_name !== "not yet observed") {
+    appendOAuthDetail(details, "OpenAI says", windows.limit_name, { warn: true });
+  }
 }
 
 async function importChatGPTOAuthCodexTokens(button) {
@@ -14458,6 +14528,11 @@ function buildModelSummary(model) {
   if (!model.has_metadata) {
     summary.appendChild(buildModelsChip("unknown", "no discovered metadata"));
   }
+  // Why this row exists at all. A different question from where any of its
+  // numbers came from, and the one the page could never answer: a picker
+  // entry sourced from the vendor's own catalogue and one sourced from a list
+  // somebody typed used to look identical.
+  appendListingChips(summary, model.listing);
   const forced = (model.effective || []).filter(
     (row) => row.action !== "inherit",
   );
@@ -14513,6 +14588,89 @@ function fillModelReadouts(readouts, model) {
   readouts.appendChild(
     buildCapabilityPanel(model.capabilities, (data && data.source_labels) || {}),
   );
+  const listing = buildListingPanel(model.listing);
+  if (listing) readouts.appendChild(listing);
+}
+
+/* Short chip text per provenance. The long sentence is the server's
+   provenance_label and goes in the tooltip beside the evidence itself, so the
+   row stays readable when a provider lists thirty models. */
+const LISTING_CHIP_TEXT = {
+  gateway: "gateway",
+  vendor_client: "vendor catalogue",
+  observed: "observed",
+  models_dev: "models.dev",
+  seed: "seed",
+};
+
+function appendListingChips(summary, listing) {
+  if (!listing) return;
+  const kind = String(listing.provenance || "").replace(/_/g, "-");
+  const chip = buildModelsChip(
+    "provenance",
+    LISTING_CHIP_TEXT[listing.provenance] || listing.provenance,
+  );
+  if (kind) chip.classList.add(`models-chip-provenance-${kind}`);
+  chip.title = [listing.provenance_label, listing.detail]
+    .filter(Boolean)
+    .join(" — ");
+  summary.appendChild(chip);
+  // The vendor's own retirement date, repeated rather than acted on: the
+  // model is still listed and still servable until it passes.
+  if (listing.retirement_at) {
+    const retiring = buildModelsChip(
+      "retiring",
+      `retires ${listing.retirement_at}`,
+    );
+    retiring.title = listing.replacement_model_id
+      ? `The vendor says ${listing.replacement_model_id} replaces this model.`
+      : "The vendor published a retirement date for this model.";
+    summary.appendChild(retiring);
+  }
+  if (listing.offered_by_default === false) {
+    const hidden = buildModelsChip("vendor-hidden", "not offered by default");
+    hidden.title =
+      "The vendor's own catalogue marks this model hidden. It is still " +
+      "servable, so MCC lists it rather than deleting it — use the " +
+      "visibility controls if you do not want to see it.";
+    summary.appendChild(hidden);
+  }
+}
+
+/* Existence provenance, drawn as prose rather than as a tier-badged row: none
+   of it is a vote between sources, it is a record of which source answered. */
+function buildListingPanel(listing) {
+  if (!listing) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "models-listing";
+  const head = document.createElement("p");
+  head.className = "models-subhead";
+  head.textContent = "Why this model is listed";
+  wrap.appendChild(head);
+  const body = document.createElement("p");
+  body.className = "models-empty-note";
+  const parts = [listing.provenance_label];
+  if (listing.detail) parts.push(listing.detail);
+  if (listing.retirement_at) {
+    parts.push(
+      listing.replacement_model_id
+        ? `the vendor retires it at ${listing.retirement_at} and names ` +
+            `${listing.replacement_model_id} as its replacement`
+        : `the vendor retires it at ${listing.retirement_at}`,
+    );
+  }
+  if (listing.offered_by_default === false) {
+    parts.push("the vendor's catalogue marks it hidden, but it is servable");
+  }
+  if (listing.provenance === "seed") {
+    parts.push(
+      "no source on this machine confirmed it — install the vendor's CLI, " +
+        "or route to it once, and this row will say something stronger",
+    );
+  }
+  body.textContent = `${parts.join("; ")}.`;
+  wrap.appendChild(body);
+  return wrap;
 }
 
 function buildModelsChip(kind, text) {
