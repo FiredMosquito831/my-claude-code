@@ -3261,6 +3261,36 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   ceiling at all, which is a real choice rather than the absence
                   of one.
                 </p>
+                <p class="guide-note">
+                  <strong>New in 6.47.0, and it changes what your install
+                  sends.</strong> <code>MAX_OUTPUT_TOKENS_FLOOR</code> ships at
+                  <strong>8,192</strong> and is the smallest allowance any
+                  request goes out with &mdash; the only bound on this card that
+                  raises a number rather than lowering one. A client that
+                  hardcodes <code>max_tokens: 512</code> was getting a truncated
+                  answer out of a model that could have finished it. It never
+                  raises past the routed model's own published limit, it is
+                  applied before the context bound so it can never re-inflate a
+                  budget the context cannot hold, and it leaves an explicit
+                  <code>max_tokens: 0</code> alone. Set it to <code>0</code> to
+                  raise nothing at all. It is <em>not</em> the same setting as
+                  <strong>Smallest bounded budget</strong>
+                  (<code>MAX_OUTPUT_TOKENS_CONTEXT_FLOOR</code>), which decides
+                  when the prompt reserve gives up.
+                </p>
+                <p>
+                  Two more numbers on this card became settings in 6.47.0.
+                  <code>ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS</code> is the
+                  last-resort <code>max_tokens</code> for a request that reached
+                  a provider with none of its own and no published limit to take
+                  one from; <code>REASONING_EFFORT_BUDGET_RATIOS</code> is the
+                  six-value ladder deciding how much of the allowance each
+                  effort spends on thinking. One ceiling is deliberately not
+                  here: NVIDIA NIM's own <code>max_tokens</code>, in the nested
+                  NIM settings, lowers whatever this card resolved on NIM routes
+                  only. It ships unset, and the nested group has no flat
+                  environment variable of its own to put on this card.
+                </p>
                 <h4>When to stop waiting</h4>
                 <p class="guide-note">
                   <strong>Every deadline on this card ships at 0, meaning no

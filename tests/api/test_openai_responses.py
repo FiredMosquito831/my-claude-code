@@ -110,7 +110,12 @@ def test_create_response_stream_routes_through_provider(
     assert routed.model == "test-model"
     assert routed.messages[0].role == "user"
     assert routed.messages[0].content == "Hello"
-    assert routed.max_tokens == 32
+    # 8,192, not the 32 the client asked for: MAX_OUTPUT_TOKENS_FLOOR ships at
+    # 8,192 since 6.47.0 and raises a small ask to something the model can
+    # finish an answer in. The dialect translation this test is about is
+    # unaffected -- the number simply arrives bounded. Set the floor to 0 to
+    # get 32 back.
+    assert routed.max_tokens == 8192
     assert provider.stream_kwargs[0]["request_id"] == response.headers["request-id"]
 
 

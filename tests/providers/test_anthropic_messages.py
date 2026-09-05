@@ -151,11 +151,23 @@ def test_reasoning_budget_keeps_max_tokens_strictly_larger() -> None:
     assert body["max_tokens"] == 8192
 
 
-def test_a_max_tokens_below_the_thinking_minimum_is_the_one_case_that_grows() -> None:
-    """No legal budget exists under 1,024, so the allowance has to move.
+def test_a_max_tokens_below_the_thinking_minimum_drops_the_thinking() -> None:
+    """The last post-decision raise in the tree, removed in 6.47.0.
 
-    Documented as the single exception: everywhere else the budget is what
-    yields.
+    An allowance at or below Anthropic's 1,024-token minimum admits no legal
+    budget at all: the budget must be at least 1,024 and strictly below
+    ``max_tokens``. Until 6.47.0 the allowance was raised to 1,025 to make one
+    fit -- with no reference to the routed model's published limit, which this
+    function cannot see, so the raise was unbounded by capability by
+    construction and was the same defect 5.64.0 removed from the rest of the
+    encoder. Lowering the budget instead, the obvious alternative, would send a
+    body Anthropic refuses outright.
+
+    So neither: the request goes out at exactly the size the client asked for,
+    without thinking. Reaching this at all means the allowance moved after
+    ``application.reasoning_budget.bound_budget`` reconciled the two, which on
+    a routed request it does not -- ``bound_budget`` already guarantees
+    ``budget <= max_tokens - 1``.
     """
 
     request = MessagesRequest(
@@ -169,8 +181,27 @@ def test_a_max_tokens_below_the_thinking_minimum_is_the_one_case_that_grows() ->
         reasoning=ReasoningPolicy.on(budget_tokens=512),
     )
 
-    assert body["thinking"] == {"type": "enabled", "budget_tokens": 1024}
-    assert body["max_tokens"] == 1025
+    assert "thinking" not in body
+    assert body["max_tokens"] == 512
+
+
+def test_the_encoder_never_raises_a_max_tokens_the_client_set() -> None:
+    """Stated as the rule rather than as one case, so it cannot regress quietly."""
+
+    for allowance in (1, 512, 1_023, 1_024, 1_025, 4_096, 131_072):
+        request = MessagesRequest(
+            model="claude-sonnet-5",
+            max_tokens=allowance,
+            messages=[Message(role="user", content="hello")],
+        )
+        body = build_anthropic_messages_body(
+            request,
+            reasoning=ReasoningPolicy.on(budget_tokens=1_000_000),
+        )
+        assert body["max_tokens"] == allowance
+        thinking = body.get("thinking")
+        if thinking is not None:
+            assert thinking["budget_tokens"] < allowance
 
 
 def test_extra_body_cannot_override_canonical_fields() -> None:

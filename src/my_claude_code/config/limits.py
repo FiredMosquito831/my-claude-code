@@ -44,7 +44,18 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     # catalogue publishes, rounded up to a power of two. It is a sanity bound
     # on a hand-typed number, not an opinion about model capacity: a real
     # per-model limit is read from the model, never from this table.
-    "max_output_tokens_unknown_default": LimitRange(1, 1_048_576),
+    # 0 is the only value that means something other than a budget: it sends
+    # no max_tokens at all when nothing published a limit, which is what an
+    # operator on a provider that sizes its own answers wants. Its four
+    # neighbours already read 0 as "off"; two adjacent boxes meaning different
+    # things by the same number is the trap this removes.
+    "max_output_tokens_unknown_default": LimitRange(
+        0, 1_048_576, "0 sends no max_tokens when nothing published a limit"
+    ),
+    # The smallest allowance a request is sent with, bounded by the routed
+    # model's own published limit. 0 applies no minimum, which is 6.46.0's
+    # behaviour.
+    "max_output_tokens_floor": LimitRange(0, 1_048_576, "0 applies no minimum"),
     # 0 lifts the head entirely. Needed because the field now ships set, and
     # a blank value resolves to the default rather than to "unset".
     "max_output_tokens_ceiling": LimitRange(
@@ -65,6 +76,11 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     # unreconciled behaviour this setting exists to remove.
     "reasoning_answer_floor_max": LimitRange(
         0, 1_048_576, "0 leaves no tokens reserved for the answer"
+    ),
+    # The per-profile last resort, reached only when nothing published a limit
+    # for the routed model *and* the client sent no max_tokens of its own.
+    "anthropic_default_max_output_tokens": LimitRange(
+        0, 1_048_576, "0 sends no max_tokens at all"
     ),
     # --- when to stop waiting ---------------------------------------------
     "fallback_first_token_timeout": LimitRange(

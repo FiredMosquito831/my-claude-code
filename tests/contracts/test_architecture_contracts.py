@@ -104,3 +104,52 @@ def test_the_shipped_template_agrees_with_the_retry_backoff_ceiling() -> None:
     assert shipped["RATE_LIMIT_ROUTES_AROUND_MODEL"].strip().lower() == (
         "true" if RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT else "false"
     )
+
+
+def test_the_shipped_template_agrees_with_the_output_token_defaults() -> None:
+    """The output-token block of ``.env.example`` against the constants.
+
+    Until 6.47.0 the only ``.env.example`` <-> code contract in the repo was
+    the retry/backoff one above, scoped to five keys. An output-token key that
+    drifted from its constant -- and the floor is a key an operator is likely
+    to copy out of the template and then wonder about -- was caught by nothing.
+    """
+    from my_claude_code.config.constants import (
+        ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        MAX_OUTPUT_TOKENS_CEILING,
+        MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
+        MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
+        MAX_OUTPUT_TOKENS_FLOOR,
+        MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
+        REASONING_ANSWER_FLOOR_MAX,
+        REASONING_EFFORT_BUDGET_RATIOS_DEFAULT,
+    )
+
+    repo_root = Path(__file__).resolve().parents[2]
+    template = (repo_root / ".env.example").read_text(encoding="utf-8")
+    shipped = dict(
+        line.split("=", 1)
+        for line in template.splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    )
+
+    numeric = {
+        "MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT": MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
+        "MAX_OUTPUT_TOKENS_FLOOR": MAX_OUTPUT_TOKENS_FLOOR,
+        "MAX_OUTPUT_TOKENS_CEILING": MAX_OUTPUT_TOKENS_CEILING,
+        "MAX_OUTPUT_TOKENS_CONTEXT_MARGIN": MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
+        "MAX_OUTPUT_TOKENS_CONTEXT_FLOOR": MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
+        "REASONING_ANSWER_FLOOR_MAX": REASONING_ANSWER_FLOOR_MAX,
+        "ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS": ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    }
+    for key, default in numeric.items():
+        assert key in shipped, f"{key} is missing from .env.example"
+        # Two of these are ``int | None`` because 0 is their off-sentinel; both
+        # ship set, and a None here would mean the constant itself changed.
+        assert default is not None, f"{key} no longer ships a default"
+        assert float(shipped[key]) == float(default), (
+            f"{key} ships {shipped[key]} in .env.example but the code uses {default}"
+        )
+    assert shipped["REASONING_EFFORT_BUDGET_RATIOS"].strip() == (
+        REASONING_EFFORT_BUDGET_RATIOS_DEFAULT
+    )

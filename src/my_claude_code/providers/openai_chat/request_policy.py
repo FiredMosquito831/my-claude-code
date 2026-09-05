@@ -14,6 +14,7 @@ from my_claude_code.config.model_overrides import (
     current_model_overrides,
     model_ref_for,
 )
+from my_claude_code.config.settings import configured_default_max_output_tokens
 from my_claude_code.core.anthropic import (
     OpenAIToolNameCodec,
     ReasoningReplayMode,
@@ -46,6 +47,22 @@ class OpenAIChatRequestPolicy:
     normalize_n_to_one: bool = False
 
 
+def _last_resort_max_tokens(policy: OpenAIChatRequestPolicy) -> int | None:
+    """Return the operator's last-resort ``max_tokens`` for this profile.
+
+    ``policy.default_max_tokens is None`` is a profile saying it deliberately
+    sends no allowance of its own; that is a property of the dialect and is not
+    the operator's to change. Every other profile carries the shipped constant,
+    and what it really means is "use the configured last resort" -- read here,
+    per request, because the profile table is a module-level dict literal and a
+    value captured at import could not follow a dashboard save.
+    """
+
+    if policy.default_max_tokens is None:
+        return None
+    return configured_default_max_output_tokens()
+
+
 def build_openai_chat_request_body(
     request_data: MessagesRequest,
     *,
@@ -74,7 +91,7 @@ def build_openai_chat_request_body(
     try:
         body = build_base_request_body(
             request_data,
-            default_max_tokens=policy.default_max_tokens,
+            default_max_tokens=_last_resort_max_tokens(policy),
             reasoning_replay=policy.reasoning_replay,
         )
     except OpenAIConversionError as exc:

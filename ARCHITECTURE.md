@@ -1115,13 +1115,18 @@ The boundary has four hard rules:
 
 The output allowance is resolved separately, in
 [application/output_tokens.py](src/my_claude_code/application/output_tokens.py).
-`resolve_max_output_tokens` applies one optional widening and then four clamps,
-in order. When the resolved policy will ask the model to think, the ask is first
-raised to the model's own published output limit -- the *presence* of reasoning
-decides this, not the named effort -- because thinking and answer tokens are
-spent from one allowance the client sized for the answer alone. Then the model
-limit, then `MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT` where nothing published a limit,
-then `MAX_OUTPUT_TOKENS_CEILING`, then context headroom. An unknown limit never
+`resolve_max_output_tokens` applies one optional widening and then five
+bounds, in order. When the resolved policy will ask the model to think, the ask
+is first raised to the model's own published output limit -- the *presence* of
+reasoning decides this, not the named effort -- because thinking and answer
+tokens are spent from one allowance the client sized for the answer alone. Then
+the model limit, then `MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT` where nothing
+published a limit, then `MAX_OUTPUT_TOKENS_FLOOR`, then
+`MAX_OUTPUT_TOKENS_CEILING`, then context headroom. The floor is the only step
+that raises: it sits fourth so that it can never ask for more than the model
+published (step two has already established that number and the floor is
+clamped by it) and never re-inflate a budget the remaining context cannot hold
+(step six runs after it and lowers). An unknown limit never
 widens an ask, by the same rule that stops it lowering one, and `max_tokens: 0`
 is left alone. The ceiling ships set because limiters that reserve `max_tokens`
 against a rate bucket charge for a widened allowance before generating anything;

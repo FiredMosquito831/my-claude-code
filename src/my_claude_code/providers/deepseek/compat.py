@@ -6,7 +6,7 @@ from typing import Any
 from loguru import logger
 
 from my_claude_code.application.errors import InvalidRequestError
-from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+from my_claude_code.config.settings import configured_default_max_output_tokens
 from my_claude_code.core.anthropic import (
     ReasoningReplayMode,
     dump_messages_request,
@@ -107,8 +107,12 @@ def build_deepseek_request_body(
         postprocessors=(_apply_deepseek_chat_extras,),
         provider_id=provider_id,
     )
-    if "max_tokens" not in body or body.get("max_tokens") is None:
-        body["max_tokens"] = ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+    if body.get("max_tokens") is None:
+        configured = configured_default_max_output_tokens()
+        if configured is None:
+            body.pop("max_tokens", None)
+        else:
+            body["max_tokens"] = configured
 
     logger.debug(
         "DEEPSEEK_REQUEST: build done model={} msgs={} tools={}",
