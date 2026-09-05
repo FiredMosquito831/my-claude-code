@@ -45,12 +45,23 @@ import tomllib
 import urllib.request
 from pathlib import Path
 
-#: The multi-file manifest schema these files are written against. Verified
-#: against ``microsoft/winget-pkgs`` ``doc/manifest/schema/`` -- 1.28.0 is the
-#: newest published there, and the client on the release machine (winget
-#: v1.29.290) validates it. Do not guess this: bump it only after reading the
-#: schema's own "Summary of Changes" page.
-MANIFEST_VERSION = "1.28.0"
+#: The multi-file manifest schema these files are written against.
+#:
+#: **This is the version the repository accepts, not the newest one that
+#: exists.** Those are different numbers and confusing them cost a rejected
+#: submission on 2026-09-05: the manifests went out at 1.28.0 -- the newest
+#: schema published under ``doc/manifest/schema/``, which the client on the
+#: release machine (winget v1.29.290) validated happily -- and
+#: ``microsoft/winget-pkgs`` answered ``Manifest-Version-Error``, naming 1.12.0
+#: as "the version currently approved for release". A merged manifest in
+#: master at the time (``sharkdp.bat`` 0.26.1) was still on 1.10.0.
+#:
+#: So do not read this off the schema directory, and do not take it from
+#: ``winget validate`` passing. Read ``ManifestVersion`` out of a recently
+#: merged manifest in ``microsoft/winget-pkgs`` master and match it, then check
+#: every field in use predates the target (``AppsAndFeaturesEntries``,
+#: ``ReleaseDate`` and ``Documentations`` all date from 1.1).
+MANIFEST_VERSION = "1.12.0"
 
 #: ``Publisher.Package``, case sensitive, and it must equal the folder path
 #: under the winget-pkgs partition directory. The publisher segment is the
