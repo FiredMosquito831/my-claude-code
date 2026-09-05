@@ -26,6 +26,11 @@ being real -- is all this rung supplies.
 The transplantable shape for any other OAuth/subscription provider is the
 three steps below: locate the vendor's official client without executing it,
 read the catalogue it ships, and publish only what that catalogue states.
+
+Two of those states keep a model out of the listing: ``visibility: hide`` and
+a passed ``upgrade.retirement_at``. Both are *listing* facts -- see
+:class:`ListingVeto` for which of them a logged success may overturn, and for
+why neither one ever touches a route.
 """
 
 import json
@@ -59,10 +64,14 @@ CATALOGUE_MARKERS: tuple[bytes, ...] = (
 #: order of magnitude of headroom and still a bounded read.
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
 
-#: ``visibility`` values Codex publishes. Carried through as a hint, never
-#: applied as a filter: a hidden model is still servable, and this project's
-#: own visibility globs are the operator's mechanism for hiding.
+#: The two ``visibility`` values Codex 0.151.0 actually publishes. ``list``
+#: means the vendor offers the model in its own picker; ``hide`` means it does
+#: not -- unreleased internals, and models on their way out. ``hide`` is a
+#: filter on *listing* and on nothing else: a hidden model stays fully routable
+#: when an operator names it, exactly like this project's own visibility globs
+#: (the hide-only contract).
 VISIBILITY_LISTED = "list"
+VISIBILITY_HIDDEN = "hide"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +93,16 @@ class CodexCatalogueEntry:
     @property
     def listed(self) -> bool:
         return self.visibility == VISIBILITY_LISTED
+
+    @property
+    def hidden(self) -> bool:
+        """Whether the vendor explicitly marked this entry ``hide``.
+
+        Not the negation of :attr:`listed`: an entry that published no
+        ``visibility`` at all, or one carrying a value this build has never
+        seen, is *unknown*, and unknown is never read as hidden.
+        """
+        return self.visibility == VISIBILITY_HIDDEN
 
     def retired_at(self, now: datetime) -> bool:
         """Whether the vendor's own published retirement instant has passed."""
@@ -377,6 +396,80 @@ def load_codex_catalogue(
     return None
 
 
+# -------------------------------------------------------------------- vetoes
+
+
+@dataclass(frozen=True, slots=True)
+class ListingVeto:
+    """The vendor own reason for keeping one slug out of every listing.
+
+    Two reasons, and they differ in exactly one way that matters -- whether a
+    later observation is allowed to overturn them:
+
+    ``hidden``
+        ``visibility: hide``. The vendor is saying "do not show this", and no
+        amount of local evidence contradicts that: a model this credential
+        served successfully last week is still a model OpenAI does not offer.
+        Not overturnable, ever.
+    ``retired``
+        the vendor published an ``upgrade.retirement_at`` that has passed.
+        This one *is* overturnable, and must be: a catalogue that is stale or
+        simply wrong must never hide a model the operator is actively and
+        successfully using. A success logged **strictly after** the retirement
+        instant overturns it; a success logged before it does not. "I used
+        this last month" is not evidence that it works today, and a dated,
+        forward-looking retirement is the better of the two facts.
+
+    A veto withholds from *listings* only. It never rewrites a route, never
+    removes a configured ref and never marks a model unsupported: a chain
+    naming a vetoed id keeps resolving and keeps serving.
+    """
+
+    slug: str
+    #: ``"hidden"`` or ``"retired"``; ``"hidden"`` wins when both apply.
+    reason: str
+    #: The vendor retirement instant, verbatim, when the reason is
+    #: ``"retired"``. ``None`` for a veto that nothing can overturn.
+    retirement_at: str | None = None
+
+    def overturned_by(self, observed_at: str) -> bool:
+        """Whether one observation is newer than the fact that vetoed the id.
+
+        Both sides are parsed as instants rather than compared as text, and a
+        value carrying no offset is read as UTC -- the request log stores UTC
+        and the machine reading it need not be on UTC. A missing or
+        unparseable timestamp overturns nothing.
+        """
+        retired = _parse_instant(self.retirement_at)
+        if retired is None:
+            return False
+        observed = _parse_instant(observed_at)
+        return observed is not None and observed > retired
+
+
+def listing_vetoes(
+    catalogue: CodexCatalogue, *, now: datetime | None = None
+) -> dict[str, ListingVeto]:
+    """Every slug the vendor catalogue says must not appear in a listing.
+
+    The single place both rungs consult, so the vendor rung and the observed
+    rung cannot disagree about what "listed" means. The plan gate is
+    deliberately *not* here: ``available_in_plans`` is what the vendor
+    believes this plan may use, and a logged success is direct proof about the
+    same question -- so the proof wins outright rather than needing a date.
+    """
+    moment = now or datetime.now(UTC)
+    vetoes: dict[str, ListingVeto] = {}
+    for entry in catalogue.entries:
+        if entry.hidden:
+            vetoes[entry.slug] = ListingVeto(slug=entry.slug, reason="hidden")
+        elif entry.retired_at(moment):
+            vetoes[entry.slug] = ListingVeto(
+                slug=entry.slug, reason="retired", retirement_at=entry.retirement_at
+            )
+    return vetoes
+
+
 # ------------------------------------------------------------------ evidence
 
 
@@ -386,24 +479,26 @@ def catalogue_evidence(
     plan_type: str = "",
     now: datetime | None = None,
 ) -> dict[str, ModelListingEvidence]:
-    """Existence evidence for every entry this plan may still use.
+    """Existence evidence for every entry this plan may still list.
 
-    Two filters, both taken from the document rather than invented here:
+    Three filters, all taken from the document rather than invented here:
 
+    * an entry the vendor marked ``visibility: hide`` is dropped -- OpenAI
+      saying "do not show this". It stays routable when an operator names it;
     * an entry whose own ``upgrade.retirement_at`` has passed is dropped --
       the vendor said when it stops being real, so it stops being offered on
       the vendor's schedule rather than on a maintainer's;
     * an entry whose ``available_in_plans`` excludes this credential's plan is
       dropped, and *only* when both halves are actually known.
 
-    ``visibility`` is deliberately not a filter. A hidden model is still
-    servable; it is carried through as ``offered_by_default=False`` so the page
-    can say so.
+    The first two are :func:`listing_vetoes`, shared with the observed rung so
+    that the two rungs cannot disagree about what "listed" means.
     """
     moment = now or datetime.now(UTC)
+    vetoes = listing_vetoes(catalogue, now=moment)
     evidence: dict[str, ModelListingEvidence] = {}
     for entry in catalogue.entries:
-        if entry.retired_at(moment):
+        if entry.slug in vetoes:
             continue
         if not entry.available_to_plan(plan_type):
             continue
@@ -415,9 +510,11 @@ def catalogue_evidence(
             detail=detail,
             retirement_at=entry.retirement_at,
             replacement_model_id=entry.replacement_model_id,
-            # Three states, kept apart: listed, explicitly hidden, and an
-            # entry that published no visibility at all.
-            offered_by_default=None if not entry.visibility else entry.listed,
+            # ``False`` is unreachable by construction now: every entry
+            # the vendor hid was vetoed above, so whatever survives either
+            # published ``list`` or published something this build does not
+            # recognise -- and unknown stays ``None`` rather than a guess.
+            offered_by_default=True if entry.listed else None,
         )
     return evidence
 
@@ -438,13 +535,16 @@ def catalogue_slugs(entries: Iterable[CodexCatalogueEntry]) -> frozenset[str]:
 __all__ = [
     "CATALOGUE_MARKERS",
     "MAX_DOCUMENT_BYTES",
+    "VISIBILITY_HIDDEN",
     "VISIBILITY_LISTED",
     "CodexCatalogue",
     "CodexCatalogueEntry",
+    "ListingVeto",
     "catalogue_evidence",
     "catalogue_slugs",
     "clear_codex_catalogue_cache",
     "embedded_json_document",
+    "listing_vetoes",
     "load_codex_catalogue",
     "parse_codex_catalogue",
     "retired_entries",

@@ -47,10 +47,11 @@ class ModelListingEvidence:
     smuggling a number in beside the name.
 
     ``retirement_at`` and ``replacement_model_id`` are the vendor's own words,
-    stored verbatim as they were published; ``offered_by_default`` is the
-    vendor's ``visibility`` hint, carried through rather than applied -- a
-    model the vendor hides is still servable, and this project's own
-    visibility globs are the operator's mechanism for hiding.
+    stored verbatim as they were published. ``offered_by_default`` says the
+    vendor's own catalogue offers this model by default; a model the vendor
+    marked hidden does not reach a listing at all, so it never reaches this
+    record either -- it stays routable, and this project's own visibility
+    globs remain the operator's mechanism for hiding anything else.
     """
 
     provenance: ModelListingProvenance
@@ -62,8 +63,10 @@ class ModelListingEvidence:
     retirement_at: str | None = None
     #: What the vendor says replaces this model once it retires.
     replacement_model_id: str | None = None
-    #: ``False`` when the vendor's own catalogue marks the model hidden.
-    #: ``None`` when no source said either way.
+    #: ``True`` when the vendor's own catalogue offers the model by default.
+    #: ``None`` when no source said either way -- which includes a vendor
+    #: ``visibility`` value this build does not recognise, because unknown is
+    #: not the same answer as "no".
     offered_by_default: bool | None = None
 
 

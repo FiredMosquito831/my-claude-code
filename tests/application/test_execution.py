@@ -300,6 +300,50 @@ class ScriptedProvider(FakeProvider):
             self.stream_close_calls += 1
 
 
+class UnlistedModelProvider(FakeProvider):
+    """A provider whose catalogue does not name the model it is asked for.
+
+    Exactly the shape ``chatgpt_oauth`` takes after 6.48.1 for a vendor-hidden
+    or vendor-retired id: absent from every listing, still perfectly able to
+    serve.
+    """
+
+    def list_model_ids(self) -> frozenset[str]:
+        return frozenset({"gpt-5.6-luna"})
+
+
+@pytest.mark.asyncio
+async def test_a_model_the_provider_does_not_list_is_still_served() -> None:
+    """Hide-only, at the executor: listing is presentation, routing is not.
+
+    The twin of
+    ``test_routing_chains.py::test_a_de_listed_provider_model_still_resolves_in_a_configured_chain``
+    -- that one proves the ref survives resolution, this one proves the
+    request actually reaches the provider with the id the operator wrote.
+    """
+    provider = UnlistedModelProvider()
+    assert "gpt-5.4" not in provider.list_model_ids()
+    routed = _routed_request("chatgpt_oauth", "gpt-5.4")
+    executor = _executor({"chatgpt_oauth": provider})
+
+    chunks = [
+        chunk
+        async for chunk in executor.stream(
+            _plan(routed),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload=routed.request.model_dump(),
+            request_id="req_unlisted",
+        )
+    ]
+
+    assert chunks == ["event: message_stop\ndata: {}\n\n"]
+    served = provider.stream_calls[0]["request"]
+    assert isinstance(served, MessagesRequest)
+    assert served.model == "gpt-5.4"
+    assert provider.preflight_calls == [(routed.request, ReasoningPolicy.on())]
+
+
 def _executor(providers: Mapping[str, ProviderPort]) -> ProviderExecutor:
     return ProviderExecutor(
         lambda provider_id: providers[provider_id],

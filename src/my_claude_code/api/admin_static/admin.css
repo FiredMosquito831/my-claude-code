@@ -6456,8 +6456,7 @@ details.turn-pane > summary:focus-visible {
   color: var(--warn);
 }
 
-.models-chip-retiring,
-.models-chip-vendor-hidden {
+.models-chip-retiring {
   border-color: var(--warn-border);
   color: var(--warn);
 }
