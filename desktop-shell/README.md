@@ -444,7 +444,7 @@ created, and nothing it did not".
 ### winget
 
 `installer/winget/` holds the three manifests for
-`FiredMosquito831.MyClaudeCode` at manifest schema 1.28.0, plus `render.py`,
+`FiredMosquito831.MyClaudeCode` at manifest schema 1.12.0, plus `render.py`,
 which produces them, and `SUBMIT.md`, which is the submission runbook.
 
 **They are rendered, not written.** Six of the values in a winget manifest are

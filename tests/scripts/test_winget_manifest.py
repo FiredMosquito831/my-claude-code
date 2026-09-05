@@ -216,7 +216,7 @@ def test_the_manifest_version_is_a_schema_winget_pkgs_publishes() -> None:
     """Pinned, so bumping it is a deliberate read of the schema's changelog."""
 
     assert re.fullmatch(r"1\.\d+\.\d+", render.MANIFEST_VERSION)
-    assert render.MANIFEST_VERSION == "1.28.0"
+    assert render.MANIFEST_VERSION == "1.12.0"
 
 
 @pytest.mark.parametrize("name", sorted(_committed()))

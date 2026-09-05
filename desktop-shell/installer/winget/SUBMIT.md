@@ -122,7 +122,7 @@ Installer: https://github.com/FiredMosquito831/my-claude-code/releases/download/
 - [x] Have you checked that there aren't other open [pull requests](https://github.com/microsoft/winget-pkgs/pulls) for the same manifest update/add?
 - [x] Have you validated your manifest locally with `winget validate --manifest <path>`?
 - [x] Have you tested your manifest locally with `winget install --manifest <path>`?
-- [x] Does your manifest conform to the [1.28 schema](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest/schema/1.28.0)?
+- [x] Does your manifest conform to the [1.12 schema](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest/schema/1.12.0)?
 
 ### Notes for the reviewer
 - **Per-user Inno Setup installer**, `PrivilegesRequired=lowest`. `Scope: user`;
