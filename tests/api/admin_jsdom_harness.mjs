@@ -442,6 +442,16 @@ const ROUTES = {
     sections: SECTIONS,
     provider_status: [],
     paths: { managed: "/tmp/.env" },
+    /* Which harness alias names each global route, exactly as the API joins it
+       on from core/tier_refs.py. MODEL_FABLE is absent on purpose: it is a
+       Claude alias, not a tier, and `mcc/best` follows MODEL. */
+    route_tier_aliases: {
+      MODEL: "mcc/best",
+      MODEL_OPUS: "mcc/good",
+      MODEL_SONNET: "mcc/medium",
+      MODEL_HAIKU: "mcc/cheap",
+      MODEL_VISION: "mcc/vision",
+    },
   },
   "/admin/api/onboarding": { dismissed: true, complete: true, steps: [] },
   "/admin/api/providers/local-status": { providers: [] },
@@ -3284,6 +3294,15 @@ if (routingLink) {
     doc.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true, ...init }));
     await settle();
   };
+
+  // --- every rail heading, with whatever alias it carries. The ids other
+  // coding agents put on the wire are invisible on this page otherwise.
+  routing.tierHeadings = Array.from(doc.querySelectorAll(".route-tier")).map((node) =>
+    (node.textContent || "").replace(/\s+/g, " ").trim(),
+  );
+  routing.aliasChips = Array.from(doc.querySelectorAll(".route-tier-alias")).map((node) =>
+    (node.textContent || "").trim(),
+  );
 
   // --- the rail's shape: a grip per node, and the arrows are still there
   routing.railNodes = nodes().length;

@@ -23,6 +23,7 @@ pub mod ladder;
 pub mod process;
 pub mod status;
 pub mod ui;
+pub mod update_progress;
 pub mod window_state;
 
 use std::path::PathBuf;
@@ -35,9 +36,10 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::webview::{PageLoadEvent, WebviewWindowBuilder};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WindowEvent, Wry};
 
-use crate::ladder::{Decision, Reconnect};
+use crate::ladder::{Decision, Reconnect, Respawn};
 use crate::status::Status;
 use crate::ui::Page;
+use crate::update_progress::Stage;
 
 /// The single windows label. One window, one label, everywhere.
 const MAIN_WINDOW: &str = "main";
@@ -62,7 +64,10 @@ const RETRY_POLL: Duration = Duration::from_millis(200);
 const PAGE_SETTLE: Duration = Duration::from_millis(500);
 
 static RETRY_REQUESTED: AtomicBool = AtomicBool::new(false);
-static MINIMIZE_TO_TRAY: AtomicBool = AtomicBool::new(false);
+/// Whether closing the window hides it instead of ending the app. Read from
+/// the status document on every ladder pass; `false` until one has been read,
+/// so a window that has learned nothing yet still closes when told to.
+static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(false);
 static TRAY_BUILT: AtomicBool = AtomicBool::new(false);
 static ACTIVATION_STARTED: AtomicBool = AtomicBool::new(false);
 static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -177,6 +182,17 @@ fn show_dashboard(window: &WebviewWindow, admin_url: &str) {
             },
         ),
     }
+}
+
+/// Whether a close request should hide the window instead of ending the app.
+///
+/// Pure, so the rule is a unit test rather than a hand-run of a window that
+/// only exists on a desktop. Two inputs, and the second one is the whole
+/// subtlety: Quit -- from the tray menu or from this window -- sets `quitting`
+/// first, and a quit that got hidden instead of quitting is an app the user
+/// cannot close at all.
+pub fn should_hide_on_close(close_to_tray: bool, quitting: bool) -> bool {
+    close_to_tray && !quitting
 }
 
 /// Block until Retry is pressed. Returns when it is.
@@ -319,12 +335,63 @@ fn wait_for_start(window: &WebviewWindow, status: &Status, health_url: &str) -> 
     }
 }
 
+/// One reconnect episode's state. An episode begins at the first failed probe
+/// past the debounce and ends when the server answers again or the budget runs
+/// out. `respawned` is per-episode on purpose: it is what stops a server that
+/// crash-loops on start from being started again every cadence for the whole
+/// budget.
+struct Episode {
+    started: Instant,
+    last_restatus: Instant,
+    respawned: bool,
+}
+
+/// Re-read the status document mid-reconnect and act on the one unambiguous
+/// answer. Returns true when a server was started.
+///
+/// This is the half of the fix that answers "the server hangs until we close
+/// the desktop app and restart it manually". Closing and relaunching the app
+/// worked because relaunching re-runs the ladder; nothing else in the design
+/// ever did. Now the reconnect loop does, on the document's own cadence.
+///
+/// It never resolves anything (C1) and never installs anything (C5): the only
+/// action available to it is `spawn_server`, which spells the shim name and
+/// nothing else.
+fn restatus_during_reconnect(window: &WebviewWindow, episode: &mut Episode) -> bool {
+    episode.last_restatus = Instant::now();
+    let Ok(raw) = process::print_status() else {
+        // A status read that failed mid-reconnect is not news: the commonest
+        // reason is that the machine is busy applying an update. Keep polling.
+        return false;
+    };
+    let Ok(fresh) = status::parse_status(&raw) else {
+        return false;
+    };
+    if ladder::respawn_verdict(&fresh, episode.respawned) != Respawn::Start {
+        return false;
+    }
+    episode.respawned = true;
+    match process::spawn_server() {
+        Ok(_) => {
+            set_tray_status("Server: starting");
+            true
+        }
+        Err(error) => {
+            // Say it in the window rather than only in a log nobody opens, but
+            // do not abandon the episode: the update helper may still start a
+            // server of its own well inside the budget.
+            append_output(window, &error);
+            false
+        }
+    }
+}
+
 /// Watch a dashboard that is already loaded. Returns when the window needs a
 /// page again -- i.e. when the reconnect budget has run out.
 fn watch_health(app: &AppHandle, window: &WebviewWindow, status: &Status) {
     let poll = Duration::from_secs_f64(status.health_poll_seconds.max(0.5));
     let mut failures: u32 = 0;
-    let mut first_failure: Option<Instant> = None;
+    let mut episode: Option<Episode> = None;
     let mut showing_banner = false;
 
     loop {
@@ -332,7 +399,9 @@ fn watch_health(app: &AppHandle, window: &WebviewWindow, status: &Status) {
         if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
             return;
         }
-        if health::is_healthy(&status.health_url) {
+        let probed_at = Instant::now();
+        let outcome = health::probe_outcome(&status.health_url);
+        if outcome.is_healthy() {
             if showing_banner {
                 // It came back. Reload the dashboard rather than leaving the
                 // user looking at a banner about a problem that is over.
@@ -340,38 +409,61 @@ fn watch_health(app: &AppHandle, window: &WebviewWindow, status: &Status) {
                 showing_banner = false;
             }
             failures = 0;
-            first_failure = None;
+            episode = None;
             set_tray_status("Server: running");
             continue;
         }
 
         failures = failures.saturating_add(1);
-        let since = *first_failure.get_or_insert_with(Instant::now);
-        match ladder::reconnect_verdict(status, failures, since.elapsed().as_secs_f64()) {
+        let episode = episode.get_or_insert_with(|| Episode {
+            started: Instant::now(),
+            // Not `Instant::now() - cadence`: the first thirty seconds of an
+            // outage are overwhelmingly a restart in progress, and re-reading
+            // the status document in that window would spawn a second server
+            // into a port the old one has not finished releasing.
+            last_restatus: Instant::now(),
+            respawned: false,
+        });
+        let elapsed = episode.started.elapsed().as_secs_f64();
+        match ladder::reconnect_verdict(status, failures, elapsed) {
             // Below the debounce: a routine update must not paint anything.
             Reconnect::Ignore => {}
             Reconnect::Waiting => {
                 set_tray_status("Server: reconnecting");
-                if !showing_banner {
-                    show_page(
-                        window,
-                        &Page::Reconnecting {
-                            message: format!(
-                                "The server stopped answering -- it is probably \
-                                 restarting. Reconnecting for up to {:.0} minutes.",
-                                status.reconnect_timeout_seconds / 60.0
-                            ),
-                        },
-                    );
-                    showing_banner = true;
+                // Re-read the whole document on the document's own cadence,
+                // and start a server if -- and only if -- the answer is the
+                // unambiguous one. Once per episode.
+                if ladder::should_restatus(status, episode.last_restatus.elapsed().as_secs_f64()) {
+                    restatus_during_reconnect(window, episode);
                 }
+                // Repainted every tick. The old banner was painted once and
+                // never touched again, so a loop that was in fact probing
+                // every five seconds was indistinguishable from a frozen
+                // window -- which is exactly what was reported.
+                let stage = update_progress::read_stage(&status.config_dir);
+                show_page(
+                    window,
+                    &Page::Reconnecting {
+                        message: ladder::reconnect_progress_text(
+                            status,
+                            elapsed,
+                            probed_at.elapsed().as_secs_f64(),
+                            &outcome.describe(),
+                            stage.as_ref().map(Stage::describe).as_deref(),
+                        ),
+                    },
+                );
+                showing_banner = true;
             }
             Reconnect::Failed { server_log } => {
                 set_tray_status("Server: not answering");
                 show_page(
                     window,
                     &Page::Error {
-                        message: "The server never came back.".to_owned(),
+                        message: format!(
+                            "The server never came back. The last check said: {}.",
+                            outcome.describe()
+                        ),
                         server_log: Some(server_log),
                     },
                 );
@@ -381,12 +473,61 @@ fn watch_health(app: &AppHandle, window: &WebviewWindow, status: &Status) {
     }
 }
 
+/// Wait for a draining server to let go of the port, then let the ladder run
+/// again.
+///
+/// Bounded by the document's own reconnect budget, which is the same budget
+/// every other wait in this window uses (C9), and it repaints as it goes for
+/// the same reason the reconnect banner does. It starts nothing and kills
+/// nothing: the server hard-exits itself one beat past its own stop budget and
+/// the update helper force-kills the exact parent pid it was given, so a third
+/// killer here would only be a way to lose an in-flight request that two other
+/// bounded paths were about to end cleanly.
+fn wait_for_drain(app: &AppHandle, status: &Status) {
+    let poll = Duration::from_secs_f64(status.health_poll_seconds.max(0.5));
+    let started = Instant::now();
+    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
+        return;
+    };
+    loop {
+        std::thread::sleep(poll);
+        if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
+            return;
+        }
+        let probed_at = Instant::now();
+        let outcome = health::probe_outcome(&status.health_url);
+        if outcome.is_healthy() {
+            return;
+        }
+        let elapsed = started.elapsed().as_secs_f64();
+        if elapsed >= status.reconnect_timeout_seconds {
+            return;
+        }
+        let stage = update_progress::read_stage(&status.config_dir);
+        show_page(
+            &window,
+            &Page::Reconnecting {
+                message: ladder::reconnect_progress_text(
+                    status,
+                    elapsed,
+                    probed_at.elapsed().as_secs_f64(),
+                    &outcome.describe(),
+                    stage.as_ref().map(Stage::describe).as_deref(),
+                ),
+            },
+        );
+    }
+}
+
 /// Apply the parts of the status document that shape the window itself.
 fn apply_status(window: &WebviewWindow, status: &Status) {
-    MINIMIZE_TO_TRAY.store(
-        status.minimize_to_tray && status.tray_enabled,
-        Ordering::SeqCst,
-    );
+    // Python's answer, used verbatim (C1). Deliberately NOT
+    // `minimize_to_tray && tray_enabled`: `tray_enabled` in this document
+    // means "should THIS window draw an icon", and it is false on Windows and
+    // macOS *because* the Python tray is already drawing one. ANDing them is
+    // what made the close button end the app -- and take the tray and the
+    // server with it -- on the two platforms that have a tray at all.
+    CLOSE_TO_TRAY.store(status.close_to_tray, Ordering::SeqCst);
     let Some(directory) = DATA_DIR.get() else {
         return;
     };
@@ -540,6 +681,20 @@ fn ladder_pass(app: &AppHandle, window: &WebviewWindow) {
             show_page(window, &Page::PortConflict { message });
             wait_for_retry(app);
         }
+        Decision::Draining => {
+            // MCC's own server, mid-stop. Not a conflict and not a free port:
+            // wait for it to finish and let the next pass of the ladder pick
+            // it up. Returning rather than blocking on Retry is what makes
+            // this self-healing -- the ladder thread loops.
+            set_tray_status("Server: shutting down");
+            show_page(
+                window,
+                &Page::Reconnecting {
+                    message: ladder::draining_message(&status),
+                },
+            );
+            wait_for_drain(app, &status);
+        }
         Decision::UnknownPresence { presence } => {
             show_page(
                 window,
@@ -579,7 +734,10 @@ pub fn run() {
         })
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
-                if MINIMIZE_TO_TRAY.load(Ordering::SeqCst) && !QUITTING.load(Ordering::SeqCst) {
+                if should_hide_on_close(
+                    CLOSE_TO_TRAY.load(Ordering::SeqCst),
+                    QUITTING.load(Ordering::SeqCst),
+                ) {
                     api.prevent_close();
                     if let Some(webview) = window.app_handle().get_webview_window(MAIN_WINDOW) {
                         save_geometry(&webview);
@@ -630,4 +788,30 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("the My Claude Code window could not be started");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closing_hides_the_window_when_there_is_a_tray_to_hide_into() {
+        // The reported behaviour: "when I close the desktop app it should
+        // minimize to tray so I can reopen it from the tray. Right now closing
+        // the desktop app also closes the tray."
+        assert!(should_hide_on_close(true, false));
+    }
+
+    #[test]
+    fn closing_ends_the_app_when_the_user_asked_for_that() {
+        assert!(!should_hide_on_close(false, false));
+    }
+
+    #[test]
+    fn quit_is_never_turned_into_a_hide() {
+        // Quit sets the flag before it closes the window. An app whose Quit
+        // hides it is an app that cannot be quit.
+        assert!(!should_hide_on_close(true, true));
+        assert!(!should_hide_on_close(false, true));
+    }
 }

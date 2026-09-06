@@ -1280,6 +1280,18 @@ textarea:focus-visible,
   color: var(--text-strong);
 }
 
+/* The wire id a harness asks for to reach this rail. Lower case and
+   unemphasised: the rail's own name is what you scan the page for, the alias
+   is what you copy into another tool's config, so it reads as an annotation on
+   the heading rather than as a second heading. */
+.route-tier-alias {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
 /* Replaces four near-identical "Select None to use the Default Model for X"
    sentences with the state they were all describing. */
 .route-state {

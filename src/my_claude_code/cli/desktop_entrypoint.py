@@ -53,7 +53,7 @@ def _print_usage() -> None:
         "[--autostart on|off] "
         "[--start-at-login | --no-start-at-login | "
         "--tray-enabled | --no-tray-enabled | "
-        "--status | --print-status | --export-icon PATH]",
+        "--status | --print-status [--presence-v2] | --export-icon PATH]",
         file=sys.stderr,
     )
 
@@ -117,12 +117,16 @@ def launch(argv: Sequence[str] | None = None) -> None:
         _print_state()
         return
 
-    if len(args) == 1 and args[0] == "--print-status":
+    if args and args[0] == "--print-status" and set(args[1:]) <= {"--presence-v2"}:
         # Imported here, not at module scope, so the toggle paths above
         # keep their current import cost.
         from my_claude_code.cli.desktop_status import print_status
 
-        print_status()
+        # ``--presence-v2`` is a reader saying "I have a branch for every
+        # presence this wheel can report", which today means ``draining``.
+        # Without it the document carries only the three values every shell
+        # ever built understands. See cli/desktop_status.py's docstring.
+        print_status(presence_v2="--presence-v2" in args[1:])
         return
 
     if args:

@@ -2633,3 +2633,42 @@ def test_revert_to_global_clears_the_entry(rendered: dict) -> None:
 
 def test_the_tiers_section_makes_no_console_errors(rendered: dict) -> None:
     assert rendered["consoleErrors"] == []
+
+
+def test_every_routing_rail_heading_carries_its_harness_alias(rendered) -> None:
+    """The id another coding agent has to ask for, beside the rail it reaches.
+
+    Claude Code never names a model -- it asks for ``claude-sonnet-5`` and gets
+    whatever Sonnet points at. Every other agent had to name a concrete
+    ``provider/model`` ref, so the five ``mcc/*`` aliases exist to close that
+    gap; and until now the page where routes are edited did not say which alias
+    named which rail, so a user who had just moved a model onto the Sonnet rail
+    had no way to see that ``mcc/medium`` is what their Codex session must ask
+    for.
+
+    The map is joined onto the config payload from ``core/tier_refs.py``. There
+    is deliberately no second list of five aliases in ``admin.js``: the first
+    thing a second copy would do is disagree with the first.
+    """
+
+    headings = rendered["routing"]["tierHeadings"]
+
+    for expected in (
+        "Default (mcc/best)",
+        "Opus (mcc/good)",
+        "Sonnet (mcc/medium)",
+        "Haiku (mcc/cheap)",
+        "Vision adapter (mcc/vision)",
+    ):
+        assert expected in headings, headings
+
+    # Fable gets none, and that is the point rather than an oversight:
+    # ``MODEL_FABLE`` is a Claude alias, not a tier. ``mcc/best`` resolves
+    # through ``MODEL`` -- the Default rail -- so printing it beside Fable
+    # would tell the reader that editing that rail moves ``mcc/best``, which it
+    # does not.
+    assert "Fable" in headings
+    assert not any(heading.startswith("Fable (") for heading in headings)
+
+    # Exactly five aliases on the page: one per tier, no more.
+    assert len(rendered["routing"]["aliasChips"]) == 5

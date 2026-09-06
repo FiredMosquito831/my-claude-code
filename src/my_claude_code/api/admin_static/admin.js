@@ -993,6 +993,37 @@ const ROUTE_PAUSE_KEY = new Map([
   ["MODEL_VISION", "MODEL_VISION_PAUSED"],
 ]);
 
+/** Put the harness alias for a route beside its heading, if it has one.
+ *
+ * The ids the other coding agents put on the wire -- `mcc/best` and friends --
+ * are invisible on this page otherwise, so a reader who has just moved a model
+ * onto the Sonnet rail has no way to see that `mcc/medium` is the name their
+ * Codex or OpenCode session has to ask for to reach it.
+ *
+ * The map comes from the config payload, which reads `core/tier_refs.py`. It
+ * is deliberately not a table in this file: a second list of five aliases is a
+ * second source of truth, and the first thing it would do is disagree. A route
+ * with no entry -- MODEL_FABLE, which is a Claude alias rather than a tier --
+ * gets no suffix rather than a guessed one.
+ */
+function tierAliasFor(modelKey) {
+  const aliases = (state.config && state.config.route_tier_aliases) || {};
+  const alias = aliases[modelKey];
+  return typeof alias === "string" && alias ? alias : null;
+}
+
+function appendTierAlias(heading, modelKey) {
+  const alias = tierAliasFor(modelKey);
+  if (!alias) return null;
+  const chip = document.createElement("span");
+  chip.className = "route-tier-alias";
+  // Inside the heading, so the accessible name of the card is "Sonnet
+  // (mcc/medium)" -- the whole point is that the two are one name.
+  chip.textContent = ` (${alias})`;
+  heading.appendChild(chip);
+  return chip;
+}
+
 /** The name this route is called on the page, for a sentence about it. */
 function routeLabelFor(modelKey) {
   const tier = ROUTE_TIERS.find((candidate) => candidate.modelKey === modelKey);
@@ -1742,6 +1773,7 @@ function renderRouteCard(tier, fieldByKey) {
   const name = document.createElement("h4");
   name.className = "route-tier";
   name.textContent = tier.label;
+  appendTierAlias(name, tier.modelKey);
 
   head.appendChild(name);
   // The default route has no state to report: it is the thing the others
@@ -1963,6 +1995,7 @@ function renderModelRouting(fields, allFields) {
     const name = document.createElement("h4");
     name.className = "route-tier";
     name.textContent = "Vision adapter";
+    appendTierAlias(name, "MODEL_VISION");
     head.appendChild(name);
     vision.appendChild(head);
 
@@ -7735,11 +7768,19 @@ const WINDOW_PROVIDER_LABELS = {
 
 function renderDesktopState() {
   const trayEnabled = byId("desktopTrayEnabled");
+  const closeToTray = byId("desktopCloseToTray");
   const serverMode = byId("desktopServerMode");
   const hint = byId("desktopServerModeHint");
   if (trayEnabled) {
     trayEnabled.checked = Boolean(state.desktop?.tray_enabled);
     trayEnabled.disabled = state.desktopBusy;
+  }
+  if (closeToTray) {
+    closeToTray.checked = Boolean(state.desktop?.close_to_tray);
+    // Without a tray there is nowhere to close to, and a switch that cannot
+    // do anything is worse than one that is not there.
+    closeToTray.disabled =
+      state.desktopBusy || !state.desktop?.tray_enabled;
   }
   if (serverMode && hint) {
     serverMode.value = state.desktop?.server_mode || "spawn";
@@ -7857,6 +7898,9 @@ byId("desktopWindow").addEventListener("change", (event) => {
 });
 byId("desktopTrayEnabled").addEventListener("change", (event) => {
   updateDesktop("tray_enabled", event.currentTarget.checked, event.currentTarget);
+});
+byId("desktopCloseToTray").addEventListener("change", (event) => {
+  updateDesktop("close_to_tray", event.currentTarget.checked, event.currentTarget);
 });
 
 /* --------------------------------------------------------------------- */

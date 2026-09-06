@@ -179,6 +179,23 @@ def tier_refs() -> tuple[str, ...]:
     return tuple(tier_ref(tier) for tier in TIER_ORDER)
 
 
+def tier_alias_by_route_env_var() -> dict[str, str]:
+    """Map each global route's env var onto the tier alias that names it.
+
+    ``{"MODEL": "mcc/best", "MODEL_OPUS": "mcc/good", ...}``.
+
+    This is what the Model Config page's route headings read, so the alias a
+    heading shows and the alias the router answers to are the same fact rather
+    than two lists that agree until one is edited. Note what is *not* here:
+    ``MODEL_FABLE`` has no entry, because it is not a tier -- ``MODEL`` is the
+    route ``mcc/best`` resolves through (see ``GLOBAL_TIER_SETTINGS`` above),
+    and printing ``mcc/best`` beside the Fable rail would tell a reader that
+    editing that rail changes where ``mcc/best`` goes, which it does not.
+    """
+
+    return {GLOBAL_TIER_SETTINGS[tier].env_var: tier_ref(tier) for tier in TIER_ORDER}
+
+
 def parse_tier_ref(model_name: str | None) -> ModelTier | None:
     """Return the tier a model name asks for, in either wire spelling.
 
@@ -227,6 +244,7 @@ __all__ = [
     "ModelTier",
     "is_tier_ref",
     "parse_tier_ref",
+    "tier_alias_by_route_env_var",
     "tier_ref",
     "tier_refs",
 ]

@@ -417,3 +417,65 @@ def test_the_installer_no_longer_waits_six_hours() -> None:
     assert "did not stop within 6 hours" not in installer
     assert "$DeferredWaitSeconds = 600" in installer
     assert "Stop-Process -Id `$target.Id -Force" in installer
+
+
+def _captured_supervisor_log(action_name: str, *, runtime_closed: bool) -> list[str]:
+    """Run one supervised generation and return what it logged."""
+
+    from contextlib import suppress
+
+    from loguru import logger
+
+    lines: list[str] = []
+    sink = logger.add(lines.append, level="INFO", format="{message}")
+    try:
+        # The REPLACE_PROCESS refusal path exits; what it logged still counts.
+        with suppress(SystemExit):
+            _run_supervisor(action_name, runtime_closed=runtime_closed)
+    finally:
+        logger.remove(sink)
+    return lines
+
+
+def test_a_stop_request_is_logged_with_its_budget_and_deadline() -> None:
+    """Before this line, a slow shutdown left no evidence that it happened.
+
+    ``request()`` computed the deadline, armed the watchdog and set
+    ``should_exit`` without writing anything at all; the ASGI gate logs nothing;
+    and the only stop-related line in the file fires only when the watchdog
+    *wins*. Combined with the rotation sweep on startup, a five-minute drain was
+    unanswerable after the fact -- this investigation could not timeline one.
+    """
+
+    lines = _captured_supervisor_log("reload", runtime_closed=True)
+    requested = [line for line in lines if line.startswith("Stop requested")]
+    assert len(requested) == 1, lines
+
+    line = requested[0]
+    assert "action=reload" in line
+    assert f"SERVER_GRACEFUL_SHUTDOWN_SECONDS={BOUND}" in line
+    assert f"budget={BOUND:.1f}s" in line
+    # The hard deadline is the budget plus the same teardown margin and grace
+    # every other waiter in the tree uses, so the three numbers can be compared.
+    total = BOUND + STOP_TEARDOWN_MARGIN_SECONDS + HARD_EXIT_GRACE_SECONDS
+    assert f"hard deadline in {total:.1f}s" in line
+    assert "New requests are refused from now" in line
+
+    completed = [line for line in lines if line.startswith("Stop complete")]
+    assert len(completed) == 1, lines
+    assert "action=reload" in completed[0]
+    assert "of a 3.0s budget" in completed[0]
+
+
+def test_a_server_that_was_never_stopped_logs_no_stop() -> None:
+    """The pair is a timeline, not a heartbeat: no stop, no lines."""
+
+    from loguru import logger
+
+    lines: list[str] = []
+    sink = logger.add(lines.append, level="INFO", format="{message}")
+    try:
+        stop_deadline().clear()
+    finally:
+        logger.remove(sink)
+    assert not [line for line in lines if line.startswith("Stop ")]

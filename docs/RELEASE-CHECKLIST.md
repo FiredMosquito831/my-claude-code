@@ -404,6 +404,23 @@ one:
    launch deletes the registration belonging to your real install. Stop the
    window and the scratch server by their exact process ids when you are done.
 
+**6.50.0 is a worked example of this.** The release changed both halves: the wheel
+gained a `draining` presence, a `close_to_tray` key and a `reconnect_restatus_seconds`
+budget, and the shell gained the branches that read them. The shell code shipped in
+6.50.0 and the pin still named `v6.45.2` on that tag, exactly as step 1 says. The pin
+moved to `v6.50.0`, with all four digests taken from the release's own
+`SHA256SUMS-desktop-shell.txt`, in the follow-up **6.50.1** patch. Nothing about the
+6.50.0 release is wrong because of that: users on the old pinned shell keep the
+three-presence behaviour they have always had, because the wheel only reports
+`draining` to a shell that asks for it with `--presence-v2`.
+
+**A shell that reads a new status key needs the pin moved.** The rule that a status
+document may gain keys without a `schema` bump protects *old readers*; it says nothing
+about new ones. A shell built after this release refuses a document that lacks
+`reconnect_restatus_seconds` or `close_to_tray` (contract C9: no compiled-in defaults),
+so pinning a *newer* shell than the wheel a user is running would break their window.
+The pin therefore only ever moves forward to a tag whose wheel is already published.
+
 **When the shell has not changed, leave the pin alone.** Every user who already
 has that binary reads a receipt and downloads nothing; moving the pin for its own
 sake makes all of them re-download an identical window.

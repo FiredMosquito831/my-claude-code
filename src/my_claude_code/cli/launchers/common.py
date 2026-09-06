@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -17,24 +18,88 @@ PROXY_PREFLIGHT_PATH = "/health"
 PROXY_PREFLIGHT_TIMEOUT_SECONDS = 1.5
 
 
-def preflight_proxy(proxy_root_url: str) -> str | None:
-    """Return an error message when the local proxy health check is unreachable."""
+@dataclass(frozen=True, slots=True)
+class PreflightResult:
+    """What one loopback ``/health`` probe actually saw.
+
+    ``preflight_proxy`` flattens every outcome to a sentence, and a sentence
+    cannot be branched on: ``returned HTTP 503`` and ``returned HTTP 500`` read
+    the same to a caller, so a server that is deliberately refusing new work
+    during its own shutdown was indistinguishable from one that is broken --
+    and from a stranger holding the port. This keeps the status code and the
+    response headers, so a caller that needs the distinction can have it
+    without a second request.
+
+    ``headers`` is lower-cased on the way in: header names are
+    case-insensitive on the wire and a caller comparing them should not have
+    to know that.
+    """
+
+    status_code: int | None = None
+    headers: dict[str, str] = field(default_factory=dict)
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Whether a healthy MCC answered."""
+
+        return self.error is None
+
+    def header(self, name: str) -> str | None:
+        """Return one response header, matched case-insensitively."""
+
+        return self.headers.get(name.strip().lower())
+
+
+def _lowercased(pairs: object) -> dict[str, str]:
+    """Return response headers keyed by their lower-cased names."""
+
+    items = getattr(pairs, "items", None)
+    if items is None:
+        return {}
+    return {str(key).strip().lower(): str(value) for key, value in items()}
+
+
+def preflight_result(proxy_root_url: str) -> PreflightResult:
+    """Probe the local proxy's health endpoint and report what answered.
+
+    Bounded by ``PROXY_PREFLIGHT_TIMEOUT_SECONDS`` and loopback-only, exactly
+    as ``preflight_proxy`` is -- this is the same single request, reported in
+    full rather than as a sentence.
+    """
 
     url = f"{proxy_root_url.rstrip('/')}{PROXY_PREFLIGHT_PATH}"
     request = Request(url, method="GET")
     try:
         with urlopen(request, timeout=PROXY_PREFLIGHT_TIMEOUT_SECONDS) as response:
-            status_code = response.getcode()
+            status_code = int(response.getcode())
+            headers = _lowercased(response.headers)
     except HTTPError as exc:
-        return f"returned HTTP {exc.code}"
+        # An HTTPError IS the response: it carries the code and the headers,
+        # which is exactly what a 503 during a drain has to be recognised by.
+        return PreflightResult(
+            status_code=int(exc.code),
+            headers=_lowercased(exc.headers),
+            error=f"returned HTTP {exc.code}",
+        )
     except URLError as exc:
-        return str(exc.reason)
+        return PreflightResult(error=str(exc.reason))
     except OSError as exc:
-        return str(exc)
+        return PreflightResult(error=str(exc))
 
     if not 200 <= status_code < 300:
-        return f"returned HTTP {status_code}"
-    return None
+        return PreflightResult(
+            status_code=status_code,
+            headers=headers,
+            error=f"returned HTTP {status_code}",
+        )
+    return PreflightResult(status_code=status_code, headers=headers)
+
+
+def preflight_proxy(proxy_root_url: str) -> str | None:
+    """Return an error message when the local proxy health check is unreachable."""
+
+    return preflight_result(proxy_root_url).error
 
 
 def resolve_client_binary(

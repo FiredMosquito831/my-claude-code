@@ -1235,7 +1235,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "the ceiling. If you set 300 here on an earlier version, consider "
             "20: before 6.41.0 this bounded only one wait inside the stop and "
             "the rest was unbounded, so a large value cost nothing -- now it is "
-            "the time you wait for a restart."
+            "the time you wait for a restart. It is also the time you wait for "
+            "every UPDATE, twice over: the installer does not start until the "
+            "old server has finished draining, and the reconnect budget the "
+            "desktop window counts down is this number plus the install "
+            "allowance. Measured on a real machine, 300 here added five silent "
+            "minutes to a fourteen-minute update and turned the window's "
+            '"reconnecting for up to 17 minutes" into 22.'
         ),
     ),
     ConfigFieldSpec(
@@ -1792,6 +1798,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "outage. This is what keeps a brief self-update restart from "
             "being read as the server dying. Applies the next time "
             "mcc-desktop starts, not to a tray already running."
+        ),
+    ),
+    ConfigFieldSpec(
+        "DESKTOP_RECONNECT_RESTATUS_SECONDS",
+        "Reconnect re-check",
+        "desktop",
+        "number",
+        settings_attr="desktop_reconnect_restatus_seconds",
+        default="30",
+        advanced=True,
+        description=(
+            "While the desktop window is waiting for the server to come back "
+            "after a restart, how often it re-reads the whole status instead "
+            "of only re-checking the health URL. This is what lets it notice "
+            "that the port has gone free and start the server itself, once, "
+            "rather than waiting out the whole reconnect budget. Applies the "
+            "next time mcc-desktop starts, not to a window already open."
         ),
     ),
     ConfigFieldSpec(

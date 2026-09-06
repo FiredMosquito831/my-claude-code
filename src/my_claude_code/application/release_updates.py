@@ -67,6 +67,26 @@ _WHEEL_SUFFIX = ".whl"
 _WINDOWS = os.name == "nt"
 _STAGE_DIRNAME = "updates"
 _PENDING_RESULT_FILENAME = "pending-upgrade.json"
+#: One JSON object per line, appended by the deferred helper as it moves
+#: between stages. JSON *lines* rather than one document on purpose: the
+#: writer is a detached PowerShell process that may be killed at any point
+#: and the reader is a desktop window polling while that happens, so an
+#: append can never leave a half-rewritten document behind, and a torn final
+#: line costs the reader one stale stage rather than the whole file.
+UPDATE_PROGRESS_FILENAME = "progress.json"
+
+#: The stages the helper reports, in the order it reports them. The reader
+#: shows whatever string it finds rather than switching on this tuple -- a
+#: second copy of the list in the desktop shell would be a second source of
+#: truth -- but the sequence is pinned by a test so a stage cannot silently
+#: stop being written.
+UPDATE_PROGRESS_STAGES: tuple[str, ...] = (
+    "waiting-for-parent",
+    "installing",
+    "starting",
+    "done",
+    "failed",
+)
 # Bound on how long the helper waits for this process to exit before it stops
 # waiting and ends the parent itself. It is the SERVER'S OWN stop budget, not a
 # number of the helper's own: the parent bounds its stop at
@@ -456,6 +476,37 @@ def _stage_dir() -> Path:
     return config_dir_path() / _STAGE_DIRNAME
 
 
+def update_progress_path() -> Path:
+    """Where the deferred helper appends its stage receipts."""
+
+    return _stage_dir() / UPDATE_PROGRESS_FILENAME
+
+
+def update_progress() -> dict[str, Any] | None:
+    """The most recent stage the deferred helper reported, if any.
+
+    The last parseable line wins. A trailing line that is still being written
+    -- the file is appended to by a detached process -- is skipped rather than
+    treated as the end of the story, because the stage before it is still true.
+    """
+
+    try:
+        raw = update_progress_path().read_text(encoding="utf-8-sig")
+    except OSError:
+        return None
+    for line in reversed(raw.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
 def pending_upgrade_result() -> dict[str, Any] | None:
     """Outcome written by a deferred (Windows) upgrade, if one has finished.
 
@@ -583,6 +634,7 @@ def _deferred_helper_script(
     """
 
     quoted_args = ", ".join(_powershell_literal(arg) for arg in command[1:])
+    progress_path = stage_dir / UPDATE_PROGRESS_FILENAME
     wait_budget = (
         _helper_wait_seconds() if wait_seconds is None else float(wait_seconds)
     )
@@ -592,6 +644,33 @@ def _deferred_helper_script(
     tool_dir_literal = _powershell_literal(str(tool_dir) if tool_dir else "")
     return f"""$ErrorActionPreference = 'Stop'
 $parent = {os.getpid()}
+# One JSON object per line, appended as this script moves between stages. It is
+# the only trace an update leaves while it is happening: the parent's log stops
+# at the stop line, uv writes to a pipe nobody is reading, and the whole window
+# between "Update" and the new server answering was, measured on a real
+# machine, fourteen minutes of a desktop app showing one unchanging sentence.
+# The desktop window reads this file and says which stage it is in.
+$progressPath = {_powershell_literal(str(progress_path))}
+$progressEncoding = New-Object System.Text.UTF8Encoding($false)
+function Write-Stage($stage, $message) {{
+    try {{
+        $record = [ordered]@{{
+            stage = $stage
+            message = $message
+            at = (Get-Date).ToUniversalTime().ToString('o')
+            parent = $parent
+        }}
+        $line = ($record | ConvertTo-Json -Compress) + [Environment]::NewLine
+        [System.IO.File]::AppendAllText($progressPath, $line, $progressEncoding)
+    }}
+    catch {{
+        # A receipt nobody can write must never be the reason an update fails.
+    }}
+}}
+# A fresh episode starts a fresh file: a stale 'done' from the previous update
+# would otherwise be the first thing the window reads and believes.
+try {{ [System.IO.File]::WriteAllText($progressPath, '', $progressEncoding) }} catch {{ }}
+Write-Stage 'waiting-for-parent' 'Waiting for the running server to stop.'
 # Windows recycles process ids quickly, so a bare Get-Process -Id would happily
 # match an unrelated process that inherited ours and wait out the full deadline
 # without ever installing. Pin the identity with the creation time too: same id
@@ -628,10 +707,12 @@ if (Test-ParentAlive) {{
     }}
 }}
 if (Test-ParentAlive) {{
+    Write-Stage 'failed' 'The server could not be stopped, so the update was not applied.'
     $result = @{{ ok = $false; message = 'The server could not be stopped, so the update was not applied.' }}
     [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
     exit 1
 }}
+Write-Stage 'installing' 'Installing the new version.'
 # Give Windows a moment to release the handles the exiting process held.
 Start-Sleep -Seconds 2
 # uv writes progress to stderr. Under ErrorActionPreference='Stop' a native
@@ -806,12 +887,18 @@ $result = @{{
 }}
 [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
 if ($ok) {{
+    Write-Stage 'starting' 'Starting the updated server.'
+}} else {{
+    Write-Stage 'failed' $result.message
+}}
+if ($ok) {{
     Remove-Item -Path {_powershell_literal(str(stage_dir / "wheel"))} -Recurse -Force -ErrorAction SilentlyContinue
     # The launcher lives in uv's bin directory, outside the tool environment
     # which was just replaced. Start it only after a successful install; a
     # failed helper leaves the receipt for the dashboard and never starts a
     # half-installed server.
     Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}
+    Write-Stage 'done' 'The updated server was started.'
 }}
 """
 

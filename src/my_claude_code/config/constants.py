@@ -398,6 +398,12 @@ DESKTOP_ADMIN_REQUEST_TIMEOUT_DEFAULT = 5.0
 DESKTOP_ACTIVATION_POLL_SECONDS_DEFAULT = 1.0
 DESKTOP_HEALTH_POLL_SECONDS_DEFAULT = 5.0
 DESKTOP_HEALTH_FAILURE_THRESHOLD_DEFAULT = 3
+# How often a client waiting out a restart re-reads the whole status document
+# instead of only re-probing /health. 30s is roughly every sixth poll at the
+# default 5s health poll: often enough that a server nobody is going to restart
+# is noticed in well under a minute, rare enough that a 17-minute reconnect
+# costs about 34 short-lived child processes rather than 200.
+DESKTOP_RECONNECT_RESTATUS_SECONDS_DEFAULT = 30.0
 DESKTOP_WINDOW_WIDTH_DEFAULT = 1400
 DESKTOP_WINDOW_HEIGHT_DEFAULT = 900
 

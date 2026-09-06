@@ -141,6 +141,7 @@ from my_claude_code.core.request_log import (
     RequestLogStore,
     store_from_settings,
 )
+from my_claude_code.core.tier_refs import tier_alias_by_route_env_var
 from my_claude_code.providers.anthropic_oauth.constants import (
     INFERENCE_SCOPE as ANTHROPIC_INFERENCE_SCOPE,
 )
@@ -258,6 +259,7 @@ class DesktopUpdatePayload(BaseModel):
     tray_enabled: bool | None = None
     start_at_login: bool | None = None
     minimize_to_tray: bool | None = None
+    close_to_tray: bool | None = None
     server_mode: str | None = None
     window: str | None = None
 
@@ -523,10 +525,29 @@ async def admin_document(slug: str, request: Request):
     }
 
 
+def _config_response() -> dict[str, Any]:
+    """The admin config payload, plus the tier alias each route answers to.
+
+    ``config`` is a leaf package -- it imports nothing else in this tree
+    (``tests/contracts/test_import_boundaries.py``) -- so ``core.tier_refs``,
+    which owns the five aliases, cannot be read from inside
+    ``load_config_response``. It is joined on here instead, in the layer that
+    is allowed to see both, rather than mirrored into ``config`` where the two
+    copies would be free to drift.
+    """
+
+    payload = load_config_response()
+    # ``{"MODEL": "mcc/best", ...}``: which harness alias names each route, for
+    # the Model Config rail headings. A route with no alias -- MODEL_FABLE --
+    # simply is not a key here, and the page shows no alias for it.
+    payload["route_tier_aliases"] = tier_alias_by_route_env_var()
+    return payload
+
+
 @router.get("/admin/api/config")
 async def get_admin_config(request: Request):
     require_loopback_admin(request)
-    return load_config_response()
+    return _config_response()
 
 
 @router.post("/admin/api/config/validate")
@@ -1531,6 +1552,7 @@ def _desktop_state_response(state: DesktopState) -> dict[str, Any]:
         "tray_enabled": state.tray_enabled,
         "start_at_login": state.start_at_login,
         "minimize_to_tray": state.minimize_to_tray,
+        "close_to_tray": state.close_to_tray,
         "server_mode": state.server_mode,
         "window": state.window,
         "window_auto_provider": resolved_provider,
@@ -1588,6 +1610,7 @@ async def update_desktop(payload: DesktopUpdatePayload, request: Request):
         "tray_enabled",
         "start_at_login",
         "minimize_to_tray",
+        "close_to_tray",
         "server_mode",
         "window",
     ):
@@ -1600,7 +1623,15 @@ async def update_desktop(payload: DesktopUpdatePayload, request: Request):
     updated = DesktopState(
         tray_enabled=updates.get("tray_enabled", current.tray_enabled),
         start_at_login=updates.get("start_at_login", current.start_at_login),
-        minimize_to_tray=updates.get("minimize_to_tray", current.minimize_to_tray),
+        # One button, one answer. A payload naming either spelling sets both,
+        # so the state file can never hold two different opinions about what
+        # the window's close button does.
+        minimize_to_tray=updates.get(
+            "close_to_tray", updates.get("minimize_to_tray", current.close_to_tray)
+        ),
+        close_to_tray=updates.get(
+            "close_to_tray", updates.get("minimize_to_tray", current.close_to_tray)
+        ),
         server_mode=updates.get("server_mode", current.server_mode),
         window=updates.get("window", current.window),
         # window_open and the last-applied-window-size fields are lifecycle

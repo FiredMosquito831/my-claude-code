@@ -22,7 +22,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from my_claude_code.cli.desktop_window import DesktopWindow, create_window
-from my_claude_code.cli.launchers.common import preflight_proxy
+from my_claude_code.cli.launchers.common import (
+    PreflightResult,
+    preflight_proxy,
+    preflight_result,
+)
 from my_claude_code.cli.port_diagnostics import (
     PortOwner,
     diagnose_port_owner,
@@ -48,6 +52,8 @@ from my_claude_code.config.settings import get_settings
 from my_claude_code.core.interprocess_lock import InterprocessFileLock
 from my_claude_code.core.stop_deadline import (
     HARD_EXIT_GRACE_SECONDS,
+    SHUTDOWN_MARKER_HEADER,
+    SHUTDOWN_MARKER_VALUE,
     STOP_TEARDOWN_MARGIN_SECONDS,
     clamp_stop_budget,
 )
@@ -87,8 +93,29 @@ WINDOW_CLOSE_POLL_SECONDS = 1.0
 #: reach a child process nobody in the middle knows how to pass a flag to.
 SKIP_AUTOSTART_ENV = "MCC_DESKTOP_SKIP_AUTOSTART"
 
-#: Three distinguishable states of the configured host:port.
-type ServerPresence = Literal["healthy", "foreign", "free"]
+#: Four distinguishable states of the configured host:port.
+#:
+#: ``draining`` is the newest and the narrowest: MCC's own server is answering
+#: on the port, but it has been asked to stop and its shutdown gate is refusing
+#: everything with a 503 until the drain finishes. Before it existed that state
+#: read as ``foreign`` -- a port conflict naming MCC's own process as "not the
+#: MCC server" -- which is the page a user landed on every time they relaunched
+#: the desktop app during a slow restart.
+#:
+#: It is reported only to a caller that asks for it (``presence_v2=True``).
+#: A reader written before this value existed has no branch for it, and the
+#: desktop shell refuses a presence it does not know rather than guessing, so
+#: an old window against a new wheel must keep seeing the old three.
+type ServerPresence = Literal["healthy", "foreign", "free", "draining"]
+
+#: Every value ``probe_server_presence`` can return, opt-in included. Any table
+#: that enumerates presences is checked against this.
+SERVER_PRESENCES: tuple[ServerPresence, ...] = (
+    "healthy",
+    "free",
+    "foreign",
+    "draining",
+)
 
 
 #: Seconds allowed for the OS to reap a process after the final ``kill``.
@@ -119,22 +146,64 @@ SERVER_DOWN_NOTIFICATION = (
 SERVER_RECOVERED_NOTIFICATION = "The MCC server is answering again."
 
 
-def probe_server_presence(settings: Any) -> ServerPresence:
-    """Tell a healthy MCC apart from a stranger holding the port.
+def is_draining_response(result: PreflightResult) -> bool:
+    """Whether this ``/health`` answer is MCC's own shutdown gate.
 
-    ``preflight_proxy`` answers only one question -- does a healthy MCC reply
-    on this port -- and its "no" covers two very different worlds: nothing is
-    listening, or something that is not MCC is. Spawning into the second case
-    produces a bind failure with no explanation, so the port is probed
-    read-only to separate them.
+    The gate refuses every request with 503 from the instant a stop is
+    requested (``runtime/asgi.py``), and it stamps
+    ``x-mcc-shutdown: 1`` on the refusal precisely so this question has an
+    answer. The ``retry-after`` fallback exists for one release of overlap: a
+    server from before the marker still sends 503 + ``retry-after``, and
+    reading that as a drain is a far better guess than reading it as a
+    stranger on the port. Neither branch fires on a plain 503 from something
+    that is not MCC, which is the distinction the whole value exists for.
     """
 
-    if preflight_proxy(local_proxy_root_url(settings)) is None:
+    if result.status_code != 503:
+        return False
+    if result.header(SHUTDOWN_MARKER_HEADER) == SHUTDOWN_MARKER_VALUE:
+        return True
+    return bool((result.header("retry-after") or "").strip())
+
+
+def probe_server_presence(
+    settings: Any, *, presence_v2: bool = False
+) -> ServerPresence:
+    """Tell a healthy MCC apart from a stranger holding the port.
+
+    ``preflight_result`` answers only one question -- does a healthy MCC reply
+    on this port -- and its "no" covers three very different worlds: nothing is
+    listening, something that is not MCC is, or MCC itself is mid-drain and
+    refusing new work on purpose. Spawning into the second case produces a bind
+    failure with no explanation, so the port is probed read-only to separate
+    them; the third is separated by the shutdown gate's own marker header
+    rather than by another probe.
+
+    ``presence_v2`` is the opt-in for the third answer. Without it this returns
+    exactly the three values it always has, so a reader written against the old
+    ladder cannot be handed a value it has no branch for.
+    """
+
+    result = preflight_result(local_proxy_root_url(settings))
+    if result.ok:
         return "healthy"
+    if presence_v2 and is_draining_response(result):
+        return "draining"
     host = (settings.host or "127.0.0.1").strip()
     if probe_port_available(host, settings.port):
         return "free"
     return "foreign"
+
+
+def draining_message(settings: Any) -> str:
+    """What to say about a server that is stopping under its own budget."""
+
+    return (
+        f"The My Claude Code server on port {settings.port} is shutting down "
+        f"and is refusing new requests until it has finished. It stops within "
+        f"its configured graceful-shutdown budget; wait for it, then start the "
+        f"desktop app again."
+    )
 
 
 def port_conflict_message(settings: Any) -> str:
@@ -282,9 +351,15 @@ class DesktopController:
         if load_desktop_state().server_mode != "spawn":
             return
         settings = get_settings()
-        presence = probe_server_presence(settings)
+        presence = probe_server_presence(settings, presence_v2=True)
         if presence == "healthy":
             return
+        if presence == "draining":
+            # MCC's own server, mid-stop. Neither a conflict to report nor a
+            # port to bind: a spawn here loses the race with the socket the
+            # draining process still holds, and the old code called it a
+            # stranger on the port.
+            raise DesktopError(draining_message(settings))
         if presence == "foreign":
             raise DesktopError(port_conflict_message(settings))
         self._spawn_server(settings)
@@ -490,19 +565,19 @@ class DesktopController:
     def handle_window_closed(self) -> bool:
         """Return True when the app should keep running after a window close.
 
-        ``minimize_to_tray`` is the user's answer to "did closing the window
-        mean quit?". With a tray to fall back to, closing hides the window;
-        with no tray, closing is the only way out, so it ends the app.
+        ``close_to_tray`` is the user's answer to "did closing the window mean
+        quit?", and since 6.50.0 the answer defaults to no. With a tray to fall
+        back to, closing hides the window; with no tray, closing is the only
+        way out, so it ends the app.
 
         Only a close that the app SURVIVES records "no window". When the close
-        ends the app -- the default, since ``minimize_to_tray`` is off -- the
-        user's last intent was an app with a window, so the state is left
-        alone. Recording it either way would mean the ordinary act of closing
-        the app stopped it ever opening a window again.
+        ends the app the user's last intent was an app with a window, so the
+        state is left alone. Recording it either way would mean the ordinary
+        act of closing the app stopped it ever opening a window again.
         """
 
         state = load_desktop_state()
-        keep_running = state.minimize_to_tray and state.tray_enabled
+        keep_running = state.close_to_tray and state.tray_enabled
         if keep_running:
             set_window_open(False)
         return keep_running
@@ -593,7 +668,10 @@ class DesktopController:
 
         settings = get_settings()
         root_url = local_proxy_root_url(settings)
-        if preflight_proxy(root_url) is not None:
+        # The same single probe every other presence question in this file goes
+        # through, so there is one place that decides what "the server is
+        # answering" means.
+        if not preflight_result(root_url).ok:
             self.ensure_server()
             return
 
@@ -604,7 +682,7 @@ class DesktopController:
             # passed. Kill any child we own and let ensure_server respawn; if we
             # do not own a child, leave the running server alone.
             self._stop_child()
-            if preflight_proxy(root_url) is not None:
+            if not preflight_result(root_url).ok:
                 self.ensure_server()
 
     def stop(self) -> None:

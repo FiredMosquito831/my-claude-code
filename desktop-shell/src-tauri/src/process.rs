@@ -9,8 +9,10 @@
 //! It never takes `desktop.lock`, never writes `desktop.json`, and never
 //! registers autostart (C4). Every one of those stays Pythons.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use crate::install::InstallCommand;
 
@@ -24,6 +26,34 @@ pub const SERVER_COMMAND_ENV: &str = "MCC_SHELL_SERVER_COMMAND";
 
 const DESKTOP_COMMAND: &str = "mcc-desktop";
 const SERVER_COMMAND: &str = "mcc-server";
+
+/// The flag that opts this window into every server state the wheel can
+/// report. Today that means `draining`: MCC's own server on the port, refusing
+/// everything while it finishes stopping.
+///
+/// It is passed unconditionally because this build has a branch for that
+/// value. A window built before it existed does not pass the flag and is
+/// answered with the three presences it was written against, so a new wheel
+/// never hands an old window a state it would render as an error page. See
+/// `cli/desktop_status.py`'s module docstring for the whole argument.
+const PRESENCE_V2_FLAG: &str = "--presence-v2";
+
+/// How long `mcc-desktop --print-status` may take before this window stops
+/// waiting on it.
+///
+/// The Python side bounds its own work -- one 1.5s loopback probe, and
+/// otherwise a path read -- so in practice this expires only when the *process*
+/// cannot make progress: a cold shim being scanned by antivirus, a `.env` on a
+/// network drive that has gone away, an interpreter paging in on a machine
+/// under load. `Command::output()` has no wall of its own, and this call runs
+/// on the ladder thread, so a wedged child used to block every page update in
+/// the window including the error page that would have explained it.
+///
+/// Fifteen seconds is chosen to be far longer than the operation can honestly
+/// take and far shorter than a person will sit in front of a frozen window.
+/// It is not a policy the operator tunes: it is the difference between a
+/// window that reports a problem and a window that hangs.
+const STATUS_WALL: Duration = Duration::from_secs(15);
 
 /// Why `mcc-desktop --print-status` did not produce a document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,27 +93,91 @@ fn hide_console(_command: &mut Command) {}
 
 /// Run `mcc-desktop --print-status` and return its stdout verbatim.
 pub fn print_status() -> Result<String, StatusRunError> {
+    print_status_within(STATUS_WALL)
+}
+
+/// The same, with the wall spelled out. Split for the test, which cannot wait
+/// fifteen seconds to prove that waiting ends.
+pub fn print_status_within(wall: Duration) -> Result<String, StatusRunError> {
     let (program, mut args) = resolve(DESKTOP_COMMAND_ENV, DESKTOP_COMMAND);
     args.push("--print-status".to_owned());
+    args.push(PRESENCE_V2_FLAG.to_owned());
 
     let mut command = Command::new(&program);
-    command.args(&args).stdin(Stdio::null());
+    command
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     hide_console(&mut command);
 
-    let output = match command.output() {
-        Ok(output) => output,
+    let mut child = match command.spawn() {
+        Ok(child) => child,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(StatusRunError::NotInstalled);
         }
         Err(error) => return Err(StatusRunError::Unrunnable(error.to_string())),
     };
-    if !output.status.success() {
+
+    // Both pipes are drained on threads of their own. A child that fills one
+    // of them deadlocks against a parent that is waiting on the other, and a
+    // status document is comfortably larger than a pipe buffer on some
+    // platforms, so this is not a hypothetical.
+    let stdout = child.stdout.take().map(drain_on_a_thread);
+    let stderr = child.stderr.take().map(drain_on_a_thread);
+
+    let deadline = Instant::now() + wall;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => return Err(StatusRunError::Unrunnable(error.to_string())),
+        }
+        if Instant::now() >= deadline {
+            // Killed, and reaped: a zombie left behind by a window that runs
+            // this every thirty seconds during a reconnect would accumulate.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(StatusRunError::Unrunnable(format!(
+                "{program} --print-status did not answer within {:.0} seconds, so \
+                 it was stopped. Something is holding it up -- a shim being \
+                 scanned, or a configuration directory on a drive that is not \
+                 answering.",
+                wall.as_secs_f64()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+
+    let out = stdout.map(collect).unwrap_or_default();
+    let err = stderr.map(collect).unwrap_or_default();
+    if !status.success() {
         return Err(StatusRunError::Failed {
-            code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            code: status.code(),
+            stderr: err.trim().to_owned(),
         });
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(out)
+}
+
+/// Read one pipe to the end on its own thread.
+fn drain_on_a_thread(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<String> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = pipe.read_to_end(&mut buffer);
+        let _ = sender.send(String::from_utf8_lossy(&buffer).into_owned());
+    });
+    receiver
+}
+
+/// What a drained pipe held. A reader that never finished -- the child was
+/// killed with the pipe still open -- contributes nothing rather than blocking
+/// the wall it was just enforced by.
+fn collect(receiver: mpsc::Receiver<String>) -> String {
+    receiver
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_or_default()
 }
 
 /// Start `mcc-server`, detached, and forget about it.
@@ -144,6 +238,8 @@ pub fn run_install(command: &InstallCommand, mut on_line: impl FnMut(&str)) -> R
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
 
     #[test]
@@ -182,14 +278,108 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_command_reads_as_not_installed() {
+    fn the_status_call_asks_for_every_presence_this_build_understands() {
+        // The opt-in that keeps an OLD window from being handed `draining`.
+        // If this flag ever stops being sent, this build silently loses the
+        // distinction between "MCC is restarting" and "a stranger has the
+        // port", which is the whole of the release.
+        assert_eq!(PRESENCE_V2_FLAG, "--presence-v2");
+    }
+
+    /// `DESKTOP_COMMAND_ENV` is process-global and `cargo test` runs its tests
+    /// on threads, so the two tests below have to take turns or each will read
+    /// the other's override.
+    static COMMAND_ENV: Mutex<()> = Mutex::new(());
+
+    /// Write a script that ignores every argument and then blocks for a good
+    /// while. It has to ignore arguments because `print_status` appends its
+    /// own, and an override that *errors* on them would prove the wrong thing:
+    /// the test is about a child that never answers, not one that fails fast.
+    fn a_command_that_never_answers() -> (std::path::PathBuf, String) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock after 1970")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("mcc-shell-wall-{stamp}"));
+        std::fs::create_dir_all(&directory).expect("scratch directory");
+        let path = if cfg!(windows) {
+            let path = directory.join("never-answers.cmd");
+            std::fs::write(&path, "@echo off\r\nping -n 200 127.0.0.1 >nul\r\n")
+                .expect("wrote the sleeper");
+            path
+        } else {
+            let path = directory.join("never-answers.sh");
+            std::fs::write(&path, "#!/bin/sh\nsleep 200\n").expect("wrote the sleeper");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                    .expect("made it executable");
+            }
+            path
+        };
+        let command = path.to_string_lossy().into_owned();
+        (directory, command)
+    }
+
+    #[test]
+    fn print_status_gives_up_rather_than_blocking_forever() {
+        // `Command::output()` has no wall, so a wedged child used to block the
+        // ladder thread for the life of the process -- and the ladder thread is
+        // what paints every page, including the error page that would have
+        // explained the problem.
+        let guard = COMMAND_ENV
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let (directory, sleeper) = a_command_that_never_answers();
         let key = DESKTOP_COMMAND_ENV;
         let previous = std::env::var(key).ok();
-        unsafe { std::env::set_var(key, "mcc-desktop-that-does-not-exist-9d2f") };
-        assert_eq!(print_status(), Err(StatusRunError::NotInstalled));
+        // Safety: the lock above makes this process the only reader for the
+        // duration, and the value is restored before it is released.
+        unsafe { std::env::set_var(key, &sleeper) };
+
+        let started = Instant::now();
+        let outcome = print_status_within(Duration::from_millis(600));
+        let waited = started.elapsed();
+
         match previous {
             Some(value) => unsafe { std::env::set_var(key, value) },
             None => unsafe { std::env::remove_var(key) },
         }
+        drop(guard);
+        std::fs::remove_dir_all(&directory).ok();
+
+        match outcome {
+            Err(StatusRunError::Unrunnable(detail)) => {
+                assert!(detail.contains("did not answer"), "{detail}");
+                assert!(
+                    detail.contains("was stopped"),
+                    "the message has to say the child was ended, not merely that \
+                     it was slow: {detail}"
+                );
+            }
+            other => panic!("expected a bounded give-up, got {other:?}"),
+        }
+        assert!(
+            waited < Duration::from_secs(30),
+            "the wall did not hold: waited {waited:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_command_reads_as_not_installed() {
+        let guard = COMMAND_ENV
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let key = DESKTOP_COMMAND_ENV;
+        let previous = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, "mcc-desktop-that-does-not-exist-9d2f") };
+        let outcome = print_status();
+        match previous {
+            Some(value) => unsafe { std::env::set_var(key, value) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+        drop(guard);
+        assert_eq!(outcome, Err(StatusRunError::NotInstalled));
     }
 }

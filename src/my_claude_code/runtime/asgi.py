@@ -8,6 +8,8 @@ from loguru import logger
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from my_claude_code.core.stop_deadline import (
+    SHUTDOWN_MARKER_HEADER,
+    SHUTDOWN_MARKER_VALUE,
     SHUTDOWN_RETRY_AFTER_SECONDS,
     stop_deadline,
 )
@@ -37,6 +39,15 @@ _SHUTTING_DOWN_HEADERS = [
     (b"content-length", str(len(_SHUTTING_DOWN_BODY)).encode("ascii")),
     (b"connection", b"close"),
     (b"retry-after", str(SHUTDOWN_RETRY_AFTER_SECONDS).encode("ascii")),
+    # The signature a program reads. Without it, ``probe_server_presence``
+    # cannot tell MCC mid-drain from a stranger on the port, and a desktop
+    # window launched during a restart accuses MCC's own process of being a
+    # port conflict. A bare 503 is not enough: any reverse proxy, any other
+    # service, any unrelated application can answer 503 on that port.
+    (
+        SHUTDOWN_MARKER_HEADER.encode("ascii"),
+        SHUTDOWN_MARKER_VALUE.encode("ascii"),
+    ),
 ]
 
 

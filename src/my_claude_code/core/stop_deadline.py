@@ -59,6 +59,17 @@ HARD_EXIT_GRACE_SECONDS = 1.0
 # measured in seconds.
 SHUTDOWN_RETRY_AFTER_SECONDS = 5
 
+# The header the shutdown gate stamps on every refusal, so a reader can tell
+# "MCC is draining" apart from "some other 503". A 503 with a ``retry-after``
+# is a good enough signature for a human; it is not good enough for a program
+# that has to decide between showing a reconnect banner and telling the user a
+# stranger has taken the port. The header is that decision, spelled out once.
+#
+# Lower-case on purpose: ASGI header names are lower-cased by contract, and
+# every reader here compares lower-cased names.
+SHUTDOWN_MARKER_HEADER = "x-mcc-shutdown"
+SHUTDOWN_MARKER_VALUE = "1"
+
 # Exit status used by the watchdog. Distinct from 0 (clean) and 1 (a refused
 # REPLACE_PROCESS) so a supervisor can tell the three apart in a log.
 HARD_EXIT_STATUS = 3
