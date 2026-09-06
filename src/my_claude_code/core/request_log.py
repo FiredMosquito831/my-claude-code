@@ -217,6 +217,13 @@ _LIST_METADATA_COLUMNS = (
     # How many images or documents the request carried. A count, not pixels,
     # so a list row can say "this turn had a screenshot in it" for free.
     "input_image_count",
+    # How those images actually travelled: "image" when the model received a
+    # picture, "stripped" when it was replaced by a sentence because the model
+    # is published as blind, "text" if a path ever flattens one to base64
+    # again, "none" when the request carried nothing visual. NULL means the row
+    # predates the column, which is not the same as "none" and is drawn as a
+    # dash rather than as a measurement.
+    "image_delivery",
     # Which local rule answered this request without contacting a provider,
     # and the input tokens that never went upstream because it did. NULL on
     # every ordinary request and on every row written before the column
@@ -272,6 +279,7 @@ CREATE TABLE IF NOT EXISTS requests (
     optimization TEXT,
     optimization_tokens_saved INTEGER,
     input_image_count INTEGER,
+    image_delivery TEXT,
     harness TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts_epoch);
@@ -801,6 +809,14 @@ _ADDED_COLUMNS = (
         "input_image_count",
         "ALTER TABLE requests ADD COLUMN input_image_count INTEGER",
     ),
+    # Added in 6.49.0 with the fix that made a tool-returned image arrive as an
+    # image. Rows written before it keep NULL forever: "we were not measuring"
+    # is a different fact from "nothing visual was sent", and only NULL says
+    # the first one.
+    (
+        "image_delivery",
+        "ALTER TABLE requests ADD COLUMN image_delivery TEXT",
+    ),
     # The reasoning intent as asked for, before per-model capability gating.
     # ``reasoning`` holds the *applied* policy: since per-model gating landed it
     # records what was actually sent, and rewriting that history would be worse
@@ -919,6 +935,7 @@ _REQUEST_INSERT_COLUMNS = (
     "route_diverted_from",
     "route_diversion",
     "input_image_count",
+    "image_delivery",
     "optimization",
     "optimization_tokens_saved",
     "is_local",
@@ -1305,6 +1322,9 @@ class RequestRecord:
     # Images and documents the request carried. The count is a column so list
     # rows can show it; the pictures themselves live in their own tables.
     input_image_count: int | None = None
+    # How the images this request carried reached the model: "image",
+    # "stripped", "text" or "none". ``None`` means not measured.
+    image_delivery: str | None = None
     images: tuple[CapturedImage, ...] = ()
     attempts: tuple[RouteAttempt, ...] = ()
     tool_calls: list[dict[str, Any]] | None = None
@@ -3101,6 +3121,7 @@ class RequestLogStore:
             record.route_diverted_from,
             record.route_diversion,
             record.input_image_count,
+            record.image_delivery,
             record.optimization,
             record.optimization_tokens_saved,
             _is_local_value(record),

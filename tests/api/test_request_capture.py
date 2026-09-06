@@ -1307,3 +1307,108 @@ def test_an_attempt_with_no_ladder_falls_back_to_the_attribution_slot(store) -> 
     attempt = store.get_request("req_skip")["route_attempts"][0]
     assert attempt["key_index"] == 2
     assert attempt["ladder_tries"] is None
+
+
+def test_image_delivery_marker_records_how_the_picture_travelled(
+    store: RequestLogStore,
+) -> None:
+    """The only way to see the 6.49.0 fix working in production.
+
+    The vision adapter here is sighted, so the request is diverted to it and the
+    picture is sent as a picture. Recorded per attempt, because the decision is
+    per attempt.
+    """
+    plan = _vision_router().resolve_messages_plan(_image_request())
+    capture = RequestCapture(
+        store,
+        request_id="req_delivery",
+        endpoint="/v1/messages",
+        protocol="anthropic",
+        stream=True,
+        requested_model="claude-sonnet-4-6",
+        input_text="hi",
+        params=None,
+    )
+    capture.set_plan(plan)
+    capture.set_routing(plan.primary, 0)
+    capture.finish_success("ok")
+    store.close()
+
+    row = store.get_request("req_delivery")
+    assert row is not None
+    assert row["image_delivery"] == "image"
+
+
+def test_image_delivery_marker_says_stripped_for_a_blind_model(
+    store: RequestLogStore,
+) -> None:
+    """No vision adapter to divert to, so the blind model keeps the request."""
+    settings = Settings()
+    settings.model = "nvidia_nim/blind"
+    settings.model_sonnet = "nvidia_nim/blind"
+    settings.model_fable = None
+    settings.model_opus = None
+    settings.model_haiku = None
+    settings.model_fallbacks = None
+    settings.model_sonnet_fallbacks = None
+    settings.model_vision = None
+    router = ModelRouter(
+        settings,
+        vision_lookup=lambda _provider, model: {"blind": False}.get(model),
+    )
+    plan = router.resolve_messages_plan(_image_request())
+    capture = RequestCapture(
+        store,
+        request_id="req_stripped",
+        endpoint="/v1/messages",
+        protocol="anthropic",
+        stream=True,
+        requested_model="claude-sonnet-4-6",
+        input_text="hi",
+        params=None,
+    )
+    capture.set_plan(plan)
+    capture.set_routing(plan.primary, 0)
+    capture.finish_success("ok")
+    store.close()
+
+    row = store.get_request("req_stripped")
+    assert row is not None
+    assert row["image_delivery"] == "stripped"
+    assert row["route_diversion"] == "vision_unavailable"
+    # And the picture really is gone from the request that will be sent.
+    content = plan.primary.request.messages[0].content
+    assert "does not accept images" in str(content)
+
+
+def test_image_delivery_marker_says_none_without_a_picture(
+    store: RequestLogStore,
+) -> None:
+    """A text-only request must not claim a delivery it never made."""
+    plan = _vision_router().resolve_messages_plan(
+        MessagesRequest.model_validate(
+            {
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 8,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        )
+    )
+    capture = RequestCapture(
+        store,
+        request_id="req_plain",
+        endpoint="/v1/messages",
+        protocol="anthropic",
+        stream=True,
+        requested_model="claude-sonnet-4-6",
+        input_text="hi",
+        params=None,
+    )
+    capture.set_plan(plan)
+    capture.set_routing(plan.primary, 0)
+    capture.finish_success("ok")
+    store.close()
+
+    row = store.get_request("req_plain")
+    assert row is not None
+    assert row["image_delivery"] == "none"

@@ -54,7 +54,7 @@ Run your coding agents with free, paid, or local models. Choose and validate pro
 | **Claude, direct** | `anthropic` speaks Anthropic's native Messages API with a Claude Console API key, billed per token. A separate `anthropic_oauth` provider can use a Pro/Max subscription instead — **which Anthropic does not permit**; read [docs/ANTHROPIC-SUBSCRIPTION.md](docs/ANTHROPIC-SUBSCRIPTION.md) before enabling it. |
 | **Model-tier routing** | Route Fable, Opus, Sonnet, Haiku, and fallback traffic to different models, each with an ordered fallback chain. |
 | **Vision adapter** | Image requests are diverted to a model that can see when the tier's own model cannot, with its own fallback chain. |
-| **Protocol fidelity** | Streaming, tool use, reasoning, and image input preserved across compatible models, with configurable reasoning control. |
+| **Protocol fidelity** | Streaming, tool use, reasoning, and image input preserved across compatible models — including an image a *tool* returned, which reaches the model as a picture rather than as base64 text. |
 | **Key rotation** | Multi-key credential rotation for both model and web search providers: comma-separated keys, four rotation policies, key health driven only by the provider's own auth and rate-limit signals, and per-key admin management. |
 | **Web search** | Claude Code's official `web_search` server tool fulfilled at the proxy level by 14 search providers, with 66 advanced per-provider options, full-page-text retrieval, domain filtering, rich result digests, and zero-config keyless fallback. |
 | **Limits & Resilience** | Deadlines, output budgets, chain benching, provider retries and credential health on one page, each field with a stated cost and an enforced range — plus a calculator that tells you what each model on *your* chains actually gets, which is rarely the number in the box. |
@@ -1246,6 +1246,27 @@ When the diversion happens, any fallbacks that are themselves known to be image-
 
 **Model Config shows which tiers need it.** A tier whose model is known not to read images carries a line under its fallback chain naming where its images actually go, and the Vision adapter card lists the tiers it currently covers. With no adapter configured the same line turns amber and says the images will fail there.
 
+**An image a *tool* returned now arrives as an image.** A screenshot from a
+browser tool, or a `Read` of a PNG, comes back nested inside the tool result.
+No OpenAI-format chat message can carry an image there — the tool role takes
+text and nothing else — so before 6.49.0 MCC turned that picture into base64
+*text* inside the tool message. Every OpenAI-dialect provider then tokenised it
+at roughly one token per byte: one 213 KB screenshot measured **324,000 prompt
+tokens**, three of them 990,000, four failed the request outright, and the model
+never saw a picture at any price. Since 6.49.0 the image is moved into a short
+`user` message immediately after the tool output, led by a line marking it as
+tool output rather than as something you said, and the tool message keeps a
+one-line note pointing at it. On the ChatGPT/Codex `/v1/responses` path no move
+is needed: that format carries the image inside `function_call_output` itself.
+Anthropic-native providers were never affected and are unchanged.
+
+`TOOL_RESULT_IMAGE_DELIVERY` chooses the rule: `auto` (default) attaches the
+image unless the model that answers is published as not accepting images, in
+which case a plain sentence naming the tool takes its place; `attach` always
+sends it; `strip` never does. There is deliberately no option to send base64
+text. A PDF returned by a tool is named rather than sent — no OpenAI-format chat
+message has a shape for one.
+
 Capability metadata is topped up from the [models.dev](https://models.dev) catalog for **every** provider, not just the ones that publish modality data themselves — without that, "can this model read a screenshot?" is unanswerable for most of the catalog. A provider's own answer always wins where it has one, and a model nobody reports on stays untouched.
 
 ### Reasoning Control
@@ -1660,6 +1681,7 @@ Every request records the **whole routing decision**, not just the model that ha
 | `route_primary_model` | what it fell back *from*, when a fallback answered |
 | `route_diverted_from` | the route's own model, when a policy replaced it |
 | `route_diversion` | which policy did — today, `vision` |
+| `image_delivery` | how the pictures travelled: `image`, `stripped`, `text`, or `none`. Blank on rows written before 6.49.0 |
 
 The chain is stored **even when the primary answers**, because "a chain existed and was not needed" and "there was no chain" are different facts about a route, and only the first one tells you your fallbacks are configured.
 

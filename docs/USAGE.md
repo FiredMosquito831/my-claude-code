@@ -1811,6 +1811,7 @@ Unlike everything else on this page, a pause is written the moment you click it:
 | `MODEL_SONNET_PAUSED` | paused entries on Sonnet |
 | `MODEL_HAIKU_PAUSED` | paused entries on Haiku |
 | `MODEL_VISION_PAUSED` | paused entries on the vision adapter |
+| `TOOL_RESULT_IMAGE_DELIVERY` | how an image a *tool* returned reaches a non-Anthropic model: `auto` (default), `attach`, `strip` |
 
 All six are comma-separated `provider/model` lists, written by the Pause button rather than typed, and **new in 6.21.0**. An entry is dropped from its list automatically when it leaves the route it was paused on.
 
@@ -1878,6 +1879,18 @@ on this page rather than a model of its own:
 | `mcc/medium` | `MODEL_SONNET` | `MODEL_SONNET_FALLBACKS`, `MODEL_SONNET_PAUSED` |
 | `mcc/cheap` | `MODEL_HAIKU` | `MODEL_HAIKU_FALLBACKS`, `MODEL_HAIKU_PAUSED` |
 | `mcc/vision` | `MODEL_VISION` | `MODEL_VISION_FALLBACKS`, `MODEL_VISION_PAUSED` |
+
+**An image a tool returned reaches the model as an image, since 6.49.0.**
+A screenshot or a `Read` of a PNG arrives nested inside the tool result, and
+no OpenAI-format chat message can carry an image there. MCC used to flatten
+it into base64 text, which every OpenAI-dialect provider billed at roughly a
+token per byte -- 324,000 prompt tokens for one 213 KB screenshot the model
+never actually saw. It is now moved into a short `user` message right after
+the tool output, marked as tool output rather than as something you said.
+`TOOL_RESULT_IMAGE_DELIVERY` picks the rule: `auto` attaches unless the model
+that answers is published as not accepting images, `attach` always attaches,
+`strip` never does. The request log's `image_delivery` field records which
+happened, per request.
 
 The fleet is genuinely split over how it spells a model id, so both spellings
 are accepted: the bare `mcc/best` that Codex, Command Code, OpenCode, Kilo, Pi

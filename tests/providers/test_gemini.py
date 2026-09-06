@@ -431,3 +431,57 @@ async def test_cleanup(gemini_provider):
     await gemini_provider.cleanup()
 
     gemini_provider._client.close.assert_called_once()
+
+
+def test_gemini_tool_result_image_goes_as_an_image_part(gemini_provider):
+    """Gemini gets the fix for free: it subclasses the OpenAI chat provider.
+
+    There is no Gemini-specific code in this PR at all. This test exists to
+    prove that, and to fail loudly if someone ever gives the Google providers
+    their own converter.
+    """
+    req = make_request(
+        messages=[
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "take_screenshot",
+                        "input": {},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "QUJDRA==",
+                                },
+                            },
+                        ],
+                    }
+                ],
+            },
+        ]
+    )
+
+    body = gemini_provider._build_request_body(req, reasoning=reasoning_for(req))
+
+    roles = [message["role"] for message in body["messages"]]
+    assert roles[-2:] == ["tool", "user"]
+    hoisted = body["messages"][-1]["content"]
+    assert hoisted[1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,QUJDRA=="},
+    }
+    assert "QUJDRA==" not in str(body["messages"][-2])

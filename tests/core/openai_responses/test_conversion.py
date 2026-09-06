@@ -643,3 +643,45 @@ def test_responses_malformed_only_function_call_still_has_no_routable_message() 
                 ],
             }
         )
+
+
+def test_non_string_function_call_output_is_normalised():
+    """A client cannot land arbitrary blocks inside ``tool_result.content``.
+
+    The Responses format allows ``output`` to be a list of content parts, and
+    this door used to copy whatever arrived straight through. The other two
+    inbound doors already force a tool result to text; this makes the third
+    agree. Accepting images from a client is a separate question, deliberately
+    out of scope.
+    """
+    payload = _to_anthropic_payload(
+        {
+            "model": "gpt-5",
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "echo",
+                    "arguments": "{}",
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {"type": "output_text", "text": "first"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,Q",
+                        },
+                    ],
+                },
+            ],
+        }
+    )
+
+    tool_result = payload["messages"][-1]["content"][0]
+    assert tool_result["type"] == "tool_result"
+    content = tool_result["content"]
+    assert isinstance(content, str)
+    assert content.startswith("first")
+    assert "input_image" in content

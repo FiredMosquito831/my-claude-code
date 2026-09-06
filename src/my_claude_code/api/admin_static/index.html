@@ -1941,6 +1941,19 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   gets its own <em>Add fallback</em> chain like any other route.
                 </p>
                 <p>
+                  <strong>An image a tool returned now arrives as an image.</strong> A
+                  browser screenshot, or a <code>Read</code> of a PNG, comes back nested
+                  inside the tool result &mdash; and no OpenAI-format chat message can carry
+                  an image there. Before 6.49.0 MCC turned it into base64 <em>text</em>, and
+                  every OpenAI-dialect provider billed roughly one token per byte for a
+                  picture the model never saw: one 213 KB screenshot measured 324,000 prompt
+                  tokens, four of them failed the request outright. It is now moved into a
+                  short message right after the tool output, marked as tool output rather
+                  than as something you typed. <code>TOOL_RESULT_IMAGE_DELIVERY</code> on
+                  <strong>Model Config</strong> picks the rule, and each request records
+                  which one applied.
+                </p>
+                <p>
                   Afterwards, <a href="#guide-analytics">Analytics</a> shows the whole path
                   a request took: which models were tried, which one answered, and whether
                   the vision adapter stepped in.

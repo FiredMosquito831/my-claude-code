@@ -9,6 +9,14 @@ from typing import Any
 from .content import get_block_attr, get_block_type
 from .models import MessagesRequest
 from .request_serialization import serialize_tool_result_content
+from .tool_result_media import (
+    HOISTED_IMAGE_BOUNDARY_TEXT,
+    TOOL_DOCUMENT_STRIPPED_TEXT,
+    TOOL_IMAGE_ATTACHED_TEXT,
+    USER_DOCUMENT_STRIPPED_TEXT,
+    dedupe_placeholders,
+    split_tool_result_media,
+)
 from .utils import set_if_not_none
 
 
@@ -219,6 +227,131 @@ def _openai_user_image_part(block: Any) -> dict[str, Any]:
     return {"type": "image_url", "image_url": {"url": url}}
 
 
+def _openai_tool_result_message(block: Any) -> dict[str, Any]:
+    """Build the one ``role: tool`` message for one Anthropic tool result.
+
+    Stage 1 of two. When the tool result carried an image, the message's content
+    is a *list of parts* -- text plus ``image_url`` -- which is deliberately not
+    wire-legal for OpenAI Chat Completions. Stage 2 disposes of those parts per
+    dialect: the chat family hoists them into a following ``user`` message
+    (:func:`hoist_tool_result_images`), the Responses family puts them back
+    inside ``function_call_output``. Keeping the two apart is what lets one
+    converter serve both without knowing which one is downstream.
+
+    With no media the content is the bare string it has always been, so a
+    text-only tool result produces a byte-for-byte identical message.
+    """
+    tool_call_id = get_block_attr(block, "tool_use_id")
+    tool_content = get_block_attr(block, "content", "")
+    remainder, media = split_tool_result_media(tool_content)
+    if not media:
+        serialized = serialize_tool_result_content(tool_content)
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": serialized if serialized else "",
+        }
+
+    image_parts: list[dict[str, Any]] = []
+    notes: list[str] = []
+    for item in media:
+        if get_block_type(item) == "document":
+            # A PDF has no agreed shape in any OpenAI-format chat message, so
+            # it is named rather than sent. Hoisting documents can be a later
+            # PR if a provider is ever found that accepts one.
+            notes.append(TOOL_DOCUMENT_STRIPPED_TEXT)
+            continue
+        image_parts.append(_openai_user_image_part(item))
+    if image_parts:
+        notes.append(TOOL_IMAGE_ATTACHED_TEXT)
+
+    serialized = serialize_tool_result_content(remainder)
+    text_parts = [part for part in (serialized, *dedupe_placeholders(notes)) if part]
+    body = "\n".join(text_parts)
+    if not image_parts:
+        # Documents only: nothing to hoist, so the message stays a plain string
+        # and stage 2 has nothing to do.
+        return {"role": "tool", "tool_call_id": tool_call_id, "content": body}
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "content": [{"type": "text", "text": body}, *image_parts],
+    }
+
+
+def hoist_tool_result_images(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Stage 2 for OpenAI Chat Completions: move tool images into a user turn.
+
+    ``ChatCompletionToolMessageParam.content`` admits a string or text parts and
+    nothing else, so an image in a tool message is either rejected or silently
+    ignored by every host that validates. The only legal shape is a normal user
+    message carrying the picture, which is what a person pasting a screenshot
+    produces.
+
+    Three rules, all three load-bearing:
+
+    * consecutive ``role: tool`` messages are treated as one run, because the
+      ``assistant(tool_calls) -> tool, tool, tool`` adjacency is what strict
+      providers validate and a user message wedged between two tool messages is
+      a 400 on most of them;
+    * exactly one user message is inserted, after the *last* tool message of the
+      run, carrying every image from the whole run in order;
+    * that message leads with a text part marking the images as tool output.
+      The hoisted message has ``role: user``, so without it a screenshot of a web
+      page would arrive with the user's authority and anything drawn inside it
+      could read as an instruction.
+
+    Runs after :func:`_close_openai_tool_result_turns` on purpose: the hoisted
+    message belongs to the tool run and must not get the synthetic assistant
+    boundary that a genuine following user turn gets.
+    """
+    result: list[dict[str, Any]] = []
+    pending_images: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        if not pending_images:
+            return
+        result.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": HOISTED_IMAGE_BOUNDARY_TEXT},
+                    *pending_images,
+                ],
+            }
+        )
+        pending_images.clear()
+
+    for index, message in enumerate(messages):
+        if message.get("role") != "tool":
+            flush()
+            result.append(message)
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            result.append(message)
+        else:
+            texts: list[str] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "image_url":
+                    pending_images.append(part)
+                elif part.get("type") == "text":
+                    texts.append(str(part.get("text", "")))
+            stripped = dict(message)
+            body = "\n".join(part for part in texts if part)
+            stripped["content"] = body or TOOL_IMAGE_ATTACHED_TEXT
+            result.append(stripped)
+        following = messages[index + 1] if index + 1 < len(messages) else None
+        if following is None or following.get("role") != "tool":
+            flush()
+    flush()
+    return result
+
+
 def _openai_user_content_parts(content: Any) -> list[dict[str, Any]]:
     """Return an owned content-part list for one converted user message."""
     if isinstance(content, str):
@@ -357,13 +490,7 @@ class _OpenAIChatHistoryLedger:
         if not tuid_s:
             self.add_plain(AnthropicToOpenAIConverter._convert_user_message([block]))
             return
-        tool_content = get_block_attr(block, "content", "")
-        serialized = serialize_tool_result_content(tool_content)
-        tool_message = {
-            "role": "tool",
-            "tool_call_id": tuid,
-            "content": serialized if serialized else "",
-        }
+        tool_message = _openai_tool_result_message(block)
         if self._has_pending_tool_id(tuid_s):
             self._tool_results[tuid_s] = tool_message
         else:
@@ -675,17 +802,17 @@ class AnthropicToOpenAIConverter:
                 )
             elif block_type == "image":
                 content_parts.append(_openai_user_image_part(block))
+            elif block_type == "document":
+                # No OpenAI-format chat message has a shape for a PDF, and
+                # dropping it silently is how a request ends up with no
+                # messages at all. Name it instead, in the same vocabulary the
+                # nested case uses.
+                content_parts.append(
+                    {"type": "text", "text": USER_DOCUMENT_STRIPPED_TEXT}
+                )
             elif block_type == "tool_result":
                 flush_content()
-                tool_content = get_block_attr(block, "content", "")
-                serialized = serialize_tool_result_content(tool_content)
-                result.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": get_block_attr(block, "tool_use_id"),
-                        "content": serialized if serialized else "",
-                    }
-                )
+                result.append(_openai_tool_result_message(block))
 
         flush_content()
         return result
@@ -746,9 +873,11 @@ def build_base_request_body(
 ) -> dict[str, Any]:
     """Build the common parts of an OpenAI-format request body."""
     _openai_reject_native_only_top_level_fields(request_data)
-    messages = AnthropicToOpenAIConverter.convert_messages(
-        request_data.messages,
-        reasoning_replay=reasoning_replay,
+    messages = hoist_tool_result_images(
+        AnthropicToOpenAIConverter.convert_messages(
+            request_data.messages,
+            reasoning_replay=reasoning_replay,
+        )
     )
 
     system = request_data.system

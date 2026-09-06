@@ -1063,3 +1063,119 @@ def test_stream_response_passes_the_policy_to_the_body_builder(
     chatgpt_oauth_provider.stream_response(_reasoning_request(), reasoning=policy)
 
     assert calls == [policy]
+
+
+def test_tool_result_image_stays_inside_function_call_output():
+    """The Responses dialect can carry the picture; it must not be hoisted.
+
+    ``FunctionCallOutput.output`` accepts a list of content parts including
+    ``input_image``, so the image stays attached to the call that produced it --
+    no extra user message, no boundary part, nothing for the model to
+    misattribute.
+    """
+    request = MessagesRequest.model_validate(
+        {
+            "model": "gpt-5",
+            "messages": [
+                {"role": "user", "content": "screenshot it"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "take_screenshot",
+                            "input": {},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [
+                                {"type": "text", "text": "captured"},
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": "QUJDRA==",
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+
+    body = build_chatgpt_oauth_request_body(request, reasoning=DEFAULT_REASONING_POLICY)
+
+    outputs = [item for item in body["input"] if item["type"] == "function_call_output"]
+    assert len(outputs) == 1
+    parts = outputs[0]["output"]
+    assert parts[0]["type"] == "input_text"
+    assert "captured" in parts[0]["text"]
+    assert parts[1] == {
+        "type": "input_image",
+        "image_url": "data:image/png;base64,QUJDRA==",
+    }
+    # No hoisted user turn: the image never left the tool result.
+    user_messages = [
+        item
+        for item in body["input"]
+        if item.get("type") == "message" and item.get("role") == "user"
+    ]
+    assert all(
+        part.get("type") != "input_image"
+        for item in user_messages
+        for part in item["content"]
+        if isinstance(part, dict)
+    )
+
+
+def test_text_only_tool_result_output_is_still_a_bare_string():
+    """The no-regression guard for every tool result that carried no media."""
+    request = MessagesRequest.model_validate(
+        {
+            "model": "gpt-5",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "bash",
+                            "input": {},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "plain text",
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+
+    body = build_chatgpt_oauth_request_body(request, reasoning=DEFAULT_REASONING_POLICY)
+
+    outputs = [item for item in body["input"] if item["type"] == "function_call_output"]
+    assert outputs == [
+        {
+            "type": "function_call_output",
+            "call_id": "toolu_1",
+            "output": "plain text",
+        }
+    ]

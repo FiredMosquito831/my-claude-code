@@ -2788,6 +2788,12 @@ details.turn-pane > summary:focus-visible {
   color: var(--muted);
 }
 
+.req-image-delivery {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .req-image-grid {
   display: flex;
   flex-wrap: wrap;

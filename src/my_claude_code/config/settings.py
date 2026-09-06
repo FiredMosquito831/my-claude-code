@@ -70,6 +70,8 @@ from .constants import (
     STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
     STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT,
     STREAM_MIDSTREAM_RECOVERY_ATTEMPTS_DEFAULT,
+    TOOL_RESULT_IMAGE_DELIVERY_DEFAULT,
+    TOOL_RESULT_IMAGE_DELIVERY_NAMES,
     TOOL_RESULT_TRIM_KEEP_HEAD_CHARS_DEFAULT,
     TOOL_RESULT_TRIM_KEEP_TAIL_CHARS_DEFAULT,
     TOOL_RESULT_TRIM_PROTECT_RECENT_DEFAULT,
@@ -1032,6 +1034,16 @@ class Settings(BaseSettings):
     # liveness is proven by the run's first real request.
     enable_probe_auto_response: bool = True
 
+    # ==================== Tool-Result Images =================================
+    # An image a tool handed back -- a screenshot, a Read of a PNG -- is nested
+    # inside the tool result. No OpenAI-format chat message can carry one
+    # there, so before it is sent it is either moved into a following user
+    # message or replaced by a sentence. This chooses which.
+    tool_result_image_delivery: str = Field(
+        default=TOOL_RESULT_IMAGE_DELIVERY_DEFAULT,
+        validation_alias="TOOL_RESULT_IMAGE_DELIVERY",
+    )
+
     # ==================== Tool-Result Trimming (Read / Grep / Glob) ==========
     # Off by default, and deliberately so: this layer is the only thing in the
     # proxy that changes what the model is allowed to see. A fresh install must
@@ -1515,6 +1527,25 @@ class Settings(BaseSettings):
         except ValueError as exc:
             raise ValueError(f"CREDENTIAL_LOCKOUT_TIERS: {exc}") from exc
         return v
+
+    @field_validator("tool_result_image_delivery")
+    @classmethod
+    def validate_tool_result_image_delivery(cls, v: str) -> str:
+        """Reject an unknown delivery mode rather than guess at it.
+
+        A blank value is not a typo -- the admin UI writes ``KEY=`` for a
+        cleared field -- so it falls back to the default the same way a blank
+        numeric limit does.
+        """
+        mode = str(v).strip().lower()
+        if not mode:
+            return TOOL_RESULT_IMAGE_DELIVERY_DEFAULT
+        if mode not in TOOL_RESULT_IMAGE_DELIVERY_NAMES:
+            raise ValueError(
+                f"Unknown tool-result image delivery mode: {v!r}. Known modes: "
+                f"{', '.join(sorted(TOOL_RESULT_IMAGE_DELIVERY_NAMES))}"
+            )
+        return mode
 
     @field_validator(
         "tool_result_trim_read",

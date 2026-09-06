@@ -432,6 +432,17 @@ TOOL_RESULT_TRIM_PROTECT_RECENT_DEFAULT = 2
 # directions exactly as it does for FAILURE_KIND_NAMES.
 TRIM_MODE_NAMES: frozenset[str] = frozenset({"off", "observe", "on"})
 
+# How an image a tool handed back travels to a non-Anthropic model.
+# `auto` follows the model's own published capability -- attach unless the
+# model is known to reject images -- which is the same `is not False` test
+# vision routing applies. `attach` always sends it, `strip` never does.
+# There is deliberately no value for the pre-6.49.0 behaviour of sending
+# the base64 as text: nobody should be able to ask for that.
+TOOL_RESULT_IMAGE_DELIVERY_NAMES: frozenset[str] = frozenset(
+    {"auto", "attach", "strip"}
+)
+TOOL_RESULT_IMAGE_DELIVERY_DEFAULT = "auto"
+
 # Nous Portal rejects an API-key request that carries no `tags` array with a
 # `user=` entry: HTTP 400 "This request is not valid. Check the model name and
 # other parameters. Additional info: missing tags". OAuth callers are identified

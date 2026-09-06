@@ -387,6 +387,10 @@ class RequestCapture:
         )
         self._record.provider = routed.resolved.provider_id
         self._record.resolved_model = routed.resolved.provider_model
+        # Per attempt, because the decision is per attempt: a chain that falls
+        # back from a blind model to a sighted one delivers the same picture
+        # two different ways, and the row must name the one that answered.
+        self._record.image_delivery = str(routed.image_delivery)
         # Recorded per attempt, and only when the reasoning widening actually
         # raised the number that will be sent. ``None`` is not stored: absence
         # is the finding, exactly as it is for every other wire knob.

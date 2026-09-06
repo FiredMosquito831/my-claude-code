@@ -354,6 +354,33 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="model_vision_fallbacks",
     ),
     ConfigFieldSpec(
+        "TOOL_RESULT_IMAGE_DELIVERY",
+        "Tool-Returned Images",
+        "models",
+        "select",
+        settings_attr="tool_result_image_delivery",
+        default="auto",
+        options=(
+            ConfigOptionSpec("auto", "Auto"),
+            ConfigOptionSpec("attach", "Always attach"),
+            ConfigOptionSpec("strip", "Never attach"),
+        ),
+        description=(
+            "What happens to an image a tool handed back -- a screenshot, a "
+            "Read of a PNG -- when the model that answers is not an Anthropic "
+            "one. No OpenAI-format chat message can carry an image inside a "
+            "tool result, so it is moved into a short user message right after "
+            "it, marked as tool output. Auto does that unless the model is "
+            "published as not accepting images, in which case a plain sentence "
+            "takes its place; an unpublished capability counts as yes, the "
+            "same rule the vision adapter above uses. Always attach ignores "
+            "that capability. Never attach replaces every tool-returned image "
+            "with the sentence. There is no option to send the picture as "
+            "base64 text: that was the pre-6.49.0 bug, and it billed roughly "
+            "one token per byte for something the model never saw."
+        ),
+    ),
+    ConfigFieldSpec(
         "MODEL_VISION_PAUSED",
         "Vision Paused Models",
         "models",
