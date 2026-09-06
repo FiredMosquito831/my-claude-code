@@ -8,14 +8,13 @@ from .models import (
     ContentBlockToolResult,
     MessagesRequest,
 )
+from .tool_result_media import MAX_MEDIA_NESTING, VISUAL_BLOCK_TYPES
 
-# Visual block types, by their wire ``type``. Documents are here because a PDF
-# reaches the model as pixels too: a model that cannot accept images cannot
-# read one, so it belongs on the same side of the vision decision.
-_VISUAL_BLOCK_TYPES = frozenset({"image", "document"})
-# Depth limit for the walk into tool results. A tool result nests one level in
-# practice; the bound only stops a hand-crafted payload from costing anything.
-_MAX_NESTING = 4
+# Both constants live in ``tool_result_media`` so that the walk which *finds*
+# an image and the walk which *disposes* of it can never disagree about what
+# counts as visual or how deep to look. Aliased rather than re-declared.
+_VISUAL_BLOCK_TYPES = VISUAL_BLOCK_TYPES
+_MAX_NESTING = MAX_MEDIA_NESTING
 
 
 @dataclass(frozen=True, slots=True)

@@ -717,6 +717,16 @@ vocabulary of their own. They are pointers, not models: each names one of
 with that route's `_FALLBACKS` and `_PAUSED` list, and an unset route collapses
 onto `MODEL` exactly as `_resolve_model_ref` already collapses `claude-opus-5`.
 
+The conversion layer preserves nested media rather than flattening it:
+`core/anthropic/tool_result_media.py` owns the single walk that finds an
+image or a document inside a `tool_result`, and both the token estimator and
+the outbound converters call it, so the two can never disagree about whether
+a nested picture is an image or 680,000 characters of text. Disposal is a
+second, per-dialect stage: OpenAI Chat Completions hoists the image into a
+following `user` message, OpenAI Responses keeps it inside
+`function_call_output`, and the Anthropic-native path never reaches the
+converter at all.
+
 Ownership is split across three modules because three layers need the same
 answer and none of them may own it alone:
 

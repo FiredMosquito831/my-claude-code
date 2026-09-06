@@ -11892,6 +11892,28 @@ function formatImageBytes(bytes) {
 }
 
 /**
+ * Say plainly how the picture travelled.
+ *
+ * Before 6.49.0 an image a tool returned was flattened into base64 text and
+ * billed at roughly a token per byte for something the model never saw. NULL
+ * means the row predates the marker, which is not the same as "nothing was
+ * sent", so it gets no sentence at all rather than a reassuring one.
+ */
+function formatImageDelivery(delivery, count) {
+  const plural = count === 1 ? "it was" : "they were";
+  switch (delivery) {
+    case "image":
+      return `Sent to the model as ${count === 1 ? "an image" : "images"}.`;
+    case "stripped":
+      return `Omitted: this model does not accept images, so ${plural} replaced by a note saying so.`;
+    case "text":
+      return "Sent as base64 text — this model saw characters, not a picture.";
+    default:
+      return "";
+  }
+}
+
+/**
  * Show what the model was actually looking at.
  *
  * Only a downscaled copy is stored, so a thumbnail is the whole picture rather
@@ -11913,6 +11935,13 @@ function renderRequestImages(row) {
   const heading = document.createElement("h4");
   heading.textContent = images.length === 1 ? "Image input" : `Image input (${images.length})`;
   container.appendChild(heading);
+  const delivery = formatImageDelivery(row.image_delivery, images.length);
+  if (delivery) {
+    const note = document.createElement("p");
+    note.className = "req-image-delivery";
+    note.textContent = delivery;
+    container.appendChild(note);
+  }
   const grid = document.createElement("div");
   grid.className = "req-image-grid";
   images.forEach((image, index) => {

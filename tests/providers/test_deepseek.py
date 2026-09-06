@@ -20,6 +20,12 @@ from my_claude_code.core.anthropic.models import (
     Tool,
 )
 from my_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from my_claude_code.core.anthropic.tool_result_media import (
+    USER_DOCUMENT_STRIPPED_TEXT,
+    USER_IMAGE_STRIPPED_TEXT,
+    collect_tool_names,
+    replace_request_media,
+)
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.deepseek import DeepSeekProvider
@@ -680,7 +686,13 @@ def test_passthrough_tool_use_and_result(deepseek_provider):
 
 
 def test_preflight_strips_user_image():
-    """Image blocks are silently stripped (DeepSeek lacks vision); request must not fail."""
+    """A blind model's image becomes the general placeholder, not a rejection.
+
+    Until 6.49.0 this strip was DeepSeek's own private code. It is now the
+    general rule -- the router replaces every visual block for any model
+    published as not accepting images -- and DeepSeek is kept here as the
+    regression witness for it rather than as its owner.
+    """
     request = MessagesRequest(
         model="m",
         messages=[
@@ -708,12 +720,12 @@ def test_preflight_strips_user_image():
         ),
         rate_limiter=passthrough_rate_limiter(),
     )
-    # Should not raise; image is stripped.
+    # Should not raise; the router has already replaced the image.
     provider.preflight_stream(request, reasoning=REASONING_ON)
+    replace_request_media(request.messages)
     body = provider._build_request_body(request, reasoning=reasoning_for(request))
     content = body["messages"][0]["content"]
-    assert "attachment omitted" in content.lower()
-    assert "image or document inputs" in content.lower()
+    assert content == USER_IMAGE_STRIPPED_TEXT
 
 
 def test_preflight_rejects_mcp_servers():
@@ -1124,11 +1136,15 @@ def test_strips_image_blocks_for_deepseek(deepseek_provider):
         }
     )
 
+    replace_request_media(request.messages)
     body = deepseek_provider._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["messages"][0] == {"role": "user", "content": "describe this"}
+    assert body["messages"][0] == {
+        "role": "user",
+        "content": f"describe this\n{USER_IMAGE_STRIPPED_TEXT}",
+    }
 
 
 def test_normalizes_tool_result_content_dict_to_string(deepseek_provider):
@@ -1214,17 +1230,21 @@ def test_strips_image_block_inside_tool_result(deepseek_provider):
         }
     )
 
+    replace_request_media(
+        request.messages, tool_names=collect_tool_names(request.messages)
+    )
     body = deepseek_provider._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
     tool_result = body["messages"][1]
     assert tool_result["role"] == "tool"
-    # After stripping + string-normalization, no base64/image marker survives.
+    # After the general strip, no base64 and no image marker survives.
     assert isinstance(tool_result["content"], str)
     assert "screenshot saved" in tool_result["content"]
+    assert "does not accept images" in tool_result["content"]
+    assert "'Read' tool" in tool_result["content"]
     assert "base64" not in tool_result["content"]
-    assert "abc" not in tool_result["content"]
 
 
 def test_image_only_tool_result_replaced_with_placeholder(deepseek_provider):
@@ -1267,6 +1287,9 @@ def test_image_only_tool_result_replaced_with_placeholder(deepseek_provider):
         }
     )
 
+    replace_request_media(
+        request.messages, tool_names=collect_tool_names(request.messages)
+    )
     body = deepseek_provider._build_request_body(
         request, reasoning=reasoning_for(request)
     )
@@ -1275,8 +1298,7 @@ def test_image_only_tool_result_replaced_with_placeholder(deepseek_provider):
     assert tool_result["role"] == "tool"
     assert isinstance(tool_result["content"], str)
     assert tool_result["content"] != ""
-    assert "attachment omitted" in tool_result["content"].lower()
-    assert "image or document inputs" in tool_result["content"].lower()
+    assert "does not accept images" in tool_result["content"]
 
 
 def test_document_only_tool_result_replaced_with_generic_placeholder(
@@ -1320,6 +1342,9 @@ def test_document_only_tool_result_replaced_with_generic_placeholder(
         }
     )
 
+    replace_request_media(
+        request.messages, tool_names=collect_tool_names(request.messages)
+    )
     body = deepseek_provider._build_request_body(
         request, reasoning=reasoning_for(request)
     )
@@ -1327,9 +1352,8 @@ def test_document_only_tool_result_replaced_with_generic_placeholder(
     tool_result = body["messages"][1]
     assert tool_result["role"] == "tool"
     assert isinstance(tool_result["content"], str)
-    assert "attachment omitted" in tool_result["content"].lower()
-    assert "document inputs" in tool_result["content"].lower()
-    assert "image omitted" not in tool_result["content"].lower()
+    assert "does not accept documents" in tool_result["content"]
+    assert "does not accept images" not in tool_result["content"]
 
 
 def test_image_only_message_replaced_with_placeholder(deepseek_provider):
@@ -1355,13 +1379,15 @@ def test_image_only_message_replaced_with_placeholder(deepseek_provider):
         }
     )
 
+    replace_request_media(
+        request.messages, tool_names=collect_tool_names(request.messages)
+    )
     body = deepseek_provider._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
     content = body["messages"][0]["content"]
-    assert "attachment omitted" in content.lower()
-    assert "image or document inputs" in content.lower()
+    assert content == USER_IMAGE_STRIPPED_TEXT
 
 
 def test_document_only_message_replaced_with_placeholder(deepseek_provider):
@@ -1383,17 +1409,25 @@ def test_document_only_message_replaced_with_placeholder(deepseek_provider):
         }
     )
 
+    replace_request_media(
+        request.messages, tool_names=collect_tool_names(request.messages)
+    )
     body = deepseek_provider._build_request_body(
         request, reasoning=reasoning_for(request)
     )
 
     content = body["messages"][0]["content"]
-    assert "attachment omitted" in content.lower()
-    assert "document inputs" in content.lower()
+    assert content == USER_DOCUMENT_STRIPPED_TEXT
 
 
 def test_warns_when_stripping_attachment_blocks(deepseek_provider, caplog):
-    """A warning is emitted when image/document blocks are dropped so users notice."""
+    """Both a pasted image and a tool-returned one become placeholders.
+
+    The warning that used to live in DeepSeek's own strip now comes from the
+    router, which is where the decision is made; what this still witnesses is
+    that a blind model's request reaches DeepSeek carrying sentences instead of
+    base64, at both nesting depths at once.
+    """
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1446,15 +1480,25 @@ def test_warns_when_stripping_attachment_blocks(deepseek_provider, caplog):
         }
     )
 
-    with caplog.at_level(logging.WARNING):
-        deepseek_provider._build_request_body(request, reasoning=reasoning_for(request))
+    assert (
+        replace_request_media(
+            request.messages, tool_names=collect_tool_names(request.messages)
+        )
+        == 2
+    )
+    body = deepseek_provider._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
 
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("stripped unsupported attachment blocks" in r.message for r in warnings)
+    assert body["messages"][0]["content"] == (
+        "look" + chr(10) + USER_IMAGE_STRIPPED_TEXT
+    )
+    assert "does not accept images" in body["messages"][2]["content"]
+    assert "abc" not in json.dumps(body["messages"])
 
 
-def test_no_warning_when_no_attachments(deepseek_provider, caplog):
-    """No warning is emitted on plain text-only requests."""
+def test_no_media_walk_on_a_text_only_request(deepseek_provider):
+    """A request with nothing visual in it is untouched by the media rule."""
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1462,14 +1506,11 @@ def test_no_warning_when_no_attachments(deepseek_provider, caplog):
         }
     )
 
-    with caplog.at_level(logging.WARNING):
-        deepseek_provider._build_request_body(request, reasoning=reasoning_for(request))
-
-    assert not any(
-        "stripped unsupported attachment blocks" in r.message
-        for r in caplog.records
-        if r.levelno == logging.WARNING
+    assert replace_request_media(request.messages) == 0
+    body = deepseek_provider._build_request_body(
+        request, reasoning=reasoning_for(request)
     )
+    assert body["messages"][0] == {"role": "user", "content": "hello"}
 
 
 def test_is_deepseek_tool_choice_rejection_matches_tool_choice_400():

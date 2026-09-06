@@ -1,5 +1,6 @@
 """Convert OpenAI Responses requests into Anthropic Messages payloads."""
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -150,7 +151,7 @@ def _append_input_item(
             {
                 "type": "tool_result",
                 "tool_use_id": call_id,
-                "content": item.get("output", ""),
+                "content": _function_call_output_text(item.get("output", "")),
             },
         )
         return None
@@ -243,6 +244,36 @@ def _append_tool_use_message(
     content = message["content"]
     if isinstance(content, list):
         content.append(tool_use)
+
+
+def _function_call_output_text(output: Any) -> str:
+    """Normalise a client's ``function_call_output`` to text.
+
+    The Responses format allows this field to be a list of content parts, so a
+    client could otherwise land an arbitrary list -- images included -- straight
+    inside ``tool_result.content``, which is the one shape the rest of MCC is
+    entitled to assume came from a tool it converted itself. The other two
+    inbound doors already force a tool result to text; this makes the third
+    agree. Accepting images from a client is deliberately a separate question.
+    """
+    if isinstance(output, str):
+        return output
+    if isinstance(output, list):
+        parts: list[str] = []
+        for item in output:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, Mapping):
+                text = item.get("text")
+                parts.append(text if isinstance(text, str) else json.dumps(dict(item)))
+            else:
+                parts.append(str(item))
+        return "\n".join(part for part in parts if part)
+    if output is None:
+        return ""
+    if isinstance(output, Mapping):
+        return json.dumps(dict(output))
+    return str(output)
 
 
 def _append_tool_result_message(

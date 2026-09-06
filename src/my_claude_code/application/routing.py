@@ -21,6 +21,12 @@ from my_claude_code.core.anthropic import (
     TokenCountRequest,
     request_carries_image,
 )
+from my_claude_code.core.anthropic.tool_result_media import (
+    MediaDelivery,
+    collect_tool_names,
+    media_delivery,
+    replace_request_media,
+)
 from my_claude_code.core.gateway_model_ids import decode_gateway_model_id
 from my_claude_code.core.reasoning import (
     ReasoningAdaptation,
@@ -109,6 +115,14 @@ class RoutedMessagesRequest:
     when the reasoning widening actually raised the number that will be sent.
     ``None`` means "the client's ask is the wire value's origin", which is the
     common case and needs no row in the request log.
+
+    ``image_delivery`` says how the pictures in this request travelled, and is
+    resolved here for the same stated reason ``output_limits`` is: the model's
+    published vision capability lives in this layer's lookup, and
+    ``core/anthropic/conversion.py`` -- where the body is built -- cannot reach
+    the model catalogue. Because the decision is made per attempt on a deep
+    copy, a chain that falls back from a blind model to a sighted one re-derives
+    it correctly for each rung, which one up-front mutation could not.
     """
 
     request: MessagesRequest
@@ -119,6 +133,7 @@ class RoutedMessagesRequest:
     output_limits: OutputTokenLimits = UNKNOWN_OUTPUT_TOKEN_LIMITS
     reasoning_dialect: ReasoningDialect | None = None
     output_widened_from: int | None = None
+    image_delivery: MediaDelivery = MediaDelivery.NONE
 
 
 @dataclass(frozen=True, slots=True)
@@ -893,11 +908,52 @@ class ModelRouter:
             return None
         return self._vision_lookup(resolved.provider_id, resolved.provider_model)
 
+    def _resolve_image_delivery(
+        self, routed: MessagesRequest, resolved: ResolvedModel
+    ) -> MediaDelivery:
+        """Settle how this attempt's images travel, and strip them if they cannot.
+
+        The converter cannot make this call and must not try: it is handed a
+        message list and nothing else, and threading a capability lookup down
+        into every dialect module would put model metadata where none belongs.
+        The decision is a fact about the *model*, not about the wire format, so
+        it is made once here -- on the per-attempt deep copy the router already
+        takes -- and by the time any body builder runs a blind model's request
+        simply contains no visual blocks at all.
+        """
+        if not request_carries_image(routed):
+            return MediaDelivery.NONE
+        mode = (
+            str(getattr(self._settings, "tool_result_image_delivery", "auto") or "auto")
+            .strip()
+            .lower()
+        )
+        if mode == "attach":
+            delivery = MediaDelivery.ATTACH
+        elif mode == "strip":
+            delivery = MediaDelivery.STRIP
+        else:
+            delivery = media_delivery(self._supports_vision(resolved))
+        if delivery is not MediaDelivery.STRIP:
+            return delivery
+        replaced = replace_request_media(
+            routed.messages, tool_names=collect_tool_names(routed.messages)
+        )
+        if replaced:
+            logger.info(
+                "IMAGE DELIVERY: '{}' is published as not accepting images;"
+                " replaced {} visual block(s) with a placeholder",
+                resolved.provider_model_ref,
+                replaced,
+            )
+        return MediaDelivery.STRIP
+
     def _route_for(
         self, request: MessagesRequest, resolved: ResolvedModel
     ) -> RoutedMessagesRequest:
         routed = request.model_copy(deep=True)
         routed.model = resolved.provider_model
+        image_delivery = self._resolve_image_delivery(routed, resolved)
         policy = resolve_reasoning_policy(routed, resolved.reasoning_preference)
         # Looked up once and handed to both consumers: gating decides what may
         # be sent with it, and the routed request carries it onward so the
@@ -915,6 +971,7 @@ class ModelRouter:
             reasoning_adaptation=reasoning_adaptation,
             output_limits=self._output_limits(resolved),
             reasoning_dialect=dialect,
+            image_delivery=image_delivery,
         )
 
     def _output_limits(self, resolved: ResolvedModel) -> OutputTokenLimits:

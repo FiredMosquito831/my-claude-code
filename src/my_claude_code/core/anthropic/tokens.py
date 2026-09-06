@@ -8,8 +8,27 @@ from my_claude_code.core.token_encoder import cl100k_encoder
 
 from .content import get_block_attr
 from .models import Message, SystemContent, Tool
+from .tool_result_media import split_tool_result_media
 
 _DISALLOWED_SPECIAL: tuple[str, ...] = ()
+
+
+def _image_tokens(block: object) -> int:
+    """Cost of one image or document block, wherever it appears.
+
+    Factored out so the top-level branch and the tool-result branch share the
+    arithmetic instead of coinciding by luck. Before 6.49.0 they did not: the
+    same 213 KB screenshot scored 99 tokens pasted and 204,216 tokens inside a
+    tool result, because the second one was measured as JSON text. That number
+    is what the dashboard shows, what the context-headroom arithmetic uses, and
+    what a cancelled request records, so the disagreement was not cosmetic.
+    """
+    source = get_block_attr(block, "source")
+    if isinstance(source, dict):
+        data = source.get("data") or source.get("base64") or ""
+        if data:
+            return max(85, len(data) // 3000)
+    return 765
 
 
 def count_text_tokens(text: str) -> int:
@@ -67,23 +86,20 @@ def get_token_count(
                     total_tokens += count_text_tokens(json.dumps(inp))
                     total_tokens += count_text_tokens(str(block_id))
                     total_tokens += 15
-                elif b_type == "image":
-                    source = get_block_attr(block, "source")
-                    if isinstance(source, dict):
-                        data = source.get("data") or source.get("base64") or ""
-                        if data:
-                            total_tokens += max(85, len(data) // 3000)
-                        else:
-                            total_tokens += 765
-                    else:
-                        total_tokens += 765
+                elif b_type in ("image", "document"):
+                    total_tokens += _image_tokens(block)
                 elif b_type == "tool_result":
-                    content = get_block_attr(block, "content", "")
+                    raw = get_block_attr(block, "content", "")
+                    content, media = split_tool_result_media(raw)
                     tool_use_id = get_block_attr(block, "tool_use_id", "")
                     if isinstance(content, str):
                         total_tokens += count_text_tokens(content)
                     else:
-                        total_tokens += count_text_tokens(json.dumps(content))
+                        total_tokens += count_text_tokens(
+                            json.dumps(content, default=str)
+                        )
+                    for item in media:
+                        total_tokens += _image_tokens(item)
                     total_tokens += count_text_tokens(str(tool_use_id))
                     total_tokens += 8
                 elif b_type in (

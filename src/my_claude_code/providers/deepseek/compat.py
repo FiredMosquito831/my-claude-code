@@ -28,20 +28,20 @@ DEEPSEEK_REQUEST_POLICY = OpenAIChatRequestPolicy(
     include_extra_body=True,
 )
 
+# Server-tool blocks DeepSeek's native surface cannot represent at all. Images
+# and documents are deliberately *not* here any more: since 6.49.0 the router
+# replaces a visual block with a placeholder for any model published as not
+# accepting images -- which DeepSeek's chat models are -- so by the time a body
+# is built there is nothing to strip, and the general rule covers every other
+# provider too. A DeepSeek model that does publish image support now gets the
+# picture through the ordinary hoist rather than a provider-specific refusal.
 _UNSUPPORTED_MESSAGE_BLOCK_TYPES = frozenset(
     {
-        "image",
-        "document",
         "server_tool_use",
         "web_search_tool_result",
         "web_fetch_tool_result",
     }
 )
-_STRIPPABLE_MESSAGE_BLOCK_TYPES = frozenset({"image", "document"})
-_OMITTED_ATTACHMENT_TEXT = (
-    "[attachment omitted: DeepSeek does not support image or document inputs]"
-)
-_OMITTED_ATTACHMENT_BLOCK = {"type": "text", "text": _OMITTED_ATTACHMENT_TEXT}
 
 
 def build_deepseek_request_body(
@@ -58,8 +58,6 @@ def build_deepseek_request_body(
     )
 
     data = dump_messages_request(request_data)
-    if "messages" in data:
-        data["messages"] = _strip_unsupported_attachment_blocks(data["messages"])
     _validate_deepseek_request_dict(data)
 
     has_tool_history = _has_tool_history(data)
@@ -159,75 +157,6 @@ def sanitize_deepseek_messages_for_openai(messages: Any) -> Any:
         new_msg["content"] = filtered or ""
         sanitized.append(new_msg)
     return sanitized
-
-
-def _strip_unsupported_attachment_blocks(messages: Any) -> Any:
-    if not isinstance(messages, list):
-        return messages
-
-    stripped: list[Any] = []
-    top_level_dropped: dict[str, int] = {}
-    nested_dropped: dict[str, int] = {}
-    placeholder_replacements = 0
-
-    for message in messages:
-        if not isinstance(message, dict):
-            stripped.append(message)
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            stripped.append(message)
-            continue
-
-        new_content: list[Any] = []
-        message_dropped_attachment = False
-        for block in content:
-            if isinstance(block, dict):
-                btype = block.get("type")
-                if btype in _STRIPPABLE_MESSAGE_BLOCK_TYPES:
-                    top_level_dropped[btype] = top_level_dropped.get(btype, 0) + 1
-                    message_dropped_attachment = True
-                    continue
-                if btype == "tool_result":
-                    inner = block.get("content")
-                    if isinstance(inner, list):
-                        filtered_inner: list[Any] = []
-                        for sub in inner:
-                            if (
-                                isinstance(sub, dict)
-                                and sub.get("type") in _STRIPPABLE_MESSAGE_BLOCK_TYPES
-                            ):
-                                sub_type = sub["type"]
-                                nested_dropped[sub_type] = (
-                                    nested_dropped.get(sub_type, 0) + 1
-                                )
-                                continue
-                            filtered_inner.append(sub)
-                        if not filtered_inner:
-                            filtered_inner = [_OMITTED_ATTACHMENT_BLOCK]
-                            placeholder_replacements += 1
-                        new_block = dict(block)
-                        new_block["content"] = filtered_inner
-                        new_content.append(new_block)
-                        continue
-            new_content.append(block)
-        if not new_content and message_dropped_attachment:
-            new_content = [_OMITTED_ATTACHMENT_BLOCK]
-            placeholder_replacements += 1
-        new_msg = dict(message)
-        new_msg["content"] = new_content
-        stripped.append(new_msg)
-
-    if top_level_dropped or nested_dropped:
-        logger.warning(
-            "DEEPSEEK_REQUEST: stripped unsupported attachment blocks "
-            "(top_level={} nested_in_tool_result={} placeholder_tool_results={}). "
-            "DeepSeek has no vision/document support; the model will not see this content.",
-            dict(top_level_dropped),
-            dict(nested_dropped),
-            placeholder_replacements,
-        )
-    return stripped
 
 
 def _is_server_listed_tool(tool: Mapping[str, Any]) -> bool:

@@ -87,7 +87,19 @@ def _openai_message_to_chatgpt_items(message: dict[str, Any]) -> list[dict[str, 
     content = message.get("content")
 
     if role == "tool":
-        output = content if isinstance(content, str) else json.dumps(content)
+        # The Responses dialect is the one that does not need the hoist:
+        # ``FunctionCallOutput.output`` accepts a list of content parts
+        # including ``input_image``, so an image a tool returned stays attached
+        # to the call that produced it. A plain string stays a plain string,
+        # byte for byte, which is every tool result that carried no media.
+        output: Any
+        if isinstance(content, str):
+            output = content
+        elif isinstance(content, list):
+            parts = _openai_content_to_chatgpt_parts(content, assistant=False)
+            output = parts if parts else json.dumps(content)
+        else:
+            output = json.dumps(content)
         return [
             {
                 "type": "function_call_output",
