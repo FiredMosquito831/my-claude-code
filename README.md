@@ -88,11 +88,28 @@ want to use it.
 | What you get | `mcc-server` and the 16 `mcc-*` agent launchers on your `PATH`; the dashboard opens in your browser at `http://127.0.0.1:8082/admin`. | A real application with its own window, its own icon and a tray icon. It renders the same dashboard. |
 | How you install it | The one-line command below. | Download an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest) — or, on Windows, `winget install FiredMosquito831.MyClaudeCode` once the manifest is accepted (see below). |
 | Does it need the other half? | No. This is the whole product. | It **installs the server for you** on first launch: if `mcc-desktop` is not there, the window shows the exact install command and runs it in front of you. Nothing is bundled and nothing is hidden. |
-| Best for | Terminal-first work, WSL, servers, headless boxes. | "I just want to double-click something." |
+| Best for | Terminal-first work, WSL, servers, headless boxes, CI, running MCC as a service. | Everyday use and management: it starts the server on launch, reconnects after an update, lives in the tray, and can start at login. |
 | Availability | Windows, Linux, macOS, WSL — today. | **All three** — `MyClaudeCode-Setup-windows-x86_64.exe`, `MyClaudeCode-linux-x86_64.deb` (Ubuntu 22.04+/Debian 12+), `MyClaudeCode-linux-x86_64.tar.gz` (Fedora 40+, Arch, anywhere without root) and `MyClaudeCode-macos-universal.dmg` (Apple silicon and Intel in one file). The macOS `.dmg` is **unsigned**: the first launch needs one Terminal command, and the reason is spelled out below. |
 
 Both paths can coexist on one machine. The desktop app is a window onto the server;
 installing it does not give you a second copy of anything.
+
+**Which one should I pick?** Find the row that describes you.
+
+| If this is you | Pick | Why |
+| --- | --- | --- |
+| Running MCC on a headless box, a VPS, or over SSH | **Server + web dashboard** | There is no desktop session to draw a window or a tray into. Reach the dashboard by forwarding `8082`. |
+| Working inside WSL | **Server + web dashboard** | WSL has no tray. `mcc-desktop` says so and refuses rather than pretending; autostart there registers `mcc-server` under `systemd --user`. |
+| You live in the terminal and want to start and stop things yourself | **Server + web dashboard** | `mcc-server` in a window you own, `Ctrl-C` when you are done, and the install command when you want a new version. |
+| Running MCC as a service, or from CI | **Server + web dashboard** | One process, no session, no window chain to resolve. |
+| You want it managed for you | **Desktop app** | It installs the server if it is missing, starts it on launch, watches its health, and reconnects on its own after an update. |
+| You want a tray icon and start-at-login | **Desktop app** | The tray is the app's home: close the window and it stays there; **Quit** in the tray menu is what ends it. Start at login is one switch on the Deployment card. |
+| You are on macOS and would rather not run a Terminal command | **Server + web dashboard**, then `mcc-desktop` | The `.dmg` is unsigned, so opening it directly needs one `xattr` command. Letting `mcc-desktop` fetch the same binary skips that. |
+| You just want to double-click something | **Desktop app** | That is the whole point of it. |
+
+Both share one configuration directory, one `.env` and one dashboard, and a desktop
+install still puts every `mcc-*` command on your `PATH` — so choosing the app costs
+you nothing on the command line.
 
 #### Path B: the desktop app (Windows)
 
@@ -851,9 +868,34 @@ mcc-desktop --window auto|app-mode|pywebview|browser
 
 `auto` (the default) tries the desktop app, then app-mode, then a plain browser tab. `mcc-desktop --status` shows which one is currently in effect. An unavailable choice falls back with a warning rather than failing outright — and an explicit choice falls back through the *browser* providers only, never into the desktop app.
 
+### Closing the window puts it in the tray
+
+Since 6.50.0 the window's close button **hides** the window and leaves the tray icon
+and the server running. Bring it back with **Open Dashboard** in the tray menu (or a
+click on the icon); **Quit** in that menu is what ends the app. Turn it off with
+**Close to Tray** on the dashboard's Deployment card, or in the tray menu.
+
+With **Tray Enabled** off there is nowhere to close to, so closing ends the app
+whatever Close to Tray says — an app you cannot get back is worse than one that quits.
+
+### While the server restarts
+
+The window waits for the server to come back after an update, and since 6.50.0 it
+says what it is doing while it waits: elapsed and remaining time counting down on
+every health poll, what the last check reported, and — on Windows — which stage the
+update helper is in, read from `~/.mcc/updates/progress.json`. If the port goes free
+and nothing restarted the server, the window starts one itself, once, rather than
+waiting out the whole budget. A server that is still draining is reported as
+"shutting down" instead of as a port conflict naming MCC's own process.
+
+If a restart feels long, look at `SERVER_GRACEFUL_SHUTDOWN_SECONDS` on
+**Limits & Resilience** first: it bounds the drain, and every update waits it out
+before the installer even begins. See
+[docs/USAGE.md](docs/USAGE.md#closing-the-window-and-the-reconnect-banner).
+
 ### Scripting it: `mcc-desktop --print-status`
 
-`mcc-desktop --print-status` prints one JSON document on stdout and exits `0` — the config directory and how it was chosen, the loopback host, port, admin and health URLs, whether a healthy server, nothing, or a stranger holds the port, every desktop preference, the two timing budgets (`health_failure_threshold`, `reconnect_timeout_seconds`) a window must read rather than hard-code, four keys about the desktop app (`shell_ready`, `shell_binary`, `shell_release_tag`, `shell_tray`), and `autostart_reconcile`. It is a **pure read**: nothing is started, locked, or written. Full field list and the `schema` rule are in [docs/USAGE.md](docs/USAGE.md#machine-readable-status).
+`mcc-desktop --print-status` prints one JSON document on stdout and exits `0` — the config directory and how it was chosen, the loopback host, port, admin and health URLs, whether a healthy server, nothing, a stranger, or MCC's own draining process holds the port (`draining` is opt-in: pass `--presence-v2`, so a window built before it existed never sees a state it has no branch for), every desktop preference including `close_to_tray`, the three timing budgets (`health_failure_threshold`, `reconnect_timeout_seconds`, `reconnect_restatus_seconds`) a window must read rather than hard-code, four keys about the desktop app (`shell_ready`, `shell_binary`, `shell_release_tag`, `shell_tray`), and `autostart_reconcile`. It is a **pure read**: nothing is started, locked, or written. Full field list and the `schema` rule are in [docs/USAGE.md](docs/USAGE.md#machine-readable-status).
 
 The dashboard's Deployment card exposes the same choice as a **Window** control, with a fourth option, **Embedded webview**, that is **not installed by default** (see pywebview below) — OAuth login, downloads, and copy buttons may not work in it.
 

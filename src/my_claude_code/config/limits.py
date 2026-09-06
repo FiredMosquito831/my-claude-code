@@ -217,6 +217,14 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     # self-update restart -- one or two missed probes while the server
     # replaces its own process -- from being read as death.
     "desktop_health_failure_threshold": LimitRange(1, 1_000),
+    # How often a reconnecting client re-reads the status document. Each
+    # re-read runs a short-lived mcc-desktop --print-status, so the 5s floor is
+    # about not turning a reconnect into a process storm; the ceiling is an
+    # hour because a value larger than any reconnect budget simply switches the
+    # behaviour off, which is a legitimate thing to want.
+    "desktop_reconnect_restatus_seconds": LimitRange(
+        5.0, HOUR, "5s floor keeps a reconnect from becoming a process storm"
+    ),
     # Desktop window size, in CSS pixels, for the app-mode/embedded window.
     # The floor keeps the dashboard usable; the ceiling is an 8K edge, past
     # which this stops being a window size and starts being a typo.

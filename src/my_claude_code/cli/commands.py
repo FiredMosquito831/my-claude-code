@@ -41,7 +41,12 @@ from my_claude_code.config.proxy_auth import open_proxy_without_auth_error
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.process_handoff import external_upgrade_helper_pending
-from my_claude_code.core.stop_deadline import stop_deadline
+from my_claude_code.core.stop_deadline import (
+    HARD_EXIT_GRACE_SECONDS,
+    STOP_TEARDOWN_MARGIN_SECONDS,
+    clamp_stop_budget,
+    stop_deadline,
+)
 from my_claude_code.runtime.bootstrap import build_asgi_app
 
 _WINDOWS = os.name == "nt"
@@ -337,12 +342,15 @@ def _run_supervised_server(
         raise SystemExit(1)
 
     requested = ServerExitAction.STOP
+    # When the stop clock started, for the "drain finished" line below. ``None``
+    # means no stop has been requested yet.
+    stop_started_at: float | None = None
     server_holder: dict[str, uvicorn.Server] = {}
     deadline = stop_deadline()
     deadline.clear()
 
     def request(action: ServerExitAction) -> None:
-        nonlocal requested
+        nonlocal requested, stop_started_at
         # Only escalate: a later, weaker action (e.g. RELOAD) must not
         # downgrade an already-requested REPLACE_PROCESS.
         if _ACTION_PRIORITY[action] > _ACTION_PRIORITY[requested]:
@@ -354,6 +362,24 @@ def _run_supervised_server(
         # own, so the total stop time is the number on the box however the
         # time was spent. A second request cannot move it.
         deadline.request(settings.server_graceful_shutdown_seconds)
+        # The first request wins; a later one neither moves the deadline nor
+        # deserves a second log line saying it did.
+        if stop_started_at is None:
+            stop_started_at = time.monotonic()
+            budget = clamp_stop_budget(settings.server_graceful_shutdown_seconds)
+            # Without this line a slow shutdown leaves NO evidence at all: the
+            # ASGI gate logs nothing, the watchdog only speaks when it wins,
+            # and the rotated logs are swept on startup -- so "why did the
+            # restart take five minutes" was, measurably, unanswerable.
+            logger.info(
+                "Stop requested (action={action}, "
+                "SERVER_GRACEFUL_SHUTDOWN_SECONDS={configured}, budget={budget:.1f}s, "
+                "hard deadline in {total:.1f}s). New requests are refused from now.",
+                action=requested.value,
+                configured=settings.server_graceful_shutdown_seconds,
+                budget=budget,
+                total=budget + STOP_TEARDOWN_MARGIN_SECONDS + HARD_EXIT_GRACE_SECONDS,
+            )
         # New work is refused from this instant (runtime/asgi.py's gate and
         # ProviderRuntimeManager.acquire), so a busy client can no longer keep
         # a closing server alive by making ordinary requests.
@@ -431,6 +457,17 @@ def _run_supervised_server(
                 err=exc,
             )
         raise
+    if stop_started_at is not None:
+        # The other half of the pair. Together the two lines are the whole
+        # timeline of a stop, which is what an after-the-fact question about a
+        # slow shutdown needs and what no log has ever carried.
+        logger.info(
+            "Stop complete (action={action}) after {elapsed:.1f}s of a "
+            "{budget:.1f}s budget.",
+            action=requested.value,
+            elapsed=time.monotonic() - stop_started_at,
+            budget=clamp_stop_budget(settings.server_graceful_shutdown_seconds),
+        )
     # Past this point the socket is closed and no request can arrive, so the
     # gate has nothing left to guard; clearing keeps the next generation (and,
     # in-process, the next test) from inheriting a stop that already happened.

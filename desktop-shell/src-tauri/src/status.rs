@@ -35,6 +35,15 @@ pub struct Status {
     pub window_height: u32,
     pub tray_enabled: bool,
     pub minimize_to_tray: bool,
+    /// Whether closing this window should hide it rather than end the app.
+    ///
+    /// Already resolved by Python, and that is load-bearing. It is NOT
+    /// `minimize_to_tray && tray_enabled`: `tray_enabled` answers "should THIS
+    /// window draw a tray icon", which is false on Windows and macOS precisely
+    /// because a Python tray is already drawing one. Computing the close
+    /// behaviour from it here is what made the close button end the app on the
+    /// two platforms that actually have a tray.
+    pub close_to_tray: bool,
     pub server_log: String,
     pub start_timeout_seconds: f64,
     pub health_check_interval_seconds: f64,
@@ -42,6 +51,11 @@ pub struct Status {
     pub health_failure_threshold: u32,
     pub activation_poll_seconds: f64,
     pub reconnect_timeout_seconds: f64,
+    /// How often, while reconnecting, to re-read this whole document instead
+    /// of only re-probing the health URL. C9: there is deliberately no default
+    /// here either -- a compiled-in cadence would be this binary deciding how
+    /// often to run a process on the user's machine.
+    pub reconnect_restatus_seconds: f64,
 }
 
 /// Why a status document could not be used.
@@ -116,7 +130,8 @@ pub(crate) fn sample_json() -> serde_json::Value {
         "window_width": 1280,
         "window_height": 860,
         "tray_enabled": true,
-        "minimize_to_tray": false,
+        "minimize_to_tray": true,
+        "close_to_tray": true,
         "start_at_login": false,
         "server_log": "/home/example/config/logs/server.log",
         "start_timeout_seconds": 30.0,
@@ -124,7 +139,8 @@ pub(crate) fn sample_json() -> serde_json::Value {
         "health_poll_seconds": 5.0,
         "health_failure_threshold": 3,
         "activation_poll_seconds": 1.0,
-        "reconnect_timeout_seconds": 1320.0
+        "reconnect_timeout_seconds": 1320.0,
+        "reconnect_restatus_seconds": 30.0
     })
 }
 
@@ -139,6 +155,71 @@ mod tests {
         assert_eq!(status.server_presence, "healthy");
         assert_eq!(status.health_failure_threshold, 3);
         assert!((status.reconnect_timeout_seconds - 1320.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn close_to_tray_is_read_and_is_not_recomputed_from_tray_enabled() {
+        // The defect: on Windows and macOS `tray_enabled` is false in this
+        // document *because* a tray exists and belongs to Python. A window
+        // that ANDs the two ends the app on exactly the platforms where
+        // closing should have hidden it.
+        let mut document = sample_json();
+        document["tray_enabled"] = serde_json::json!(false);
+        document["close_to_tray"] = serde_json::json!(true);
+        let status = parse_status(&document.to_string()).expect("parses");
+        assert!(!status.tray_enabled);
+        assert!(status.close_to_tray);
+
+        let mut opted_out = sample_json();
+        opted_out["close_to_tray"] = serde_json::json!(false);
+        assert!(
+            !parse_status(&opted_out.to_string())
+                .expect("parses")
+                .close_to_tray
+        );
+    }
+
+    #[test]
+    fn a_document_without_close_to_tray_is_malformed() {
+        // Same rule as every other budget and switch here: no compiled-in
+        // default, because a default is a second source of truth.
+        let mut document = sample_json();
+        document
+            .as_object_mut()
+            .expect("an object")
+            .remove("close_to_tray");
+        let error = parse_status(&document.to_string()).expect_err("refused");
+        assert!(matches!(error, StatusError::Malformed(_)));
+    }
+
+    #[test]
+    fn parses_reconnect_restatus_seconds() {
+        let status = parse_status(&sample_json().to_string()).expect("sample parses");
+        assert!((status.reconnect_restatus_seconds - 30.0).abs() < f64::EPSILON);
+        let moved = parse_status(
+            &{
+                let mut document = sample_json();
+                document["reconnect_restatus_seconds"] = serde_json::json!(7.5);
+                document
+            }
+            .to_string(),
+        )
+        .expect("parses");
+        assert!((moved.reconnect_restatus_seconds - 7.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_document_without_reconnect_restatus_seconds_is_malformed() {
+        // C9. A default here would be this binary deciding how often to run a
+        // process on the user's machine, and the whole design of this shell is
+        // that it decides nothing.
+        let mut document = sample_json();
+        document
+            .as_object_mut()
+            .expect("an object")
+            .remove("reconnect_restatus_seconds");
+        let error = parse_status(&document.to_string()).expect_err("refused");
+        assert!(matches!(error, StatusError::Malformed(_)));
     }
 
     #[test]

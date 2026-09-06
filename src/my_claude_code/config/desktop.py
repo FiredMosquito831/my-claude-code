@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -35,6 +36,13 @@ _BOOLEAN_DEFAULTS: dict[str, bool] = {
     "tray_enabled": True,
     "start_at_login": False,
     "minimize_to_tray": False,
+    # Default ON, unlike every other new preference here, and deliberately so.
+    # An app that lives in the tray and whose window close ENDS it is not two
+    # defensible designs, it is one design with a bug: the close button is the
+    # obvious way to put a window away, the tray icon is the obvious way to get
+    # it back, and before 6.50.0 the first of those quit the app and took the
+    # tray and the server with it. Closing hides; Quit in the tray menu quits.
+    "close_to_tray": True,
     "window_open": True,
 }
 
@@ -49,7 +57,13 @@ class DesktopState:
 
     tray_enabled: bool = True
     start_at_login: bool = False
+    #: The old spelling of ``close_to_tray``, kept so a state file written by a
+    #: build before 6.50.0 still says what its owner meant, and so a downgrade
+    #: reads something sane. It is no longer edited anywhere: every writer sets
+    #: ``close_to_tray`` and this follows it (see ``load_desktop_state``).
     minimize_to_tray: bool = False
+    #: Whether closing the window hides it instead of ending the app.
+    close_to_tray: bool = True
     server_mode: ServerMode = "spawn"
     window: WindowPreference = "auto"
     window_open: bool = True
@@ -80,6 +94,17 @@ def load_desktop_state() -> DesktopState:
         if isinstance(data.get(name), bool):
             values[name] = data[name]
 
+    # A file written before 6.50.0 has no ``close_to_tray``. Its owner did
+    # express an opinion, though -- under the old name -- and honouring it is
+    # the difference between "the new default applies" and "the app forgot what
+    # you asked for". Only an EXPLICIT legacy value migrates; an absent one
+    # takes the new default, which is what makes closing hide by default on
+    # every install that never touched the old switch.
+    if not isinstance(data.get("close_to_tray"), bool) and isinstance(
+        data.get("minimize_to_tray"), bool
+    ):
+        values["close_to_tray"] = data["minimize_to_tray"]
+
     raw_mode = data.get("server_mode")
     if raw_mode in SERVER_MODES:
         server_mode: ServerMode = raw_mode
@@ -103,7 +128,10 @@ def load_desktop_state() -> DesktopState:
     return DesktopState(
         tray_enabled=bool(values["tray_enabled"]),
         start_at_login=bool(values["start_at_login"]),
-        minimize_to_tray=bool(values["minimize_to_tray"]),
+        # Both names carry the same answer from here on, so a reader of either
+        # -- this build, an older one, the status document -- agrees.
+        minimize_to_tray=bool(values["close_to_tray"]),
+        close_to_tray=bool(values["close_to_tray"]),
         server_mode=server_mode,
         window=window,
         window_open=bool(values["window_open"]),
@@ -124,6 +152,22 @@ def save_desktop_state(state: DesktopState) -> None:
         os.replace(tmp_path, path)
     except OSError as exc:
         raise DesktopStateError(f"Failed to save desktop state: {exc}") from exc
+
+
+def _close_to_tray_override(
+    overrides: Mapping[str, object], current: DesktopState
+) -> bool:
+    """One answer for both spellings of the close-to-tray preference.
+
+    Either name in an override sets both fields, so a caller written against
+    the old name cannot leave the two disagreeing -- which would be a state
+    file whose two halves say different things about the same button.
+    """
+
+    for name in ("close_to_tray", "minimize_to_tray"):
+        if name in overrides:
+            return bool(overrides[name])
+    return current.close_to_tray
 
 
 def _int_or_none(value: object) -> int | None:
@@ -155,9 +199,8 @@ def _update_state(
         start_at_login=bool(overrides["start_at_login"])
         if "start_at_login" in overrides
         else current.start_at_login,
-        minimize_to_tray=bool(overrides["minimize_to_tray"])
-        if "minimize_to_tray" in overrides
-        else current.minimize_to_tray,
+        minimize_to_tray=_close_to_tray_override(overrides, current),
+        close_to_tray=_close_to_tray_override(overrides, current),
         server_mode=server_mode,
         window=window,
         window_open=bool(overrides["window_open"])
@@ -186,6 +229,12 @@ def set_window_preference(value: str) -> DesktopState:
         raise ValueError(f"Invalid window preference: {value}")
     validated = cast(WindowPreference, value)
     return _update_state(window=validated)
+
+
+def set_close_to_tray(enabled: bool) -> DesktopState:
+    """Persist whether closing the window hides it instead of ending the app."""
+
+    return _update_state(close_to_tray=enabled)
 
 
 def set_tray_enabled(enabled: bool) -> DesktopState:

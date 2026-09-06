@@ -734,13 +734,17 @@ def test_deferred_helper_writes_the_receipt_without_a_bom(tmp_path) -> None:
 
     ``Set-Content -Encoding utf8`` under PowerShell 5.1 prepends U+FEFF;
     ``[System.IO.File]::WriteAllText`` with ``UTF8Encoding($false)`` does not.
-    All three write sites -- timeout, final result, and the rewritten uv
-    receipt the staged fallback leaves behind -- must use it, and the outcome
-    must still be recorded before any relaunch attempt.
+    Every write site -- timeout, final result, the rewritten uv receipt the
+    staged fallback leaves behind, and the progress receipt's truncation and
+    appends -- must use it, and the outcome must still be recorded before any
+    relaunch attempt.
     """
     script = _deferred_script(tmp_path)
-    assert script.count("[System.IO.File]::WriteAllText") == 3
-    assert script.count("UTF8Encoding($false)") == 3
+    assert script.count("[System.IO.File]::WriteAllText") == 4
+    assert script.count("[System.IO.File]::AppendAllText") == 1
+    # One shared encoder object for the progress receipt, plus one at each of
+    # the three whole-file writes that do not share it.
+    assert script.count("UTF8Encoding($false)") == 4
     assert "Set-Content" not in script
     first_write = script.index("[System.IO.File]::WriteAllText")
     launch = script.index("Start-Process -FilePath")
@@ -874,3 +878,81 @@ async def test_reconnect_timeout_tracks_the_configured_graceful_budget(
         + graceful
         + release_updates._DASHBOARD_RECONNECT_STARTUP_MARGIN_SECONDS
     )
+
+
+def test_the_helper_writes_a_progress_file_for_each_stage(tmp_path) -> None:
+    """The measured 14-minute silent update leaves a trail now.
+
+    The 23:19 update on the reporting machine left *no* trace whatsoever: the
+    stop is not logged, the helper wrote no progress, and no pending receipt
+    survived. The only forensic evidence that anything had happened was shim
+    mtimes. One appended JSON line per stage is a dozen lines of PowerShell and
+    it turns the single worst part of the experience -- a blank fourteen-minute
+    wait -- into a status line the window can read.
+    """
+
+    script = _deferred_script(tmp_path)
+    progress = str(tmp_path / release_updates.UPDATE_PROGRESS_FILENAME)
+
+    assert progress in script
+    for stage in release_updates.UPDATE_PROGRESS_STAGES:
+        assert f"Write-Stage '{stage}'" in script, stage
+
+    # The order the stages are written in is the order they happen in.
+    waiting = script.index("Write-Stage 'waiting-for-parent'")
+    installing = script.index("Write-Stage 'installing'")
+    starting = script.index("Write-Stage 'starting'")
+    done = script.index("Write-Stage 'done'")
+    assert waiting < installing < starting < done
+
+    # The first stage is written before the wait loop, not after it: the whole
+    # point is to say something during the wait.
+    assert waiting < script.index("while ((Get-Date) -lt $deadline)")
+    # And installing is written before uv is invoked.
+    assert installing < script.index("$delays = @(0, 5, 10, 20, 30)")
+
+    # A fresh episode truncates: a stale 'done' from the previous update would
+    # otherwise be the first thing a window reads and believes.
+    truncate = script.index("[System.IO.File]::WriteAllText($progressPath, ''")
+    assert truncate < waiting
+
+    # Appended, never rewritten. The writer is a detached process that may be
+    # killed at any point and the reader is a window polling while that
+    # happens, so a rewrite could hand the reader a half-written document.
+    assert "AppendAllText($progressPath" in script
+
+    # A receipt nobody can write must never be the reason an update fails.
+    assert "catch {" in script[script.index("function Write-Stage") :]
+
+
+def test_the_progress_reader_takes_the_last_complete_line(
+    tmp_path, monkeypatch
+) -> None:
+    """Reading back what the helper wrote, torn final line included."""
+
+    monkeypatch.setattr(release_updates, "_stage_dir", lambda: tmp_path)
+    assert release_updates.update_progress() is None
+
+    path = release_updates.update_progress_path()
+    assert path == tmp_path / release_updates.UPDATE_PROGRESS_FILENAME
+
+    path.write_text(
+        '{"stage": "waiting-for-parent", "message": "Waiting."}\n'
+        '{"stage": "installing", "message": "Installing the new version."}\n',
+        encoding="utf-8",
+    )
+    assert release_updates.update_progress() == {
+        "stage": "installing",
+        "message": "Installing the new version.",
+    }
+
+    # A line still being appended costs one stale stage, not the whole file.
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write('{"stage": "star')
+    torn = release_updates.update_progress()
+    assert torn is not None
+    assert torn["stage"] == "installing"
+
+    # And a BOM from Windows PowerShell 5.1 does not hide it.
+    path.write_bytes(b'\xef\xbb\xbf{"stage": "done"}')
+    assert release_updates.update_progress() == {"stage": "done"}

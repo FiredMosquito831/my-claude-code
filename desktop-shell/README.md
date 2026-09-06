@@ -63,21 +63,86 @@ pure function (`src/ladder.rs::decide`), so every row below is a unit test.
 | `free` + `server_mode: spawn` | `mcc-server` is started, then `health_url` is polled every `health_check_interval_seconds` until `start_timeout_seconds` | "Starting the server…", then the dashboard |
 | `free` + `attach` / `off` | Nothing is started | "The server is not running. Server mode is *attach*; start `mcc-server` yourself, or switch to spawn." + Retry |
 | `foreign` | Nothing is started | The `port_conflict` sentence Python wrote, verbatim — it names the holding process — + Retry |
+| `draining` | Nothing is started, nothing is killed | "The server is shutting down…" and a wait, bounded by `reconnect_timeout_seconds`, then the ladder runs again |
 | Was healthy, now failing, under `health_failure_threshold` | Nothing at all | The dashboard, untouched |
-| …over the threshold, inside `reconnect_timeout_seconds` | Reconnect banner; the dashboard is reloaded the moment health returns | "The server stopped answering — it is probably restarting." |
-| …past the budget, or a start that timed out | The end of the line | An error page naming `server_log`, + Retry |
+| …over the threshold, inside `reconnect_timeout_seconds` | Reconnect banner, **repainted on every poll**; every `reconnect_restatus_seconds` the status document is re-read, and if it says `free` + `spawn` a server is started **once** per episode | "Still trying: 3 m 20 s elapsed of 22 m, 18 m 40 s left. Last checked 2 s ago (connection refused). Update: Installing the new version." |
+| …past the budget, or a start that timed out | The end of the line | An error page naming `server_log` and what the last check said, + Retry |
 | `schema` is not 1, or `server_presence` is a word this build does not know | Refuses | "Update the desktop window" — never a guess |
 
 Every number in that table is read from the status document. None of them is
 compiled into this binary (contract C9), which is what stops a routine server
 update being painted over with an error page.
 
+### `draining`, and why it is opt-in
+
+`draining` is the fourth presence, added in 6.50.0. It means MCC's own server is
+on the port and its shutdown gate is refusing every request with `503` until the
+drain finishes — not a port conflict, not a free port, and above all not
+something to start a second server into.
+
+It reaches this window only because this window **asks for it**: `print_status`
+passes `--presence-v2`. A shell built before 6.50.0 does not pass it and is
+answered with the three presences it was written against, which matters because
+the row above refuses an unknown presence rather than guessing at the nearest
+neighbour. Before the value existed, a drain read as `foreign` and this window
+told the user that port 8082 was *"held by python.exe (pid N), which is not the
+MCC server"* — about MCC's own process, during an ordinary restart.
+
+This shell does **not** kill a draining server (decision Q5). The server
+hard-exits itself one beat past its own stop budget and the update helper
+force-kills the exact parent pid it was given; a third killer here would only be
+a way to lose an in-flight request that two other bounded paths were about to
+end cleanly.
+
+### The reconnect episode
+
+`watch_health` used to be a closed loop over one URL that painted its banner
+exactly once. Three things changed in 6.50.0, and the pure half of each is a
+unit test in `ladder.rs`:
+
+1. **The banner repaints every poll** — elapsed, remaining, and what the last
+   probe actually said (`health.rs::ProbeOutcome`). A loop that was in fact
+   probing every five seconds had no way of showing it, so a fourteen-minute
+   update looked like a frozen window.
+2. **The ladder is re-run** every `reconnect_restatus_seconds`, and on the one
+   unambiguous answer — `free` + `server_mode: spawn` — `mcc-server` is started.
+   Once per episode, guarded by a flag, so a server that crash-loops on start is
+   not restarted every thirty seconds for the whole budget. Before this, a
+   server that had exited with nothing to restart it was waited on, idle, for
+   the entire budget; closing and reopening the app was the only thing in the
+   design that started one.
+3. **An update in progress is named.** `update_progress.rs` reads
+   `<config_dir>/updates/progress.json`, one JSON object per line, appended by
+   the Python update helper. The stage string is shown verbatim — a table of
+   stage names here would be a second copy of a list Python owns.
+
+### Closing the window
+
+The close button **hides** the window when the status document says
+`close_to_tray`. That value is resolved by Python and used verbatim: it is
+deliberately **not** `minimize_to_tray && tray_enabled`, because `tray_enabled`
+answers "should *this window* draw a tray icon" and is `false` on Windows and
+macOS precisely *because* a Python tray is already drawing one. Computing the
+close behaviour from it is what made the close button end the app — taking the
+tray and, in `spawn` mode, the server with it — on the two platforms that have a
+tray at all. `should_hide_on_close` in `lib.rs` is the whole rule, and Quit is
+never turned into a hide.
+
+### `print_status` has a wall
+
+`Command::output()` has no timeout. A wedged `mcc-desktop` — a cold shim being
+scanned by antivirus, a configuration directory on a drive that has gone away —
+used to block the ladder thread forever, and that thread paints every page
+including the error page that would have explained it. The call now spawns,
+drains both pipes on their own threads, and kills the child after 15 seconds,
+reporting `Unrunnable`.
+
 ## Building
 
 Everything below runs from `desktop-shell/src-tauri/`.
 
 ```
-cargo test          # 42 unit tests, no window, no network, no MCC install
+cargo test          # 71 unit tests, no window, no network, no MCC install
 cargo clippy --all-targets -- -D warnings
 cargo build         # debug
 cargo tauri build --no-bundle    # release binary, no installer

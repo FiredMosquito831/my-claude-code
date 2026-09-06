@@ -21,6 +21,7 @@ from .constants import (
     DESKTOP_HEALTH_CHECK_INTERVAL_DEFAULT,
     DESKTOP_HEALTH_FAILURE_THRESHOLD_DEFAULT,
     DESKTOP_HEALTH_POLL_SECONDS_DEFAULT,
+    DESKTOP_RECONNECT_RESTATUS_SECONDS_DEFAULT,
     DESKTOP_SERVER_START_TIMEOUT_DEFAULT,
     DESKTOP_WINDOW_HEIGHT_DEFAULT,
     DESKTOP_WINDOW_WIDTH_DEFAULT,
@@ -1372,6 +1373,14 @@ class Settings(BaseSettings):
     desktop_health_failure_threshold: int = Field(
         default=DESKTOP_HEALTH_FAILURE_THRESHOLD_DEFAULT,
         validation_alias="DESKTOP_HEALTH_FAILURE_THRESHOLD",
+    )
+    # How often a client that is waiting out a server restart re-reads the
+    # whole status document, rather than only re-probing /health. Probing one
+    # URL forever cannot notice that the port has gone free and nothing is
+    # going to start a server on it.
+    desktop_reconnect_restatus_seconds: float = Field(
+        default=DESKTOP_RECONNECT_RESTATUS_SECONDS_DEFAULT,
+        validation_alias="DESKTOP_RECONNECT_RESTATUS_SECONDS",
     )
     # Desktop window size, in CSS pixels, for the app-mode/embedded window.
     desktop_window_width: int = Field(

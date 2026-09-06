@@ -17,6 +17,7 @@ from my_claude_code.cli.desktop import (
     launch_desktop,
     probe_server_presence,
 )
+from my_claude_code.cli.launchers.common import PreflightResult
 from my_claude_code.config.desktop import (
     DesktopState,
     ServerMode,
@@ -24,12 +25,42 @@ from my_claude_code.config.desktop import (
     load_desktop_state,
     save_desktop_state,
 )
+from my_claude_code.core.stop_deadline import (
+    SHUTDOWN_MARKER_HEADER,
+    SHUTDOWN_MARKER_VALUE,
+)
 
 
 def _set_home(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.chdir(tmp_path)
+
+
+def _probe(error: str | None) -> PreflightResult:
+    """A ``/health`` probe result standing in for a real socket.
+
+    ``None`` is a healthy MCC; a string is whatever went wrong, exactly as
+    ``preflight_proxy`` used to flatten it.
+    """
+
+    if error is None:
+        return PreflightResult(status_code=200)
+    return PreflightResult(error=error)
+
+
+def _draining_probe() -> PreflightResult:
+    """The exact head MCC's shutdown gate answers with during a drain."""
+
+    return PreflightResult(
+        status_code=503,
+        headers={
+            "connection": "close",
+            "retry-after": "5",
+            SHUTDOWN_MARKER_HEADER: SHUTDOWN_MARKER_VALUE,
+        },
+        error="returned HTTP 503",
+    )
 
 
 def _controller(
@@ -46,8 +77,8 @@ def _controller(
 
     spawned: list[Any] = []
     monkeypatch.setattr(
-        "my_claude_code.cli.desktop.preflight_proxy",
-        lambda url: preflight_result,
+        "my_claude_code.cli.desktop.preflight_result",
+        lambda url: _probe(preflight_result),
     )
     # Never touch a real socket: the port is free unless a test says otherwise.
     monkeypatch.setattr(
@@ -160,12 +191,16 @@ class _FakeWindow:
 
 class TestServerPresenceProbe:
     def test_healthy_when_mcc_answers(self, monkeypatch):
-        monkeypatch.setattr(desktop_module, "preflight_proxy", lambda url: None)
+        monkeypatch.setattr(
+            desktop_module, "preflight_result", lambda url: _probe(None)
+        )
 
         assert probe_server_presence(_Settings()) == "healthy"
 
     def test_free_when_nothing_holds_the_port(self, monkeypatch):
-        monkeypatch.setattr(desktop_module, "preflight_proxy", lambda url: "down")
+        monkeypatch.setattr(
+            desktop_module, "preflight_result", lambda url: _probe("down")
+        )
         monkeypatch.setattr(
             desktop_module, "probe_port_available", lambda host, port: True
         )
@@ -173,12 +208,98 @@ class TestServerPresenceProbe:
         assert probe_server_presence(_Settings()) == "free"
 
     def test_foreign_when_someone_else_holds_the_port(self, monkeypatch):
-        monkeypatch.setattr(desktop_module, "preflight_proxy", lambda url: "down")
+        monkeypatch.setattr(
+            desktop_module, "preflight_result", lambda url: _probe("down")
+        )
         monkeypatch.setattr(
             desktop_module, "probe_port_available", lambda host, port: False
         )
 
         assert probe_server_presence(_Settings()) == "foreign"
+
+    def test_draining_when_our_own_server_is_refusing_on_the_way_out(self, monkeypatch):
+        """MCC mid-stop is not a stranger on the port.
+
+        The socket is still bound, so the old ladder fell through to
+        ``foreign`` -- which names MCC's own process as "not the MCC server".
+        """
+
+        monkeypatch.setattr(
+            desktop_module, "preflight_result", lambda url: _draining_probe()
+        )
+        monkeypatch.setattr(
+            desktop_module, "probe_port_available", lambda host, port: False
+        )
+
+        assert probe_server_presence(_Settings(), presence_v2=True) == "draining"
+        # And a caller that did not ask for the new value keeps the old answer.
+        assert probe_server_presence(_Settings()) == "foreign"
+
+    def test_a_503_without_our_marker_is_not_claimed_as_ours(self, monkeypatch):
+        """Any reverse proxy can answer 503; only MCC stamps the marker."""
+
+        monkeypatch.setattr(
+            desktop_module,
+            "preflight_result",
+            lambda url: PreflightResult(
+                status_code=503,
+                headers={"server": "nginx"},
+                error="returned HTTP 503",
+            ),
+        )
+        monkeypatch.setattr(
+            desktop_module, "probe_port_available", lambda host, port: False
+        )
+
+        assert probe_server_presence(_Settings(), presence_v2=True) == "foreign"
+
+    def test_a_pre_marker_server_is_still_recognised_by_its_retry_after(
+        self, monkeypatch
+    ):
+        """One release of overlap: a server from before the marker existed.
+
+        It answers 503 with ``retry-after`` and no marker. Reading that as a
+        drain is a far better guess than reading it as a stranger on the port,
+        and it is still not a guess a plain 503 can trigger.
+        """
+
+        monkeypatch.setattr(
+            desktop_module,
+            "preflight_result",
+            lambda url: PreflightResult(
+                status_code=503,
+                headers={"retry-after": "5", "connection": "close"},
+                error="returned HTTP 503",
+            ),
+        )
+        monkeypatch.setattr(
+            desktop_module, "probe_port_available", lambda host, port: False
+        )
+
+        assert probe_server_presence(_Settings(), presence_v2=True) == "draining"
+
+    def test_spawn_waits_for_a_draining_server_instead_of_accusing_it(
+        self, monkeypatch, tmp_path
+    ):
+        """The tray reads the same ladder, so it landed on the same wrong page."""
+
+        controller, spawned = _controller(
+            monkeypatch, tmp_path, "spawn", preflight_result="down"
+        )
+        monkeypatch.setattr(
+            desktop_module, "preflight_result", lambda url: _draining_probe()
+        )
+        monkeypatch.setattr(
+            desktop_module, "probe_port_available", lambda host, port: False
+        )
+
+        with pytest.raises(DesktopError) as excinfo:
+            controller.ensure_server()
+
+        message = str(excinfo.value)
+        assert "shutting down" in message
+        assert "not the MCC server" not in message
+        assert spawned == [], "a drain must not be raced with a second server"
 
     def test_spawn_refuses_a_foreign_port_and_names_the_holder(
         self, monkeypatch, tmp_path
@@ -325,16 +446,16 @@ class TestWindowLifecycle:
         assert window.closed == 1
         assert stopped == []
 
-    def test_minimize_to_tray_keeps_the_app_alive_on_close(self, monkeypatch, tmp_path):
+    def test_close_to_tray_keeps_the_app_alive_on_close(self, monkeypatch, tmp_path):
         _set_home(monkeypatch, tmp_path)
-        save_desktop_state(DesktopState(minimize_to_tray=True, tray_enabled=True))
+        save_desktop_state(DesktopState(close_to_tray=True, tray_enabled=True))
         controller = DesktopController.__new__(DesktopController)
 
         assert controller.handle_window_closed() is True
 
-    def test_without_minimize_to_tray_closing_ends_the_app(self, monkeypatch, tmp_path):
+    def test_without_close_to_tray_closing_ends_the_app(self, monkeypatch, tmp_path):
         _set_home(monkeypatch, tmp_path)
-        save_desktop_state(DesktopState(minimize_to_tray=False))
+        save_desktop_state(DesktopState(close_to_tray=False))
         controller = DesktopController.__new__(DesktopController)
 
         assert controller.handle_window_closed() is False
@@ -579,7 +700,9 @@ class TestLaunchReconciliation:
         _set_home(monkeypatch, tmp_path)
         monkeypatch.setattr(desktop_module, "config_dir_path", lambda: tmp_path)
         # A healthy server keeps ensure_server a no-op without any sockets.
-        monkeypatch.setattr(desktop_module, "preflight_proxy", lambda url: None)
+        monkeypatch.setattr(
+            desktop_module, "preflight_result", lambda url: _probe(None)
+        )
         applied = []
         removed = []
         monkeypatch.setattr(
@@ -646,9 +769,9 @@ class TestLaunchReconciliation:
 class TestWindowCloseWatcher:
     """Only a True->False is_open edge routes through handle_window_closed."""
 
-    def _controller(self, monkeypatch, tmp_path, *, minimize_to_tray):
+    def _controller(self, monkeypatch, tmp_path, *, close_to_tray):
         _set_home(monkeypatch, tmp_path)
-        save_desktop_state(DesktopState(minimize_to_tray=minimize_to_tray))
+        save_desktop_state(DesktopState(close_to_tray=close_to_tray))
         controller = DesktopController.__new__(DesktopController)
         object.__setattr__(controller, "_window", _FakeWindow())
         return controller
@@ -656,7 +779,7 @@ class TestWindowCloseWatcher:
     def test_a_survived_close_records_no_window_and_keeps_the_tray(
         self, monkeypatch, tmp_path
     ):
-        controller = self._controller(monkeypatch, tmp_path, minimize_to_tray=True)
+        controller = self._controller(monkeypatch, tmp_path, close_to_tray=True)
         controller.show_window()
         controller.window.close()
         tray = _RecordingTray()
@@ -669,7 +792,7 @@ class TestWindowCloseWatcher:
     def test_an_app_ending_close_stops_the_tray_and_preserves_the_state(
         self, monkeypatch, tmp_path
     ):
-        controller = self._controller(monkeypatch, tmp_path, minimize_to_tray=False)
+        controller = self._controller(monkeypatch, tmp_path, close_to_tray=False)
         controller.show_window()
         controller.window.close()
         tray = _RecordingTray()
@@ -680,7 +803,7 @@ class TestWindowCloseWatcher:
         assert load_desktop_state().window_open is True
 
     def test_edges_require_a_previous_open(self, monkeypatch, tmp_path):
-        controller = self._controller(monkeypatch, tmp_path, minimize_to_tray=False)
+        controller = self._controller(monkeypatch, tmp_path, close_to_tray=False)
         tray = _RecordingTray()
 
         assert desktop_module._poll_window_transition(False, controller, tray) is False
@@ -689,7 +812,7 @@ class TestWindowCloseWatcher:
         assert load_desktop_state().window_open is True
 
     def test_a_steady_open_is_not_a_close(self, monkeypatch, tmp_path):
-        controller = self._controller(monkeypatch, tmp_path, minimize_to_tray=False)
+        controller = self._controller(monkeypatch, tmp_path, close_to_tray=False)
         controller.show_window()
         tray = _RecordingTray()
 
@@ -701,7 +824,7 @@ class TestWindowCloseWatcher:
         self, monkeypatch, tmp_path
     ):
         _set_home(monkeypatch, tmp_path)
-        save_desktop_state(DesktopState(minimize_to_tray=False))
+        save_desktop_state(DesktopState(close_to_tray=False))
         controller = DesktopController.__new__(DesktopController)
         object.__setattr__(controller, "_window", _FlippingWindow(reads_before_close=4))
         stop = threading.Event()
@@ -786,3 +909,104 @@ class TestFatalErrorSurfacing:
 
         assert excinfo.value.code == 1
         assert reported == ["port held by another program"]
+
+
+class TestCloseToTray:
+    """Closing the window hides it; Quit in the tray is what ends the app."""
+
+    def _state(self, monkeypatch, tmp_path, **fields):
+        from my_claude_code.config import desktop as desktop_config
+
+        _set_home(monkeypatch, tmp_path)
+        monkeypatch.setattr(desktop_module, "config_dir_path", lambda: tmp_path)
+        monkeypatch.setattr(desktop_config, "config_dir_path", lambda: tmp_path)
+        save_desktop_state(DesktopState(**fields))
+
+    def test_the_default_is_that_closing_hides_the_window(self, monkeypatch, tmp_path):
+        """The reported behaviour, and the reason this defaults ON.
+
+        An app that lives in the tray and whose close button ends it is one
+        design with a bug, not two defensible designs.
+        """
+
+        self._state(monkeypatch, tmp_path)
+        assert load_desktop_state().close_to_tray is True
+
+        controller = DesktopController.__new__(DesktopController)
+        assert controller.handle_window_closed() is True
+        # A survived close records "no window" so the next launch does not
+        # reopen one the user put away.
+        assert load_desktop_state().window_open is False
+
+    def test_turning_it_off_makes_the_close_button_end_the_app(
+        self, monkeypatch, tmp_path
+    ):
+        self._state(monkeypatch, tmp_path, close_to_tray=False)
+
+        controller = DesktopController.__new__(DesktopController)
+        assert controller.handle_window_closed() is False
+        # An app-ending close leaves the state alone: the user's last intent
+        # was an app WITH a window.
+        assert load_desktop_state().window_open is True
+
+    def test_without_a_tray_closing_still_ends_the_app(self, monkeypatch, tmp_path):
+        """There is nowhere to close to, so closing is the only way out."""
+
+        self._state(monkeypatch, tmp_path, tray_enabled=False, close_to_tray=True)
+
+        controller = DesktopController.__new__(DesktopController)
+        assert controller.handle_window_closed() is False
+
+    def test_a_state_file_from_before_6_50_0_keeps_the_answer_it_gave(
+        self, monkeypatch, tmp_path
+    ):
+        """An explicit old opinion migrates; an absent one takes the new default.
+
+        ``minimize_to_tray`` was the old spelling and defaulted to False. A user
+        who deliberately turned it ON must not have it turned off by the rename,
+        and a user who never touched it must get the new default rather than the
+        old one -- which is what makes closing hide on every existing install.
+        """
+
+        from my_claude_code.config import desktop as desktop_config
+
+        _set_home(monkeypatch, tmp_path)
+        monkeypatch.setattr(desktop_config, "config_dir_path", lambda: tmp_path)
+        path = desktop_config.desktop_state_path()
+
+        path.write_text(
+            '{"tray_enabled": true, "minimize_to_tray": false}', encoding="utf-8"
+        )
+        assert desktop_config.load_desktop_state().close_to_tray is False
+
+        path.write_text(
+            '{"tray_enabled": true, "minimize_to_tray": true}', encoding="utf-8"
+        )
+        assert desktop_config.load_desktop_state().close_to_tray is True
+
+        # No opinion at all: the new default.
+        path.write_text('{"tray_enabled": true}', encoding="utf-8")
+        assert desktop_config.load_desktop_state().close_to_tray is True
+
+        # And an explicit new value always wins over the legacy one.
+        path.write_text(
+            '{"minimize_to_tray": false, "close_to_tray": true}', encoding="utf-8"
+        )
+        assert desktop_config.load_desktop_state().close_to_tray is True
+
+    def test_the_two_spellings_can_never_disagree(self, monkeypatch, tmp_path):
+        """One button, one answer, whichever name a writer used."""
+
+        from my_claude_code.config import desktop as desktop_config
+
+        _set_home(monkeypatch, tmp_path)
+        monkeypatch.setattr(desktop_config, "config_dir_path", lambda: tmp_path)
+        save_desktop_state(DesktopState())
+
+        for value in (False, True):
+            state = desktop_config.set_close_to_tray(value)
+            assert state.close_to_tray is value
+            assert state.minimize_to_tray is value
+            reloaded = desktop_config.load_desktop_state()
+            assert reloaded.close_to_tray is value
+            assert reloaded.minimize_to_tray is value

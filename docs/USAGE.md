@@ -91,6 +91,23 @@ Both end at the same place: one server, one dashboard, one configuration directo
 Neither excludes the other. The desktop app is a window onto the server, not a second
 copy of it, and one machine can have both.
 
+**Which one should I pick?** Find the row that describes you.
+
+| If this is you | Pick | Why |
+| --- | --- | --- |
+| Running MCC on a headless box, a VPS, or over SSH | **Server + web dashboard** | There is no desktop session to draw a window or a tray into. Reach the dashboard by forwarding `8082`. |
+| Working inside WSL | **Server + web dashboard** | WSL has no tray. `mcc-desktop` says so and refuses rather than pretending; autostart there registers `mcc-server` under `systemd --user`. |
+| You live in the terminal and want to start and stop things yourself | **Server + web dashboard** | `mcc-server` in a window you own, `Ctrl-C` when you are done, and the install command when you want a new version. |
+| Running MCC as a service, or from CI | **Server + web dashboard** | One process, no session, no window chain to resolve. |
+| You want it managed for you | **Desktop app** | It installs the server if it is missing, starts it on launch, watches its health, and reconnects on its own after an update. |
+| You want a tray icon and start-at-login | **Desktop app** | The tray is the app's home: close the window and it stays there; **Quit** in the tray menu is what ends it. Start at login is one switch on the Deployment card. |
+| You are on macOS and would rather not run a Terminal command | **Server + web dashboard**, then `mcc-desktop` | The `.dmg` is unsigned, so opening it directly needs one `xattr` command. Letting `mcc-desktop` fetch the same binary skips that. |
+| You just want to double-click something | **Desktop app** | That is the whole point of it. |
+
+Both share one configuration directory, one `.env` and one dashboard, and a desktop
+install still puts every `mcc-*` command on your `PATH` — so choosing the app costs
+you nothing on the command line.
+
 <a id="the-windows-desktop-app-installer"></a>
 
 ### The Windows desktop-app installer
@@ -506,7 +523,8 @@ $ mcc-desktop --print-status
   "window_width": 1400,
   "window_height": 900,
   "tray_enabled": true,
-  "minimize_to_tray": false,
+  "minimize_to_tray": true,
+  "close_to_tray": true,
   "start_at_login": false,
   "autostart_reconcile": true,
   "server_log": "C:\\Users\\me\\.mcc\\logs\\server.log",
@@ -516,6 +534,7 @@ $ mcc-desktop --print-status
   "health_failure_threshold": 3,
   "activation_poll_seconds": 1.0,
   "reconnect_timeout_seconds": 1040.0,
+  "reconnect_restatus_seconds": 30.0,
   "shell_tray": true,
   "shell_binary": "C:\\Users\\me\\.local\\bin\\MyClaudeCode.exe",
   "shell_release_tag": "v6.43.0",
@@ -523,7 +542,7 @@ $ mcc-desktop --print-status
 }
 ```
 
-Six things are worth knowing about it:
+Eight things are worth knowing about it:
 
 - **`autostart_reconcile` says whether anyone is enforcing `start_at_login`.** It is
   `false` when `MCC_DESKTOP_SKIP_AUTOSTART=1` is set in the environment, which turns the
@@ -540,9 +559,28 @@ Six things are worth knowing about it:
 - **`host` is where you connect, not where the server binds.** The default bind is
   `0.0.0.0`, which is not an address anything can navigate to; the wildcard is mapped to
   `127.0.0.1` here exactly as it is in the URL the server prints at startup.
-- **`server_presence` is the three-way answer**, not a boolean: `healthy` (a My Claude
-  Code server is answering), `free` (nothing is listening) or `foreign` (something else
-  holds the port). Only `foreign` fills `port_conflict`, and it names the holding process.
+- **`server_presence` is a four-way answer**, not a boolean: `healthy` (a My Claude
+  Code server is answering), `free` (nothing is listening), `foreign` (something else
+  holds the port) or `draining` (MCC's own server is on the port and is refusing every
+  request with `503` while it finishes stopping). Only `foreign` fills `port_conflict`,
+  and it names the holding process.
+
+  `draining` is **opt-in**: it appears only when you pass `--print-status --presence-v2`.
+  Adding a *value* to a key is not a `schema` bump by the rule below, but the desktop
+  window refuses a presence it has no branch for rather than guessing at the nearest
+  neighbour — so a window built before 6.50.0 would turn a routine restart into an error
+  page. It asks for the fourth value; older readers keep the three they were written
+  against. Before 6.50.0 a draining server reported as `foreign`, which is why relaunching
+  the desktop app during a restart used to land on a port-conflict page accusing MCC's own
+  process of not being the MCC server.
+- **`close_to_tray` is already resolved for you.** `minimize_to_tray` is the stored
+  preference; `close_to_tray` is the answer to "if the user closes this window, is there a
+  tray for it to go to?" — the preference **and** a tray that exists. A window cannot work
+  that out from `tray_enabled`, because that key answers "should *you* draw an icon", and
+  it is `false` on Windows and macOS precisely *because* a tray is already running.
+- **`reconnect_restatus_seconds` is how often a reconnecting window should re-read this
+  document** rather than only re-pinging `health_url`. It is what lets a window notice that
+  the port has gone free and start a server itself.
 - **`schema` is the compatibility handle.** It is bumped when a documented key is removed
   or changes type. New keys can appear without a bump, so a reader must ignore keys it
   does not recognise, and should refuse loudly on a `schema` it does not know. The four
@@ -677,19 +715,74 @@ This writes a Start Menu `.lnk` on Windows, a `.desktop` entry on Linux, and a m
 
 Ordering and safety are unchanged: the desktop artefacts are removed only **after** every shim is verified gone, so a failed or unverified tool removal leaves your config *and* your shortcut alone. A shortcut or registry value that cannot be deleted (a file the shell has open, a locked key) is reported as a warning rather than aborting an uninstall that has already removed the tool. `--dry-run` / `-DryRun` prints every removal without performing it.
 
+<a id="closing-the-window-and-the-reconnect-banner"></a>
+
+### Closing the window, and the reconnect banner
+
+**Closing the window puts the app in the tray. It does not quit it.** Before 6.50.0
+the close button ended the app outright — and took the tray icon and, in `spawn`
+mode, the server with it. Since 6.50.0 the default is **Close to Tray**:
+
+* the **X** hides the window and leaves the tray icon and the server running;
+* the tray's **Open Dashboard** (also a plain click on the icon) brings it back;
+* the tray's **Quit** is what ends the app, and it still stops only the server it
+  started itself.
+
+Turn it off with **Close to Tray** on the dashboard's **Deployment** card, or in the
+tray menu, if you would rather the close button ended the app. With **Tray Enabled**
+off there is nowhere to close to, so the close button ends the app whatever this says.
+
+**While the server restarts, the window says what it is doing.** An update replaces
+the server process, and the window waits for the new one. That wait used to be a
+single sentence painted once and never touched again, which over a fourteen-minute
+update was indistinguishable from a frozen window. It now repaints on every health
+poll with:
+
+* how long it has been trying and how much of the budget is left, counting down;
+* what the last check actually said — `connection refused`, `shutting down`,
+  `HTTP 502`;
+* on Windows, which stage the update helper reported: `Waiting for the running
+  server to stop.`, `Installing the new version.`, `Starting the updated server.`
+
+Those stages are appended to `~/.mcc/updates/progress.json`, one JSON object per
+line, by the helper that performs the update. Read it if a restart goes wrong; the
+last line is where it stopped.
+
+**And the window now restarts a server that nobody else did.** Every
+`DESKTOP_RECONNECT_RESTATUS_SECONDS` (default 30) the reconnect loop re-reads
+`mcc-desktop --print-status` instead of only re-pinging the health URL. If the port
+has gone free and **Server mode** is `spawn`, it starts the server — **once** per
+reconnect, never in a loop — and goes back to polling. Before that, a server that
+had exited with nothing to restart it was waited on, idle, for the whole budget, and
+closing and reopening the app was the only thing in the design that started one.
+
+**A restarting server is no longer reported as a port conflict.** While MCC drains,
+its own port answers every request with `503`, and a window launched in that moment
+used to be told the port was *"held by python.exe (pid N), which is not the MCC
+server"* — about MCC's own process. The server now stamps `x-mcc-shutdown: 1` on that
+refusal and the window reads it as "shutting down", waits, and reconnects.
+
+> **The single biggest thing you can do about a slow restart** is check
+> `SERVER_GRACEFUL_SHUTDOWN_SECONDS` on **Limits & Resilience**. It bounds the drain,
+> and every update waits it out *twice over*: once while the old server finishes, and
+> again in the reconnect budget the window shows you. At the shipped default of `20`
+> the banner says about 17 minutes; at `300` it says 22, and roughly five minutes of
+> every update is that setting alone.
+
 <a id="desktop-settings-apply-on-the-next-launch"></a>
 
 ### DESKTOP_* settings apply on the next launch
 
 > **These settings apply on the next `mcc-desktop` launch, not to a tray already running.** `mcc-desktop` is a separate process from `mcc-server` and reads them once at start — changing one in the dashboard or in `~/.mcc/.env` does nothing to a tray you already have open. Quit and relaunch `mcc-desktop` to pick it up.
 
-Nine settings live under **Admin → Providers → Desktop**, beside the live desktop panel. They sat on the Limits page until 6.2.0; if you are following an older note, that is where they went.
+Ten settings live under **Admin → Providers → Desktop**, beside the live desktop panel. They sat on the Limits page until 6.2.0; if you are following an older note, that is where they went.
 
 | Setting | Default | Range |
 | --- | --- | --- |
 | `DESKTOP_HEALTH_POLL_SECONDS` | 5 | 0.5–3600 |
 | `DESKTOP_HEALTH_FAILURE_THRESHOLD` | 3 | 1–1000 |
 | `DESKTOP_ACTIVATION_POLL_SECONDS` | 1 | 0.1–3600 |
+| `DESKTOP_RECONNECT_RESTATUS_SECONDS` | 30 | 5–3600 |
 | `DESKTOP_SERVER_START_TIMEOUT` | 15 | 1–300 |
 | `DESKTOP_ADMIN_REQUEST_TIMEOUT` | 5 | 0.5–60 |
 | `DESKTOP_HEALTH_CHECK_INTERVAL` | 0.25 | 0.05–5 |

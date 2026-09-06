@@ -23,9 +23,14 @@ from my_claude_code.cli.desktop_status import (
     desktop_status,
     reconnect_timeout_seconds,
 )
+from my_claude_code.cli.launchers.common import PreflightResult
 from my_claude_code.cli.port_diagnostics import PortOwner
 from my_claude_code.config import paths
 from my_claude_code.config.settings import Settings, get_settings
+from my_claude_code.core.stop_deadline import (
+    SHUTDOWN_MARKER_HEADER,
+    SHUTDOWN_MARKER_VALUE,
+)
 
 #: The type every documented key must carry. Retyping one is exactly as
 #: breaking to a reader as removing it, so both are guarded here and both cost
@@ -50,6 +55,7 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     "window_height": int,
     "tray_enabled": bool,
     "minimize_to_tray": bool,
+    "close_to_tray": bool,
     "start_at_login": bool,
     "autostart_reconcile": bool,
     "server_log": str,
@@ -59,6 +65,7 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     "health_failure_threshold": int,
     "activation_poll_seconds": float,
     "reconnect_timeout_seconds": float,
+    "reconnect_restatus_seconds": float,
     "shell_tray": bool,
     "shell_binary": (str, type(None)),
     "shell_release_tag": str,
@@ -92,17 +99,40 @@ def _settings(monkeypatch, **overrides) -> Settings:
     return settings
 
 
+def _preflight(presence: str) -> PreflightResult:
+    """The probe result each rung of the ladder is built from.
+
+    ``draining`` is spelled as the exact head MCC's own shutdown gate sends,
+    because the whole point of the value is that it is recognised from that
+    head rather than from anything the caller already knew.
+    """
+
+    if presence == "healthy":
+        return PreflightResult(status_code=200)
+    if presence == "draining":
+        return PreflightResult(
+            status_code=503,
+            headers={
+                "content-type": "application/json",
+                "connection": "close",
+                "retry-after": "5",
+                SHUTDOWN_MARKER_HEADER: SHUTDOWN_MARKER_VALUE,
+            },
+            error="returned HTTP 503",
+        )
+    return PreflightResult(error="unreachable")
+
+
 def _presence(monkeypatch, presence: str) -> None:
-    """Drive the real ``probe_server_presence`` ladder from its two primitives."""
+    """Drive the real ``probe_server_presence`` ladder from its primitives."""
 
     monkeypatch.setattr(
-        desktop_module,
-        "preflight_proxy",
-        lambda url: None if presence == "healthy" else "unreachable",
+        desktop_module, "preflight_result", lambda url: _preflight(presence)
     )
     monkeypatch.setattr(
         desktop_module,
         "probe_port_available",
+        # A draining server still holds the socket, so the port is not free.
         lambda host, port: presence == "free",
     )
 
@@ -136,6 +166,99 @@ def test_reports_healthy_foreign_and_free(config_dir, monkeypatch) -> None:
         )
 
         assert desktop_status()["server_presence"] == presence
+
+
+def test_a_draining_server_is_not_reported_as_foreign(config_dir, monkeypatch) -> None:
+    """The defect this release exists for.
+
+    While the shutdown gate is refusing with 503 the port is still bound, so
+    the old ladder fell straight through to ``foreign`` -- and ``foreign``
+    carries a message accusing MCC's own process of not being the MCC server.
+    That is the page a user lands on every time they close and relaunch the
+    desktop app during a slow restart, which is precisely the workaround they
+    reported using.
+    """
+
+    _presence(monkeypatch, "draining")
+    monkeypatch.setattr(
+        desktop_module,
+        "diagnose_port_owner",
+        lambda host, port: PortOwner(pid=42112, name="python.exe", command=None),
+    )
+
+    opted_in = desktop_status(presence_v2=True)
+    assert opted_in["server_presence"] == "draining"
+    # No conflict message: there is no conflict. A stale one here would be a
+    # sentence about MCC's own process being an impostor.
+    assert opted_in["port_conflict"] is None
+
+
+def test_the_draining_presence_is_only_reported_to_a_caller_that_asked(
+    config_dir, monkeypatch
+) -> None:
+    """C3: an old shell must never be handed a state it has no branch for.
+
+    The desktop shell refuses an unknown presence loudly rather than guessing
+    at the nearest neighbour -- the right instinct, and the reason a new value
+    cannot simply be switched on for every reader at once. A window built
+    before 6.50.0 does not pass ``--presence-v2`` and keeps seeing the three
+    values it was written against.
+    """
+
+    _presence(monkeypatch, "draining")
+    monkeypatch.setattr(desktop_module, "diagnose_port_owner", lambda host, port: None)
+
+    assert desktop_status()["server_presence"] == "foreign"
+    assert desktop_status(presence_v2=False)["server_presence"] == "foreign"
+    assert desktop_status(presence_v2=True)["server_presence"] == "draining"
+
+
+def test_a_stranger_on_the_port_is_still_foreign_while_draining_exists(
+    config_dir, monkeypatch
+) -> None:
+    """A plain 503 from something that is not MCC is not claimed as ours.
+
+    Any reverse proxy on the configured port can answer 503. Reading that as
+    "My Claude Code is restarting" would replace one wrong page with another.
+    """
+
+    monkeypatch.setattr(
+        desktop_module,
+        "preflight_result",
+        lambda url: PreflightResult(
+            status_code=503,
+            headers={"server": "nginx"},
+            error="returned HTTP 503",
+        ),
+    )
+    monkeypatch.setattr(
+        desktop_module, "probe_port_available", lambda host, port: False
+    )
+    monkeypatch.setattr(
+        desktop_module,
+        "diagnose_port_owner",
+        lambda host, port: PortOwner(pid=99, name="nginx.exe", command=None),
+    )
+
+    payload = desktop_status(presence_v2=True)
+    assert payload["server_presence"] == "foreign"
+    assert "nginx.exe (pid 99)" in payload["port_conflict"]
+
+
+def test_reconnect_restatus_seconds_is_in_the_golden_key_set(
+    config_dir, monkeypatch
+) -> None:
+    """The cadence a reconnecting window re-reads this document at.
+
+    C9: a shell that compiled in its own "every sixth tick" would be deciding
+    how often to run a process on the user's machine.
+    """
+
+    assert "reconnect_restatus_seconds" in STATUS_KEYS
+    _settings(monkeypatch, desktop_reconnect_restatus_seconds=12.5)
+    _presence(monkeypatch, "healthy")
+
+    assert desktop_status()["reconnect_restatus_seconds"] == 12.5
 
 
 def test_carries_the_port_conflict_message_when_foreign(
@@ -287,6 +410,37 @@ def test_prints_one_json_document_and_exits_zero(config_dir, monkeypatch) -> Non
     assert tuple(payload) == STATUS_KEYS
 
 
+def test_the_presence_v2_flag_reaches_the_document(config_dir, monkeypatch) -> None:
+    """``--print-status --presence-v2`` is the shell's opt-in, end to end."""
+
+    _presence(monkeypatch, "draining")
+    monkeypatch.setattr(desktop_module, "diagnose_port_owner", lambda host, port: None)
+
+    def rendered(argv: list[str]) -> dict:
+        stream = io.StringIO()
+        with redirect_stdout(stream):
+            desktop_entrypoint.launch(argv)
+        return json.loads(stream.getvalue())
+
+    assert rendered(["--print-status"])["server_presence"] == "foreign"
+    assert (
+        rendered(["--print-status", "--presence-v2"])["server_presence"] == "draining"
+    )
+    # The key set does not move with the flag: one document, one shape.
+    assert tuple(rendered(["--print-status", "--presence-v2"])) == STATUS_KEYS
+
+
+def test_an_unknown_flag_after_print_status_is_still_a_usage_error(
+    config_dir, monkeypatch
+) -> None:
+    """The flag is an allow-list of one, not "anything after --print-status"."""
+
+    _presence(monkeypatch, "healthy")
+    with pytest.raises(SystemExit) as exit_info:
+        desktop_entrypoint.launch(["--print-status", "--presence-v3"])
+    assert exit_info.value.code == 2
+
+
 def test_never_prints_a_key_or_a_token(config_dir, monkeypatch) -> None:
     """The document is safe to paste into a bug report."""
     _settings(
@@ -321,6 +475,34 @@ def test_reconnect_budget_follows_the_configured_drain(config_dir, monkeypatch) 
     assert desktop_status()["reconnect_timeout_seconds"] == 1065.0
 
 
+def test_reconnect_timeout_matches_release_updates_for_a_300_second_drain(
+    config_dir, monkeypatch
+) -> None:
+    """The exact number this investigation measured on the reporting machine.
+
+    ``SERVER_GRACEFUL_SHUTDOWN_SECONDS=300`` in a user's ``.env`` is what turned
+    the banner's "17 minutes" into "22 minutes" and every update's drain into
+    five silent minutes. The arithmetic is pinned here so a later change to the
+    formula cannot quietly move it again.
+    """
+
+    from my_claude_code.application import release_updates
+
+    settings = _settings(monkeypatch, server_graceful_shutdown_seconds=300.0)
+    _presence(monkeypatch, "healthy")
+
+    assert desktop_status()["reconnect_timeout_seconds"] == 1320.0
+    assert reconnect_timeout_seconds(settings) == (
+        release_updates._UPGRADE_TIMEOUT_SECONDS
+        + 300.0
+        + release_updates._DASHBOARD_RECONNECT_STARTUP_MARGIN_SECONDS
+    )
+
+    # And the shipped default is the 17.3 minutes the banner should show.
+    default_settings = _settings(monkeypatch, server_graceful_shutdown_seconds=20.0)
+    assert reconnect_timeout_seconds(default_settings) == 1040.0
+
+
 def test_reports_that_autostart_reconciliation_is_switched_off(
     config_dir, monkeypatch
 ) -> None:
@@ -345,3 +527,41 @@ def test_reports_that_autostart_reconciliation_is_switched_off(
     for value in ("", "0", "yes", "true"):
         monkeypatch.setenv(desktop_module.SKIP_AUTOSTART_ENV, value)
         assert desktop_status()["autostart_reconcile"] is True, value
+
+
+def test_close_to_tray_is_resolved_for_the_window_that_reads_it(
+    config_dir, monkeypatch
+) -> None:
+    """The window cannot work this out for itself, so Python answers it.
+
+    ``tray_enabled`` in this document means "should YOU draw a tray icon", and
+    it is ``false`` on Windows and macOS *because* the Python tray is already
+    drawing one. A shell that computed its close behaviour as
+    ``minimize_to_tray and tray_enabled`` therefore ended the app on exactly
+    the two platforms where closing should have hidden the window -- taking the
+    tray and the server with it, which is what was reported.
+    """
+
+    from my_claude_code.config import desktop as desktop_config
+
+    _presence(monkeypatch, "healthy")
+    monkeypatch.setenv(desktop_status_module.SHELL_TRAY_ENV, "0")
+
+    payload = desktop_status()
+    # The shell is told not to draw an icon...
+    assert payload["tray_enabled"] is False
+    # ...and is still told that closing hides, because a tray does exist.
+    assert payload["close_to_tray"] is True
+    assert "close_to_tray" in STATUS_KEYS
+
+    # With no tray at all there is nowhere to close to, and the answer flips.
+    desktop_config.save_desktop_state(
+        desktop_config.DesktopState(tray_enabled=False, close_to_tray=True)
+    )
+    assert desktop_status()["close_to_tray"] is False
+
+    # And an explicit opt-out is honoured even with a tray.
+    desktop_config.save_desktop_state(
+        desktop_config.DesktopState(tray_enabled=True, close_to_tray=False)
+    )
+    assert desktop_status()["close_to_tray"] is False

@@ -532,3 +532,60 @@ def test_the_shipped_stop_budget_is_a_restart_an_operator_will_wait_for() -> Non
 
     assert SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT == 20.0
     assert Settings().server_graceful_shutdown_seconds == 20.0
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_carries_a_shutdown_marker_health_can_recognise() -> None:
+    """A 503 alone cannot say who sent it.
+
+    ``probe_server_presence`` has to tell "MCC is draining" apart from "a
+    stranger has taken the port", and both can answer 503. Before this header
+    existed the drain window reported as ``foreign`` -- a port-conflict page
+    naming MCC's own process as "not the MCC server" -- which is the page a
+    user lands on whenever they close and relaunch the desktop app during a
+    slow restart.
+    """
+
+    from my_claude_code.cli.desktop import is_draining_response
+    from my_claude_code.cli.launchers.common import PreflightResult
+    from my_claude_code.core.stop_deadline import (
+        SHUTDOWN_MARKER_HEADER,
+        SHUTDOWN_MARKER_VALUE,
+    )
+
+    runtime = MagicMock()
+
+    async def inner_app(scope, receive, send) -> None:
+        raise AssertionError("a request during the drain must not reach the app")
+
+    app = RuntimeASGIApp(inner_app, runtime)
+    stop_deadline().request(BOUND)
+
+    sent: list[Message] = []
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    await app(_http_scope("/health"), _receive, send)
+
+    start = sent[0]
+    assert start["status"] == 503
+    headers = {
+        name.decode("ascii").lower(): value.decode("ascii")
+        for name, value in start["headers"]
+    }
+    assert headers[SHUTDOWN_MARKER_HEADER] == SHUTDOWN_MARKER_VALUE
+
+    # And the reader on the other end recognises exactly this shape, while
+    # refusing to claim a 503 that is not ours.
+    assert is_draining_response(
+        PreflightResult(status_code=503, headers=headers, error="returned HTTP 503")
+    )
+    assert not is_draining_response(
+        PreflightResult(
+            status_code=503, headers={"server": "nginx"}, error="returned HTTP 503"
+        )
+    )
+    assert not is_draining_response(
+        PreflightResult(status_code=500, headers=headers, error="returned HTTP 500")
+    )

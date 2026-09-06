@@ -64,6 +64,25 @@
                     <code>mcc-desktop</code> gets you the second without downloading
                     anything else.
                   </p>
+                  <p>
+                    <strong>Which one should you pick?</strong> Take the
+                    <strong>server and this dashboard</strong> if MCC lives on a
+                    headless box, a VPS or behind SSH, if you work inside WSL (which has
+                    no tray), if you run it as a service or from CI, or if you simply
+                    prefer starting and stopping things yourself. Take the
+                    <strong>desktop app</strong> for everyday use: it installs the server
+                    if it is missing, starts it on launch, watches its health and
+                    reconnects on its own after an update, lives in the tray &mdash;
+                    closing the window puts it there, <em>Quit</em> in the tray menu ends
+                    it &mdash; and can start at login. Both share one configuration
+                    directory, one <code>.env</code> and this dashboard, both can sit on
+                    the same machine, and a desktop install still puts every
+                    <code>mcc-*</code> command on your <code>PATH</code>. One caveat
+                    worth knowing before you download: the macOS disk image is unsigned,
+                    so opening it directly needs a single
+                    <code>xattr -d com.apple.quarantine</code> command &mdash; letting
+                    <code>mcc-desktop</code> fetch the same binary skips that.
+                  </p>
                 </div>
               </div>
               <div id="getStartedProgress" class="get-started-progress" aria-live="polite"></div>
@@ -139,10 +158,20 @@
                   <input id="desktopTrayEnabled" type="checkbox" />
                   Tray Enabled
                 </label>
+                <label class="toggle-control">
+                  <input id="desktopCloseToTray" type="checkbox" />
+                  Close to Tray
+                </label>
               </div>
               <p class="field-description">
                 With Tray Enabled off, Start at Login is not applied at the next
                 launch -- an invisible tray must not relaunch at login.
+              </p>
+              <p class="field-description">
+                With Close to Tray on (the default), closing the desktop window
+                hides it and leaves the tray and the server running; reopen it
+                from the tray, and use Quit there to stop the app. Turn it off
+                to make the window's close button end the app.
               </p>
             </section>
             <section class="settings-section" aria-label="Token optimizer">
@@ -1756,7 +1785,13 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                 <p>
                   Routing is by <strong>tier</strong>: Fable, Opus, Sonnet, Haiku and a
                   fallback each map to a real model on your provider. That is what lets an
-                  unmodified agent run on any backend.
+                  unmodified agent run on any backend. Each rail heading also carries the
+                  id every <em>other</em> coding agent asks for to reach it &mdash;
+                  Default <code>(mcc/best)</code>, Opus <code>(mcc/good)</code>, Sonnet
+                  <code>(mcc/medium)</code>, Haiku <code>(mcc/cheap)</code> and the Vision
+                  adapter <code>(mcc/vision)</code>. The Fable rail carries none, because
+                  it is a Claude alias rather than a tier: <code>mcc/best</code> follows
+                  <code>MODEL</code>, which is the Default rail.
                 </p>
                 <img class="guide-shot" src="/admin/img/admin-model-config.png"
                      alt="Model Config: tier mapping, fallback chains and reasoning controls"
@@ -3262,6 +3297,16 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   it is the time you spend watching a tray icon after pressing Restart
                   &mdash; and it is the number the tray and the Windows update helper
                   both wait before they terminate the server themselves.
+                </p>
+                <p class="guide-note">
+                  <strong>It slows every update, not just every stop.</strong> An update
+                  waits this budget out <em>twice over</em>: the installer does not begin
+                  until the old server has finished draining, and the reconnect budget the
+                  desktop window counts down is this number plus the install allowance.
+                  Measured on a real machine, <code>300</code> here added five silent
+                  minutes to a fourteen-minute update and turned the window&rsquo;s
+                  &ldquo;reconnecting for up to 17 minutes&rdquo; into 22. If a restart
+                  feels long, this is the first field to look at.
                 </p>
 
                 <h4>What one answer may cost</h4>

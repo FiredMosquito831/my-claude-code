@@ -10,6 +10,7 @@ from my_claude_code.cli.desktop import DesktopController
 from my_claude_code.cli.desktop_assets import tray_icon_bytes
 from my_claude_code.config.desktop import (
     load_desktop_state,
+    set_close_to_tray,
     set_server_mode,
     set_start_at_login,
     set_tray_enabled,
@@ -39,6 +40,7 @@ class PystrayDesktopTray:
         state = load_desktop_state()
         self._start_at_login = state.start_at_login
         self._tray_enabled = state.tray_enabled
+        self._close_to_tray = state.close_to_tray
         self._server_mode = state.server_mode
         self._rtk_state = load_rtk_state().as_dict()
         self._icon = Icon(
@@ -50,7 +52,11 @@ class PystrayDesktopTray:
 
     def _menu(self) -> Menu:
         return Menu(
-            MenuItem("Open Admin", self._open_admin, default=True),
+            # The default item, so a left click (Windows) or a click on the
+            # menu bar mark (macOS) brings the window back. That is the other
+            # half of close-to-tray: putting the window away has to have an
+            # obvious way to get it back, or hiding it is just losing it.
+            MenuItem("Open Dashboard", self._open_admin, default=True),
             MenuItem("Check Server Status", self._check_status),
             MenuItem("Restart Server", self._restart_server),
             MenuItem(
@@ -83,6 +89,11 @@ class PystrayDesktopTray:
                 "Tray Enabled",
                 self._toggle_tray_enabled,
                 checked=lambda item: self._tray_enabled,
+            ),
+            MenuItem(
+                "Close to Tray",
+                self._toggle_close_to_tray,
+                checked=lambda item: self._close_to_tray,
             ),
             Menu.SEPARATOR,
             MenuItem("Token optimizer", Menu(*self._rtk_menu_items())),
@@ -150,6 +161,12 @@ class PystrayDesktopTray:
         # nothing). set_start_at_login itself preserves the other fields.
         self._start_at_login = not load_desktop_state().start_at_login
         set_start_at_login(self._start_at_login)
+
+    def _toggle_close_to_tray(self, _icon: Icon, _item: MenuItem) -> None:
+        # Same reasoning as _toggle_start_at_login: derive the new value from
+        # persisted state, because the dashboard writes this field too.
+        self._close_to_tray = not load_desktop_state().close_to_tray
+        set_close_to_tray(self._close_to_tray)
 
     def _toggle_tray_enabled(self, _icon: Icon, _item: MenuItem) -> None:
         # Same reasoning as _toggle_start_at_login: derive the new value from
