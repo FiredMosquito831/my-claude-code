@@ -16,6 +16,7 @@ from my_claude_code.application.desktop_documents import (
     token_reference,
 )
 from my_claude_code.config.desktop_apps import (
+    CLAUDE_DESKTOP_GATEWAY_KEYS,
     DESKTOP_APPS,
     DESKTOP_APPS_BY_ID,
     DesktopAppSpec,
@@ -115,7 +116,14 @@ def test_a_spec_without_a_header_field_writes_no_attribution_header(
 
     block = owned_block(spec, MODELS, proxy_root_url="http://127.0.0.1:8082")
     if spec.attribution_header_field:
-        assert spec.provider.headers_key, spec.id
+        # The header goes wherever this app's settings live: in the provider
+        # entry for an app whose block carries them, or in the file MCC owns
+        # outright for one whose block is only an index entry -- Claude
+        # Desktop, whose ``inferenceCustomHeaders`` sits beside the gateway URL
+        # in the sidecar rather than in ``_meta.json``.
+        assert spec.provider.headers_key or (
+            spec.sidecar is not None and spec.sidecar.headers_key
+        ), spec.id
         return
     assert "x-mcc-harness" not in str(block), spec.id
 
@@ -170,7 +178,7 @@ def test_the_opt_in_checkbox_adds_a_default_model_where_one_is_declared():
 
 def test_a_sidecar_is_only_declared_where_the_app_reads_a_file_of_its_own():
     with_sidecar = {spec.id for spec in DESKTOP_APPS if spec.sidecar is not None}
-    assert with_sidecar == {"goose_desktop", "roo_code"}
+    assert with_sidecar == {"goose_desktop", "roo_code", "claude_desktop"}
 
 
 def test_the_goose_sidecar_is_the_whole_provider_document():
@@ -191,13 +199,81 @@ def test_antigravity_is_servable_again_and_says_what_changed():
     assert any("2026-09-07" in note for note in agy.notes)
 
 
-def test_claude_desktop_is_an_instruction_card_with_no_guessed_path():
-    """Anthropic documents the dialog, not a file. MCC does not invent one."""
+def test_claude_desktop_writes_the_file_anthropic_documents():
+    """The 6.55.0 card said no file existed. Anthropic's MDM page names one.
+
+    ``%LOCALAPPDATA%\\Claude-3p\\configLibrary\\`` is the documented local
+    configuration source, and this machine already had a gateway configuration
+    authored in it. MCC owns a whole document there and merges exactly one
+    foreign key of ``_meta.json``.
+    """
 
     claude = DESKTOP_APPS_BY_ID["claude_desktop"]
-    assert claude.status is DesktopAppStatus.INSTRUCTIONS_ONLY
-    assert claude.document is None
-    fields = dict(claude.instruction_fields)
-    assert fields["Connection"] == "Gateway"
-    assert "ANTHROPIC_AUTH_TOKEN" in fields["API key"]
-    assert "mcc/best" in fields["Models"]
+    assert claude.status is DesktopAppStatus.SERVABLE
+    assert claude.document is not None
+    assert claude.document.display_path.endswith("configLibrary\\_meta.json")
+    assert claude.document.owned_element_path == ("entries",)
+    assert claude.document.overwritten_keys == (("appliedId",),)
+    assert claude.sidecar is not None
+    assert claude.sidecar.holds_credential
+    # No card may still claim Anthropic documents no persistence path.
+    assert not any("does not guess a persistence path" in n for n in claude.notes)
+
+
+def test_claude_desktop_writes_exactly_the_six_documented_gateway_keys():
+    claude = DESKTOP_APPS_BY_ID["claude_desktop"]
+    document = sidecar_document(
+        claude, MODELS, proxy_root_url="http://127.0.0.1:8082", auth_token="scratch"
+    )
+    assert document is not None
+    assert set(document) == set(CLAUDE_DESKTOP_GATEWAY_KEYS)
+    assert document["inferenceProvider"] == "gateway"
+    # The proxy ROOT: the gateway must serve POST /v1/messages, which the app
+    # appends itself.
+    assert document["inferenceGatewayBaseUrl"] == "http://127.0.0.1:8082"
+    assert document["inferenceCredentialKind"] == "static"
+    assert document["modelDiscoveryEnabled"] is True
+    assert document["inferenceCustomHeaders"] == {"x-mcc-harness": "claude_desktop"}
+    assert document["inferenceGatewayApiKey"] == "scratch"
+
+
+def test_claude_desktops_instruction_fallback_uses_the_dialogs_own_labels():
+    """Kept for a machine with no configuration library, or a managed one."""
+
+    fields = dict(DESKTOP_APPS_BY_ID["claude_desktop"].instruction_fields)
+    assert fields["Inference provider"] == "Gateway"
+    assert fields["Gateway base URL"] == "{root}"
+    assert fields["Credential kind"] == "Static API key"
+    # ANTHROPIC_AUTH_TOKEN is MCC's own proxy token, and naming it as the
+    # thing to type is right; what was wrong in 6.55.0 was the live
+    # "not exported yet" warning beside it, for a variable this flow never
+    # reads. ``token_env_var`` is empty now, so no card renders one.
+    assert DESKTOP_APPS_BY_ID["claude_desktop"].token_env_var == ""
+
+
+def test_extension_cards_require_the_extension_not_the_editor():
+    """%APPDATA%\\Code\\User proves VS Code, and says nothing about an extension."""
+
+    for app_id, publisher in (
+        ("vscode_copilot", "github.copilot"),
+        ("roo_code", "rooveterinaryinc.roo-cline-"),
+    ):
+        detect = DESKTOP_APPS_BY_ID[app_id].detect
+        assert detect is not None, app_id
+        markers = detect.markers
+        assert markers, app_id
+        for marker in markers:
+            assert marker.glob, app_id
+            assert "extensions" in marker.relative_parts, app_id
+        assert any(
+            publisher in part for marker in markers for part in marker.relative_parts
+        ), app_id
+
+
+def test_opencode_targets_the_only_path_opencode_documents():
+    """https://opencode.ai/docs/config names ~/.config/opencode and no other."""
+
+    opencode = DESKTOP_APPS_BY_ID["opencode_desktop"]
+    assert opencode.document is not None
+    assert opencode.document.display_path == "~/.config/opencode/opencode.json"
+    assert not any("APPDATA" in path.env_vars for path in opencode.document.paths)

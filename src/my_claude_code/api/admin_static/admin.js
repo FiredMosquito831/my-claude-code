@@ -392,6 +392,7 @@ async function loadDashboardState() {
       .filter(Boolean),
   );
   renderNav();
+  mountGuideLinks();
   renderSections(config.sections, config.fields);
   renderMessagingAuthNotice(config.messaging_auth_open);
   renderWebSearchProviders();
@@ -892,6 +893,22 @@ function renderOnboarding() {
       description.textContent = step.description;
       body.appendChild(description);
 
+      if ((step.guide_anchors || []).length) {
+        const guides = document.createElement("p");
+        guides.className = "get-started-step-guides";
+        step.guide_anchors.forEach((anchor) => {
+          const purpose = Object.keys(GUIDE_ANCHORS).find(
+            (key) => GUIDE_ANCHORS[key] === anchor,
+          );
+          if (purpose) guides.append(guideLink(purpose, guideLinkLabel(purpose)));
+        });
+        if (guides.children.length) body.appendChild(guides);
+      }
+
+      if ((step.agents || []).length) {
+        body.appendChild(onboardingAgentList(step.agents));
+      }
+
       if (step.instructions && step.instructions.length) {
         const instructionList = document.createElement("ol");
         instructionList.className = "get-started-step-instructions";
@@ -939,6 +956,194 @@ function renderOnboarding() {
     ? "Checklist dismissed"
     : "Dismiss checklist";
   dismissButton.disabled = onboarding.dismissed;
+}
+
+/* ------------------------------------------------------------ guide links
+   The Guide already explains every one of these surfaces at length, and until
+   now the only way from a surface to its explanation was to open the Guide and
+   hunt. One small link per surface closes that, and the anchors are declared
+   here rather than spelled at each call site so a renamed heading fails one
+   test instead of silently pointing seven links at nothing.
+
+   `guide-*` ids live in index.html, in the Guide view, which is always in the
+   DOM (hidden, not absent) -- so the link switches the view first and scrolls
+   afterwards, in a rAF, for the same reason the onboarding targets do: the
+   element has no box until its section stops being hidden. */
+
+const GUIDE_ANCHORS = {
+  cli: "guide-cli",
+  desktop_apps: "guide-desktop-apps",
+  agent_tiers: "guide-agent-tiers",
+  learned: "guide-learned",
+  images: "guide-images",
+  cost: "guide-cost",
+};
+
+// The surfaces that exist in the static markup. Everything else is appended by
+// the code that builds it, through the same `guideLink`.
+const GUIDE_LINK_MOUNTS = [
+  ["#codingAgentsHeading", "cli"],
+  ["#desktopAppsHeading", "desktop_apps"],
+  ["#reqCostHeading", "cost"],
+];
+
+const GUIDE_VIEW_ID = "guide";
+
+/** Return a small "Guide" link into one section of the Guide.
+ *
+ * `purpose` is a key of GUIDE_ANCHORS, never a raw anchor, so a link can only
+ * ever be written for a section that is declared to exist. */
+function guideLink(purpose, label) {
+  const anchor = GUIDE_ANCHORS[purpose];
+  const link = document.createElement("a");
+  link.className = "guide-link";
+  link.href = `#${anchor || ""}`;
+  link.dataset.guidePurpose = purpose;
+  link.dataset.guideAnchor = anchor || "";
+  link.textContent = label || "Guide";
+  link.setAttribute("aria-label", `Open the Guide at ${anchor || purpose}`);
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (!anchor) return;
+    state.userNavigated = true;
+    setActiveView(GUIDE_VIEW_ID, { scroll: false });
+    scrollToGuideAnchor(anchor);
+  });
+  return link;
+}
+
+function scrollToGuideAnchor(anchor) {
+  requestAnimationFrame(() => {
+    const target = document.getElementById(anchor);
+    if (!target) return;
+    const reduced =
+      window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({
+      behavior: reduced ? "auto" : "smooth",
+      block: "start",
+    });
+    target.classList.add("onboarding-highlight");
+    window.setTimeout(() => target.classList.remove("onboarding-highlight"), 2000);
+  });
+}
+
+/** Attach the static links once, at boot. Idempotent: a second call is a no-op. */
+function mountGuideLinks() {
+  GUIDE_LINK_MOUNTS.forEach(([selector, purpose]) => {
+    const host = document.querySelector(selector);
+    if (!host || host.querySelector(":scope > .guide-link")) return;
+    host.appendChild(guideLink(purpose));
+  });
+}
+
+const GUIDE_LINK_LABELS = {
+  cli: "Guide: CLI agents",
+  desktop_apps: "Guide: desktop apps",
+};
+
+function guideLinkLabel(purpose) {
+  return GUIDE_LINK_LABELS[purpose] || "Guide";
+}
+
+/** The agents detected on this machine, as the Get Started step lists them.
+ *
+ * The step used to be "done" because the user had *visited* the Coding agents
+ * page, which is a fact about navigation. This is the same detection the page
+ * itself runs -- one implementation, so the two cannot disagree about whether
+ * Codex is installed -- and it writes nothing: every row is a status, a
+ * command to copy, or a link to the card that has the button. */
+function onboardingAgentList(agents) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "get-started-agents";
+
+  const installed = agents.filter((agent) => agent.installed);
+  const lead = document.createElement("p");
+  lead.className = "field-description";
+  lead.textContent = installed.length
+    ? `${installed.length} of ${agents.length} agents MCC knows about are on this machine.`
+    : "None of the agents MCC knows about were detected on this machine.";
+  wrapper.appendChild(lead);
+
+  const list = document.createElement("ul");
+  list.className = "get-started-agent-list";
+  // Installed first, then connected first among those: the rows worth acting
+  // on are the ones at the top.
+  const ordered = agents
+    .slice()
+    .sort(
+      (a, b) =>
+        Number(b.installed) - Number(a.installed) ||
+        Number(b.connected) - Number(a.connected) ||
+        a.display_name.localeCompare(b.display_name),
+    );
+  ordered.forEach((agent) => {
+    if (!agent.installed && !agent.connected) return;
+    const item = document.createElement("li");
+    item.className = "get-started-agent";
+    item.dataset.agent = agent.id;
+
+    const pill = document.createElement("span");
+    pill.className = `status-pill ${agent.connected ? "ok" : "neutral"}`;
+    pill.textContent = agent.connected
+      ? "Connected"
+      : agent.state === "managed"
+        ? "Managed"
+        : "Installed";
+    item.appendChild(pill);
+
+    const name = document.createElement("strong");
+    name.textContent = agent.display_name;
+    item.appendChild(name);
+
+    const detail = document.createElement("span");
+    detail.className = "get-started-agent-detail";
+    if (agent.kind === "cli") {
+      const command = document.createElement("code");
+      command.textContent = agent.command;
+      detail.appendChild(command);
+    } else {
+      detail.textContent =
+        DESKTOP_STATE_LABELS[agent.state] || agent.state || "Installed";
+    }
+    item.appendChild(detail);
+
+    if (agent.requests_7d > 0) {
+      const traffic = document.createElement("span");
+      traffic.className = "get-started-agent-traffic";
+      traffic.textContent = `${formatAnalyticsNumber(agent.requests_7d)} requests (7d)`;
+      item.appendChild(traffic);
+    }
+
+    if (agent.kind === "desktop" && agent.configurable) {
+      const jump = document.createElement("button");
+      jump.type = "button";
+      jump.className = "secondary-button get-started-agent-configure";
+      jump.dataset.role = "configure-agent";
+      jump.textContent = "Configure";
+      // Never a write from here: the checklist takes you to the card that
+      // owns the button, and the button is still a deliberate click.
+      jump.addEventListener("click", () => {
+        state.userNavigated = true;
+        setActiveView("coding_agents", { scroll: true });
+        highlightOnboardingTarget(`[data-desktop-app="${agent.id}"]`);
+      });
+      item.appendChild(jump);
+    }
+
+    list.appendChild(item);
+  });
+
+  if (!list.children.length) {
+    const none = document.createElement("p");
+    none.className = "field-description";
+    none.textContent =
+      "Install one of the agents on the Coding agents page, then come back.";
+    wrapper.appendChild(none);
+  } else {
+    wrapper.appendChild(list);
+  }
+  return wrapper;
 }
 
 // The target may be a field that only exists once its (previously hidden)
@@ -2072,6 +2277,7 @@ function renderModelRouting(fields, allFields) {
     name.textContent = "Vision adapter";
     appendTierAlias(name, "MODEL_VISION");
     head.appendChild(name);
+    head.appendChild(guideLink("images"));
     vision.appendChild(head);
 
     const note = document.createElement("p");
@@ -8147,7 +8353,25 @@ async function updateRtk(field, value, toggle) {
 /* Coding agents                                                           */
 /* --------------------------------------------------------------------- */
 
+/** Draw a placeholder while a list is being fetched.
+ *
+ * Both lists used to paint their section headers with empty bodies for
+ * several seconds and no spinner, skeleton or word, so the page read as
+ * broken during the gap. This is the smallest honest fix: it says a request
+ * is in flight, and it is replaced the moment one lands -- including when it
+ * lands as an error, which the list already renders. */
+function renderListLoading(elementId, what) {
+  const list = byId(elementId);
+  if (!list || list.children.length) return;
+  const line = document.createElement("p");
+  line.className = "field-description list-loading";
+  line.setAttribute("role", "status");
+  line.textContent = `Loading ${what}…`;
+  list.append(line);
+}
+
 async function loadHarnesses() {
+  renderListLoading("codingAgentsList", "coding agents");
   try {
     const payload = await api("/admin/api/harnesses");
     state.harnesses = Array.isArray(payload.harnesses) ? payload.harnesses : [];
@@ -8277,6 +8501,7 @@ const DESKTOP_STATE_LABELS = {
   configured: "Configured by MCC",
   drifted: "Configured but drifted",
   unreadable: "Config file will not parse",
+  managed: "Managed by your organisation",
 };
 
 const DESKTOP_STATE_CLASS = {
@@ -8284,9 +8509,11 @@ const DESKTOP_STATE_CLASS = {
   drifted: "agent-state drifted",
   not_routable: "agent-state unavailable",
   unreadable: "agent-state unavailable",
+  managed: "agent-state unavailable",
 };
 
 async function loadDesktopApps() {
+  renderListLoading("desktopAppsList", "desktop apps");
   try {
     const payload = await api("/admin/api/desktop-apps");
     state.desktopApps = Array.isArray(payload.apps) ? payload.apps : [];
@@ -8361,6 +8588,23 @@ function desktopAppCard(app) {
 
   card.append(desktopAppMeta(app));
 
+  if (stateId === "managed") {
+    // The file MCC would write is the lowest-precedence source this app
+    // reads, and a managed profile replaces it wholesale. A Configure button
+    // here would write a file with no effect and then report success, so
+    // there is no button -- and the card names what is enforcing it.
+    const managed = document.createElement("p");
+    managed.className = "agent-unavailable-reason";
+    const keys = (probe.managed_keys || []).join(", ");
+    managed.textContent =
+      `${probe.managed_by} sets this app's configuration, and it outranks ` +
+      `the file MCC writes${keys ? ` (${keys})` : ""}. MCC will not write a ` +
+      "file the app is going to ignore. Ask whoever manages this device.";
+    card.append(managed);
+    card.append(desktopAppNotes(app));
+    return card;
+  }
+
   if (stateId === "unreadable") {
     const error = document.createElement("p");
     error.className = "agent-unavailable-reason";
@@ -8379,6 +8623,14 @@ function desktopAppCard(app) {
   }
 
   card.append(desktopAppActions(app));
+  // The fallback, not the main event: a servable app whose config file has
+  // never been created yet may be easier to set up in its own dialog, and
+  // some of these apps only create the file once you have used that dialog
+  // once. Shown only then, so a card can no longer say "here is how to do
+  // this by hand" directly under a button that does it.
+  if ((app.instruction_fields || []).length && !probe.document_exists) {
+    card.append(desktopInstructionTable(app));
+  }
   card.append(desktopAppNotes(app));
   return card;
 }
@@ -8396,6 +8648,17 @@ function desktopAppMeta(app) {
     rows.push(["Replaces", app.overwrites.join(", ")]);
   }
   if (app.sidecar_path) rows.push(["MCC-owned file", app.sidecar_path]);
+  if ((app.sidecar_keys || []).length) {
+    // Key names, never values: one of them is a credential, and it never
+    // leaves the server.
+    rows.push(["It writes", app.sidecar_keys.join(", ")]);
+  }
+  if ((app.managed_source_labels || []).length) {
+    rows.push([
+      "Outranked by",
+      `${app.managed_source_labels.join("; ")} - checked before every write`,
+    ]);
+  }
   if (app.base_url) rows.push(["Base URL", app.base_url]);
   if (app.token_reference) rows.push(["Token", app.token_reference]);
   if (app.token_env_var) {
@@ -8442,19 +8705,23 @@ function desktopAppNotes(app) {
   return wrapper;
 }
 
-/** Claude Desktop's values, each with a copy button.
+/** The values a human types into the app's own dialog, each with a copy button.
  *
- * A button here would have to guess where the app persists these settings, and
- * Anthropic documents the dialog rather than a file. Writing a merge into a
- * guessed path is exactly the failure this whole feature exists to avoid, so
- * the card hands over the values and a human types them. */
+ * The fallback for the two cases no button can serve: the app's config file
+ * does not exist yet, or a managed profile owns it. Where the file is there,
+ * Configure writes it and this table is not shown -- a card that offered both
+ * at once was the self-contradiction 6.55.0 shipped. */
 function desktopInstructionTable(app) {
   const wrapper = document.createElement("div");
   wrapper.className = "desktop-instructions";
 
   const lead = document.createElement("p");
   lead.className = "field-description";
-  lead.textContent = "Enter these in the app's own dialog:";
+  lead.textContent =
+    app.status === "servable"
+      ? "This app has not written its config file yet. Either open it once " +
+        "and let it, or enter these in the app's own dialog:"
+      : "Enter these in the app's own dialog:";
   wrapper.append(lead);
 
   (app.instruction_fields || []).forEach((field) => {
@@ -8593,16 +8860,17 @@ function desktopAppActions(app) {
   row.append(previewButton, configure);
 
   if (configured) {
-    // Two modes, both offered, because both are right answers to different
-    // questions. Removing MCC's keys cannot surprise anyone and is the
-    // default; restoring is the only thing that brings back a value MCC
-    // replaced, and it is only offered when MCC actually recorded one.
+    // Two modes, both offered, and both put back a value MCC replaced -- what
+    // separates them is what they refuse. Keys-only never refuses and is the
+    // default; restore additionally guarantees the pre-MCC state and declines
+    // when the file has been rewritten since, rather than reverting an edit
+    // made on purpose.
     const mode = document.createElement("select");
     mode.className = "desktop-undo-mode";
     mode.dataset.role = "undo-mode";
     [
-      ["keys_only", "Remove MCC's keys only"],
-      ["restore", "Restore the original values"],
+      ["keys_only", "Remove MCC's keys (and put back what it replaced)"],
+      ["restore", "Restore the original values exactly"],
     ].forEach(([value, label]) => {
       const option = document.createElement("option");
       option.value = value;
@@ -8752,6 +9020,7 @@ function harnessTiersSection(harness) {
   const summary = document.createElement("summary");
   summary.className = "agent-tiers-summary";
   summary.textContent = "Tiers";
+  summary.append(guideLink("agent_tiers"));
   block.append(summary);
 
   const intro = document.createElement("p");
@@ -9007,7 +9276,23 @@ function harnessUsageRow(harness) {
   const usage = state.harnessUsage;
   if (!usage || usage.enabled === false) return ["Requests (7d)", "—"];
   const counts = usage.counts && typeof usage.counts === "object" ? usage.counts : {};
-  return ["Requests (7d)", formatAnalyticsNumber(Number(counts[harness.id] || 0))];
+  const count = Number(counts[harness.id] || 0);
+  const value = formatAnalyticsNumber(count);
+  // Two facts from two different sources, and side by side they read as a
+  // contradiction: "Not installed" is a PATH lookup taken just now, and the
+  // count is the request log looking back a week. Both can be true -- the
+  // agent was uninstalled, or it runs in WSL, or in a container, or from a
+  // directory that is not on this process's PATH. Saying so is cheaper than
+  // making the reader wonder which number is lying.
+  if (count > 0 && harness.installed === false) {
+    return [
+      "Requests (7d)",
+      `${value} - sent before this agent left this machine's PATH, or from ` +
+        "another shell, WSL or a container. MCC logs what reaches it; " +
+        '"Not installed" is only a PATH lookup here and now.',
+    ];
+  }
+  return ["Requests (7d)", value];
 }
 
 function harnessMeta(harness) {
@@ -9043,7 +9328,15 @@ function harnessMeta(harness) {
       rows.push(["Last written", `Never - written on the first ${harness.command}`]);
     } else {
       rows.push(["Last written", catalogue.updated_at || "unknown"]);
-      rows.push(["Models", String(catalogue.model_count ?? "unknown")]);
+      // Cline's providers.json has no per-model array at all, so the number
+      // in it counts provider blocks. Reported as "Models: 1" beside twelve
+      // agents reporting 140, that read as a defect rather than as Cline's
+      // own schema, so the label says what was counted and the note says why.
+      rows.push([
+        catalogue.model_count_label || "Models",
+        String(catalogue.model_count ?? "unknown") +
+          (catalogue.model_count_note ? ` - ${catalogue.model_count_note}` : ""),
+      ]);
     }
   }
 
@@ -15173,6 +15466,10 @@ function renderModelsFacets() {
     });
     target.appendChild(chip);
   });
+  // Appended here rather than mounted once at boot: this function clears its
+  // own container on every render, so a link put there earlier would be
+  // wiped by the first refresh and nobody would notice.
+  target.appendChild(guideLink("learned"));
   if (modelsState.facet instanceof Set) {
     const chip = document.createElement("button");
     chip.type = "button";
@@ -15936,6 +16233,7 @@ function appendImageEstimateChips(toggle, provider) {
     `${formatAnalyticsNumber(estimate.est_image_tokens)} of the estimate was pictures. ` +
     "A ratio near 1.0 means this host's image-token family is right.";
   toggle.appendChild(chip);
+  toggle.appendChild(guideLink("images"));
 }
 
 function buildModelsChip(kind, text) {

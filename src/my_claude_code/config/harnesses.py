@@ -465,6 +465,19 @@ class HarnessCatalogue:
     #: here so the card can say the file carries no record rather than
     #: reporting a count of zero it did not measure.
     carries_defaulted_record: bool = True
+    #: What the number in the generated document actually counts, for the one
+    #: format where it is not models. Cline validates ``providers.json`` as a
+    #: whole and discards it on a single unrecognised *root* key -- measured on
+    #: 3.0.61, losing the base URL and the key with it -- so MCC's per-model
+    #: block is stripped by ``config/harness_cline.strip_mcc_keys`` before the
+    #: file reaches disk, and what is left is one provider entry. The card used
+    #: to report that as "Models: 1" beside twelve harnesses reporting 140,
+    #: which reads as a defect rather than as Cline's own schema. The full set
+    #: is still published at ``GET /admin/api/catalogue-models`` and is what
+    #: ``mcc-cline -m <id>`` selects from.
+    model_count_label: str = "Models"
+    #: A sentence the card shows under that number where it needs one.
+    model_count_note: str = ""
     #: How the generated document is encoded. ``json`` for every harness that
     #: reads JSON; ``toml`` for Kimi Code, whose ``config.toml`` is parsed with
     #: ``tomlkit``. It is a property of the *file format*, not of the
@@ -1219,6 +1232,16 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             config_flag="--config",
             base_url_sentinel=CLINE_BASE_URL_SENTINEL,
             base_url_shape="v1",
+            model_count_label="Provider blocks",
+            model_count_note=(
+                "Cline's providers.json has no per-model array: its schema "
+                "carries the numbers for the one model the provider is "
+                "configured with, and it discards the whole document on any "
+                "unrecognised root key. So this counts provider blocks, not "
+                "models. MCC still resolves the full catalogue -- see "
+                "/admin/api/catalogue-models -- and mcc-cline -m <id> promotes "
+                "whichever model you name into the block before Cline reads it."
+            ),
         ),
         passthrough_commands=frozenset(
             {"doctor", "plugin", "skill", "mcp", "schedule", "hook", "connect"}

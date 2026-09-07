@@ -303,19 +303,37 @@ def test_a_per_harness_override_changes_only_that_agents_document() -> None:
     assert best_crush.display_name == f"Best ({PRIMARY})"
 
 
-def test_a_tier_pointing_at_an_unlisted_model_gets_no_entry() -> None:
-    """An alias the picker cannot select is worse than no alias.
+def test_a_tier_pointing_at_a_hidden_model_still_gets_its_entry() -> None:
+    """A tier is a route, and hiding a model does not close the route.
 
-    The catalogue is the list of routable models; a tier resolving to something
-    absent from it would render an entry whose metadata MCC does not have.
+    Until 6.56.0 an alias whose target was absent from the document was
+    dropped, on the argument that a picker entry that cannot be selected is
+    worse than none. But the alias *is* selectable: the router resolves
+    ``mcc/cheap`` server-side whether or not the model it points at is listed,
+    and the visibility list is the operator saying "do not show me this model",
+    not "do not give me this tier".
+
+    Measured on the install this fix came from: ``MODEL_VISION`` pointed at a
+    model excluded by ``MODEL_VISIBILITY_DENY``, so ``mcc/vision`` was missing
+    from all thirteen generated catalogues while ``constants.MODEL_TIER_NAMES``
+    and the dashboard both went on promising it.
     """
 
     settings = _settings(MODEL_VISIBILITY_DENY=CHEAP)
     models = _models(settings)
     refs = {model.provider_model_ref for model in models}
 
-    assert "mcc/cheap" not in refs
+    assert CHEAP not in refs
+    assert "mcc/cheap" in refs
     assert "mcc/best" in refs
+
+
+def test_every_tier_reaches_the_catalogue_including_vision() -> None:
+    """``mcc/vision`` was promised in two places and emitted in none."""
+
+    refs = {model.provider_model_ref for model in _models()}
+
+    assert {"mcc/best", "mcc/good", "mcc/medium", "mcc/cheap", "mcc/vision"} <= refs
 
 
 def test_an_alias_is_not_a_no_thinking_variant() -> None:

@@ -413,3 +413,69 @@ def test_every_data_view_section_has_a_matching_view_group_id() -> None:
         "src/my_claude_code/api/admin_static/admin.js, or remove the "
         "orphaned section."
     )
+
+
+# --------------------------------------------------------------------- F ---
+# Every Guide anchor admin.js links to must be a heading index.html declares.
+#
+# The Guide-link pattern is new in 6.56.0: one small link from each dashboard
+# surface into the Guide section that explains it. The failure it can have is
+# silent -- somebody renames a heading, the link still renders, and clicking it
+# scrolls nowhere -- so the anchors are declared in one table in admin.js and
+# checked against the shipped markup here.
+
+_GUIDE_ANCHORS_BLOCK = re.compile(
+    r"const GUIDE_ANCHORS = \{(?P<body>.*?)\n\};", re.DOTALL
+)
+_GUIDE_ANCHOR_ENTRY = re.compile(r"""(\w+):\s*["']([^"']+)["']""")
+
+
+def _declared_guide_anchors() -> dict[str, str]:
+    match = _GUIDE_ANCHORS_BLOCK.search(_JS_SOURCE)
+    assert match, "admin.js no longer declares a GUIDE_ANCHORS table"
+    return dict(_GUIDE_ANCHOR_ENTRY.findall(match.group("body")))
+
+
+def test_every_guide_anchor_admin_js_links_to_exists_in_index_html() -> None:
+    anchors = _declared_guide_anchors()
+
+    assert anchors, "GUIDE_ANCHORS parsed as empty"
+    markup_ids = set(_MARKUP_ID.findall(_HTML_SOURCE))
+    missing = sorted(anchor for anchor in anchors.values() if anchor not in markup_ids)
+    assert not missing, (
+        f"admin.js links to Guide anchors index.html does not define: {missing}."
+    )
+
+
+def test_every_guide_anchor_names_a_guide_section() -> None:
+    """A link into a non-Guide id would switch to the Guide and scroll nowhere."""
+
+    for purpose, anchor in _declared_guide_anchors().items():
+        assert anchor.startswith("guide-"), f"{purpose} -> {anchor}"
+
+
+def test_guide_links_are_only_written_through_the_declared_table() -> None:
+    """`guideLink("x")` may only name a key of GUIDE_ANCHORS.
+
+    The helper takes a purpose rather than a raw anchor precisely so a link
+    cannot be written for a section nobody declared; this checks that no call
+    site got around it.
+    """
+
+    anchors = _declared_guide_anchors()
+    used = set(re.findall(r"""guideLink\(\s*["'](\w+)["']""", _JS_SOURCE))
+    unknown = sorted(used - set(anchors))
+    assert not unknown, f"guideLink called with undeclared purposes: {unknown}"
+    assert used, "no guideLink call sites found at all"
+
+
+def test_every_static_guide_link_mount_point_exists() -> None:
+    mounts = re.search(
+        r"const GUIDE_LINK_MOUNTS = \[(?P<body>.*?)\n\];", _JS_SOURCE, re.DOTALL
+    )
+    assert mounts, "admin.js no longer declares GUIDE_LINK_MOUNTS"
+    selectors = re.findall(r"""\["#([\w-]+)",""", mounts.group("body"))
+    assert selectors
+    markup_ids = set(_MARKUP_ID.findall(_HTML_SOURCE))
+    missing = sorted(name for name in selectors if name not in markup_ids)
+    assert not missing, f"guide links mount on ids that do not exist: {missing}"

@@ -2820,19 +2820,20 @@ def test_the_desktop_apps_group_renders_one_card_per_app(rendered: dict) -> None
     apps = rendered["desktopApps"]
 
     assert apps["present"] is True
-    assert apps["cardCount"] == 6
+    assert apps["cardCount"] == 7
     assert [card["id"] for card in apps["cards"]] == [
         "codex_desktop",
         "opencode_desktop",
         "goose_desktop",
         "crush_desktop",
         "claude_desktop",
+        "roo_code",
         "warp",
     ]
 
 
 def test_each_probe_state_reaches_the_badge_in_its_own_words(rendered: dict) -> None:
-    """Six states, six labels. Collapsing any two would hide a real difference."""
+    """Seven states, seven labels. Collapsing any two hides a real difference."""
 
     badges = {card["id"]: card["badge"] for card in rendered["desktopApps"]["cards"]}
     assert badges["codex_desktop"] == "Configured by MCC"
@@ -2840,7 +2841,10 @@ def test_each_probe_state_reaches_the_badge_in_its_own_words(rendered: dict) -> 
     assert badges["goose_desktop"] == "Installed, not configured"
     assert badges["crush_desktop"] == "Not installed"
     assert badges["warp"] == "Not routable"
-    assert len(set(badges.values())) == 5
+    # New in 6.56.0: a source outranks the file MCC would write.
+    assert badges["roo_code"] == "Managed by your organisation"
+    assert badges["claude_desktop"] == "Configured by MCC"
+    assert len(set(badges.values())) == 6
 
 
 def test_a_drifted_card_says_what_drift_means_and_offers_a_re_apply(
@@ -2860,8 +2864,11 @@ def test_a_configured_card_offers_both_undo_modes(rendered: dict) -> None:
 
     assert card["hasUndo"] is True
     assert [mode["value"] for mode in card["undoModes"]] == ["keys_only", "restore"]
-    assert card["undoModes"][0]["label"] == "Remove MCC's keys only"
-    assert card["undoModes"][1]["label"] == "Restore the original values"
+    assert (
+        card["undoModes"][0]["label"]
+        == "Remove MCC's keys (and put back what it replaced)"
+    )
+    assert card["undoModes"][1]["label"] == "Restore the original values exactly"
     assert card["undoModes"][1]["disabled"] is False
 
 
@@ -2897,28 +2904,44 @@ def test_a_not_routable_card_states_the_reason_and_offers_no_buttons(
     assert card["hasUndo"] is False
 
 
-def test_the_claude_desktop_card_is_values_to_copy_rather_than_a_button(
+def test_the_claude_desktop_card_is_a_button_and_names_what_it_writes(
     rendered: dict,
 ) -> None:
-    """Anthropic documents the dialog, not a file, so MCC guesses no path."""
+    """The 6.55.0 card was a "Not installed" badge over six copy buttons.
+
+    Anthropic's MDM page documents the local configuration library, so this is
+    a Configure button like every other servable card -- and the card states
+    the file, the one foreign key it merges, the settings its own document
+    carries, and what would outrank it.
+    """
 
     card = _desktop_card(rendered, "claude_desktop")
 
+    assert card["hasConfigure"] is True
+    assert card["badge"] == "Configured by MCC"
+    meta = dict(zip(card["metaTerms"], card["metaValues"], strict=False))
+    assert "configLibrary/_meta.json" in meta["Config file"]
+    assert meta["Replaces"] == "appliedId"
+    assert "inferenceGatewayBaseUrl" in meta["It writes"]
+    assert "inferenceGatewayApiKey" in meta["It writes"]
+    assert r"Policies\Claude" in meta["Outranked by"]
+    # The instruction table is the fallback, and this file exists.
+    assert card["instructionLabels"] == []
+    # And nothing anywhere still claims Anthropic documents no file.
+    assert not any("does not guess" in note for note in card["notes"])
+
+
+def test_a_managed_card_has_no_button_and_names_what_is_enforcing_it(
+    rendered: dict,
+) -> None:
+    """A Configure that wrote a file the app ignores would report success."""
+
+    card = _desktop_card(rendered, "roo_code")
+
     assert card["hasConfigure"] is False
-    assert card["instructionLabels"] == [
-        "Connection",
-        "Base URL",
-        "Auth scheme",
-        "API key",
-        "Models",
-        "Custom headers",
-    ]
-    assert "Gateway" in card["instructionValues"]
-    assert any("mcc/best" in value for value in card["instructionValues"])
-    assert any("x-mcc-harness" in value for value in card["instructionValues"])
-    # One copy button per value: the whole point of the card.
-    assert card["copyButtons"] == len(card["instructionLabels"])
-    assert any("does not guess" in note for note in card["notes"])
+    assert card["hasPreview"] is False
+    assert "Machine policy" in card["unavailableReason"]
+    assert "inferenceProvider" in card["unavailableReason"]
 
 
 def test_a_card_names_the_file_the_owned_key_and_what_it_replaces(
@@ -2972,3 +2995,42 @@ def test_the_group_states_the_ownership_promise_and_the_two_undo_modes(
     assert "touches only its own keys" in note
     assert ".mcc-backup" in note
     assert "Restore the original values" in note
+
+
+# ------------------------------------------------------------- guide links
+# Every dashboard surface that the Guide explains now carries a small link
+# into the section that explains it. Two failures are invisible without a
+# check: an anchor that names a heading somebody renamed, and a click that
+# switches the view but never scrolls.
+
+
+def test_the_guide_links_render_and_every_one_of_them_resolves(rendered) -> None:
+    """The anchor table itself is checked in ``test_admin_asset_wiring``.
+
+    What this adds is the DOM: that the links are actually appended by the
+    code that draws each surface, and that each rendered link's anchor is a
+    real element on the page rather than a heading somebody renamed.
+    """
+
+    rendered_links = rendered["guideLinks"]["rendered"]
+
+    assert rendered_links, "no Guide links rendered anywhere on the page"
+    dead = [entry["anchor"] for entry in rendered_links if not entry["resolves"]]
+    assert not dead, f"rendered Guide links point at missing anchors: {dead}"
+
+    purposes = {entry["purpose"] for entry in rendered_links}
+    # The surfaces this fixture's payload actually draws. The billed/est chip
+    # needs a provider with a measured image estimate, which this payload does
+    # not supply, so it is covered by the source-level guard instead.
+    assert {"cli", "desktop_apps", "agent_tiers", "images", "cost"} <= purposes
+
+
+def test_clicking_a_guide_link_opens_the_guide_and_scrolls_to_the_section(
+    rendered,
+) -> None:
+    clicked = rendered["guideLinks"]["clicked"]
+
+    assert clicked is not None
+    assert clicked["guideViewVisible"] is True
+    assert clicked["navActive"] is True
+    assert clicked["anchor"] in clicked["scrolledAnchors"]

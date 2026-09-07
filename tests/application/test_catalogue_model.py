@@ -210,9 +210,39 @@ def test_a_model_known_not_to_think_gets_only_the_no_thinking_variant() -> None:
     ids = [
         model.gateway_id
         for model in build_catalogue_models(runtime.current_settings(), runtime)
+        # The tier aliases are names for routes and are asserted in
+        # ``test_catalogue_tier_aliases``. Since 6.56.0 they are emitted even
+        # when the model a tier points at publishes no thinking variant, which
+        # is exactly this model -- so they would otherwise crowd out the one
+        # fact under test here.
+        if not model.provider_model_ref.startswith("mcc/")
     ]
 
     assert ids == ["claude-3-freecc-no-thinking/open_router/plain"]
+
+
+def test_a_tier_whose_target_only_has_a_no_thinking_variant_still_gets_an_alias() -> (
+    None
+):
+    """The other half of the missing-``mcc/vision`` bug.
+
+    The alias lookup skipped every ``force_no_thinking`` record, so a tier
+    pointing at a model whose provider publishes no thinking variant found
+    nothing and was dropped.
+    """
+
+    runtime = FakeRuntime(
+        settings=_settings(model="open_router/plain"),
+        cached_infos=(ProviderModelInfo("open_router/plain"),),
+        thinking={"open_router/plain": False},
+    )
+
+    refs = {
+        model.provider_model_ref
+        for model in build_catalogue_models(runtime.current_settings(), runtime)
+    }
+
+    assert "mcc/vision" in refs
 
 
 def test_catalogue_models_and_v1_models_agree_on_visible_refs() -> None:

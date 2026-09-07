@@ -216,6 +216,7 @@ def build_catalogue_models(
         harness_tiers if harness_tiers is not None else EMPTY_HARNESS_TIERS,
         harness_id,
         models,
+        runtime=runtime,
     )
     if not aliases:
         return tuple(models)
@@ -237,6 +238,8 @@ def _tier_alias_models(
     harness_tiers: HarnessTiers,
     harness_id: str | None,
     models: list[CatalogueModel],
+    *,
+    runtime: RequestRuntimePort,
 ) -> tuple[CatalogueModel, ...]:
     """Build the five tier records, each a copy of the model it points at.
 
@@ -263,17 +266,44 @@ def _tier_alias_models(
     -- which requires at least two segments after the gateway prefix -- accepts
     ``anthropic/mcc/best`` unchanged.
 
-    A tier whose chain resolves to a model this catalogue does not list gets no
-    entry: an alias pointing at something absent from the same document is a
-    picker entry that cannot be selected.
+    **A tier is a route, not a listing of its target.** Until 6.56.0 a tier
+    whose primary was not itself in this document got no entry at all, on the
+    argument that an alias pointing at something absent cannot be selected.
+    That confused two different facts. ``mcc/vision`` names ``MODEL_VISION``,
+    and the router resolves it server-side whatever the picker lists -- so on
+    an install whose vision model is hidden by ``MODEL_VISIBILITY_DENY``, or is
+    a model whose provider publishes no thinking variant, the alias vanished
+    from all thirteen catalogues while ``constants.MODEL_TIER_NAMES`` and the
+    dashboard both went on promising it. Measured on this machine: four tiers
+    in every generated document, ``mcc/vision`` in none, with ``MODEL_VISION``
+    set the whole time.
+
+    The alias is therefore built from the *primary's* record wherever one can
+    be had -- preferring the thinking variant, accepting the no-thinking one --
+    and skipped only when the ladder gives no primary at all, which is the one
+    case where there is genuinely nothing to point at.
     """
 
     if not settings.harness_tier_aliases:
+        return ()
+    if not models:
+        # No routable model at all. The aliases are names for routes, but a
+        # document consisting *only* of names for routes is a catalogue with
+        # nothing in it -- and ``runtime/harness_catalogues`` refuses to
+        # overwrite a good file with an empty projection precisely so a
+        # transient provider outage cannot wipe thirteen configs. Synthesising
+        # five entries here would defeat that guard by making the projection
+        # look non-empty.
         return ()
     by_ref: dict[str, CatalogueModel] = {}
     for model in models:
         if not model.force_no_thinking:
             by_ref.setdefault(model.provider_model_ref, model)
+    # The fallback layer: a provider that publishes no thinking variant leaves
+    # only the ``(no thinking)`` record, and a tier pointing at such a model
+    # would otherwise be dropped for a reason that has nothing to do with it.
+    for model in models:
+        by_ref.setdefault(model.provider_model_ref, model)
     aliases: list[CatalogueModel] = []
     for tier in TIER_ORDER:
         chain = resolve_tier_chain(settings, harness_tiers, harness_id, tier)
@@ -282,7 +312,25 @@ def _tier_alias_models(
             continue
         record = by_ref.get(primary_ref)
         if record is None:
-            continue
+            # The target is not in this document -- hidden by the visibility
+            # filter, or served by a provider whose model list has not been
+            # warmed. Resolve it directly rather than dropping the tier: the
+            # numbers are the ladder's own answer for that model, exactly as
+            # they would be if it were listed.
+            record = _variant(
+                _resolve(
+                    primary_ref,
+                    provider_id=parse_provider_type(primary_ref),
+                    model_id=parse_model_name(primary_ref),
+                    runtime=runtime,
+                    info=None,
+                    provenance=None,
+                ),
+                gateway_id=gateway_model_id(primary_ref),
+                display_name=primary_ref,
+                force_no_thinking=False,
+                is_primary_route=False,
+            )
         aliases.append(
             replace(
                 record,

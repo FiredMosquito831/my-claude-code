@@ -1,6 +1,7 @@
 """The Coding agents page's two routes: what is installed, and what it is told."""
 
 import json
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -34,9 +35,10 @@ def _remote_client(app):
 
 def test_harnesses_route_lists_every_registered_harness(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
+    found = str(tmp_path / "bin" / "codex")
     monkeypatch.setattr(
         "my_claude_code.api.admin_harness_routes.shutil.which",
-        lambda name: "/usr/local/bin/codex" if name == "codex" else None,
+        lambda name: found if name == "codex" else None,
     )
     rtk_config.save_rtk_state(RtkState(claude=True))
     app = create_test_app()
@@ -47,7 +49,7 @@ def test_harnesses_route_lists_every_registered_harness(monkeypatch, tmp_path):
     by_id = {entry["id"]: entry for entry in body["harnesses"]}
     assert tuple(by_id) == harness_ids()
     assert by_id["codex"]["installed"] is True
-    assert by_id["codex"]["binary_path"] == "/usr/local/bin/codex"
+    assert by_id["codex"]["binary_path"] == found
     assert by_id["codex"]["command"] == "mcc-codex"
     assert by_id["codex"]["protocol_label"].startswith("OpenAI Responses")
     assert by_id["pi"]["installed"] is False
@@ -431,3 +433,61 @@ def test_opencode_document_authenticates_with_apikey_alone(monkeypatch, tmp_path
     assert accepted.status_code == 200
     assert refused.status_code == 401
     assert unauthenticated.status_code == 401
+
+
+def test_a_binary_found_relative_to_the_cwd_is_reported_absolute(monkeypatch, tmp_path):
+    r"""The live payload reported ``.\claude.EXE`` for Claude Code alone.
+
+    ``shutil.which`` searches the current directory first on Windows and hands
+    back what it searched for, so one harness read as a relative path while
+    every other reported an absolute one -- which reads as though the lookup
+    depended on where the server was started.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which",
+        lambda name: (
+            os.path.join(os.curdir, "claude.EXE") if name == "claude" else None
+        ),
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    path = {entry["id"]: entry for entry in body["harnesses"]}["claude"]["binary_path"]
+    assert path is not None
+    assert os.path.isabs(path)
+    assert not path.startswith(".")
+
+
+def test_clines_catalogue_says_what_its_number_counts(monkeypatch, tmp_path):
+    """ "Models: 1" beside twelve agents reporting 140 reads as a defect.
+
+    It is not one. Cline validates ``providers.json`` as a whole and discards
+    it on a single unrecognised root key -- measured on 3.0.61, losing the base
+    URL and the key with it -- so MCC's per-model block is stripped before the
+    file reaches disk and what remains is one provider entry. The card now says
+    which of the two it counted.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    by_id = {entry["id"]: entry for entry in body["harnesses"]}
+    cline = by_id["cline_cli"]["catalogue"]
+    assert cline["model_count_label"] == "Provider blocks"
+    assert "no per-model array" in cline["model_count_note"]
+    assert "mcc-cline -m" in cline["model_count_note"]
+
+    # Every other harness still just says "Models", with no note.
+    codex = by_id["codex"]["catalogue"]
+    assert codex["model_count_label"] == "Models"
+    assert codex["model_count_note"] == ""

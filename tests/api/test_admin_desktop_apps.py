@@ -87,7 +87,7 @@ def test_a_not_routable_card_carries_its_reason_and_no_document(monkeypatch, tmp
 
 
 def test_the_claude_desktop_card_carries_the_gateway_values(monkeypatch, tmp_path):
-    """Instructions, not a guessed path: Anthropic documents the dialog."""
+    """A real Configure button, against the file Anthropic's MDM page names."""
 
     _scratch_home(monkeypatch, tmp_path)
     app = create_test_app()
@@ -96,12 +96,21 @@ def test_the_claude_desktop_card_carries_the_gateway_values(monkeypatch, tmp_pat
         body = client.get("/admin/api/desktop-apps").json()
 
     card = next(entry for entry in body["apps"] if entry["id"] == "claude_desktop")
-    assert card["status"] == "instructions_only"
-    fields = {item["label"]: item["value"] for item in card["instruction_fields"]}
-    assert fields["Connection"] == "Gateway"
-    assert "mcc/best" in fields["Models"]
+    assert card["status"] == "servable"
+    assert card["display_path"].endswith(r"configLibrary\_meta.json")
+    assert card["sidecar_keys"] == [
+        "inferenceProvider",
+        "inferenceGatewayBaseUrl",
+        "inferenceGatewayApiKey",
+        "inferenceCredentialKind",
+        "modelDiscoveryEnabled",
+        "inferenceCustomHeaders",
+    ]
+    # The proxy ROOT: Claude Desktop appends /v1/messages itself.
     assert card["base_url"].startswith("http://")
     assert not card["base_url"].endswith("/v1")
+    # The meaningless live warning is gone with the variable it named.
+    assert card["token_env_var"] == ""
 
 
 def test_plan_returns_a_diff_and_writes_nothing(monkeypatch, tmp_path):
@@ -171,8 +180,10 @@ def test_undo_keys_only_leaves_the_users_own_keys_and_removes_mccs(
         ).json()
 
     assert body["mode"] == "keys_only"
-    assert body["restored_keys"] == []
+    # The user's own default model comes back rather than being deleted.
+    assert body["restored_keys"] == ["model"]
     text = path.read_text(encoding="utf-8", newline=None)
+    assert 'model = "gpt-5.6-luna"' in text
     assert "model_providers.mcc" not in text
     assert "# a comment the user wrote" in text
     assert '[projects."C:/work"]' in text
@@ -226,15 +237,13 @@ def test_an_unknown_app_is_a_404_naming_the_ones_that_exist(monkeypatch, tmp_pat
 
 
 def test_a_card_with_no_document_refuses_to_be_configured(monkeypatch, tmp_path):
-    """Claude Desktop is values a human types; there is no file to write."""
+    """A NOT_ROUTABLE card has no file, and a write to it is a caller bug."""
 
     _scratch_home(monkeypatch, tmp_path)
     app = create_test_app()
 
     with _local_client(app) as client:
-        response = client.post(
-            "/admin/api/desktop-apps/claude_desktop/configure", json={}
-        )
+        response = client.post("/admin/api/desktop-apps/lm_studio/configure", json={})
 
     assert response.status_code == 409
     assert "not configured by writing a file" in response.json()["detail"]
@@ -296,5 +305,8 @@ def test_an_instruction_card_resolves_the_proxy_root_it_tells_you_to_type(
     card = next(entry for entry in body["apps"] if entry["id"] == "claude_desktop")
     fields = {item["label"]: item["value"] for item in card["instruction_fields"]}
     assert "{root}" not in json.dumps(card)
-    assert fields["Base URL"].startswith("http://")
-    assert fields["Base URL"] == card["base_url"]
+    # The dialog's own labels, from Anthropic's in-app configuration page.
+    assert fields["Inference provider"] == "Gateway"
+    assert fields["Credential kind"] == "Static API key"
+    assert fields["Gateway base URL"].startswith("http://")
+    assert fields["Gateway base URL"] == card["base_url"]

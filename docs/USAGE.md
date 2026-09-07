@@ -948,7 +948,9 @@ Official references: [Claude Code LLM gateway docs](https://code.claude.com/docs
 
 ## 5. Tutorial: connect Claude Desktop
 
-The desktop app has a **native gateway setting** — no file editing required. Its *Code* tab also honours the `~/.claude/settings.json` above, but the gateway configuration below is the supported path for the app itself.
+The desktop app has a **native gateway setting**. Since 6.56.0 MCC can write it for you: the **Claude Desktop** card in the [Desktop apps](#6-point-a-desktop-app-here) group owns one document in the app's local configuration library (`%LOCALAPPDATA%\Claude-3p\configLibrary\`, macOS `~/Library/Application Support/Claude-3p/configLibrary/`) and points the library's `appliedId` at it, leaving every configuration you authored where it is. That library is the **lowest**-precedence source the app reads, so where a managed profile is present (`HKLM`/`HKCU\SOFTWARE\Policies\Claude`, or macOS Managed Preferences) the card says so and offers no button rather than writing a file the app will ignore.
+
+The manual route below is still the fallback — it is what to do when the app has never written that library, or when your organisation manages it. Its *Code* tab also honours the `~/.claude/settings.json` above, but the gateway configuration below is the supported path for the app itself.
 
 Menu labels shift slightly between app versions; this is the currently documented route.
 
@@ -1048,14 +1050,24 @@ second backup.
 
 Undo offers a picker, because there are two honest answers:
 
-- **Remove MCC's keys only** — deletes what MCC owns and leaves every other
-  byte alone. The default, and the one that cannot surprise anyone.
-- **Restore the original values** — additionally puts back the values MCC
-  *replaced*. Codex's `model`, Goose's `GOOSE_PROVIDER` and Antigravity's
-  `modelProvider` are values you may already have set to something of your own,
-  and MCC records what was there before it overwrote them. If the file has been
-  rewritten since MCC configured it, this mode refuses rather than reverting an
-  edit you made on purpose, and points you at the backup.
+Both remove the keys MCC *created*, and both put back a value MCC *replaced* —
+Codex's `model`, Goose's `GOOSE_PROVIDER`, Antigravity's `modelProvider`, Claude
+Desktop's `appliedId`, all values you may already have set to something of your
+own. What separates them is what they refuse:
+
+- **Remove MCC's keys (and put back what it replaced)** — never refuses. No
+  restore record required and no hash check, so it is always available. The
+  default.
+- **Restore the original values exactly** — guarantees the pre-MCC state
+  instead. It requires the record MCC wrote at Configure time and refuses when
+  the file has been rewritten since, rather than reverting an edit you made on
+  purpose, pointing you at the backup instead. This is the mode that consumes
+  the record.
+
+> **Fixed in 6.56.0.** Before this release the first mode *deleted* a replaced
+> value rather than restoring it, and then emptied the restore record — so a
+> Codex user's own default model was destroyed and "Restore the original
+> values" answered *no record* afterwards. Neither happens now.
 
 The same two modes now apply to **Configure Claude Code**. Before 6.55.0 that
 page overwrote `ANTHROPIC_BASE_URL` without remembering what it held, so a
@@ -1073,7 +1085,7 @@ user who had it pointed at another gateway lost it. It is remembered now.
 | **Antigravity (`agy`)** | yes | See below. |
 | **Roo Code** | yes | Uses Roo's own import hook, so MCC owns the settings file outright. |
 | **Command Code** | status only | Already configured by `mcc-commandcode` since 6.27.0; the card reports and does not re-mechanise. |
-| **Claude Desktop** | instructions | Its gateway settings are entered in a dialog, and Anthropic documents the dialog rather than a file. The card gives you the six values with copy buttons. A button follows once the persistence path is established — MCC does not guess one. |
+| **Claude Desktop** | yes | Anthropic's MDM documentation names the local configuration source, so MCC owns one document in `%LOCALAPPDATA%\Claude-3p\configLibrary\` (macOS `~/Library/Application Support/Claude-3p/configLibrary/`) and merges exactly one foreign key, `_meta.json`'s `appliedId`. It is the **lowest**-precedence source the app reads, so a managed profile under `HKLM`/`HKCU\SOFTWARE\Policies\Claude` (macOS: Managed Preferences) replaces it wholesale — MCC probes for one before every write and shows the card as *Managed by your organisation*, with no button, rather than writing a file the app ignores. The credential has no reference form in this store, so it goes into MCC's own document at mode 0600 and never into one you edit. Relaunch the app to load it. |
 | **Kimi desktop, Qwen desktop, LM Studio, Warp** | not routable | Each card carries the measured reason and its date. |
 
 ### Antigravity

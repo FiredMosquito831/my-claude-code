@@ -2,6 +2,7 @@
 
 import asyncio
 import ipaddress
+import os
 import sys
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -95,6 +96,9 @@ from my_claude_code.config.onboarding import (
 )
 from my_claude_code.config.onboarding import (
     build_state as build_onboarding_state,
+)
+from my_claude_code.config.onboarding import (
+    detect_agents as detect_onboarding_agents,
 )
 from my_claude_code.config.onboarding import (
     load_persisted as load_onboarding_persisted,
@@ -925,6 +929,21 @@ def _onboarding_step_response(step: OnboardingStep) -> dict[str, Any]:
         "done": step.done,
         "instructions": list(step.instructions),
         "target": step.target,
+        "guide_anchors": list(step.guide_anchors),
+        "agents": [
+            {
+                "id": agent.id,
+                "display_name": agent.display_name,
+                "kind": agent.kind,
+                "installed": agent.installed,
+                "state": agent.state,
+                "command": agent.command,
+                "configurable": agent.configurable,
+                "requests_7d": agent.requests_7d,
+                "connected": agent.connected,
+            }
+            for agent in step.agents
+        ],
     }
 
 
@@ -971,12 +990,40 @@ async def _onboarding_has_requests(settings: Settings) -> bool:
     return total > 0
 
 
+async def _onboarding_harness_usage(settings: Settings) -> dict[str, int]:
+    """Return seven days of per-agent request counts, or an empty map.
+
+    The same window and the same store the Coding agents page's
+    "Requests (7d)" chip reads, so the checklist and the chip cannot disagree
+    about whether an agent has ever talked to MCC. Never raises: with request
+    logging switched off the step simply falls back to "is it configured".
+    """
+
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {}
+    try:
+        return await asyncio.to_thread(
+            store.harness_usage, since=time.time() - 7 * 86_400
+        )
+    except Exception:
+        return {}
+
+
 async def _build_onboarding_state(settings: Settings) -> OnboardingState:
     claude_settings_configured = await _claude_settings_configured(settings)
     has_requests = await _onboarding_has_requests(settings)
+    usage = await _onboarding_harness_usage(settings)
+    # Off the event loop: the desktop probes stat a dozen directories and read
+    # the registry, which is exactly what every other probe on this page does
+    # in a thread.
+    agents = await asyncio.to_thread(
+        detect_onboarding_agents, env=os.environ, harness_requests=usage
+    )
     return build_onboarding_state(
         claude_settings_configured=claude_settings_configured,
         has_requests=has_requests,
+        agents=agents,
     )
 
 

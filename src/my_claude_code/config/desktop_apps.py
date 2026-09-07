@@ -24,9 +24,14 @@ a row and its tests -- never a branch.
 
 ``INSTRUCTIONS_ONLY``
     The app *can* be pointed at MCC, but not by editing a file MCC can find.
-    Claude Desktop is the case: its gateway settings are entered in a dialog
-    and Anthropic documents the dialog, not a persistence path. The card
-    carries the exact values with copy buttons; MCC does not guess a path.
+    No app is in this state today. Claude Desktop was, on the belief that
+    Anthropic documented a dialog and not a persistence path; that was wrong
+    -- the MDM documentation names
+    ``%LOCALAPPDATA%\\Claude-3p\\configLibrary\\`` (macOS:
+    ``~/Library/Application Support/Claude-3p/configLibrary/``) as the local
+    configuration source -- so it is SERVABLE, and its instruction fields
+    survive as the fallback the card shows when that directory does not exist
+    or a managed profile outranks it.
 
 ``NOT_ROUTABLE``
     The app cannot be pointed at MCC at all, and ``unavailable_reason`` says
@@ -103,6 +108,11 @@ class DesktopAppState(StrEnum):
     CONFIGURED = "configured"
     DRIFTED = "drifted"
     UNREADABLE = "unreadable"
+    #: A higher-precedence source -- a policy key, a managed profile -- owns
+    #: this app's configuration, so the file MCC would write is ignored. The
+    #: card names the source and offers no button, because a button that wrote
+    #: a file with no effect would be worse than none.
+    MANAGED = "managed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +133,16 @@ class DesktopPath:
     relative_parts: tuple[str, ...]
     #: Platforms this path applies to. Empty means every platform.
     platforms: tuple[str, ...] = ()
+    #: Whether ``relative_parts`` is a glob pattern rather than a literal path.
+    #: Two installs force this: an MSIX package directory carries a publisher
+    #: hash Microsoft assigns (``Packages/Claude_pzs8sxrjxfjjc``), and a VS Code
+    #: extension directory carries the extension's *version*
+    #: (``github.copilot-chat-0.32.4``). Both are real, both change under the
+    #: user, and neither can be spelled as a constant without being wrong on
+    #: the next update. A glob path resolves to the first match in sorted
+    #: order, or to nothing at all when there is no match -- which is the whole
+    #: point for a detection marker: no match means not installed.
+    glob: bool = False
     #: Resolve under MCC's own configuration directory rather than the user's
     #: home. Set for a file MCC owns outright, so that the directory's name
     #: stays the single responsibility of ``config/paths`` -- a contract test
@@ -161,6 +181,14 @@ class DesktopDocument:
     #: For ``JSON_ARRAY``: the field and value identifying MCC's element.
     match_field: str = ""
     match_value: str = ""
+    #: A list *nested inside an object document* of which MCC owns exactly one
+    #: element, identified by ``match_field``/``match_value``. Claude Desktop's
+    #: ``_meta.json`` is the case: it is an object (``appliedId`` plus
+    #: ``entries``), and MCC's configuration is one element of ``entries``
+    #: beside however many the user authored in the app's own window. Distinct
+    #: from ``JSON_ARRAY``, where the whole document is the list, and from
+    #: ``owned_key_path``, which owns a mapping rather than a list element.
+    owned_element_path: tuple[str, ...] = ()
     #: Scalars MCC *replaces* rather than creates. These are the keys the
     #: restore record remembers and the RESTORE undo mode puts back. Every one
     #: of them is a value a user may legitimately have set to something else.
@@ -191,6 +219,51 @@ class DesktopSidecar:
     #: Whether this file may contain a literal credential. Only true where the
     #: app resolves no reference form at all.
     holds_credential: bool = False
+    #: The whole content of the file, declared, for an app whose owned file is
+    #: a fixed set of settings rather than a serialised model catalogue.
+    #: ``{base_url}`` and ``{token}`` are substituted by
+    #: ``application/desktop_documents``; every other value is written as it
+    #: stands. Claude Desktop is the case, and declaring the six keys here
+    #: rather than branching on the app in the writer is what keeps the promise
+    #: that adding an app is adding a row.
+    fields: Mapping[str, object] = field(default_factory=dict)
+    #: Where the attribution header map goes inside :attr:`fields`, or empty.
+    headers_key: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopManagedSource:
+    """A configuration source that outranks the file MCC would write.
+
+    Claude Desktop is the reason this exists, and it is the reason it is data
+    rather than a branch. Its local configuration library is the *lowest*
+    precedence source it has: a machine or user policy under
+    ``SOFTWARE\\Policies\\Claude``, or a macOS managed preferences plist,
+    replaces it wholesale and makes the app's own configuration window
+    read-only. A Configure that wrote the library anyway would leave a file
+    that does nothing and a card that said "Configured by MCC" about a machine
+    routing somewhere else -- the same invisible failure a wrong path is, one
+    layer up.
+
+    This is the desktop-card twin of
+    :func:`my_claude_code.config.claude_settings._detect_overrides`, which does
+    the same job for Claude Code's enterprise ``managed-settings.json``.
+    """
+
+    #: How the card names it, e.g. ``Machine policy (HKLM\\SOFTWARE\\Policies\\Claude)``.
+    label: str
+    #: ``HKLM`` or ``HKCU`` for a Windows registry source, else empty.
+    registry_hive: str = ""
+    #: The subkey under that hive. Values must sit *directly* under it: the app
+    #: never reads a value nested in a deeper subkey.
+    registry_subkey: str = ""
+    #: A file source, when this one is a file rather than a registry key.
+    path: DesktopPath | None = None
+    #: Value names that do not, on their own, mean the source has taken over.
+    #: Claude Desktop documents exactly such a group -- update, relaunch,
+    #: config-recheck and proxy keys -- which a fleet may set without making
+    #: the whole configuration managed.
+    exempt_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +320,9 @@ class DesktopAppSpec:
     detect: DesktopDetect | None = None
     document: DesktopDocument | None = None
     sidecar: DesktopSidecar | None = None
+    #: Sources that outrank the file MCC writes. Empty for every app whose
+    #: config file is the only place its settings can come from.
+    managed_sources: tuple[DesktopManagedSource, ...] = ()
     protocol: HarnessProtocol = HarnessProtocol.OPENAI_CHAT_COMPLETIONS
     base_url_shape: BaseUrlShape = BaseUrlShape.V1
     token_form: TokenForm = TokenForm.ENV_REFERENCE
@@ -283,6 +359,12 @@ class DesktopAppSpec:
             return ""
         if self.document.document_format is DocumentFormat.JSON_ARRAY:
             return f'{self.document.match_field} == "{self.document.match_value}"'
+        if self.document.owned_element_path:
+            element = ".".join(self.document.owned_element_path)
+            return (
+                f"{element}[{self.document.match_field} == "
+                f'"{self.document.match_value}"]'
+            )
         return ".".join(self.document.owned_key_path)
 
 
@@ -299,6 +381,55 @@ DESKTOP_PROVIDER_LABEL = "My Claude Code"
 #: name rather than one per app: the user exports it once, and a card that
 #: verifies "is it exported?" is checking a single fact.
 DESKTOP_TOKEN_ENV_VAR = "MCC_AUTH_TOKEN"
+
+#: The id of the configuration document MCC owns inside Claude Desktop's local
+#: configuration library, and the name the app's own picker shows for it.
+#:
+#: The library is a directory of ``<uuid>.json`` documents plus a ``_meta.json``
+#: index -- read off this machine on 2026-09-07, key names only -- so MCC owns
+#: a whole file of its own and merges exactly one foreign key, ``appliedId``,
+#: plus one element of ``entries``. A fixed id rather than a generated one:
+#: Undo has to find the same file a year later, and a second Configure must
+#: replace MCC's document rather than litter the user's picker with a new entry
+#: on every run.
+CLAUDE_DESKTOP_CONFIG_ID = "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"
+CLAUDE_DESKTOP_CONFIG_NAME = "My Claude Code (MCC)"
+
+#: The registry key Claude Desktop reads managed configuration from, under both
+#: ``HKEY_LOCAL_MACHINE`` and ``HKEY_CURRENT_USER``. Values sitting *directly*
+#: under it outrank the local configuration library entirely; a subkey does not
+#: count. Documented at
+#: https://claude.com/docs/third-party/claude-desktop/mdm section
+#: "4. Deploy the configuration".
+CLAUDE_DESKTOP_POLICY_SUBKEY = "SOFTWARE\\Policies\\Claude"
+
+#: Claude Desktop's own name for the gateway settings MCC writes, from
+#: https://claude.com/docs/third-party/claude-desktop/configuration. Named here
+#: so the card, the writer and the tests read one list.
+#: The "app-behavior" keys a fleet may set from a managed profile *without*
+#: taking over the whole configuration. Verbatim from
+#: https://claude.com/docs/third-party/claude-desktop/mdm, section
+#: "Update keys and managed precedence": a profile setting only keys from this
+#: group leaves the device's locally authored configuration in force and the
+#: app's configuration window editable -- so MCC's Configure is still honest.
+CLAUDE_DESKTOP_APP_BEHAVIOR_KEYS: tuple[str, ...] = (
+    "disableAutoUpdates",
+    "autoUpdaterEnforcementHours",
+    "updateViaUpdatesHost",
+    "relaunchEnforcementHours",
+    "configRecheckIntervalMinutes",
+    "egressProxyUrl",
+    "egressProxyPacUrl",
+)
+
+CLAUDE_DESKTOP_GATEWAY_KEYS: tuple[str, ...] = (
+    "inferenceProvider",
+    "inferenceGatewayBaseUrl",
+    "inferenceGatewayApiKey",
+    "inferenceCredentialKind",
+    "modelDiscoveryEnabled",
+    "inferenceCustomHeaders",
+)
 
 
 #: Why ``antigravity`` is now a servable desktop app rather than a refusal.
@@ -337,22 +468,57 @@ ANTIGRAVITY_ROUTING_NOTE = (
 )
 
 
+#: Variables that name a *platform* directory rather than an app's own config
+#: location. The distinction decides a tie: a variable an app defines for
+#: itself -- ``CODEX_HOME``, ``OPENCODE_CONFIG_DIR``, ``CRUSH_GLOBAL_CONFIG``
+#: -- is the user saying "my config is here", and it wins outright even when
+#: the file does not exist yet. ``APPDATA`` is always set on Windows and says
+#: nothing about where any particular app keeps anything, so a path built from
+#: it may lose to a sibling that exists. Without that line, "prefer the path
+#: that already exists" would quietly override an explicit ``CODEX_HOME``.
+PLATFORM_ENV_VARS: frozenset[str] = frozenset(
+    {
+        "APPDATA",
+        "LOCALAPPDATA",
+        "HOME",
+        "USERPROFILE",
+        "PROGRAMFILES",
+        "PROGRAMFILES(X86)",
+        "PROGRAMDATA",
+    }
+)
+
+
 def _windows_appdata(*parts: str) -> DesktopPath:
     return DesktopPath(
         env_vars=("APPDATA",), relative_parts=parts, platforms=("win32",)
     )
 
 
-def _windows_localappdata(*parts: str) -> DesktopPath:
+def _windows_localappdata(*parts: str, glob: bool = False) -> DesktopPath:
     return DesktopPath(
-        env_vars=("LOCALAPPDATA",), relative_parts=parts, platforms=("win32",)
+        env_vars=("LOCALAPPDATA",),
+        relative_parts=parts,
+        platforms=("win32",),
+        glob=glob,
+    )
+
+
+def _windows_program_files(*parts: str) -> DesktopPath:
+    return DesktopPath(
+        env_vars=("PROGRAMFILES",), relative_parts=parts, platforms=("win32",)
     )
 
 
 def _home(
-    *parts: str, env_vars: tuple[str, ...] = ("HOME", "USERPROFILE")
+    *parts: str,
+    env_vars: tuple[str, ...] = ("HOME", "USERPROFILE"),
+    platforms: tuple[str, ...] = (),
+    glob: bool = False,
 ) -> DesktopPath:
-    return DesktopPath(env_vars=env_vars, relative_parts=parts)
+    return DesktopPath(
+        env_vars=env_vars, relative_parts=parts, platforms=platforms, glob=glob
+    )
 
 
 DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
@@ -496,10 +662,17 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
                     env_vars=("OPENCODE_CONFIG_DIR",),
                     relative_parts=("opencode.json",),
                 ),
-                _windows_appdata("opencode", "opencode.json"),
+                # ~/.config, on every platform including Windows. OpenCode's
+                # own documentation states exactly one global location --
+                # "Place your global OpenCode config in
+                # ~/.config/opencode/opencode.json" (https://opencode.ai/docs/config)
+                # -- and names no %APPDATA% form at all. MCC used to declare
+                # the %APPDATA% path first, so on Windows Configure created a
+                # brand-new file OpenCode never reads and reported success:
+                # the invisible failure this module exists to prevent.
                 _home(".config", "opencode", "opencode.json"),
             ),
-            display_path="%APPDATA%\\opencode\\opencode.json",
+            display_path="~/.config/opencode/opencode.json",
             document_format=DocumentFormat.JSON,
             owned_key_path=("provider", DESKTOP_PROVIDER_ID),
         ),
@@ -535,10 +708,21 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://code.visualstudio.com/docs/copilot/customization/language-models",
+        # The *extension* directory, not %APPDATA%\Code\User. That directory
+        # proves VS Code is installed and says nothing about Copilot, so the
+        # card read "Installed, not configured" and offered Configure on a
+        # machine with 33 extensions and no Copilot among them. An extension
+        # directory carries the extension's version, so it is a glob.
         detect=DesktopDetect(
             markers=(
-                _windows_appdata("Code", "User"),
-                _home(".config", "Code", "User"),
+                _home(".vscode", "extensions", "github.copilot-chat-*", glob=True),
+                _home(".vscode", "extensions", "github.copilot-*", glob=True),
+                _home(
+                    ".vscode-server",
+                    "extensions",
+                    "github.copilot-chat-*",
+                    glob=True,
+                ),
             )
         ),
         document=DesktopDocument(
@@ -679,10 +863,19 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://docs.roocode.com/features/settings-management",
+        # Same correction as vscode_copilot: the marker has to be the
+        # extension, not the editor that could host it.
         detect=DesktopDetect(
             markers=(
-                _windows_appdata("Code", "User"),
-                _home(".config", "Code", "User"),
+                _home(
+                    ".vscode", "extensions", "rooveterinaryinc.roo-cline-*", glob=True
+                ),
+                _home(
+                    ".vscode-server",
+                    "extensions",
+                    "rooveterinaryinc.roo-cline-*",
+                    glob=True,
+                ),
             )
         ),
         document=DesktopDocument(
@@ -763,41 +956,217 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         id="claude_desktop",
         display_name="Claude Desktop",
         summary=(
-            "Claude Desktop has a native gateway mode, entered in a dialog "
-            "rather than a file. MCC shows the values; a human types them."
+            "Claude Desktop's native gateway mode is stored in a local "
+            "configuration library. MCC owns one document there and merges a "
+            "single key of the index; a managed profile outranks both."
         ),
-        status=DesktopAppStatus.INSTRUCTIONS_ONLY,
-        doc_url="https://claude.com/docs/third-party/claude-desktop/gateway",
+        status=DesktopAppStatus.SERVABLE,
+        doc_url="https://claude.com/docs/third-party/claude-desktop/mdm",
         detect=DesktopDetect(
             markers=(
+                # The Microsoft Store / MSIX install, which is the shape most
+                # Windows users get. A packaged app virtualises AppData, so its
+                # %APPDATA%\Claude really lives under LocalCache\Roaming -- and
+                # the package directory carries a publisher hash Microsoft
+                # assigns, hence the glob.
+                _windows_localappdata("Packages", "Claude_*", glob=True),
+                # The third-party data directory. Present whenever the app has
+                # ever been started in its Claude Desktop on 3P mode, and the
+                # directory the configuration library lives in.
+                _windows_localappdata("Claude-3p"),
+                # The Squirrel (per-user .exe) install.
+                _windows_localappdata("AnthropicClaude"),
                 _windows_appdata("Claude"),
-                _home("Library", "Application Support", "Claude"),
+                _windows_program_files("Claude"),
+                _home(
+                    "Library",
+                    "Application Support",
+                    "Claude",
+                    platforms=("darwin",),
+                ),
+                _home(
+                    "Library",
+                    "Application Support",
+                    "Claude-3p",
+                    platforms=("darwin",),
+                ),
+                _home(".config", "Claude", platforms=("linux",)),
+                _home(".config", "Claude-3p", platforms=("linux",)),
             )
+        ),
+        # ``_meta.json`` is the library's index, and the only file here that is
+        # the user's: MCC merges ``appliedId`` (the document the app loads on
+        # next launch) and adds one element to ``entries`` beside whatever the
+        # user authored in the app's own window. Everything else MCC writes
+        # goes in the sidecar, which is a file of its own.
+        document=DesktopDocument(
+            paths=(
+                _windows_localappdata("Claude-3p", "configLibrary", "_meta.json"),
+                _home(
+                    "Library",
+                    "Application Support",
+                    "Claude-3p",
+                    "configLibrary",
+                    "_meta.json",
+                    platforms=("darwin",),
+                ),
+                _home(
+                    ".config",
+                    "Claude-3p",
+                    "configLibrary",
+                    "_meta.json",
+                    platforms=("linux",),
+                ),
+            ),
+            display_path="%LOCALAPPDATA%\\Claude-3p\\configLibrary\\_meta.json",
+            document_format=DocumentFormat.JSON,
+            owned_key_path=(),
+            owned_element_path=("entries",),
+            match_field="id",
+            match_value=CLAUDE_DESKTOP_CONFIG_ID,
+            overwritten_keys=(("appliedId",),),
+        ),
+        sidecar=DesktopSidecar(
+            paths=(
+                _windows_localappdata(
+                    "Claude-3p",
+                    "configLibrary",
+                    f"{CLAUDE_DESKTOP_CONFIG_ID}.json",
+                ),
+                _home(
+                    "Library",
+                    "Application Support",
+                    "Claude-3p",
+                    "configLibrary",
+                    f"{CLAUDE_DESKTOP_CONFIG_ID}.json",
+                    platforms=("darwin",),
+                ),
+                _home(
+                    ".config",
+                    "Claude-3p",
+                    "configLibrary",
+                    f"{CLAUDE_DESKTOP_CONFIG_ID}.json",
+                    platforms=("linux",),
+                ),
+            ),
+            display_path=(
+                "%LOCALAPPDATA%\\Claude-3p\\configLibrary\\"
+                f"{CLAUDE_DESKTOP_CONFIG_ID}.json"
+            ),
+            document_format=DocumentFormat.JSON,
+            holds_credential=True,
+            # The six keys, spelled exactly as
+            # https://claude.com/docs/third-party/claude-desktop/configuration
+            # spells them. ``static`` and ``gateway`` are that page's own
+            # enum members, not a guess: inferenceCredentialKind is one of
+            # static / helper-script / interactive / vendor-profile /
+            # workforce, and inferenceProvider one of gateway / anthropic /
+            # bedrock / mantle / vertex / foundry. ``inferenceGatewayAuthScheme``
+            # is not written because the documented default is already
+            # ``bearer``, which is what MCC accepts.
+            fields={
+                "inferenceProvider": "gateway",
+                "inferenceGatewayBaseUrl": "{base_url}",
+                "inferenceGatewayApiKey": "{token}",
+                "inferenceCredentialKind": "static",
+                "modelDiscoveryEnabled": True,
+            },
+            headers_key="inferenceCustomHeaders",
+        ),
+        managed_sources=(
+            DesktopManagedSource(
+                label="Machine policy (HKLM\\SOFTWARE\\Policies\\Claude)",
+                registry_hive="HKLM",
+                registry_subkey=CLAUDE_DESKTOP_POLICY_SUBKEY,
+                exempt_keys=CLAUDE_DESKTOP_APP_BEHAVIOR_KEYS,
+            ),
+            DesktopManagedSource(
+                label="User policy (HKCU\\SOFTWARE\\Policies\\Claude)",
+                registry_hive="HKCU",
+                registry_subkey=CLAUDE_DESKTOP_POLICY_SUBKEY,
+                exempt_keys=CLAUDE_DESKTOP_APP_BEHAVIOR_KEYS,
+            ),
+            DesktopManagedSource(
+                label=(
+                    "Managed preferences "
+                    "(/Library/Managed Preferences/"
+                    "com.anthropic.claudefordesktop.plist)"
+                ),
+                path=DesktopPath(
+                    env_vars=(),
+                    relative_parts=(
+                        "/Library",
+                        "Managed Preferences",
+                        "com.anthropic.claudefordesktop.plist",
+                    ),
+                    platforms=("darwin",),
+                ),
+                exempt_keys=CLAUDE_DESKTOP_APP_BEHAVIOR_KEYS,
+            ),
+            DesktopManagedSource(
+                label="Managed settings (/etc/claude-desktop/managed-settings.json)",
+                path=DesktopPath(
+                    env_vars=(),
+                    relative_parts=(
+                        "/etc",
+                        "claude-desktop",
+                        "managed-settings.json",
+                    ),
+                    platforms=("linux",),
+                ),
+                exempt_keys=CLAUDE_DESKTOP_APP_BEHAVIOR_KEYS,
+            ),
         ),
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
         base_url_shape=BaseUrlShape.ROOT,
-        token_form=TokenForm.IN_APP,
-        token_env_var="ANTHROPIC_AUTH_TOKEN",
+        # The store resolves no reference form: ``inferenceGatewayApiKey`` is
+        # documented as a plain string, and the only indirection the app offers
+        # is ``inferenceCredentialKind: helper-script``, which runs a script
+        # rather than expanding a variable. So the literal goes into a file MCC
+        # owns outright, written 0600 -- the Kimi and Roo Code precedent -- and
+        # never into a document the user edits.
+        token_form=TokenForm.MCC_OWNED_FILE,
+        token_env_var="",
         attribution_header_field="inferenceCustomHeaders",
         catalogue_format_id="",
+        # MCC's element of ``_meta.json.entries``. ``id`` is written by the
+        # merge engine from ``match_value``, so only the label belongs here --
+        # it is what the app's own configuration picker shows beside whatever
+        # the user has authored.
+        provider=DesktopProvider(constants={"name": CLAUDE_DESKTOP_CONFIG_NAME}),
         open_command="",
         notes=(
-            "Help -> Troubleshooting -> Enable Developer Mode, then "
-            "Developer -> Configure Third-Party Inference.",
+            "Configure writes MCC's own document into Claude Desktop's local "
+            "configuration library and points the library's appliedId at it. "
+            "Your own saved configurations are left exactly where they are, "
+            "and Undo deletes MCC's document and puts appliedId back.",
+            "The local library is the *lowest*-precedence source. A managed "
+            "profile under HKLM or HKCU\\SOFTWARE\\Policies\\Claude (macOS: "
+            "/Library/Managed Preferences) silently outranks it and makes the "
+            "app's own configuration window read-only, so MCC checks for one "
+            "and refuses to write rather than leaving you a file that does "
+            "nothing.",
+            "Relaunch Claude Desktop to load it: the app reads this library at "
+            "startup. Help -> Troubleshooting -> Enable Developer Mode, then "
+            "Developer -> Configure Third-Party Inference shows what it read.",
             "The desktop app does not honour ANTHROPIC_BASE_URL. Its Code tab "
             "reads ~/.claude/settings.json, which Configure Claude Code "
             "already covers.",
-            "MCC does not guess a persistence path for these settings. "
-            "Anthropic documents the dialog, not a file, and writing a merge "
-            "into a guessed path is how a merge engine gets its first "
-            "data-loss bug. A button follows once the file is established.",
         ),
+        # Kept for the two cases where no button can help: the configuration
+        # library is absent because the app has never run in third-party mode,
+        # or a managed profile owns the device. The labels are the dialog's own
+        # (https://claude.com/docs/third-party/claude-desktop/in-app-configuration).
         instruction_fields=(
-            ("Connection", "Gateway"),
-            ("Base URL", "{root}"),
-            ("Auth scheme", "Bearer"),
-            ("API key", "the value of ANTHROPIC_AUTH_TOKEN"),
-            ("Models", "mcc/best, mcc/good, mcc/medium, mcc/cheap"),
+            ("Inference provider", "Gateway"),
+            ("Gateway base URL", "{root}"),
+            ("Gateway auth scheme", "Bearer"),
+            (
+                "Gateway API key",
+                "MCC's proxy auth token -- the ANTHROPIC_AUTH_TOKEN value in "
+                "MCC's own .env, which Configure Claude Code writes for you",
+            ),
+            ("Credential kind", "Static API key"),
             ("Custom headers", "x-mcc-harness: claude_desktop"),
         ),
     ),

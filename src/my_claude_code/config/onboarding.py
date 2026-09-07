@@ -8,9 +8,15 @@ persists to disk is whether the checklist has been dismissed and which
 
 import json
 import os
-from dataclasses import dataclass
+import shutil
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from .admin.values import load_value_state
+from .desktop_apply import DesktopApplyError, is_installed
+from .desktop_apply import probe as probe_desktop
+from .desktop_apps import DESKTOP_APPS, DesktopAppState, DesktopAppStatus
+from .harnesses import harness_specs
 from .model_refs import parse_provider_type
 from .paths import onboarding_state_path
 from .provider_catalog import PROVIDER_CATALOG
@@ -20,6 +26,40 @@ from .websearch_catalog import WEBSEARCH_CATALOG
 
 class OnboardingError(Exception):
     """Raised when the persisted onboarding state cannot be written."""
+
+
+@dataclass(frozen=True)
+class OnboardingAgent:
+    """One coding agent on this machine, as the Get Started step lists it.
+
+    The same detection the Coding agents page uses, and deliberately the same
+    functions rather than a second implementation: a checklist that disagreed
+    with the page it links to about whether Codex is installed would be worse
+    than no checklist. CLIs are a PATH lookup, desktop apps are a marker-path
+    probe, and neither is a guess about what the user has done.
+    """
+
+    id: str
+    display_name: str
+    #: ``cli`` (MCC launches it) or ``desktop`` (MCC writes its file).
+    kind: str
+    installed: bool
+    #: For a desktop app, the probe's own badge; for a CLI, "" -- a CLI is
+    #: configured by the launcher at the moment it runs, so there is no file
+    #: state to report between runs.
+    state: str = ""
+    #: The command a human types, for a CLI.
+    command: str = ""
+    #: Whether this app's card offers a Configure button right now.
+    configurable: bool = False
+    #: Requests this agent sent in the last seven days.
+    requests_7d: int = 0
+
+    @property
+    def connected(self) -> bool:
+        """Whether this agent counts towards completing the step."""
+
+        return self.requests_7d > 0 or self.state in {"configured", "drifted"}
 
 
 @dataclass(frozen=True)
@@ -38,6 +78,12 @@ class OnboardingStep:
     # ('[data-key="ENV_KEY"]') for a dynamically-rendered field. None means
     # the button only switches views.
     target: str | None = None
+    # Guide anchors this step links to, as ``id`` values of ``guide-*``
+    # headings. The checklist renders one small link per entry, through the
+    # same helper every other surface uses.
+    guide_anchors: tuple[str, ...] = ()
+    # The detected agents this step lists, for the one step that lists any.
+    agents: tuple[OnboardingAgent, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -169,8 +215,70 @@ def _fallback_model_configured() -> bool:
     return bool(str(state.get(descriptor.credential_env, {}).get("value", "")).strip())
 
 
+def detect_agents(
+    *,
+    env: Mapping[str, str] | None = None,
+    harness_requests: Mapping[str, int] | None = None,
+) -> tuple[OnboardingAgent, ...]:
+    """Return every coding agent this machine actually has, CLIs first.
+
+    Never raises. A probe that cannot resolve a path for this platform is
+    dropped rather than allowed to take the whole checklist down with it --
+    the checklist is a nudge, and an exception in it would break the first
+    page a new user sees.
+    """
+
+    environment = env if env is not None else os.environ
+    usage = dict(harness_requests or {})
+    agents: list[OnboardingAgent] = []
+
+    for spec in harness_specs():
+        if not spec.available:
+            continue
+        agents.append(
+            OnboardingAgent(
+                id=spec.id,
+                display_name=spec.display_name,
+                kind="cli",
+                installed=shutil.which(spec.binary) is not None,
+                command=spec.command,
+                requests_7d=int(usage.get(spec.id, 0)),
+            )
+        )
+
+    for spec in DESKTOP_APPS:
+        if spec.status is DesktopAppStatus.NOT_ROUTABLE:
+            continue
+        try:
+            installed = is_installed(spec, environment)
+            probe = probe_desktop(spec, env=environment)
+            state = probe.state
+        except DesktopApplyError, OSError:
+            continue
+        agents.append(
+            OnboardingAgent(
+                id=spec.id,
+                display_name=spec.display_name,
+                kind="desktop",
+                installed=installed,
+                state=state.value,
+                configurable=(
+                    spec.status is DesktopAppStatus.SERVABLE
+                    and installed
+                    and state is not DesktopAppState.MANAGED
+                ),
+                requests_7d=int(usage.get(spec.id, 0)),
+            )
+        )
+
+    return tuple(agents)
+
+
 def build_state(
-    *, claude_settings_configured: bool, has_requests: bool
+    *,
+    claude_settings_configured: bool,
+    has_requests: bool,
+    agents: tuple[OnboardingAgent, ...] = (),
 ) -> OnboardingState:
     """Build the current onboarding checklist state from live configuration."""
 
@@ -236,56 +344,36 @@ def build_state(
             target="#claudeSettingsPanel",
         ),
         OnboardingStep(
-            id="coding_agents",
-            label="Launch a coding agent (optional)",
+            id="connect_agents",
+            label="Connect your coding agents (optional)",
             description=(
-                "Claude Code is not the only client MCC serves. The Coding "
-                "agents page lists every CLI it can launch, whether that CLI "
-                "is installed, and the exact command for each one."
+                "Claude Code is not the only client MCC serves. This step "
+                "lists the agents actually on this machine - the CLIs MCC can "
+                "launch and the desktop applications whose config file it can "
+                "write - with what each one's state is right now."
             ),
             view="coding_agents",
             optional=True,
-            # Not derivable from configuration: nothing is written when a user
-            # runs `mcc-codex` in their own terminal, so this step is done
-            # because they opened the page that tells them how.
-            done="coding_agents" in visited,
+            # Derived, not remembered. Until 6.56.0 both this step and its
+            # sibling were "done" because the user had *visited* the page,
+            # which is a fact about navigation rather than about anything
+            # being connected. An agent counts when it has actually sent a
+            # request through MCC in the last seven days, or when its file is
+            # currently pointed here -- the two ways an agent can be connected.
+            done=any(agent.connected for agent in agents),
             instructions=(
-                "Open the Coding agents page from the left nav.",
-                "Find an agent you already have installed - its card says "
-                "whether the binary is on your PATH.",
-                "Copy one of the commands on the card and run it in a "
-                "terminal; the launcher writes that agent's config for you.",
+                "Find an agent below that says Installed.",
+                "For a CLI, copy its command and run it in a terminal; the "
+                "launcher writes that agent's config for you.",
+                "For a desktop app, press Configure on its card - it shows a "
+                "real diff of your real file first, backs the file up once, "
+                "and Undo takes it back out.",
                 "Agents other than Claude Code pick models by tier, as "
                 "mcc/best, mcc/good, mcc/medium, mcc/cheap and mcc/vision.",
             ),
             target="#codingAgentsList",
-        ),
-        OnboardingStep(
-            id="desktop_apps",
-            label="Point a desktop app here (optional)",
-            description=(
-                "Some applications MCC cannot launch - they are already "
-                "running, and the only way in is the one config file each "
-                "reads at startup. The Desktop apps group writes that file "
-                "for you, and takes it back out again."
-            ),
-            view="coding_agents",
-            optional=True,
-            # Same reason as the step above: configuring an app writes a file
-            # outside MCC's own configuration, so nothing here is derivable.
-            # Opening the page that explains it is the observable event.
-            done="coding_agents" in visited,
-            instructions=(
-                "Open the Coding agents page and scroll to Desktop apps.",
-                "Pick a card whose badge does not say not installed.",
-                "Press What will this write? - it shows a real diff of your "
-                "real file and writes nothing.",
-                "Press Configure. Your file is backed up once before the "
-                "first edit, and every byte MCC does not own is kept.",
-                "Undo offers two modes: remove MCC's keys, or also restore "
-                "the values MCC replaced.",
-            ),
-            target="#desktopAppsList",
+            guide_anchors=("guide-cli", "guide-desktop-apps"),
+            agents=agents,
         ),
         OnboardingStep(
             id="websearch",
