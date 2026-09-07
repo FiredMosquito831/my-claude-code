@@ -57,6 +57,11 @@ HOME
 USERPROFILE
 XDG_CONFIG_HOME
 NO_COLOR
+# Read by curl, Invoke-RestMethod and uv -- not by MCC -- so an install
+# behind a corporate proxy works. The installers name them in their headers.
+HTTPS_PROXY
+HTTP_PROXY
+NO_PROXY
 
 # --- Placeholders that stand in for a value the reader supplies. -----------
 YOUR_API_KEY

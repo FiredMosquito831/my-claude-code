@@ -1,6 +1,36 @@
 #!/bin/sh
 set -eu
 
+# My Claude Code installer (POSIX shells: Linux, macOS, WSL).
+#
+# This script owns every prerequisite the proxy needs, so a machine with
+# nothing but a shell and curl ends up with a working install:
+#   * uv           -- installed from https://astral.sh/uv/install.sh when it is
+#                     missing, and REPLACED when the uv already on PATH is older
+#                     than the floor below. The floor is MIN_UV_VERSION and it
+#                     tracks [tool.uv] required-version in pyproject.toml.
+#   * Python       -- PYTHON_VERSION is downloaded by uv itself
+#                     (`uv python install`) BEFORE the tool environment is
+#                     built, and the tool environment is pinned to a uv-managed
+#                     interpreter (`--managed-python`). A system Python is never
+#                     used, and none needs to exist.
+#   * My Claude Code -- installed into an isolated uv tool environment from the
+#                     release wheel, after its SHA-256 is verified.
+#
+# The ONE thing this script cannot bootstrap is curl: it is what fetches
+# everything else. require_curl below names the package for the local distro
+# and exits 1 rather than failing later with a confusing error.
+#
+# Behind a proxy, export HTTPS_PROXY (and HTTP_PROXY/NO_PROXY) before running
+# this script: curl and uv both honour those variables, so every download here
+# -- the uv installer, the Python build, the release wheel -- goes through it.
+#
+# Desktop app prerequisites are NOT this script's job and are not installed
+# here: on Linux the .deb declares webkit2gtk in its Depends and apt pulls it
+# in; on Windows the Inno Setup installer detects and bootstraps WebView2; on
+# macOS the .dmg needs nothing. --desktop below only writes a launcher entry
+# for the mcc-desktop command that this install already provides.
+
 FCC_REPO="FiredMosquito831/my-claude-code"
 FCC_LATEST_RELEASE_URL="https://api.github.com/repos/${FCC_REPO}/releases/latest"
 PYTHON_VERSION="3.14.0"
@@ -25,6 +55,9 @@ enable_desktop=0
 # actually happened instead of hedging with "(if the platform supports it)".
 desktop_launcher_created=""
 desktop_launcher_error=""
+# Absolute path to the uv this script uses. ensure_uv replaces the bare name
+# with the resolved path so no later step re-searches PATH for it.
+uv_bin="uv"
 temporary_script=""
 temporary_directory=""
 release_wheel_path=""
@@ -46,6 +79,10 @@ Options:
   --torch-backend VALUE    Use a uv PyTorch backend, such as cu130. Requires local voice.
   --rtk                    Enable RTK token optimization for Claude Code, Codex, and Pi.
   --desktop                Create a desktop launcher (app menu entry / .app bundle) for mcc-desktop.
+                           The tray app needs webkit2gtk on Linux (the .deb
+                           package declares it in Depends) and WebView2 on
+                           Windows (the Setup .exe bootstraps it); macOS needs
+                           nothing.
   --dry-run                Print commands without running them.
   --help                   Show this help text.
 USAGE
@@ -135,6 +172,50 @@ require_command() {
     if [ "$dry_run" -eq 0 ] && ! command -v "$1" >/dev/null 2>&1; then
         fail "$1 is required. Install it first, then rerun this installer."
     fi
+}
+
+# The install command for curl on this machine, chosen from the package manager
+# that is actually present (/etc/os-release IDs vary too much to trust alone --
+# a machine can say "debian" and only have apt-get, or be a container with
+# neither). Falls back to a generic sentence when nothing is recognised.
+curl_install_hint() {
+    if command -v apt-get >/dev/null 2>&1; then
+        printf 'sudo apt-get update && sudo apt-get install -y curl'
+    elif command -v dnf >/dev/null 2>&1; then
+        printf 'sudo dnf install -y curl'
+    elif command -v yum >/dev/null 2>&1; then
+        printf 'sudo yum install -y curl'
+    elif command -v zypper >/dev/null 2>&1; then
+        printf 'sudo zypper install -y curl'
+    elif command -v pacman >/dev/null 2>&1; then
+        printf 'sudo pacman -S --noconfirm curl'
+    elif command -v apk >/dev/null 2>&1; then
+        printf 'sudo apk add curl'
+    elif command -v brew >/dev/null 2>&1; then
+        printf 'brew install curl'
+    elif command -v pkg >/dev/null 2>&1; then
+        printf 'sudo pkg install -y curl'
+    else
+        printf 'install curl with your system package manager'
+    fi
+}
+
+# curl is the only prerequisite this installer cannot install for you: it is
+# what downloads uv, Python and the release wheel. Say exactly what to run.
+require_curl() {
+    [ "$dry_run" -eq 1 ] && return 0
+    command -v curl >/dev/null 2>&1 && return 0
+
+    printf 'error: curl is required and was not found.\n' >&2
+    printf '\n' >&2
+    printf 'curl is the one thing this installer cannot install for you -- it is what\n' >&2
+    printf 'downloads uv, Python and the My Claude Code release wheel.\n' >&2
+    printf '\n' >&2
+    printf 'Install it with:\n' >&2
+    printf '  %s\n' "$(curl_install_hint)" >&2
+    printf '\n' >&2
+    printf 'Then run this installer again.\n' >&2
+    exit 1
 }
 
 download_and_run() {
@@ -260,6 +341,10 @@ verify_uv() {
     fi
 
     command -v uv >/dev/null 2>&1 || fail "uv was installed, but it is not available on PATH."
+    # Pin the absolute path once. Everything after this calls "$uv_bin" instead
+    # of a bare uv, so the rest of the install cannot be hijacked by a PATH that
+    # changes underneath it -- and works in a shell that never had ~/.local/bin.
+    uv_bin=$(command -v uv)
     version=$(current_uv_version) || fail "uv is present, but 'uv --version' did not return a valid version."
     if ! version_ge "$version" "$MIN_UV_VERSION"; then
         fail "uv $MIN_UV_VERSION or newer is required; found uv $version after installation."
@@ -284,6 +369,7 @@ ensure_uv() {
     if command -v uv >/dev/null 2>&1; then
         version=$(current_uv_version) || fail "uv is present, but 'uv --version' did not return a valid version."
         if version_ge "$version" "$MIN_UV_VERSION"; then
+            uv_bin=$(command -v uv)
             printf 'uv %s already satisfies >=%s; leaving it unchanged.\n' "$version" "$MIN_UV_VERSION"
             return 0
         fi
@@ -499,6 +585,15 @@ package_spec() {
     fi
 }
 
+# Download PYTHON_VERSION through uv before anything needs an interpreter, so
+# a machine with no Python at all installs cleanly. --no-bin and --no-registry
+# keep this to a self-contained interpreter under UV_PYTHON_INSTALL_DIR: no
+# python/python3 shim is dropped on PATH and, on Windows, no PEP 514 registry
+# entry is written. The tool environment finds it by version, not by PATH.
+install_managed_python() {
+    run "$uv_bin" python install --no-bin --no-registry "$PYTHON_VERSION"
+}
+
 install_my_claude_code() {
     resolve_release
     download_verified_release_wheel
@@ -506,9 +601,9 @@ install_my_claude_code() {
     spec=$(package_spec "$package_url")
 
     if [ -n "$torch_backend" ]; then
-        run uv tool install --force --refresh-package my-claude-code --python "$PYTHON_VERSION" --torch-backend "$torch_backend" "$spec"
+        run "$uv_bin" tool install --managed-python --force --refresh-package my-claude-code --python "$PYTHON_VERSION" --torch-backend "$torch_backend" "$spec"
     else
-        run uv tool install --force --refresh-package my-claude-code --python "$PYTHON_VERSION" "$spec"
+        run "$uv_bin" tool install --managed-python --force --refresh-package my-claude-code --python "$PYTHON_VERSION" "$spec"
     fi
 }
 
@@ -710,17 +805,17 @@ WRAPPER
 }
 
 configure_and_verify_my_claude_code() {
-    run uv tool update-shell
+    run "$uv_bin" tool update-shell
 
     if [ "$dry_run" -eq 1 ]; then
-        print_command uv tool dir --bin
+        print_command "$uv_bin" tool dir --bin
         printf '+ verify mcc-server, mcc-claude, mcc-codex, mcc-pi, mcc-help, and my-claude-code in the uv tool bin directory\n'
         print_command mcc-server --version
         return 0
     fi
 
-    print_command uv tool dir --bin
-    if tool_bin=$(uv tool dir --bin); then
+    print_command "$uv_bin" tool dir --bin
+    if tool_bin=$("$uv_bin" tool dir --bin); then
         :
     else
         status=$?
@@ -778,13 +873,16 @@ validate_args
 add_known_bin_directories
 
 step "Checking installation prerequisites"
-require_command curl
+require_curl
 require_command bash
 require_command sh
 require_command mktemp
 
 step "Ensuring uv $MIN_UV_VERSION or newer is installed"
 ensure_uv
+
+step "Installing Python $PYTHON_VERSION through uv"
+install_managed_python
 
 step "Installing or updating My Claude Code"
 install_my_claude_code
@@ -832,6 +930,8 @@ else
         fi
     fi
     printf '\nThe legacy fcc-* commands (fcc-server, fcc-claude, ...) remain as aliases.\n'
+    printf '\nIf mcc-server is not found, open a new terminal: this install may have added\n'
+    printf 'a directory to PATH that shells started earlier cannot see.\n'
     printf '\nTo use an update installed while the server is running, restart the proxy\n'
     printf 'with: mcc-server\n'
 fi

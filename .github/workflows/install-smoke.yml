@@ -1,0 +1,179 @@
+name: install smoke
+
+# The Linux proof for scripts/install.sh: a bare ubuntu-latest runner with uv
+# and every Python removed from PATH, so the script has to provision uv, an
+# interpreter and the tool environment itself. Everything it creates goes to
+# scratch directories under the workspace -- nothing lands in the runner's real
+# home -- and the job passes only if `mcc-server --version` answers afterwards.
+#
+# It installs the LATEST PUBLISHED release, not this branch's code: the thing
+# under test is the script, and the wheel it fetches is whatever GitHub says is
+# current. A release that has not happened yet cannot break this job.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/install.sh"
+      - ".github/workflows/install-smoke.yml"
+  pull_request:
+    paths:
+      - "scripts/install.sh"
+      - ".github/workflows/install-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fresh-machine:
+    name: install.sh on a machine with no uv and no Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage a scratch profile and a PATH with no uv and no Python
+        run: |
+          set -eu
+          scratch="${RUNNER_TEMP}/fresh-machine"
+          mkdir -p \
+            "${scratch}/uv-tools" \
+            "${scratch}/uv-tool-bin" \
+            "${scratch}/uv-python" \
+            "${scratch}/uv-cache" \
+            "${scratch}/config" \
+            "${scratch}/home"
+          {
+            echo "UV_TOOL_DIR=${scratch}/uv-tools"
+            echo "UV_TOOL_BIN_DIR=${scratch}/uv-tool-bin"
+            echo "UV_PYTHON_INSTALL_DIR=${scratch}/uv-python"
+            echo "UV_CACHE_DIR=${scratch}/uv-cache"
+            echo "MCC_CONFIG_DIR=${scratch}/config"
+            echo "XDG_CONFIG_HOME=${scratch}/home/.config"
+            echo "XDG_DATA_HOME=${scratch}/home/.local/share"
+          } >> "$GITHUB_ENV"
+
+          # A PATH holding a symlink to every command the runner's PATH offered
+          # EXCEPT uv and every python. Dropping whole directories instead
+          # would take curl and coreutils with them, which is not what a fresh
+          # machine looks like -- it has curl and no Python.
+          shadow="${scratch}/path-bin"
+          mkdir -p "$shadow"
+          old_ifs=$IFS
+          IFS=:
+          for entry in $PATH; do
+            [ -d "$entry" ] || continue
+            for candidate in "$entry"/*; do
+              [ -f "$candidate" ] || continue
+              name="$(basename "$candidate")"
+              case "$name" in
+                uv|uvx|python|python3|python3.*|python2|python2.*|py|pypy|pypy3)
+                  echo "withholding: $candidate"
+                  continue
+                  ;;
+              esac
+              [ -e "$shadow/$name" ] || ln -s "$candidate" "$shadow/$name" 2>/dev/null || true
+            done
+          done
+          IFS=$old_ifs
+          echo "PATH=${shadow}" >> "$GITHUB_ENV"
+
+      - name: Prove the machine has no uv and no Python
+        run: |
+          set -eu
+          echo "PATH=$PATH"
+          for missing in uv uvx python python3; do
+            if command -v "$missing" >/dev/null 2>&1; then
+              echo "::error::$missing is still on PATH at $(command -v "$missing")"
+              exit 1
+            fi
+            echo "not found (as required): $missing"
+          done
+          command -v curl >/dev/null 2>&1 || { echo "::error::curl is missing"; exit 1; }
+
+      - name: Run scripts/install.sh
+        run: sh scripts/install.sh
+
+      - name: uv, Python 3.14 and MCC all landed in the scratch profile
+        run: |
+          set -eu
+          scratch="${RUNNER_TEMP}/fresh-machine"
+
+          # install.sh puts uv in ~/.local/bin and extends its OWN PATH; this
+          # step is a fresh shell with the trimmed PATH, exactly like the new
+          # terminal the closing message tells the user to open.
+          PATH="$HOME/.local/bin:$PATH"
+          uv_bin="$(command -v uv || true)"
+          [ -n "$uv_bin" ] || { echo "::error::install.sh did not provide uv"; exit 1; }
+          echo "uv installed at: $uv_bin ($("$uv_bin" --version))"
+
+          # The interpreter came from uv, into the scratch directory -- not from
+          # the runner image, and not from a system Python.
+          ls -1 "${scratch}/uv-python"
+          test -n "$(ls -A "${scratch}/uv-python")" \
+            || { echo "::error::UV_PYTHON_INSTALL_DIR is empty"; exit 1; }
+          ls -1 "${scratch}/uv-python" | grep -q "cpython-3.14" \
+            || { echo "::error::no uv-managed CPython 3.14 was installed"; exit 1; }
+
+          # --no-bin means no python shim was dropped anywhere on PATH.
+          if command -v python3 >/dev/null 2>&1; then
+            echo "::error::a python3 appeared on PATH: $(command -v python3)"
+            exit 1
+          fi
+
+          test -x "${scratch}/uv-tool-bin/mcc-server" \
+            || { echo "::error::mcc-server is not in the scratch tool bin"; exit 1; }
+
+      - name: mcc-server --version
+        run: |
+          set -eu
+          version="$("${RUNNER_TEMP}/fresh-machine/uv-tool-bin/mcc-server" --version)"
+          echo "$version"
+          case "$version" in
+            "my-claude-code "*) ;;
+            *) echo "::error::unexpected version output: $version"; exit 1 ;;
+          esac
+
+      - name: The real home was never written to
+        run: |
+          set -eu
+          for untouched in "$HOME/.mcc" "$HOME/.fcc"; do
+            if [ -e "$untouched" ]; then
+              echo "::error::$untouched was created outside the scratch profile"
+              exit 1
+            fi
+          done
+          echo "no config directory was created in the real home"
+
+      - name: Missing curl is a clear, per-distro failure
+        run: |
+          set -eu
+          # The one prerequisite install.sh cannot bootstrap. Stage a PATH
+          # without curl and check the script names the package and exits 1.
+          # A PATH holding apt-get and nothing else: no curl, so the check has
+          # to fire, and apt-get present so the hint is the Debian one. Every
+          # command install.sh runs before require_curl is a shell builtin.
+          hidden="${RUNNER_TEMP}/no-curl"
+          rm -rf "$hidden"
+          mkdir -p "$hidden"
+          ln -s /usr/bin/apt-get "$hidden/apt-get"
+          set +e
+          out="$(env PATH="$hidden" HOME="${RUNNER_TEMP}/fresh-machine/home" \
+            /bin/sh scripts/install.sh 2>&1)"
+          status=$?
+          set -e
+          echo "$out"
+          [ "$status" -eq 1 ] || { echo "::error::expected exit 1, got $status"; exit 1; }
+          case "$out" in
+            *"curl is required and was not found."*) ;;
+            *) echo "::error::the curl message did not appear"; exit 1 ;;
+          esac
+          case "$out" in
+            *"apt-get install -y curl"*) ;;
+            *) echo "::error::the Debian install command was not named"; exit 1 ;;
+          esac
