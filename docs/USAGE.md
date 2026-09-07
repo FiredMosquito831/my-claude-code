@@ -1904,6 +1904,7 @@ Unlike everything else on this page, a pause is written the moment you click it:
 | `MODEL_SONNET_PAUSED` | paused entries on Sonnet |
 | `MODEL_HAIKU_PAUSED` | paused entries on Haiku |
 | `MODEL_VISION_PAUSED` | paused entries on the vision adapter |
+| `VISION_ADAPTER_MODE` | what the vision adapter does with an image: `route` (default, divert the whole request) or `describe` (describe the image, keep the model) |
 | `TOOL_RESULT_IMAGE_DELIVERY` | how an image a *tool* returned reaches a non-Anthropic model: `auto` (default), `attach`, `strip` |
 
 All six are comma-separated `provider/model` lists, written by the Pause button rather than typed, and **new in 6.21.0**. An entry is dropped from its list automatically when it leaves the route it was paused on.
@@ -1967,7 +1968,7 @@ on this page rather than a model of its own:
 
 | Name | The route it names | And therefore the chain it uses |
 | --- | --- | --- |
-| `mcc/best` | `MODEL` | `MODEL_FALLBACKS`, `MODEL_PAUSED` |
+| `mcc/best` | `MODEL_FABLE` | `MODEL_FABLE_FALLBACKS`, `MODEL_FABLE_PAUSED` |
 | `mcc/good` | `MODEL_OPUS` | `MODEL_OPUS_FALLBACKS`, `MODEL_OPUS_PAUSED` |
 | `mcc/medium` | `MODEL_SONNET` | `MODEL_SONNET_FALLBACKS`, `MODEL_SONNET_PAUSED` |
 | `mcc/cheap` | `MODEL_HAIKU` | `MODEL_HAIKU_FALLBACKS`, `MODEL_HAIKU_PAUSED` |
@@ -1985,6 +1986,35 @@ that answers is published as not accepting images, `attach` always attaches,
 `strip` never does. The request log's `image_delivery` field records which
 happened, per request.
 
+**The vision adapter has two modes, since 6.51.0.** `VISION_ADAPTER_MODE`
+decides what happens when a request carries an image and the model its route
+picked is published as unable to read one.
+
+| mode | what happens | who answers |
+| --- | --- | --- |
+| `route` (default) | the whole request is diverted to `MODEL_VISION` | the vision model |
+| `describe` | each image is sent to `MODEL_VISION` on its own, and its description replaces the image | the model the route picked |
+
+`route` is what every release up to 6.50.1 did, and upgrading changes nothing.
+Choose `describe` when your coding model is fast, cheap and blind and the
+screenshot is *context* rather than the question -- in `route` mode the vision
+model has to answer a coding question it has no context for. Choose `route`
+when the picture is the question.
+
+A describe call is an ordinary routed request over the vision chain: same
+fallbacks, same `MODEL_VISION_PAUSED`, same benching, same retries, and its own
+row in the request log linked to the request that carried the picture
+(`route_diversion` reads `vision_described`, `image_delivery` reads
+`described`). Descriptions are cached against the image's own content, so one
+screenshot re-sent on every turn is described once; **Admin UI -> Requests ->
+Clear image descriptions** forgets them all. Images of one request are
+described concurrently, at most three at a time.
+
+Failure never reaches the client. A describe call that fails falls back to
+`route` mode for that request; a route with nowhere to divert to falls back to
+a placeholder sentence saying the image could not be described. The request is
+answered either way.
+
 The fleet is genuinely split over how it spells a model id, so both spellings
 are accepted: the bare `mcc/best` that Codex, Command Code, OpenCode, Kilo, Pi
 and Kimi Code put on the wire, and the gateway form `anthropic/mcc/best` that
@@ -1993,9 +2023,13 @@ answers the same way to both, and the tier segment is matched exactly — no nam
 merely *containing* `cheap` lands on the cheap rail.
 
 **On a default install all five resolve to the same model, and the dashboard
-says so.** `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU` and `MODEL_VISION` ship
-unset, so every tier collapses onto `MODEL` — primary, fallbacks and pause list
-together — which is exactly what `claude-opus-5` already does today. MCC
+says so.** `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU` and
+`MODEL_VISION` ship unset, so every tier collapses onto `MODEL` — primary,
+fallbacks and pause list together — which is exactly what `claude-opus-5`
+already does today. That includes `mcc/best`, which names `MODEL_FABLE` since
+6.51.0: it used to name `MODEL`, which made the ladder's top rung and the floor
+every unset route falls back to the same setting, and an install that never set
+`MODEL_FABLE` sees no change at all. MCC
 deliberately does not invent a different model for an unset tier, because
 choosing one would be MCC choosing a model for you; the Tiers section says *Same
 as global Opus — currently `<ref>`* instead of quietly picking something. Map

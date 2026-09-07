@@ -19,6 +19,7 @@ from my_claude_code.application.routing import (
     RoutedMessagesPlan,
     RoutedMessagesRequest,
 )
+from my_claude_code.application.vision_describe import describe_attempt_index
 from my_claude_code.config.model_refs import format_model_ref_list
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import (
@@ -183,6 +184,44 @@ class RequestCapture:
     @property
     def enabled(self) -> bool:
         return self._store is not None
+
+    def record_describe_attempt(
+        self, attempt: RouteAttemptRecord, image_sha: str, image_index: int
+    ) -> None:
+        """Store one upstream try a describe call made, against this request.
+
+        A describe call is an extra hop on the request that carried the
+        picture, not traffic of its own: it has no request id, no client and no
+        row in ``requests``. Recording it here is what makes the dashboard draw
+        it as what it is, and what lets an operator add up what describe mode
+        actually cost -- the per-image breakdown, which is the thing worth
+        having, rather than one summed number on the request row.
+
+        The attempt index is offset clear of the parent chain's own indexes
+        because (request id, attempt) is the primary key of the attempt table.
+        No wire body is attached: the wire trace is keyed by attempt index
+        within one executor run, and the parent's own run overwrites those
+        slots afterwards, so a body claimed here would be the wrong body.
+        """
+        if not self.enabled:
+            return
+        self._attempts.append(
+            RouteAttempt(
+                attempt=describe_attempt_index(image_index, attempt.attempt),
+                provider=attempt.provider_id or None,
+                model_ref=attempt.model_ref or None,
+                outcome=RouteAttemptOutcome(attempt.outcome),
+                error_kind=attempt.error_kind,
+                error_message=attempt.error_message,
+                duration_ms=attempt.duration_ms,
+                params={
+                    "kind": "describe",
+                    "image_sha": image_sha,
+                    "image_index": image_index,
+                    "cached": False,
+                },
+            )
+        )
 
     def record_attempt_result(self, attempt: RouteAttemptRecord) -> None:
         """Store one model's verdict for the request log.

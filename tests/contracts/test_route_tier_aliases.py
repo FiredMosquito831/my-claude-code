@@ -40,7 +40,7 @@ def test_every_tier_reaches_the_page_under_the_route_it_names() -> None:
     aliases = tier_alias_by_route_env_var()
 
     assert aliases == {
-        "MODEL": "mcc/best",
+        "MODEL_FABLE": "mcc/best",
         "MODEL_OPUS": "mcc/good",
         "MODEL_SONNET": "mcc/medium",
         "MODEL_HAIKU": "mcc/cheap",
@@ -51,18 +51,18 @@ def test_every_tier_reaches_the_page_under_the_route_it_names() -> None:
 
 
 def test_the_map_carries_nothing_the_tier_table_did_not_put_there() -> None:
-    """The other direction. In particular ``MODEL_FABLE`` is not a tier.
+    """The other direction. In particular ``MODEL`` is not a tier.
 
-    ``MODEL`` is the route MCC starts on, which is what "best" means; an
-    operator who sets ``MODEL_FABLE`` gets Claude Code's ``claude-fable-*`` and
-    changes nothing about where ``mcc/best`` goes. Labelling the Fable rail
-    ``mcc/best`` would therefore be a sentence that is not true, on the one
-    page where a reader goes to find out where a request lands.
+    ``MODEL`` is the default every unset route falls back to, not a rung on the
+    ladder. ``mcc/best`` names the Fable route, and an install that leaves
+    ``MODEL_FABLE`` blank reaches ``MODEL`` through the ordinary collapse --
+    which is a different sentence from "the Default rail is where mcc/best
+    goes", and only one of them stays true when the operator fills Fable in.
     """
 
     aliases = tier_alias_by_route_env_var()
 
-    assert "MODEL_FABLE" not in aliases
+    assert "MODEL" not in aliases
     assert len(aliases) == len(TIER_ORDER)
     known = {GLOBAL_TIER_SETTINGS[tier].env_var for tier in TIER_ORDER}
     assert set(aliases) == known

@@ -78,6 +78,8 @@ from .constants import (
     TOOL_RESULT_TRIM_PROTECT_RECENT_DEFAULT,
     TOOL_RESULT_TRIM_THRESHOLD_CHARS_DEFAULT,
     TRIM_MODE_NAMES,
+    VISION_ADAPTER_MODE_DEFAULT,
+    VISION_ADAPTER_MODE_NAMES,
 )
 from .env_files import (
     ANTHROPIC_AUTH_TOKEN_ENV,
@@ -1045,6 +1047,16 @@ class Settings(BaseSettings):
         validation_alias="TOOL_RESULT_IMAGE_DELIVERY",
     )
 
+    # ==================== Vision Adapter Mode ================================
+    # What happens when a request carries an image and the model its route
+    # picked is published as unable to read one. `route` diverts the whole
+    # request to MODEL_VISION; `describe` asks MODEL_VISION what the picture
+    # shows and lets the route's own model answer with that text in hand.
+    vision_adapter_mode: str = Field(
+        default=VISION_ADAPTER_MODE_DEFAULT,
+        validation_alias="VISION_ADAPTER_MODE",
+    )
+
     # ==================== Tool-Result Trimming (Read / Grep / Glob) ==========
     # Off by default, and deliberately so: this layer is the only thing in the
     # proxy that changes what the model is allowed to see. A fresh install must
@@ -1536,6 +1548,24 @@ class Settings(BaseSettings):
         except ValueError as exc:
             raise ValueError(f"CREDENTIAL_LOCKOUT_TIERS: {exc}") from exc
         return v
+
+    @field_validator("vision_adapter_mode")
+    @classmethod
+    def validate_vision_adapter_mode(cls, v: str) -> str:
+        """Reject an unknown adapter mode rather than guess at it.
+
+        A blank value is the admin UI clearing the field, not a typo, so it
+        falls back to the default the same way every other select does.
+        """
+        mode = str(v).strip().lower()
+        if not mode:
+            return VISION_ADAPTER_MODE_DEFAULT
+        if mode not in VISION_ADAPTER_MODE_NAMES:
+            raise ValueError(
+                f"Unknown vision adapter mode: {v!r}. Known modes: "
+                f"{', '.join(sorted(VISION_ADAPTER_MODE_NAMES))}"
+            )
+        return mode
 
     @field_validator("tool_result_image_delivery")
     @classmethod

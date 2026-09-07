@@ -142,6 +142,7 @@ const FIELDS = [
     ["MODEL_HAIKU_FALLBACKS", "", "model_chain"],
     ["MODEL_VISION", "<img src=x onerror=boom()>", "optional_model"],
     ["MODEL_VISION_FALLBACKS", "", "model_chain"],
+    ["VISION_ADAPTER_MODE", "route", "select"],
     // The pause lists. Written by the Pause button rather than typed, so they
     // are never rendered as controls -- but they are in the payload, which is
     // where the page reads which rows are switched off.
@@ -155,6 +156,15 @@ const FIELDS = [
     key,
     label: key,
     section: "models",
+    ...(key === "VISION_ADAPTER_MODE"
+      ? {
+          options: [
+            { value: "route", label: "Send the request to the vision model" },
+            { value: "describe", label: "Describe the image, keep the model" },
+          ],
+          description: "What the adapter does with an image it has taken.",
+        }
+      : {}),
     // The real control types the manifest declares, so the route rails the
     // drag operates on are the ones the dashboard actually renders.
     type,
@@ -3959,6 +3969,143 @@ const anthropicOAuthCard = (() => {
   return { live, unobserved, absent };
 })();
 
+/* --------------------------------------------------- the vision adapter mode
+   Two things the mode has to do on this page: sit inside the adapter's own
+   card rather than in the leftovers grid, and change what the hop under each
+   blind tier claims -- in describe mode the arrow no longer means "your
+   request goes here". */
+const visionMode = {};
+{
+  const routingLinkAgain = navLinks.find(
+    (link) => link.dataset.view === "model_config",
+  );
+  if (routingLinkAgain) {
+    routingLinkAgain.click();
+    await settle();
+    const card = doc.querySelector(".route-vision");
+    const control = card ? card.querySelector(".route-vision-mode select") : null;
+    visionMode.insideTheCard = Boolean(control);
+    visionMode.inTheLeftovers = Boolean(
+      doc.querySelector(".route-layout > .field-grid [data-key='VISION_ADAPTER_MODE']"),
+    );
+    visionMode.options = control
+      ? Array.from(control.options).map((option) => option.value)
+      : [];
+    visionMode.value = control ? control.value : null;
+    // The card renders the mode under the rail and above the "currently
+    // covers" summary; reading the order proves the placement rather than
+    // only the presence.
+    visionMode.order = card
+      ? Array.from(card.children).map((node) => node.className.split(" ")[0])
+      : [];
+    const hopText = () =>
+      Array.from(doc.querySelectorAll(".route-vision-hop"))
+        .map((node) => (node.textContent || "").replace(/\s+/g, " ").trim())
+        .join(" | ");
+    visionMode.hopsInRoute = hopText();
+    visionMode.summaryInRoute = (
+      doc.querySelector(".route-vision-summary")?.textContent || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    if (control) {
+      control.value = "describe";
+      control.dispatchEvent(new window.Event("change", { bubbles: true }));
+      await settle();
+    }
+    visionMode.hopsInDescribe = hopText();
+    // No tier in this fixture resolves to a model the catalogue calls blind,
+    // so the hop itself is drawn directly: the sentence it writes is the
+    // thing under test, not which tier happens to trigger it.
+    const hopSentence = (mode) => {
+      const node = window.eval(
+        `buildVisionHop("p1/blind", "groq/eyes", ${JSON.stringify(mode)})`,
+      );
+      return (node.textContent || "").replace(/\s+/g, " ").trim();
+    };
+    visionMode.hopSentenceRoute = hopSentence("route");
+    visionMode.hopSentenceDescribe = hopSentence("describe");
+    visionMode.hopSentenceUnset = (
+      window.eval('buildVisionHop("p1/blind", "", "describe")').textContent || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    visionMode.summaryInDescribe = (
+      doc.querySelector(".route-vision-summary")?.textContent || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    if (control) {
+      control.value = control.dataset.original;
+      control.dispatchEvent(new window.Event("change", { bubbles: true }));
+      await settle();
+    }
+  }
+}
+
+/* -------------------------------------------- the description in the modal
+   Section 5A / Q15: the only way to judge whether describe mode is worth
+   using is to read what the coding model was actually handed. */
+const describedImages = {};
+{
+  const driveImages = (row) => {
+    window.eval(`renderRequestImages(${JSON.stringify(row)});`);
+    const container = doc.getElementById("reqDetailImages");
+    return {
+      delivery: (container.querySelector(".req-image-delivery")?.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim(),
+      summaries: Array.from(
+        container.querySelectorAll(".req-image-description summary"),
+      ).map((node) => node.textContent),
+      bodies: Array.from(
+        container.querySelectorAll(".req-image-description-text"),
+      ).map((node) => node.textContent),
+    };
+  };
+  const image = {
+    sha256: "sha_one",
+    kind: "image",
+    media_type: "image/png",
+    source_bytes: 213_000,
+    width: 1200,
+    height: 800,
+    thumbnail_media_type: "image/webp",
+    thumbnail_base64: null,
+    description: "A terminal showing ModuleNotFoundError.",
+    described_by: "groq/eyes",
+    described_at: 1_757_000_000,
+  };
+  describedImages.fresh = driveImages({
+    input_image_count: 1,
+    image_delivery: "described",
+    input_images: [image],
+    route_attempts: [
+      { attempt: 0, model_ref: "p/blind", outcome: "succeeded", params: null },
+      {
+        attempt: 1000,
+        model_ref: "groq/eyes",
+        outcome: "succeeded",
+        params: { kind: "describe", image_sha: "sha_one", cached: false },
+      },
+    ],
+  });
+  describedImages.cached = driveImages({
+    input_image_count: 1,
+    image_delivery: "described",
+    input_images: [image],
+    route_attempts: [
+      { attempt: 0, model_ref: "p/blind", outcome: "succeeded", params: null },
+    ],
+  });
+  describedImages.plain = driveImages({
+    input_image_count: 1,
+    image_delivery: "image",
+    input_images: [{ ...image, description: null, described_by: null }],
+    route_attempts: [],
+  });
+}
+
 console.log(
   JSON.stringify(
     {
@@ -3984,6 +4131,8 @@ console.log(
       limits,
       models,
       routing,
+      visionMode,
+      describedImages,
       analytics,
       harnessAttr,
       optimizer: {

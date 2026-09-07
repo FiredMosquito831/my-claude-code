@@ -37,7 +37,8 @@ names; and the output always parses as JSON.
 
 import json
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
@@ -581,6 +582,24 @@ def install_wire_trace(
     slot = WireTrace(body_limit=body_limit)
     _WIRE_TRACE.set(slot)
     return slot
+
+
+@contextmanager
+def paused_wire_trace() -> Iterator[None]:
+    """Stop recording outbound bodies for the duration of a nested call.
+
+    The trace is keyed by attempt index within one executor run, so a request
+    MCC issues on its own behalf -- a describe call -- would write its body
+    into the slot the client's own attempt 0 is about to claim. Pausing is the
+    same answer ``paused_ladder`` gives to a diagnostic probe, for the same
+    reason: a body recorded under someone else's attempt number is worse than
+    no body at all.
+    """
+    token = _WIRE_TRACE.set(None)
+    try:
+        yield
+    finally:
+        _WIRE_TRACE.reset(token)
 
 
 def record_wire_request(body: Mapping[str, Any], **extra: Any) -> None:

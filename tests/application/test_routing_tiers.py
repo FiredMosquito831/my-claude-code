@@ -123,6 +123,73 @@ def test_an_unset_tier_falls_back_to_MODEL_like_the_claude_alias_does() -> None:
     assert _refs(router, "claude-opus-5") == [PRIMARY, PRIMARY_FALLBACK]
 
 
+def test_mcc_best_leads_with_MODEL_FABLE_when_one_is_set() -> None:
+    """``mcc/best`` names the Fable route, not the default one.
+
+    The two used to be the same setting, which made the ladder's top rung and
+    the floor every unset route falls back to indistinguishable. An operator
+    who puts their strongest model on Fable is now the operator whose agents
+    reach it under Best.
+    """
+
+    settings = _settings(
+        MODEL_FABLE="open_router/fable",
+        MODEL_FABLE_FALLBACKS="open_router/fable-backup",
+    )
+    router = _router(settings)
+
+    assert _refs(router, "mcc/best") == [
+        "open_router/fable",
+        "open_router/fable-backup",
+    ]
+    # And Claude Code's own alias for the same route answers identically, which
+    # is what "a tier is a name for a route" has to mean.
+    assert _refs(router, "claude-fable-5") == [
+        "open_router/fable",
+        "open_router/fable-backup",
+    ]
+    # The default route is untouched and is still not a tier.
+    assert _refs(router, "claude-3-5-something") == [PRIMARY, PRIMARY_FALLBACK]
+
+
+def test_an_unset_MODEL_FABLE_leaves_mcc_best_exactly_where_it_was() -> None:
+    """The upgrade guarantee: nothing changes for an install that never set it.
+
+    Chain, fallbacks and pause list all collapse onto MODEL through the same
+    path every other unset tier takes, so 6.51.0 moves ``mcc/best`` only for
+    the operators who asked for it by filling the Fable rail in.
+    """
+
+    settings = _bare_settings(
+        model=PRIMARY,
+        MODEL_FALLBACKS=PRIMARY_FALLBACK,
+        MODEL_PAUSED=PRIMARY_FALLBACK,
+    )
+    router = _router(settings)
+
+    plan = router.resolve_messages_plan(_request("mcc/best"))
+
+    assert list(plan.model_refs()) == [PRIMARY, PRIMARY_FALLBACK]
+    assert plan.paused_refs == frozenset({PRIMARY_FALLBACK})
+    assert plan.paused_env_var == "MODEL_PAUSED"
+
+
+def test_a_paused_ref_on_mcc_best_names_MODEL_FABLE_PAUSED() -> None:
+    """A configured Fable route brings its own pause list with it."""
+
+    settings = _settings(
+        MODEL_FABLE="open_router/fable",
+        MODEL_FABLE_FALLBACKS="open_router/fable-backup",
+        MODEL_FABLE_PAUSED="open_router/fable-backup",
+    )
+    router = _router(settings)
+
+    plan = router.resolve_messages_plan(_request("mcc/best"))
+
+    assert plan.paused_refs == frozenset({"open_router/fable-backup"})
+    assert plan.paused_env_var == "MODEL_FABLE_PAUSED"
+
+
 def test_a_harness_override_leads_the_chain_for_that_harness_only() -> None:
     """One agent's chain must never move another agent's, or Claude Code's."""
 
@@ -397,6 +464,7 @@ def test_the_request_log_row_names_the_alias_and_the_ref_it_served() -> None:
 @pytest.mark.parametrize(
     ("tier", "reasoning_key", "expected"),
     [
+        ("mcc/best", "REASONING_FABLE", "off"),
         ("mcc/good", "REASONING_OPUS", "off"),
         ("mcc/medium", "REASONING_SONNET", "off"),
         ("mcc/cheap", "REASONING_HAIKU", "off"),

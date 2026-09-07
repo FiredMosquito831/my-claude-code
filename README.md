@@ -1110,13 +1110,15 @@ Claude Code never names a model — it asks for `claude-sonnet-5` and gets whate
 
 | Name | The route it names, with that route's own fallbacks and pause list |
 | --- | --- |
-| `mcc/best` | `MODEL` — the route MCC itself starts on |
+| `mcc/best` | `MODEL_FABLE` — the Fable route, the strongest rung |
 | `mcc/good` | `MODEL_OPUS` |
 | `mcc/medium` | `MODEL_SONNET` |
 | `mcc/cheap` | `MODEL_HAIKU` |
 | `mcc/vision` | `MODEL_VISION` |
 
-On a default install `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU` and `MODEL_VISION` are unset, so all five collapse onto `MODEL` — primary, fallbacks and pause list together — exactly as `claude-opus-5` already does; MCC does not invent a different model for an unset tier, and the dashboard says *Same as global Opus — currently `<ref>`* rather than hiding the fact. Any one agent can be given its own chain per tier from the **Coding agents** page, which writes `~/.mcc/harness_tiers.json`; `HARNESS_TIER_ALIASES=false` keeps the pickers to concrete refs, and the router still answers an alias a client sends anyway. See [Tiers for every other coding agent](docs/USAGE.md#tiers-for-every-other-coding-agent).
+**`mcc/best` follows the Fable route since 6.51.0.** It named `MODEL` before, which made the ladder's top rung and the floor every unset route falls back to the same setting. If you never set `MODEL_FABLE`, nothing changes: `mcc/best` collapses onto `MODEL` exactly as it always did.
+
+On a default install `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU` and `MODEL_VISION` are unset, so all five collapse onto `MODEL` — primary, fallbacks and pause list together — exactly as `claude-opus-5` already does; MCC does not invent a different model for an unset tier, and the dashboard says *Same as global Opus — currently `<ref>`* rather than hiding the fact. Any one agent can be given its own chain per tier from the **Coding agents** page, which writes `~/.mcc/harness_tiers.json`; `HARNESS_TIER_ALIASES=false` keeps the pickers to concrete refs, and the router still answers an alias a client sends anyway. See [Tiers for every other coding agent](docs/USAGE.md#tiers-for-every-other-coding-agent).
 
 ### Model Visibility
 
@@ -1308,6 +1310,35 @@ which case a plain sentence naming the tool takes its place; `attach` always
 sends it; `strip` never does. There is deliberately no option to send base64
 text. A PDF returned by a tool is named rather than sent — no OpenAI-format chat
 message has a shape for one.
+
+**Since 6.51.0 the adapter has two modes, and the default is unchanged.**
+`VISION_ADAPTER_MODE=route` is what every release up to 6.50.1 did: a request
+carrying an image the route's model cannot read is handed whole to
+`MODEL_VISION`, and the vision model answers it. That is right when the picture
+*is* the question, and wrong for the case most people actually have — a fast,
+cheap, text-only model doing the coding and a screenshot arriving
+mid-conversation, where the vision model then has to answer a coding question
+it has no context for.
+
+`VISION_ADAPTER_MODE=describe` inverts it. Each image is sent to the vision
+chain on its own with one instruction — say what is there, verbatim where it is
+legible, do not interpret — and its answer replaces the image in the
+transcript, wrapped so the model cannot mistake it for something you typed.
+**The model your route actually picked then answers**, with the screenshot
+rendered as words it can read. Each describe call is an ordinary routed
+request: it uses the vision chain's own fallbacks, its pause list, the health
+registry and the retry policy, and it gets its own row in the request log
+against the request that carried the picture. Descriptions are cached on the
+image itself, so a screenshot Claude Code re-sends on every turn is described
+once — clear them from **Admin UI → Requests → Clear image descriptions** if a
+better vision model arrives. Nothing here can cost you an answer: a describe
+call that fails falls back to `route` mode, and a route with nowhere to divert
+to falls back to the placeholder.
+
+Pick `describe` when the picture is context; pick `route` when the picture is
+the question. Both modes fire only when the model that would answer is
+*published* as unable to read images — a model that can see is simply sent the
+picture, which is cheaper than two calls and always better.
 
 Capability metadata is topped up from the [models.dev](https://models.dev) catalog for **every** provider, not just the ones that publish modality data themselves — without that, "can this model read a screenshot?" is unanswerable for most of the catalog. A provider's own answer always wins where it has one, and a model nobody reports on stays untouched.
 
@@ -1722,8 +1753,8 @@ Every request records the **whole routing decision**, not just the model that ha
 | `route_attempt` | which entry in that chain answered — `0` is the route's own model |
 | `route_primary_model` | what it fell back *from*, when a fallback answered |
 | `route_diverted_from` | the route's own model, when a policy replaced it |
-| `route_diversion` | which policy did — today, `vision` |
-| `image_delivery` | how the pictures travelled: `image`, `stripped`, `text`, or `none`. Blank on rows written before 6.49.0 |
+| `route_diversion` | which policy did: `vision`, `vision_unavailable`, or `vision_described` |
+| `image_delivery` | how the pictures travelled: `image`, `described`, `stripped`, `text`, or `none`. Blank on rows written before 6.49.0 |
 
 The chain is stored **even when the primary answers**, because "a chain existed and was not needed" and "there was no chain" are different facts about a route, and only the first one tells you your fallbacks are configured.
 
