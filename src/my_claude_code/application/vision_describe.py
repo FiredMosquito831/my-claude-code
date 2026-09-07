@@ -93,10 +93,21 @@ DESCRIBE_CONCURRENCY = 3
 DESCRIBE_ATTEMPT_BASE = 1000
 DESCRIBE_ATTEMPT_STRIDE = 16
 
-#: Called with (attempt record, image sha, image index) for every upstream try
-#: a describe call made. The parent request owns the row: a describe call is an
-#: extra hop on this request, not phantom traffic of its own.
-DescribeAttemptObserver = Callable[[RouteAttemptRecord, str, int], None]
+#: Called with (attempt record, image sha, image index, usage) for every
+#: upstream try a describe call made. The parent request owns the row: a
+#: describe call is an extra hop on this request, not phantom traffic of its
+#: own.
+#:
+#: ``usage`` is the describe reply's own ``{"input_tokens", "output_tokens"}``,
+#: and it is why the observer is called after the stream finishes rather than
+#: during it: the tokens are only known once the SSE aggregator has assembled
+#: the message. Before 6.53.0 the aggregator returned them and this module read
+#: only text out of it, so the describe hop's cost was discarded entirely --
+#: not misfiled, discarded. ``None`` means not measured, which is what every
+#: failed attempt reports and what a host that publishes no usage reports.
+DescribeAttemptObserver = Callable[
+    [RouteAttemptRecord, str, int, dict[str, Any] | None], None
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,11 +338,29 @@ class VisionDescribeAdapter:
         describe_request = _describe_request(target)
         plan = self._router.vision_describe_plan(describe_request, chain)
         model_ref = plan.primary.resolved.provider_model_ref
+        # Buffered rather than reported as they happen: an attempt's own token
+        # usage is not known until the stream it opened has been aggregated,
+        # and the row is written once. ``flush`` is called on every exit path,
+        # including the failing ones, so a describe call that died still leaves
+        # the same trail it did before -- with NULL tokens, which is the honest
+        # answer for an attempt that never got a usage block.
+        pending: list[RouteAttemptRecord] = []
         observer = None
         if on_attempt is not None:
 
             def observer(record: RouteAttemptRecord) -> None:
-                on_attempt(record, target.sha, target.index)
+                pending.append(record)
+
+        def flush(usage: dict[str, Any] | None) -> None:
+            if on_attempt is None:
+                return
+            for position, record in enumerate(pending):
+                # Only the last rung can be the one that answered, so it is the
+                # only one the usage can belong to. Attributing it to an
+                # earlier, failed attempt would invent a measurement.
+                last = position == len(pending) - 1
+                on_attempt(record, target.sha, target.index, usage if last else None)
+            pending.clear()
 
         try:
             # The parent's per-attempt collectors are keyed by attempt index
@@ -361,7 +390,10 @@ class VisionDescribeAdapter:
                 model_ref,
                 exc,
             )
+            flush(None)
             return None
+        usage = body.get("usage") if isinstance(body, dict) else None
+        flush(usage if isinstance(usage, dict) else None)
         if error is not None:
             unreachable.update(plan.model_refs())
             logger.warning(

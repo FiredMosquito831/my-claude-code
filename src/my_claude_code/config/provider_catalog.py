@@ -206,6 +206,22 @@ class ProviderDescriptor:
     # provider that forgets this fails ``test_every_provider_declares_a_group``
     # instead of silently filing itself somewhere wrong.
     group: str = ""
+    # How this host bills an image, from ``core.anthropic.image_tokens``. It is
+    # declared here rather than inferred because no provider declares a wire
+    # dialect anywhere: ``ReasoningDialect`` is about reasoning only, and
+    # inferring the family from whichever converter a provider's
+    # ``stream_response`` happens to import would be implicit and would break
+    # the first time one provider is served by two converters. Nothing anywhere
+    # branches on a model name to reach this.
+    #
+    # ``unknown`` is the deliberate default and is not a shrug: it charges
+    # Anthropic's 28-px formula, which is the budget the client itself is
+    # reasoning about because the request arrived in the Anthropic protocol,
+    # and it is *recorded as a fallback* so the Models page's billed-vs-
+    # estimated readout can show how wrong that guess is for a given host. A
+    # host with no published formula ships as ``unknown``; guessing one would
+    # produce a confident number nobody could audit.
+    image_token_family: str = "unknown"
 
     def configuration_attrs(self) -> tuple[str, ...]:
         """Return settings fields whose non-empty values configure this provider."""
@@ -223,6 +239,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     # and billed per token. This is the authentication method Anthropic
     # documents for software that calls Claude on a user's behalf.
     "anthropic": ProviderDescriptor(
+        image_token_family="anthropic",
         provider_id="anthropic",
         display_name="Anthropic (Claude API)",
         credential_env="ANTHROPIC_API_KEY",
@@ -239,6 +256,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     # operator's explicit instruction, and refuses any request that did not
     # come from the Claude Code CLI. See docs/ANTHROPIC-SUBSCRIPTION.md.
     "anthropic_oauth": ProviderDescriptor(
+        image_token_family="anthropic",
         provider_id="anthropic_oauth",
         display_name="Anthropic Claude subscription (OAuth, Caution)",
         credential_env="ANTHROPIC_OAUTH_ACCESS_TOKEN",
@@ -265,6 +283,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         group="inference",
     ),
     "openai": ProviderDescriptor(
+        image_token_family="openai_patch",
         provider_id="openai",
         display_name="OpenAI / ChatGPT",
         credential_env="CHATGPT_OAUTH_ACCESS_TOKEN",
@@ -285,6 +304,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         group="gateway",
     ),
     "gemini": ProviderDescriptor(
+        image_token_family="gemini",
         provider_id="gemini",
         display_name="Gemini",
         credential_env="GEMINI_API_KEY",
@@ -298,6 +318,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     # API key, so ``credential_env``/``credential_attr`` are deliberately unset.
     # The project and location are required and supplied through the Admin UI.
     "vertex": ProviderDescriptor(
+        image_token_family="gemini",
         provider_id="vertex",
         display_name="Google Vertex AI",
         credential_url=(
@@ -316,6 +337,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     # missing URL a configuration error naming AZURE_OPENAI_BASE_URL rather
     # than a request that silently goes somewhere wrong.
     "azure_openai": ProviderDescriptor(
+        image_token_family="openai_tile",
         provider_id="azure_openai",
         display_name="Azure OpenAI",
         credential_env="AZURE_OPENAI_API_KEY",
@@ -326,6 +348,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         group="direct",
     ),
     "deepseek": ProviderDescriptor(
+        image_token_family="deepseek",
         provider_id="deepseek",
         display_name="DeepSeek",
         credential_env="DEEPSEEK_API_KEY",
@@ -446,6 +469,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         group="subscription",
     ),
     "chatgpt_oauth": ProviderDescriptor(
+        image_token_family="openai_patch",
         provider_id="chatgpt_oauth",
         display_name="ChatGPT OAuth (experimental)",
         credential_env="CHATGPT_OAUTH_ACCESS_TOKEN",
@@ -575,6 +599,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         group="subscription",
     ),
     "qwencloud": ProviderDescriptor(
+        image_token_family="qwen",
         provider_id="qwencloud",
         display_name="QwenCloud Token Plan",
         credential_env="QWENCLOUD_API_KEY",
@@ -585,6 +610,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         group="direct",
     ),
     "qwencloud_coding": ProviderDescriptor(
+        image_token_family="qwen",
         provider_id="qwencloud_coding",
         display_name="QwenCloud Coding Plan",
         credential_env="QWENCLOUD_CODING_API_KEY",
@@ -739,6 +765,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         group="inference",
     ),
     "alibaba_coding": ProviderDescriptor(
+        image_token_family="qwen",
         provider_id="alibaba_coding",
         display_name="Alibaba Coding Plan (International)",
         credential_env="ALIBABA_CODING_API_KEY",
@@ -750,6 +777,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         group="subscription",
     ),
     "alibaba_coding_cn": ProviderDescriptor(
+        image_token_family="qwen",
         provider_id="alibaba_coding_cn",
         display_name="Alibaba Coding Plan (China)",
         credential_env="ALIBABA_CODING_CN_API_KEY",
@@ -761,6 +789,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         group="subscription",
     ),
     "alibaba": ProviderDescriptor(
+        image_token_family="qwen",
         provider_id="alibaba",
         display_name="Alibaba Token Plan (International)",
         credential_env="ALIBABA_API_KEY",
@@ -772,6 +801,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         group="direct",
     ),
     "alibaba_cn": ProviderDescriptor(
+        image_token_family="qwen",
         provider_id="alibaba_cn",
         display_name="Alibaba Token Plan (China)",
         credential_env="ALIBABA_CN_API_KEY",

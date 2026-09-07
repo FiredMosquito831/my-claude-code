@@ -464,6 +464,30 @@ TOOL_RESULT_IMAGE_DELIVERY_NAMES: frozenset[str] = frozenset(
 )
 TOOL_RESULT_IMAGE_DELIVERY_DEFAULT = "auto"
 
+# How much fidelity an OpenAI-family host is asked to spend on one picture.
+# `auto` emits no `detail` key at all, which is what every release before
+# 6.53.0 sent and what OpenAI applies when the field is absent. `low` bills the
+# base tokens only and the model sees a thumbnail, so it is a large, silent
+# fidelity cut and can never be the default. The value never reaches the token
+# estimator: an estimate keyed on a field the Anthropic protocol does not carry
+# is how LiteLLM ends up charging every Anthropic image a flat 85 tokens.
+IMAGE_DETAIL_NAMES: frozenset[str] = frozenset({"auto", "low", "high"})
+IMAGE_DETAIL_DEFAULT = "auto"
+
+# The longest edge, in pixels, an outbound image may have. The default is the
+# number Anthropic itself resizes to and the number Claude Code ships
+# (`maxTargetPx: 1568`, `maxTargetTokens: 1568`); combined with the destination
+# family's own token budget it turns a 1920x1080 screenshot into 1456x819,
+# which is the size Anthropic would have billed for anyway. 0 turns resizing
+# off entirely and sends what the client sent, byte for byte.
+IMAGE_MAX_LONG_EDGE_DEFAULT = 1568
+
+# JPEG quality for a re-encode on the way out. 0 -- the default -- means never
+# change the format: a PNG stays a PNG. The images in question are screenshots
+# of text and code, which is the worst case for JPEG ringing, so this is opt-in
+# only, and it is skipped outright for any image carrying an alpha channel.
+IMAGE_JPEG_QUALITY_DEFAULT = 0
+
 # What the vision adapter does with a request whose images the route's own
 # model is published as unable to read.
 # `route` sends the whole request to MODEL_VISION and lets that model answer

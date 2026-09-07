@@ -407,6 +407,73 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "IMAGE_MAX_LONG_EDGE",
+        "Shrink Images Larger Than (px)",
+        "models",
+        "number",
+        settings_attr="image_max_long_edge",
+        default="1568",
+        description=(
+            "The longest edge an image may have when it leaves the proxy. "
+            "Anything larger is resized once, before it is sent, and the "
+            "request detail shows the before and after. 1568 is the number "
+            "Anthropic itself resizes to and the number Claude Code ships, and "
+            "the resize also respects the destination's own token budget -- "
+            "which is why a 1920x1080 screenshot lands on 1456x819 rather than "
+            "1568x882. On most hosts this changes nothing you can see, because "
+            "they already resize server-side and bill the resized picture: "
+            "Anthropic, OpenAI's tile-billed models and Gemini all come out on "
+            "exactly the same token count either way. On OpenAI's newer "
+            "patch-billed models it is a real 41% saving and a real fidelity "
+            "cut -- the model genuinely sees less -- which is why this is one "
+            "box and not a hidden constant. Set 0 to send whatever the client "
+            "sent, byte for byte. The picture stored in the request log is "
+            "unaffected: that has always been a thumbnail."
+        ),
+    ),
+    ConfigFieldSpec(
+        "IMAGE_JPEG_QUALITY",
+        "Re-encode Resized Images as JPEG (quality)",
+        "models",
+        "number",
+        settings_attr="image_jpeg_quality",
+        default="0",
+        description=(
+            "Off by default, and 0 means off: a PNG stays a PNG. Re-encoding "
+            "is where the bandwidth actually is, but the images in question "
+            "are screenshots of text and code, which is the worst case for "
+            "JPEG ringing. 85 is the usual opt-in. Any image carrying an alpha "
+            "channel is skipped whatever this says, because flattening "
+            "transparency is a change nobody asked for when they asked for a "
+            "smaller file."
+        ),
+    ),
+    ConfigFieldSpec(
+        "IMAGE_DETAIL",
+        "Image Detail (OpenAI hosts)",
+        "models",
+        "select",
+        settings_attr="image_detail",
+        default="auto",
+        options=(
+            ConfigOptionSpec("auto", "Auto (send no detail field)"),
+            ConfigOptionSpec("low", "Low (thumbnail, base tokens only)"),
+            ConfigOptionSpec("high", "High"),
+        ),
+        description=(
+            "OpenAI's per-image fidelity knob, and meaningless to every other "
+            "host. Auto sends no detail field at all, which is what OpenAI "
+            "applies anyway and what every release before 6.53.0 did. Low is a "
+            "large, silent fidelity cut: it bills the base tokens only and the "
+            "model is shown a thumbnail, so it will confidently misread a "
+            "screenshot rather than say it cannot see one. This never changes "
+            "the token estimate -- the estimate is a function of the picture's "
+            "real dimensions and the host's published formula, not of this "
+            "field, which is the mistake that makes LiteLLM charge every "
+            "Anthropic image a flat 85 tokens."
+        ),
+    ),
+    ConfigFieldSpec(
         "MODEL_VISION_PAUSED",
         "Vision Paused Models",
         "models",

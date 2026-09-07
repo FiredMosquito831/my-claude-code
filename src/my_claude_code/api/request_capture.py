@@ -14,6 +14,8 @@ from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from loguru import logger
+
 from my_claude_code.application.execution import RouteAttemptRecord
 from my_claude_code.application.routing import (
     RoutedMessagesPlan,
@@ -25,8 +27,10 @@ from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import (
     ImageInput,
     MessagesRequest,
+    get_token_count,
     request_image_inputs,
 )
+from my_claude_code.core.anthropic.image_tokens import ImageTokenFamily, image_tokens
 from my_claude_code.core.async_iterators import try_close_async_iterator
 from my_claude_code.core.client_fingerprint import (
     harness_from_headers,
@@ -35,6 +39,7 @@ from my_claude_code.core.client_fingerprint import (
 from my_claude_code.core.credential_attribution import install_attribution
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import failure_kind_name, find_execution_failure
+from my_claude_code.core.image_geometry import image_dimensions
 from my_claude_code.core.reasoning import (
     ReasoningAdaptation,
     ReasoningAdaptationKind,
@@ -65,6 +70,45 @@ from my_claude_code.core.wire_capture import (
     install_wire_trace,
 )
 
+
+def _usage_int(usage: Mapping[str, Any] | None, key: str) -> int | None:
+    """Read one token counter out of a reply's usage block.
+
+    ``None`` for anything that is not a number, which is the same rule the
+    request row's own counters follow: a host that reports no usage leaves NULL
+    rather than a zero nobody measured.
+    """
+    if not isinstance(usage, Mapping):
+        return None
+    value = usage.get(key)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return int(value)
+
+
+def _is_describe(attempt: RouteAttempt) -> bool:
+    """Return whether this attempt row is a vision-adapter describe hop."""
+    params = attempt.params
+    return isinstance(params, dict) and params.get("kind") == "describe"
+
+
+def _estimated_image_tokens(image: ImageInput, family: str) -> int:
+    """What the estimator expects this one picture to cost on this host.
+
+    The same arithmetic ``core.anthropic.tokens`` applies inside the request
+    total, run again over just the pictures so the two numbers can be compared:
+    ``est_image_tokens`` is the share of ``est_tokens_in`` that is images, and
+    the Models page's billed-vs-estimated readout is only meaningful because
+    they are computed from the same formula on the same dimensions.
+    """
+    if not image.data:
+        return 85
+    size = image_dimensions(image.data)
+    if size is None:
+        return max(85, len(image.data) // 3000)
+    return image_tokens(size[0], size[1], family)
+
+
 #: The inbound wire protocol a logged request arrived on. Stored verbatim in
 #: the request log's ``protocol`` column, shown in the request detail pane, and
 #: exported as-is, so a value added here becomes a user-visible vocabulary word.
@@ -92,6 +136,7 @@ class RequestCapture:
         ladder_body_max_chars: int = DEFAULT_LADDER_BODY_MAX_CHARS,
         headers: dict[str, str] | None = None,
         harness: str | None = None,
+        request: MessagesRequest | None = None,
     ) -> None:
         self._store = store
         self._capture_bodies = capture_bodies
@@ -100,6 +145,18 @@ class RequestCapture:
         # first token, so it happens at finalize time instead.
         self._images = images
         self._capture_images_pixels = capture_images_pixels
+        # Position in the image walk -> the size that image actually left at,
+        # for the ones the outbound downscaler shrank. Per attempt, and the
+        # last attempt wins, exactly as ``image_delivery`` does: a chain that
+        # falls back from one host to another may resize to two different
+        # sizes, and the row must describe the one that answered.
+        self._image_sent_sizes: dict[int, tuple[int, int]] = {}
+        self._image_bytes: tuple[int, int] | None = None
+        # How the answering host bills a picture, and the request the estimate
+        # is computed against. Held so the estimate can be produced at finalize
+        # -- after the client has its tokens -- rather than on the hot path.
+        self._image_token_family: str | None = None
+        self._request = request
         # Filled once, at the end of the chain, not per attempt: an attempt
         # verdict is never worth a database round trip while a client is
         # still waiting for tokens.
@@ -186,7 +243,11 @@ class RequestCapture:
         return self._store is not None
 
     def record_describe_attempt(
-        self, attempt: RouteAttemptRecord, image_sha: str, image_index: int
+        self,
+        attempt: RouteAttemptRecord,
+        image_sha: str,
+        image_index: int,
+        usage: Mapping[str, Any] | None = None,
     ) -> None:
         """Store one upstream try a describe call made, against this request.
 
@@ -202,11 +263,20 @@ class RequestCapture:
         No wire body is attached: the wire trace is keyed by attempt index
         within one executor run, and the parent's own run overwrites those
         slots afterwards, so a body claimed here would be the wrong body.
+
+        ``usage`` is the describe reply's own token counts. It goes on the
+        attempt row and, summed, onto the request row's ``adapter_tokens_*``;
+        it is never added into ``tokens_in``, which measures the model that
+        answered the client and has measured only that since the log existed.
+        ``None`` is not measured -- a failed attempt, or a host that reports no
+        usage -- and stays NULL rather than becoming a confident zero.
         """
         if not self.enabled:
             return
         self._attempts.append(
             RouteAttempt(
+                tokens_in=_usage_int(usage, "input_tokens"),
+                tokens_out=_usage_int(usage, "output_tokens"),
                 attempt=describe_attempt_index(image_index, attempt.attempt),
                 provider=attempt.provider_id or None,
                 model_ref=attempt.model_ref or None,
@@ -430,6 +500,21 @@ class RequestCapture:
         # back from a blind model to a sighted one delivers the same picture
         # two different ways, and the row must name the one that answered.
         self._record.image_delivery = str(routed.image_delivery)
+        # Same rule, same reason: the downscale is decided per attempt on the
+        # per-attempt copy, so what is recorded is what the winning attempt did.
+        self._image_token_family = routed.image_token_family
+        self._image_sent_sizes = {
+            resize.index: (resize.after_width, resize.after_height)
+            for resize in routed.image_resizes
+        }
+        self._image_bytes = (
+            (
+                sum(resize.before_bytes for resize in routed.image_resizes),
+                sum(resize.after_bytes for resize in routed.image_resizes),
+            )
+            if routed.image_resizes
+            else None
+        )
         # Recorded per attempt, and only when the reasoning widening actually
         # raised the number that will be sent. ``None`` is not stored: absence
         # is the finding, exactly as it is for every other wire knob.
@@ -698,6 +783,67 @@ class RequestCapture:
             self._thinking_parts.append(text[:remaining])
             self._stored_thinking_chars += min(remaining, len(text))
 
+    def _apply_adapter_tokens(self, record: RequestRecord) -> None:
+        """Roll this request's describe attempts up onto the request row.
+
+        Summed here rather than derived by the reader for the reason the column
+        exists at all: analytics scans ``requests`` and must not have to walk
+        every attempt's JSON to answer "what did the adapter cost". NULL rather
+        than 0 when nothing measured anything, because "no describe call ran"
+        and "a describe call ran and reported nothing" are different facts and
+        a zero would erase the distinction.
+        """
+        measured_in = [
+            attempt.tokens_in
+            for attempt in self._attempts
+            if _is_describe(attempt) and attempt.tokens_in is not None
+        ]
+        measured_out = [
+            attempt.tokens_out
+            for attempt in self._attempts
+            if _is_describe(attempt) and attempt.tokens_out is not None
+        ]
+        record.adapter_tokens_in = sum(measured_in) if measured_in else None
+        record.adapter_tokens_out = sum(measured_out) if measured_out else None
+
+    def _apply_estimate(self, record: RequestRecord) -> None:
+        """Store what the estimator expected this request to cost.
+
+        Computed only for a request that carried a picture, and only at
+        finalize -- after the client has every token it is going to get. The
+        estimate is a full tiktoken pass over the prompt, which is real CPU
+        work, and the question it exists to answer is about images: a text-only
+        request has nothing to audit here and pays nothing for the privilege.
+        NULL therefore means "not measured", which on a text request is exactly
+        true.
+        """
+        request = self._request
+        if request is None or not self._images:
+            return
+        family = self._image_token_family or ImageTokenFamily.UNKNOWN.value
+        try:
+            record.est_tokens_in = get_token_count(
+                request.messages,
+                request.system,
+                request.tools,
+                image_token_family=family,
+            )
+            # Walked again here rather than reusing the images captured at the
+            # start of the request, because the two can legitimately differ:
+            # in describe mode the pictures have become sentences by now, and
+            # the honest answer is that they cost zero image tokens and their
+            # words are already inside ``est_tokens_in``. Counting the client's
+            # original pictures instead would make the image share of the
+            # estimate describe a request that was never sent.
+            record.est_image_tokens = sum(
+                _estimated_image_tokens(image, family)
+                for image in request_image_inputs(request)
+            )
+        except Exception as exc:
+            # An estimate is an estimate. A request that has already succeeded
+            # must never be reported as failed because arithmetic about it did.
+            logger.debug("Request estimate skipped: {}", exc)
+
     def _collected_tool_calls(self) -> list[dict[str, Any]]:
         """Return the streamed tool calls in block order, arguments parsed."""
         calls: list[dict[str, Any]] = []
@@ -780,7 +926,12 @@ class RequestCapture:
                 self._images,
                 max_pixels=self._capture_images_pixels,
                 store_pixels=self._capture_images_pixels > 0,
+                sent_sizes=self._image_sent_sizes,
             )
+        if self._image_bytes is not None:
+            record.image_bytes_in, record.image_bytes_out = self._image_bytes
+        self._apply_adapter_tokens(record)
+        self._apply_estimate(record)
         record.key_index = self._credential.index
         record.key_label = self._credential.label
         record.attempts = tuple(self._attempts)
@@ -822,6 +973,7 @@ def build_capture(
         params=extract_request_params(request),
         capture_bodies=bool(getattr(settings, "request_log_capture_bodies", True)),
         images=request_image_inputs(request),
+        request=request,
         capture_images_pixels=_image_pixels(settings),
         wire_body_max_chars=int(
             getattr(

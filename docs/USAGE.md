@@ -1906,6 +1906,9 @@ Unlike everything else on this page, a pause is written the moment you click it:
 | `MODEL_VISION_PAUSED` | paused entries on the vision adapter |
 | `VISION_ADAPTER_MODE` | what the vision adapter does with an image: `route` (default, divert the whole request) or `describe` (describe the image, keep the model) |
 | `TOOL_RESULT_IMAGE_DELIVERY` | how an image a *tool* returned reaches a non-Anthropic model: `auto` (default), `attach`, `strip` |
+| `IMAGE_MAX_LONG_EDGE` | longest edge, in px, an outbound image may have. `1568` (default), `0` to send images untouched |
+| `IMAGE_JPEG_QUALITY` | re-encode a resized image as JPEG at this quality. `0` (default) never changes the format |
+| `IMAGE_DETAIL` | OpenAI's per-image detail knob: `auto` (default, sends no field), `low`, `high` |
 
 All six are comma-separated `provider/model` lists, written by the Pause button rather than typed, and **new in 6.21.0**. An entry is dropped from its list automatically when it leaves the route it was paused on.
 
@@ -1985,6 +1988,66 @@ the tool output, marked as tool output rather than as something you said.
 that answers is published as not accepting images, `attach` always attaches,
 `strip` never does. The request log's `image_delivery` field records which
 happened, per request.
+
+**Images are shrunk before they are sent, since 6.53.0, and this is on by
+default.** `IMAGE_MAX_LONG_EDGE` is `1568` px -- the size Anthropic itself
+resizes to, and the size Claude Code ships. An image larger than that is
+resized once, on the copy of the request MCC is about to send, and the request
+detail shows the before and after (`1920x1080 -> 1456x819`). Nothing MCC stores
+changes: the picture in the request log has always been a thumbnail.
+
+The resize respects the destination's *token* budget as well as the pixel one,
+which is why 1920x1080 lands on 1456x819 and not on 1568x882 -- the second
+would satisfy the 1568 px edge and cost 1792 tokens, over the 1568-token half
+of the same budget.
+
+What this actually changes, per family:
+
+| family | formula | effect of the default resize |
+| --- | --- | --- |
+| Anthropic (`ceil(w/28) x ceil(h/28)`, [docs](https://platform.claude.com/docs/en/build-with-claude/vision)) | 28 px per token, capped 1568 px / 1568 tokens | **none** -- Anthropic resizes to exactly this before billing anyway |
+| OpenAI tile (`base + tiles x per_tile`, [docs](https://developers.openai.com/api/docs/guides/images-vision)) | fit 2048², short side to 768, 512 px tiles | **none** -- both sizes land on the same 6 tiles |
+| Gemini (258 per tile, [docs](https://ai.google.dev/gemini-api/docs/image-understanding)) | flat 258 under 384 px, else `floor(min(w,h)/1.5)` crop units | **none** -- both sizes land on the same 6 tiles |
+| OpenAI patch (`ceil(w/32) x ceil(h/32) x multiplier`, same docs) | per-model patch budget | **-41%**: 2448 tokens becomes 1435, and the model genuinely sees less |
+
+That last row is the reason this is a setting and not a constant. Set
+`IMAGE_MAX_LONG_EDGE=0` to send exactly what your client sent, byte for byte.
+
+`IMAGE_JPEG_QUALITY` is off (`0`) by default and means "never change the
+format" -- these are screenshots of text and code, the worst case for JPEG
+ringing. `85` is the usual opt-in; any image with an alpha channel is skipped
+whatever it says.
+
+`IMAGE_DETAIL` is OpenAI's per-image fidelity knob and is meaningless
+elsewhere. `auto`, the default, emits no `detail` field at all -- which is what
+OpenAI applies anyway. `low` bills the base tokens only and shows the model a
+thumbnail, so it will confidently misread a screenshot rather than say it
+cannot see one. It never changes MCC's own token estimate: that is a function
+of the picture's real dimensions and the host's published formula.
+
+**How MCC estimates what a picture costs, since 6.53.0.** Every provider has a
+declared `image_token_family`, shown as a chip on the Models page beside each
+host. A host with no published formula is `unknown` and is charged Anthropic's
+28-px rate, because the request arrived in the Anthropic protocol and that is
+the budget the client itself is reasoning about -- the fallback is recorded,
+not hidden. Nothing anywhere branches on a model name to reach the family.
+
+Every request that carried a picture now stores `est_tokens_in` and
+`est_image_tokens` in the request log, and the Models page shows a
+**billed/est** ratio per host over the uncached successful requests that
+carried one. Read it like this: near `1.00x` means that host's declared family
+is right. A host far from `1.00x` has either the wrong family or a formula
+nobody publishes, and should be marked UNVERIFIED rather than guessed at.
+
+**The vision adapter's describe calls now report what they cost, since
+6.53.0.** They always had a row in the request log; that row never had a token
+column, so the cost was discarded rather than misfiled. `request_attempts` now
+carries nullable `tokens_in` / `tokens_out`, and the request row carries
+`adapter_tokens_in` / `adapter_tokens_out` rolled up from them. The request
+detail shows the answering model's tokens as it always has, and a separate
+`+ adapter` line beneath. The adapter's tokens are **never** folded into
+`tokens_in`: that column measures the model that answered and has measured
+exactly that since the log existed. NULL there means not measured, never zero.
 
 **The vision adapter has two modes, since 6.51.0.** `VISION_ADAPTER_MODE`
 decides what happens when a request carries an image and the model its route

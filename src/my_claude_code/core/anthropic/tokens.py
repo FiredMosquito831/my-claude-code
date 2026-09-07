@@ -4,16 +4,18 @@ import json
 
 from loguru import logger
 
+from my_claude_code.core.image_geometry import image_dimensions
 from my_claude_code.core.token_encoder import cl100k_encoder
 
 from .content import get_block_attr
+from .image_tokens import ImageTokenFamily, image_tokens
 from .models import Message, SystemContent, Tool
 from .tool_result_media import split_tool_result_media
 
 _DISALLOWED_SPECIAL: tuple[str, ...] = ()
 
 
-def _image_tokens(block: object) -> int:
+def _image_tokens(block: object, family: str | ImageTokenFamily) -> int:
     """Cost of one image or document block, wherever it appears.
 
     Factored out so the top-level branch and the tool-result branch share the
@@ -22,13 +24,25 @@ def _image_tokens(block: object) -> int:
     tool result, because the second one was measured as JSON text. That number
     is what the dashboard shows, what the context-headroom arithmetic uses, and
     what a cancelled request records, so the disagreement was not cosmetic.
+
+    Since 6.53.0 the arithmetic is the destination family's own published
+    formula applied to the image's real pixel dimensions, which is what every
+    provider actually bills on. The old ``len(base64) // 3000`` survives only
+    as the unreadable-image fallback: a URL-referenced image, a truncated
+    upload, a PDF sent as a document. The invented ``765`` for a block with no
+    inlined data is gone -- it corresponded to no published number anywhere,
+    and a block whose bytes we never saw is now charged the same 85-token floor
+    every other unmeasurable image gets.
     """
     source = get_block_attr(block, "source")
     if isinstance(source, dict):
         data = source.get("data") or source.get("base64") or ""
         if data:
+            size = image_dimensions(str(data))
+            if size is not None:
+                return image_tokens(size[0], size[1], family)
             return max(85, len(data) // 3000)
-    return 765
+    return 85
 
 
 def count_text_tokens(text: str) -> int:
@@ -51,8 +65,18 @@ def get_token_count(
     messages: list[Message],
     system: str | list[SystemContent] | None = None,
     tools: list[Tool] | None = None,
+    image_token_family: str | ImageTokenFamily = ImageTokenFamily.UNKNOWN,
 ) -> int:
-    """Estimate token count for a request."""
+    """Estimate token count for a request.
+
+    ``image_token_family`` is how the destination host bills a picture, as
+    declared on its provider descriptor. It is positional-or-keyword and
+    defaults to ``UNKNOWN`` -- which charges Anthropic's rate -- so every
+    existing caller keeps working and every caller that knows the destination
+    can say so. It is deliberately *not* derived from the request's ``detail``
+    field: that field does not exist in the Anthropic protocol at all, and
+    keying the estimate on it is the bug LiteLLM ships.
+    """
     total_tokens = 0
 
     if system:
@@ -87,7 +111,7 @@ def get_token_count(
                     total_tokens += count_text_tokens(str(block_id))
                     total_tokens += 15
                 elif b_type in ("image", "document"):
-                    total_tokens += _image_tokens(block)
+                    total_tokens += _image_tokens(block, image_token_family)
                 elif b_type == "tool_result":
                     raw = get_block_attr(block, "content", "")
                     content, media = split_tool_result_media(raw)
@@ -99,7 +123,7 @@ def get_token_count(
                             json.dumps(content, default=str)
                         )
                     for item in media:
-                        total_tokens += _image_tokens(item)
+                        total_tokens += _image_tokens(item, image_token_family)
                     total_tokens += count_text_tokens(str(tool_use_id))
                     total_tokens += 8
                 elif b_type in (

@@ -45,6 +45,10 @@ from .constants import (
     FALLBACK_STALL_TIMEOUT_DEFAULT,
     FALLBACK_TOTAL_TIMEOUT_DEFAULT,
     HTTP_CONNECT_TIMEOUT_DEFAULT,
+    IMAGE_DETAIL_DEFAULT,
+    IMAGE_DETAIL_NAMES,
+    IMAGE_JPEG_QUALITY_DEFAULT,
+    IMAGE_MAX_LONG_EDGE_DEFAULT,
     MAX_OUTPUT_TOKENS_CEILING,
     MAX_OUTPUT_TOKENS_CONTEXT_FLOOR,
     MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
@@ -1069,6 +1073,35 @@ class Settings(BaseSettings):
         validation_alias="TOOL_RESULT_IMAGE_DELIVERY",
     )
 
+    # ==================== Outbound Image Size ================================
+    # Shrink an oversized picture before it is sent, once per attempt, on the
+    # deep copy the router already takes -- so every dialect converter is
+    # handed pre-shrunk data and the client's own request is never mutated.
+    # On by default, to the budget Anthropic itself resizes to: token-neutral
+    # on three of the four billing families because they already do this
+    # server-side, and a real 41% saving on the fourth (OpenAI's patch-billed
+    # models), which is also the one case where the model genuinely sees less.
+    # 0 sends what the client sent.
+    image_max_long_edge: int = Field(
+        default=IMAGE_MAX_LONG_EDGE_DEFAULT,
+        validation_alias="IMAGE_MAX_LONG_EDGE",
+    )
+    # Re-encode a resized image as JPEG at this quality. 0 -- the default --
+    # never changes the format, because these are screenshots of text and code
+    # and that is the worst case for JPEG ringing. Skipped for any image with
+    # an alpha channel whatever this says.
+    image_jpeg_quality: int = Field(
+        default=IMAGE_JPEG_QUALITY_DEFAULT,
+        validation_alias="IMAGE_JPEG_QUALITY",
+    )
+    # OpenAI's per-image fidelity knob. `auto` emits no field at all, which is
+    # unchanged behaviour; it is meaningless outside the OpenAI dialects and is
+    # not emitted there.
+    image_detail: str = Field(
+        default=IMAGE_DETAIL_DEFAULT,
+        validation_alias="IMAGE_DETAIL",
+    )
+
     # ==================== Vision Adapter Mode ================================
     # What happens when a request carries an image and the model its route
     # picked is published as unable to read one. `route` diverts the whole
@@ -1608,6 +1641,24 @@ class Settings(BaseSettings):
             )
         return mode
 
+    @field_validator("image_detail")
+    @classmethod
+    def validate_image_detail(cls, v: str) -> str:
+        """Reject an unknown image detail rather than guess at it.
+
+        Blank falls back to the default the same way every other select does:
+        the admin UI writes ``KEY=`` for a cleared field, which is not a typo.
+        """
+        detail = str(v).strip().lower()
+        if not detail:
+            return IMAGE_DETAIL_DEFAULT
+        if detail not in IMAGE_DETAIL_NAMES:
+            raise ValueError(
+                f"Unknown image detail: {v!r}. Known values: "
+                f"{', '.join(sorted(IMAGE_DETAIL_NAMES))}"
+            )
+        return detail
+
     @field_validator(
         "tool_result_trim_read",
         "tool_result_trim_grep",
@@ -1922,6 +1973,19 @@ def _log_legacy_fcc_env_names_once() -> None:
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
+
+
+def configured_image_detail() -> str:
+    """Return the operator's OpenAI ``detail`` value, read per request.
+
+    Read here rather than captured at import for the same reason
+    :func:`configured_default_max_output_tokens` is: a value captured once
+    could not follow a dashboard save. ``auto`` -- the default -- means the
+    converter emits no ``detail`` key at all, which is what OpenAI applies
+    anyway and what every release before 6.53.0 sent.
+    """
+    settings = get_settings()
+    return str(getattr(settings, "image_detail", IMAGE_DETAIL_DEFAULT) or "auto")
 
 
 def configured_default_max_output_tokens() -> int | None:

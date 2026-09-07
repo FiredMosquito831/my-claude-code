@@ -11123,6 +11123,8 @@ async function openRequestDetail(requestId) {
     ["Cache writes", formatOptionalNumber(row.cache_write_tokens)],
     ["Cache hit", formatRowCacheHit(row)],
     ["Tokens out", formatOptionalNumber(row.tokens_out)],
+    ["+ adapter (in/out)", formatAdapterTokens(row)],
+    ["Estimated input", formatEstimatedInput(row)],
     ["Output rate", formatOutputRate(row)],
     ["TTFT", row.ttft_ms != null ? `${Math.round(row.ttft_ms)} ms` : "—"],
     ["Duration", row.duration_ms != null ? `${Math.round(row.duration_ms)} ms` : "—"],
@@ -12120,6 +12122,70 @@ function formatImageBytes(bytes) {
  * means the row predates the marker, which is not the same as "nothing was
  * sent", so it gets no sentence at all rather than a reassuring one.
  */
+/* What the vision adapter's own describe calls cost, kept apart from the
+ * answering model's tokens on purpose.
+ *
+ * The line above this one measures the model that answered the client, and it
+ * has measured exactly that since the request log existed. Folding a describe
+ * hop into it would silently change what every historical chart means without
+ * changing a single stored number, so the adapter gets its own line and an
+ * explicit "+". Absent when nothing was measured -- which is every request
+ * that ran no describe call, and every row written before 6.53.0.
+ */
+function formatAdapterTokens(row) {
+  const tokensIn = row?.adapter_tokens_in;
+  const tokensOut = row?.adapter_tokens_out;
+  if (tokensIn == null && tokensOut == null) return "";
+  return `+ ${formatOptionalNumber(tokensIn)} / ${formatOptionalNumber(tokensOut)}`;
+}
+
+/* What the proxy expected this request to cost, and how much of it was images.
+ *
+ * Stored so the estimator can be audited against a real bill rather than
+ * trusted. Only requests that carried a picture carry an estimate: a text-only
+ * request has nothing here to check, and a full token pass on every request
+ * would be real CPU on the response path for no answer.
+ */
+function formatEstimatedInput(row) {
+  const estimated = row?.est_tokens_in;
+  if (estimated == null) return "";
+  const images = row?.est_image_tokens;
+  if (images == null) return formatOptionalNumber(estimated);
+  return `${formatOptionalNumber(estimated)} (${formatOptionalNumber(images)} images)`;
+}
+
+/* The resize, when there was one: what arrived, and what actually left.
+ *
+ * Read off the pictures rather than off the request, because that is where the
+ * before and after live -- ``sent_width``/``sent_height`` are NULL on an image
+ * that was sent as it arrived, which is a different fact from "it was sent at
+ * its stored size" and the only one worth a sentence.
+ */
+function formatImageResize(images, row) {
+  // Gated on the request's own byte record, not only on the pictures: the
+  // sent size lives on the image, one image is shared by every turn that
+  // re-sent it, and a request that resized nothing must not inherit a
+  // sentence from one that did.
+  if (row?.image_bytes_in == null) return "";
+  const resized = (images || []).filter(
+    (image) => image && image.sent_width && image.sent_height,
+  );
+  if (!resized.length) return "";
+  const shapes = resized
+    .map(
+      (image) =>
+        `${image.width}\u00d7${image.height} \u2192 ${image.sent_width}\u00d7${image.sent_height}`,
+    )
+    .join(", ");
+  const before = Number(row?.image_bytes_in || 0);
+  const after = Number(row?.image_bytes_out || 0);
+  const bytes =
+    before > 0 && after > 0
+      ? ` (${formatImageBytes(before)} \u2192 ${formatImageBytes(after)})`
+      : "";
+  return ` Resized before sending: ${shapes}${bytes}.`;
+}
+
 function formatImageDelivery(delivery, count) {
   const plural = count === 1 ? "it was" : "they were";
   switch (delivery) {
@@ -12160,8 +12226,10 @@ function renderRequestImages(row) {
   const heading = document.createElement("h4");
   heading.textContent = images.length === 1 ? "Image input" : `Image input (${images.length})`;
   container.appendChild(heading);
-  const delivery = formatImageDelivery(row.image_delivery, images.length);
-  if (delivery) {
+  const delivery =
+    formatImageDelivery(row.image_delivery, images.length) +
+    formatImageResize(images, row);
+  if (delivery.trim()) {
     const note = document.createElement("p");
     note.className = "req-image-delivery";
     note.textContent = delivery;
@@ -14535,6 +14603,7 @@ function buildModelsProviderNode(provider, models, autoOpen) {
   if (providerHasOverrides(provider)) {
     toggle.appendChild(buildModelsChip("forced", "provider override"));
   }
+  appendImageEstimateChips(toggle, provider);
   head.appendChild(toggle);
 
   const bulk = document.createElement("div");
@@ -15184,6 +15253,43 @@ function buildListingPanel(listing) {
   body.textContent = `${parts.join("; ")}.`;
   wrap.appendChild(body);
   return wrap;
+}
+
+/* How this host bills a picture, and whether that claim has held up.
+ *
+ * The family is declared data on the provider's descriptor -- nothing here or
+ * anywhere else branches on a model name to reach it. The ratio beside it is
+ * the only thing that can audit that declaration: billed input tokens over
+ * estimated input tokens, across the uncached successful requests that carried
+ * an image. Near 1.0 means the family is right. A host far from 1.0 has either
+ * the wrong family or a formula nobody publishes, and should be marked
+ * UNVERIFIED rather than guessed at.
+ *
+ * Nothing is drawn for a host nobody has sent a picture to: "0 vs 0" would
+ * read as a verdict, and it is the absence of a measurement.
+ */
+function appendImageEstimateChips(toggle, provider) {
+  const family = provider.image_token_family;
+  if (family) {
+    const chip = buildModelsChip("imagefam", `images: ${family}`);
+    chip.title =
+      family === "unknown"
+        ? "This host publishes no image-token formula, so images are estimated with Anthropic's 28-px rule and the fallback is recorded rather than hidden."
+        : `Images on this host are estimated with the ${family} formula, declared on its provider descriptor.`;
+    toggle.appendChild(chip);
+  }
+  const estimate = provider.image_estimate;
+  if (!estimate || !estimate.requests) return;
+  const ratio =
+    estimate.ratio == null ? "no usage reported" : `${estimate.ratio.toFixed(2)}\u00d7`;
+  const chip = buildModelsChip("imageest", `billed/est ${ratio}`);
+  chip.title =
+    `Billed ${formatAnalyticsNumber(estimate.billed_tokens_in)} input tokens against ` +
+    `${formatAnalyticsNumber(estimate.est_tokens_in)} estimated, over ` +
+    `${estimate.requests} uncached request(s) carrying ${estimate.images} image(s); ` +
+    `${formatAnalyticsNumber(estimate.est_image_tokens)} of the estimate was pictures. ` +
+    "A ratio near 1.0 means this host's image-token family is right.";
+  toggle.appendChild(chip);
 }
 
 function buildModelsChip(kind, text) {

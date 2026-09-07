@@ -6534,6 +6534,24 @@ details.turn-pane > summary:focus-visible {
   color: var(--reasoning);
 }
 
+/* How this host bills a picture, and how well that declaration has predicted
+   the bill. Both are neutral by default: the family is a statement of fact
+   about the descriptor, not a warning, and a ratio is only alarming once
+   somebody reads it. The `unknown` family and a missing measurement are the
+   two cases the operator has to act on, so only those borrow the warn colour
+   -- via the title text, not a second chip. */
+.models-chip-imagefam {
+  border-color: var(--neutral-border);
+  background: var(--neutral-bg);
+  color: var(--muted);
+}
+
+.models-chip-imageest {
+  border-color: var(--accent-border);
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
 .models-subhead {
   margin: var(--space-4) 0 var(--space-2);
   font-size: 12px;
