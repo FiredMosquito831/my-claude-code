@@ -177,8 +177,12 @@ def _anchor_for(text: str, used: dict[str, int]) -> str:
     return base if seen == 0 else f"{base}-{seen}"
 
 
-def _decorate(tokens: list[Token]) -> tuple[Heading, ...]:
+def _decorate(tokens: list[Token], base_dir: str = "") -> tuple[Heading, ...]:
     """Add ids, classes and link targets in place; collect the headings.
+
+    ``base_dir`` is the repository directory the document lives in, so a
+    relative link is resolved from where it was written rather than from
+    the repository root.
 
     Done on the token stream rather than on the rendered HTML string: a
     regex pass over output would happily rewrite an `href=` that appears
@@ -207,7 +211,7 @@ def _decorate(tokens: list[Token]) -> tuple[Heading, ...]:
             href = token.attrGet("href") or ""
             if isinstance(href, str) and href and not href.startswith("#"):
                 if not _ABSOLUTE.match(href):
-                    href = resolve_relative_link(href)
+                    href = resolve_relative_link(href, base_dir)
                     token.attrSet("href", href)
                 if not href.startswith("#"):
                     # An admin page that navigates itself away on a doc link
@@ -218,16 +222,18 @@ def _decorate(tokens: list[Token]) -> tuple[Heading, ...]:
         elif token.type == "image":
             src = token.attrGet("src") or ""
             if isinstance(src, str) and src and not _ABSOLUTE.match(src):
-                token.attrSet("src", resolve_relative_link(src))
+                token.attrSet("src", resolve_relative_link(src, base_dir))
             token.attrSet("loading", "lazy")
 
         elif token.type == "inline" and token.children:
-            _decorate(token.children)
+            _decorate(token.children, base_dir)
 
     return tuple(headings)
 
 
-def _render_markdown_with_headings(source: str) -> tuple[str, tuple[Heading, ...]]:
+def _render_markdown_with_headings(
+    source: str, base_dir: str = ""
+) -> tuple[str, tuple[Heading, ...]]:
     """Markdown in, page HTML and table of contents out.
 
     Kept separate from `render_document` so the rendering rules can be
@@ -237,7 +243,7 @@ def _render_markdown_with_headings(source: str) -> tuple[str, tuple[Heading, ...
 
     parser = _parser()
     tokens = parser.parse(_strip_html_only_lines(source))
-    headings = _decorate(tokens)
+    headings = _decorate(tokens, base_dir)
     return parser.renderer.render(tokens, parser.options, {}), headings
 
 
@@ -259,7 +265,8 @@ def render_document(slug: str) -> RenderedDocument | None:
         return None
     document: Document = DOCUMENT_BY_SLUG[slug]
 
-    html, headings = _render_markdown_with_headings(source)
+    base_dir = document.repo_path.rpartition("/")[0]
+    html, headings = _render_markdown_with_headings(source, base_dir)
 
     return RenderedDocument(
         slug=document.slug,

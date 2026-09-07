@@ -1526,20 +1526,31 @@
               </nav>
 
               <article class="guide-body">
-                <h3 id="guide-start">How it works</h3>
+                <h3 id="guide-start">A local router for every coding agent you use</h3>
                 <p>
-                  My Claude Code is a local server that <strong>speaks Anthropic's
-                  API</strong>. Your coding agent believes it is talking to Anthropic. This
-                  proxy receives the request, forwards it to whichever provider you
-                  configured, and translates the reply back into Anthropic's wire format.
+                  My Claude Code is a local server that <strong>speaks four protocols at
+                  once</strong> &mdash; Anthropic's Messages API, OpenAI's Chat Completions
+                  and Responses APIs, and Google's Gemini API. Whichever one your agent
+                  already speaks, it believes it is talking to that vendor. This proxy
+                  receives the request, forwards it to whichever provider you configured,
+                  and translates the reply back into the wire format the agent asked in.
                   Streaming, tool use, reasoning and image input all keep working.
+                </p>
+                <p>
+                  The 16 <code>mcc-*</code> launchers &mdash; Claude Code, Codex, OpenCode,
+                  Gemini CLI, Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command
+                  Code, Droid, Pi, Kilo, Roo Code, Antigravity &mdash; and the desktop apps
+                  beside them all point at one address and share this one control panel.
+                  Claude Code is one first-class client here, not the frame around
+                  everything else; it leads the walkthroughs below only because it is the
+                  one most readers arrive with.
                 </p>
                 <p>Three things follow from that:</p>
                 <ul>
                   <li><strong>The server must stay running.</strong> It is a daemon, not a
                     library.</li>
                   <li><strong>Your agent's model picker can list this catalog</strong>, not
-                    Anthropic's. Choosing Sonnet routes to whatever you mapped Sonnet to.
+                    the vendor's. Choosing Sonnet routes to whatever you mapped Sonnet to.
                     Codex and Pi's pickers always do this; Claude Code's needs model
                     discovery on (see the Claude Code section below).</li>
                   <li><strong>Provider keys never leave the machine.</strong> Your agent
@@ -1554,7 +1565,11 @@
                 <p>
                   Eight steps, in order, from nothing installed to a request you can
                   read in the log. Everything after this section is a single topic in
-                  depth; this is the path through all of them.
+                  depth; this is the path through all of them. It is written with Claude
+                  Code as the client because that is the most common arrival, and every
+                  step except the one that writes its <code>settings.json</code> is the
+                  same for Codex, Gemini CLI, Aider or any other agent &mdash; the
+                  &ldquo;Point another CLI here&rdquo; section swaps that one step out.
                 </p>
                 <ol>
                   <li>

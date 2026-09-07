@@ -17,6 +17,7 @@ total in production.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import zipfile
@@ -24,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from my_claude_code.api.docs_content import DOCUMENTS
+from my_claude_code.api.docs_content import DOCUMENT_BY_SLUG, DOCUMENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUNDLE_PREFIX = "my_claude_code/docs_bundle/"
@@ -204,3 +205,101 @@ def test_developer_only_documents_are_not_force_included() -> None:
             f"{internal} is written for whoever builds MCC, not whoever runs "
             "it, and should not be on the Docs page."
         )
+
+
+# --------------------------------------------------------------------------
+# The index and the bundle must agree.
+#
+# `docs/README.md` is the index every other page hangs off, and it is now a
+# Docs page itself. That makes a new failure mode possible and invisible: a
+# topic page is written, linked from the index, and never added to DOCUMENTS,
+# so the dashboard's own index links to a page the dashboard does not have.
+# The five pages PR #20 split out of the README failed exactly this way.
+# --------------------------------------------------------------------------
+
+#: Pages the index links on purpose that are written for whoever *builds*
+#: MCC. The Docs page is curated to what someone *running* it needs, so
+#: these stay on GitHub -- see the docs_content module docstring.
+BUILDER_ONLY_DOCS: frozenset[str] = frozenset(
+    {
+        "docs/BRAND.md",
+        "docs/RELEASE-CHECKLIST.md",
+    }
+)
+
+_INDEX_LINK = re.compile(r"\]\(\.\/([A-Z0-9][A-Z0-9-]*\.md)\)")
+
+
+def _docs_linked_from_the_index() -> list[str]:
+    """Every `docs/*.md` the documentation index links to, in reading order."""
+
+    text = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    found = [f"docs/{name}" for name in _INDEX_LINK.findall(text)]
+    assert found, "the documentation index links to no docs/*.md at all"
+    return found
+
+
+def test_every_topic_page_the_index_links_is_a_curated_document() -> None:
+    curated = {document.repo_path for document in DOCUMENTS}
+    missing = [
+        path
+        for path in _docs_linked_from_the_index()
+        if path not in curated and path not in BUILDER_ONLY_DOCS
+    ]
+    assert not missing, (
+        f"the documentation index links to {missing}, which the Docs page "
+        "does not carry. Add a Document to DOCUMENTS in "
+        "src/my_claude_code/api/docs_content.py, or list it in "
+        "BUILDER_ONLY_DOCS if it is written for whoever builds MCC."
+    )
+
+
+def test_the_index_itself_is_a_curated_document() -> None:
+    """Without it the topic pages are reachable only by scrolling the rail."""
+
+    assert DOCUMENT_BY_SLUG["docs-index"].repo_path == "docs/README.md"
+
+
+def test_every_topic_page_the_index_links_is_force_included() -> None:
+    """Curated is not shipped. This is the half that reaches an install."""
+
+    mapping = _force_include()
+    missing = [
+        path
+        for path in _docs_linked_from_the_index()
+        if path not in mapping and path not in BUILDER_ONLY_DOCS
+    ]
+    assert not missing, (
+        f"the documentation index links to {missing}, which no "
+        "[tool.hatch.build.targets.wheel.force-include] line puts in the "
+        "wheel. The page would be empty for every installed user."
+    )
+
+
+def test_every_topic_page_the_index_links_actually_renders() -> None:
+    """Bundled and served are different claims; this one checks served."""
+
+    from my_claude_code.api.docs_render import render_document
+
+    slug_by_path = {document.repo_path: document.slug for document in DOCUMENTS}
+    for path in _docs_linked_from_the_index():
+        if path in BUILDER_ONLY_DOCS:
+            continue
+        rendered = render_document(slug_by_path[path])
+        assert rendered is not None, path
+        assert rendered.html.strip(), f"{path} renders to nothing"
+
+
+def test_an_index_link_to_a_sibling_page_stays_in_the_dashboard() -> None:
+    """`./USAGE.md` inside `docs/README.md` is `docs/USAGE.md`, not a
+    top-level file of that name -- otherwise the index's every row is a
+    GitHub 404.
+    """
+
+    from my_claude_code.api.docs_render import render_document
+
+    rendered = render_document("docs-index")
+    assert rendered is not None
+    assert 'href="#doc-usage"' in rendered.html, rendered.html[:2000]
+    assert 'href="#doc-clients"' in rendered.html
+    assert "blob/main/USAGE.md" not in rendered.html

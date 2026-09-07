@@ -290,7 +290,8 @@ def build_state(
             label="Connect a model provider",
             description=(
                 "Add a free API key from a supported provider so MCC has a "
-                "model to route your Claude Code requests to."
+                "model to route to. Every coding agent you point at this "
+                "server shares it, Claude Code included."
             ),
             view="providers",
             optional=False,
