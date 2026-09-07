@@ -38,6 +38,9 @@ KIMI_CODE_HOME
 NIM_ENABLE_KV_CACHE_REUSE
 # uv's own tool-install location, named in the install troubleshooting section.
 UV_TOOL_BIN_DIR
+# The npm package's own opt-out, read by packaging/npm/bin/postinstall.js (a
+# Node hook, not the Python server), so Settings will never declare it.
+MCC_NPM_SKIP_INSTALL
 
 # --- Upstream status/error phrases quoted verbatim so a reader can match the
 # --- string they see in a log. They are values, not variables. ------------

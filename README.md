@@ -278,6 +278,31 @@ curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/ma
 
 </details>
 
+<details>
+<summary><b>Or with npm (any platform)</b></summary>
+
+```bash
+npm install -g @firedmosquito831/my-claude-code
+```
+
+This is a **wrapper over the same digest-verified installer**, not a second way
+of building the product: a global install runs `install.ps1 -Desktop` /
+`install.sh --desktop` for you, so you end up with the server, every `mcc-*`
+command and the desktop app — plus `my-claude-code` and `mcc` as extra aliases.
+If the installer fails, `npm install -g` fails with it.
+
+```bash
+npx @firedmosquito831/my-claude-code            # run without installing globally
+mcc uninstall                                   # remove the server, its commands and the config home
+```
+
+`npx` installs nothing until you ask it to run something that needs a server, and
+neither a local `npm install`, nor `CI` being set, nor
+`MCC_NPM_SKIP_INSTALL=1` will trigger the installer. `npm uninstall -g` removes
+only the launcher — run `mcc uninstall` first.
+
+</details>
+
 **Then close and reopen your terminal.** The installer adds `~/.local/bin` to your `PATH`, and an already-open shell won't see it. This is the single most common reason `mcc-server` appears "not found" straight after a successful install.
 
 Verify it worked:

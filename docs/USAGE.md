@@ -84,7 +84,7 @@ Both end at the same place: one server, one dashboard, one configuration directo
 | | **Server + web dashboard** | **Desktop app** |
 | --- | --- | --- |
 | You get | `mcc-server` plus the 16 `mcc-*` launchers on your `PATH`; the dashboard opens in a browser tab. | A window with its own icon and tray icon, rendering the same dashboard. |
-| You install it by | running the one-liner below. | downloading an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest). |
+| You install it by | running the one-liner below — or `npm install -g @firedmosquito831/my-claude-code`, which is a wrapper over that same script and installs the desktop app with it ([Or with npm](#or-with-npm-any-platform)). | downloading an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest). |
 | The other half | — | is installed **by the app**, on first launch, in front of you: no `mcc-desktop` on the machine means the window prints the exact install command and runs it, streaming the output. Nothing is bundled. |
 | Available | Windows, WSL, Linux, macOS — today. | **All three**: `MyClaudeCode-Setup-windows-x86_64.exe`, `MyClaudeCode-linux-x86_64.deb`, `MyClaudeCode-linux-x86_64.tar.gz` and `MyClaudeCode-macos-universal.dmg`. The macOS image is **unsigned and un-notarised**, so its first launch needs one `xattr` command ([The macOS desktop-app disk image](#the-macos-desktop-app-disk-image)); `mcc-desktop` fetching the same binary avoids that entirely ([The desktop app](#the-desktop-app-fetched-verified-installed)). |
 
@@ -277,6 +277,35 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh" | sh
 ```
+
+### Or with npm (any platform)
+
+```bash
+npm install -g @firedmosquito831/my-claude-code
+```
+
+npm is a **wrapper over the same digest-verified installer**, never a second
+build of the product. A *global* install runs `install.ps1 -Desktop` (Windows) or
+`install.sh --desktop` (everywhere else) and streams its output, so it leaves the
+machine exactly as the one-liner above does — the server, every `mcc-*` command
+and the desktop app — and adds `my-claude-code` and `mcc` as two more aliases for
+the same launchers. A failing installer fails the `npm install -g`; npm does not
+report success for a package whose whole job is to put a server on your `PATH`.
+
+```bash
+npx @firedmosquito831/my-claude-code            # run without installing globally
+mcc uninstall                                   # remove the server, its commands and the config home
+```
+
+`npx … --version` installs nothing at all: the launcher fetches a server only
+when you ask it to run something that needs one. Four situations skip the
+installer and say so in one line each — a local `npm install` or an `npx` run,
+`CI` being set, `--ignore-scripts`, and `MCC_NPM_SKIP_INSTALL=1`.
+
+**Uninstalling takes both halves.** `npm uninstall -g
+@firedmosquito831/my-claude-code` removes the launcher npm installed and nothing
+else; the server, the commands and the configuration home are `mcc uninstall`'s
+job, and running it first is the order that leaves nothing behind.
 
 ### Then reopen your terminal
 

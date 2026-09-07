@@ -1,0 +1,147 @@
+# The npm package's release build: one job, one publish, on every release.
+#
+# WHY THIS IS ITS OWN FILE AND NOT A JOB IN `shell-release.yml`
+#
+#   `shell-release.yml` is a four-runner matrix whose `release` job needs all
+#   of it; an npm publish shares none of that -- no Rust, no artefacts, no
+#   `contents: write` -- and adding a sibling job there would mean a job that
+#   is unrelated to the shell inheriting the shell's concurrency group and its
+#   dispatch inputs. Same event, separate file, separate blast radius.
+#
+# WHAT IT PUBLISHES
+#
+#   `packaging/npm/` -- the launcher, not the server. The server itself ships
+#   as a wheel on the GitHub release; the npm package's postinstall runs the
+#   repository's own install script. The two therefore have to agree on a
+#   version, which is why the version check below is a hard failure and not a
+#   warning: a tag that publishes a launcher claiming a version the Python
+#   package never had is a package nobody can reason about.
+#
+# WHY A MISSING SECRET IS NOT A FAILURE
+#
+#   `NPM_TOKEN` is a granular access token the repository owner creates by
+#   hand (Read+write on packages for the `@firedmosquito831` scope, with
+#   "Bypass two-factor authentication" ticked -- npm refuses a publish from a
+#   token that has neither 2FA nor the bypass, and classic tokens cannot carry
+#   it). Until it exists this job must announce that clearly and exit green: a
+#   release is a release of the *server*, and the shipping of a convenience
+#   launcher must never turn a good release red.
+
+name: npm publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The existing release tag to publish from, e.g. v6.53.1"
+        required: true
+        type: string
+
+concurrency:
+  # Per tag, and never cancelled: npm publishes are not idempotent to
+  # interrupt, and the already-published guard below makes a re-run cheap.
+  group: npm-release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Provenance: npm records the workflow, the commit and the runner that
+      # built the tarball, and shows it on the package page. It costs nothing
+      # and it is the only thing that makes "this really came from the repo"
+      # checkable by a stranger.
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Check the secret exists
+        # A missing token is reported once, here, as a notice -- every later
+        # step is skipped and the job ends green. `secrets` cannot be read in
+        # an `if:` on a step of a reusable-callable job, so the answer is
+        # carried in an output instead.
+        id: secret
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "have=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NPM_TOKEN is not set, so nothing was published to npm. The release itself is unaffected. Add a granular npm access token (Read+write on packages for the @firedmosquito831 scope, with 'Bypass two-factor authentication' ticked) as the repository secret NPM_TOKEN; the next release publishes automatically."
+          else
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stamp the version from the tag and check it against pyproject
+        if: steps.secret.outputs.have == 'true'
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          # The one contract between the two packages. `packaging/npm/
+          # package.json` is also pinned to this by
+          # `tests/contracts/test_npm_package_contract.py`, so a mismatch here
+          # means the tag disagrees with the source, not that the source
+          # drifted.
+          pyproject="$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)"
+          if [ "$version" != "$pyproject" ]; then
+            echo "::error::tag '$TAG' is version '$version' but pyproject.toml says '$pyproject'. Refusing to publish a launcher that claims a version the server never had."
+            exit 1
+          fi
+          declared="$(node -p 'require("./packaging/npm/package.json").version')"
+          if [ "$declared" != "$version" ]; then
+            echo "::error::packaging/npm/package.json says '$declared' but the tag is '$version'. The version bump did not reach the npm package."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publishing $version"
+
+      - name: Skip if this version is already on the registry
+        if: steps.secret.outputs.have == 'true'
+        id: registry
+        working-directory: packaging/npm
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        # 6.52.0 was published by hand before this workflow existed, and a
+        # release can be re-run. `npm view` on a version that does not exist
+        # exits non-zero with an E404, which is the answer and not an error --
+        # hence `|| true` and a test on the printed value.
+        run: |
+          set -euo pipefail
+          name="$(node -p 'require("./package.json").name')"
+          published="$(npm view "$name@$VERSION" version 2>/dev/null || true)"
+          if [ "$published" = "$VERSION" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$name@$VERSION is already published; nothing to do."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: npm publish
+        if: steps.secret.outputs.have == 'true' && steps.registry.outputs.publish == 'true'
+        working-directory: packaging/npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance

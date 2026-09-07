@@ -1506,7 +1506,15 @@
                     in WSL, Linux or macOS,
                     <code>curl -fsSL
                     "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh"
-                    | sh</code>. Pick <em>one</em> environment and stay in it &mdash;
+                    | sh</code>. On any platform with Node,
+                    <code>npm install -g @firedmosquito831/my-claude-code</code> is
+                    the same thing through a third door: the package is a wrapper
+                    that runs the digest-verified installer above with the desktop
+                    flag, so it leaves you the server, every <code>mcc-*</code>
+                    command and the desktop app, plus <code>mcc</code> as an alias
+                    (<code>npx @firedmosquito831/my-claude-code</code> runs it
+                    without installing globally, and installs nothing until you ask
+                    for a server). Pick <em>one</em> environment and stay in it &mdash;
                     PowerShell and WSL keep separate config directories
                     (<code>C:\Users\&lt;you&gt;\.mcc</code> and <code>~/.mcc</code> inside
                     WSL), and installing in both is the usual way to end up editing the
