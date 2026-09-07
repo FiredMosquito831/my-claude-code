@@ -27,6 +27,9 @@ _SHELL_HELPER_NAMES = frozenset(
         "configure_and_verify_my_claude_code",
         "ensure_uv",
         "verify_uv",
+        "require_curl",
+        "curl_install_hint",
+        "install_managed_python",
         "current_uv_version",
         "version_ge",
         "create_desktop_shortcut",
@@ -41,6 +44,8 @@ _POWERSHELL_HELPER_NAMES = frozenset(
         "Install-FreeClaudeCode",
         "Ensure-Uv",
         "Confirm-Uv",
+        "Install-ManagedPython",
+        "Resolve-UvPath",
         "Get-UvVersion",
         "Convert-UvVersionOutput",
         "Test-UvVersionAtLeast",
@@ -172,6 +177,13 @@ if [ "${{1:-}}" = "--version" ]; then
     echo "uv {version}"
     exit 0
 fi
+if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "install" ]; then
+    if [ "$FAIL_STEP" = "python-install" ]; then
+        exit 36
+    fi
+    mkdir -p "$FAKE_PYTHON_DIR/cpython-3.14.0"
+    exit 0
+fi
 if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
     if [ "$FAIL_STEP" = "fcc-install" ]; then
         exit 33
@@ -248,7 +260,8 @@ def posix_harness(tmp_path: Path) -> PosixHarness:
     tool_bin = tmp_path / "tool-bin"
     home = tmp_path / "home"
     log = tmp_path / "calls.log"
-    for path in (bin_dir, fixtures, tool_bin, home):
+    python_dir = tmp_path / "uv-python"
+    for path in (bin_dir, fixtures, tool_bin, home, python_dir):
         path.mkdir(parents=True)
 
     _write_executable(
@@ -345,6 +358,10 @@ fi
             "CALL_LOG": str(log),
             "FAKE_FIXTURES": str(fixtures),
             "FAKE_TOOL_BIN": str(tool_bin),
+            # Where the fake uv pretends to unpack the interpreter that
+            # `uv python install` now downloads before the tool env is built.
+            "FAKE_PYTHON_DIR": str(python_dir),
+            "UV_PYTHON_INSTALL_DIR": str(python_dir),
             "FAIL_STEP": "",
         }
     )
@@ -361,12 +378,23 @@ def test_install_sh_fresh_install_is_verified(posix_harness: PosixHarness) -> No
     assert calls.index("uv-install") < calls.index("uv:--version")
     assert any(
         call.startswith(
-            "uv:tool install --force --refresh-package my-claude-code "
+            "uv:tool install --managed-python --force "
+            "--refresh-package my-claude-code "
             "--python 3.14.0 my-claude-code @ file://"
         )
         and FCC_WHEEL_NAME in call
         for call in calls
     )
+    # The interpreter is provisioned first, once, with the footprint flags.
+    # Folded into this case rather than run as a second full install: the fake
+    # mcc-server a second concurrent run executes is what the uninstaller's
+    # pgrep guard trips over under xdist.
+    python_calls = [c for c in calls if c.startswith("uv:python install")]
+    assert python_calls == ["uv:python install --no-bin --no-registry 3.14.0"], calls
+    assert calls.index(python_calls[0]) < next(
+        index for index, call in enumerate(calls) if call.startswith("uv:tool install")
+    )
+    assert "Installing Python 3.14.0 through uv" in result.stdout
     assert f"download:{FCC_WHEEL_URL}" in calls
     assert any(call.startswith("sha256sum:") for call in calls)
     assert not any(call.startswith("git:") for call in calls)
@@ -752,6 +780,7 @@ def _batch_uv(version: str) -> str:
     return rf"""@echo off
 echo uv:%*>>"%CALL_LOG%"
 if "%1"=="--version" goto version
+if "%1"=="python" if "%2"=="install" goto python_install
 if "%1"=="tool" if "%2"=="install" goto install
 if "%1"=="tool" if "%2"=="update-shell" goto update_shell
 if "%1"=="tool" if "%2"=="dir" if "%3"=="--bin" goto tool_bin
@@ -760,6 +789,10 @@ exit /b 59
 :version
 if "%FAIL_STEP%"=="uv-verify" exit /b 52
 echo uv {version}
+exit /b 0
+:python_install
+if "%FAIL_STEP%"=="python-install" exit /b 56
+if not exist "%FAKE_PYTHON_DIR%\cpython-3.14.0" mkdir "%FAKE_PYTHON_DIR%\cpython-3.14.0"
 exit /b 0
 :install
 if "%FAIL_STEP%"=="fcc-install" exit /b 53
@@ -884,11 +917,13 @@ def powershell_harness(
     app_data = tmp_path / "app-data"
     log = tmp_path / "calls.log"
     tool_root = tmp_path / "uv-tools"
+    python_root = tmp_path / "uv-python"
     for path in (
         bin_dir,
         fixtures,
         tool_bin,
         tool_root,
+        python_root,
         home,
         local_app_data,
         app_data,
@@ -1020,6 +1055,10 @@ $installer = [scriptblock]::Create([IO.File]::ReadAllText($env:FCC_INSTALLER))
             # ``tool dir --bin`` and exited 59 for everything else, which is
             # why the three full-run PowerShell cases failed on this machine.
             "FAKE_TOOL_DIR": str(tool_root),
+            # Where the fake uv pretends to unpack the interpreter that
+            # `uv python install` now downloads before the tool env is built.
+            "FAKE_PYTHON_DIR": str(python_root),
+            "UV_PYTHON_INSTALL_DIR": str(python_root),
             "FCC_INSTALLER": str(_repo_root() / "scripts" / "install.ps1"),
             "FAIL_STEP": "",
         }
@@ -1041,7 +1080,8 @@ def test_install_ps1_fresh_install_is_verified(
     assert calls.index("uv-install") < calls.index("uv:--version")
     assert any(
         call.startswith(
-            "uv:tool install --force --refresh-package my-claude-code "
+            "uv:tool install --managed-python --force "
+            "--refresh-package my-claude-code "
             '--python 3.14.0 "my-claude-code @ file:///'
         )
         and FCC_WHEEL_NAME in call
@@ -1640,7 +1680,12 @@ def test_install_ps1_never_reports_verified_with_missing_commands(
     )
     func_file = tmp_path / "ConfigureAndConfirm.ps1"
     func_file.write_text(
-        _extract_function_definition(installer_text, "Get-LauncherCommands")
+        # Configure-AndConfirmFreeClaudeCode runs the uv it pinned during
+        # Ensure-Uv rather than re-searching PATH, so the resolver comes with
+        # it and the module-level pin has to exist under Set-StrictMode.
+        '$script:UvPath = ""\n'
+        + _extract_function_definition(installer_text, "Resolve-UvPath")
+        + _extract_function_definition(installer_text, "Get-LauncherCommands")
         + _extract_function_definition(
             installer_text, "Configure-AndConfirmFreeClaudeCode"
         ),
@@ -1744,7 +1789,15 @@ def test_installers_use_native_clients_and_single_python_selection() -> None:
         assert "pi.dev/install" not in text
         assert "Alishahryar1/free-claude-code" not in text
         assert "refs/heads/main" not in text
-        assert "python install" not in text
+        # The installer provisions the interpreter itself: a machine with no
+        # Python at all must install cleanly, so `uv python install` runs
+        # before the tool environment is built. This assertion used to say
+        # `not in` -- back when the script leaned on whatever interpreter uv
+        # happened to find.
+        assert "python install" in text
+        assert "--no-bin" in text
+        assert "--no-registry" in text
+        assert "--managed-python" in text
         assert "--refresh-package" in text
         assert "tool update-shell" in text
         assert "--python" in text
@@ -2478,3 +2531,212 @@ def test_install_sh_steps_aside_when_the_desktop_app_is_registered(
     )
     # And it removed nothing: the app's entry belongs to the app's installer.
     assert (applications / DESKTOP_APP_ENTRY_NAME).is_file()
+
+
+def _install_sh() -> str:
+    return (_repo_root() / "scripts" / "install.sh").read_text(encoding="utf-8")
+
+
+def test_installers_provision_python_before_the_tool_environment() -> None:
+    """Python is installed by uv, first, and the tool env may not use another.
+
+    A fresh machine has no Python. `uv tool install --python 3.14.0` alone will
+    happily bind the tool environment to a *system* interpreter that happens to
+    match, and on a machine with none it depends on an implicit download. Both
+    installers therefore run `uv python install` as its own step BEFORE the
+    tool install, and pass --managed-python so a system interpreter can never
+    be chosen.
+    """
+    shell = _install_sh()
+    powershell = _install_ps1()
+
+    assert (
+        'run "$uv_bin" python install --no-bin --no-registry "$PYTHON_VERSION"' in shell
+    )
+    assert (
+        '"python", "install", "--no-bin", "--no-registry", $PythonVersion' in powershell
+    )
+
+    # The step runs before the tool environment is built, in both scripts.
+    assert shell.index(
+        'step "Installing Python $PYTHON_VERSION through uv"'
+    ) < shell.index('step "Installing or updating My Claude Code"')
+    assert powershell.index(
+        'Write-Step "Installing Python $PythonVersion through uv"'
+    ) < (powershell.index('Write-Step "Installing or updating My Claude Code"'))
+    assert "install_managed_python\n" in shell
+    assert "Install-ManagedPython\n" in powershell
+
+    # No system interpreter, ever.
+    for text in (shell, powershell):
+        assert "--managed-python" in text
+    assert "--managed-python --force --refresh-package" in shell
+    assert '"--managed-python",\n        "--force",' in powershell
+
+
+def test_install_sh_names_the_curl_package_for_the_local_distro() -> None:
+    """curl is the one prerequisite the script cannot bootstrap.
+
+    It must not fail with a bare "curl is required": it has to print the exact
+    command for whichever package manager the machine actually has, and exit 1.
+    """
+    shell = _install_sh()
+
+    assert "require_curl\n" in shell
+    assert "require_command curl" not in shell
+    for manager, command in (
+        ("apt-get", "sudo apt-get update && sudo apt-get install -y curl"),
+        ("dnf", "sudo dnf install -y curl"),
+        ("yum", "sudo yum install -y curl"),
+        ("zypper", "sudo zypper install -y curl"),
+        ("pacman", "sudo pacman -S --noconfirm curl"),
+        ("apk", "sudo apk add curl"),
+        ("brew", "brew install curl"),
+        ("pkg", "sudo pkg install -y curl"),
+    ):
+        assert f"command -v {manager} >/dev/null 2>&1" in shell
+        assert command in shell
+    assert "install curl with your system package manager" in shell
+    assert "error: curl is required and was not found." in shell
+    assert "Then run this installer again." in shell
+
+
+_CURL_HINTS = (
+    ("apt-get", "sudo apt-get update && sudo apt-get install -y curl"),
+    ("dnf", "sudo dnf install -y curl"),
+    ("yum", "sudo yum install -y curl"),
+    ("zypper", "sudo zypper install -y curl"),
+    ("pacman", "sudo pacman -S --noconfirm curl"),
+    ("apk", "sudo apk add curl"),
+    ("brew", "brew install curl"),
+    ("pkg", "sudo pkg install -y curl"),
+)
+
+
+def test_install_sh_exits_one_with_the_curl_hint_when_curl_is_missing(
+    tmp_path: Path,
+) -> None:
+    """The failure path itself, not just its text: exit 1 and a real command.
+
+    The PATH given here holds ONE package manager and nothing else -- not the
+    host's /usr/bin. Everything install.sh runs before require_curl is a shell
+    builtin, so that is enough to reach the check, and it makes the case
+    impossible to run past: a PATH carrying the real curl would send the script
+    on to download uv and a release wheel for real.
+    """
+    if os.name == "nt":
+        pytest.skip("POSIX installer scenarios run on POSIX hosts")
+
+    hidden = tmp_path / "no-curl"
+    hidden.mkdir()
+    expected = "install curl with your system package manager"
+    for manager, hint in _CURL_HINTS:
+        found = shutil.which(manager)
+        if found:
+            (hidden / manager).symlink_to(found)
+            expected = hint
+            break
+
+    result = subprocess.run(
+        ["/bin/sh", str(_repo_root() / "scripts" / "install.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={"PATH": str(hidden), "HOME": str(tmp_path)},
+        timeout=60,
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "curl is required and was not found." in result.stderr
+    assert expected in result.stderr
+    assert "Then run this installer again." in result.stderr
+    # It stopped at the check: nothing was downloaded and nothing was written.
+    assert "astral.sh" not in result.stdout
+    assert not (tmp_path / ".local").exists()
+
+
+def test_installers_pin_the_uv_they_installed_by_absolute_path() -> None:
+    """A fresh uv lands where the CURRENT shell has no PATH entry.
+
+    Both scripts must therefore run the resolved path of the uv they just
+    verified, not the bare name, and tell the user to open a new terminal
+    afterwards -- the launchers land in a directory this shell also predates.
+    """
+    shell = _install_sh()
+    powershell = _install_ps1()
+
+    assert "uv_bin=$(command -v uv)" in shell
+    assert 'run "$uv_bin" tool install' in shell
+    assert 'run "$uv_bin" tool update-shell' in shell
+    assert 'tool_bin=$("$uv_bin" tool dir --bin)' in shell
+    # No bare `uv` subcommand invocation survives in either script.
+    assert "run uv tool " not in shell
+    assert "$script:UvPath = $uvCommand.Source" in powershell
+    assert 'Resolve-UvPath "the Free Claude Code installation"' in powershell
+    assert 'Resolve-UvPath "PATH configuration"' in powershell
+    assert 'Resolve-UvPath "the Python installation"' in powershell
+
+    for text in (shell, powershell):
+        assert "open a new terminal" in text
+        assert "shells started earlier cannot see" in text
+
+
+def test_installers_state_the_uv_floor_proxy_and_desktop_prerequisites() -> None:
+    """The script header is the contract a reader checks before running it."""
+    shell = _install_sh()
+    powershell = _install_ps1()
+
+    for text in (shell, powershell):
+        # The uv version floor, and where it comes from.
+        assert "required-version in pyproject.toml" in text
+        assert "uv python install" in text
+        assert "A system Python is never" in text
+        # One sentence on proxies.
+        assert "HTTPS_PROXY" in text
+        assert "NO_PROXY" in text
+        # Desktop prerequisites are stated, and stated as not installed here.
+        assert "webkit2gtk" in text
+        assert "WebView2" in text
+
+    assert "The ONE thing this script cannot bootstrap is curl" in shell
+    assert "Invoke-RestMethod is part of PowerShell" in powershell
+    # The published one-liner runs under the default execution policy.
+    assert "irm ... | iex" in powershell
+    assert "without Set-ExecutionPolicy" in powershell
+    assert "-ExecutionPolicy Bypass -File" in powershell
+
+
+def test_installers_still_do_not_install_coding_agents() -> None:
+    """Provisioning prerequisites must not become provisioning agents."""
+    shell = _install_sh()
+    powershell = _install_ps1()
+
+    for text in (shell, powershell):
+        assert "npm install -g" not in text
+        assert "claude.ai/install" not in text
+        assert "chatgpt.com/codex/install" not in text
+        assert "install whichever of those you use yourself" in text
+
+
+def test_install_sh_stops_when_the_python_download_fails(
+    posix_harness: PosixHarness,
+) -> None:
+    result = posix_harness.run(fail_step="python-install")
+
+    assert result.returncode != 0
+    assert "is installed and verified." not in result.stdout
+    assert not any(call.startswith("uv:tool install") for call in posix_harness.calls())
+
+
+def test_install_sh_finds_uv_where_xdg_data_home_puts_it() -> None:
+    """uv installs to $XDG_DATA_HOME/../bin, not always $HOME/.local/bin.
+
+    A machine that sets XDG_DATA_HOME somewhere other than ~/.local/share gets
+    its uv written to a directory install.sh never looked in, and the install
+    dies with "uv was installed, but it is not available on PATH" right after
+    the uv installer reported success. Caught by the ubuntu-latest smoke job.
+    """
+    shell = _install_sh()
+
+    assert 'add_path_entry "${XDG_DATA_HOME%/}/../bin"' in shell
+    assert 'if [ -n "${XDG_DATA_HOME:-}" ]; then' in shell

@@ -317,9 +317,10 @@ mcc-server --version
 
 #### What the installer actually does
 
-1. Installs `uv` (the Python tool runner) if it's missing or too old.
-2. Looks up the **latest** release, downloads its wheel, and **verifies the SHA-256 that GitHub publishes for that asset** — a mismatch aborts rather than running unverified code.
-3. Installs My Claude Code and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, `mcc-kimi`, `mcc-qwen`, `mcc-crush`, `mcc-cline`, `mcc-goose`, `mcc-aider`, and `mcc-droid` on your `PATH` (the legacy `fcc-*` spellings remain as aliases for the first five).
+1. Installs `uv` (the Python tool runner) if it's missing, and replaces it if it is older than the floor the scripts state (`>=0.11.0`, the `[tool.uv] required-version` in `pyproject.toml`).
+2. Installs **Python 3.14.0 through `uv`** — you do not need Python on the machine, and a Python you already have is never used (`--managed-python`). The interpreter lands under uv's own directory: no `python` shim on your `PATH`, and no Windows registry entry.
+3. Looks up the **latest** release, downloads its wheel, and **verifies the SHA-256 that GitHub publishes for that asset** — a mismatch aborts rather than running unverified code.
+4. Installs My Claude Code and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex`, `mcc-pi`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-commandcode`, `mcc-kimi`, `mcc-qwen`, `mcc-crush`, `mcc-cline`, `mcc-goose`, `mcc-aider`, and `mcc-droid` on your `PATH` (the legacy `fcc-*` spellings remain as aliases for the first five).
 
 That's all it does. **It does not install Claude Code, Codex, Pi, OpenCode, Kilo or Command Code** — those are separate third-party tools, and My Claude Code doesn't need any of them to run. Install whichever you actually use, yourself. The `mcc-*` launchers just point an agent you already have at the proxy: when one is missing, the launcher prints that agent's own install command and exits 127 rather than fetching anything. A test in the suite greps both installers for every known agent package name so the rule cannot quietly change.
 
@@ -330,6 +331,20 @@ sh install.sh --version 5.5.1      # PowerShell: -Version 5.5.1
 ```
 
 Want to see what it would do without changing anything? Add `--dry-run` (PowerShell: `-DryRun`).
+
+**What it cannot install for you.** On Linux/macOS/WSL: `curl` — it is what fetches
+everything else, so the script names the exact `apt-get`/`dnf`/`pacman`/`apk`/`brew`
+command for your machine and stops. On Windows: nothing — `Invoke-RestMethod` ships with
+PowerShell 5.1, and the published one-liner pipes the script into the session
+(`irm ... | iex`), which runs under the **default execution policy** with no
+`Set-ExecutionPolicy`. (Only a *saved* `.\install.ps1` is subject to policy; run that as
+`powershell -ExecutionPolicy Bypass -File .\install.ps1`.) Both scripts honour
+`HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` for every download. The desktop app's own
+prerequisites are carried by its packages: the Windows `setup.exe` bootstraps WebView2,
+and the Linux `.deb` declares `webkit2gtk` in its `Depends`.
+
+If a freshly installed command is not found, open a new terminal — the install may have
+added a `PATH` entry that shells started earlier cannot see.
 
 You can review both installers before running them: [install.sh](scripts/install.sh) and [install.ps1](scripts/install.ps1).
 

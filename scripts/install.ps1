@@ -12,6 +12,42 @@ param(
     [object[]] $RemainingArgs = @()
 )
 
+# My Claude Code installer (Windows PowerShell 5.1+ and PowerShell 7+).
+#
+# This script owns every prerequisite the proxy needs, so a machine with
+# nothing but Windows on it ends up with a working install:
+#   * uv           -- installed from https://astral.sh/uv/install.ps1 when it is
+#                     missing, and REPLACED when the uv already on PATH is older
+#                     than the floor below. The floor is $MinUvVersion and it
+#                     tracks [tool.uv] required-version in pyproject.toml.
+#   * Python       -- $PythonVersion is downloaded by uv itself
+#                     (`uv python install`) BEFORE the tool environment is
+#                     built, and the tool environment is pinned to a uv-managed
+#                     interpreter (`--managed-python`). A system Python is never
+#                     used, and none needs to exist.
+#   * My Claude Code -- installed into an isolated uv tool environment from the
+#                     release wheel, after its SHA-256 is verified.
+#
+# Nothing has to be installed by hand first. The POSIX installer needs curl;
+# here Invoke-RestMethod is part of PowerShell, so there is no such gap.
+#
+# Execution policy: the published one-liner pipes this script into the session
+# (`irm ... | iex`) and so runs under the default RemoteSigned/Restricted
+# policy without Set-ExecutionPolicy -- policy applies to script FILES, not to
+# text executed in the current session. Only a saved copy run as
+# `.\install.ps1` is subject to it; use
+# `powershell -ExecutionPolicy Bypass -File .\install.ps1` for that.
+#
+# Behind a proxy, set $env:HTTPS_PROXY (and HTTP_PROXY/NO_PROXY) before running
+# this script: Invoke-RestMethod/Invoke-WebRequest and uv both honour those
+# variables, so every download here -- the uv installer, the Python build, the
+# release wheel -- goes through it.
+#
+# Desktop app prerequisites are NOT installed here: the Windows desktop Setup
+# .exe (Inno Setup) detects and bootstraps the WebView2 runtime itself, and the
+# Linux .deb declares webkit2gtk in its Depends. -Desktop below only writes a
+# Start Menu shortcut for the mcc-desktop command this install provides.
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -24,6 +60,10 @@ $FccLatestReleaseUrl = "https://api.github.com/repos/$FccRepo/releases/latest"
 $PythonVersion = "3.14.0"
 $MinUvVersion = "0.11.0"
 $UvInstallUrl = "https://astral.sh/uv/install.ps1"
+# Absolute path to the uv this script verified, set by Ensure-Uv. A fresh uv
+# install lands in a directory the CURRENT shell may not have on PATH, so every
+# later step runs this path rather than the bare name.
+$script:UvPath = ""
 # Set by Start-DeferredInstall when the app was running and the install was
 # staged for completion after the user stops it.
 $script:Deferred = $false
@@ -60,6 +100,8 @@ Options:
   -TorchBackend VALUE    Use a uv PyTorch backend, such as cu130. Requires local voice.
   -Rtk                   Enable RTK token optimization for Claude Code, Codex, and Pi.
   -Desktop               Create a Start Menu shortcut for mcc-desktop.
+                         The tray app needs the WebView2 runtime, which the
+                         desktop Setup .exe bootstraps; Windows 11 ships it.
   -DryRun                Print commands without running them.
   -Help                  Show this help text.
 "@
@@ -389,6 +431,7 @@ function Confirm-Uv {
     if (-not (Test-UvVersionAtLeast -Version $version -Minimum $MinUvVersion)) {
         throw "uv $MinUvVersion or newer is required; found uv $version after installation."
     }
+    $script:UvPath = $uvCommand.Source
     Write-Host "Verified uv $version."
 }
 
@@ -410,6 +453,7 @@ function Ensure-Uv {
     if ($uvCommand) {
         $version = Get-UvVersion $uvCommand.Source
         if (Test-UvVersionAtLeast -Version $version -Minimum $MinUvVersion) {
+            $script:UvPath = $uvCommand.Source
             Write-Host "uv $version already satisfies >=$MinUvVersion; leaving it unchanged."
             return
         }
@@ -537,6 +581,37 @@ function Get-PackageSpec {
     return "my-claude-code @ $PackageUrl"
 }
 
+function Install-ManagedPython {
+    # Download $PythonVersion through uv before anything needs an interpreter,
+    # so a machine with no Python at all installs cleanly. --no-bin and
+    # --no-registry keep this to a self-contained interpreter under
+    # UV_PYTHON_INSTALL_DIR: no python.exe shim is dropped into a bin directory
+    # on PATH, and no PEP 514 entry is written to the Windows registry. The
+    # tool environment finds it by version, not by PATH.
+    $arguments = @("python", "install", "--no-bin", "--no-registry", $PythonVersion)
+
+    if ($DryRun) {
+        Write-Host "+ uv $($arguments -join ' ')"
+        return
+    }
+
+    $uvPath = Resolve-UvPath "the Python installation"
+    Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments
+}
+
+function Resolve-UvPath {
+    param([Parameter(Mandatory = $true)] [string] $Purpose)
+
+    if (-not [string]::IsNullOrWhiteSpace($script:UvPath)) {
+        return $script:UvPath
+    }
+    $uvCommand = Get-ApplicationCommand "uv"
+    if (-not $uvCommand) {
+        throw "uv is not available for $Purpose."
+    }
+    return $uvCommand.Source
+}
+
 function Install-FreeClaudeCode {
     $release = Resolve-Release
     $wheelPath = Get-VerifiedReleaseWheel -Release $release
@@ -550,6 +625,7 @@ function Install-FreeClaudeCode {
     $arguments = @(
         "tool",
         "install",
+        "--managed-python",
         "--force",
         "--refresh-package",
         "my-claude-code",
@@ -565,11 +641,7 @@ function Install-FreeClaudeCode {
         return $release.Version
     }
 
-    $uvCommand = Get-ApplicationCommand "uv"
-    if (-not $uvCommand) {
-        throw "uv is not available for the Free Claude Code installation."
-    }
-    $uvPath = $uvCommand.Source
+    $uvPath = Resolve-UvPath "the Free Claude Code installation"
 
     $running = @(Get-RunningLaunchers)
     if ($running.Count -gt 0) {
@@ -1156,12 +1228,9 @@ function Configure-AndConfirmFreeClaudeCode {
         return
     }
 
-    $uvCommand = Get-ApplicationCommand "uv"
-    if (-not $uvCommand) {
-        throw "uv is not available for PATH configuration."
-    }
-    Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
-    $toolBin = Invoke-NativeCapture -FilePath $uvCommand.Source -Arguments @("tool", "dir", "--bin")
+    $uvPath = Resolve-UvPath "PATH configuration"
+    Invoke-NativeCommand -FilePath $uvPath -Arguments @("tool", "update-shell")
+    $toolBin = Invoke-NativeCapture -FilePath $uvPath -Arguments @("tool", "dir", "--bin")
     if ([string]::IsNullOrWhiteSpace($toolBin)) {
         throw "uv returned an empty tool bin directory."
     }
@@ -1256,6 +1325,9 @@ function Write-MccCommandReference {
     }
     Write-Host ""
     Write-Host "The legacy fcc-* commands (fcc-server, fcc-claude, ...) remain as aliases."
+    Write-Host ""
+    Write-Host "If mcc-server is not found, open a new terminal: this install may have added"
+    Write-Host "a directory to PATH that shells started earlier cannot see."
     Write-Host ""
     Write-Host "To use an update installed while the server is running, restart the proxy"
     Write-Host "with: mcc-server"
@@ -1493,6 +1565,9 @@ Add-KnownBinDirectories
 
 Write-Step "Ensuring uv $MinUvVersion or newer is installed"
 Ensure-Uv
+
+Write-Step "Installing Python $PythonVersion through uv"
+Install-ManagedPython
 
 Write-Step "Installing or updating My Claude Code"
 $InstalledVersion = Install-FreeClaudeCode
