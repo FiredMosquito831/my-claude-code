@@ -945,6 +945,29 @@
               Table timestamps use your browser locale; chart bucket boundaries use UTC.
             </p>
             <p id="reqBreakdownTruncatedNote" class="analytics-footnote" hidden></p>
+            <section class="analytics-panel cost-panel">
+              <h4>Cost</h4>
+              <p id="reqCostNote" class="analytics-footnote"></p>
+              <div id="reqCostCards" class="requests-cards"></div>
+              <div class="requests-breakdowns">
+                <section class="analytics-panel">
+                  <h4>Cost by provider</h4>
+                  <div id="reqCostProvider"></div>
+                </section>
+                <section class="analytics-panel">
+                  <h4>Cost by model</h4>
+                  <div id="reqCostModel"></div>
+                </section>
+                <section class="analytics-panel">
+                  <h4>Cost by harness</h4>
+                  <div id="reqCostHarness"></div>
+                </section>
+                <section class="analytics-panel">
+                  <h4>Cost by day</h4>
+                  <div id="reqCostDay"></div>
+                </section>
+              </div>
+            </section>
             <div class="requests-breakdowns">
               <section class="analytics-panel">
                 <h4>Provider performance</h4>
@@ -988,6 +1011,7 @@
                     <th>Status</th>
                     <th>Turn</th>
                     <th>Tokens</th>
+                    <th>Cost</th>
                     <th>TTFT</th>
                     <th>Duration</th>
                     <th>Details</th>

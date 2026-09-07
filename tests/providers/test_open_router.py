@@ -1,6 +1,8 @@
 """Tests for the OpenRouter OpenAI-chat provider."""
 
+from collections.abc import Mapping
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +14,7 @@ from my_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
     text_content,
 )
+from my_claude_code.core.reported_cost import install_reported_cost
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.open_router import OpenRouterProvider
 from my_claude_code.providers.openai_chat import OpenAIChatProvider
@@ -235,3 +238,145 @@ async def test_cleanup_closes_openai_client(open_router_provider):
     await open_router_provider.cleanup()
 
     open_router_provider._client.close.assert_awaited_once()
+
+
+# --------------------------------------------------------------------------
+# Reported cost (6.54.0). Read off the final usage block, which is the one
+# place every OpenAI-shaped host's usage passes through -- nothing in the
+# provider layer names OpenRouter, and any host reporting the same keys is
+# read the same way.
+# --------------------------------------------------------------------------
+
+
+def _usage_chunk(usage, *, finish_reason="stop"):
+    """The final SSE chunk, in the shape OpenRouter actually sends it.
+
+    OpenRouter deliberately deviates from OpenAI here: rather than an empty
+    ``choices`` array it sends one choice with an empty delta repeating the
+    finish reason. Detecting the usage chunk by ``choices.length === 0`` --
+    the obvious reading -- therefore misses it every time.
+    """
+    delta = SimpleNamespace(content=None, reasoning_content=None, tool_calls=None)
+    choice = SimpleNamespace(delta=delta, finish_reason=finish_reason)
+    return SimpleNamespace(choices=[choice], usage=usage)
+
+
+async def _run(provider, chunks):
+    stream = AsyncStream(chunks)
+    with patch.object(
+        provider._client.chat.completions,
+        "create",
+        new_callable=AsyncMock,
+        return_value=stream,
+    ):
+        return [event async for event in provider.stream_response(make_request())]
+
+
+@pytest.mark.asyncio
+async def test_usage_cost_is_read_from_the_final_stream_chunk(open_router_provider):
+    slot = install_reported_cost()
+    await _run(
+        open_router_provider,
+        [
+            _chunk(content="hi"),
+            _usage_chunk(
+                {
+                    "prompt_tokens": 194,
+                    "completion_tokens": 2,
+                    "cost": 0.95,
+                    "cost_details": {"upstream_inference_cost": None},
+                    "is_byok": False,
+                }
+            ),
+        ],
+    )
+    assert slot.cost_usd == 0.95
+    assert slot.total_usd == 0.95
+
+
+@pytest.mark.asyncio
+async def test_the_usage_chunk_is_detected_by_usage_not_by_empty_choices(
+    open_router_provider,
+):
+    """The chunk that carries the cost still has a choice in it."""
+    chunk = _usage_chunk({"cost": 0.1, "cost_details": {}, "prompt_tokens": 1})
+    assert chunk.choices, "the trap: this is not an empty-choices chunk"
+    slot = install_reported_cost()
+    await _run(open_router_provider, [_chunk(content="hi"), chunk])
+    assert slot.cost_usd == 0.1
+
+
+@pytest.mark.asyncio
+async def test_a_byok_response_is_not_priced_at_the_surcharge_alone(
+    open_router_provider,
+):
+    """On BYOK, ``cost`` is OpenRouter's ~5% cut and not the bill."""
+    slot = install_reported_cost()
+    await _run(
+        open_router_provider,
+        [
+            _chunk(content="hi"),
+            _usage_chunk(
+                {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 10,
+                    "cost": 0.05,
+                    "cost_details": {"upstream_inference_cost": 1.0},
+                    "is_byok": True,
+                }
+            ),
+        ],
+    )
+    assert slot.cost_usd == 0.05
+    assert slot.total_usd == pytest.approx(1.05)
+
+
+@pytest.mark.asyncio
+async def test_a_host_that_reports_no_cost_leaves_the_request_unpriced(
+    open_router_provider,
+):
+    slot = install_reported_cost()
+    await _run(
+        open_router_provider,
+        [
+            _chunk(content="hi"),
+            _usage_chunk({"prompt_tokens": 100, "completion_tokens": 10}),
+        ],
+    )
+    assert slot.cost_usd is None
+    assert slot.total_usd is None
+
+
+def _float_every_value(mapping: Mapping[str, Any]) -> dict[str, float]:
+    """The obvious, wrong way to read a ``pricing`` object."""
+    return {key: float(value) for key, value in mapping.items()}
+
+
+def test_a_models_pricing_object_with_overrides_and_discount_parses():
+    """``pricing`` carries an array and a number beside its decimal strings.
+
+    A naive "map every value to float" over that object raises. MCC reads the
+    ``/models`` pricing object nowhere today -- the price ladder comes from
+    models.dev and LiteLLM -- and this pins the shape so a future reader
+    starts from the real one rather than from the documented one.
+    """
+    pricing: dict[str, Any] = {
+        "prompt": "0.00001",
+        "completion": "0.00005",
+        "input_cache_read": "0.00000025",
+        "input_cache_write": "0.0000125",
+        "web_search": "0.01",
+        "overrides": [{"provider": "anthropic", "prompt": "0.000009"}],
+        "discount": 0.25,
+    }
+    numeric = {
+        key: float(value) for key, value in pricing.items() if isinstance(value, str)
+    }
+    assert numeric["prompt"] == 1e-05
+    assert isinstance(pricing["overrides"], list)
+    assert isinstance(pricing["discount"], float)
+    with pytest.raises(TypeError):
+        # The naive read, which is what raises: `overrides` is an array and
+        # `float()` refuses it. Written through a helper so the expression is
+        # about the runtime shape rather than about what a checker can prove.
+        _float_every_value(pricing)

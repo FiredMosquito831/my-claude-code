@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from my_claude_code.api.admin_websearch_routes import get_websearch_log_store
 from my_claude_code.config.settings import Settings
 from my_claude_code.core import export as export_engine
+from my_claude_code.core import request_log
 from my_claude_code.core.request_log import RequestLogStore, store_from_settings
 from my_claude_code.websearch.analytics import WebSearchLogStore
 
@@ -122,6 +123,10 @@ async def export_analytics(
     endpoint: str | None = Query(None),
     key: str | None = Query(None),
     q: str | None = Query(None),
+    local: str | None = Query(
+        None, description="all | hide | only -- locally answered requests"
+    ),
+    harness: str | None = Query(None, description="comma-separated harness names"),
     settings: Settings = Depends(get_settings),
     websearch_store: WebSearchLogStore = Depends(get_websearch_log_store),
 ):
@@ -154,6 +159,8 @@ async def export_analytics(
             endpoint=endpoint,
             key=key,
             q=q,
+            local=local,
+            harness=harness,
             settings=settings,
         )
     return _websearch_export(
@@ -182,6 +189,8 @@ def _request_export(
     endpoint: str | None,
     key: str | None,
     q: str | None,
+    local: str | None,
+    harness: str | None,
     settings: Settings,
 ) -> StreamingResponse:
     store = _request_store(settings)
@@ -189,6 +198,12 @@ def _request_export(
         return _disabled_response()
     if status is not None and status not in {"success", "error", "cancelled"}:
         raise HTTPException(status_code=422, detail="Invalid status filter")
+    # The dashboard always sends ``local`` and sends ``harness`` whenever one
+    # is picked, and until 6.54.0 FastAPI dropped both silently, so a download
+    # disagreed with the table it was taken from. Validated the same way
+    # ``status`` is: an unknown value is a typo, not "everything".
+    if local is not None and local not in request_log.LOCAL_FILTER_VALUES:
+        raise HTTPException(status_code=422, detail="Invalid local filter")
     selected = (
         _split_csv(fields)
         if fields is not None
@@ -223,6 +238,8 @@ def _request_export(
             since=since_epoch,
             until=until_epoch,
             q=q,
+            local=local,
+            harness=harness,
         )
 
         def agg_rows() -> Iterator[dict[str, Any]]:
@@ -252,6 +269,8 @@ def _request_export(
         since=since_epoch,
         until=until_epoch,
         q=q,
+        local=local,
+        harness=harness,
     )
 
     def detail_rows() -> Iterator[dict[str, Any]]:

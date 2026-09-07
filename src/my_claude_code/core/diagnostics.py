@@ -37,8 +37,37 @@ _SECRET_TEXT_REPLACEMENTS = (
             r"(?i)(?<![a-z0-9])(?:sk-[a-z0-9._-]{8,}|"
             r"nvapi-[a-z0-9._-]{8,}|hf_[a-z0-9_-]{8,}|"
             r"gsk_[a-z0-9_-]{8,}|github_pat_[a-z0-9_]{8,}|"
-            r"gh[pousr]_[a-z0-9]{8,}|AIza[a-z0-9_-]{20,})"
+            r"gh[pousr]_[a-z0-9]{8,}|AIza[a-z0-9_-]{20,}|"
+            # Added in 6.54.0. Cerebras and Fireworks are supported providers,
+            # so two of these were reachable from a live route; the rest are
+            # shapes a user can paste into a custom provider or a header.
+            r"csk-[a-z0-9._-]{8,}|xai-[a-z0-9._-]{8,}|"
+            r"fw_[a-z0-9._-]{8,})"
             r"(?![a-z0-9])"
+        ),
+        "<redacted>",
+    ),
+    # Google OAuth access tokens. Case-sensitive prefix on purpose: ``ya29.``
+    # is the literal Google issues, and matching it case-insensitively would
+    # start eating ordinary words that happen to end in a dotted suffix.
+    (
+        re.compile(r"(?<![A-Za-z0-9])ya29\.[A-Za-z0-9._-]{10,}"),
+        "<redacted>",
+    ),
+    # AWS access key ids: a fixed prefix and exactly sixteen uppercase
+    # alphanumerics. Anchored on both sides so it cannot bite into a longer
+    # identifier that merely starts with the same four letters.
+    (
+        re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![A-Za-z0-9])"),
+        "<redacted>",
+    ),
+    # A JSON Web Token, whatever it is called where it appears. Three
+    # base64url segments and a ``eyJ`` header, which is ``{"`` encoded -- the
+    # one shape here that cannot be anything but a token.
+    (
+        re.compile(
+            r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+            r"\.[A-Za-z0-9_-]{4,}"
         ),
         "<redacted>",
     ),

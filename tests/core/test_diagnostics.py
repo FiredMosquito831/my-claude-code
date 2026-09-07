@@ -150,3 +150,35 @@ def test_execution_failure_format_uses_semantic_category_and_request_id() -> Non
     assert '{"error":{"message":"bad field token=<redacted>"}}' in message
     assert "Request ID: req_diagnostic" in message
     assert "invalid_request_error" not in message
+
+
+def test_a_sha256_digest_in_error_text_is_not_redacted():
+    """The entropy rung belongs to structured wire values, not to error prose.
+
+    A bare 64-hex run in an error message is nearly always a digest an operator
+    needs to read -- a body sha, an image sha, a commit. Putting the entropy
+    rung here would have started eating them, which is why it lives in
+    ``core.wire_capture`` where the values are one JSON leaf at a time.
+    """
+    digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    text = f"body blob {digest} was not found"
+    assert redact_sensitive_error_text(text) == text
+
+
+def test_the_new_credential_prefixes_are_redacted_in_error_text():
+    jwt = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+        ".eyJzdWIiOiIxMjM0NTY3ODkwIn0"
+        ".dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    )
+    for secret in (
+        "csk-abcdef0123456789abcdef0123456789",
+        "xai-abcdef0123456789abcdef0123456789",
+        "fw_abcdef0123456789abcdef0123456789",
+        "ya29.a0ARrdaM9xQfakeGoogleOauthAccessTokenValue",
+        "AKIAIOSFODNN7EXAMPLE",
+        jwt,
+    ):
+        cleaned = redact_sensitive_error_text(f"upstream rejected {secret} today")
+        assert secret not in cleaned, secret
+        assert "<redacted>" in cleaned

@@ -11,11 +11,13 @@ import hashlib
 import json
 import time
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from loguru import logger
 
+from my_claude_code.api.request_pricing import rate_cards
+from my_claude_code.application.cost import MODE_AUTO, TokenUsage, resolve_cost
 from my_claude_code.application.execution import RouteAttemptRecord
 from my_claude_code.application.routing import (
     RoutedMessagesPlan,
@@ -46,6 +48,7 @@ from my_claude_code.core.reasoning import (
     ReasoningPolicy,
     combine_reasoning_adaptations,
 )
+from my_claude_code.core.reported_cost import install_reported_cost
 from my_claude_code.core.request_headers import capture_headers
 from my_claude_code.core.request_images import capture_images
 from my_claude_code.core.request_log import (
@@ -137,9 +140,15 @@ class RequestCapture:
         headers: dict[str, str] | None = None,
         harness: str | None = None,
         request: MessagesRequest | None = None,
+        cost_enabled: bool = True,
+        cost_mode: str = MODE_AUTO,
+        cost_litellm_enabled: bool = False,
     ) -> None:
         self._store = store
         self._capture_bodies = capture_bodies
+        self._cost_enabled = cost_enabled
+        self._cost_mode = cost_mode
+        self._cost_litellm_enabled = cost_litellm_enabled
         # Held undecoded until the request is over. Thumbnailing is real CPU
         # work and there is no reason for it to sit between the client and its
         # first token, so it happens at finalize time instead.
@@ -200,6 +209,15 @@ class RequestCapture:
         # through. Only a logged request installs one, so providers exercised
         # directly stay unrecorded.
         self._recovery = install_recovery_trace() if self.enabled else None
+        # A host's own answer about what this request cost arrives the same
+        # way, from the one statement in the OpenAI-shaped stream runner that
+        # sees the final usage block. Anthropic SSE has no field for a cost,
+        # so it cannot travel with the stream, and putting a proprietary
+        # number in front of the client to move it two layers would be worse
+        # than a collector.
+        self._reported_cost = (
+            install_reported_cost() if self.enabled and cost_enabled else None
+        )
         # The outbound body arrives the same way, from the one statement in
         # each provider that hands a body to its SDK. Reading ``max_tokens``
         # and the tool count off the *inbound* request here -- which is what
@@ -844,6 +862,86 @@ class RequestCapture:
             # must never be reported as failed because arithmetic about it did.
             logger.debug("Request estimate skipped: {}", exc)
 
+    def _apply_cost(self, record: RequestRecord) -> None:
+        """Price this request, and each describe hop, once -- at the commit.
+
+        Once, and stored: a price that changes next month must not silently
+        rewrite last month's bill, so nothing recomputes this at read time.
+
+        The parent row and a describe attempt are priced separately because
+        they are different calls: a different model, usually a different
+        provider, always a different key. Summing them into one figure would
+        make the answering model look more expensive than it was and would
+        leave no way to see what describe mode actually cost.
+
+        Never fatal. A request that has already been answered must not be
+        recorded as failed because arithmetic about it was -- the same rule
+        ``_apply_estimate`` follows, for the same reason.
+        """
+        if not self._cost_enabled:
+            return
+        try:
+            reported = self._reported_cost
+            record.cost_usd, record.cost_source = self._price(
+                record.provider,
+                record.resolved_model,
+                TokenUsage(
+                    tokens_in=record.tokens_in,
+                    tokens_out=record.tokens_out,
+                    cache_read_tokens=record.cache_read_tokens,
+                    cache_write_tokens=record.cache_write_tokens,
+                    reasoning_tokens=(
+                        None if reported is None else reported.reasoning_tokens
+                    ),
+                ),
+                reported_usd=None if reported is None else reported.total_usd,
+            )
+            self._price_attempts()
+        except Exception as exc:
+            logger.debug("Request cost skipped: {}", exc)
+
+    def _price(
+        self,
+        provider: str | None,
+        model: str | None,
+        usage: TokenUsage,
+        *,
+        reported_usd: float | None,
+    ) -> tuple[float | None, str | None]:
+        """Walk the ladder for one (provider, model, usage) and return its answer."""
+        result = resolve_cost(
+            reported_usd=reported_usd,
+            usage=usage,
+            cards=rate_cards(
+                provider, model, litellm_enabled=self._cost_litellm_enabled
+            ),
+            mode=self._cost_mode,
+        )
+        return result.cost_usd, result.cost_source
+
+    def _price_attempts(self) -> None:
+        """Price every attempt that reported usage of its own.
+
+        Only a describe hop does today: the request row's counters come from
+        the client-facing stream, and an ordinary attempt that repeated them
+        here would double every total that ever joined the two tables.
+        """
+        for index, attempt in enumerate(self._attempts):
+            if attempt.tokens_in is None and attempt.tokens_out is None:
+                continue
+            cost, source = self._price(
+                attempt.provider,
+                attempt.model_ref,
+                TokenUsage(tokens_in=attempt.tokens_in, tokens_out=attempt.tokens_out),
+                # A describe hop runs with the parent's collector paused, so no
+                # host-reported figure can reach it. It prices from a table, on
+                # its own row, and says so.
+                reported_usd=None,
+            )
+            if cost is None:
+                continue
+            self._attempts[index] = replace(attempt, cost_usd=cost, cost_source=source)
+
     def _collected_tool_calls(self) -> list[dict[str, Any]]:
         """Return the streamed tool calls in block order, arguments parsed."""
         calls: list[dict[str, Any]] = []
@@ -932,6 +1030,7 @@ class RequestCapture:
             record.image_bytes_in, record.image_bytes_out = self._image_bytes
         self._apply_adapter_tokens(record)
         self._apply_estimate(record)
+        self._apply_cost(record)
         record.key_index = self._credential.index
         record.key_label = self._credential.label
         record.attempts = tuple(self._attempts)
@@ -996,6 +1095,11 @@ def build_capture(
         # string and a row written from here is never NULL -- which is what
         # lets NULL keep meaning "predates the column" for the backfill.
         harness=harness_from_headers(headers).harness,
+        cost_enabled=bool(getattr(settings, "cost_estimation_enabled", True)),
+        cost_mode=str(getattr(settings, "cost_estimation_mode", MODE_AUTO)),
+        cost_litellm_enabled=bool(
+            getattr(settings, "cost_source_litellm_enabled", False)
+        ),
     )
 
 

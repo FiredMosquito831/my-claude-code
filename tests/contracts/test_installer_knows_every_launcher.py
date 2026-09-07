@@ -173,3 +173,52 @@ def test_the_posix_verification_reports_every_missing_command() -> None:
 
     assert "missing_commands" in source
     assert "Installed, but these commands are missing: %s" in source
+
+
+class TestDesktopShortcutConfigDir:
+    r"""`-Desktop` must not write into the real config home of a scratch install.
+
+    `New-DesktopShortcut` exports `app-icon.ico` beside the config, and it used
+    to hard-code `$env:USERPROFILE\.mcc` -- so an installation run with
+    `MCC_CONFIG_DIR` pointed at a sandbox still leaked one file into the user's
+    actual `~/.mcc`. PowerShell tests never run on Linux CI, so this asserts on
+    the script text: the resolver must exist, walk the three rungs the server
+    walks, and be the only thing the icon path is built from.
+    """
+
+    def test_the_resolver_walks_env_then_mcc_then_legacy_fcc(self) -> None:
+        text = INSTALL_PS1.read_text(encoding="utf-8")
+        assert "function Get-MccConfigDir {" in text
+        body = text.split("function Get-MccConfigDir {", 1)[1]
+        body = body.split("\nfunction ", 1)[0]
+        order = [
+            body.index("$env:MCC_CONFIG_DIR"),
+            body.index('".mcc"'),
+            body.index('".fcc"'),
+        ]
+        assert order == sorted(order), "MCC_CONFIG_DIR > ~/.mcc > legacy ~/.fcc"
+
+    def test_the_icon_path_comes_from_the_resolver(self) -> None:
+        text = INSTALL_PS1.read_text(encoding="utf-8")
+        shortcut = text.split("function New-DesktopShortcut {", 1)[1]
+        shortcut = shortcut.split("\nfunction ", 1)[0]
+        assert "$configDir = Get-MccConfigDir" in shortcut
+        assert 'Join-Path $configDir "app-icon.ico"' in shortcut
+        assert "$env:USERPROFILE" not in shortcut, (
+            "the shortcut must resolve the config dir, never assume the home"
+        )
+
+    def test_the_posix_installer_writes_no_icon_into_the_config_dir(self) -> None:
+        """`install.sh --desktop` has the same feature and not the same bug.
+
+        It writes the icon into the XDG icon directory (Linux) or into the app
+        bundle (macOS), neither of which is the config home, so there is
+        nothing to leak and nothing to fix. Pinned so a later rewrite cannot
+        quietly move it into `~/.mcc`.
+        """
+        text = INSTALL_SH.read_text(encoding="utf-8")
+        desktop = text.split("create_linux_desktop_entry() {", 1)[1]
+        desktop = desktop.split("\n}\n", 1)[0]
+        assert 'icons_dir="$HOME/.local/share/icons/hicolor/256x256/apps"' in desktop
+        assert ".mcc" not in desktop
+        assert ".fcc" not in desktop

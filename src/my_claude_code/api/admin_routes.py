@@ -2735,6 +2735,65 @@ async def request_log_stats(
     return result
 
 
+@router.get("/admin/api/requests/cost")
+async def request_log_cost(
+    request: Request,
+    provider: str | None = None,
+    model: str | None = None,
+    status: str | None = None,
+    endpoint: str | None = None,
+    key: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
+    q: str | None = None,
+    local: str | None = None,
+    harness: str | None = None,
+    settings: Settings = Depends(get_settings),
+):
+    """What the filtered traffic cost, per provider, model, harness and day.
+
+    Served apart from ``/admin/api/requests/stats`` because it is computed
+    apart: the stats rollup counts integers over nine dimensions, and putting a
+    currency in it would mean a versioned rebuild of every bucket on every
+    installation for a number that is read on a page rather than on the hot
+    path.
+
+    Reported and estimated amounts arrive as two numbers and are never added
+    together, and every sum ships with the count of rows that were actually
+    priced -- a partial total has to be readable as one.
+    """
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {"enabled": False}
+    _validate_request_log_status(status)
+    _validate_request_log_local(local)
+    result = await asyncio.to_thread(
+        store.cost_breakdown,
+        provider=provider,
+        model=model,
+        status=status,
+        endpoint=endpoint,
+        key=key,
+        since=since,
+        until=until,
+        q=q,
+        local=local,
+        harness=harness,
+    )
+    result["enabled"] = True
+    # Whether costing is on at all, and under which rules. A page showing an
+    # empty cost card has to be able to say *why* it is empty: nothing priced,
+    # or nothing asked to price.
+    result["cost_estimation_enabled"] = bool(settings.cost_estimation_enabled)
+    result["cost_estimation_mode"] = str(settings.cost_estimation_mode)
+    result["cost_source_litellm_enabled"] = bool(settings.cost_source_litellm_enabled)
+    result["harness_labels"] = _harness_labels(
+        row["key"] for row in result.get("by_harness", [])
+    )
+    return result
+
+
 @router.get("/admin/api/requests/lifetime")
 async def request_log_lifetime(
     request: Request,

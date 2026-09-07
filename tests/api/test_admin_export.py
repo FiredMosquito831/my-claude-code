@@ -703,3 +703,197 @@ class TestLadderColumns:
     ) -> None:
         rows = _export(client, format="json", scope="requests", fields="models").json()
         assert all("ladder_tries" not in row for row in rows)
+
+
+class TestRequestFilters:
+    """The export must agree with the table it was taken from.
+
+    Until 6.54.0 the dashboard sent ``local`` (always) and ``harness`` (when
+    picked) and FastAPI dropped both without an error, so a download of a
+    "Hide local answers" table contained every local answer.
+    """
+
+    @pytest.fixture
+    def mixed_store(self, tmp_path):
+        store = get_request_log_store(tmp_path / "requests.db")
+        assert store is not None
+        base = time.time() - 100
+        for index in range(6):
+            local = index % 2 == 1
+            store.enqueue(
+                RequestRecord(
+                    id=f"mix{index}",
+                    endpoint="/v1/messages",
+                    protocol="anthropic",
+                    provider=None if local else "p1",
+                    optimization="title_generation" if local else None,
+                    resolved_model="m1",
+                    harness="claude_code" if index < 3 else "codex",
+                    ts_epoch=base + index,
+                    tokens_in=index,
+                    tokens_out=index,
+                )
+            )
+        store.close()
+        yield store
+
+    def test_export_honours_the_local_filter(self, client, mixed_store) -> None:
+        every = _export(client, format="json", scope="requests")
+        assert len(every.json()) == 6
+
+        hidden = _export(client, format="json", scope="requests", local="hide")
+        assert len(hidden.json()) == 3
+        assert all(row["provider"] == "p1" for row in hidden.json())
+
+        only = _export(client, format="json", scope="requests", local="only")
+        assert len(only.json()) == 3
+        assert all(row["provider"] is None for row in only.json())
+
+    def test_export_rejects_an_invalid_local_value(self, client, mixed_store) -> None:
+        response = _export(client, format="json", scope="requests", local="sometimes")
+        assert response.status_code == 422
+
+    def test_export_honours_the_harness_filter(self, client, mixed_store) -> None:
+        response = _export(
+            client, format="json", scope="requests", harness="claude_code"
+        )
+        assert len(response.json()) == 3
+
+    def test_an_aggregate_export_honours_both_filters(
+        self, client, mixed_store
+    ) -> None:
+        response = _export(
+            client,
+            format="json",
+            scope="requests",
+            group_by="harness",
+            fields="error_rate",
+            local="hide",
+            harness="claude_code",
+        )
+        rows = response.json()
+        assert [row["harness"] for row in rows] == ["claude_code"]
+        assert rows[0]["requests"] == 2
+
+
+class TestCostExport:
+    """`cost_usd` NULL must survive the query layer and the aggregation layer.
+
+    A nullable column is not the fix; it is the first of three. Three of the
+    five implementations surveyed for this feature destroy the unknown-versus-
+    free distinction, and one of them does it *despite* storing a correct
+    nullable column -- at read time.
+    """
+
+    @pytest.fixture
+    def priced_store(self, tmp_path):
+        store = get_request_log_store(tmp_path / "requests.db")
+        assert store is not None
+        base = time.time() - 100
+        rows = [
+            ("reported", 0.50, "provider"),
+            ("estimated", 0.10, "models_dev"),
+            ("free", 0.0, "models_dev"),
+            ("unpriced", None, None),
+        ]
+        for index, (name, cost, source) in enumerate(rows):
+            store.enqueue(
+                RequestRecord(
+                    id=name,
+                    endpoint="/v1/messages",
+                    protocol="anthropic",
+                    provider="p1",
+                    resolved_model="m1",
+                    harness="claude_code",
+                    ts_epoch=base + index,
+                    tokens_in=100,
+                    tokens_out=10,
+                    cost_usd=cost,
+                    cost_source=source,
+                )
+            )
+        store.close()
+        yield store
+
+    def test_a_detail_export_carries_the_amount_and_its_source(
+        self, client, priced_store
+    ) -> None:
+        response = _export(client, format="json", scope="requests", fields="cost")
+        by_id = {row["id"]: row for row in response.json()}
+        assert by_id["reported"]["cost_usd"] == 0.5
+        assert by_id["reported"]["cost_source"] == "provider"
+        assert by_id["free"]["cost_usd"] == 0.0
+        assert by_id["free"]["cost_source"] == "models_dev"
+        assert by_id["unpriced"]["cost_usd"] is None
+        assert by_id["unpriced"]["cost_source"] is None
+
+    def test_reported_and_estimated_are_never_summed_into_one_number(
+        self, client, priced_store
+    ) -> None:
+        response = _export(
+            client,
+            format="json",
+            scope="requests",
+            fields="cost",
+            group_by="provider",
+        )
+        row = response.json()[0]
+        assert row["cost_reported_usd"] == 0.5
+        assert row["cost_estimated_usd"] == pytest.approx(0.10)
+        # The grand total exists, but the split is what the UI renders: a
+        # merged figure launders an estimate into a fact.
+        assert row["cost_usd"] == pytest.approx(0.60)
+
+    def test_the_priced_denominator_travels_with_the_sum(
+        self, client, priced_store
+    ) -> None:
+        row = _export(
+            client,
+            format="json",
+            scope="requests",
+            fields="cost",
+            group_by="provider",
+        ).json()[0]
+        assert row["cost_priced"] == 3
+        assert row["cost_requests"] == 4
+
+    def test_an_unpriced_group_aggregates_to_null_not_zero(
+        self, client, priced_store
+    ) -> None:
+        row = _export(
+            client,
+            format="json",
+            scope="requests",
+            fields="cost",
+            group_by="provider",
+            q="nothing-matches-this",
+        ).json()
+        assert row == []
+
+    def test_a_group_whose_rows_are_all_unpriced_sums_to_null(
+        self, client, tmp_path
+    ) -> None:
+        store = get_request_log_store(tmp_path / "requests.db")
+        assert store is not None
+        store.enqueue(
+            RequestRecord(
+                id="u1",
+                endpoint="/v1/messages",
+                protocol="anthropic",
+                provider="p9",
+                resolved_model="m9",
+                tokens_in=10,
+                tokens_out=1,
+            )
+        )
+        store.close()
+        row = _export(
+            client,
+            format="json",
+            scope="requests",
+            fields="cost",
+            group_by="provider",
+        ).json()[0]
+        assert row["cost_usd"] is None, "not 0.0 -- nobody priced these"
+        assert row["cost_priced"] == 0
+        assert row["cost_requests"] == 1

@@ -1446,6 +1446,7 @@ def test_the_request_table_names_the_client_that_sent_each_row(rendered) -> None
         "Status",
         "Turn",
         "Tokens",
+        "Cost",
         "TTFT",
         "Duration",
         "Details",

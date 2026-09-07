@@ -14,6 +14,7 @@ from .constants import (
     ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     CATALOGUE_FETCH_TIMEOUT_SECONDS,
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+    COST_ESTIMATION_MODE_DEFAULT,
     CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
     CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT,
     DESKTOP_ACTIVATION_POLL_SECONDS_DEFAULT,
@@ -1336,6 +1337,32 @@ class Settings(BaseSettings):
     request_log_ladder_body_max_chars: int = Field(
         default=REQUEST_LOG_LADDER_BODY_MAX_CHARS_DEFAULT,
         validation_alias="REQUEST_LOG_LADDER_BODY_MAX_CHARS",
+    )
+
+    # ==================== Cost estimation ====================
+    # Off by default is the wrong default here and on by default is the right
+    # one: the ladder reads catalogues MCC already fetches, the arithmetic is
+    # four multiplications at the commit, and a request nobody can price is
+    # stored as NULL rather than as a guess. The cost of being wrong is a dash
+    # in a column; the cost of being off is a product that cannot answer the
+    # first question anyone asks it.
+    cost_estimation_enabled: bool = Field(
+        default=True, validation_alias="COST_ESTIMATION_ENABLED"
+    )
+    # ``auto`` walks the whole ladder. ``reported_only`` stores a host's own
+    # figure or nothing, which is the strictest reading of "never guess".
+    # ``computed_only`` skips the host and always computes, which is how a
+    # provider's own billing gets audited against a published price.
+    cost_estimation_mode: str = Field(
+        default=COST_ESTIMATION_MODE_DEFAULT,
+        validation_alias="COST_ESTIMATION_MODE",
+    )
+    # The second price source. Off by default because turning it on adds a
+    # 2.3 MB cached artefact and one more conditional GET a day, which is a
+    # real cost to impose on an installation whose models models.dev already
+    # prices. It buys the misses -- and the only published reasoning rate.
+    cost_source_litellm_enabled: bool = Field(
+        default=False, validation_alias="COST_SOURCE_LITELLM_ENABLED"
     )
 
     # ==================== NIM Settings ====================

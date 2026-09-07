@@ -221,6 +221,9 @@ def test_nothing_anywhere_publishes_it_and_the_answer_stays_none(
         "output_price",
         "cache_read_price",
         "cache_write_price",
+        # Added in 6.54.0 with per-request costing. Almost nothing publishes
+        # one, so the "nobody said" answer covers it too.
+        "reasoning_price",
     }
     assert all(value == (None, None) for value in prices.values())
 

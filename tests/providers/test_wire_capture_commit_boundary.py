@@ -8,13 +8,17 @@ against a model whose upstream cap is 40,960 must be recorded as 40,960.
 """
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from my_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
+from my_claude_code.config.provider_catalog import (
+    GROQ_DEFAULT_BASE,
+    VERTEX_DEFAULT_BASE,
+)
 from my_claude_code.core.wire_capture import install_wire_trace
 from my_claude_code.providers.base import ProviderConfig
+from my_claude_code.providers.vertex import VertexProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import passthrough_rate_limiter, profiled_provider
 
@@ -216,3 +220,57 @@ async def test_the_recorded_reasoning_knob_survives_a_fifty_nine_tool_request(
     assert stored["reasoning_effort"] == "high"
     assert stored["temperature"] == 0.7
     assert trace.requests[0].reasoning_emitted is True
+
+
+@pytest.mark.asyncio
+async def test_vertex_records_the_wire_body():
+    """Vertex is not exempt from the commit boundary.
+
+    A register entry claimed Vertex attempts record no wire body, inferred from
+    reading ``providers/vertex/client.py`` -- which defines no ``_create_stream``
+    of its own. The owner is ``OpenAIChatProvider._create_stream``, which Vertex
+    inherits through ``GoogleOpenAIProvider``, so the body is recorded like
+    every other OpenAI-shaped provider's. Vertex has never been routed to on the
+    install the claim came from, so nothing could have observed the absence.
+    This pins the inherited behaviour so it cannot silently regress.
+    """
+    token_provider = MagicMock()
+    token_provider.token = AsyncMock(return_value="fake-access-token")
+    with (
+        patch("my_claude_code.providers.openai_chat.provider.AsyncOpenAI"),
+        patch("httpx.AsyncClient"),
+    ):
+        provider = VertexProvider(
+            ProviderConfig(
+                api_key="",
+                base_url=VERTEX_DEFAULT_BASE,
+                rate_limit=10,
+                rate_window=60,
+            ),
+            project_id="my-project",
+            location="global",
+            rate_limiter=passthrough_rate_limiter(),
+            access_token_provider=token_provider,
+        )
+    body = provider._build_request_body(
+        make_messages_request(
+            "gemini-2.5-pro",
+            max_tokens=1234,
+            thinking={"enabled": False},
+        )
+    )
+
+    trace = install_wire_trace()
+    with patch.object(
+        provider._client.chat.completions,
+        "create",
+        AsyncMock(return_value=object()),
+    ):
+        await provider._create_stream(body)
+
+    assert len(trace.requests) == 1
+    recorded = trace.requests[0]
+    assert recorded.body_json is not None
+    assert recorded.params["model"] == "gemini-2.5-pro"
+    assert recorded.params["max_tokens"] == 1234
+    assert recorded.params["stream"] is True

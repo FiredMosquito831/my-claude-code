@@ -200,8 +200,9 @@ const VIEW_GROUPS = [
     label: "Analytics",
     title: "Observability",
     // The page that shows the consequence owns the control: what the log keeps
-    // is what these tables and content search can ever display.
-    sections: ["request_log"],
+    // is what these tables and content search can ever display, and what
+    // prices a request is what the cost cards on this page can ever total.
+    sections: ["request_log", "cost"],
     containerId: "requestsSections",
   },
   {
@@ -10050,13 +10051,18 @@ async function loadRequestsView() {
   let stats;
   let list;
   let lifetime;
+  let cost;
   try {
-    [stats, list, lifetime] = await Promise.all([
+    [stats, list, lifetime, cost] = await Promise.all([
       api(`/admin/api/requests/stats?${params}`),
       api(
         `/admin/api/requests?limit=${reqState.limit}&offset=${reqState.offset}&${params}`,
       ),
       api("/admin/api/requests/lifetime"),
+      // Served apart from stats because it is computed apart: the stats
+      // rollup counts integers over nine dimensions, and a currency in it
+      // would mean a versioned rebuild of every bucket on every install.
+      api(`/admin/api/requests/cost?${params}`),
     ]);
   } catch (error) {
     if (loadId !== reqState.loadId) return;
@@ -10079,6 +10085,7 @@ async function loadRequestsView() {
     clearChart(byId("reqModelChart"));
     reqState.total = 0;
     byId("reqBreakdownTruncatedNote").hidden = true;
+    renderRequestCost(null);
     byId("reqBodiesIndicator").textContent = "Request log disabled (REQUEST_LOG_ENABLED=false)";
     renderReqPager();
     byId("reqLastUpdated").textContent = "Logging disabled";
@@ -10108,6 +10115,7 @@ async function loadRequestsView() {
   renderRequestFallbackRoutes(stats.fallback_routes || []);
   renderRequestDivertedRoutes(stats.diverted_routes || []);
   renderReqBreakdownTruncatedNote(stats);
+  renderRequestCost(cost);
   reqState.total = list.total || 0;
   renderRequestsTable(list.rows || []);
   renderReqPager();
@@ -10426,6 +10434,83 @@ function renderRequestStatsCards(stats) {
     ["Avg TTFT", stats.avg_ttft_ms != null ? `${stats.avg_ttft_ms} ms` : "—"],
   ];
   renderStatCards(byId("reqStatsCards"), cards);
+}
+
+/* Reported and estimated are rendered as two numbers and are never added
+   into one. A merged total launders a guess into a fact, and afterwards
+   nobody can tell which half was which -- which is exactly the failure the
+   whole provenance column exists to prevent. Every sum carries its own
+   "N of M priced" denominator for the same reason. */
+function renderRequestCost(cost) {
+  const cards = byId("reqCostCards");
+  const note = byId("reqCostNote");
+  const panels = [
+    ["reqCostProvider", "Provider", "by_provider", providerDisplayLabel],
+    ["reqCostModel", "Model", "by_model", (key) => key],
+    ["reqCostHarness", "Harness", "by_harness", harnessDisplayLabel],
+    ["reqCostDay", "Day", "by_day", (key) => key],
+  ];
+  if (!cost || cost.enabled === false) {
+    cards.innerHTML = "";
+    note.textContent = "The request log is off, so nothing is being priced.";
+    panels.forEach(([id]) => {
+      byId(id).innerHTML = "";
+    });
+    return;
+  }
+  const totals = cost.totals || {};
+  note.textContent = costPanelNote(cost);
+  renderStatCards(cards, [
+    [
+      "Reported",
+      formatCostAmount(totals.reported_usd),
+      "what the hosts themselves billed",
+    ],
+    [
+      "Estimated",
+      formatCostAmount(totals.estimated_usd),
+      "computed from a published price — never added to the reported figure",
+    ],
+    ["Priced", formatPricedShare(totals.priced, totals.requests)],
+  ]);
+  panels.forEach(([id, header, field, label]) => {
+    const container = byId(id);
+    container.innerHTML = "";
+    container.appendChild(
+      analyticsTable(
+        [header, "Reported", "Estimated (est.)", "Priced"],
+        (cost[field] || []).map((row) => [
+          label(row.key) || row.key || "—",
+          formatCostAmount(row.reported_usd),
+          formatCostAmount(row.estimated_usd),
+          formatPricedShare(row.priced, row.requests),
+        ]),
+        "Nothing priced in this range.",
+      ),
+    );
+  });
+}
+
+/* Why a cost panel is empty, in the panel. "Nothing priced" and "nothing was
+   asked to price" are different answers and a blank card says neither. */
+function costPanelNote(cost) {
+  if (!cost.cost_estimation_enabled) {
+    return "Cost estimation is off (COST_ESTIMATION_ENABLED=false). Requests already priced keep their figures.";
+  }
+  const sources = (cost.by_source || [])
+    .map(
+      (row) =>
+        `${COST_SOURCE_LABELS[row.key] || row.key}: ${formatAnalyticsNumber(Number(row.requests || 0))}`,
+    )
+    .join(" · ");
+  const mode =
+    cost.cost_estimation_mode === "auto"
+      ? ""
+      : ` Mode: ${cost.cost_estimation_mode}.`;
+  const litellm = cost.cost_source_litellm_enabled ? "" : " LiteLLM source off.";
+  return sources
+    ? `Priced by — ${sources}.${mode}${litellm}`
+    : `Nothing in this range could be priced.${mode}${litellm}`;
 }
 
 // Prune leaves the count just above the cap between runs, so an exact
@@ -10776,6 +10861,63 @@ function requestTableColumnCount() {
   return headers.length || 12;
 }
 
+/* Short names for the four rungs of the pricing ladder, in ladder order.
+   These are the values stored in `cost_source`, so they are a wire contract
+   with the request log and not a display choice. */
+const COST_SOURCE_LABELS = {
+  provider: "the host itself",
+  models_dev: "models.dev",
+  litellm: "LiteLLM",
+  cross_provider: "a cross-provider vote",
+};
+
+/* A dash, not a zero. `cost_usd` is NULL when nothing priced the request, and
+   "$0.00" is a claim that the request was free -- a claim only a source that
+   publishes a zero may make. Three of the five implementations surveyed for
+   this feature destroy that distinction, and one of them does it here, at
+   render time, despite storing the column correctly. */
+function formatCostAmount(value) {
+  if (value === null || value === undefined) return "—";
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  if (amount === 0) return "$0.00";
+  if (amount < 0.01) return `$${amount.toFixed(6)}`;
+  return `$${amount.toFixed(4)}`;
+}
+
+/* "N of M priced". Without it a window where nine models in ten are unpriced
+   reads as a cheap week rather than as an incomplete one. */
+function formatPricedShare(priced, requests) {
+  const total = Number(requests || 0);
+  if (!total) return "no requests";
+  return `${formatAnalyticsNumber(Number(priced || 0))} of ${formatAnalyticsNumber(total)} priced`;
+}
+
+/* The request row's and the modal's cost cell: the amount, plus an "est."
+   badge naming the rung for everything below the host's own answer. A
+   reported cost carries no badge, because it is not an estimate. */
+function buildCostCell(row) {
+  const td = document.createElement("td");
+  if (row.cost_usd === null || row.cost_usd === undefined) {
+    td.className = "cost-unpriced";
+    td.textContent = "—";
+    td.title = "not priced — no source published a rate for this model";
+    return td;
+  }
+  const amount = document.createElement("span");
+  amount.className = "cost-amount";
+  amount.textContent = formatCostAmount(row.cost_usd);
+  td.appendChild(amount);
+  if (row.cost_source && row.cost_source !== "provider") {
+    const badge = document.createElement("span");
+    badge.className = "cost-badge";
+    badge.textContent = "est.";
+    badge.title = `estimated from ${COST_SOURCE_LABELS[row.cost_source] || row.cost_source}`;
+    td.appendChild(badge);
+  }
+  return td;
+}
+
 function renderRequestsTable(rows) {
   const body = byId("reqTableBody");
   body.innerHTML = "";
@@ -10808,6 +10950,7 @@ function renderRequestsTable(rows) {
     addText(row.status);
     tr.appendChild(buildTurnShapeCell(row));
     addText(`${row.tokens_in ?? "—"}/${row.tokens_out ?? "—"}`);
+    tr.appendChild(buildCostCell(row));
     addText(row.ttft_ms != null ? `${Math.round(row.ttft_ms)} ms` : "—");
     addText(row.duration_ms != null ? `${Math.round(row.duration_ms)} ms` : "—");
     const actionCell = document.createElement("td");
@@ -11147,6 +11290,7 @@ async function openRequestDetail(requestId) {
     dd.textContent = value;
     meta.append(dt, dd);
   });
+  appendRequestCostDetail(meta, row);
   renderRequestRouteTrace(row);
   renderRequestImages(row);
   renderRequestChain(row);
@@ -11154,6 +11298,66 @@ async function openRequestDetail(requestId) {
   renderTurnTranscript(row);
   byId("reqDetailModal").hidden = false;
   byId("reqDetailClose").focus();
+}
+
+/* Appended after the plain fields because it is the one row that is not
+   plain text: an estimate has to say so on the number itself, and it has to
+   name which of the four rungs answered. A request nothing priced says "not
+   priced" in words rather than showing a zero. */
+function appendRequestCostDetail(meta, row) {
+  const dt = document.createElement("dt");
+  dt.textContent = "Cost";
+  const dd = document.createElement("dd");
+  dd.className = "cost-detail";
+  if (row.cost_usd === null || row.cost_usd === undefined) {
+    dd.classList.add("cost-unpriced");
+    dd.textContent = "— not priced";
+    const why = document.createElement("span");
+    why.className = "cost-note";
+    why.textContent =
+      "No source published a rate for this model, so nothing was stored. " +
+      "A zero here would be a claim that the request was free.";
+    dd.appendChild(why);
+    meta.append(dt, dd);
+    return;
+  }
+  const amount = document.createElement("span");
+  amount.className = "cost-amount";
+  amount.textContent = formatCostAmount(row.cost_usd);
+  dd.appendChild(amount);
+  const source = COST_SOURCE_LABELS[row.cost_source] || row.cost_source || "unknown";
+  if (row.cost_source === "provider") {
+    const note = document.createElement("span");
+    note.className = "cost-note";
+    note.textContent = `reported by ${source}`;
+    dd.appendChild(note);
+  } else {
+    const badge = document.createElement("span");
+    badge.className = "cost-badge";
+    badge.textContent = "est.";
+    dd.appendChild(badge);
+    const note = document.createElement("span");
+    note.className = "cost-note";
+    note.textContent = `estimated from ${source}`;
+    dd.appendChild(note);
+  }
+  const describes = (row.route_attempts || []).filter(
+    (attempt) => attempt && attempt.params && attempt.params.kind === "describe",
+  );
+  if (describes.length) {
+    const caveat = document.createElement("span");
+    caveat.className = "cost-note";
+    const priced = describes.filter((attempt) => attempt.cost_usd != null);
+    const spent = priced.reduce(
+      (total, attempt) => total + Number(attempt.cost_usd || 0),
+      0,
+    );
+    caveat.textContent = priced.length
+      ? `This is the answering model only. The vision adapter's ${describes.length} describe call(s) cost a further ${formatCostAmount(spent)}, listed per attempt below.`
+      : `This is the answering model only. The vision adapter made ${describes.length} describe call(s) that nothing could price.`;
+    dd.appendChild(caveat);
+  }
+  meta.append(dt, dd);
 }
 
 // The applied policy lives in row.reasoning; row.requested_reasoning is what
@@ -11642,6 +11846,27 @@ function renderRequestChain(row) {
       kind.className = "req-chain-describe";
       kind.textContent = "described an image";
       head.appendChild(kind);
+    }
+
+    // Priced on its own row, never folded into the request's. A describe hop
+    // is a different model on a different key, and adding it to the answering
+    // model's figure would make that model look more expensive than it was
+    // while hiding what describe mode actually cost.
+    if (attempt.cost_usd != null) {
+      const spent = document.createElement("span");
+      spent.className = "req-chain-summary cost-amount";
+      spent.textContent = formatCostAmount(attempt.cost_usd);
+      spent.title =
+        attempt.cost_source === "provider"
+          ? "reported by the host itself"
+          : `estimated from ${COST_SOURCE_LABELS[attempt.cost_source] || attempt.cost_source}`;
+      head.appendChild(spent);
+      if (attempt.cost_source && attempt.cost_source !== "provider") {
+        const badge = document.createElement("span");
+        badge.className = "cost-badge";
+        badge.textContent = "est.";
+        head.appendChild(badge);
+      }
     }
 
     if (attempt.duration_ms != null) {
@@ -15519,6 +15744,15 @@ function buildCapabilityPanel(capabilities, labels) {
     rows.push(["output limit", capabilities.max_output_tokens]);
     rows.push(["context length", capabilities.context_length]);
     rows.push(["reads images", capabilities.supports_vision]);
+    /* The prices resolved long before anything read them: the ladder has
+       returned a rate and a tier for every (provider, model) since 6.35.0 and
+       no surface showed either. They carry the same provenance badge as every
+       other field here, which is the point -- a rate voted across strangers'
+       catalogues and a rate this provider published are the same shape of
+       number and must not look the same. */
+    PRICE_FIELD_LABELS.forEach((entry) => {
+      rows.push([entry[1], capabilities[entry[0]], formatPriceValue]);
+    });
     rows.push(["gateway default parameters", capabilities.default_parameters]);
     rows.push(["supported parameters", capabilities.supported_parameters]);
     const reasoning = capabilities.reasoning || {};
@@ -15530,7 +15764,7 @@ function buildCapabilityPanel(capabilities, labels) {
   rows.forEach((entry) => {
     if (!entry[1]) return;
     written += 1;
-    table.appendChild(buildCapabilityRow(entry[0], entry[1], labels));
+    table.appendChild(buildCapabilityRow(entry[0], entry[1], labels, entry[2]));
   });
   if (!written) {
     const note = document.createElement("p");
@@ -15614,7 +15848,7 @@ function buildDialectPanel(dialect) {
   return wrap;
 }
 
-function buildCapabilityRow(label, field, labels) {
+function buildCapabilityRow(label, field, labels, format) {
   const tr = document.createElement("tr");
   const name = document.createElement("th");
   name.scope = "row";
@@ -15622,7 +15856,7 @@ function buildCapabilityRow(label, field, labels) {
   tr.appendChild(name);
 
   const value = document.createElement("td");
-  value.textContent = formatCapabilityValue(field.value);
+  value.textContent = (format || formatCapabilityValue)(field.value);
   tr.appendChild(value);
 
   const source = document.createElement("td");
@@ -15673,6 +15907,30 @@ function buildCapabilityRow(label, field, labels) {
   }
   tr.appendChild(source);
   return tr;
+}
+
+/* models.dev publishes these per million tokens, which is how every price
+   list a reader has ever seen is written, so that is how they are shown. The
+   request log stores per token; the two are the same number, and the division
+   happens once, at the fetcher, because the two sources' units are exact
+   opposites and a conversion at a call site is a 1,000,000x bug waiting. */
+const PRICE_FIELD_LABELS = [
+  ["input_price", "input price (USD / 1M)"],
+  ["output_price", "output price (USD / 1M)"],
+  ["cache_read_price", "cache read price (USD / 1M)"],
+  ["cache_write_price", "cache write price (USD / 1M)"],
+  ["reasoning_price", "reasoning price (USD / 1M)"],
+];
+
+/* A published zero is a price -- a free tier saying so -- and renders as
+   "$0.00", never as "not reported". The two are different facts, and every
+   surface in this feature has to keep them apart. */
+function formatPriceValue(value) {
+  if (value === null || value === undefined) return "not reported";
+  if (typeof value !== "number") return String(value);
+  if (value === 0) return "$0.00 (free)";
+  if (value < 0.01) return `$${value.toFixed(6)}`;
+  return `$${value.toFixed(2)}`;
 }
 
 function formatCapabilityValue(value) {

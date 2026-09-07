@@ -1051,6 +1051,37 @@ function Enable-RtkForAgents {
     Invoke-NativeCommand -FilePath $rtkShim -Arguments @("enable", "claude,codex,pi")
 }
 
+function Get-MccConfigDir {
+    <#
+        .SYNOPSIS
+        Resolve the config directory this installation writes into.
+
+        .DESCRIPTION
+        The same three rungs the server itself walks, in the same order:
+        an explicit MCC_CONFIG_DIR, then ~/.mcc, then a legacy ~/.fcc that an
+        older install left behind. A hard-coded "$env:USERPROFILE\.mcc" here
+        meant a scratch install with MCC_CONFIG_DIR pointed elsewhere still
+        exported app-icon.ico into the REAL config home -- one file leaked out
+        of the sandbox, every time.
+
+        New installs still land in ~/.mcc: that is the last rung, and it is
+        what an installation with neither directory present resolves to.
+    #>
+
+    if (-not [string]::IsNullOrWhiteSpace($env:MCC_CONFIG_DIR)) {
+        return $env:MCC_CONFIG_DIR
+    }
+    $modern = Join-Path $env:USERPROFILE ".mcc"
+    if (Test-Path -LiteralPath $modern) {
+        return $modern
+    }
+    $legacy = Join-Path $env:USERPROFILE ".fcc"
+    if (Test-Path -LiteralPath $legacy) {
+        return $legacy
+    }
+    return $modern
+}
+
 function New-DesktopShortcut {
     if (-not $script:EnableDesktop) {
         return
@@ -1073,9 +1104,7 @@ function New-DesktopShortcut {
             $launcherPath = Join-Path $toolBin "mcc-desktop.exe"
         }
 
-        # New installs keep their config in ~/.mcc; the app icon is a fresh
-        # export written into that directory, never into a legacy ~/.fcc.
-        $configDir = Join-Path $env:USERPROFILE ".mcc"
+        $configDir = Get-MccConfigDir
         New-Item -ItemType Directory -Path $configDir -Force | Out-Null
         $iconPath = Join-Path $configDir "app-icon.ico"
 

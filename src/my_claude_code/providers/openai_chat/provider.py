@@ -36,6 +36,7 @@ from my_claude_code.core.reasoning import (
     ReasoningPolicy,
     narrow_dialect_by_rejections,
 )
+from my_claude_code.core.reported_cost import record_reported_usage
 from my_claude_code.core.request_log import (
     RECOVERY_EARLY_RETRIES,
     RECOVERY_MIDSTREAM_RECOVERIES,
@@ -414,6 +415,12 @@ class OpenAIChatProvider(BaseProvider):
         streaming path subtracts the read count back out before emitting
         Anthropic's ``input_tokens``, which excludes it by definition.
         """
+        # The one place every OpenAI-shaped host's final usage block passes
+        # through, which is why the reported-cost read lives here and not in a
+        # provider of its own. Nothing below names a host: a gateway that
+        # reports ``usage.cost`` is read exactly like one that does not, and
+        # one that does not costs a dictionary lookup.
+        record_reported_usage(usage_info)
         details = prompt_tokens_details(usage_info)
         fields: dict[str, int] = {}
         cached = usage_int(details, "cached_tokens")

@@ -2647,7 +2647,7 @@ The detail dialog answers the question "what did MCC actually put on the wire, a
 
 **1. Open Analytics and find the request.** Filter or search (search reaches the reasoning text and tool arguments too), then press **View** on the row. Since 6.13.0 every filter applies itself — the selects the moment you change one, the text boxes a short pause after you stop typing, and **Clear filters** puts everything back including the default below. **Apply** is still there for when you would rather press it.
 
-**Local answers** defaults to **Hide**, so the table, the cards, the charts and the breakdowns show requests that actually went to a provider. Requests MCC answered itself — title-generation skips, probe replies, suggestion-mode skips — are hidden until you switch it to **Show** (everything, as before 6.13.0) or **Only** (nothing else). The choice is remembered across refreshes. Rows whose provider is genuinely unknown are not local answers and stay visible under Hide, and the **All time** rollup and the export window ignore this filter.
+**Local answers** defaults to **Hide**, so the table, the cards, the charts and the breakdowns show requests that actually went to a provider. Requests MCC answered itself — title-generation skips, probe replies, suggestion-mode skips — are hidden until you switch it to **Show** (everything, as before 6.13.0) or **Only** (nothing else). The choice is remembered across refreshes. Rows whose provider is genuinely unknown are not local answers and stay visible under Hide, and the **All time** rollup ignores this filter. Exports honour it: since 6.54.0 `/admin/api/export` accepts `local` and `harness`, so a download matches the table it was taken from.
 
 **Harness** names the coding agent that sent the request. Since 6.37.0 every row records it, the
 table shows it as a chip, the detail dialog spells it out, there is a **Harness** filter beside
@@ -2769,6 +2769,36 @@ What it will not do:
 - Anything it does not completely understand is passed through untouched.
 
 Each rule has three states, and the middle one is why you would look at this at all: `off`, **`observe`**, and `on`. **`observe` measures what a rule would have removed from your real traffic without changing a single byte on the wire.** That is the way to find out whether trimming would help you: run `observe`, compare against your own cache hit rate on this page, and only then decide. The remaining settings — the size threshold below which nothing is touched, how much of the head and tail survive, and how many recent results are exempt — are documented in the Admin UI and in `.env.example`.
+
+### What a request cost
+
+Since 6.54.0 every request is priced once, at the moment it is written to the log, and the answer is stored beside it in two columns: the amount, and the name of the source that produced it. It is never recomputed when you look at it — a price that changes next month must not silently rewrite last month's bill.
+
+**Pricing walks the same ladder every other model fact walks.** MCC has always resolved a model's context window, its output limit and its capabilities by asking, in order, this provider's own catalogue, then models.dev's bucket for this provider, then a curated reference catalogue, then a vote across same-named rows in other providers' buckets. Cost is now resolved the same way, and for the same reason: the rung that answered is what tells you how much to trust the number.
+
+| Rung | Shown as | Where it comes from |
+|---|---|---|
+| 1 | *(no badge)* | The host's own reported cost. OpenRouter returns one in the final chunk of every streamed response; any host that reports the same field is read the same way. |
+| 2 | `est.` models.dev | The models.dev price for this provider's own bucket — the catalogue MCC already fetches hourly. |
+| 3 | `est.` LiteLLM | LiteLLM's published price map, if you turn that source on. The widest table there is, and the only one that names a separate reasoning rate. |
+| 4 | `est.` cross-provider | A vote across same-named rows in *other* providers' catalogues. The model is the same; the seller is not. Last resort. |
+| — | `—` **not priced** | Nothing published a rate. |
+
+**An unpriced request shows a dash, never `$0.00`.** Those are different facts. `$0.00` is a claim that the request was free, and only a source that actually publishes a zero — a `:free` model's own catalogue entry, for instance — may make it. Every cost total on the Analytics page therefore carries an **"N of M priced"** denominator beside it, so a partial total can never be read as a complete one.
+
+**Reported and estimated amounts are shown side by side and are never added together.** A single merged figure would launder a guess into a fact, and afterwards nobody could tell which half was which. The Cost panel shows the two as two numbers, per provider, per model, per harness and per day.
+
+Details worth knowing:
+
+- **Cache reads and cache writes are priced at their own rates**, from the same source as the base rate. A source that prices input but not cache reads does not price a request that read from cache — that request falls to the next rung whole, rather than being patched together from two sources.
+- **Reasoning tokens price as output**, unless the winning source publishes a rate specifically for them. Almost none do, and that is the correct default: the hosts that publish nothing bill reasoning at the output rate.
+- **The vision adapter's describe calls are priced separately**, on their own row in the request modal's attempt list. A describe hop is a different model on a different key; folding it into the answering model's figure would make that model look more expensive than it was and would hide what describe mode actually cost. The modal says so explicitly when a request had one.
+- **Nothing is backfilled.** Requests logged before 6.54.0 stay unpriced forever. Pricing them at today's rates would produce a confident number that was never anybody's bill.
+- **There is no price table in the package.** Both sources are fetched at runtime with conditional requests and cached like every other catalogue. The LiteLLM refresh is integrity-checked before it is accepted — a minimum entry count, and no shrink past half of what is already cached — because it is served from a branch that changes about a hundred times a week and has shipped broken JSON before.
+
+The Models page shows the resolved input, output, cache and reasoning rates per model, in USD per million tokens, each with the ladder rung it came from — so you can see exactly what a request would be priced from before you send one.
+
+Controls live on this page under **Cost estimation**: the master toggle (on by default), which sources may price a request (`auto`, `reported only`, or `computed only` — the last ignores the host's own figure, which is how you audit a provider's billing against a published price), and the LiteLLM source (off by default; it costs one more cached 2.3 MB file and one conditional fetch a day).
 
 ### Web search analytics
 

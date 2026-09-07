@@ -63,6 +63,25 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "exists to show. Read-only, admin surface only."
     ),
     (
+        "my_claude_code.api.request_pricing",
+        "my_claude_code.providers.runtime.models_dev",
+    ): (
+        "Owner: per-request cost estimation. "
+        "Reason: the ladder's rungs ARE the models.dev tier lookups, exactly "
+        "as the Models page's capability inspector above. Reading them through "
+        "an abstraction would erase the provenance the stored cost_source "
+        "column exists to record. Read-only."
+    ),
+    (
+        "my_claude_code.api.request_pricing",
+        "my_claude_code.providers.runtime.litellm_prices",
+    ): (
+        "Owner: per-request cost estimation, LiteLLM rung. "
+        "Reason: the second price source is a cached catalogue beside "
+        "models_dev and is consulted the same way, from the same module, for "
+        "the same reason. Read-only."
+    ),
+    (
         "my_claude_code.api.admin_routes",
         "my_claude_code.providers.anthropic_oauth.credentials",
     ): (

@@ -15,11 +15,14 @@ from my_claude_code.application.model_metadata import (
     ProviderModelRefreshResult,
 )
 from my_claude_code.application.ports import RequestRuntimePort
+from my_claude_code.config.provider_catalog import configured_credential_values
+from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.reasoning import ReasoningDialect
 from my_claude_code.core.stop_deadline import stop_deadline
 from my_claude_code.core.trace import trace_event
+from my_claude_code.core.wire_capture import install_credential_digests
 from my_claude_code.providers.base import BaseProvider
 from my_claude_code.providers.runtime import ProviderRuntime
 from my_claude_code.providers.runtime.discovery import (
@@ -138,6 +141,7 @@ class ProviderRuntimeManager:
             runtime=runtime_factory(settings),
         )
         self._trace_published(self._current, previous=None, reason="startup")
+        _install_credential_digests(settings)
 
     @property
     def current_generation_id(self) -> int:
@@ -615,6 +619,10 @@ class ProviderRuntimeManager:
 
             self._next_generation_id += 1
             assert candidate_runtime is not None
+            # The redactor's exact-match rung follows the live configuration:
+            # a key pasted into the dashboard is protected from the generation
+            # it takes effect in, not from the next restart.
+            _install_credential_digests(settings)
             previous = self._current
             candidate = _ProviderGeneration(
                 generation_id=candidate_id,
@@ -871,3 +879,25 @@ class ProviderRuntimeManager:
             active_leases=generation.active_leases,
             reason=reason,
         )
+
+
+def _install_credential_digests(settings: Settings) -> None:
+    """Hand the wire-body redactor the digests of this generation's credentials.
+
+    ``core.wire_capture`` may not import ``config``, and must not hold a secret
+    in memory in any case, so the values are hashed here and only the digests
+    cross the boundary. Never fatal: redaction is a safety net, and a net that
+    could refuse a configuration change would be a worse defect than the leak
+    it prevents.
+    """
+    try:
+        values = list(configured_credential_values(settings))
+        # Custom providers keep their keys in ``custom_providers.json`` rather
+        # than in ``Settings``, so the catalogue walk above cannot see them --
+        # and a custom gateway's key is exactly the case shape rules can never
+        # cover, since it may be any string at all.
+        for entry in get_provider_registry().list_custom():
+            values.extend(entry.api_keys)
+        install_credential_digests(values)
+    except Exception as exc:
+        logger.debug("Credential digest install skipped: {}", type(exc).__name__)

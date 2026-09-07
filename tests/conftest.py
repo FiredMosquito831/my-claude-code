@@ -270,6 +270,23 @@ def _reset_image_geometry_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_credential_digests():
+    """Forget the configured-credential digests between tests.
+
+    ``core.wire_capture`` holds sha256 digests of the credentials the running
+    generation was configured with, so a value equal to one of them is redacted
+    under any key. The set is process-wide and is installed whenever a provider
+    generation is published, so a test that publishes one would otherwise leave
+    the next test redacting strings it never configured.
+    """
+    from my_claude_code.core import wire_capture
+
+    wire_capture.reset_credential_digests()
+    yield
+    wire_capture.reset_credential_digests()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_provider_registry(monkeypatch, tmp_path):
     """Keep custom provider registry state out of the real ~/.fcc directory."""
     from my_claude_code.config import provider_registry

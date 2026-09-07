@@ -550,6 +550,13 @@ def capability_payload(
         "cache_write_price": _laddered(
             None, SOURCE_UNKNOWN, None, prices["cache_write_price"]
         ),
+        # Almost nothing publishes a separate reasoning rate, and that is the
+        # useful fact: where it is absent, reasoning tokens price as output,
+        # which is what the hosts that publish nothing actually bill. Absent
+        # is not zero and is rendered as "not reported".
+        "reasoning_price": _laddered(
+            None, SOURCE_UNKNOWN, None, prices["reasoning_price"]
+        ),
         # Only a gateway publishes these two; models.dev has no equivalent, so
         # there is no second tier they could have come from.
         "supported_parameters": _sourced(
