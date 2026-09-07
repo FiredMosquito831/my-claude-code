@@ -41,6 +41,9 @@ UV_TOOL_BIN_DIR
 # The npm package's own opt-out, read by packaging/npm/bin/postinstall.js (a
 # Node hook, not the Python server), so Settings will never declare it.
 MCC_NPM_SKIP_INSTALL
+# The npm package's server/desktop/both/none switch, read by the same Node
+# hook and by packaging/npm/bin/runtime-install.js. Also not a server setting.
+MCC_NPM_INSTALL
 
 # --- Upstream status/error phrases quoted verbatim so a reader can match the
 # --- string they see in a log. They are values, not variables. ------------

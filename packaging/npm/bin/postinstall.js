@@ -2,19 +2,29 @@
 "use strict";
 
 // `npm install -g @firedmosquito831/my-claude-code` must leave the machine in
-// the same state the one-line installer does -- the server, every `mcc-*`
-// command, and the desktop app -- and not merely drop a launcher that installs
-// on first use. That is what this hook is for, and it is deliberately the only
-// place in this package that installs anything.
+// the state the one-line installer does -- the server, every `mcc-*` command,
+// and, where there is a screen to draw on, the desktop application -- and not
+// merely drop a launcher that installs on first use. That is what this hook is
+// for, and it is deliberately the only place in this package that installs
+// anything during `npm install`.
 //
-// It does NOT reimplement the installer. It runs the official, digest-verified
-// script from the repository with the desktop flag the installer already has
-// (`install.ps1 -Desktop`, `install.sh --desktop`), streams its output, and
-// exits with its status. A failed install therefore fails `npm install -g`,
-// which is the honest outcome: npm should not report success for a package
-// whose whole job is to put a server on your PATH.
+// It does NOT reimplement the installer. The server half runs the repository's
+// own digest-verified script (`install.ps1 -Desktop`, `install.sh --desktop`),
+// streams its output, and exits with its status. A failed server install
+// therefore fails `npm install -g`, which is the honest outcome: npm should
+// not report success for a package whose whole job is to put a server on your
+// PATH.
 //
-// Four situations must NOT install:
+// What is new since 6.57.1 is that the hook no longer assumes a desktop. It
+// asks `runtime-install.decide()` -- platform, arch, DISPLAY/WAYLAND_DISPLAY,
+// SSH, CI, and the explicit overrides -- and on a VPS, in a container or in a
+// WSL shell with no display it installs the server WITHOUT the `-Desktop`
+// flag, so no shortcuts are created for a screen that does not exist. Where
+// there is a desktop it also installs the OS-native application (setup.exe,
+// .dmg into ~/Applications, .deb/tarball), each verified against the release's
+// own SHA256SUMS-desktop-shell.txt before it is run.
+//
+// Four situations must NOT install at all:
 //
 //   * a local `npm install` or an `npx` run (`npm_config_global` is not
 //     "true"). `npx @firedmosquito831/my-claude-code --version` has to stay
@@ -29,11 +39,7 @@
 // Every one of them prints a single line saying what happened and why, then
 // exits 0. Silence here is indistinguishable from a broken hook.
 
-const { spawnSync } = require("node:child_process");
-
-const REPO_RAW =
-  "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts";
-const IS_WINDOWS = process.platform === "win32";
+const runtime = require("./runtime-install.js");
 
 function note(message) {
   console.log(`my-claude-code: ${message}`);
@@ -56,31 +62,7 @@ function skipReason(env) {
   return null;
 }
 
-/** The installer command for this platform, with the desktop flag on. */
-function installerCommand() {
-  if (IS_WINDOWS) {
-    // The scriptblock form, not `-File`: there is no file to point at when the
-    // script is fetched over the network. `& ([scriptblock]::Create(...))
-    // -Desktop` binds `-Desktop` to the script's own `param()` block, which a
-    // plain `irm ... | iex` cannot do.
-    return {
-      command: "powershell",
-      args: [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        `& ([scriptblock]::Create((irm "${REPO_RAW}/install.ps1"))) -Desktop`,
-      ],
-    };
-  }
-  return {
-    command: "sh",
-    args: ["-c", `curl -fsSL "${REPO_RAW}/install.sh" | sh -s -- --desktop`],
-  };
-}
-
-function main() {
+async function main() {
   const reason = skipReason(process.env);
   if (reason !== null) {
     note(reason);
@@ -88,30 +70,25 @@ function main() {
   }
 
   note(
-    "global install -- running the official installer with the desktop app (`" +
-      (IS_WINDOWS ? "install.ps1 -Desktop" : "install.sh --desktop") +
-      "`). Set MCC_NPM_SKIP_INSTALL=1 to skip this."
+    "global install -- deciding what this machine needs. Set MCC_NPM_SKIP_INSTALL=1 to skip this, " +
+      "or MCC_NPM_INSTALL=server to take the server only."
   );
 
-  const { command, args } = installerCommand();
-  const result = spawnSync(command, args, { stdio: "inherit" });
-  if (result.error) {
-    console.error(
-      `my-claude-code: could not start the installer: ${result.error.message}`
-    );
-    return 1;
-  }
-  const status = result.status ?? 1;
+  // No argv: `npm install -g` passes none. Overrides here are the environment
+  // variable, which is the only channel a package manager or Dockerfile has.
+  const status = await runtime.performInstall({ argv: [], log: note });
   if (status === 0) {
-    note(
-      "the server, every mcc-* command and the desktop app are installed. Open a new terminal so PATH picks them up."
-    );
-  } else {
-    console.error(
-      `my-claude-code: the installer exited ${status}. Nothing was left half-installed by this hook; rerun \`mcc install\` or install manually from https://github.com/FiredMosquito831/my-claude-code`
-    );
+    note("done. Open a new terminal so PATH picks up the mcc-* commands.");
   }
   return status;
 }
 
-process.exit(main());
+main().then(
+  (status) => {
+    process.exitCode = status;
+  },
+  (error) => {
+    console.error(`my-claude-code: the install hook failed: ${error && error.message}`);
+    process.exitCode = 1;
+  }
+);
