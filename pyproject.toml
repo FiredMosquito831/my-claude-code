@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "6.57.0"
+version = "6.57.1"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 license = "AGPL-3.0-or-later AND MIT"
@@ -108,7 +108,15 @@ packages = ["src/my_claude_code", "src/free_claude_code"]
 "README.md" = "my_claude_code/docs_bundle/README.md"
 "ARCHITECTURE.md" = "my_claude_code/docs_bundle/ARCHITECTURE.md"
 "CONTRIBUTING.md" = "my_claude_code/docs_bundle/CONTRIBUTING.md"
+# docs/README.md is the index of the pages below it; the bundle is flat, so
+# it cannot keep its basename next to the repository's own README.md.
+"docs/README.md" = "my_claude_code/docs_bundle/DOCS-README.md"
 "docs/USAGE.md" = "my_claude_code/docs_bundle/USAGE.md"
+"docs/CLIENTS.md" = "my_claude_code/docs_bundle/CLIENTS.md"
+"docs/OAUTH-PROVIDERS.md" = "my_claude_code/docs_bundle/OAUTH-PROVIDERS.md"
+"docs/MESSAGING.md" = "my_claude_code/docs_bundle/MESSAGING.md"
+"docs/ROUTING-REFERENCE.md" = "my_claude_code/docs_bundle/ROUTING-REFERENCE.md"
+"docs/WEB-SEARCH.md" = "my_claude_code/docs_bundle/WEB-SEARCH.md"
 "docs/CLAUDE-CODE-CONFIG.md" = "my_claude_code/docs_bundle/CLAUDE-CODE-CONFIG.md"
 "docs/ANTHROPIC-SUBSCRIPTION.md" = "my_claude_code/docs_bundle/ANTHROPIC-SUBSCRIPTION.md"
 

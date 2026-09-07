@@ -57,10 +57,14 @@ class Document(NamedTuple):
     title: str
     summary: str
     repo_path: str
+    #: Overrides the flat name when two documents share a basename. The
+    #: bundle is flat, so `docs/README.md` and `README.md` would otherwise
+    #: land on the same file and one page would render the other's text.
+    bundle_as: str = ""
 
     @property
     def bundled_name(self) -> str:
-        return self.repo_path.rsplit("/", 1)[-1]
+        return self.bundle_as or self.repo_path.rsplit("/", 1)[-1]
 
     @property
     def github_url(self) -> str:
@@ -77,10 +81,60 @@ DOCUMENTS: tuple[Document, ...] = (
         repo_path="README.md",
     ),
     Document(
+        slug="docs-index",
+        title="All docs",
+        summary="One row per topic page, and what each one covers.",
+        repo_path="docs/README.md",
+        bundle_as="DOCS-README.md",
+    ),
+    Document(
         slug="usage",
         title="Usage",
         summary="Running the server day to day, and every setting it reads.",
         repo_path="docs/USAGE.md",
+    ),
+    Document(
+        slug="clients",
+        title="Clients",
+        summary=(
+            "Editor integrations, and any OpenAI-, Anthropic- or "
+            "Gemini-shaped client that is not one of the launchers."
+        ),
+        repo_path="docs/CLIENTS.md",
+    ),
+    Document(
+        slug="oauth-providers",
+        title="OAuth Providers",
+        summary=(
+            "Sign-in-based providers: a Claude subscription, ChatGPT, Kimi For Coding."
+        ),
+        repo_path="docs/OAUTH-PROVIDERS.md",
+    ),
+    Document(
+        slug="messaging",
+        title="Messaging",
+        summary=(
+            "Running sessions over Discord or Telegram, with voice-note transcription."
+        ),
+        repo_path="docs/MESSAGING.md",
+    ),
+    Document(
+        slug="routing-reference",
+        title="Routing Reference",
+        summary=(
+            "Key rotation, fallback chains, output budgets, limits and the "
+            "token optimizer, as reference rather than tutorial."
+        ),
+        repo_path="docs/ROUTING-REFERENCE.md",
+    ),
+    Document(
+        slug="web-search",
+        title="Web Search",
+        summary=(
+            "The `web_search` server tool, fulfilled at the proxy by 14 "
+            "search providers instead of by Anthropic."
+        ),
+        repo_path="docs/WEB-SEARCH.md",
     ),
     Document(
         slug="claude-code-config",
@@ -192,16 +246,43 @@ def load_markdown(slug: str) -> str | None:
     return path.read_text(encoding="utf-8")
 
 
-def resolve_relative_link(href: str) -> str:
+def _repo_relative(target: str, base_dir: str) -> str:
+    """Resolve ``target`` as written *inside a document in* ``base_dir``.
+
+    Without this every link would be read as if the document sat at the
+    repository root, so `docs/README.md`'s `./CLIENTS.md` would point at a
+    `CLIENTS.md` that does not exist and its whole index table would land
+    on GitHub 404s. Segments are walked by hand rather than with
+    ``posixpath.normpath`` so a `../` that climbs past the root cannot
+    produce a path outside the repository.
+    """
+
+    segments = [segment for segment in base_dir.split("/") if segment]
+    for segment in target.split("/"):
+        if segment in ("", "."):
+            continue
+        if segment == "..":
+            if segments:
+                segments.pop()
+            continue
+        segments.append(segment)
+    return "/".join(segments)
+
+
+def resolve_relative_link(href: str, base_dir: str = "") -> str:
     """Rewrite a repository-relative link for the dashboard.
 
     A link to another curated document becomes an in-page link, so a
     cross-reference does not eject the reader to a browser tab. Everything
     else -- source files, `.env.example`, directories -- becomes a GitHub
     link, because the dashboard has nothing to show for it.
+
+    ``base_dir`` is the directory of the document the link was written in,
+    so `./USAGE.md` inside `docs/README.md` resolves to `docs/USAGE.md`
+    rather than to a top-level file of that name.
     """
 
-    target = href.split("#", 1)[0].split("?", 1)[0].lstrip("./")
+    target = _repo_relative(href.split("#", 1)[0].split("?", 1)[0], base_dir)
     anchor = href[len(href.split("#", 1)[0]) :]
     slug = _SLUG_BY_REPO_PATH.get(target)
     if slug is not None:
