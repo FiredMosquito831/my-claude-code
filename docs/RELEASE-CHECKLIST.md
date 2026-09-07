@@ -426,7 +426,33 @@ has that binary reads a receipt and downloads nothing; moving the pin for its ow
 sake makes all of them re-download an identical window.
 
 
-## 9. The winget manifest (`desktop-shell/installer/winget/`)
+## 9. The npm package (`packaging/npm/`, `npm-release.yml`)
+
+**Nothing to do.** `npm-release.yml` fires on `release: published`, checks the
+tag against `pyproject.toml`, skips a version already on the registry, and runs
+`npm publish --access public --provenance` from `packaging/npm/`. The version in
+`packaging/npm/package.json` is pinned to the Python version by
+`tests/contracts/test_npm_package_contract.py`, so the bump that goes into a
+release carries the launcher with it.
+
+**If the job logged a notice and published nothing**, the repository secret
+`NPM_TOKEN` is missing. That is a deliberate skip, not a failure — a convenience
+launcher must never turn a good server release red. To arm it, create a
+**granular** npm access token (classic tokens cannot publish here) with:
+
+* **Read and write** on packages for the `@firedmosquito831` scope, and
+* **Bypass two-factor authentication** ticked — npm refuses a publish from a
+  token that has neither 2FA nor the bypass;
+
+then add it as the repository secret `NPM_TOKEN`. The *next* release publishes
+automatically; the skipped one can be published by re-running the workflow from
+its tag (`workflow_dispatch`, `tag: vN`).
+
+`@firedmosquito831/my-claude-code@6.52.0` was published by hand before this
+workflow existed and is deliberately not backfilled.
+
+
+## 10. The winget manifest (`desktop-shell/installer/winget/`)
 
 Only relevant once the manifest has been **accepted** into
 `microsoft/winget-pkgs`. Until then this section is preparation, and
