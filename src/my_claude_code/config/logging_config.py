@@ -4,12 +4,21 @@ Structured logs are written as JSON lines to a configurable path (default
 ``logs/server.log``). Stdlib logging is intercepted and funneled to loguru.
 Context vars (request_id, node_id, chat_id) from contextualize() are
 included at top level for easy grep/filter.
+
+Each start rotates the previous ``server.log`` aside as
+``server.<timestamp>.log`` rather than truncating it, and the startup sweep
+caps those together with loguru's own rotations under
+``SERVER_LOG_RETAIN_FILES``. A restart is the commonest thing anyone needs a
+log to explain, and until 6.58.1 a restart was what destroyed it.
 """
 
 import json
 import logging
+import os
 import re
 import threading
+from contextlib import suppress
+from datetime import datetime
 from pathlib import Path
 
 from loguru import logger
@@ -150,6 +159,49 @@ def _add_file_sink(log_file: str | Path, level: str, retain_files: int) -> int:
     )
 
 
+def _rotate_current_log(log_path: Path) -> Path | None:
+    """Move an existing ``server.log`` aside so the new run starts a fresh one.
+
+    Until 6.58.1 the line here was ``log_path.write_text("")``: every server
+    start destroyed the previous run's log. That is why a report of "the app
+    hung and I restarted it" could only ever be reconstructed from database
+    rows and file mtimes -- the one file that would have said what happened had
+    been emptied by the very restart being investigated.
+
+    The rotated name matches the ``{stem}.*{suffix}`` glob loguru's own
+    rotation uses, so the startup sweep below caps these and loguru's rotations
+    together under one ``SERVER_LOG_RETAIN_FILES``.
+
+    Returns the rotated path, or ``None`` when there was nothing to rotate.
+    Truncating is the fallback and not an error: on Windows a log another
+    process still holds cannot be renamed, and a start that refused to proceed
+    because of that would be a worse bug than a lost log.
+    """
+
+    try:
+        if not log_path.is_file() or log_path.stat().st_size == 0:
+            return None
+    except OSError:
+        return None
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+    target = log_path.with_name(f"{log_path.stem}.{stamp}{log_path.suffix}")
+    # A second start inside the same microsecond is not a thing, but a clock
+    # that went backwards is: never overwrite a log that is already there.
+    counter = 1
+    while target.exists():
+        target = log_path.with_name(
+            f"{log_path.stem}.{stamp}-{counter}{log_path.suffix}"
+        )
+        counter += 1
+    try:
+        os.replace(log_path, target)
+    except OSError:
+        with suppress(OSError):
+            log_path.write_text("")
+        return None
+    return target
+
+
 def _sweep_rotated_logs(log_path: Path, retain_files: int) -> None:
     """Delete rotated ``server.*.log`` files beyond ``retain_files``.
 
@@ -215,6 +267,9 @@ def configure_logging(
     On verbosity change alone, updates only the third-party logger levels.
     Use force=True to reconfigure from scratch.
 
+    The previous ``server.log`` is rotated aside rather than truncated, so a
+    restart no longer destroys the evidence of what happened before it.
+
     ``retain_files`` caps the number of rotated ``server.*.log`` files kept;
     ``0`` keeps them all. The cap is applied both as loguru's rotation retention
     and by a startup sweep, so a directory that already holds more rotated files
@@ -244,9 +299,14 @@ def configure_logging(
 
         logger.remove()
 
-        log_path.write_text("")
+        rotated = _rotate_current_log(log_path)
 
         _sink_id = _add_file_sink(log_path, level, retain_files)
+
+        if rotated is not None:
+            # Said in the new log, because the whole point of keeping the old
+            # one is that somebody will go looking for it later.
+            logger.info("Previous server log rotated to {}.", rotated)
 
         intercept = InterceptHandler()
         logging.root.handlers = [intercept]

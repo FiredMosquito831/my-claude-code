@@ -206,6 +206,11 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     # How long to wait for a spawned mcc-server child to answer healthy before
     # giving up and reporting a start failure.
     "desktop_server_start_timeout": LimitRange(1.0, 300.0),
+    # Extra start attempts after the first. 0 is the old single-attempt
+    # behaviour and is a legitimate thing to want; the ceiling stops a typo
+    # from turning a start into an hour of probing before the window says
+    # anything at all.
+    "desktop_server_start_retries": LimitRange(0, 20),
     # Timeout for one loopback call to the server's admin API.
     "desktop_admin_request_timeout": LimitRange(0.5, 60.0),
     # How often the tray polls the activation file that a second launch

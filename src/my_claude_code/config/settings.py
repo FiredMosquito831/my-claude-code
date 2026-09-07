@@ -23,6 +23,7 @@ from .constants import (
     DESKTOP_HEALTH_FAILURE_THRESHOLD_DEFAULT,
     DESKTOP_HEALTH_POLL_SECONDS_DEFAULT,
     DESKTOP_RECONNECT_RESTATUS_SECONDS_DEFAULT,
+    DESKTOP_SERVER_START_RETRIES_DEFAULT,
     DESKTOP_SERVER_START_TIMEOUT_DEFAULT,
     DESKTOP_WINDOW_HEIGHT_DEFAULT,
     DESKTOP_WINDOW_WIDTH_DEFAULT,
@@ -1445,6 +1446,14 @@ class Settings(BaseSettings):
     desktop_server_start_timeout: float = Field(
         default=DESKTOP_SERVER_START_TIMEOUT_DEFAULT,
         validation_alias="DESKTOP_SERVER_START_TIMEOUT",
+    )
+    # How many further attempts follow the first one when the spawned server
+    # has not answered within that timeout. The desktop window keeps the
+    # startup page up for (retries + 1) x the timeout before it says anything
+    # went wrong, and it keeps probing even then.
+    desktop_server_start_retries: int = Field(
+        default=DESKTOP_SERVER_START_RETRIES_DEFAULT,
+        validation_alias="DESKTOP_SERVER_START_RETRIES",
     )
     # Timeout for one loopback call to the server's admin API.
     desktop_admin_request_timeout: float = Field(

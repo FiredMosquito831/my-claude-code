@@ -22,9 +22,16 @@ Three rules hold this file together:
 ``schema`` is the compatibility handle. It is bumped when a documented key is
 removed or changes type; adding a key does not bump it, because a reader is
 required to tolerate keys it does not know. 6.44.0 added four shell keys,
-6.45.0 added ``autostart_reconcile`` and 6.50.0 added
-``reconnect_restatus_seconds``; the schema stayed at 1 every time, for exactly
-that reason.
+6.45.0 added ``autostart_reconcile``, 6.50.0 added
+``reconnect_restatus_seconds`` and 6.58.1 added ``server_start_retries``; the
+schema stayed at 1 every time, for exactly that reason.
+
+Note the asymmetry a new key creates, because it is the one thing to get right
+when adding another. An *old* reader tolerates a key it has never heard of, so
+a new wheel is always safe under an old shell. A *new* reader refuses a
+document that is missing a budget it needs (C9: no compiled-in default), so a
+new shell is not safe under an old wheel -- which is why the shell pin moves in
+a release *after* the one that starts emitting the key, never before.
 
 **Why ``draining`` is behind a flag, and why it still did not bump the schema.**
 6.50.0 gave ``server_presence`` a fourth value: MCC's own server, answering the
@@ -109,6 +116,7 @@ STATUS_KEYS: tuple[str, ...] = (
     "autostart_reconcile",
     "server_log",
     "start_timeout_seconds",
+    "server_start_retries",
     "health_check_interval_seconds",
     "health_poll_seconds",
     "health_failure_threshold",
@@ -208,6 +216,11 @@ def desktop_status(*, presence_v2: bool = False) -> dict[str, Any]:
         "autostart_reconcile": autostart_reconcile_enabled(),
         "server_log": str(server_log_path()),
         "start_timeout_seconds": float(settings.desktop_server_start_timeout),
+        # How many further attempts follow the first one before the window
+        # stops calling itself "starting". Three attempts of 15s is what a
+        # 22-25s startup needs; one was what parked the window on a Retry
+        # button seven seconds before the server answered.
+        "server_start_retries": int(settings.desktop_server_start_retries),
         "health_check_interval_seconds": float(settings.desktop_health_check_interval),
         "health_poll_seconds": float(settings.desktop_health_poll_seconds),
         "health_failure_threshold": int(settings.desktop_health_failure_threshold),

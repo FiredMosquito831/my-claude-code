@@ -59,6 +59,40 @@ pub fn install_command_for_this_machine() -> InstallCommand {
     install_command(std::env::consts::OS)
 }
 
+/// What the window says once it has installed MCC and `mcc-desktop` still is
+/// not there.
+///
+/// Until 6.58.1 there was no such sentence, because there was no such state:
+/// a `NotInstalled` status ran the installer and returned, the ladder thread
+/// looped, and the next pass ran the installer again. On the machine where the
+/// installer succeeds but leaves its `bin` directory on a `PATH` only a newly
+/// started process can see -- the ordinary Windows first launch -- that is an
+/// install every couple of minutes, forever, under a spinner. Bounding the
+/// attempts is half the fix; saying the true reason is the other half, because
+/// the true reason has a one-line remedy the user can act on.
+pub fn install_did_not_take_message(attempts: u32, last_line: &str) -> String {
+    let ran = if attempts == 1 {
+        "The installer ran".to_owned()
+    } else {
+        format!("The installer ran {attempts} times")
+    };
+    let mut text = format!(
+        "{ran} and mcc-desktop still is not on this window's PATH. The \
+         commonest reason is that the installer added a directory to PATH that \
+         only a newly started process can see: quit this window and start it \
+         again, and it will be found. "
+    );
+    let last = last_line.trim();
+    if !last.is_empty() {
+        text.push_str(&format!("The installer's last line was: {last}. "));
+    }
+    text.push_str(
+        "This window keeps checking either way, so if mcc-desktop does appear \
+         it is picked up without Retry.",
+    );
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,6 +142,29 @@ mod tests {
                 "{os} shows a command it does not run"
             );
         }
+    }
+
+    #[test]
+    fn the_install_that_did_not_take_names_the_reason_and_the_last_line() {
+        let message = install_did_not_take_message(3, "  Installed 12 executables  ");
+        assert!(message.contains("ran 3 times"), "{message}");
+        // The remedy, not merely the complaint.
+        assert!(message.contains("newly started process"), "{message}");
+        assert!(
+            message.contains("quit this window and start it again"),
+            "{message}"
+        );
+        // The installer's own last word, trimmed, so the page is never a bare
+        // spinner over nothing.
+        assert!(message.contains("Installed 12 executables."), "{message}");
+        assert!(message.contains("keeps checking"), "{message}");
+    }
+
+    #[test]
+    fn an_install_with_nothing_to_quote_still_reads_as_a_sentence() {
+        let message = install_did_not_take_message(1, "   ");
+        assert!(message.starts_with("The installer ran and"), "{message}");
+        assert!(!message.contains("last line"), "{message}");
     }
 
     #[test]

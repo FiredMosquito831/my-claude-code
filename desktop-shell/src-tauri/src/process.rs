@@ -203,12 +203,50 @@ pub fn spawn_server() -> Result<Child, String> {
     })
 }
 
+/// Whether a child this window started is still running.
+///
+/// The one signal that tells a server that is merely slow from one that is
+/// gone. Every *probe* a starting server can be given says the port is free,
+/// because uvicorn binds after the lifespan and MCC does all of its work in
+/// the lifespan -- so a retry that reads a probe as licence to start another
+/// server would put two of them into the same bind race. A running child says
+/// "still coming up" and nothing else does.
+pub fn still_running(child: &mut Child) -> bool {
+    matches!(child.try_wait(), Ok(None))
+}
+
+/// How long the installer may run before this window stops waiting on it.
+///
+/// Generous: a cold `uv tool install` on a slow link, behind an antivirus
+/// scanner, genuinely takes minutes. It exists because the alternative is
+/// unbounded, and an unbounded wait behind a spinner is the exact shape of the
+/// first-launch hang this release is about -- an installer that stops to ask a
+/// question it will never be given an answer to (stdin is null) would
+/// otherwise hold this window for the life of the process.
+const INSTALL_WALL: Duration = Duration::from_secs(900);
+
+/// How often the installer page says something when the installer itself has
+/// gone quiet. Not a policy either: it is the difference between a window that
+/// is visibly working and a window that looks frozen.
+const INSTALL_HEARTBEAT: Duration = Duration::from_secs(10);
+
 /// Run the install command, calling `on_line` for every line it writes.
 ///
 /// stderr is merged into stdout on purpose: an installer that is failing says
 /// so on stderr, and a window that shows only stdout would show a blank pane
 /// and then an error with no explanation.
-pub fn run_install(command: &InstallCommand, mut on_line: impl FnMut(&str)) -> Result<i32, String> {
+pub fn run_install(command: &InstallCommand, on_line: impl FnMut(&str)) -> Result<i32, String> {
+    run_install_within(command, INSTALL_WALL, INSTALL_HEARTBEAT, on_line)
+}
+
+/// The same, with the walls spelled out. Split for the test, which cannot wait
+/// fifteen minutes to prove that waiting ends.
+pub fn run_install_within(
+    command: &InstallCommand,
+    wall: Duration,
+    heartbeat: Duration,
+    mut on_line: impl FnMut(&str),
+) -> Result<i32, String> {
     let mut child = Command::new(&command.program)
         .args(&command.args)
         .stdin(Stdio::null())
@@ -225,15 +263,65 @@ pub fn run_install(command: &InstallCommand, mut on_line: impl FnMut(&str)) -> R
             }
         });
     }
-    if let Some(stdout) = child.stdout.take() {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+    // stdout is drained on a thread too, now that this function has a wall to
+    // enforce: reading it inline is itself an unbounded wait.
+    let lines = child.stdout.take().map(lines_on_a_thread);
+
+    let started = Instant::now();
+    let mut last_said = Instant::now();
+    let status = loop {
+        if let Some(receiver) = lines.as_ref() {
+            while let Ok(line) = receiver.try_recv() {
+                on_line(&line);
+                last_said = Instant::now();
+            }
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                return Err(format!("the installer could not be waited on: {error}"));
+            }
+        }
+        if started.elapsed() >= wall {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!(
+                "the installer was still running after {:.0} minutes, so it was \
+                 stopped. Run it yourself in a terminal to see what it is \
+                 waiting for.",
+                wall.as_secs_f64() / 60.0
+            ));
+        }
+        if last_said.elapsed() >= heartbeat {
+            on_line(&format!(
+                "-- still installing, {:.0}s elapsed --",
+                started.elapsed().as_secs_f64()
+            ));
+            last_said = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    // Whatever the reader had not handed over yet, now that the child is gone.
+    if let Some(receiver) = lines {
+        while let Ok(line) = receiver.recv_timeout(Duration::from_millis(200)) {
             on_line(&line);
         }
     }
-    let status = child
-        .wait()
-        .map_err(|error| format!("the installer could not be waited on: {error}"))?;
     Ok(status.code().unwrap_or(-1))
+}
+
+/// Read one pipe line by line on its own thread.
+fn lines_on_a_thread(pipe: impl Read + Send + 'static) -> mpsc::Receiver<String> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    receiver
 }
 
 #[cfg(test)]
@@ -363,6 +451,46 @@ mod tests {
         assert!(
             waited < Duration::from_secs(30),
             "the wall did not hold: waited {waited:?}"
+        );
+    }
+
+    #[test]
+    fn the_installer_is_given_a_wall_rather_than_the_rest_of_the_session() {
+        // The first-launch hang, in one test: an installer that never returns
+        // used to hold the ladder thread -- and therefore every page in the
+        // window, including the one that would have explained it -- forever.
+        let (directory, sleeper) = a_command_that_never_answers();
+        let command = InstallCommand {
+            program: sleeper.clone(),
+            args: Vec::new(),
+            display: sleeper,
+        };
+        let mut said: Vec<String> = Vec::new();
+        let started = Instant::now();
+        let outcome = run_install_within(
+            &command,
+            Duration::from_millis(700),
+            Duration::from_millis(100),
+            |line| said.push(line.to_owned()),
+        );
+        let waited = started.elapsed();
+        std::fs::remove_dir_all(&directory).ok();
+
+        match outcome {
+            Err(detail) => {
+                assert!(detail.contains("was stopped"), "{detail}");
+                assert!(detail.contains("still running after"), "{detail}");
+            }
+            other => panic!("expected a bounded give-up, got {other:?}"),
+        }
+        assert!(
+            waited < Duration::from_secs(20),
+            "the wall did not hold: {waited:?}"
+        );
+        // And it was not a bare spinner while it waited.
+        assert!(
+            said.iter().any(|line| line.contains("still installing")),
+            "a silent installer must still say something: {said:?}"
         );
     }
 

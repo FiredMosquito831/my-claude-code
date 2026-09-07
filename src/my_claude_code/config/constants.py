@@ -415,6 +415,15 @@ REQUEST_LOG_IMAGE_MAX_PIXELS_DEFAULT = 512
 # already running. See config/limits.py for the bounds and their reasons.
 DESKTOP_HEALTH_CHECK_INTERVAL_DEFAULT = 0.25
 DESKTOP_SERVER_START_TIMEOUT_DEFAULT = 15.0
+# How many *extra* start attempts follow the first one when a spawned server
+# has not answered inside ``DESKTOP_SERVER_START_TIMEOUT_DEFAULT``. Two, so a
+# start gets 3 x 15 s = 45 s of probing before anything that looks like a
+# failure is shown -- a real configuration here takes 22-25 s to bind, which a
+# single 15 s budget cannot fit, and the window used to park on a Retry button
+# the moment that budget expired. Retries never mean "spawn again": a child
+# that is still running is still coming up, and a second server would only
+# lose the bind race. Zero restores the pre-6.58.1 single attempt.
+DESKTOP_SERVER_START_RETRIES_DEFAULT = 2
 DESKTOP_ADMIN_REQUEST_TIMEOUT_DEFAULT = 5.0
 DESKTOP_ACTIVATION_POLL_SECONDS_DEFAULT = 1.0
 DESKTOP_HEALTH_POLL_SECONDS_DEFAULT = 5.0

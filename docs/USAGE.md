@@ -788,6 +788,43 @@ Those stages are appended to `~/.mcc/updates/progress.json`, one JSON object per
 line, by the helper that performs the update. Read it if a restart goes wrong; the
 last line is where it stopped.
 
+**A slow start is no longer a failed one.** The window gives the server it
+starts `DESKTOP_SERVER_START_TIMEOUT` (default 15 s) to answer, and since 6.58.1
+it does that **three times** — `DESKTOP_SERVER_START_RETRIES` (default 2) more
+attempts, 45 s in all — before it says anything went wrong. A real configuration
+here takes **22–25 s** to bind, because everything MCC loads at startup happens
+*before* the port is opened; a single 15 s budget could not fit that, and the
+window used to park on a Retry button about seven seconds before the server
+answered. The countdown says which attempt it is on (`attempt 2 of 3`) so a
+window that is patiently waiting cannot be mistaken for a stuck one.
+
+A retry never starts a *second* server. A server that has not finished starting
+has not bound its port yet, so every check the window can make says the port is
+free — a retry that acted on that reading would put two servers into one bind
+race. What it watches instead is the child it started: still running means still
+coming up, and only a child that has actually exited is started again.
+
+**And the page you get if all three attempts run out is not the end.** It keeps
+checking on the same health poll, so a server that binds a minute late is picked
+up and the dashboard loads with nothing asked of you. **Retry** is now an
+accelerator — check again *now* — rather than the only way out. Before 6.58.1 it
+was the only way out, and it was worse than that: nothing behind that page was
+still running, so waiting at it achieved nothing and closing and reopening the
+app was the only recovery anybody found.
+
+**The same applies to the very first launch.** When MCC is not installed at all,
+the desktop app runs the project's own installer and shows its output. It now
+does that **at most three times**. An installer that succeeds without putting
+`mcc-desktop` on the running window's `PATH` — the ordinary Windows first launch,
+because a `PATH` change reaches only newly started processes — used to mean
+installing MCC again every few minutes for as long as the window stayed open,
+under a spinner that said *Checking the server…* the whole time. The window now
+names what it is doing, quotes the installer's last line, tells you that quitting
+and reopening it is the fix, and goes on watching for `mcc-desktop` to appear.
+The installer itself is bounded too: one that stops to ask a question it will
+never be given an answer to is stopped after 15 minutes rather than holding the
+window for the rest of the session.
+
 **And the window now restarts a server that nobody else did.** Every
 `DESKTOP_RECONNECT_RESTATUS_SECONDS` (default 30) the reconnect loop re-reads
 `mcc-desktop --print-status` instead of only re-pinging the health URL. If the port
@@ -815,7 +852,7 @@ refusal and the window reads it as "shutting down", waits, and reconnects.
 
 > **These settings apply on the next `mcc-desktop` launch, not to a tray already running.** `mcc-desktop` is a separate process from `mcc-server` and reads them once at start — changing one in the dashboard or in `~/.mcc/.env` does nothing to a tray you already have open. Quit and relaunch `mcc-desktop` to pick it up.
 
-Ten settings live under **Admin → Providers → Desktop**, beside the live desktop panel. They sat on the Limits page until 6.2.0; if you are following an older note, that is where they went.
+Eleven settings live under **Admin → Providers → Desktop**, beside the live desktop panel. They sat on the Limits page until 6.2.0; if you are following an older note, that is where they went.
 
 | Setting | Default | Range |
 | --- | --- | --- |
@@ -824,6 +861,7 @@ Ten settings live under **Admin → Providers → Desktop**, beside the live des
 | `DESKTOP_ACTIVATION_POLL_SECONDS` | 1 | 0.1–3600 |
 | `DESKTOP_RECONNECT_RESTATUS_SECONDS` | 30 | 5–3600 |
 | `DESKTOP_SERVER_START_TIMEOUT` | 15 | 1–300 |
+| `DESKTOP_SERVER_START_RETRIES` | 2 | 0–20 |
 | `DESKTOP_ADMIN_REQUEST_TIMEOUT` | 5 | 0.5–60 |
 | `DESKTOP_HEALTH_CHECK_INTERVAL` | 0.25 | 0.05–5 |
 | `DESKTOP_WINDOW_WIDTH` | 1400 | 640–7680 |
@@ -3319,6 +3357,17 @@ The dashboard shows your running version, checks the release feed (cached for si
 **Update now** downloads the release wheel, verifies its SHA-256 against the digest GitHub publishes for that asset, and installs it with `uv`. A checksum mismatch aborts. Extras you originally installed — voice support, for instance — are detected and preserved.
 
 **Upgrading never restarts the server.** A running process keeps serving the code it already loaded, so an upgrade can't drop an in-flight stream. You get a *restart required* banner and restart when convenient.
+
+**A restart no longer destroys the log that would explain it.** Until 6.58.1
+every server start emptied `logs/server.log`, so the one file anyone would open
+after a restart went wrong had been erased by that very restart — the timeline of
+the hang this release fixes had to be reconstructed from database rows and file
+timestamps. A start now moves the previous log aside as
+`logs/server.<timestamp>.log` and begins a fresh one, and the same
+`SERVER_LOG_RETAIN_FILES` (default 10) that caps loguru's own rotations caps
+these: the newest ten survive, older ones are swept on the next start. On Windows
+a log another process still holds open cannot be moved; that start truncates as
+before rather than refusing to run.
 
 ### Windows: the install is deferred
 
