@@ -747,7 +747,7 @@ configure_and_verify_my_claude_code() {
         mcc-qwen mcc-crush \
         mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini \
         mcc-init mcc-chatgpt-oauth-login mcc-anthropic-oauth-login \
-        mcc-compact-log mcc-help mcc-rtk mcc-migrate \
+        mcc-compact-log mcc-help mcc-rtk mcc-migrate mcc-apps \
         mcc-desktop my-claude-code; do
         if [ ! -x "$tool_bin/$command_name" ]; then
             if [ -z "$missing_commands" ]; then
@@ -822,6 +822,7 @@ else
     printf '\nManage and inspect:\n'
     printf '  mcc-init                Create or repair ~/.mcc/.env\n'
     printf '  mcc-rtk                 Manage the RTK token optimizer\n'
+    printf '  mcc-apps                Point desktop apps here (list/status/configure/undo)\n'
     printf '  mcc-help                Show what each command does\n'
     if [ "$enable_desktop" -eq 1 ]; then
         if [ -n "$desktop_launcher_created" ]; then

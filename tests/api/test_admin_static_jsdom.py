@@ -2800,3 +2800,175 @@ def test_every_theme_option_sits_inside_the_picker(rendered: dict) -> None:
         "a theme option rendered outside #themeSwitch: " + ", ".join(picker["labels"])
     )
     assert len(picker["checked"]) == 1
+
+
+# --------------------------------------------------------------- desktop apps
+#
+# The cards MCC draws for applications it does not launch. What is worth
+# asserting here is not that the fetch happened -- the API tests cover that --
+# but that the server's six-state answer became six visibly different cards,
+# that a card with no button offers none, and that the undo picker offers both
+# modes and disables the one that would have nothing to restore.
+
+
+def _desktop_card(rendered: dict, app_id: str) -> dict:
+    cards = rendered["desktopApps"]["cards"]
+    return next(card for card in cards if card["id"] == app_id)
+
+
+def test_the_desktop_apps_group_renders_one_card_per_app(rendered: dict) -> None:
+    apps = rendered["desktopApps"]
+
+    assert apps["present"] is True
+    assert apps["cardCount"] == 6
+    assert [card["id"] for card in apps["cards"]] == [
+        "codex_desktop",
+        "opencode_desktop",
+        "goose_desktop",
+        "crush_desktop",
+        "claude_desktop",
+        "warp",
+    ]
+
+
+def test_each_probe_state_reaches_the_badge_in_its_own_words(rendered: dict) -> None:
+    """Six states, six labels. Collapsing any two would hide a real difference."""
+
+    badges = {card["id"]: card["badge"] for card in rendered["desktopApps"]["cards"]}
+    assert badges["codex_desktop"] == "Configured by MCC"
+    assert badges["opencode_desktop"] == "Configured but drifted"
+    assert badges["goose_desktop"] == "Installed, not configured"
+    assert badges["crush_desktop"] == "Not installed"
+    assert badges["warp"] == "Not routable"
+    assert len(set(badges.values())) == 5
+
+
+def test_a_drifted_card_says_what_drift_means_and_offers_a_re_apply(
+    rendered: dict,
+) -> None:
+    card = _desktop_card(rendered, "opencode_desktop")
+
+    assert card["drifted"] is True
+    assert "changed since MCC wrote it" in card["driftNote"]
+    assert card["configureLabel"] == "Re-apply"
+
+
+def test_a_configured_card_offers_both_undo_modes(rendered: dict) -> None:
+    """Both, because both are right answers to different questions."""
+
+    card = _desktop_card(rendered, "codex_desktop")
+
+    assert card["hasUndo"] is True
+    assert [mode["value"] for mode in card["undoModes"]] == ["keys_only", "restore"]
+    assert card["undoModes"][0]["label"] == "Remove MCC's keys only"
+    assert card["undoModes"][1]["label"] == "Restore the original values"
+    assert card["undoModes"][1]["disabled"] is False
+
+
+def test_restore_is_disabled_where_mcc_replaced_nothing(rendered: dict) -> None:
+    """Offering it would promise a value that was never recorded."""
+
+    card = _desktop_card(rendered, "opencode_desktop")
+    restore = next(mode for mode in card["undoModes"] if mode["value"] == "restore")
+
+    assert restore["disabled"] is True
+    assert "replaced nothing" in restore["label"]
+
+
+def test_an_unconfigured_card_offers_configure_but_no_undo(rendered: dict) -> None:
+    card = _desktop_card(rendered, "goose_desktop")
+
+    assert card["hasConfigure"] is True
+    assert card["hasUndo"] is False
+    assert card["undoModes"] == []
+
+
+def test_a_not_routable_card_states_the_reason_and_offers_no_buttons(
+    rendered: dict,
+) -> None:
+    """A dated explanation, and no button that would imply there might be one."""
+
+    card = _desktop_card(rendered, "warp")
+
+    assert card["unavailable"] is True
+    assert "2026-09-07" in card["unavailableReason"]
+    assert card["hasConfigure"] is False
+    assert card["hasPreview"] is False
+    assert card["hasUndo"] is False
+
+
+def test_the_claude_desktop_card_is_values_to_copy_rather_than_a_button(
+    rendered: dict,
+) -> None:
+    """Anthropic documents the dialog, not a file, so MCC guesses no path."""
+
+    card = _desktop_card(rendered, "claude_desktop")
+
+    assert card["hasConfigure"] is False
+    assert card["instructionLabels"] == [
+        "Connection",
+        "Base URL",
+        "Auth scheme",
+        "API key",
+        "Models",
+        "Custom headers",
+    ]
+    assert "Gateway" in card["instructionValues"]
+    assert any("mcc/best" in value for value in card["instructionValues"])
+    assert any("x-mcc-harness" in value for value in card["instructionValues"])
+    # One copy button per value: the whole point of the card.
+    assert card["copyButtons"] == len(card["instructionLabels"])
+    assert any("does not guess" in note for note in card["notes"])
+
+
+def test_a_card_names_the_file_the_owned_key_and_what_it_replaces(
+    rendered: dict,
+) -> None:
+    card = _desktop_card(rendered, "codex_desktop")
+
+    assert "Config file" in card["metaTerms"]
+    assert "MCC owns" in card["metaTerms"]
+    assert "Replaces" in card["metaTerms"]
+    assert "~/.codex/config.toml" in card["metaValues"]
+    assert "model_providers.mcc" in card["metaValues"]
+    assert "model_provider, model" in card["metaValues"]
+
+
+def test_a_card_reports_whether_the_token_variable_is_exported(rendered: dict) -> None:
+    """MCC never sets it, so the card has to be able to say it is missing."""
+
+    exported = _desktop_card(rendered, "codex_desktop")
+    missing = _desktop_card(rendered, "opencode_desktop")
+
+    assert any("exported where the server" in v for v in exported["metaValues"])
+    assert any("not exported yet" in v for v in missing["metaValues"])
+
+
+def test_the_default_model_checkbox_is_offered_only_where_it_is_a_choice(
+    rendered: dict,
+) -> None:
+    """Codex writes one by necessity; everywhere else it is opt-in."""
+
+    assert _desktop_card(rendered, "codex_desktop")["hasDefaultModelCheckbox"] is False
+    assert _desktop_card(rendered, "goose_desktop")["hasDefaultModelCheckbox"] is True
+
+
+def test_the_preview_shows_the_real_diff_and_no_credential(rendered: dict) -> None:
+    preview = rendered["desktopApps"]["preview"]
+
+    assert preview["hidden"] is False
+    assert "[model_providers.mcc]" in preview["text"]
+    assert "Replaces existing values at: model_provider, model" in preview["text"]
+    assert "-> Restart Codex desktop to pick this up." in preview["text"]
+    # The server masks before sending; nothing token-shaped reaches the page.
+    assert "sk-" not in preview["text"]
+
+
+def test_the_group_states_the_ownership_promise_and_the_two_undo_modes(
+    rendered: dict,
+) -> None:
+    note = rendered["desktopApps"]["ownershipNote"]
+
+    assert "touches only its own keys" in note
+    assert ".mcc-backup" in note
+    assert "Restore the original values" in note

@@ -7426,3 +7426,121 @@ details.turn-pane > summary:focus-visible {
 .cost-panel {
   margin-bottom: 16px;
 }
+
+
+/* Desktop apps -----------------------------------------------------------
+   The same card as a coding agent, plus the three things a file-editing card
+   has to show that a launcher card does not: which state its document is in,
+   what pressing the button would write, and which of the two undos to run. */
+
+.agent-state.drifted {
+  background: var(--warning-soft, #4a3a12);
+  color: var(--warning-strong, #f2c94c);
+}
+
+.desktop-app-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0.75rem 0 0;
+  font-size: 0.85rem;
+}
+
+.desktop-app-meta dt {
+  color: var(--muted, #9aa0a6);
+}
+
+.desktop-app-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.desktop-drift-note {
+  margin: 0.75rem 0 0;
+  font-size: 0.85rem;
+  color: var(--warning-strong, #f2c94c);
+}
+
+.desktop-app-actions {
+  margin-top: 0.75rem;
+}
+
+.desktop-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.desktop-default-model {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.desktop-undo-mode {
+  min-width: 14rem;
+}
+
+/* The preview is a unified diff of a real document: it has to wrap nowhere
+   and scroll on its own rather than widening the page. */
+.desktop-preview {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  max-height: 22rem;
+  overflow: auto;
+  white-space: pre;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  background: var(--code-bg, #14161a);
+}
+
+.desktop-app-status {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  min-height: 1.2em;
+}
+
+.desktop-instruction-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.desktop-instruction-label {
+  min-width: 9rem;
+  font-size: 0.85rem;
+  color: var(--muted, #9aa0a6);
+}
+
+.desktop-instruction-value {
+  overflow-wrap: anywhere;
+}
+
+.desktop-copy-button {
+  position: static;
+}
+
+/* The desktop card carries more rows than a launcher card, so it gets a
+   little more room between its blocks rather than a denser variant of the
+   same spacing. */
+.desktop-app-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.desktop-app-notes {
+  margin-top: 0.5rem;
+}
+
+.desktop-app-notes:empty {
+  display: none;
+}
+
+/* Claude Desktop's block of values to type. Sits between the summary and the
+   file metadata, so it needs its own separation from both. */
+.desktop-instructions {
+  margin: 0.75rem 0;
+}

@@ -454,3 +454,83 @@ def test_plan_names_the_export_and_the_restart_without_performing_either(tmp_pat
     joined = " ".join(plan.actions)
     assert "MCC_AUTH_TOKEN" in joined
     assert "Restart" in joined
+
+
+def test_a_second_configure_does_not_bury_the_users_original_value(tmp_path):
+    """The bug a browser drive found, and the reason the record is write-once.
+
+    Configure, hand-edit an owned key, Configure again to clear the drift, then
+    Restore. If the second Configure had replaced the record, it would have
+    stored MCC's own ``mcc/best`` as "what the user had" and Restore would have
+    put MCC's value back while reporting success.
+    """
+
+    spec = desktop_app("codex_desktop")
+    prepare(tmp_path, spec, CODEX_DOCUMENT)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+    scalars = {"model_provider": "mcc", "model": "mcc/best"}
+    path = document_path(spec, env)
+    original = path.read_bytes()
+
+    desktop_apply.apply(spec, env=env, block=BLOCK, scalars=scalars, record_path=record)
+
+    # A hand edit to an owned key, exactly what the drift badge reports.
+    path.write_text(
+        path.read_text(encoding="utf-8", newline=None).replace("8082", "9999"),
+        encoding="utf-8",
+        newline="",
+    )
+    desktop_apply.apply(spec, env=env, block=BLOCK, scalars=scalars, record_path=record)
+
+    result = desktop_apply.undo(
+        spec, env=env, mode=UndoMode.RESTORE, record_path=record
+    )
+
+    assert result.restored_keys == ("model",)
+    assert path.read_bytes() == original
+
+
+def test_the_recorded_hash_tracks_the_latest_write(tmp_path):
+    """Otherwise a re-apply would make every later restore refuse."""
+
+    spec = desktop_app("codex_desktop")
+    prepare(tmp_path, spec, CODEX_DOCUMENT)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+    scalars = {"model_provider": "mcc", "model": "mcc/best"}
+
+    desktop_apply.apply(spec, env=env, block=BLOCK, scalars=scalars, record_path=record)
+    changed = dict(BLOCK) | {"base_url": "http://127.0.0.1:9999/v1"}
+    desktop_apply.apply(
+        spec, env=env, block=changed, scalars=scalars, record_path=record
+    )
+
+    # No refusal: the document is still the one MCC left.
+    desktop_apply.undo(spec, env=env, mode=UndoMode.RESTORE, record_path=record)
+
+
+def test_a_masked_json_preview_is_still_valid_json(tmp_path):
+    """A preview that is not the format it claims to be is not a preview."""
+
+    spec = desktop_app("opencode_desktop")
+    prepare(tmp_path, spec, '{"theme": "opencode"}\n')
+    plan = desktop_apply.plan(
+        spec,
+        env=env_for(tmp_path),
+        block={
+            "options": {
+                "baseURL": "http://127.0.0.1:8082/v1",
+                "apiKey": "sk-super-secret-value",
+            }
+        },
+        scalars={},
+    )
+
+    assert "sk-super-secret-value" not in plan.diff
+    added = "\n".join(
+        line[1:]
+        for line in plan.diff.splitlines()
+        if line.startswith(("+", " ")) and not line.startswith("+++")
+    )
+    json.loads(added)

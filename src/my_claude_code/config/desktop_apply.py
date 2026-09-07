@@ -637,7 +637,14 @@ def plan(
             sidecar_after = json.dumps(_mask(sidecar_document), indent=2) + "\n"
             sidecar_diff = _diff(sidecar_before, sidecar_after, sidecar)
 
-    diff = _diff(_mask_text(rendered_before), _mask_text(rendered_after), path)
+    # The object formats are masked structurally before rendering, so masking
+    # their text again would only damage it -- it strips the trailing comma
+    # and leaves a preview that is not the JSON it claims to be. The text
+    # formats are rendered from the user's own bytes and have no other chance.
+    if document_format in {DocumentFormat.TOML, DocumentFormat.YAML}:
+        rendered_before = _mask_text(rendered_before)
+        rendered_after = _mask_text(rendered_after)
+    diff = _diff(rendered_before, rendered_after, path)
 
     return DesktopPlan(
         app_id=spec.id,

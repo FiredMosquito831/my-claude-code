@@ -30,6 +30,7 @@ $FccCommands = @(
     "mcc-cline", "mcc-goose", "mcc-aider", "mcc-droid", "mcc-gemini",
     "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
     "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-migrate",
+    "mcc-apps",
     "mcc-desktop", "my-claude-code",
     "fcc-migrate"
 )

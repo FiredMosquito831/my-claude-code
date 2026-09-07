@@ -29,6 +29,7 @@ from my_claude_code.core.version import package_version
 from .admin_cache import AdminNoStoreMiddleware, attach_admin_no_store
 from .admin_claude_config_routes import router as admin_claude_config_router
 from .admin_custom_routes import router as admin_custom_router
+from .admin_desktop_app_routes import router as admin_desktop_app_router
 from .admin_export_routes import router as admin_export_router
 from .admin_harness_routes import router as admin_harness_router
 from .admin_routes import router as admin_router
@@ -57,6 +58,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(admin_custom_router)
     app.include_router(admin_claude_config_router)
     app.include_router(admin_harness_router)
+    app.include_router(admin_desktop_app_router)
     app.include_router(admin_websearch_router)
     app.include_router(admin_export_router)
     app.include_router(gemini_router)

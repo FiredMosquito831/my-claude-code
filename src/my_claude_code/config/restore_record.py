@@ -180,12 +180,19 @@ def _harden(path: Path) -> None:
 
 
 def write_entry(entry: RestoreEntry, *, path: Path | None = None) -> Path:
-    """Record what one Configure overwrote, replacing any earlier entry for it.
+    """Record what Configure overwrote, keeping the *first* answer it got.
 
-    Replacing rather than appending is deliberate. The record answers exactly
-    one question -- "what did the user have before MCC's *current* edit?" --
-    and a second Configure over MCC's own output would otherwise bury the
-    user's real value under MCC's.
+    The record answers exactly one question -- "what did the user have before
+    MCC ever wrote here?" -- so a second Configure must not replace it. By the
+    time the second one runs, the values it reads are MCC's own, and storing
+    those would bury the user's real value under MCC's and make Restore a
+    no-op that looks like it worked. This is the same doctrine as the one-shot
+    ``.mcc-backup``, and for the same reason: the copy worth keeping is the
+    pre-MCC one, not yesterday's MCC output.
+
+    What *is* refreshed on every write is ``document_sha256``, which answers a
+    different question -- "is this still the document MCC left?" -- and has to
+    track the latest write or a re-apply would make every later Restore refuse.
 
     An entry with nothing overwritten is not written at all, and an existing
     one for that subject is dropped: that is the Command Code case, where MCC
@@ -199,6 +206,14 @@ def write_entry(entry: RestoreEntry, *, path: Path | None = None) -> Path:
     subjects = dict(subjects) if isinstance(subjects, dict) else {}
 
     if entry.overwritten:
+        existing = read_entry(entry.subject, path=record_path)
+        if existing is not None and existing.overwritten:
+            entry = RestoreEntry(
+                subject=existing.subject,
+                document_path=entry.document_path,
+                document_sha256=entry.document_sha256,
+                overwritten=existing.overwritten,
+            )
         subjects[entry.subject] = entry.as_payload()
     else:
         subjects.pop(entry.subject, None)

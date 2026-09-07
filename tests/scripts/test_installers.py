@@ -182,7 +182,7 @@ if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
         mcc-qwen mcc-crush \
         mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini \
         mcc-init mcc-chatgpt-oauth-login mcc-anthropic-oauth-login \
-        mcc-compact-log mcc-help mcc-rtk mcc-migrate \
+        mcc-compact-log mcc-help mcc-rtk mcc-migrate mcc-apps \
         mcc-desktop my-claude-code fcc-server fcc-claude fcc-claude-old fcc-pi \
         fcc-init fcc-chatgpt-oauth-login fcc-anthropic-oauth-login \
         fcc-compact-log fcc-help fcc-rtk fcc-migrate fcc-desktop free-claude-code \
@@ -764,7 +764,7 @@ exit /b 0
 :install
 if "%FAIL_STEP%"=="fcc-install" exit /b 53
 if not exist "%FAKE_TOOL_BIN%" mkdir "%FAKE_TOOL_BIN%"
-for %%N in (fcc-anthropic-oauth-login fcc-chatgpt-oauth-login fcc-claude fcc-claude-old fcc-codex fcc-compact-log fcc-desktop fcc-help fcc-init fcc-migrate fcc-pi fcc-rtk fcc-server free-claude-code mcc-aider mcc-anthropic-oauth-login mcc-chatgpt-oauth-login mcc-claude mcc-claude-old mcc-cline mcc-codex mcc-commandcode mcc-compact-log mcc-crush mcc-desktop mcc-droid mcc-gemini mcc-goose mcc-help mcc-init mcc-kilo mcc-kimi mcc-migrate mcc-opencode mcc-opencode2 mcc-pi mcc-qwen mcc-rtk mcc-server my-claude-code) do copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%FAKE_TOOL_BIN%\%%N.cmd" >nul
+for %%N in (fcc-anthropic-oauth-login fcc-chatgpt-oauth-login fcc-claude fcc-claude-old fcc-codex fcc-compact-log fcc-desktop fcc-help fcc-init fcc-migrate fcc-pi fcc-rtk fcc-server free-claude-code mcc-aider mcc-anthropic-oauth-login mcc-apps mcc-chatgpt-oauth-login mcc-claude mcc-claude-old mcc-cline mcc-codex mcc-commandcode mcc-compact-log mcc-crush mcc-desktop mcc-droid mcc-gemini mcc-goose mcc-help mcc-init mcc-kilo mcc-kimi mcc-migrate mcc-opencode mcc-opencode2 mcc-pi mcc-qwen mcc-rtk mcc-server my-claude-code) do copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%FAKE_TOOL_BIN%\%%N.cmd" >nul
 if "%FAIL_STEP%"=="fcc-missing" del /q "%FAKE_TOOL_BIN%\mcc-server.cmd" >nul
 exit /b 0
 :update_shell

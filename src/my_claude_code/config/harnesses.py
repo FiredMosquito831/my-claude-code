@@ -253,8 +253,10 @@ MCC_HARNESS_ID_SENTINEL = "{{mcc_harness_id}}"
 #:   key reference and limits; the bundle exposes no per-model header map.
 #: * ``goose`` -- MCC writes Goose no file at all (see
 #:   ``GOOSE_PROVIDER_VALUE`` above) and Goose publishes no header variable.
-#: * ``antigravity`` -- not servable at all; see
-#:   ``ANTIGRAVITY_UNAVAILABLE_REASON``.
+#: * ``antigravity`` -- ``agy`` publishes no custom-header field on any of the
+#:   three surfaces it reads (settings key, ``GEMINI_API_KEY``,
+#:   ``GOOGLE_GEMINI_BASE_URL``), so there is nowhere to put one. Measured
+#:   2026-09-07; see ``ANTIGRAVITY_UNAVAILABLE_REASON``.
 #:
 #: Stated as data rather than prose because a contract test asserts that the
 #: generated document for each of these carries no header, so adding a hook
@@ -264,41 +266,60 @@ HARNESSES_WITHOUT_ATTRIBUTION_HEADER: frozenset[str] = frozenset(
 )
 
 
-#: Why ``mcc-antigravity`` does not exist, stated with the version and the
-#: date it was measured so a reader can re-check it rather than trust it.
+#: Why there is no ``mcc-antigravity`` *launcher*, and where Antigravity is
+#: served instead. Dated, because the previous version of this text was not
+#: wrong when it was written and was wrong by the time anyone re-read it.
 #:
-#: Read out of ``agy.exe`` 1.0.14 itself and confirmed against a live run with
-#: ``HOME``/``APPDATA`` redirected to a scratch directory. Two independent
-#: blockers, either of which alone is fatal:
+#: **The 1.0.14 verdict has been superseded.** That measurement was taken
+#: against a JavaScript bundle. Re-measured 2026-09-07 against the installed Go
+#: build (187,601,560 bytes, mtime 2026-09-02), with ``HOME``/``USERPROFILE``
+#: redirected to a scratch directory and a logging HTTP server standing in for
+#: MCC on a scratch port. With ``~/.gemini/antigravity-cli/settings.json``
+#: holding ``{"modelProvider": "gemini"}``, ``GEMINI_API_KEY`` set to a scratch
+#: string and ``GOOGLE_GEMINI_BASE_URL`` pointed at that server, ``agy -p`` sent::
 #:
-#: * **Every credential path ends in a Google OAuth token.** ``auth.ChainedAuth``
-#:   composes ``keyringAuth``, ``oauthMethod``, ``adcAuth``, ``externalCorpLoginAuth``
-#:   and ``cliFileTokenStorage``; ``CLIAuthProvider`` exposes ``GetTokenSource``,
-#:   ``GetEntitlement`` and ``GetCAICProject`` and no API-key entry point at
-#:   all. The binary contains no ``GEMINI_API_KEY``, no ``GOOGLE_API_KEY`` and
-#:   no ``GOOGLE_GEMINI_BASE_URL``. Without a login it stops at
-#:   "You are currently not signed in."
-#: * **The wire format is not the public Gemini API.** It calls
-#:   ``/v1internal:generateContent``, ``:loadCodeAssist``, ``:onboardUser``,
-#:   ``:fetchAvailableModels`` and ``:listExperiments`` on
-#:   ``cloudcode-pa.googleapis.com`` -- the private Gemini Code Assist service,
-#:   proto package ``google.internal.cloud.code.v1internal.CloudCode`` -- and
-#:   never ``/v1beta/models/{model}:generateContent``. Its model list is
-#:   server-supplied, so ``--model`` cannot name an MCC route either.
+#:     POST /v1beta/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse
+#:     x-goog-api-key: <the scratch string>
 #:
-#: ``CLOUD_CODE_URL`` does redirect the backend host, so a proxy in front of an
-#: already-signed-in session is technically reachable. That is a different
-#: product from what MCC does -- it would require reimplementing a private
-#: Google protocol and would still need the user's Google account -- and it is
-#: not what this entry promises.
+#: That is the **public** Gemini API -- the surface MCC already serves at
+#: ``/v1beta`` (``api/gemini_routes.py``) -- and not the private
+#: ``v1internal`` Code Assist protocol the old reason described. So the two
+#: claims below are the ones that survive, and both were measured rather than
+#: inferred:
+#:
+#: * ``modelProvider`` is the switch, not the base URL. With the key omitted,
+#:   nothing reached the scratch server at all and ``agy`` answered from
+#:   Google's own backend: on Windows its credential store survives a ``HOME``
+#:   redirect, so the environment variables alone are not enough.
+#: * ``agy`` validates ``--model`` against its own catalogue **before** issuing
+#:   any request -- ``model mcc/best is not recognized as a known model or
+#:   custom model in settings`` -- so the ``mcc/*`` tier aliases cannot be
+#:   named. Models are chosen by ``agy``'s own ids and MCC routes them through
+#:   the resolution ladder like any other inbound model name.
+#:
+#: **Why the Coding agents card and not a launcher.** Every other harness gets
+#: an ``mcc-<agent>`` launcher because MCC can hand the CLI its endpoint and
+#: token through the child process's environment and point it at a settings
+#: document MCC owns -- Gemini CLI's ``GEMINI_CLI_SYSTEM_SETTINGS_PATH`` is the
+#: template. ``agy`` publishes no equivalent override that has been verified
+#: here, so a launcher would have to write the user's own
+#: ``~/.gemini/antigravity-cli/settings.json`` -- which is exactly what the
+#: **Desktop apps** card already does, with a one-time backup and a two-mode
+#: undo. Adding a launcher would duplicate that mechanism without adding a
+#: capability, so Antigravity is served there and this entry says so.
 ANTIGRAVITY_UNAVAILABLE_REASON = (
-    "Antigravity is locked to Google auth -- verified 2026-09-02 against agy "
-    "1.0.14. Every credential path in the binary ends in a Google OAuth token "
-    "(auth.ChainedAuth: keyring, oauth, ADC, corp login) and it carries no "
-    "GEMINI_API_KEY, GOOGLE_API_KEY or GOOGLE_GEMINI_BASE_URL at all. It also "
-    "speaks the private Gemini Code Assist protocol -- /v1internal:generateContent "
-    "on cloudcode-pa.googleapis.com -- not the public /v1beta Gemini API this "
-    "proxy serves."
+    "Antigravity is served from the Desktop apps card rather than an "
+    "mcc-antigravity launcher. Re-measured 2026-09-07 against the installed "
+    'agy Go build: with modelProvider set to "gemini" in '
+    "~/.gemini/antigravity-cli/settings.json, plus GEMINI_API_KEY and "
+    "GOOGLE_GEMINI_BASE_URL, agy sends POST "
+    "/v1beta/models/{model}:streamGenerateContent with x-goog-api-key -- the "
+    "public Gemini API this proxy already serves at /v1beta. Two limits: "
+    "modelProvider is the switch (without it agy uses Google's backend "
+    "whatever the base URL says), and agy rejects the mcc/* tier aliases "
+    "before sending, so models are named with agy's own ids. The 2026-09-02 "
+    "verdict against agy 1.0.14 -- no API-key path, private v1internal "
+    "protocol -- no longer holds for this build."
 )
 
 
@@ -1522,11 +1543,12 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         available=False,
         unavailable_reason=ANTIGRAVITY_UNAVAILABLE_REASON,
         summary=(
-            "Google's Antigravity CLI speaks a private Gemini Code Assist "
-            "protocol behind a Google login, not the public Gemini API this "
-            "proxy serves. The entry exists so the answer is on the page."
+            "Google's Antigravity CLI does route through this proxy, as of a "
+            "2026-09-07 measurement -- but through the Desktop apps card, "
+            "which writes its one settings key, rather than through an "
+            "mcc-antigravity launcher. Configure it there."
         ),
-        tagline="Not servable: locked to Google sign-in.",
+        tagline="Served from the Desktop apps card, not a launcher.",
     ),
 )
 

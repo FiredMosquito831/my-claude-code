@@ -651,6 +651,33 @@
               </p>
               <div id="codingAgentsList" class="coding-agents-list"></div>
             </section>
+
+            <section class="settings-section" aria-label="Desktop apps">
+              <div class="section-heading">
+                <div>
+                  <h3>Desktop apps</h3>
+                  <p>
+                    Applications MCC does not launch, and reaches only through the one
+                    file they read at startup. Configure writes MCC's keys and nothing
+                    else; Undo takes them back out.
+                  </p>
+                </div>
+              </div>
+              <div class="callout" id="desktopAppsOwnershipNote">
+                <strong>MCC touches only its own keys.</strong>
+                Every other setting in these files is read, carried through and written
+                back unchanged, and your original is copied to a
+                <code>.mcc-backup</code> beside it before the first edit. Where MCC
+                <em>replaces</em> a value you had set, it remembers what was there:
+                that is what <strong>Restore the original values</strong> puts back.
+              </div>
+              <p class="field-description">
+                MCC never starts one of these applications, and never sets an
+                environment variable for you. Where a token has to be exported, the
+                card says so and the next refresh reports whether it took.
+              </p>
+              <div id="desktopAppsList" class="coding-agents-list"></div>
+            </section>
           </section>
 
           <section id="view-model_config" class="admin-view" data-view="model_config" hidden>
