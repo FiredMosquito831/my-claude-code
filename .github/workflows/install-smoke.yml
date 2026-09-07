@@ -56,8 +56,7 @@ jobs:
             echo "MCC_CONFIG_DIR=${scratch}/config"
             echo "XDG_CONFIG_HOME=${scratch}/home/.config"
             echo "XDG_DATA_HOME=${scratch}/home/.local/share"
-            # A real machine has SHELL set; the runner does not, and without it
-            # `uv tool update-shell` misidentifies the shell and refuses.
+            # A real machine has SHELL set; the runner does not.
             echo "SHELL=/bin/bash"
           } >> "$GITHUB_ENV"
 
@@ -100,7 +99,13 @@ jobs:
           command -v curl >/dev/null 2>&1 || { echo "::error::curl is missing"; exit 1; }
 
       - name: Run scripts/install.sh
-        run: sh scripts/install.sh
+        # PSModulePath is how uv decides the shell is PowerShell, and a GitHub
+        # runner exports it on Linux. Left set, `uv tool update-shell` refuses
+        # with "updating PowerShell is currently unsupported" and fails an
+        # install that had otherwise finished. No Linux machine a user installs
+        # on has it, so the job drops it rather than the script working around
+        # it.
+        run: env -u PSModulePath sh scripts/install.sh
 
       - name: uv, Python 3.14 and MCC all landed in the scratch profile
         run: |
