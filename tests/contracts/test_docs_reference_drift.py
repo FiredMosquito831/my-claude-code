@@ -44,6 +44,21 @@ MARKDOWN_DOCS: tuple[str, ...] = (
 )
 
 
+#: Documentation surfaces that are not bundled into the wheel but are part of
+#: the published documentation set: the topic pages the 6.57.0 README cut moved
+#: detail into. They are guarded exactly like README and USAGE above, but they
+#: are deliberately *not* in ``MARKDOWN_DOCS`` -- the two tests that iterate
+#: that tuple assert a name appears in *every* document listed, which is a
+#: statement about the two documents every reader has, not about a topic page.
+TOPIC_DOCS: tuple[str, ...] = (
+    "docs/CLIENTS.md",
+    "docs/MESSAGING.md",
+    "docs/OAUTH-PROVIDERS.md",
+    "docs/ROUTING-REFERENCE.md",
+    "docs/WEB-SEARCH.md",
+)
+
+
 def _read(path: Path) -> str:
     # The worktree checks out CRLF; read with universal newlines so the
     # patterns below never have to think about "\r".
@@ -92,7 +107,7 @@ def _guide_text() -> str:
 
 
 def _doc_surfaces() -> dict[str, str]:
-    surfaces = {name: _read(REPO_ROOT / name) for name in MARKDOWN_DOCS}
+    surfaces = {name: _read(REPO_ROOT / name) for name in MARKDOWN_DOCS + TOPIC_DOCS}
     surfaces["admin_static/index.html (Guide + Get Started)"] = _guide_text()
     return surfaces
 
@@ -612,3 +627,163 @@ def test_the_migration_walkthrough_tells_the_reader_to_stop_the_server() -> None
             f"{doc} documents mcc-migrate without telling the reader to stop "
             f"the server first."
         )
+
+
+# ------------------------------------------------ nothing was lost in the 6.57.0 cut
+
+
+#: The identifiers the README carried before 6.57.0 shortened it from 2,402
+#: lines to a map. Generated once from ``git show fork/main:README.md`` at
+#: 5982fcf7 and vendored beside this file: the point of the fixture is that it
+#: is a snapshot of what a reader could once find, so regenerating it from the
+#: current tree would make it vacuous.
+_PRE_PR_FIXTURE = Path(__file__).resolve().parent / "pre_pr_readme_identifiers.json"
+
+
+def _pre_pr_identifiers() -> dict[str, object]:
+    import json
+
+    return json.loads(_read(_PRE_PR_FIXTURE))
+
+
+def _all_documentation_text() -> str:
+    """Every surface a reader can reach: the docs, the topic pages, the Guide."""
+    parts = [_read(REPO_ROOT / name) for name in MARKDOWN_DOCS]
+    parts.extend(_read(REPO_ROOT / name) for name in TOPIC_DOCS)
+    parts.append(_read(REPO_ROOT / "docs/README.md"))
+    parts.append(_read(REPO_ROOT / "docs/ANTHROPIC-SUBSCRIPTION.md"))
+    parts.append(_read(REPO_ROOT / "docs/CLAUDE-CODE-CONFIG.md"))
+    parts.append(_guide_text())
+    return "\n".join(parts)
+
+
+@pytest.mark.parametrize("kind", ["env", "commands", "providers", "pages"])
+def test_nothing_the_old_readme_named_was_lost(kind: str) -> None:
+    """Shortening the README moved detail; it must not have deleted any.
+
+    The 6.57.0 cut took the README from 2,402 lines to a map and pushed the
+    walkthroughs into ``docs/``. "Move, do not delete" is only a promise until
+    something checks it: every environment variable, ``mcc-*`` command,
+    provider id and dashboard page the old README named has to still be
+    findable somewhere in the documentation, or a reader who knew where to
+    look for it has simply lost it.
+    """
+    names = _pre_pr_identifiers()[kind]
+    assert isinstance(names, list)
+    text = _all_documentation_text()
+    missing = sorted(str(name) for name in names if str(name) not in text)
+
+    assert not missing, (
+        f"the pre-6.57.0 README named these {kind} and no current document "
+        f"does: {missing}. They were moved out of the README, so they have to "
+        f"have landed somewhere -- put them in docs/USAGE.md or the topic page "
+        f"that owns them rather than dropping the line."
+    )
+
+
+def test_every_old_feature_row_is_still_visible_in_the_readme() -> None:
+    """The Features table became Capabilities; no row may have evaporated.
+
+    The old table's first cell was the feature's name. Some names survived the
+    rewrite verbatim and some were renamed, so a rename is recorded in the
+    fixture's ``feature_aliases`` as the phrase that now carries it. What is
+    not allowed is a row that is neither present nor mapped: the user's rule
+    for this README was that a newcomer must still be able to see everything
+    MCC does, at a glance, from the README itself.
+    """
+    fixture = _pre_pr_identifiers()
+    features = fixture["features"]
+    aliases = fixture["feature_aliases"]
+    assert isinstance(features, list)
+    assert isinstance(aliases, dict)
+    readme = _read(REPO_ROOT / "README.md")
+
+    missing = sorted(
+        str(title)
+        for title in features
+        if str(title) not in readme and str(aliases.get(str(title), "\0")) not in readme
+    )
+
+    assert not missing, (
+        f"these rows of the pre-6.57.0 Features table are named nowhere in the "
+        f"new README: {missing}. Either give the capability a row in the "
+        f"Capabilities tables, or record the rename in "
+        f"{_PRE_PR_FIXTURE.name}'s feature_aliases."
+    )
+
+
+#: Every headline feature shipped between 6.49.0 and 6.57.0, with the phrase
+#: that has to carry it in the README. The rule the user set is that the
+#: README shows the whole product: a release that gave people something new
+#: and is not named in the Capabilities tables is a feature nobody browsing
+#: the project can discover. Release titles are quoted from ``gh release list``.
+_RELEASE_HEADLINES: tuple[tuple[str, str, str], ...] = (
+    (
+        "6.49.0",
+        "an image a tool returned reaches the model as an image",
+        "Tool-returned images",
+    ),
+    (
+        "6.50.0",
+        "the desktop app says what a restart is doing and stays in the tray",
+        "Desktop app and tray",
+    ),
+    (
+        "6.51.0",
+        "describe a screenshot instead of hijacking the request",
+        "Describe mode",
+    ),
+    ("6.52.0", "learned facts", "Learned facts"),
+    ("6.52.0", "capability probes", "Capability probes"),
+    ("6.52.0", "hourly catalogue refresh", "Hourly catalogue refresh"),
+    (
+        "6.53.0",
+        "real image token math, downscale on by default",
+        "Outbound image sizing",
+    ),
+    ("6.54.0", "what every request cost, and who said so", "Cost with provenance"),
+    ("6.55.0", "point a desktop app here", "Desktop app **Configure**"),
+    (
+        "6.56.0",
+        "Claude Desktop gets a Configure button, and Undo stops losing your values",
+        "Undo, two ways",
+    ),
+    (
+        "6.57.0",
+        "installers provision every prerequisite, including Python",
+        "Python 3.14.0 through `uv`",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("version", "headline", "marker"),
+    _RELEASE_HEADLINES,
+    ids=[f"{v}-{m}" for v, _, m in _RELEASE_HEADLINES],
+)
+def test_recent_release_headlines_have_a_readme_row(
+    version: str, headline: str, marker: str
+) -> None:
+    """A shipped headline feature the README never mentions did not ship."""
+    readme = _read(REPO_ROOT / "README.md")
+    assert marker in readme, (
+        f"{version} shipped {headline!r} and the README does not carry "
+        f"{marker!r}. Give it a row in the Capabilities tables -- a capability "
+        f"a reader cannot see is one they will never turn on."
+    )
+
+
+def test_the_readme_stayed_a_map_not_a_manual() -> None:
+    """The cut is only durable if something notices it growing back.
+
+    2,402 lines was the state that made the README unreadable. The research
+    pass behind 6.57.0 put comparable routers between 62 and 663 lines
+    (Continue 62, opencode 128, Open WebUI 260, CLIProxyAPI 307, LiteLLM 663),
+    and the target it set was under 600 with the 57-row provider table -- which
+    a contract test requires the README to keep -- inside it.
+    """
+    lines = _read(REPO_ROOT / "README.md").count("\n") + 1
+    assert lines <= 600, (
+        f"README.md is {lines} lines. Detail belongs in docs/USAGE.md or a "
+        f"topic page under docs/; the README is the map."
+    )

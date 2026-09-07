@@ -2239,8 +2239,11 @@ def test_staged_install_keeps_a_locked_shim_and_repoints_the_receipt(
 
 def test_readme_install_section_has_no_manual_git_prerequisite() -> None:
     readme = (_repo_root() / "README.md").read_text(encoding="utf-8")
-    install_section = readme.split("### 1. Install Or Update", 1)[1].split(
-        "### 2. Start The Server", 1
+    # 6.57.0 renamed the headings when the README became a map: the install
+    # block is now the second section, between "## Install" and the
+    # capability tables that follow it.
+    install_section = readme.split("\n## Install\n", 1)[1].split(
+        "\n## Capabilities\n", 1
     )[0]
 
     assert "Install Git" not in install_section
