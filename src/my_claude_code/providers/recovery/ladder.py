@@ -72,6 +72,11 @@ class RecoveryDecision:
     body: dict[str, Any] | None = None
     kind: str = ""
     stripped_reasoning_field: str | None = None
+    #: A bounded, redacted excerpt of the words that produced this decision,
+    #: carried so the caller can store it beside the fact it eventually
+    #: learns. Read here rather than at the rung, because every rung already
+    #: has the same error and only the ladder sees all of them.
+    evidence: str = ""
 
     @property
     def retry(self) -> bool:
@@ -114,6 +119,7 @@ class RecoveryLadder:
                 body=retry_body,
                 kind=rung.kind,
                 stripped_reasoning_field=stripped,
+                evidence=complaint_evidence_snippet(upstream_complaint(error)),
             )
         return GIVE_UP
 
@@ -156,7 +162,11 @@ class OutputCapRecovery:
             return None
         model = body.get("model")
         if isinstance(model, str):
-            cap = self.memory.learn_cap(model, cap)
+            cap = self.memory.learn_cap(
+                model,
+                cap,
+                evidence=complaint_evidence_snippet(upstream_complaint(error)),
+            )
         clamped = clamp_output_tokens(body, cap, fields=self.fields)
         if clamped is None:
             return None

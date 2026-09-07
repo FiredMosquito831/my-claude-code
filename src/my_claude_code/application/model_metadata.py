@@ -213,6 +213,12 @@ class ProviderDiscoveryFailure:
     provider_id: str
     error_type: str
     message: str
+    #: The HTTP status the upstream answered with, when the failure carried
+    #: one. The periodic sweep backs off from 401 and 403 specifically -- a
+    #: rejected credential asked again every hour is how a gateway decides to
+    #: rate-limit the whole account -- and cannot tell those from a timeout
+    #: without it.
+    status_code: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

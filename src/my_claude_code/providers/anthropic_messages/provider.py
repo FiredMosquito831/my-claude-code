@@ -38,6 +38,7 @@ from my_claude_code.providers.recovery import (
     ReasoningStripRecovery,
     RecoveryLadder,
     RecoveryMemory,
+    learned_fact_store,
 )
 from my_claude_code.providers.stream_recovery import (
     RecoveryController,
@@ -90,9 +91,13 @@ class AnthropicMessagesProvider(BaseProvider):
         auth: AnthropicMessagesAuth | None = None,
         extra_headers: dict[str, str] | None = None,
         body_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        provider_id: str = "",
     ) -> None:
         super().__init__(config)
         self._provider_name = provider_name
+        # The catalogue id, which is what the learned-facts store keys on.
+        # ``provider_name`` is the log label and several providers share one.
+        self._provider_id = provider_id
         self._base_url = config.base_url.rstrip("/")
         # Default preserves the bearer-token shape every existing caller uses;
         # upstreams with a different credential contract inject their own.
@@ -121,11 +126,15 @@ class AnthropicMessagesProvider(BaseProvider):
         # surface from the same ``try`` as an inference error and would
         # otherwise be reported as a generic upstream 502.
         self._failure_override: ProviderFailureOverride | None = None
-        # What this host has taught this process about itself. Same two tables,
-        # same lifetime and the same matchers as the OpenAI-chat family's --
+        # What this host has taught MCC about itself. Same tables, same
+        # durable store and the same matchers as the OpenAI-chat family's --
         # only the body keys differ, because this dialect spells the output
         # budget ``max_tokens`` and its reasoning instruction ``thinking``.
-        self._recovery_memory = RecoveryMemory()
+        self._recovery_memory = (
+            learned_fact_store().memory_for(provider_id)
+            if provider_id
+            else RecoveryMemory()
+        )
         log_tag = f"{provider_name}_STREAM"
         self._output_cap_recovery = OutputCapRecovery(
             self._recovery_memory,
@@ -227,7 +236,9 @@ class AnthropicMessagesProvider(BaseProvider):
             self._response_observer(response.headers, response.status_code)
         return response, request
 
-    def _remember_reasoning_rejection(self, body: dict[str, Any], field: str) -> None:
+    def _remember_reasoning_rejection(
+        self, body: dict[str, Any], field: str, evidence: str = ""
+    ) -> None:
         """Record that this model refused a reasoning field, once it is proven.
 
         Reached only after the stripped body was actually accepted, so the
@@ -238,7 +249,9 @@ class AnthropicMessagesProvider(BaseProvider):
         model = body.get("model")
         if not isinstance(model, str):
             return
-        if not self._recovery_memory.remember_rejection(model, field):
+        if not self._recovery_memory.remember_rejection(
+            model, field, evidence=evidence
+        ):
             return
         record_reasoning_adaptation(
             ReasoningAdaptationKind.SUPPRESSED,
@@ -311,6 +324,9 @@ class AnthropicMessagesProvider(BaseProvider):
         # this provider, and both values are consumed once a retry is accepted.
         used_retry_kinds: set[str] = set()
         stripped_reasoning: str | None = None
+        # The host's own words that provoked the strip, kept for the durable
+        # fact the acceptance below eventually writes.
+        stripped_evidence = ""
 
         async with self._rate_limiter.concurrency_slot():
             while True:
@@ -327,7 +343,9 @@ class AnthropicMessagesProvider(BaseProvider):
                     )
                     stream_opened = True
                     if stripped_reasoning is not None:
-                        self._remember_reasoning_rejection(body, stripped_reasoning)
+                        self._remember_reasoning_rejection(
+                            body, stripped_reasoning, stripped_evidence
+                        )
                     recovery.upstream_opened()
                     shape = start_response_shape()
                     async for event in iter_anthropic_sse_frames(
@@ -349,6 +367,7 @@ class AnthropicMessagesProvider(BaseProvider):
                         if recovered.body is not None:
                             if recovered.stripped_reasoning_field is not None:
                                 stripped_reasoning = recovered.stripped_reasoning_field
+                                stripped_evidence = recovered.evidence
                             body = recovered.body
                             continue
                     decision = recovery.advance_failure(

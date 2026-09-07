@@ -80,7 +80,7 @@ def _create_anthropic(
 ) -> BaseProvider:
     from my_claude_code.providers.anthropic import AnthropicProvider
 
-    return AnthropicProvider(config, rate_limiter=rate_limiter)
+    return AnthropicProvider(config, rate_limiter=rate_limiter, provider_id="anthropic")
 
 
 def _create_anthropic_oauth(
@@ -96,6 +96,7 @@ def _create_anthropic_oauth(
         require_claude_code_cli=bool(
             getattr(settings, "anthropic_oauth_require_claude_code", True)
         ),
+        provider_id="anthropic_oauth",
     )
 
 

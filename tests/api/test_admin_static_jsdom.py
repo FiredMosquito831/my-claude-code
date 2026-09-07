@@ -2743,3 +2743,59 @@ def test_an_image_that_travelled_as_an_image_gets_no_description_block(
     plain = rendered["describedImages"]["plain"]
     assert plain["delivery"] == "Sent to the model as an image."
     assert plain["summaries"] == []
+
+
+# --------------------------------------------------------------- learned facts
+
+
+def test_the_models_page_draws_a_chip_per_learned_fact(rendered: dict) -> None:
+    """Persisting an invisible fact would make an invisible fact permanent."""
+
+    models = rendered["models"]
+    assert models["learnedChips"] >= 2
+    # Stale is a state the row has to show, not a reason to hide it: the
+    # operator needs to see what MCC used to believe and why it stopped.
+    assert models["learnedStaleChips"] >= 1
+
+
+def test_a_probe_that_contradicts_the_catalogue_is_marked_without_a_click(
+    rendered: dict,
+) -> None:
+    """The disagreement is the finding; burying it in a panel would waste it."""
+
+    assert rendered["models"]["learnedDisagreeChips"] >= 1
+
+
+def test_the_models_page_has_a_learned_facet(rendered: dict) -> None:
+    assert rendered["models"]["learnedFacet"], (
+        '"show me every model MCC has learned something about" must be one click'
+    )
+
+
+def test_the_models_page_says_when_the_catalogue_was_last_refreshed(
+    rendered: dict,
+) -> None:
+    readout = rendered["models"]["refreshReadout"]
+    assert "last refreshed" in readout
+    assert "next in" in readout
+
+
+# ---------------------------------------------------------------- theme picker
+
+
+def test_every_theme_option_sits_inside_the_picker(rendered: dict) -> None:
+    """The fourth theme used to render outside the segmented pill.
+
+    jsdom cannot see the overflow itself -- it has no box model -- but it can
+    see the structural invariant the CSS fix has to preserve: every option is a
+    child of the control, so a future fifth theme is a layout question and
+    never an orphaned button.
+    """
+
+    picker = rendered["themePicker"]
+    assert picker["present"]
+    assert picker["optionCount"] >= 4
+    assert picker["allInsidePill"], (
+        "a theme option rendered outside #themeSwitch: " + ", ".join(picker["labels"])
+    )
+    assert len(picker["checked"]) == 1

@@ -1104,6 +1104,8 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
         dialect_lookup=services.requests.model_reasoning_dialect,
         measured=measured,
         measured_days=REASONING_MEASUREMENT_DAYS,
+        learned=services.admin.learned_facts_by_model(),
+        catalogue_refresh=services.admin.catalogue_refresh_status(),
     )
 
 
@@ -1121,6 +1123,73 @@ async def model_admin_page(
 
     require_loopback_admin(request)
     return await asyncio.to_thread(_models_page_payload, services)
+
+
+class LearnedFactForgetPayload(BaseModel):
+    """What to forget: one row, one model, one provider, or everything."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    provider_id: str = Field(default="", alias="providerId")
+    model_id: str = Field(default="", alias="modelId")
+    fact_kind: str = Field(default="", alias="factKind")
+
+
+class CapabilityProbePayload(BaseModel):
+    """Which models one press of *Probe capabilities* should cover."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    models: list[str] = Field(default_factory=list)
+
+
+@router.post("/admin/api/model-admin/learned/forget")
+async def forget_learned_facts(
+    payload: LearnedFactForgetPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Forget learned facts at one of three granularities.
+
+    Row, provider, or everything -- decided by how much of the payload is
+    filled in, because they are the same operation at three scopes rather than
+    three operations. An empty ``provider_id`` means all of it, which is the
+    button that sits beside *Clear image descriptions*: an operator wants a
+    fact gone because the deployment changed, and that is a first-class reason
+    independent of staleness. The store logs one INFO line naming what went.
+    """
+
+    require_loopback_admin(request)
+    forgotten = services.admin.forget_learned_facts(
+        payload.provider_id.strip(),
+        payload.model_id.strip(),
+        payload.fact_kind.strip(),
+    )
+    return {
+        "forgotten": forgotten,
+        "provider_id": payload.provider_id,
+        "model_id": payload.model_id,
+        "fact_kind": payload.fact_kind,
+    }
+
+
+@router.post("/admin/api/providers/{provider_id}/probe")
+async def probe_provider_capabilities(
+    provider_id: str,
+    payload: CapabilityProbePayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Measure what this host actually does, on up to 25 of its models.
+
+    Bounded and deliberate: never on the request path, never on a timer, and
+    the button states the request count before it runs.
+    """
+
+    require_loopback_admin(request)
+    return await services.admin.probe_provider_capabilities(
+        provider_id, tuple(payload.models)
+    )
 
 
 @router.post("/admin/api/model-admin/visibility/preview")

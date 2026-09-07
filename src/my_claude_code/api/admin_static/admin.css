@@ -4678,8 +4678,17 @@ details.turn-pane > summary:focus-visible {
 }
 
 /* â”€â”€ Theme switcher control â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* Grid rather than a nowrap flex row, and sized by the options rather than by
+   how many there happen to be. As a flex row every option was ``flex: 1 1
+   auto`` with 10px of side padding, so four of them could not shrink below
+   their own min-content width in a 240px sidebar: the pill kept its width, the
+   fourth button ("Velvet") rendered past its border, and the control looked
+   broken. ``auto-fit`` + ``minmax`` reflows to as many columns as fit -- two
+   rows of two at sidebar width, one row when there is room -- so a fifth theme
+   needs no CSS at all and nothing ever escapes the border. */
 .theme-switch {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
   gap: 4px;
   padding: 4px;
   border-radius: var(--radius-md);
@@ -4688,9 +4697,18 @@ details.turn-pane > summary:focus-visible {
 }
 
 .theme-option {
-  flex: 1 1 auto;
+  /* A grid item that may not shrink below its content is the overflow bug in
+     its other form, so the floor is lifted explicitly and long labels wrap --
+     "High Contrast" still takes two lines, as it always has. */
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
   min-height: 44px;
-  padding: 0 10px;
+  padding: 4px 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -7176,7 +7194,9 @@ details.turn-pane > summary:focus-visible {
 }
 
 .cp-dialect-save,
-.cp-dialect-probe {
+.cp-dialect-probe,
+.cp-capability-probe,
+.cp-forget-learned {
   flex: 0 0 auto;
 }
 
@@ -7271,4 +7291,70 @@ details.turn-pane > summary:focus-visible {
 .anthropic-oauth-paste input {
   flex: 1 1 260px;
   min-width: 0;
+}
+
+/* --- Learned facts on the Models page -------------------------------------
+   A learned chip is drawn like every other models chip; the two states worth
+   colouring are "stale" (loaded and shown, deliberately not applied) and
+   "disagrees with the catalogue", which is the finding this feature exists to
+   surface. */
+.models-chip-learned-stale {
+  opacity: 0.65;
+  font-style: italic;
+}
+
+.models-chip-learned-disagree {
+  border-color: var(--warn, #b45309);
+  color: var(--warn, #b45309);
+}
+
+.models-refresh-readout {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.models-learned {
+  margin-top: 0.75rem;
+}
+
+.models-learned-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+}
+
+.models-learned-row.is-stale {
+  opacity: 0.7;
+}
+
+.models-learned-what {
+  font-weight: 600;
+}
+
+.models-learned-source,
+.models-learned-stale,
+.models-learned-evidence {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+.models-learned-evidence {
+  font-family: var(--mono, monospace);
+}
+
+.models-learned-agree {
+  font-size: 0.85em;
+  color: var(--ok, #15803d);
+}
+
+.models-learned-disagree {
+  font-size: 0.85em;
+  color: var(--warn, #b45309);
+  font-weight: 600;
+}
+
+.models-learned-forget {
+  margin-left: auto;
 }

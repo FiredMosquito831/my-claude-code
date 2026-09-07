@@ -1,6 +1,7 @@
 """Single-owner provider generations and application model catalog."""
 
 import asyncio
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from typing import Protocol
@@ -123,6 +124,9 @@ class ProviderRuntimeManager:
             model_cache_provider_ids_for_settings(settings, connected_provider_ids())
         )
         self._refresh_task: asyncio.Task[None] | None = None
+        # When the last sweep finished, for the dashboard's "last refreshed"
+        # readout. None until one has completed in this process.
+        self._last_refresh_at: float | None = None
         self._next_generation_id = 2
         self._retired: dict[int, _ProviderGeneration] = {}
         self._unpublished: set[ProviderRuntime] = set()
@@ -519,6 +523,56 @@ class ProviderRuntimeManager:
             await self._cancel_refresh()
             return await self._refresh_generation(self._current, only_missing=False)
 
+    @property
+    def refresh_in_flight(self) -> bool:
+        """Whether a background sweep is running right now."""
+
+        return self._refresh_task is not None and not self._refresh_task.done()
+
+    @property
+    def last_catalogue_refresh_at(self) -> float | None:
+        """Epoch seconds of the last completed sweep, or ``None``."""
+
+        return self._last_refresh_at
+
+    async def refresh_model_list_cache_periodic(
+        self, skip_provider_ids: frozenset[str] = frozenset()
+    ) -> ProviderModelRefreshResult:
+        """One timer tick's sweep, through the same seam an operator uses.
+
+        Deliberately not a second code path. ``refresh_provider_models`` says
+        in its own docstring that *a periodic sweep is deliberately not the
+        answer, because the sweep is what caused the race this replaces* -- so
+        the timer takes ``_replace_lock`` and cancels any in-flight refresh
+        exactly as the manual button does, which means a config apply always
+        wins over a tick rather than racing it. It also refuses to queue: a
+        tick that lands while a sweep is running is skipped and logged at
+        DEBUG, never held.
+
+        The only difference from the manual path is that it is quiet: 57
+        "discovery cached" lines an hour would drown the log, so a
+        timer-driven sweep speaks only about the providers whose catalogue
+        actually changed.
+        """
+
+        if self._closing or self._closed:
+            return ProviderModelRefreshResult()
+        if self.refresh_in_flight:
+            logger.debug(
+                "Periodic model discovery tick skipped: a sweep is already running"
+            )
+            return ProviderModelRefreshResult()
+        async with self._replace_lock:
+            if self._closing or self._closed:
+                return ProviderModelRefreshResult()
+            await self._cancel_refresh()
+            return await self._refresh_generation(
+                self._current,
+                only_missing=False,
+                quiet=True,
+                skip_provider_ids=skip_provider_ids,
+            )
+
     async def replace(
         self,
         settings: Settings,
@@ -664,6 +718,8 @@ class ProviderRuntimeManager:
         generation: _ProviderGeneration,
         *,
         only_missing: bool,
+        quiet: bool = False,
+        skip_provider_ids: frozenset[str] = frozenset(),
     ) -> ProviderModelRefreshResult:
         if generation.closed:
             return ProviderModelRefreshResult()
@@ -674,8 +730,13 @@ class ProviderRuntimeManager:
                 generation.settings,
                 generation.runtime.resolve_provider,
                 self._model_cache,
+                self._connected_provider_ids(),
+                quiet=quiet,
             )
-            result = await discovery.refresh_model_list_cache(only_missing=only_missing)
+            result = await discovery.refresh_model_list_cache(
+                only_missing=only_missing, skip_provider_ids=skip_provider_ids
+            )
+            self._last_refresh_at = time.time()
             self._publish_model_catalog()
             return result
         finally:

@@ -72,6 +72,29 @@ def _reset_stop_deadline():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_learned_facts():
+    """No test may inherit another test's learned facts.
+
+    The store is a process-wide singleton on purpose -- a provider instance is
+    rebuilt on every config apply while what the host said about itself is not
+    -- and it hands the *same* memory to every provider built with the same
+    catalogue id. That is exactly the behaviour the feature wants and exactly
+    the behaviour that makes two tests constructing "the same" provider share
+    a table of refusals.
+    """
+    from my_claude_code.providers.chatgpt_oauth.provider import WITHHELD_MODEL_IDS
+    from my_claude_code.providers.recovery import store as learned_store
+
+    learned_store.reset_learned_fact_store()
+    WITHHELD_MODEL_IDS.clear()
+    WITHHELD_MODEL_IDS.sink = None
+    yield
+    learned_store.reset_learned_fact_store()
+    WITHHELD_MODEL_IDS.clear()
+    WITHHELD_MODEL_IDS.sink = None
+
+
+@pytest.fixture(autouse=True)
 def _isolate_request_log(monkeypatch, tmp_path):
     """Keep request-log writes out of the real ~/.fcc directory during tests."""
     from my_claude_code.core import request_log

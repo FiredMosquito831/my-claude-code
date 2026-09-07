@@ -333,7 +333,52 @@ const modelsFor = (providerId, hiddenTail) =>
       index === 1
         ? [{ parameter: "temperature", action: "value", value: 0.1 }]
         : [],
-    capabilities: {},
+    capabilities: {
+      max_output_tokens: { value: 40960, source: "provider", source_label: "" },
+      supports_vision: { value: true, source: "provider", source_label: "" },
+    },
+    // One fresh fact, one stale one, and one probe verdict that contradicts
+    // the catalogue -- the three states the Learned column has to draw.
+    learned:
+      index === 3
+        ? [
+            {
+              fact_kind: "output_cap",
+              fact_label: "output cap",
+              value: 4096,
+              detail: "",
+              source: "rejection",
+              source_label: "the host's own rejection",
+              learned_at: "2026-09-01T00:00:00Z",
+              last_confirmed_at: "2026-09-06T00:00:00Z",
+              age_seconds: 86400,
+              stale: false,
+              retired: false,
+              hits: 3,
+              evidence: "max_completion_tokens must be <= 4096",
+              field: "max_output_tokens",
+              agrees: false,
+            },
+          ]
+        : index === 4
+          ? [
+              {
+                fact_kind: "reasoning_field_rejected",
+                fact_label: "reasoning field refused",
+                value: true,
+                detail: "reasoning_effort",
+                source: "rejection",
+                source_label: "the host's own rejection",
+                learned_at: "2026-07-01T00:00:00Z",
+                last_confirmed_at: "2026-07-02T00:00:00Z",
+                age_seconds: 5_000_000,
+                stale: true,
+                retired: false,
+                hits: 1,
+                evidence: "unknown field reasoning_effort",
+              },
+            ]
+          : [],
     reasoning_measured:
       index === 2 ? { attempts: 12, requested: 12, returned: 12 } : null,
     reasoning_dialect:
@@ -343,6 +388,16 @@ const modelsFor = (providerId, hiddenTail) =>
 const MODEL_ADMIN_PAGE = {
   measured_days: 7,
   source_labels: {},
+  fact_labels: {},
+  learned_source_labels: {},
+  catalogue_refresh: {
+    enabled: true,
+    interval_seconds: 3600,
+    configured_seconds: 3600,
+    last_refreshed_at: Date.now() / 1000 - 720,
+    next_refresh_at: Date.now() / 1000 + 2880,
+    running: true,
+  },
   providers: ["alpha", "beta", "gamma"].map((providerId) => ({
     provider_id: providerId,
     model_count: 45,
@@ -2688,6 +2743,19 @@ if (modelsLink) {
     ),
   ).sort();
   models.measuredBadges = tree.querySelectorAll(".models-chip-measured").length;
+  // The Learned column: one chip per stored fact, the stale one marked as
+  // such and the disagreement marked as such, plus the refresh readout.
+  models.learnedChips = tree.querySelectorAll(".models-chip-learned").length;
+  models.learnedStaleChips = tree.querySelectorAll(
+    ".models-chip-learned-stale",
+  ).length;
+  models.learnedDisagreeChips = tree.querySelectorAll(
+    ".models-chip-learned-disagree",
+  ).length;
+  models.learnedFacet = Array.from(doc.querySelectorAll(".models-facet"))
+    .map(flat)
+    .filter((label) => label.startsWith("Learned"));
+  models.refreshReadout = flat(doc.getElementById("modelsRefreshReadout"));
 
   // --- plain click, then a shift-click range
   await click(boxes()[0]);
@@ -4106,6 +4174,24 @@ const describedImages = {};
   });
 }
 
+/* The segmented theme control. jsdom has no box model, so this cannot prove
+   the fourth option stopped overflowing -- only that every option is a child
+   of the pill, which is the structural half of the same guarantee and the
+   half a future fifth theme could quietly break. */
+const themeSwitch = doc.getElementById("themeSwitch");
+const themeOptions = Array.from(doc.querySelectorAll(".theme-option"));
+const themePicker = {
+  present: Boolean(themeSwitch),
+  optionCount: themeOptions.length,
+  labels: themeOptions.map((option) => (option.textContent || "").trim()),
+  allInsidePill: themeOptions.every(
+    (option) => option.parentElement === themeSwitch,
+  ),
+  checked: themeOptions
+    .filter((option) => option.getAttribute("aria-checked") === "true")
+    .map((option) => option.dataset.themeValue),
+};
+
 console.log(
   JSON.stringify(
     {
@@ -4152,6 +4238,7 @@ console.log(
           : "",
         dirtyAfterToggle,
       },
+      themePicker,
       customProviders,
       codingAgents,
       rtkToggles,

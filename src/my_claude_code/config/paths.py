@@ -47,6 +47,7 @@ ONBOARDING_STATE_FILENAME = "onboarding.json"
 # would drag the GUI stack into a dependency-free command.
 DESKTOP_LOCK_FILENAME = "desktop.lock"
 MODEL_OVERRIDES_FILENAME = "model_overrides.json"
+LEARNED_FACTS_FILENAME = "learned_facts.json"
 HARNESS_TIERS_FILENAME = "harness_tiers.json"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
 WSL_WINDOWS_USERS_DIR = "/mnt/c/Users"
@@ -488,6 +489,18 @@ def model_overrides_path() -> Path:
     """Return the per-provider/per-model request parameter override file."""
 
     return config_dir_path() / MODEL_OVERRIDES_FILENAME
+
+
+def learned_facts_path() -> Path:
+    """Return the durable store of what MCC has learned about each host.
+
+    Deliberately a config-dir document rather than a table in ``requests.db``:
+    the request log has a user-facing *Clear* button and a retention pruner,
+    and a learned fact must not share a lifetime with a log the user is told
+    to empty.
+    """
+
+    return config_dir_path() / LEARNED_FACTS_FILENAME
 
 
 def harness_tiers_path() -> Path:
