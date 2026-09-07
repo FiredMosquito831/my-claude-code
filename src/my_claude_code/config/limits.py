@@ -235,6 +235,14 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     # Desktop window size, in CSS pixels, for the app-mode/embedded window.
     # The floor keeps the dashboard usable; the ceiling is an 8K edge, past
     # which this stops being a window size and starts being a typo.
+    # The longest edge an outbound image may have. The ceiling is an 8K edge,
+    # past which this stops being a resize target and starts being a typo; 0
+    # is the sentinel that turns resizing off rather than a size of nothing.
+    "image_max_long_edge": LimitRange(0, 7680, "0 sends the client's image untouched"),
+    # JPEG quality for an opt-in re-encode. 0 is the sentinel meaning "never
+    # change the format"; the floor of the real range is 1 and 100 is JPEG's
+    # own maximum.
+    "image_jpeg_quality": LimitRange(0, 100, "0 never re-encodes"),
     "desktop_window_width": LimitRange(640, 7680),
     "desktop_window_height": LimitRange(480, 4320),
 }

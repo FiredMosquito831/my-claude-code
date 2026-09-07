@@ -252,6 +252,24 @@ def _reset_config_dir_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_image_geometry_cache():
+    """Forget memoised image dimensions between tests.
+
+    ``core.image_geometry`` memoises width/height per image for the life of the
+    process, because Claude Code re-sends the same screenshot on every turn of
+    a conversation and re-parsing its header every time is pure cost. That memo
+    is a process-wide singleton, so a test that asserts on the hit/miss
+    counters -- or one that reuses a fixture image another test already
+    measured -- would otherwise read the previous test's state.
+    """
+    from my_claude_code.core import image_geometry
+
+    image_geometry.reset_image_geometry_cache()
+    yield
+    image_geometry.reset_image_geometry_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_provider_registry(monkeypatch, tmp_path):
     """Keep custom provider registry state out of the real ~/.fcc directory."""
     from my_claude_code.config import provider_registry

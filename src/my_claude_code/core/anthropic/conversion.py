@@ -200,8 +200,25 @@ def _openai_system_text(
     return "\n\n".join(text_parts)
 
 
-def _openai_user_image_part(block: Any) -> dict[str, Any]:
-    """Convert one Anthropic user image block without performing I/O."""
+#: The value of ``image_detail`` that means "say nothing". OpenAI applies
+#: ``auto`` when the field is absent, so emitting it changes nothing on the
+#: wire while making the request body larger and the diff noisier; every other
+#: dialect rejects or ignores it. Absence is the default and the unchanged
+#: behaviour.
+IMAGE_DETAIL_AUTO = "auto"
+
+
+def _openai_user_image_part(block: Any, detail: str | None = None) -> dict[str, Any]:
+    """Convert one Anthropic user image block without performing I/O.
+
+    ``detail`` is OpenAI's per-image fidelity knob. ``None`` and ``"auto"``
+    both emit no key at all, which is what every release before 6.53.0 did.
+    ``low`` is a large, silent fidelity cut -- it bills the base tokens only
+    and the model sees a thumbnail -- so it is never a default, and it never
+    reaches the token estimator: the estimate is a function of the picture's
+    real dimensions and the destination family, not of a field the Anthropic
+    protocol does not carry.
+    """
     source = get_block_attr(block, "source", {})
     source_type = get_block_attr(source, "type")
 
@@ -224,10 +241,15 @@ def _openai_user_image_part(block: Any) -> dict[str, Any]:
             f"Unsupported image source type {source_type!r}; expected 'base64' or 'url'."
         )
 
-    return {"type": "image_url", "image_url": {"url": url}}
+    image_url: dict[str, Any] = {"url": url}
+    if detail and detail != IMAGE_DETAIL_AUTO:
+        image_url["detail"] = detail
+    return {"type": "image_url", "image_url": image_url}
 
 
-def _openai_tool_result_message(block: Any) -> dict[str, Any]:
+def _openai_tool_result_message(
+    block: Any, image_detail: str | None = None
+) -> dict[str, Any]:
     """Build the one ``role: tool`` message for one Anthropic tool result.
 
     Stage 1 of two. When the tool result carried an image, the message's content
@@ -261,7 +283,7 @@ def _openai_tool_result_message(block: Any) -> dict[str, Any]:
             # PR if a provider is ever found that accepts one.
             notes.append(TOOL_DOCUMENT_STRIPPED_TEXT)
             continue
-        image_parts.append(_openai_user_image_part(item))
+        image_parts.append(_openai_user_image_part(item, image_detail))
     if image_parts:
         notes.append(TOOL_IMAGE_ATTACHED_TEXT)
 
@@ -436,10 +458,14 @@ def _close_openai_tool_result_turns(
 class _OpenAIChatHistoryLedger:
     """Assemble OpenAI chat history while respecting tool-result dependencies."""
 
-    def __init__(self) -> None:
+    def __init__(self, image_detail: str | None = None) -> None:
         self._output: list[dict[str, Any]] = []
         self._segments: list[_TranscriptSegment] = []
         self._tool_results: dict[str, dict[str, Any]] = {}
+        # Threaded rather than looked up, exactly as ``reasoning_replay`` is:
+        # this module is handed a message list and a scalar, and reaching for
+        # settings from here would put configuration in a dialect converter.
+        self._image_detail = image_detail
 
     def add_plain(self, messages: list[dict[str, Any]]) -> None:
         if messages:
@@ -481,16 +507,22 @@ class _OpenAIChatHistoryLedger:
     def _add_text_blocks(self, blocks: list[Any]) -> None:
         if not blocks:
             return
-        self.add_plain(AnthropicToOpenAIConverter._convert_user_message(blocks))
+        self.add_plain(
+            AnthropicToOpenAIConverter._convert_user_message(blocks, self._image_detail)
+        )
         blocks.clear()
 
     def _record_tool_result(self, block: Any) -> None:
         tuid = get_block_attr(block, "tool_use_id")
         tuid_s = str(tuid) if tuid is not None else ""
         if not tuid_s:
-            self.add_plain(AnthropicToOpenAIConverter._convert_user_message([block]))
+            self.add_plain(
+                AnthropicToOpenAIConverter._convert_user_message(
+                    [block], self._image_detail
+                )
+            )
             return
-        tool_message = _openai_tool_result_message(block)
+        tool_message = _openai_tool_result_message(block, self._image_detail)
         if self._has_pending_tool_id(tuid_s):
             self._tool_results[tuid_s] = tool_message
         else:
@@ -564,8 +596,9 @@ class AnthropicToOpenAIConverter:
         messages: list[Any],
         *,
         reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+        image_detail: str | None = None,
     ) -> list[dict[str, Any]]:
-        ledger = _OpenAIChatHistoryLedger()
+        ledger = _OpenAIChatHistoryLedger(image_detail)
 
         for msg in messages:
             role = msg.role
@@ -583,6 +616,7 @@ class AnthropicToOpenAIConverter:
                 content,
                 reasoning_content=reasoning_content,
                 reasoning_replay=reasoning_replay,
+                image_detail=image_detail,
             )
             for segment in segments:
                 if isinstance(segment, _PlainSegment):
@@ -601,6 +635,7 @@ class AnthropicToOpenAIConverter:
         *,
         reasoning_content: str | None,
         reasoning_replay: ReasoningReplayMode,
+        image_detail: str | None = None,
     ) -> list[_TranscriptSegment]:
         if role == "system":
             system_text = _openai_system_text(
@@ -641,7 +676,11 @@ class AnthropicToOpenAIConverter:
             ]
         if role == "user" and isinstance(content, list):
             return [
-                _PlainSegment(AnthropicToOpenAIConverter._convert_user_message(content))
+                _PlainSegment(
+                    AnthropicToOpenAIConverter._convert_user_message(
+                        content, image_detail
+                    )
+                )
             ]
         if isinstance(content, str):
             converted = {"role": role, "content": content}
@@ -777,7 +816,9 @@ class AnthropicToOpenAIConverter:
         )
 
     @staticmethod
-    def _convert_user_message(content: list[Any]) -> list[dict[str, Any]]:
+    def _convert_user_message(
+        content: list[Any], image_detail: str | None = None
+    ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         content_parts: list[dict[str, Any]] = []
 
@@ -801,7 +842,7 @@ class AnthropicToOpenAIConverter:
                     {"type": "text", "text": get_block_attr(block, "text", "")}
                 )
             elif block_type == "image":
-                content_parts.append(_openai_user_image_part(block))
+                content_parts.append(_openai_user_image_part(block, image_detail))
             elif block_type == "document":
                 # No OpenAI-format chat message has a shape for a PDF, and
                 # dropping it silently is how a request ends up with no
@@ -812,7 +853,7 @@ class AnthropicToOpenAIConverter:
                 )
             elif block_type == "tool_result":
                 flush_content()
-                result.append(_openai_tool_result_message(block))
+                result.append(_openai_tool_result_message(block, image_detail))
 
         flush_content()
         return result
@@ -870,13 +911,21 @@ def build_base_request_body(
     *,
     default_max_tokens: int | None = None,
     reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+    image_detail: str | None = None,
 ) -> dict[str, Any]:
-    """Build the common parts of an OpenAI-format request body."""
+    """Build the common parts of an OpenAI-format request body.
+
+    ``image_detail`` is OpenAI's per-image fidelity knob, passed in by the
+    provider layer -- which may read settings -- rather than read here, because
+    ``core`` may not import ``config``. ``None`` and ``"auto"`` both emit no
+    ``detail`` key, which is the behaviour of every release before 6.53.0.
+    """
     _openai_reject_native_only_top_level_fields(request_data)
     messages = hoist_tool_result_images(
         AnthropicToOpenAIConverter.convert_messages(
             request_data.messages,
             reasoning_replay=reasoning_replay,
+            image_detail=image_detail,
         )
     )
 

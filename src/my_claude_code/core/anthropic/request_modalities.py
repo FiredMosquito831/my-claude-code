@@ -49,7 +49,25 @@ def request_image_inputs(request: MessagesRequest) -> tuple[ImageInput, ...]:
 
     ``system`` is text-or-text-blocks in the Anthropic schema and needs no walk.
     """
-    found: list[ImageInput] = []
+    return tuple(
+        _image_input(kind, source) for kind, source in request_image_sources(request)
+    )
+
+
+def request_image_sources(request: MessagesRequest) -> tuple[tuple[str, object], ...]:
+    """Return ``(kind, source)`` for every visual block, in the same walk order.
+
+    The *live* source object, not a copy of what it says. The downscaler needs
+    to put smaller bytes back where it found them, and the blocks it edits are
+    on the router's per-attempt deep copy -- so writing through this is how a
+    resize reaches the wire without any converter learning about settings, and
+    without the client's own request being touched.
+
+    ``source`` is whatever the block carried: the Anthropic schema types it as
+    a plain dict, and a block that arrived inside an untyped tool result is a
+    dict too, so a caller that wants to write must still check the shape.
+    """
+    found: list[tuple[str, object]] = []
     for message in request.messages:
         content = message.content
         if isinstance(content, list):
@@ -63,12 +81,14 @@ def request_carries_image(request: MessagesRequest) -> bool:
     return bool(request_image_inputs(request))
 
 
-def _collect_block(block: object, found: list[ImageInput], *, depth: int) -> None:
+def _collect_block(
+    block: object, found: list[tuple[str, object]], *, depth: int
+) -> None:
     """Append any visual block, descending into tool results."""
     if depth > _MAX_NESTING:
         return
     if isinstance(block, ContentBlockImage | ContentBlockDocument):
-        found.append(_image_input(block.type, block.source))
+        found.append((block.type, block.source))
         return
     if isinstance(block, ContentBlockToolResult):
         _collect_nested(block.content, found, depth=depth + 1)
@@ -79,13 +99,14 @@ def _collect_block(block: object, found: list[ImageInput], *, depth: int) -> Non
     if isinstance(block, dict):
         block_type = block.get("type")
         if block_type in _VISUAL_BLOCK_TYPES:
-            source = block.get("source")
-            found.append(_image_input(str(block_type), source))
+            found.append((str(block_type), block.get("source")))
         elif block_type == "tool_result":
             _collect_nested(block.get("content"), found, depth=depth + 1)
 
 
-def _collect_nested(content: object, found: list[ImageInput], *, depth: int) -> None:
+def _collect_nested(
+    content: object, found: list[tuple[str, object]], *, depth: int
+) -> None:
     """Walk the content of a tool result, which may be a block or a list."""
     if isinstance(content, list):
         for nested in content:

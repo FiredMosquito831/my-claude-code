@@ -14,7 +14,10 @@ from my_claude_code.config.model_overrides import (
     current_model_overrides,
     model_ref_for,
 )
-from my_claude_code.config.settings import configured_default_max_output_tokens
+from my_claude_code.config.settings import (
+    configured_default_max_output_tokens,
+    configured_image_detail,
+)
 from my_claude_code.core.anthropic import (
     OpenAIToolNameCodec,
     ReasoningReplayMode,
@@ -93,6 +96,10 @@ def build_openai_chat_request_body(
             request_data,
             default_max_tokens=_last_resort_max_tokens(policy),
             reasoning_replay=policy.reasoning_replay,
+            # Read here, in the provider layer, because ``core`` may not import
+            # ``config``; read per request, because a value captured at import
+            # could not follow a dashboard save. ``auto`` emits nothing.
+            image_detail=configured_image_detail(),
         )
     except OpenAIConversionError as exc:
         raise InvalidRequestError(str(exc)) from exc

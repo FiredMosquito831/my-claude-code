@@ -369,6 +369,8 @@ _IMAGE_BLOB_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("description", "ALTER TABLE image_blobs ADD COLUMN description TEXT"),
     ("described_by", "ALTER TABLE image_blobs ADD COLUMN described_by TEXT"),
     ("described_at", "ALTER TABLE image_blobs ADD COLUMN described_at REAL"),
+    ("sent_width", "ALTER TABLE image_blobs ADD COLUMN sent_width INTEGER"),
+    ("sent_height", "ALTER TABLE image_blobs ADD COLUMN sent_height INTEGER"),
 )
 
 # NULL is stored as the empty string, not as a sentinel word, so the reverse
@@ -681,7 +683,16 @@ CREATE TABLE IF NOT EXISTS image_blobs (
     -- of them. NULL means nobody has described it, which is the common case.
     description TEXT,
     described_by TEXT,
-    described_at REAL
+    described_at REAL,
+    -- The size this picture actually left at, when the outbound downscaler
+    -- shrank it. NULL means it was not resized -- either because it was
+    -- already inside the budget or because resizing is off -- which is a
+    -- different fact from "it was sent at its stored width", and only NULL
+    -- says the first one. Stored on the picture rather than on the request
+    -- because the resize is a function of the picture and the budget, so one
+    -- screenshot re-sent every turn is resized to the same size every time.
+    sent_width INTEGER,
+    sent_height INTEGER
 );
 CREATE TABLE IF NOT EXISTS request_images (
     request_id TEXT NOT NULL,
@@ -733,6 +744,12 @@ CREATE TABLE IF NOT EXISTS request_attempts (
     -- ``params.ladder`` so the analytics status breakdown can restrict its
     -- JSON scan to the rows that have a ladder at all.
     ladder_tries INTEGER,
+    -- What this attempt itself reported spending. Filled today by the vision
+    -- adapter's describe calls, whose tokens had no column at all before
+    -- 6.53.0 and were therefore thrown away; nullable and general so any
+    -- attempt that can report usage may use them. NULL is "not measured".
+    tokens_in INTEGER,
+    tokens_out INTEGER,
     PRIMARY KEY (request_id, attempt)
 );
 """
@@ -888,6 +905,40 @@ _ADDED_COLUMNS = (
     # ``DEFAULT 'unknown'`` would have erased that distinction and left the
     # whole history unrecoverably unattributed.
     ("harness", "ALTER TABLE requests ADD COLUMN harness TEXT"),
+    # Added in 6.53.0. What the vision adapter's own describe calls cost,
+    # rolled up from this request's describe attempts so analytics can scan it
+    # without a JSON walk. Deliberately NOT folded into ``tokens_in``: that
+    # column measures the model that answered, it has measured exactly that
+    # since the log existed, and quietly widening its meaning would change
+    # every historical chart without changing a single stored number. NULL
+    # means not measured -- which covers every row written before this column
+    # and every request where no describe call ran.
+    (
+        "adapter_tokens_in",
+        "ALTER TABLE requests ADD COLUMN adapter_tokens_in INTEGER",
+    ),
+    (
+        "adapter_tokens_out",
+        "ALTER TABLE requests ADD COLUMN adapter_tokens_out INTEGER",
+    ),
+    # What the proxy's own estimator thought this request would cost, and how
+    # much of that was pictures. Stored because the single biggest reason a
+    # tokens-per-pixel table could not be produced from 275,304 logged requests
+    # is that the proxy had never once written down what it estimated: without
+    # this there is nothing to compare a bill against. Two integers per row,
+    # and the only thing that can audit the estimator over the next 30 days.
+    ("est_tokens_in", "ALTER TABLE requests ADD COLUMN est_tokens_in INTEGER"),
+    (
+        "est_image_tokens",
+        "ALTER TABLE requests ADD COLUMN est_image_tokens INTEGER",
+    ),
+    # Image payload before and after the outbound downscaler, in bytes. NULL
+    # when nothing was resized, which is distinct from 0.
+    ("image_bytes_in", "ALTER TABLE requests ADD COLUMN image_bytes_in INTEGER"),
+    (
+        "image_bytes_out",
+        "ALTER TABLE requests ADD COLUMN image_bytes_out INTEGER",
+    ),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -907,6 +958,14 @@ _ATTEMPT_ADDED_COLUMNS = (
     ("key_index", "ALTER TABLE request_attempts ADD COLUMN key_index INTEGER"),
     ("key_label", "ALTER TABLE request_attempts ADD COLUMN key_label TEXT"),
     ("ladder_tries", "ALTER TABLE request_attempts ADD COLUMN ladder_tries INTEGER"),
+    # Added in 6.53.0. ``request_attempts`` shipped with fourteen columns and
+    # none of them were tokens, so the vision adapter's describe hop -- which
+    # is recorded here and nowhere else -- had its usage discarded entirely
+    # even though the SSE aggregator hands it over. Nullable and general: any
+    # attempt that can report its own usage may fill these, and NULL keeps its
+    # "not measured" meaning on every row that already exists.
+    ("tokens_in", "ALTER TABLE request_attempts ADD COLUMN tokens_in INTEGER"),
+    ("tokens_out", "ALTER TABLE request_attempts ADD COLUMN tokens_out INTEGER"),
 )
 
 # Written in this order by ``_record_to_row``. The INSERT's column list, its
@@ -962,6 +1021,12 @@ _REQUEST_INSERT_COLUMNS = (
     "optimization_tokens_saved",
     "is_local",
     "harness",
+    "adapter_tokens_in",
+    "adapter_tokens_out",
+    "est_tokens_in",
+    "est_image_tokens",
+    "image_bytes_in",
+    "image_bytes_out",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -1013,6 +1078,8 @@ _ATTEMPT_INSERT_COLUMNS = (
     "key_index",
     "key_label",
     "ladder_tries",
+    "tokens_in",
+    "tokens_out",
 )
 
 # Blank, not zero: a request whose attempts predate the ladder measured
@@ -1199,6 +1266,13 @@ class RouteAttempt:
     # pool handed it. None on every attempt written before the ladder existed,
     # which is "not measured" -- not "it went through on the first try".
     ladder_tries: int | None = None
+    # What this attempt itself reported spending upstream. Filled by the
+    # vision adapter's describe calls, whose usage the SSE aggregator has
+    # always returned and which nothing has ever read. None is "not measured",
+    # which is what every ordinary attempt still says: the request row's own
+    # counters come from the client-facing stream, not from here.
+    tokens_in: int | None = None
+    tokens_out: int | None = None
 
 
 # ---------------------------------------------------- recovery observability --
@@ -1363,6 +1437,23 @@ class RequestRecord:
     # How the images this request carried reached the model: "image",
     # "stripped", "text" or "none". ``None`` means not measured.
     image_delivery: str | None = None
+    # What the vision adapter's describe calls cost, summed over this
+    # request's describe attempts. Shown beneath the answering model's tokens
+    # as a separate "+ adapter" line and never added into ``tokens_in``, which
+    # measures the model that answered and has always measured only that.
+    adapter_tokens_in: int | None = None
+    adapter_tokens_out: int | None = None
+    # What the proxy's own estimator expected this request to cost, and how
+    # much of that was pictures. The Models page reads them back as "billed vs
+    # estimated"; a ratio near 1.0 means the host's declared image-token family
+    # is right, and a host far from 1.0 has either the wrong family or an
+    # undocumented formula.
+    est_tokens_in: int | None = None
+    est_image_tokens: int | None = None
+    # Image payload before and after the outbound downscaler, in bytes. None
+    # when nothing was resized.
+    image_bytes_in: int | None = None
+    image_bytes_out: int | None = None
     images: tuple[CapturedImage, ...] = ()
     attempts: tuple[RouteAttempt, ...] = ()
     tool_calls: list[dict[str, Any]] | None = None
@@ -2877,6 +2968,8 @@ class RequestLogStore:
                         image.height,
                         image.thumbnail_media_type,
                         image.thumbnail,
+                        image.sent_width,
+                        image.sent_height,
                     ),
                 )
                 links.append((record.id, position, image.sha256))
@@ -2890,8 +2983,9 @@ class RequestLogStore:
         # dedup that makes one screenshot cost one row is unchanged.
         conn.executemany(
             "INSERT INTO image_blobs (sha, kind, media_type,"
-            " source_bytes, width, height, thumbnail_media_type, thumbnail)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            " source_bytes, width, height, thumbnail_media_type, thumbnail,"
+            " sent_width, sent_height)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(sha) DO UPDATE SET"
             " media_type = COALESCE(image_blobs.media_type, excluded.media_type),"
             " source_bytes = COALESCE(image_blobs.source_bytes,"
@@ -2900,7 +2994,15 @@ class RequestLogStore:
             " height = COALESCE(image_blobs.height, excluded.height),"
             " thumbnail_media_type = COALESCE(image_blobs.thumbnail_media_type,"
             " excluded.thumbnail_media_type),"
-            " thumbnail = COALESCE(image_blobs.thumbnail, excluded.thumbnail)",
+            " thumbnail = COALESCE(image_blobs.thumbnail, excluded.thumbnail),"
+            # Assigned, not COALESCEd, unlike every column above it. The
+            # others are facts about the picture and only ever get filled in;
+            # this one is a fact about the last request that *sent* it, and a
+            # NULL here means "that request sent it as it arrived" -- which is
+            # exactly what turning resizing off produces. Keeping the previous
+            # value would then show a resize on a request that did none.
+            " sent_width = excluded.sent_width,"
+            " sent_height = excluded.sent_height",
             list(blobs.values()),
         )
         conn.executemany(
@@ -2934,6 +3036,8 @@ class RequestLogStore:
                 attempt.key_index,
                 attempt.key_label,
                 attempt.ladder_tries,
+                attempt.tokens_in,
+                attempt.tokens_out,
             )
             for record in batch
             for attempt in record.attempts
@@ -2964,7 +3068,7 @@ class RequestLogStore:
         rows = conn.execute(
             "SELECT attempt, provider, model_ref, outcome, error_kind,"
             " error_message, duration_ms, params, wire_body, reasoning_emitted,"
-            " key_index, key_label, ladder_tries"
+            " key_index, key_label, ladder_tries, tokens_in, tokens_out"
             " FROM request_attempts"
             " WHERE request_id = ? ORDER BY attempt",
             (request_id,),
@@ -2985,6 +3089,12 @@ class RequestLogStore:
                     if row["reasoning_emitted"] is None
                     else bool(row["reasoning_emitted"])
                 ),
+                # NULL on every attempt written before 6.53.0, and on every
+                # attempt that is not a describe hop: the request row's own
+                # counters come from the client-facing stream, not from here,
+                # so an ordinary attempt has nothing to put in these.
+                "tokens_in": row["tokens_in"],
+                "tokens_out": row["tokens_out"],
                 # NULL on every attempt written before these columns existed:
                 # not measured, which the UI renders as a dash rather than as
                 # a keyless request.
@@ -3067,7 +3177,7 @@ class RequestLogStore:
         rows = conn.execute(
             "SELECT i.sha, i.kind, i.media_type, i.source_bytes, i.width,"
             " i.height, i.thumbnail_media_type, i.thumbnail, i.description,"
-            " i.described_by, i.described_at"
+            " i.described_by, i.described_at, i.sent_width, i.sent_height"
             " FROM request_images AS r JOIN image_blobs AS i ON i.sha = r.sha"
             " WHERE r.request_id = ? ORDER BY r.position",
             (request_id,),
@@ -3083,6 +3193,10 @@ class RequestLogStore:
                     "source_bytes": row["source_bytes"],
                     "width": row["width"],
                     "height": row["height"],
+                    # The size it actually left at, when the downscaler shrank
+                    # it. NULL means it was sent as it arrived.
+                    "sent_width": row["sent_width"],
+                    "sent_height": row["sent_height"],
                     "thumbnail_media_type": row["thumbnail_media_type"],
                     # Base64 so the payload is JSON, and the client can use it
                     # directly as a data URI without a second round trip.
@@ -3241,6 +3355,12 @@ class RequestLogStore:
             record.optimization_tokens_saved,
             _is_local_value(record),
             record.harness,
+            record.adapter_tokens_in,
+            record.adapter_tokens_out,
+            record.est_tokens_in,
+            record.est_image_tokens,
+            record.image_bytes_in,
+            record.image_bytes_out,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose
@@ -4456,6 +4576,75 @@ class RequestLogStore:
             for row in cursor.fetchall()
             if row[0] is not None
         ]
+
+    def image_estimate_by_provider(
+        self, *, since: float | None = None, limit: int = _BREAKDOWN_LIMIT
+    ) -> list[dict[str, Any]]:
+        """Per host: what images were estimated to cost, against what was billed.
+
+        The question this exists to answer could not be asked before 6.53.0,
+        because the proxy had never stored what it estimated -- 275,304 logged
+        requests and not one recorded prediction, which is why a measured
+        tokens-per-pixel table was impossible to produce from the log. Now the
+        ratio of billed to estimated is a number per host: near 1.0 means that
+        host's declared ``image_token_family`` is right, and a host far from it
+        has either the wrong family or a formula nobody publishes.
+
+        Restricted to rows that carried an estimate at all, and to uncached
+        ones: prompt caching moves an image's cost into ``cache_read_tokens``,
+        and comparing an estimate against a bill the cache already paid would
+        read as a wildly over-confident estimator. Only successful requests
+        count -- a failed one was billed for nothing.
+        """
+
+        cache_key = ("image_estimate_by_provider", since, limit)
+        now = time.monotonic()
+        with self._stats_lock:
+            cached = self._stats_cache.get(cache_key)
+            if cached is not None:
+                if now - cached[0] < _STATS_CACHE_TTL_SECONDS:
+                    self._stats_cache.move_to_end(cache_key)
+                    return [dict(row) for row in cached[1]["rows"]]
+                del self._stats_cache[cache_key]
+        since_clause = "" if since is None else " AND ts_epoch >= ?"
+        args: list[Any] = [] if since is None else [since]
+        args.append(limit)
+        rows: list[dict[str, Any]] = []
+        try:
+            with self._connection() as conn:
+                rows = [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT provider AS provider,"
+                        " COUNT(*) AS requests,"
+                        " SUM(COALESCE(tokens_in, 0)) AS billed_tokens_in,"
+                        " SUM(COALESCE(est_tokens_in, 0)) AS est_tokens_in,"
+                        " SUM(COALESCE(est_image_tokens, 0)) AS est_image_tokens,"
+                        " SUM(COALESCE(input_image_count, 0)) AS images"
+                        " FROM requests"
+                        " WHERE est_image_tokens IS NOT NULL"
+                        " AND provider IS NOT NULL"
+                        " AND status = 'success'"
+                        " AND COALESCE(cache_read_tokens, 0) = 0"
+                        f"{since_clause}"
+                        " GROUP BY provider"
+                        " ORDER BY requests DESC"
+                        " LIMIT ?",
+                        args,
+                    ).fetchall()
+                ]
+        except sqlite3.Error as exc:
+            # A page that cannot measure still renders. This is a readout, not
+            # a control: an unavailable log means "no measurement", never an
+            # error banner over the model tree.
+            logger.warning("Image estimate breakdown unavailable: {}", exc)
+            return []
+        with self._stats_lock:
+            self._stats_cache[cache_key] = (now, {"rows": [dict(r) for r in rows]})
+            self._stats_cache.move_to_end(cache_key)
+            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
+                self._stats_cache.popitem(last=False)
+        return rows
 
     def reasoning_by_model(
         self, *, since: float | None = None, limit: int = _BREAKDOWN_LIMIT

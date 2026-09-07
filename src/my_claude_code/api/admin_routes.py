@@ -1088,6 +1088,7 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
     # error here: the page renders with no measurement rather than not at all.
     store = _request_log_store_or_none(settings)
     measured: dict[str, dict[str, Any]] = {}
+    image_estimates: dict[str, dict[str, Any]] = {}
     if store is not None:
         # Floored to the minute so two page loads a few seconds apart share
         # a cache key: the query is cached on ``since``, and a raw
@@ -1095,6 +1096,10 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
         window = int(time.time() - REASONING_MEASUREMENT_DAYS * 86_400) // 60 * 60
         measured = {
             str(row["model_ref"]): row for row in store.reasoning_by_model(since=window)
+        }
+        image_estimates = {
+            str(row["provider"]): row
+            for row in store.image_estimate_by_provider(since=window)
         }
     return build_models_page_payload(
         services.requests.cached_prefixed_model_infos(),
@@ -1106,6 +1111,7 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
         measured_days=REASONING_MEASUREMENT_DAYS,
         learned=services.admin.learned_facts_by_model(),
         catalogue_refresh=services.admin.catalogue_refresh_status(),
+        image_estimates=image_estimates,
     )
 
 

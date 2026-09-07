@@ -43,6 +43,7 @@ from my_claude_code.config.model_refs import (
     parse_model_name,
     parse_provider_type,
 )
+from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.model_visibility import (
     MODEL_PATTERN_SEPARATOR,
@@ -1094,6 +1095,7 @@ def build_models_page_payload(
     measured_days: int = REASONING_MEASUREMENT_DAYS,
     learned: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     catalogue_refresh: Mapping[str, Any] | None = None,
+    image_estimates: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Everything the Models page renders, in one request.
 
@@ -1134,6 +1136,13 @@ def build_models_page_payload(
             "model_count": len(models),
             "hidden_count": sum(1 for model in models if not model["visible"]),
             "models": models,
+            # How this host bills a picture, as declared on its descriptor, and
+            # what that declaration has actually predicted. The two travel
+            # together because neither is worth much alone: a family name
+            # nobody has checked is a claim, and a billed-vs-estimated ratio
+            # with no family attached says nothing about what to change.
+            "image_token_family": _image_token_family(provider_id),
+            "image_estimate": _image_estimate_row(image_estimates, provider_id),
         }
         for provider_id, models in sorted(grouped.items(), key=lambda item: item[0])
     ]
@@ -1150,6 +1159,40 @@ def build_models_page_payload(
         # page can say "last refreshed 12 min ago, next in 48 min" rather than
         # leaving a catalogue's age unanswerable.
         "catalogue_refresh": dict(catalogue_refresh or {}),
+    }
+
+
+def _image_token_family(provider_id: str) -> str:
+    """Return the image billing family this host declares."""
+    descriptor = get_provider_registry().all_descriptors().get(provider_id)
+    if descriptor is None:
+        return "unknown"
+    return str(getattr(descriptor, "image_token_family", "") or "unknown")
+
+
+def _image_estimate_row(
+    estimates: Mapping[str, Mapping[str, Any]] | None, provider_id: str
+) -> dict[str, Any] | None:
+    """Return one host's billed-vs-estimated readout, or None if unmeasured.
+
+    ``None`` rather than a row of zeros: a host nobody has sent a picture to
+    has not been measured, and printing "0 vs 0" would read as a verdict.
+    """
+    row = None if estimates is None else estimates.get(provider_id)
+    if not row:
+        return None
+    billed = int(row.get("billed_tokens_in") or 0)
+    estimated = int(row.get("est_tokens_in") or 0)
+    return {
+        "requests": int(row.get("requests") or 0),
+        "images": int(row.get("images") or 0),
+        "billed_tokens_in": billed,
+        "est_tokens_in": estimated,
+        "est_image_tokens": int(row.get("est_image_tokens") or 0),
+        # The ratio the page actually reads. None when there is nothing to
+        # divide by, which is a host that reported no usage at all -- itself a
+        # finding, and one a 0.0 would hide.
+        "ratio": (billed / estimated) if estimated > 0 else None,
     }
 
 

@@ -353,3 +353,75 @@ def test_a_text_only_tool_result_is_invisible_to_the_media_walk(content):
 
     assert request_image_inputs(request) == ()
     assert replace_request_media(request.messages) == 0
+
+
+# --------------------------------------------------------------------------
+# The per-request `detail` knob
+# --------------------------------------------------------------------------
+
+
+def test_detail_absent_by_default():
+    """No `detail` key unless the operator asked for one.
+
+    OpenAI applies `auto` when the field is absent, so emitting it would change
+    nothing on the wire while making every body larger; every other dialect
+    ignores or rejects it. This is the unchanged-behaviour guard.
+    """
+    body = _body(_request([{"type": "text", "text": "ok"}, _image_block()]))
+    dumped = json.dumps(body)
+
+    assert '"detail"' not in dumped
+
+
+def test_detail_auto_still_emits_nothing():
+    body = build_base_request_body(
+        MessagesRequest.model_validate(_request([_image_block()])),
+        image_detail="auto",
+    )
+
+    assert '"detail"' not in json.dumps(body)
+
+
+def test_detail_low_reaches_every_image_part():
+    """Both the hoisted tool image and a pasted one carry it."""
+    payload = _request([_image_block()])
+    payload["messages"][0]["content"].append(_image_block())
+    body = build_base_request_body(
+        MessagesRequest.model_validate(payload), image_detail="low"
+    )
+
+    parts = [
+        part
+        for message in body["messages"]
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+        if part.get("type") == "image_url"
+    ]
+    assert len(parts) == 2
+    assert all(part["image_url"]["detail"] == "low" for part in parts)
+
+
+def test_detail_never_changes_the_token_estimate():
+    """The estimate is a function of pixels and family, never of `detail`.
+
+    LiteLLM keys its count on `detail`, which is why every Anthropic image
+    costs it a flat 85 tokens: Anthropic blocks carry no such field, so the
+    `auto` branch always wins. This is the guard against copying that.
+    """
+    import base64
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (1920, 1080), "red").save(buffer, format="PNG")
+    real = base64.b64encode(buffer.getvalue()).decode("ascii")
+    request = MessagesRequest.model_validate(_request([_image_block(real)]))
+
+    # Two families, two different numbers, both a function of the picture's
+    # real dimensions -- and neither reachable from a `detail` value, because
+    # `get_token_count` has no such parameter to pass.
+    anthropic = get_token_count(request.messages, image_token_family="anthropic")
+    tiled = get_token_count(request.messages, image_token_family="openai_tile")
+    assert anthropic != tiled
+    assert "detail" not in get_token_count.__code__.co_varnames

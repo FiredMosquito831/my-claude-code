@@ -21,6 +21,11 @@ from my_claude_code.core.anthropic import (
     TokenCountRequest,
     request_carries_image,
 )
+from my_claude_code.core.anthropic.image_downscale import (
+    ImageResize,
+    downscale_request_images,
+)
+from my_claude_code.core.anthropic.image_tokens import ImageTokenFamily
 from my_claude_code.core.anthropic.tool_result_media import (
     MediaDelivery,
     collect_tool_names,
@@ -116,6 +121,14 @@ class RoutedMessagesRequest:
     ``None`` means "the client's ask is the wire value's origin", which is the
     common case and needs no row in the request log.
 
+    ``image_token_family`` is how the destination host bills a picture, read
+    from its provider descriptor. It is carried rather than re-derived for the
+    same reason ``reasoning_dialect`` is: two later consumers need it -- the
+    downscaler above and the request log's stored estimate -- and neither is in
+    a position to look up a provider descriptor. ``image_resizes`` is what the
+    downscaler actually did, empty when it did nothing, which is the difference
+    between "resizing is off" and "the picture was already small enough".
+
     ``image_delivery`` says how the pictures in this request travelled, and is
     resolved here for the same stated reason ``output_limits`` is: the model's
     published vision capability lives in this layer's lookup, and
@@ -134,6 +147,8 @@ class RoutedMessagesRequest:
     reasoning_dialect: ReasoningDialect | None = None
     output_widened_from: int | None = None
     image_delivery: MediaDelivery = MediaDelivery.NONE
+    image_token_family: str = ImageTokenFamily.UNKNOWN.value
+    image_resizes: tuple[ImageResize, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1009,12 +1024,61 @@ class ModelRouter:
             )
         return MediaDelivery.STRIP
 
+    def _image_token_family(self, resolved: ResolvedModel) -> str:
+        """Return the billing family this host declares for images.
+
+        Data on the provider descriptor, never inferred and never a model-name
+        branch. A provider the registry does not know -- which is only ever a
+        custom provider that was removed mid-request -- is ``unknown``, which
+        charges Anthropic's formula and records that it did so.
+        """
+        descriptor = get_provider_registry().all_descriptors().get(resolved.provider_id)
+        if descriptor is None:
+            return ImageTokenFamily.UNKNOWN.value
+        return str(getattr(descriptor, "image_token_family", "") or "unknown")
+
+    def _downscale_images(
+        self, routed: MessagesRequest, family: str, delivery: MediaDelivery
+    ) -> tuple[ImageResize, ...]:
+        """Shrink this attempt's oversized images on the copy, before it is sent.
+
+        Beside :meth:`_resolve_image_delivery` and for its stated reason: the
+        size an image should leave at depends on the destination's billing
+        family, which is model metadata the converters cannot reach. Running it
+        here also means a chain that falls back from one host to another
+        re-derives the size for each rung.
+
+        Skipped outright once delivery has settled on ``STRIP``: those blocks
+        are already sentences by this point, so there is nothing left to
+        resize and decoding them would be pure cost.
+        """
+        if delivery in (MediaDelivery.NONE, MediaDelivery.STRIP):
+            return ()
+        resizes = downscale_request_images(
+            routed,
+            max_long_edge=int(getattr(self._settings, "image_max_long_edge", 0) or 0),
+            family=family,
+            jpeg_quality=int(getattr(self._settings, "image_jpeg_quality", 0) or 0),
+        )
+        if resizes:
+            logger.info(
+                "IMAGE RESIZE: {} image(s) shrunk for '{}' ({})",
+                len(resizes),
+                family,
+                ", ".join(resize.summary for resize in resizes),
+            )
+        return resizes
+
     def _route_for(
         self, request: MessagesRequest, resolved: ResolvedModel
     ) -> RoutedMessagesRequest:
         routed = request.model_copy(deep=True)
         routed.model = resolved.provider_model
         image_delivery = self._resolve_image_delivery(routed, resolved)
+        image_token_family = self._image_token_family(resolved)
+        image_resizes = self._downscale_images(
+            routed, image_token_family, image_delivery
+        )
         policy = resolve_reasoning_policy(routed, resolved.reasoning_preference)
         # Looked up once and handed to both consumers: gating decides what may
         # be sent with it, and the routed request carries it onward so the
@@ -1033,6 +1097,8 @@ class ModelRouter:
             output_limits=self._output_limits(resolved),
             reasoning_dialect=dialect,
             image_delivery=image_delivery,
+            image_token_family=image_token_family,
+            image_resizes=image_resizes,
         )
 
     def _output_limits(self, resolved: ResolvedModel) -> OutputTokenLimits:

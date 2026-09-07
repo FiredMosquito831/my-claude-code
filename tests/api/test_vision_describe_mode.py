@@ -140,12 +140,30 @@ def _handler(
     return handler, providers
 
 
+def _screenshot(width: int = 1920, height: int = 1080) -> str:
+    """A real picture, at a size a real screenshot has.
+
+    Since 6.53.0 the estimator bills an image on its actual pixel dimensions,
+    so a 1x1 PNG genuinely costs about one token. Any test comparing "the
+    picture" against "words about the picture" therefore has to use a picture,
+    or it is comparing a description against a single pixel.
+    """
+    import base64
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), "red").save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 def _image_request(
-    *, stream: bool = False, tool_result: bool = False
+    *, stream: bool = False, tool_result: bool = False, data: str = PIXEL
 ) -> MessagesRequest:
     image = {
         "type": "image",
-        "source": {"type": "base64", "media_type": "image/png", "data": PIXEL},
+        "source": {"type": "base64", "media_type": "image/png", "data": data},
     }
     if tool_result:
         content: list[dict[str, Any]] = [
@@ -359,7 +377,10 @@ async def test_the_estimate_measures_the_text_the_model_receives() -> None:
     eyes = RecordingProvider("eyes", DESCRIPTION)
     handler, _ = _handler(settings, {"nvidia_nim": blind, "groq": eyes})
 
-    await _drain(await handler.create(_image_request(), request_id="req_tokens"))
+    screenshot = _screenshot()
+    await _drain(
+        await handler.create(_image_request(data=screenshot), request_id="req_tokens")
+    )
 
     route_settings = _settings("route")
     route_blind = RecordingProvider("blind", "answer")
@@ -367,7 +388,11 @@ async def test_the_estimate_measures_the_text_the_model_receives() -> None:
     route_handler, _ = _handler(
         route_settings, {"nvidia_nim": route_blind, "groq": route_eyes}
     )
-    await _drain(await route_handler.create(_image_request(), request_id="req_tok2"))
+    await _drain(
+        await route_handler.create(
+            _image_request(data=screenshot), request_id="req_tok2"
+        )
+    )
 
     assert blind.input_tokens[0] < route_eyes.input_tokens[0]
 
@@ -530,3 +555,156 @@ async def test_describe_mode_declines_a_request_it_cannot_describe() -> None:
 
     assert result.applied is False
     assert result.failed is False
+
+
+# ------------------------------------------- what the describe hop cost ---
+
+
+class MeteredProvider(RecordingProvider):
+    """A provider whose reply reports its own usage, as a real host does."""
+
+    def __init__(self, model: str, text: str, *, tokens_in: int, tokens_out: int):
+        super().__init__(model, text)
+        self.tokens_in = tokens_in
+        self.tokens_out = tokens_out
+
+    async def stream_response(
+        self,
+        request: MessagesRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        self.requests.append(request)
+        self.input_tokens.append(input_tokens)
+        for event in _text_stream(self.text, self.model):
+            yield event
+        for event in _sse(
+            (
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {
+                        "input_tokens": self.tokens_in,
+                        "output_tokens": self.tokens_out,
+                    },
+                },
+            )
+        ):
+            yield event
+
+
+@pytest.mark.asyncio
+async def test_describe_usage_reaches_the_attempt_row() -> None:
+    """The hole this PR closes: the aggregator returned it, nothing read it."""
+    settings = _settings("describe")
+    blind = RecordingProvider("blind", "answer")
+    eyes = MeteredProvider("eyes", DESCRIPTION, tokens_in=1560, tokens_out=64)
+    handler, _ = _handler(settings, {"nvidia_nim": blind, "groq": eyes})
+
+    await _drain(await handler.create(_image_request(), request_id="req_usage"))
+
+    row = _row(settings, "req_usage")
+    describes = [
+        a
+        for a in row["route_attempts"]
+        if (a["params"] or {}).get("kind") == "describe"
+    ]
+    assert len(describes) == 1
+    assert describes[0]["tokens_in"] == 1560
+    assert describes[0]["tokens_out"] == 64
+
+
+@pytest.mark.asyncio
+async def test_describe_usage_rolls_up_to_the_request_row() -> None:
+    settings = _settings("describe")
+    blind = RecordingProvider("blind", "answer")
+    eyes = MeteredProvider("eyes", DESCRIPTION, tokens_in=1560, tokens_out=64)
+    handler, _ = _handler(settings, {"nvidia_nim": blind, "groq": eyes})
+
+    await _drain(await handler.create(_image_request(), request_id="req_rollup"))
+
+    row = _row(settings, "req_rollup")
+    assert row["adapter_tokens_in"] == 1560
+    assert row["adapter_tokens_out"] == 64
+
+
+@pytest.mark.asyncio
+async def test_parent_tokens_in_is_unchanged_by_describe() -> None:
+    """The regression guard: the adapter's cost is never folded into tokens_in.
+
+    ``tokens_in`` measures the model that answered the client and has measured
+    exactly that since the request log existed. Adding a describe hop into it
+    would silently change what every historical chart means.
+    """
+    settings = _settings("describe")
+    blind = RecordingProvider("blind", "answer")
+    eyes = MeteredProvider("eyes", DESCRIPTION, tokens_in=1560, tokens_out=64)
+    handler, _ = _handler(settings, {"nvidia_nim": blind, "groq": eyes})
+
+    await _drain(await handler.create(_image_request(), request_id="req_apart"))
+
+    row = _row(settings, "req_apart")
+    assert row["adapter_tokens_in"] == 1560
+    assert (row["tokens_in"] or 0) != 1560
+
+
+@pytest.mark.asyncio
+async def test_no_describe_leaves_adapter_tokens_null() -> None:
+    """NULL, not 0: nothing was measured because nothing ran."""
+    settings = _settings("route")
+    blind = RecordingProvider("blind", "answer")
+    eyes = RecordingProvider("eyes", DESCRIPTION)
+    handler, _ = _handler(settings, {"nvidia_nim": blind, "groq": eyes})
+
+    await _drain(await handler.create(_image_request(), request_id="req_null"))
+
+    row = _row(settings, "req_null")
+    assert row["adapter_tokens_in"] is None
+    assert row["adapter_tokens_out"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_described_image_costs_no_image_tokens_in_the_estimate() -> None:
+    """The estimate describes what was sent, not what arrived.
+
+    In describe mode the pictures are sentences by the time the request goes
+    out, so the honest split is "0 image tokens, and their words are already
+    inside est_tokens_in". Counting the client's original pictures instead
+    would make the image share of the estimate describe a request nobody sent.
+    """
+    settings = _settings("describe")
+    blind = RecordingProvider("blind", "answer")
+    eyes = RecordingProvider("eyes", DESCRIPTION)
+    handler, _ = _handler(settings, {"nvidia_nim": blind, "groq": eyes})
+
+    await _drain(
+        await handler.create(
+            _image_request(data=_screenshot()), request_id="req_est_described"
+        )
+    )
+
+    row = _row(settings, "req_est_described")
+    assert row["est_image_tokens"] == 0
+    assert row["est_tokens_in"] is not None
+
+
+@pytest.mark.asyncio
+async def test_an_attached_image_records_its_estimated_share() -> None:
+    settings = _settings("route")
+    blind = RecordingProvider("blind", "answer")
+    eyes = RecordingProvider("eyes", "answer")
+    handler, _ = _handler(settings, {"nvidia_nim": blind, "groq": eyes})
+
+    await _drain(
+        await handler.create(
+            _image_request(data=_screenshot()), request_id="req_est_attached"
+        )
+    )
+
+    row = _row(settings, "req_est_attached")
+    # 1920x1080 on the Anthropic fallback: resized to 1456x819 and billed at
+    # 52 x 30 patches, which is the number in Anthropic's own worked example.
+    assert row["est_image_tokens"] == 1560

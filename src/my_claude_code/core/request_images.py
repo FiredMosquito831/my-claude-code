@@ -14,20 +14,22 @@ import base64
 import binascii
 import hashlib
 import io
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from loguru import logger
 
 from my_claude_code.core.anthropic import ImageInput
+from my_claude_code.core.image_geometry import MAX_SOURCE_PIXELS
 
 # Stored thumbnails are WebP: at the same visual quality it is roughly a third
 # of a JPEG, and unlike JPEG it keeps the alpha channel a UI screenshot may use.
 THUMBNAIL_FORMAT = "WEBP"
 THUMBNAIL_MEDIA_TYPE = "image/webp"
 _THUMBNAIL_QUALITY = 72
-# Decoder guard. Pillow refuses images above this many pixels as a decompression
-# bomb; the explicit number keeps the refusal ours and logged.
-_MAX_SOURCE_PIXELS = 80_000_000
+# Decoder guard, shared with ``core.image_geometry`` so the thumbnailer and the
+# outbound downscaler cannot disagree about what counts as a decompression bomb.
+_MAX_SOURCE_PIXELS = MAX_SOURCE_PIXELS
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,12 @@ class CapturedImage:
     height: int | None = None
     thumbnail: bytes | None = None
     thumbnail_media_type: str | None = None
+    # The size this picture actually left at, when the outbound downscaler
+    # shrank it. ``None`` means it was sent as it arrived, which is a different
+    # fact from "it was sent at ``width`` x ``height``" only in that we can say
+    # which one we mean.
+    sent_width: int | None = None
+    sent_height: int | None = None
 
 
 def capture_images(
@@ -51,16 +59,33 @@ def capture_images(
     *,
     max_pixels: int,
     store_pixels: bool = True,
+    sent_sizes: Mapping[int, tuple[int, int]] | None = None,
 ) -> tuple[CapturedImage, ...]:
-    """Describe every image on a request, thumbnailing the ones we can read."""
+    """Describe every image on a request, thumbnailing the ones we can read.
+
+    ``sent_sizes`` maps a position in this same walk order to the size that
+    image actually left at, for the ones the outbound downscaler shrank. It is
+    keyed by position rather than by content address because the resize is a
+    fact about this attempt, and an absent entry means "sent as it arrived".
+    """
+    sizes = sent_sizes or {}
     return tuple(
-        _capture_one(image, max_pixels=max_pixels, store_pixels=store_pixels)
-        for image in images
+        _capture_one(
+            image,
+            max_pixels=max_pixels,
+            store_pixels=store_pixels,
+            sent=sizes.get(index),
+        )
+        for index, image in enumerate(images)
     )
 
 
 def _capture_one(
-    image: ImageInput, *, max_pixels: int, store_pixels: bool
+    image: ImageInput,
+    *,
+    max_pixels: int,
+    store_pixels: bool,
+    sent: tuple[int, int] | None = None,
 ) -> CapturedImage:
     raw = _decode(image.data)
     sha256 = hashlib.sha256(
@@ -71,6 +96,8 @@ def _capture_one(
         kind=image.kind,
         media_type=image.media_type,
         source_bytes=len(raw) if raw is not None else image.approx_bytes,
+        sent_width=None if sent is None else sent[0],
+        sent_height=None if sent is None else sent[1],
     )
     if raw is None or not store_pixels or max_pixels <= 0:
         return captured
@@ -116,6 +143,8 @@ def _with_thumbnail(
         height=height,
         thumbnail=buffer.getvalue(),
         thumbnail_media_type=THUMBNAIL_MEDIA_TYPE,
+        sent_width=captured.sent_width,
+        sent_height=captured.sent_height,
     )
 
 
