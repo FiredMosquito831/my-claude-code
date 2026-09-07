@@ -164,7 +164,10 @@ function decide(options) {
 
   // A desktop this release has no asset for is not a decision anyone can act
   // on, so it degrades to the server rather than failing the install.
-  const asset = desktopAsset(platform, arch);
+  // Only asked when a desktop app is actually on the cards: resolving the
+  // Linux asset shells out to `command -v dpkg`, and a server-only install has
+  // no business probing the package manager.
+  const asset = desktop ? desktopAsset(platform, arch) : null;
   if (desktop && asset === null) {
     desktop = false;
     why = `${why}, but there is no desktop build for ${platform}/${arch}`;
