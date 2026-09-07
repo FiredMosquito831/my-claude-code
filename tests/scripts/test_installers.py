@@ -2601,34 +2601,58 @@ def test_install_sh_names_the_curl_package_for_the_local_distro() -> None:
     assert "Then run this installer again." in shell
 
 
+_CURL_HINTS = (
+    ("apt-get", "sudo apt-get update && sudo apt-get install -y curl"),
+    ("dnf", "sudo dnf install -y curl"),
+    ("yum", "sudo yum install -y curl"),
+    ("zypper", "sudo zypper install -y curl"),
+    ("pacman", "sudo pacman -S --noconfirm curl"),
+    ("apk", "sudo apk add curl"),
+    ("brew", "brew install curl"),
+    ("pkg", "sudo pkg install -y curl"),
+)
+
+
 def test_install_sh_exits_one_with_the_curl_hint_when_curl_is_missing(
     tmp_path: Path,
 ) -> None:
-    """The failure path itself, not just its text: exit 1 and a real command."""
+    """The failure path itself, not just its text: exit 1 and a real command.
+
+    The PATH given here holds ONE package manager and nothing else -- not the
+    host's /usr/bin. Everything install.sh runs before require_curl is a shell
+    builtin, so that is enough to reach the check, and it makes the case
+    impossible to run past: a PATH carrying the real curl would send the script
+    on to download uv and a release wheel for real.
+    """
     if os.name == "nt":
         pytest.skip("POSIX installer scenarios run on POSIX hosts")
 
-    empty_bin = tmp_path / "bin"
-    empty_bin.mkdir()
-    # A PATH with the standard tools but no curl. /usr/bin holds command -v's
-    # targets for the package managers, so the hint is whatever this host has.
+    hidden = tmp_path / "no-curl"
+    hidden.mkdir()
+    expected = "install curl with your system package manager"
+    for manager, hint in _CURL_HINTS:
+        found = shutil.which(manager)
+        if found:
+            (hidden / manager).symlink_to(found)
+            expected = hint
+            break
+
     result = subprocess.run(
         ["/bin/sh", str(_repo_root() / "scripts" / "install.sh")],
         check=False,
         capture_output=True,
         text=True,
-        env={"PATH": f"{empty_bin}:/usr/bin:/bin", "HOME": str(tmp_path)},
+        env={"PATH": str(hidden), "HOME": str(tmp_path)},
         timeout=60,
     )
 
-    if shutil.which("curl", path=f"{empty_bin}:/usr/bin:/bin"):
-        pytest.skip(
-            "this host has curl on the minimal PATH, so the gap cannot be staged"
-        )
     assert result.returncode == 1, result.stdout + result.stderr
     assert "curl is required and was not found." in result.stderr
-    assert "curl" in result.stderr
+    assert expected in result.stderr
     assert "Then run this installer again." in result.stderr
+    # It stopped at the check: nothing was downloaded and nothing was written.
+    assert "astral.sh" not in result.stdout
+    assert not (tmp_path / ".local").exists()
 
 
 def test_installers_pin_the_uv_they_installed_by_absolute_path() -> None:
