@@ -333,6 +333,11 @@ FORMATS_WITH_AN_ATTRIBUTION_HEADER: dict[str, tuple[str, ...]] = {
     # Inside ``settings``: Cline discards the whole document on an unknown
     # *root* key. See ``config/harness_cline.strip_mcc_keys``.
     "cline": ("providers", "openai-compatible", "settings", "headers"),
+    # ``requestHeaders`` on the one custom endpoint element, which VS Code
+    # merges into every request to it -- the desktop counterpart of the four
+    # above, and the reason VS Code is the one desktop app in the set that can
+    # be attributed by header rather than by user-agent.
+    "vscode": ("chatLanguageModel", "requestHeaders"),
 }
 
 #: Qwen Code's is a sixth, and it is not in the table above because its header

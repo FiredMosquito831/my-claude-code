@@ -1,4 +1,29 @@
-"""Read and patch Claude Code's settings.json to point at the FCC proxy."""
+"""Read and patch Claude Code's settings.json to point at the FCC proxy.
+
+**The two undo modes.** Until 6.55.0 :func:`apply_proxy_env` overwrote
+``ANTHROPIC_BASE_URL`` without recording what had been there and
+:func:`clear_proxy_env` deleted it, so a user who had that variable pointed at
+another gateway lost it on Configure and did not get it back on Undo. The only
+copy was the one-shot ``.fcc-backup`` -- the whole file from before MCC's first
+ever edit, which is worthless once anything else in it has changed since.
+
+Configure now records the prior value of both variables through
+``config/restore_record.py``, and Undo takes a mode:
+
+``KEYS_ONLY``
+    Remove MCC's two variables. What Undo has always done, and still the
+    default, because it is the mode that cannot surprise anyone.
+
+``RESTORE``
+    Remove them and put back whatever they held before MCC first wrote. A
+    restore into a settings file that has been rewritten since MCC configured
+    it is refused rather than guessed at -- the recorded SHA-256 is what makes
+    that check possible.
+
+This is the same mechanism the desktop-app cards use, deliberately: the user
+named this file's behaviour as the reference the desktop cards should match, so
+the two share one implementation rather than resembling each other.
+"""
 
 import json
 import shutil
@@ -9,6 +34,19 @@ from my_claude_code.config.atomic_json import write_json_document_atomically
 from my_claude_code.config.paths import (
     claude_managed_settings_paths,
 )
+from my_claude_code.config.restore_record import (
+    RestoreEntry,
+    UndoMode,
+    capture_overwritten,
+    document_sha256,
+    forget_entry,
+    read_entry,
+    write_entry,
+)
+
+#: The subject name this file's records are filed under, so the desktop cards
+#: and Configure Claude Code can share one record without colliding.
+CLAUDE_RESTORE_SUBJECT = "claude_code"
 
 CLAUDE_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
 CLAUDE_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
@@ -243,9 +281,19 @@ def _backup_if_needed(path: Path) -> None:
 
 
 def apply_proxy_env(
-    *, path: Path, base_url: str, auth_token: str
+    *,
+    path: Path,
+    base_url: str,
+    auth_token: str,
+    record_path: Path | None = None,
 ) -> ClaudeSettingsStatus:
-    """Set ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN in the Claude settings file."""
+    """Set ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN in the Claude settings file.
+
+    Records what each variable held first, so :func:`clear_proxy_env` can offer
+    to put it back. ``record_path`` overrides where that record is kept and
+    exists for tests; production passes nothing and it lands in MCC's own
+    configuration directory.
+    """
 
     path = path.absolute()
 
@@ -260,6 +308,13 @@ def apply_proxy_env(
 
     env = dict(_env_block(data))
 
+    # Captured before the write, on the document as it was read off disk,
+    # which is the only moment the user's prior values still exist.
+    overwritten = capture_overwritten(
+        data,
+        (("env", CLAUDE_BASE_URL_ENV), ("env", CLAUDE_AUTH_TOKEN_ENV)),
+    )
+
     try:
         _backup_if_needed(path)
 
@@ -273,15 +328,37 @@ def apply_proxy_env(
             f"cannot write Claude settings file {path}: {exc}"
         ) from exc
 
+    write_entry(
+        RestoreEntry(
+            subject=CLAUDE_RESTORE_SUBJECT,
+            document_path=str(path),
+            document_sha256=document_sha256(path),
+            overwritten=overwritten,
+        ),
+        path=record_path,
+    )
+
     return read_status(
         path=path, expected_base_url=base_url, expected_auth_token=auth_token
     )
 
 
 def clear_proxy_env(
-    *, path: Path, expected_base_url: str = "", expected_auth_token: str = ""
+    *,
+    path: Path,
+    expected_base_url: str = "",
+    expected_auth_token: str = "",
+    mode: UndoMode = UndoMode.KEYS_ONLY,
+    record_path: Path | None = None,
 ) -> ClaudeSettingsStatus:
-    """Remove ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN from the Claude settings file.
+    """Undo Configure Claude Code, in one of two modes.
+
+    ``KEYS_ONLY`` removes MCC's two variables and leaves every other key in the
+    file alone. ``RESTORE`` additionally puts back whatever those two variables
+    held before MCC first wrote them, read from the side record -- and refuses
+    rather than guessing when the file has been rewritten since, because at
+    that point "the original value" is a claim about a document that no longer
+    exists.
 
     The expected values do not affect what is removed; they are only carried into
     the returned status so a caller can keep rendering what a re-apply would write.
@@ -302,7 +379,29 @@ def clear_proxy_env(
 
     env = _env_block(data)
 
+    restore: dict[str, object] = {}
+    if mode is UndoMode.RESTORE:
+        entry = read_entry(CLAUDE_RESTORE_SUBJECT, path=record_path)
+        if entry is None:
+            raise ClaudeSettingsError(
+                "MCC has no record of what these variables held before it "
+                "configured this file, so there is nothing to restore. Undo "
+                "can still remove MCC's keys."
+            )
+        current = document_sha256(path)
+        if entry.document_sha256 and current and entry.document_sha256 != current:
+            raise ClaudeSettingsError(
+                f"{path} has changed since MCC configured it, so restoring the "
+                "pre-MCC values would overwrite an edit made since. Remove "
+                "MCC's keys only, or restore from "
+                f"{path.name}{CLAUDE_SETTINGS_BACKUP_SUFFIX} by hand."
+            )
+        for value in entry.overwritten:
+            if value.prior_present and len(value.key_path) == 2:
+                restore[value.key_path[1]] = value.prior_value
+
     if CLAUDE_BASE_URL_ENV not in env and CLAUDE_AUTH_TOKEN_ENV not in env:
+        forget_entry(CLAUDE_RESTORE_SUBJECT, path=record_path)
         return read_status(path=path, **status_args)
 
     try:
@@ -311,6 +410,7 @@ def clear_proxy_env(
         env = dict(env)
         env.pop(CLAUDE_BASE_URL_ENV, None)
         env.pop(CLAUDE_AUTH_TOKEN_ENV, None)
+        env.update(restore)
         if env:
             data["env"] = env
         else:
@@ -322,4 +422,5 @@ def clear_proxy_env(
             f"cannot write Claude settings file {path}: {exc}"
         ) from exc
 
+    forget_entry(CLAUDE_RESTORE_SUBJECT, path=record_path)
     return read_status(path=path, **status_args)

@@ -140,6 +140,16 @@ CRUSH_API_KEY_ENV = "MCC_CRUSH_API_KEY"
 QWEN_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
 CRUSH_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
 
+#: VS Code appends the method path itself according to ``apiType``, so its
+#: custom endpoint takes the proxy **root** -- a trailing ``/v1`` would produce
+#: ``/v1/v1/chat/completions``. Same shape, different reason, as Crush's
+#: anthropic provider above.
+VSCODE_BASE_URL_SENTINEL = "https://base-url.mcc.invalid"
+
+#: Goose splits host from path: this is the host half, and
+#: ``GOOSE_BASE_PATH_VALUE`` above is the other.
+GOOSE_BASE_URL_SENTINEL = "https://base-url.mcc.invalid"
+
 #: Cline's own secret reference does not exist: ``providers.json`` stores a
 #: plain ``apiKey`` string, and the runtime fallback to ``$OPENAI_API_KEY``
 #: only fires when the key is *absent* -- which, measured on 3.0.61, leaves the
