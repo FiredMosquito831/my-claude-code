@@ -398,6 +398,10 @@ def require_loopback_admin(request: Request) -> None:
 #: HTTP endpoint. Spelling the intent out on the wire means no request deletes
 #: the log unless deleting the log is exactly what it was written to do.
 REQUEST_LOG_CLEAR_CONFIRMATION = "delete-all-request-log-rows"
+# Same guard, a much smaller blast radius: the pictures and the requests
+# stay, only what a vision model said about them is forgotten. Worth its own
+# confirmation anyway -- every description it drops has to be paid for again.
+IMAGE_DESCRIPTION_CLEAR_CONFIRMATION = "clear-all-image-descriptions"
 
 
 def require_destructive_admin_confirmation(
@@ -2906,6 +2910,34 @@ async def clear_request_log(
     )
     store = _request_log_store_or_none(settings)
     cleared = await asyncio.to_thread(store.clear) if store is not None else 0
+    return {"cleared": cleared}
+
+
+@router.delete("/admin/api/requests/image-descriptions")
+async def clear_image_descriptions(
+    request: Request,
+    confirm: str | None = None,
+    settings: Settings = Depends(get_settings),
+):
+    """Forget every description describe mode has cached. Keeps the pictures.
+
+    The cache key is the image's own content, so a description never goes
+    stale on its own and nothing here is routine maintenance. It exists for
+    the two cases where an operator genuinely wants them gone: a better vision
+    model has been configured and the old descriptions no longer represent
+    what it would say, or a bad one wrote nonsense into the log. The next
+    request carrying an already-seen image pays for a fresh description.
+    """
+    require_loopback_admin(request)
+    require_destructive_admin_confirmation(
+        request, confirm, IMAGE_DESCRIPTION_CLEAR_CONFIRMATION
+    )
+    store = _request_log_store_or_none(settings)
+    cleared = (
+        await asyncio.to_thread(store.clear_image_descriptions)
+        if store is not None
+        else 0
+    )
     return {"cleared": cleared}
 
 

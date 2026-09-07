@@ -13,6 +13,8 @@ converter call it, so the two can never again disagree about whether a nested
 image is a picture or 680,000 characters of text.
 """
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -39,6 +41,9 @@ class MediaDelivery(StrEnum):
     ATTACH = "image"
     TEXT = "text"
     STRIP = "stripped"
+    #: A sighted model was asked what the picture shows and its words went in
+    #: the picture's place. Only ``VISION_ADAPTER_MODE=describe`` produces it.
+    DESCRIBED = "described"
 
 
 # The sentence left in the tool message when its image has been moved into the
@@ -60,6 +65,30 @@ USER_IMAGE_STRIPPED_TEXT = "[image omitted: this model does not accept images]"
 USER_DOCUMENT_STRIPPED_TEXT = (
     "[attachment omitted: this model does not accept documents]"
 )
+# What a description looks like once it has taken the picture's place. The
+# brackets and the naming of the describing model are not decoration: the text
+# arrives in a user turn, so without them a sentence written by another model
+# would read as something the user typed.
+DESCRIBE_FAILED_TEXT = (
+    "[image omitted: it could not be described and this model cannot read it]"
+)
+
+
+def described_media_placeholder(
+    description: str, *, model_ref: str, tool_name: str | None = None
+) -> str:
+    """Return the sentence a description travels in, inside a tool result."""
+    if tool_name:
+        return (
+            f"[image returned by the {tool_name!r} tool, described by"
+            f" {model_ref}: {description}]"
+        )
+    return f"[image returned by a tool, described by {model_ref}: {description}]"
+
+
+def described_top_level_placeholder(description: str, *, model_ref: str) -> str:
+    """Return the sentence a description travels in, at the top level."""
+    return f"[image described by {model_ref}: {description}]"
 
 
 def media_delivery(supports_vision: bool | None) -> MediaDelivery:
@@ -243,6 +272,210 @@ def _replace_tool_result_content(
                 "text": stripped_media_placeholder(content, tool_name=tool_name),
             }
         ], 1
+    return content, 0
+
+
+@dataclass(frozen=True, slots=True)
+class MediaBlockContext:
+    """Where one visual block sits, in the order the walks find them.
+
+    ``nested`` is true for a block inside a ``tool_result``, which decides both
+    which sentence wraps a description and whether the replacement is a plain
+    dict or a parsed content block. ``tool_name`` is the tool that produced it,
+    when the transcript says -- worth nine tokens in a describe prompt, because
+    "this came back from take_screenshot" is real context.
+    """
+
+    kind: str
+    nested: bool
+    tool_name: str | None
+
+
+def media_block_contexts(
+    messages: list[Any], *, tool_names: dict[str, str] | None = None
+) -> tuple[MediaBlockContext, ...]:
+    """Describe every visual block a message list carries, in walk order.
+
+    The same depth-first order
+    :func:`core.anthropic.request_modalities.request_image_inputs` returns, so
+    the two results can be zipped. Kept here beside the walks that consume it
+    for exactly that reason: three functions that agree on "which image is the
+    second one" have to be read together.
+    """
+    names = tool_names or {}
+    found: list[MediaBlockContext] = []
+    for message in messages:
+        content = getattr(message, "content", None)
+        if content is None and isinstance(message, dict):
+            content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        _collect_contexts(content, names, found, depth=0, nested=False, tool_name=None)
+    return tuple(found)
+
+
+def _collect_contexts(
+    blocks: list[Any],
+    names: dict[str, str],
+    found: list[MediaBlockContext],
+    *,
+    depth: int,
+    nested: bool,
+    tool_name: str | None,
+) -> None:
+    if depth > MAX_MEDIA_NESTING:
+        return
+    for block in blocks:
+        if is_visual_block(block):
+            found.append(
+                MediaBlockContext(
+                    kind=str(get_block_type(block) or "image"),
+                    nested=nested,
+                    tool_name=tool_name,
+                )
+            )
+            continue
+        if get_block_type(block) != "tool_result":
+            continue
+        tool_use_id = get_block_attr(block, "tool_use_id", "")
+        inner_name = names.get(str(tool_use_id)) if tool_use_id else None
+        inner = get_block_attr(block, "content", "")
+        if isinstance(inner, list):
+            _collect_contexts(
+                inner,
+                names,
+                found,
+                depth=depth + 1,
+                nested=True,
+                tool_name=inner_name,
+            )
+        elif is_visual_block(inner):
+            found.append(
+                MediaBlockContext(
+                    kind=str(get_block_type(inner) or "image"),
+                    nested=True,
+                    tool_name=inner_name,
+                )
+            )
+
+
+def replace_request_media_with_text(
+    messages: list[Any],
+    texts: Sequence[str],
+    *,
+    tool_names: dict[str, str] | None = None,
+) -> int:
+    """Put one prepared sentence in the place of each visual block, in order.
+
+    ``texts`` is aligned with the order
+    :func:`core.anthropic.request_modalities.request_image_inputs` returns --
+    the same depth-first walk over messages, content lists and tool-result
+    content that this module already performs. One list, one walk, one index:
+    the alternative, re-deriving each image's identity down here, would be a
+    second definition of "which image is this" and would drift from the one
+    routing counted.
+
+    Nothing is deduplicated. A description belongs to the block it replaces,
+    and collapsing two identical ones would silently move a description onto a
+    picture it was not written about.
+
+    Returns how many blocks were replaced. A shorter ``texts`` than there are
+    blocks leaves the surplus untouched, which is the honest outcome of a
+    caller that could only prepare some of them; the caller checks the count.
+    """
+    replaced = 0
+    cursor = _TextCursor(texts, tool_names or {})
+    for message in messages:
+        content = getattr(message, "content", None)
+        if content is None and isinstance(message, dict):
+            content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        new_content, count = _replace_block_list_with_text(
+            content, cursor, depth=0, nested=False
+        )
+        if not count:
+            continue
+        replaced += count
+        if isinstance(message, dict):
+            message["content"] = new_content
+        else:
+            message.content = new_content
+    return replaced
+
+
+class _TextCursor:
+    """The prepared sentences, handed out in walk order."""
+
+    def __init__(self, texts: Sequence[str], tool_names: dict[str, str]) -> None:
+        self._texts = texts
+        self._index = 0
+        self.tool_names = tool_names
+
+    def take(self) -> str | None:
+        if self._index >= len(self._texts):
+            return None
+        text = self._texts[self._index]
+        self._index += 1
+        return text
+
+
+def _replace_block_list_with_text(
+    blocks: list[Any], cursor: _TextCursor, *, depth: int, nested: bool
+) -> tuple[list[Any], int]:
+    if depth > MAX_MEDIA_NESTING:
+        return blocks, 0
+    result: list[Any] = []
+    replaced = 0
+    for block in blocks:
+        if is_visual_block(block):
+            text = cursor.take()
+            if text is None:
+                result.append(block)
+                continue
+            result.append(_text_block(text, nested=nested))
+            replaced += 1
+            continue
+        if get_block_type(block) == "tool_result":
+            inner = get_block_attr(block, "content", "")
+            new_inner, inner_replaced = _replace_tool_result_with_text(
+                inner, cursor, depth=depth + 1
+            )
+            if inner_replaced:
+                replaced += inner_replaced
+                result.append(_with_content(block, new_inner))
+                continue
+        result.append(block)
+    return result, replaced
+
+
+def _replace_tool_result_with_text(
+    content: Any, cursor: _TextCursor, *, depth: int
+) -> tuple[Any, int]:
+    if isinstance(content, list):
+        result: list[Any] = []
+        replaced = 0
+        for item in content:
+            if is_visual_block(item):
+                text = cursor.take()
+                if text is None:
+                    result.append(item)
+                    continue
+                result.append({"type": "text", "text": text})
+                replaced += 1
+                continue
+            result.append(item)
+        if not replaced:
+            return content, 0
+        # Same rule as the strip path: a tool message with empty content is
+        # rejected by several hosts, and a tool result whose only block was the
+        # image now has the description as its whole body anyway.
+        return result, replaced
+    if is_visual_block(content):
+        text = cursor.take()
+        if text is None:
+            return content, 0
+        return [{"type": "text", "text": text}], 1
     return content, 0
 
 

@@ -10,7 +10,7 @@ logged requests, the number of non-Claude-Code requests naming an alias is zero.
 These are the alias names that close that gap:
 
 ===============  ==========================================================
-``mcc/best``     the route MCC itself starts on -- ``MODEL``
+``mcc/best``     ``MODEL_FABLE``
 ``mcc/good``     ``MODEL_OPUS``
 ``mcc/medium``   ``MODEL_SONNET``
 ``mcc/cheap``    ``MODEL_HAIKU``
@@ -22,6 +22,9 @@ it is a name for a route. Unset routes collapse onto ``MODEL`` here for the same
 reason they do for ``claude-opus-5`` today -- ``_resolve_model_ref`` falls
 through -- and the dashboard says so rather than hiding it, because MCC choosing
 a distinct model for an unset tier would be MCC picking a model for the user.
+That applies to ``mcc/best`` like every other tier: an install that never set
+``MODEL_FABLE`` sends ``mcc/best`` down ``MODEL``'s chain, with ``MODEL``'s
+fallbacks and ``MODEL``'s pause list, and the card reads "Inherits default".
 
 Two segments, not three. ``mcc/tier/best`` would buy nothing and would make
 Kimi's generated key ``mcc/mcc/tier/best``; two segments satisfy both hard shape
@@ -113,19 +116,23 @@ class GlobalTierSettings:
         return f"{self.env_var}_FALLBACKS"
 
 
-#: Which global route each tier points at. ``MODEL_FABLE`` is deliberately not
-#: a tier: ``MODEL`` *is* the route MCC starts on, which is what "Best" means
-#: and what ``CatalogueModel.is_primary_route`` already marks. An operator who
-#: sets ``MODEL`` and ``MODEL_FABLE`` to different refs gets Best on ``MODEL``
-#: and Claude Code's ``claude-fable-*`` on ``MODEL_FABLE``; the Tiers card shows
-#: both rather than reconciling them behind the operator's back.
+#: Which global route each tier points at.
+#:
+#: ``mcc/best`` names ``MODEL_FABLE``. The five tiers are one ladder and the top
+#: rung has to be the route an operator puts their strongest model on -- which
+#: is the Fable route, the one Claude Code's own ``claude-fable-*`` already
+#: reaches. ``MODEL`` is not a rung: it is the *default*, the thing every unset
+#: route falls back to, and naming it "Best" made the ladder's top step and its
+#: floor the same setting. An install that never sets ``MODEL_FABLE`` sees no
+#: change at all -- the collapse in ``application/tier_chains`` sends
+#: ``mcc/best`` down ``MODEL``'s chain, exactly as it always did.
 GLOBAL_TIER_SETTINGS: dict[ModelTier, GlobalTierSettings] = {
     ModelTier.BEST: GlobalTierSettings(
-        model_attr="model",
-        fallbacks_attr="model_fallbacks",
-        paused_attr="model_paused",
-        env_var="MODEL",
-        route_label="Default",
+        model_attr="model_fable",
+        fallbacks_attr="model_fable_fallbacks",
+        paused_attr="model_fable_paused",
+        env_var="MODEL_FABLE",
+        route_label="Fable",
     ),
     ModelTier.GOOD: GlobalTierSettings(
         model_attr="model_opus",
@@ -157,10 +164,15 @@ GLOBAL_TIER_SETTINGS: dict[ModelTier, GlobalTierSettings] = {
     ),
 }
 
-#: Which per-route reasoning setting a tier inherits, where one exists. Best and
-#: Vision have none -- ``settings.py`` defines exactly four ``REASONING_*``
-#: route overrides -- so both fall through to the global reasoning policy.
+#: Which per-route reasoning setting a tier inherits, where one exists. Vision
+#: has none -- ``settings.py`` defines exactly four ``REASONING_*`` route
+#: overrides and none of them is the adapter's -- so it falls through to the
+#: global reasoning policy. Best inherits ``REASONING_FABLE``, because it is
+#: the Fable route: a tier that routed through a setting but ignored that
+#: setting's reasoning override would be two different answers to "where does
+#: mcc/best go".
 TIER_REASONING_SETTINGS: dict[ModelTier, str] = {
+    ModelTier.BEST: "reasoning_fable",
     ModelTier.GOOD: "reasoning_opus",
     ModelTier.MEDIUM: "reasoning_sonnet",
     ModelTier.CHEAP: "reasoning_haiku",
@@ -187,10 +199,10 @@ def tier_alias_by_route_env_var() -> dict[str, str]:
     This is what the Model Config page's route headings read, so the alias a
     heading shows and the alias the router answers to are the same fact rather
     than two lists that agree until one is edited. Note what is *not* here:
-    ``MODEL_FABLE`` has no entry, because it is not a tier -- ``MODEL`` is the
-    route ``mcc/best`` resolves through (see ``GLOBAL_TIER_SETTINGS`` above),
-    and printing ``mcc/best`` beside the Fable rail would tell a reader that
-    editing that rail changes where ``mcc/best`` goes, which it does not.
+    ``MODEL`` has no entry, because it is not a tier -- it is the default every
+    unset route falls back to, and printing ``mcc/best`` beside the Default rail
+    would tell a reader that editing that rail is what moves ``mcc/best``, when
+    what moves it is ``MODEL_FABLE`` (see ``GLOBAL_TIER_SETTINGS`` above).
     """
 
     return {GLOBAL_TIER_SETTINGS[tier].env_var: tier_ref(tier) for tier in TIER_ORDER}

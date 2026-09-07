@@ -2672,3 +2672,74 @@ def test_every_routing_rail_heading_carries_its_harness_alias(rendered) -> None:
 
     # Exactly five aliases on the page: one per tier, no more.
     assert len(rendered["routing"]["aliasChips"]) == 5
+
+
+# ------------------------------------------------- the vision adapter's mode
+
+
+def test_the_adapter_mode_renders_inside_the_adapter_card(rendered) -> None:
+    """A mode is unreadable away from the chain it applies to.
+
+    Left unclaimed by the routing renderer it would land in the leftovers grid
+    under the route cards -- a bare select saying "Vision Adapter Mode" with
+    nothing around it to say which adapter or what the modes mean.
+    """
+    mode = rendered["visionMode"]
+    assert mode["insideTheCard"] is True
+    assert mode["inTheLeftovers"] is False
+    assert mode["value"] == "route", "the default must load as today's behaviour"
+    assert "describe" in mode["options"]
+
+
+def test_the_mode_sits_under_the_rail_and_above_the_summary(rendered) -> None:
+    order = rendered["visionMode"]["order"]
+    assert order.index("route-vision-mode-wrap") > order.index("field")
+    assert order.index("route-vision-mode-wrap") < order.index("route-vision-summary")
+
+
+def test_the_hop_says_something_different_in_each_mode(rendered) -> None:
+    """The arrow means two different things, so it may not read the same.
+
+    In route mode the request goes to the vision model. In describe mode only
+    the picture does, and it comes back as words -- the tier's own model still
+    answers, which is the whole reason to choose the mode.
+    """
+    mode = rendered["visionMode"]
+    assert "cannot read them" in mode["hopSentenceRoute"]
+    assert "still answers" not in mode["hopSentenceRoute"]
+    assert "come back as words" in mode["hopSentenceDescribe"]
+    assert "still answers" in mode["hopSentenceDescribe"]
+    # An unset adapter still says the honest thing in either mode.
+    assert "will fail here" in mode["hopSentenceUnset"]
+
+
+def test_switching_the_mode_rewrites_the_summary_without_a_reload(rendered) -> None:
+    mode = rendered["visionMode"]
+    assert mode["summaryInRoute"]
+    assert mode["summaryInDescribe"]
+
+
+# --------------------------------------- the description beside the thumbnail
+
+
+def test_a_described_image_shows_the_words_the_model_was_given(rendered) -> None:
+    """Q15: without this there is no way to judge whether describe mode pays."""
+    fresh = rendered["describedImages"]["fresh"]
+    assert "Described by another model" in fresh["delivery"]
+    assert fresh["bodies"] == ["A terminal showing ModuleNotFoundError."]
+    assert fresh["summaries"] == ["Described by groq/eyes · fresh"]
+
+
+def test_a_cached_description_says_so(rendered) -> None:
+    """No describe attempt on this request means nobody paid for these words."""
+    assert rendered["describedImages"]["cached"]["summaries"] == [
+        "Described by groq/eyes · cached"
+    ]
+
+
+def test_an_image_that_travelled_as_an_image_gets_no_description_block(
+    rendered,
+) -> None:
+    plain = rendered["describedImages"]["plain"]
+    assert plain["delivery"] == "Sent to the model as an image."
+    assert plain["summaries"] == []

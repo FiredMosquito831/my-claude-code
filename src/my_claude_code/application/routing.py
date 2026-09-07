@@ -149,10 +149,17 @@ class RouteDiversion(StrEnum):
     nowhere to move to. It is recorded anyway -- an image sent to a route with
     no sighted model on it is the one case the operator most needs to see, and
     without a marker it is indistinguishable from an ordinary request.
+
+    ``VISION_DESCRIBED`` is a second exception, and a different one: nothing
+    moved because nothing had to. A sighted model was asked what the picture
+    shows, its words took the picture's place, and the route's own model
+    answered. It is a third thing that happened, not a re-labelling of the
+    other two.
     """
 
     VISION = "vision"
     VISION_UNAVAILABLE = "vision_unavailable"
+    VISION_DESCRIBED = "vision_described"
 
 
 @dataclass(frozen=True, slots=True)
@@ -854,6 +861,60 @@ class ModelRouter:
             chain[0].provider_model_ref,
         )
         return chain, True
+
+    def vision_describe_chain(
+        self, request: MessagesRequest, *, harness: str | None = None
+    ) -> tuple[ResolvedModel, ...]:
+        """The models a describe call may use for this request, or ``()``.
+
+        Empty means describe mode does not apply and the caller should route
+        exactly as it always has -- because the mode is ``route``, because
+        nothing in the request is visual, because the model the route picked
+        can see perfectly well (Q14: a sighted primary gets the picture, which
+        is strictly better and cheaper than two calls), or because no vision
+        model is configured to ask.
+
+        The route is resolved here rather than in the caller so that "which
+        model would have answered" is decided in exactly one place. The chain
+        that comes back is ``MODEL_VISION`` plus its own fallbacks, already
+        stripped of entries known to be blind -- the same chain
+        :meth:`_apply_vision_policy` would have diverted the whole request to.
+        """
+        if str(self._settings.vision_adapter_mode or "").strip().lower() != "describe":
+            return ()
+        if not request_carries_image(request):
+            return ()
+        tier = parse_tier_ref(request.model)
+        if tier is not None:
+            route_chain, _tier_route = self._resolve_tier_chain(
+                request.model, tier, harness
+            )
+        else:
+            route_chain = self.resolve_chain(request.model)
+        if self._supports_vision(route_chain[0]) is not False:
+            return ()
+        return self._vision_adapter_chain(route_chain[0])
+
+    def vision_describe_plan(
+        self, describe_request: MessagesRequest, chain: tuple[ResolvedModel, ...]
+    ) -> RoutedMessagesPlan:
+        """Wrap the vision chain around one describe sub-request.
+
+        An ordinary plan, deliberately: handing it to the same executor is what
+        buys the health registry, the pause button, credential rotation, the
+        retry policy and wire capture without a second copy of any of them, and
+        guarantees a vision model benched by failures is skipped here exactly
+        as it is everywhere else.
+        """
+        paused = frozenset(
+            parse_model_ref_list(getattr(self._settings, _VISION_PAUSE_SETTING[0]))
+        ) & {resolved.provider_model_ref for resolved in chain}
+        return RoutedMessagesPlan(
+            tuple(self._route_for(describe_request, resolved) for resolved in chain),
+            probe_candidates=self._probe_candidates(),
+            paused_refs=paused,
+            paused_env_var=_VISION_PAUSE_SETTING[1],
+        )
 
     def _vision_adapter_chain(
         self, primary: ResolvedModel

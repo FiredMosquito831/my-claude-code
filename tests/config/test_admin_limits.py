@@ -354,6 +354,65 @@ def test_retention_survives_a_round_trip_through_the_form() -> None:
     assert "REQUEST_LOG_MAX_ROWS=500000" in render_env_file(values)
 
 
+# Every field the manifest puts on Model Config, in the order it renders them.
+# The dashboard hand-places the routing fields into cards and drops whatever is
+# left into a leftovers grid, so a field added to this section without a home
+# is not a crash -- it is a control nobody meant to draw, silently appearing
+# under the route grid. This list is the review step that catches it.
+MODELS_KEYS = (
+    "MODEL",
+    "MODEL_FALLBACKS",
+    "MODEL_PAUSED",
+    "MODEL_FABLE",
+    "MODEL_FABLE_FALLBACKS",
+    "MODEL_FABLE_PAUSED",
+    "MODEL_OPUS",
+    "MODEL_OPUS_FALLBACKS",
+    "MODEL_OPUS_PAUSED",
+    "MODEL_SONNET",
+    "MODEL_SONNET_FALLBACKS",
+    "MODEL_SONNET_PAUSED",
+    "MODEL_HAIKU",
+    "MODEL_HAIKU_FALLBACKS",
+    "MODEL_HAIKU_PAUSED",
+    "MODEL_VISION",
+    "MODEL_VISION_FALLBACKS",
+    "VISION_ADAPTER_MODE",
+    "TOOL_RESULT_IMAGE_DELIVERY",
+    "MODEL_VISION_PAUSED",
+    "MODEL_VISIBILITY_ALLOW",
+    "MODEL_VISIBILITY_DENY",
+    "HARNESS_TIER_ALIASES",
+    "FALLBACK_SKIP_KINDS",
+)
+
+
+def test_no_models_field_is_orphaned() -> None:
+    """Every field in the section is listed above, so the list cannot rot."""
+    declared = [f.key for f in FIELDS if f.section_id == "models"]
+    assert declared == list(MODELS_KEYS)
+
+
+@pytest.mark.parametrize("key", MODELS_KEYS)
+def test_each_models_field_points_at_a_real_setting(key: str) -> None:
+    """A manifest field with no setting behind it saves into nothing."""
+    field = FIELD_BY_KEY[key]
+    attr = field.settings_attr
+    assert attr, f"{key} has no settings attribute"
+    assert hasattr(Settings(), attr), f"{key} points at a setting that does not exist"
+
+
+def test_the_adapter_mode_sits_with_the_adapter_it_configures() -> None:
+    """Placement is the documentation: the mode is unreadable on its own.
+
+    "Vision adapter mode: describe" says nothing until you can see which model
+    it will ask, so the manifest puts it directly after the adapter's own chain
+    and the dashboard renders it inside that card.
+    """
+    keys = [f.key for f in FIELDS if f.section_id == "models"]
+    assert keys[keys.index("MODEL_VISION_FALLBACKS") + 1] == "VISION_ADAPTER_MODE"
+
+
 @pytest.mark.parametrize("section", sorted(SECTION_KEYS))
 def test_no_resilience_field_is_orphaned(section: str) -> None:
     """Every field in the section is listed above, so the list cannot rot."""

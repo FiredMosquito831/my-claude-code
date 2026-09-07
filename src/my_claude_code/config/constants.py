@@ -449,6 +449,17 @@ TOOL_RESULT_IMAGE_DELIVERY_NAMES: frozenset[str] = frozenset(
 )
 TOOL_RESULT_IMAGE_DELIVERY_DEFAULT = "auto"
 
+# What the vision adapter does with a request whose images the route's own
+# model is published as unable to read.
+# `route` sends the whole request to MODEL_VISION and lets that model answer
+# -- the behaviour every release up to 6.50.1 had, and the default, because a
+# mode toggle that changes what happens on upgrade is a surprise rather than a
+# toggle. `describe` asks MODEL_VISION what each picture shows, puts its words
+# in the picture's place, and lets the model the route actually picked answer
+# the question it was asked.
+VISION_ADAPTER_MODE_NAMES: frozenset[str] = frozenset({"route", "describe"})
+VISION_ADAPTER_MODE_DEFAULT = "route"
+
 # Nous Portal rejects an API-key request that carries no `tags` array with a
 # `user=` entry: HTTP 400 "This request is not valid. Check the model name and
 # other parameters. Additional info: missing tags". OAuth callers are identified

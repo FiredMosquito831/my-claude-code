@@ -11,7 +11,7 @@ import sqlite3
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Sequence
 from compression import zstd
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -362,6 +362,15 @@ _ROLLUP_DIMENSIONS = (
     "harness",
 )
 
+# Columns added to ``image_blobs`` after it shipped. Same rule as the request
+# and attempt lists above: ``CREATE TABLE IF NOT EXISTS`` never revises an
+# existing table, so each one needs its own guarded ``ALTER TABLE``.
+_IMAGE_BLOB_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("description", "ALTER TABLE image_blobs ADD COLUMN description TEXT"),
+    ("described_by", "ALTER TABLE image_blobs ADD COLUMN described_by TEXT"),
+    ("described_at", "ALTER TABLE image_blobs ADD COLUMN described_at REAL"),
+)
+
 # NULL is stored as the empty string, not as a sentinel word, so the reverse
 # mapping is one ``CASE WHEN x <> ''`` and no sentinel can collide with a real
 # value. Measured on the real log: no empty-string provider, model, key or
@@ -421,6 +430,11 @@ _ROLLUP_COUNTERS: tuple[tuple[str, str, str], ...] = (
         "vision_unavailable",
         "INTEGER",
         "SUM(CASE WHEN route_diversion = 'vision_unavailable' THEN 1 ELSE 0 END)",
+    ),
+    (
+        "vision_described",
+        "INTEGER",
+        "SUM(CASE WHEN route_diversion = 'vision_described' THEN 1 ELSE 0 END)",
     ),
     (
         "with_images",
@@ -659,7 +673,15 @@ CREATE TABLE IF NOT EXISTS image_blobs (
     width INTEGER,
     height INTEGER,
     thumbnail_media_type TEXT,
-    thumbnail BLOB
+    thumbnail BLOB,
+    -- What a sighted model said this picture shows, when the vision adapter
+    -- ran in ``describe`` mode. It belongs on the picture rather than on the
+    -- request because the picture is what it describes: Claude Code re-sends
+    -- the same screenshot on every turn, and one description then serves all
+    -- of them. NULL means nobody has described it, which is the common case.
+    description TEXT,
+    described_by TEXT,
+    described_at REAL
 );
 CREATE TABLE IF NOT EXISTS request_images (
     request_id TEXT NOT NULL,
@@ -1237,6 +1259,22 @@ def install_recovery_trace() -> RecoveryTrace:
     return slot
 
 
+@contextlib.contextmanager
+def paused_recovery_trace() -> Iterator[None]:
+    """Stop counting stream recovery for the duration of a nested call.
+
+    A describe call is a request MCC issues on its own behalf. Its retries are
+    real and are recorded on its own attempt row; adding them to the parent's
+    counters would say the client's answer was rescued when it was never in
+    trouble.
+    """
+    token = _RECOVERY_TRACE.set(None)
+    try:
+        yield
+    finally:
+        _RECOVERY_TRACE.reset(token)
+
+
 def record_recovery_event(kind: str) -> None:
     """Record one recovery action for the tracked request, if any.
 
@@ -1577,6 +1615,8 @@ class RequestLogStore:
                 self._ensure_added_columns(conn)
                 self._ensure_input_sha_column(conn)
                 self._ensure_attempt_columns(conn)
+                self._ensure_image_blob_columns(conn)
+                self._ensure_rollup_counter_columns(conn)
                 # After the ALTERs: the index does not reference the new
                 # columns, but the table must exist before it is created.
                 self._ensure_attempt_index(conn)
@@ -2171,6 +2211,58 @@ class RequestLogStore:
                     raise
 
     @staticmethod
+    def _ensure_image_blob_columns(conn: sqlite3.Connection) -> None:
+        """Add the description columns to a picture table created before them.
+
+        A row written before 6.51.0 keeps ``description`` NULL, which reads as
+        "nobody has described this picture" -- the same thing a fresh row says,
+        and exactly what the describe cache should conclude.
+        """
+        for column, ddl in _IMAGE_BLOB_ADDED_COLUMNS:
+            columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(image_blobs)")
+            }
+            if column in columns:
+                continue
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                columns = {
+                    str(row[1])
+                    for row in conn.execute("PRAGMA table_info(image_blobs)")
+                }
+                if column not in columns:
+                    raise
+
+    @staticmethod
+    def _ensure_rollup_counter_columns(conn: sqlite3.Connection) -> None:
+        """Add a rollup counter declared after the table shipped.
+
+        A new *dimension* cannot be added this way -- it would fold two
+        different buckets into one, which is why
+        ``_drop_superseded_rollup_tables`` rebuilds instead. A counter is
+        additive and independent, so an ``ALTER`` with ``DEFAULT 0`` is
+        correct: hours rolled up before the counter existed report zero for
+        it, which is the truth, because the thing it counts had not shipped.
+        """
+        existing = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(request_stats_rollup)")
+        }
+        # An empty result is a database whose rollup table was just created by
+        # the schema script above, with every declared column already on it.
+        if not existing:
+            return
+        for name, ddl, _sql in _ROLLUP_COUNTERS:
+            if name in existing:
+                continue
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.execute(
+                    "ALTER TABLE request_stats_rollup ADD COLUMN"
+                    f" {name} {ddl} NOT NULL DEFAULT 0"
+                )
+
+    @staticmethod
     def _relax_bodies_sha_constraint(conn: sqlite3.Connection) -> None:
         """Allow a request to have a prompt but no reply blob.
 
@@ -2578,6 +2670,7 @@ class RequestLogStore:
             "route_reported": int(record.route_attempt is not None),
             "diverted": int(record.route_diverted_from is not None),
             "vision_unavailable": int(record.route_diversion == "vision_unavailable"),
+            "vision_described": int(record.route_diversion == "vision_described"),
             "with_images": int((record.input_image_count or 0) > 0),
             "duration_sum": duration if duration is not None else 0.0,
             "duration_count": int(duration is not None),
@@ -2789,10 +2882,25 @@ class RequestLogStore:
                 links.append((record.id, position, image.sha256))
         if not links:
             return
+        # Not ``INSERT OR IGNORE``: describe mode writes a row for a picture
+        # the moment it has a description, which is before the request that
+        # carried it is flushed. Ignoring the conflict would then leave that
+        # picture without its thumbnail forever. ``COALESCE`` fills only what
+        # is still missing, so a complete row is never overwritten and the
+        # dedup that makes one screenshot cost one row is unchanged.
         conn.executemany(
-            "INSERT OR IGNORE INTO image_blobs (sha, kind, media_type,"
+            "INSERT INTO image_blobs (sha, kind, media_type,"
             " source_bytes, width, height, thumbnail_media_type, thumbnail)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(sha) DO UPDATE SET"
+            " media_type = COALESCE(image_blobs.media_type, excluded.media_type),"
+            " source_bytes = COALESCE(image_blobs.source_bytes,"
+            " excluded.source_bytes),"
+            " width = COALESCE(image_blobs.width, excluded.width),"
+            " height = COALESCE(image_blobs.height, excluded.height),"
+            " thumbnail_media_type = COALESCE(image_blobs.thumbnail_media_type,"
+            " excluded.thumbnail_media_type),"
+            " thumbnail = COALESCE(image_blobs.thumbnail, excluded.thumbnail)",
             list(blobs.values()),
         )
         conn.executemany(
@@ -2958,7 +3066,8 @@ class RequestLogStore:
         """Return one request's images in the order they appeared."""
         rows = conn.execute(
             "SELECT i.sha, i.kind, i.media_type, i.source_bytes, i.width,"
-            " i.height, i.thumbnail_media_type, i.thumbnail"
+            " i.height, i.thumbnail_media_type, i.thumbnail, i.description,"
+            " i.described_by, i.described_at"
             " FROM request_images AS r JOIN image_blobs AS i ON i.sha = r.sha"
             " WHERE r.request_id = ? ORDER BY r.position",
             (request_id,),
@@ -2982,6 +3091,12 @@ class RequestLogStore:
                         if isinstance(thumbnail, bytes | bytearray)
                         else None
                     ),
+                    # What describe mode replaced this picture with, if it ran.
+                    # NULL on every picture that was sent as a picture, which
+                    # is what lets the request detail say which happened.
+                    "description": row["description"],
+                    "described_by": row["described_by"],
+                    "described_at": row["described_at"],
                 }
             )
         return images
@@ -3745,6 +3860,8 @@ class RequestLogStore:
                            AS diverted,
                        SUM(CASE WHEN route_diversion = 'vision_unavailable'
                            THEN 1 ELSE 0 END) AS vision_unavailable,
+                       SUM(CASE WHEN route_diversion = 'vision_described'
+                           THEN 1 ELSE 0 END) AS vision_described,
                        SUM(CASE WHEN input_image_count > 0 THEN 1 ELSE 0 END)
                            AS with_images,
                        AVG(duration_ms) AS avg_duration_ms,
@@ -3906,6 +4023,10 @@ class RequestLogStore:
             # apart from ``diverted``: one is the safety net working, the
             # other is the safety net having nowhere to put the request.
             "vision_unavailable": totals["vision_unavailable"] or 0,
+            # An image was replaced by a description a second model wrote and
+            # the route's own model answered as usual. Counted apart from
+            # ``diverted``: nothing moved, the picture became words.
+            "vision_described": totals["vision_described"] or 0,
             "avg_duration_ms": _rounded(totals["avg_duration_ms"]),
             "p50_duration_ms": _rounded(percentiles[0.50]),
             "p95_duration_ms": _rounded(percentiles[0.95]),
@@ -4175,6 +4296,7 @@ class RequestLogStore:
             },
             "with_images": int(counters["with_images"]),
             "vision_unavailable": int(counters["vision_unavailable"]),
+            "vision_described": int(counters["vision_described"]),
             "avg_duration_ms": _rounded(
                 _mean(counters["duration_sum"], counters["duration_count"])
             ),
@@ -4778,6 +4900,109 @@ class RequestLogStore:
             conn.execute("DELETE FROM image_blobs")
             conn.execute("DELETE FROM request_attempts")
             return cursor.rowcount
+
+    # ------------------------------------------------- image descriptions ---
+
+    def image_descriptions(
+        self, shas: Sequence[str]
+    ) -> dict[str, tuple[str, str | None]]:
+        """Return the stored description of each picture that has one.
+
+        Keyed on the content address of the *source* bytes, which is already
+        this table's primary key, so a screenshot re-sent on every turn of a
+        conversation is looked up -- and paid for -- once. A picture with no
+        description is simply absent from the result; there is no sentinel,
+        because "not described" and "described as nothing" would then be the
+        same value.
+        """
+        wanted = [sha for sha in dict.fromkeys(shas) if sha]
+        if not wanted:
+            return {}
+        found: dict[str, tuple[str, str | None]] = {}
+        try:
+            with self._connection() as conn:
+                # Chunked because SQLite caps a statement at 999 variables by
+                # default and a long conversation can carry more images than
+                # that.
+                for start in range(0, len(wanted), 500):
+                    chunk = wanted[start : start + 500]
+                    placeholders = ", ".join("?" * len(chunk))
+                    rows = conn.execute(
+                        "SELECT sha, description, described_by FROM image_blobs"
+                        f" WHERE sha IN ({placeholders})"
+                        " AND description IS NOT NULL",
+                        chunk,
+                    ).fetchall()
+                    for row in rows:
+                        found[str(row["sha"])] = (
+                            str(row["description"]),
+                            row["described_by"],
+                        )
+        except sqlite3.Error as exc:
+            # A cache miss is always survivable: the caller describes the
+            # picture again. A request must never fail because the log did.
+            logger.warning("Image description lookup failed: {}", exc)
+            return {}
+        return found
+
+    def store_image_description(
+        self,
+        *,
+        sha: str,
+        kind: str,
+        media_type: str | None,
+        source_bytes: int | None,
+        description: str,
+        described_by: str,
+    ) -> None:
+        """Remember what a sighted model said one picture shows.
+
+        Written while the request that carried the picture is still in flight,
+        so the row may not exist yet -- hence the upsert, and hence
+        ``_store_images`` filling only the columns that are still NULL when the
+        request is finally flushed. The two meet on the same row from either
+        direction and neither erases the other's work.
+        """
+        if not sha or not description:
+            return
+        try:
+            with self._connection() as conn:
+                conn.execute(
+                    "INSERT INTO image_blobs (sha, kind, media_type,"
+                    " source_bytes, description, described_by, described_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT(sha) DO UPDATE SET"
+                    " description = excluded.description,"
+                    " described_by = excluded.described_by,"
+                    " described_at = excluded.described_at",
+                    (
+                        sha,
+                        kind or "image",
+                        media_type,
+                        source_bytes,
+                        description,
+                        described_by,
+                        time.time(),
+                    ),
+                )
+        except sqlite3.Error as exc:
+            logger.warning("Image description store failed: {}", exc)
+
+    def clear_image_descriptions(self) -> int:
+        """Forget every stored description, keeping the pictures themselves.
+
+        The cache key is the picture's own content, so nothing about a
+        description ever goes stale on its own. This exists for the other
+        reason an operator wants it gone: a better vision model was configured,
+        or a bad one wrote nonsense into the log. Returns how many pictures
+        lost a description.
+        """
+        with self._connection() as conn:
+            cursor = conn.execute(
+                "UPDATE image_blobs SET description = NULL, described_by = NULL,"
+                " described_at = NULL WHERE description IS NOT NULL"
+            )
+            return int(cursor.rowcount or 0)
 
     def lifetime(self) -> dict[str, Any]:
         """Return all-time counters, unaffected by retention.

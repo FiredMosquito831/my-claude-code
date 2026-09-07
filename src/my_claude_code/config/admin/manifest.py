@@ -354,6 +354,32 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="model_vision_fallbacks",
     ),
     ConfigFieldSpec(
+        "VISION_ADAPTER_MODE",
+        "Vision Adapter Mode",
+        "models",
+        "select",
+        settings_attr="vision_adapter_mode",
+        default="route",
+        options=(
+            ConfigOptionSpec("route", "Send the request to the vision model"),
+            ConfigOptionSpec("describe", "Describe the image, keep the model"),
+        ),
+        description=(
+            "What the adapter does when a request carries an image and the "
+            "model its tier picked is published as unable to read one. Route "
+            "hands the whole request to the vision model, so the vision model "
+            "answers -- that is what every release before 6.51.0 did, and it "
+            "is still the default. Describe asks the vision model what each "
+            "picture shows, puts its answer in the picture's place, and lets "
+            "the model the tier actually picked answer the question. Pick "
+            "describe when your coding model is fast, cheap and blind and the "
+            "screenshot is context rather than the question; pick route when "
+            "the picture is the question. Descriptions are cached against the "
+            "image itself, so a screenshot re-sent every turn is described "
+            "once."
+        ),
+    ),
+    ConfigFieldSpec(
         "TOOL_RESULT_IMAGE_DELIVERY",
         "Tool-Returned Images",
         "models",

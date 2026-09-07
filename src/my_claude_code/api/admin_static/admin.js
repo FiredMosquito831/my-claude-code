@@ -1812,10 +1812,11 @@ function renderRouteCard(tier, fieldByKey) {
  * model is documented not to read images silently sends them somewhere else,
  * and that was invisible until it showed up in the request log.
  */
-function buildVisionHop(tierModel, visionModel) {
+function buildVisionHop(tierModel, visionModel, mode) {
   const hop = document.createElement("p");
   hop.className = `route-vision-hop${visionModel ? "" : " is-unset"}`;
 
+  const describe = mode === "describe";
   const label = document.createElement("span");
   label.className = "route-vision-hop-label";
   label.textContent = "Images";
@@ -1824,7 +1825,9 @@ function buildVisionHop(tierModel, visionModel) {
   const arrow = document.createElement("span");
   arrow.className = "route-vision-hop-arrow";
   arrow.setAttribute("aria-hidden", "true");
-  arrow.textContent = "→";
+  // In describe mode the picture makes a round trip and comes back as words,
+  // so a one-way arrow would say the wrong thing about where the request goes.
+  arrow.textContent = describe && visionModel ? "⇄" : "→";
   hop.appendChild(arrow);
 
   const target = document.createElement("code");
@@ -1833,9 +1836,15 @@ function buildVisionHop(tierModel, visionModel) {
 
   const why = document.createElement("span");
   why.className = "route-vision-hop-why";
-  why.textContent = visionModel
-    ? `${tierModel} cannot read them`
-    : `${tierModel} cannot read them, so they will fail here`;
+  if (!visionModel) {
+    why.textContent = `${tierModel} cannot read them, so they will fail here`;
+  } else if (describe) {
+    why.textContent =
+      `${tierModel} cannot read them, so they go there as pictures and come ` +
+      `back as words — ${tierModel} still answers`;
+  } else {
+    why.textContent = `${tierModel} cannot read them`;
+  }
   hop.appendChild(why);
   return hop;
 }
@@ -1854,10 +1863,20 @@ function routedModelValue(key) {
  * the first paint has no idea which tiers need the adapter. Updating in place
  * rather than re-rendering keeps unsaved edits in the fields untouched.
  */
+function visionAdapterMode() {
+  const raw = String(
+    (state.fields.get("VISION_ADAPTER_MODE") || {}).value || "",
+  )
+    .trim()
+    .toLowerCase();
+  return raw === "describe" ? "describe" : "route";
+}
+
 function updateVisionRouting() {
   const visionModel = String(
     (state.fields.get("MODEL_VISION") || {}).value || "",
   ).trim();
+  const mode = visionAdapterMode();
   const covered = [];
   ROUTE_TIERS.forEach((tier) => {
     const card = document.querySelector(`.route-card[data-tier="${tier.id}"]`);
@@ -1867,15 +1886,19 @@ function updateVisionRouting() {
     const tierModel = routedModelValue(tier.modelKey);
     if (!tierModel || !state.blindModels.has(tierModel)) return;
     covered.push(tier.label);
-    card.appendChild(buildVisionHop(tierModel, visionModel));
+    card.appendChild(buildVisionHop(tierModel, visionModel, mode));
   });
 
   const summary = document.querySelector(".route-vision-summary");
   if (!summary) return;
   summary.classList.toggle("is-idle", covered.length === 0);
+  const what =
+    mode === "describe"
+      ? "those tiers picked a model that cannot read images, so their images " +
+        "are described and the tier's own model still answers."
+      : "those tiers picked a model that cannot read images.";
   summary.textContent = covered.length
-    ? `Currently covers ${covered.join(", ")} — those tiers picked a model ` +
-      "that cannot read images."
+    ? `Currently covers ${covered.join(", ")} — ${what}`
     : "No tier needs it right now: no tier's model is known to reject images.";
 }
 
@@ -1954,6 +1977,47 @@ function renderBenchMasterSwitch(field) {
   return card;
 }
 
+/** The adapter's mode, rendered where the adapter is read.
+ *
+ * The same control the leftovers grid would have drawn, moved into the card
+ * and wired to the same `syncSharedControls` + `updateDirtyState` pair every
+ * other field uses, plus a re-draw of the hops: switching the mode changes
+ * what the arrows above it mean, and a page that keeps saying the old thing
+ * until reload is a page that lies.
+ */
+function renderVisionModeControl(field) {
+  const control = document.createElement("label");
+  control.className = "field route-vision-mode";
+  const labelText = document.createElement("span");
+  labelText.textContent = field.label;
+  const input = inputForField(field);
+  input.id = `field-${field.key}`;
+  input.dataset.key = field.key;
+  input.dataset.original = field.value || "";
+  input.dataset.default = field.default ?? "";
+  input.dataset.secret = "false";
+  input.dataset.configured = field.configured ? "true" : "false";
+  input.dataset.fieldType = field.type;
+  input.disabled = field.locked;
+  const onEdit = () => {
+    syncSharedControls(input);
+    const stored = state.fields.get(field.key);
+    if (stored) stored.value = input.value;
+    updateVisionRouting();
+    updateDirtyState();
+  };
+  input.addEventListener("input", onEdit);
+  input.addEventListener("change", onEdit);
+  control.append(labelText, input);
+  const note = document.createElement("p");
+  note.className = "route-note";
+  note.textContent = field.description || "";
+  const wrap = document.createElement("div");
+  wrap.className = "route-vision-mode-wrap";
+  wrap.append(control, note);
+  return wrap;
+}
+
 function renderModelRouting(fields, allFields) {
   const fieldByKey = new Map(fields.map((field) => [field.key, field]));
   const wrap = document.createElement("div");
@@ -2015,6 +2079,12 @@ function renderModelRouting(fields, allFields) {
     appendRouteRail(rail, visionField, fieldByKey.get("MODEL_VISION_FALLBACKS"));
     vision.appendChild(rail);
 
+    // Directly under the rail, because the rail says WHERE images go and this
+    // says WHAT HAPPENS when they get there. Read apart, either one is half an
+    // answer.
+    const modeField = fieldByKey.get("VISION_ADAPTER_MODE");
+    if (modeField) vision.appendChild(renderVisionModeControl(modeField));
+
     // Which tiers this actually covers today. "It fires when a model cannot
     // read images" is a rule; this is the answer for *your* configuration,
     // which is the thing you came to the page to find out. The text is filled
@@ -2029,6 +2099,9 @@ function renderModelRouting(fields, allFields) {
   const claimed = new Set([
     "MODEL_VISION",
     "MODEL_VISION_FALLBACKS",
+    // Rendered inside the vision card above; leaving it unclaimed would draw
+    // it a second time in the leftovers grid.
+    "VISION_ADAPTER_MODE",
     ...ROUTE_TIERS.flatMap((tier) => [tier.modelKey, tier.chainKey]),
     // The pause lists are written by the Pause button beside the ref they
     // name, never typed. Leaving them unclaimed would render six bare text
@@ -10072,6 +10145,7 @@ function formatRouteAttempt(row) {
 const ROUTE_DIVERSION_LABELS = {
   vision: "Vision adapter",
   vision_unavailable: "No vision route",
+  vision_described: "Vision adapter (described)",
 };
 
 /** True when an image arrived and nothing on the route could read it. */
@@ -10262,6 +10336,9 @@ function renderRequestStatsCards(stats) {
       "Image, no vision route",
       formatAnalyticsNumber(stats.vision_unavailable || 0),
     ],
+    // The picture became text and the route's own model answered. Not a
+    // diversion: nothing moved.
+    ["Image described", formatAnalyticsNumber(stats.vision_described || 0)],
     ["Cancelled", stats.cancelled],
     ["Total input", formatAnalyticsNumber(totalInputTokens(stats))],
     ["Input (uncached)", formatAnalyticsNumber(uncachedInputTokens(stats))],
@@ -11046,10 +11123,28 @@ function formatRequestReasoningEmitted(row) {
 /* The attempt whose verdict the request row describes: the one that answered,
    or the last one tried when none did. */
 function answeringAttempt(row) {
-  const attempts = row.route_attempts || [];
+  const attempts = chainAttempts(row);
   return (
     attempts.find((attempt) => attempt.outcome === "succeeded") ||
     attempts[attempts.length - 1]
+  );
+}
+
+/** True for a row written by a describe call rather than by the route itself.
+ *
+ * They share the request's attempt table because they are hops on this
+ * request, but they are not rungs of its chain: a describe call that answered
+ * did not answer the client, so anything asking "which model served this
+ * request" has to step over them.
+ */
+function isDescribeAttempt(attempt) {
+  return !!(attempt && attempt.params && attempt.params.kind === "describe");
+}
+
+/** The route's own attempts, in order, with the describe hops removed. */
+function chainAttempts(row) {
+  return (row.route_attempts || []).filter(
+    (attempt) => !isDescribeAttempt(attempt),
   );
 }
 
@@ -11412,13 +11507,15 @@ function renderRequestChain(row) {
   if (!container) return;
   container.innerHTML = "";
   const attempts = row.route_attempts || [];
+  const routeAttempts = chainAttempts(row);
   // One attempt that succeeded is just "the model answered" -- the route
   // summary above already says that, and repeating it as a timeline implies a
   // chain did something when it did not. One attempt that knocked fifteen
   // times is a different matter: the ladder is the only place that shows it,
   // so a single attempt with a ladder still gets the panel.
   if (
-    attempts.length < 2 &&
+    routeAttempts.length < 2 &&
+    attempts.length === routeAttempts.length &&
     !attempts.some(hasLadder) &&
     !attempts.some((attempt) => truncationOf(attempt)) &&
     !attempts.some((attempt) => continuationOf(attempt))
@@ -11466,6 +11563,13 @@ function renderRequestChain(row) {
     model.textContent = attempt.model_ref || "—";
     model.title = attempt.model_ref || "";
     head.appendChild(model);
+
+    if (isDescribeAttempt(attempt)) {
+      const kind = document.createElement("span");
+      kind.className = "req-chain-describe";
+      kind.textContent = "described an image";
+      head.appendChild(kind);
+    }
 
     if (attempt.duration_ms != null) {
       const took = document.createElement("span");
@@ -11562,7 +11666,9 @@ function renderWireRequest(row) {
   // body was captured read as "no request body was sent", which is the one
   // thing it never meant: a provider with no instrumented commit boundary
   // still sent a body, and this pane now says so instead of vanishing.
-  const attempts = row.route_attempts || [];
+  // Describe hops are left out: their body is a picture and a prompt MCC
+  // wrote, not the request this pane is about.
+  const attempts = chainAttempts(row);
   if (!attempts.length) {
     container.hidden = true;
     return;
@@ -11950,6 +12056,10 @@ function formatImageDelivery(delivery, count) {
       return `Sent to the model as ${count === 1 ? "an image" : "images"}.`;
     case "stripped":
       return `Omitted: this model does not accept images, so ${plural} replaced by a note saying so.`;
+    case "described":
+      return `Described by another model: ${
+        count === 1 ? "it was" : "they were"
+      } replaced by the text below, and the model this route picked answered.`;
     case "text":
       return "Sent as base64 text — this model saw characters, not a picture.";
     default:
@@ -11986,15 +12096,33 @@ function renderRequestImages(row) {
     note.textContent = delivery;
     container.appendChild(note);
   }
+  const described = describedShas(row);
   const grid = document.createElement("div");
   grid.className = "req-image-grid";
   images.forEach((image, index) => {
-    grid.appendChild(buildRequestImage(image, index));
+    grid.appendChild(buildRequestImage(image, index, described));
   });
   container.appendChild(grid);
 }
 
-function buildRequestImage(image, index) {
+/** Which of this request's pictures were described by a call it paid for.
+ *
+ * A cached description writes no attempt row and makes no upstream call, so
+ * the presence of a describe attempt for an image is exactly the difference
+ * between "this request paid for these words" and "they were already known".
+ * Reading it off the attempts rather than storing a second flag keeps one
+ * fact in one place.
+ */
+function describedShas(row) {
+  const shas = new Set();
+  (row.route_attempts || []).forEach((attempt) => {
+    const params = attempt.params || {};
+    if (params.kind === "describe" && params.image_sha) shas.add(params.image_sha);
+  });
+  return shas;
+}
+
+function buildRequestImage(image, index, describedShas) {
   const figure = document.createElement("figure");
   figure.className = "req-image";
   const source = requestImageSource(image);
@@ -12022,7 +12150,32 @@ function buildRequestImage(image, index) {
   if (image.source_bytes) parts.push(formatImageBytes(image.source_bytes));
   caption.textContent = parts.join(" · ") || image.kind || "image";
   figure.appendChild(caption);
+  const description = buildImageDescription(image, describedShas);
+  if (description) figure.appendChild(description);
   return figure;
+}
+
+/** What the model actually received in this picture's place.
+ *
+ * Collapsed, because a description is a paragraph and the grid is a grid; open
+ * it and you can read the sentence the coding model read. It is the only way
+ * to judge whether describe mode is worth what it costs, which is why it is
+ * here rather than only in the log file.
+ */
+function buildImageDescription(image, describedShas) {
+  if (!image.description) return null;
+  const details = document.createElement("details");
+  details.className = "req-image-description";
+  const summary = document.createElement("summary");
+  const fresh = describedShas && describedShas.has(image.sha256);
+  const by = image.described_by ? ` by ${image.described_by}` : "";
+  summary.textContent = `Described${by} · ${fresh ? "fresh" : "cached"}`;
+  details.appendChild(summary);
+  const body = document.createElement("p");
+  body.className = "req-image-description-text";
+  body.textContent = image.description;
+  details.appendChild(body);
+  return details;
 }
 
 function requestImageSource(image) {
@@ -12613,6 +12766,31 @@ byId("reqAutoRefreshInterval").addEventListener("change", () => {
 // Must match ``REQUEST_LOG_CLEAR_CONFIRMATION`` in api/admin_routes.py;
 // ``tests/contracts/test_config_dir_is_single_sourced.py`` pins the two.
 const REQUEST_LOG_CLEAR_CONFIRMATION = "delete-all-request-log-rows";
+// Must match ``IMAGE_DESCRIPTION_CLEAR_CONFIRMATION`` in api/admin_routes.py.
+const IMAGE_DESCRIPTION_CLEAR_CONFIRMATION = "clear-all-image-descriptions";
+
+byId("reqClearDescriptionsButton").addEventListener("click", () => {
+  if (
+    !window.confirm(
+      "Forget every cached image description? The pictures and the requests " +
+        "stay; the next request carrying one of them pays for a fresh " +
+        "description.",
+    )
+  ) {
+    return;
+  }
+  api(
+    `/admin/api/requests/image-descriptions?confirm=${IMAGE_DESCRIPTION_CLEAR_CONFIRMATION}`,
+    { method: "DELETE" },
+  )
+    .then((result) =>
+      showMessage(
+        `Cleared ${result.cleared} cached image description(s).`,
+        "success",
+      ),
+    )
+    .catch((error) => showMessage(error.message, "error"));
+});
 
 byId("reqExportButton").addEventListener("click", openExportModal);
 byId("reqClearButton").addEventListener("click", () => {

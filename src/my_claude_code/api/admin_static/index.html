@@ -891,6 +891,7 @@
               <button id="reqClearFilters" class="secondary-button" type="button">Clear filters</button>
               <button id="reqExportButton" class="secondary-button" type="button">Export</button>
               <span id="reqBodiesIndicator" class="requests-indicator"></span>
+              <button id="reqClearDescriptionsButton" class="secondary-button danger" type="button">Clear image descriptions</button>
               <button id="reqClearButton" class="secondary-button danger" type="button">Clear log</button>
             </div>
             <div id="reqStatsCards" class="requests-cards"></div>
@@ -1787,11 +1788,12 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   fallback each map to a real model on your provider. That is what lets an
                   unmodified agent run on any backend. Each rail heading also carries the
                   id every <em>other</em> coding agent asks for to reach it &mdash;
-                  Default <code>(mcc/best)</code>, Opus <code>(mcc/good)</code>, Sonnet
+                  Fable <code>(mcc/best)</code>, Opus <code>(mcc/good)</code>, Sonnet
                   <code>(mcc/medium)</code>, Haiku <code>(mcc/cheap)</code> and the Vision
-                  adapter <code>(mcc/vision)</code>. The Fable rail carries none, because
-                  it is a Claude alias rather than a tier: <code>mcc/best</code> follows
-                  <code>MODEL</code>, which is the Default rail.
+                  adapter <code>(mcc/vision)</code>. The Default rail carries none, because
+                  it is not a tier: it is the route every <em>unset</em> rail falls back
+                  to, including Fable's. Before 6.51.0 <code>mcc/best</code> named the
+                  Default rail; if you never filled Fable in, it still lands there.
                 </p>
                 <img class="guide-shot" src="/admin/img/admin-model-config.png"
                      alt="Model Config: tier mapping, fallback chains and reasoning controls"
@@ -1814,7 +1816,7 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   a model id typed into its config a month ago is still that id today
                   however many times you moved the route it should have followed. Five
                   names now sit at the top of every generated picker &mdash;
-                  <code>mcc/best</code> (<code>MODEL</code>), <code>mcc/good</code>
+                  <code>mcc/best</code> (Fable), <code>mcc/good</code>
                   (Opus), <code>mcc/medium</code> (Sonnet), <code>mcc/cheap</code>
                   (Haiku) and <code>mcc/vision</code> &mdash; each carrying that route's
                   own fallback chain and pause list. An unset tier follows
@@ -1976,6 +1978,24 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   gets its own <em>Add fallback</em> chain like any other route.
                 </p>
                 <p>
+                  <strong>Or the image can be described instead of rerouted.</strong>
+                  <em>Vision adapter mode</em>, in the same card, chooses.
+                  <em>Route</em> &mdash; the default, and what every release before
+                  6.51.0 did &mdash; sends the whole request to the vision model, so the
+                  vision model answers it. <em>Describe</em> sends each image to the
+                  vision model on its own, puts its answer in the picture&rsquo;s place,
+                  and lets the model your tier actually picked answer the question.
+                  Pick <em>describe</em> when your coding model is fast, cheap and blind
+                  and the screenshot is context rather than the question &mdash; in
+                  route mode the vision model has to answer a coding question it has no
+                  context for. Pick <em>route</em> when the picture <em>is</em> the
+                  question. Descriptions are cached against the image itself, so a
+                  screenshot re-sent every turn is described once; <em>Clear image
+                  descriptions</em> on <strong>Requests</strong> forgets them. If a
+                  describe call fails, the request falls back to route mode and then to
+                  a plain sentence &mdash; it is never the reason you lose an answer.
+                </p>
+                <p>
                   <strong>An image a tool returned now arrives as an image.</strong> A
                   browser screenshot, or a <code>Read</code> of a PNG, comes back nested
                   inside the tool result &mdash; and no OpenAI-format chat message can carry
@@ -2009,7 +2029,7 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                     <tr><th>Alias</th><th>Points at</th></tr>
                   </thead>
                   <tbody>
-                    <tr><td><code>mcc/best</code></td><td><code>MODEL</code> &mdash; the route MCC itself starts on</td></tr>
+                    <tr><td><code>mcc/best</code></td><td><code>MODEL_FABLE</code> &mdash; the Fable route, the strongest rung</td></tr>
                     <tr><td><code>mcc/good</code></td><td><code>MODEL_OPUS</code></td></tr>
                     <tr><td><code>mcc/medium</code></td><td><code>MODEL_SONNET</code></td></tr>
                     <tr><td><code>mcc/cheap</code></td><td><code>MODEL_HAIKU</code></td></tr>
@@ -2026,7 +2046,7 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                 <p class="guide-note">
                   <strong>An unset tier collapses onto <code>MODEL</code>.</strong> If you
                   have not mapped Opus, then <code>mcc/good</code> resolves to the same
-                  place <code>mcc/best</code> does &mdash; exactly as
+                  place an unmapped <code>mcc/best</code> does &mdash; exactly as
                   <code>claude-opus-5</code> already does today. Four agents asking for
                   four different tiers can therefore all land on one model, and nothing is
                   wrong. The dashboard says so rather than hiding it: MCC choosing a

@@ -753,3 +753,73 @@ def test_harness_usage_is_not_shadowed_by_the_request_id_route(
     assert "counts" in response.json()
     # The path-parameter route still works for a real id.
     assert client.get("/admin/api/requests/h0").json()["harness"] == "claude"
+
+
+#: Mirrors ``IMAGE_DESCRIPTION_CLEAR_CONFIRMATION`` in api/admin_routes.py.
+DESCRIPTIONS_CONFIRMED = "?confirm=clear-all-image-descriptions"
+
+
+@pytest.fixture
+def described_store(tmp_path):
+    store = get_request_log_store(tmp_path / "requests.db")
+    assert store is not None
+    store.store_image_description(
+        sha="sha_a",
+        kind="image",
+        media_type="image/png",
+        source_bytes=100,
+        description="a failing test in a terminal",
+        described_by="groq/eyes",
+    )
+    store.store_image_description(
+        sha="sha_b",
+        kind="image",
+        media_type="image/png",
+        source_bytes=200,
+        description="a login form",
+        described_by="groq/eyes",
+    )
+    yield store
+
+
+def test_clear_image_descriptions(client, described_store) -> None:
+    """The pictures stay; only what a vision model said about them goes."""
+    response = client.request(
+        "DELETE",
+        f"/admin/api/requests/image-descriptions{DESCRIPTIONS_CONFIRMED}",
+        headers=BROWSER_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["cleared"] == 2
+    assert described_store.image_descriptions(["sha_a", "sha_b"]) == {}
+
+
+def test_clear_image_descriptions_refuses_without_the_confirmation(
+    client, described_store
+) -> None:
+    response = client.request(
+        "DELETE", "/admin/api/requests/image-descriptions", headers=BROWSER_HEADERS
+    )
+
+    assert response.status_code == 400
+    assert "confirm=" in response.json()["detail"]
+    assert len(described_store.image_descriptions(["sha_a", "sha_b"])) == 2
+
+
+def test_clear_image_descriptions_refuses_a_bare_curl(client, described_store) -> None:
+    """No ``Origin`` header, so it is not a browser and not the dashboard."""
+    response = client.request(
+        "DELETE", f"/admin/api/requests/image-descriptions{DESCRIPTIONS_CONFIRMED}"
+    )
+
+    assert response.status_code == 403
+    assert len(described_store.image_descriptions(["sha_a", "sha_b"])) == 2
+
+
+def test_clear_image_descriptions_is_not_swallowed_by_the_detail_route(
+    client, described_store
+) -> None:
+    """FastAPI matches in declaration order; this path must not read as an id."""
+    response = client.get("/admin/api/requests/image-descriptions")
+    assert response.status_code == 404

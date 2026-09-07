@@ -727,6 +727,19 @@ following `user` message, OpenAI Responses keeps it inside
 `function_call_output`, and the Anthropic-native path never reaches the
 converter at all.
 
+`VISION_ADAPTER_MODE=describe` adds a third disposal: the image is replaced by
+a description a sighted model wrote. `application/vision_describe.py` builds
+one ordinary `RoutedMessagesPlan` per image over the vision chain and hands it
+to the same `ProviderExecutor` the client's own request uses, so a describe
+call inherits the health registry, the pause list, credential rotation and the
+retry policy rather than reimplementing any of them -- and MCC's first
+self-initiated upstream call is, structurally, not a new kind of call at all.
+The description is cached on `image_blobs` under the content address the
+thumbnail already uses, so a screenshot re-sent every turn is described once.
+Every failure returns "describe mode did not happen", and the handler then
+does what it would have done without the module: divert, or send the
+placeholder.
+
 Ownership is split across three modules because three layers need the same
 answer and none of them may own it alone:
 

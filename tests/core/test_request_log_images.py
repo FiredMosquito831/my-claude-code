@@ -226,3 +226,162 @@ def test_an_image_with_no_vision_route_is_counted_apart_from_a_diversion(
         assert reader.lifetime()["diverted"] == 1
     finally:
         reader.close()
+
+
+def test_a_description_is_stored_on_the_picture_and_read_back(tmp_path: Path):
+    """The cache the vision adapter's describe mode reads before it spends."""
+    store = RequestLogStore(tmp_path / "requests.db")
+    store.store_image_description(
+        sha="sha_described",
+        kind="image",
+        media_type="image/png",
+        source_bytes=1234,
+        description="a terminal showing a failing test",
+        described_by="groq/eyes",
+    )
+
+    found = store.image_descriptions(["sha_described", "sha_unknown"])
+    assert found == {
+        "sha_described": ("a terminal showing a failing test", "groq/eyes")
+    }
+    store.close()
+
+
+def test_a_description_written_first_keeps_the_thumbnail_written_after(
+    tmp_path: Path,
+):
+    """Describe mode runs while the request is in flight; the row must merge.
+
+    ``INSERT OR IGNORE`` would have left this picture without a thumbnail
+    forever, because the description created its row before the request that
+    carried it was ever flushed.
+    """
+    store = RequestLogStore(tmp_path / "requests.db")
+    store.store_image_description(
+        sha="abc123",
+        kind="image",
+        media_type="image/png",
+        source_bytes=None,
+        description="what the picture shows",
+        described_by="groq/eyes",
+    )
+    store.enqueue(_record("r1", (_image(),)))
+    store.close()
+
+    store = RequestLogStore(tmp_path / "requests.db")
+    row = store.get_request("r1")
+    assert row is not None
+    image = row["input_images"][0]
+    assert image["description"] == "what the picture shows"
+    assert image["described_by"] == "groq/eyes"
+    assert image["thumbnail_base64"]
+    assert image["width"] == 1600
+    store.close()
+
+
+def test_clearing_the_descriptions_keeps_the_pictures(tmp_path: Path):
+    store = RequestLogStore(tmp_path / "requests.db")
+    store.enqueue(_record("r1", (_image(),)))
+    store.close()
+    store = RequestLogStore(tmp_path / "requests.db")
+    store.store_image_description(
+        sha="abc123",
+        kind="image",
+        media_type="image/png",
+        source_bytes=None,
+        description="gone soon",
+        described_by="groq/eyes",
+    )
+
+    assert store.clear_image_descriptions() == 1
+    assert store.image_descriptions(["abc123"]) == {}
+    row = store.get_request("r1")
+    assert row is not None
+    assert row["input_images"][0]["thumbnail_base64"]
+    # Idempotent: a second click clears nothing and says so.
+    assert store.clear_image_descriptions() == 0
+    store.close()
+
+
+def test_an_old_database_gains_the_description_columns(tmp_path: Path):
+    """A log written before 6.51.0 must open, not crash and not lose rows."""
+    import sqlite3
+
+    path = tmp_path / "requests.db"
+    store = RequestLogStore(path)
+    store.enqueue(_record("r1", (_image(),)))
+    store.close()
+
+    # Rewind the table to its pre-6.51.0 shape, the way an installed release
+    # would have left it: the columns simply are not there. Rebuilt rather
+    # than DROP COLUMNed so the stored DDL is the one 6.50.1 actually shipped.
+    with sqlite3.connect(path) as conn:
+        conn.execute("ALTER TABLE image_blobs RENAME TO image_blobs_new")
+        conn.execute(
+            "CREATE TABLE image_blobs (sha TEXT PRIMARY KEY, kind TEXT NOT NULL,"
+            " media_type TEXT, source_bytes INTEGER, width INTEGER,"
+            " height INTEGER, thumbnail_media_type TEXT, thumbnail BLOB)"
+        )
+        conn.execute(
+            "INSERT INTO image_blobs SELECT sha, kind, media_type, source_bytes,"
+            " width, height, thumbnail_media_type, thumbnail FROM image_blobs_new"
+        )
+        conn.execute("DROP TABLE image_blobs_new")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(image_blobs)")}
+    assert "description" not in columns
+
+    upgraded = RequestLogStore(path)
+    row = upgraded.get_request("r1")
+    assert row is not None
+    image = row["input_images"][0]
+    # NULL, which reads as "nobody has described this picture" -- the same
+    # thing a fresh row says, and what the cache should conclude.
+    assert image["description"] is None
+    assert image["thumbnail_base64"]
+    assert upgraded.image_descriptions(["abc123"]) == {}
+    upgraded.close()
+
+
+def test_an_old_rollup_gains_the_described_counter(tmp_path: Path):
+    """A counter added after the rollup shipped is an ALTER, not a rebuild."""
+    import sqlite3
+
+    path = tmp_path / "requests.db"
+    store = RequestLogStore(path)
+    store.enqueue(_record("r1", (_image(),)))
+    store.close()
+
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "ALTER TABLE request_stats_rollup RENAME TO request_stats_rollup_old"
+        )
+        columns = [
+            row[1]
+            for row in conn.execute("PRAGMA table_info(request_stats_rollup_old)")
+            if row[1] != "vision_described"
+        ]
+        conn.execute(
+            "CREATE TABLE request_stats_rollup ("
+            + ", ".join(f"{name} NUMERIC" for name in columns)
+            + ")"
+        )
+        conn.execute(
+            f"INSERT INTO request_stats_rollup SELECT {', '.join(columns)}"
+            " FROM request_stats_rollup_old"
+        )
+        conn.execute("DROP TABLE request_stats_rollup_old")
+        columns_now = {
+            row[1] for row in conn.execute("PRAGMA table_info(request_stats_rollup)")
+        }
+    assert "vision_described" not in columns_now
+
+    upgraded = RequestLogStore(path)
+    with sqlite3.connect(path) as conn:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(request_stats_rollup)")
+        }
+    assert "vision_described" in columns
+    # And the hours rolled up before it existed report zero rather than
+    # refusing to be read.
+    assert upgraded.stats()["vision_described"] == 0
+    upgraded.close()

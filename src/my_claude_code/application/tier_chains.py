@@ -91,6 +91,13 @@ def harness_tier_pause_label(harness: str | None, tier: ModelTier) -> str:
     return f"harness_tiers.json:{harness}.{tier.value}.paused"
 
 
+#: The pause list of the route every unset tier collapses onto. Spelled out
+#: rather than read off a tier's ``paused_env_var``: ``MODEL`` is not a tier --
+#: ``mcc/best`` names ``MODEL_FABLE`` -- so there is no tier this could be
+#: derived from without asserting something untrue about the ladder.
+DEFAULT_ROUTE_PAUSED_ENV_VAR = "MODEL_PAUSED"
+
+
 def global_tier_chain(settings: Settings, tier: ModelTier) -> TierChain:
     """Resolve one tier against the global routes alone."""
 
@@ -109,7 +116,7 @@ def global_tier_chain(settings: Settings, tier: ModelTier) -> TierChain:
         primary = settings.model.strip()
         fallbacks = parse_model_ref_list(settings.model_fallbacks)
         paused = parse_model_ref_list(settings.model_paused)
-        paused_label = GLOBAL_TIER_SETTINGS[ModelTier.BEST].paused_env_var
+        paused_label = DEFAULT_ROUTE_PAUSED_ENV_VAR
     return TierChain(
         tier=tier,
         harness=None,

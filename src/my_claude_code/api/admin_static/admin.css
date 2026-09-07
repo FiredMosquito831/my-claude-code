@@ -2806,6 +2806,37 @@ details.turn-pane > summary:focus-visible {
   color: var(--muted);
 }
 
+.req-chain-describe {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.req-image-description {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+}
+
+.req-image-description summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.req-image-description-text {
+  margin: 0.35rem 0 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.route-vision-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.route-vision-mode-wrap {
+  margin-top: 0.6rem;
+}
+
 .req-image-grid {
   display: flex;
   flex-wrap: wrap;
