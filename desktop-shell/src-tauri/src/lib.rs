@@ -27,7 +27,7 @@ pub mod update_progress;
 pub mod window_state;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -36,7 +36,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::webview::{PageLoadEvent, WebviewWindowBuilder};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WindowEvent, Wry};
 
-use crate::ladder::{Decision, Reconnect, Respawn};
+use crate::ladder::{Decision, Reconnect, Respawn, StartAttempt};
 use crate::status::Status;
 use crate::ui::Page;
 use crate::update_progress::Stage;
@@ -63,7 +63,45 @@ const RETRY_POLL: Duration = Duration::from_millis(200);
 /// pending state on load, so this is a smoothing delay, not a correctness one.
 const PAGE_SETTLE: Duration = Duration::from_millis(500);
 
+/// How many times MCC may be installed from this window before it stops
+/// trying and says why.
+///
+/// Not a budget from the status document, because there is no status document:
+/// this is the one state the shell is in when `mcc-desktop` cannot be run at
+/// all. Three, for the same reason a start gets three: the first one is the
+/// one that usually works, and a fourth would only be the third again.
+const INSTALL_ATTEMPTS: u32 = 3;
+
+/// How often the window re-checks for `mcc-desktop` after it has stopped
+/// installing. Each check runs a short-lived process, so this is not the
+/// 200ms Retry poll.
+const INSTALL_RECHECK: Duration = Duration::from_secs(5);
+
+/// Set to a non-empty value to launch a window that does not join the
+/// single-instance group.
+///
+/// Test-only, and it exists for exactly one reason: verifying a change to this
+/// shell means running a *second* shell on a machine where the developer's own
+/// is already open, and `tauri-plugin-single-instance` would otherwise hand
+/// the launch straight to that one -- so the build under test never runs and
+/// the proof is of the wrong binary. A launch with this set registers no
+/// handler and signals nothing, so the already-running window is not disturbed
+/// either. It is the same family of override as `MCC_SHELL_DESKTOP_COMMAND`
+/// and the window-state directory: nothing a normal launch reads.
+pub const SEPARATE_INSTANCE_ENV: &str = "MCC_SHELL_SEPARATE_INSTANCE";
+
+/// Whether this launch should stand apart from the single-instance group.
+pub fn separate_instance(raw: Option<&str>) -> bool {
+    raw.is_some_and(|value| !value.trim().is_empty())
+}
+
 static RETRY_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Installs run in this session that did not end with a runnable
+/// `mcc-desktop`. Reset by the first status read that works.
+static INSTALLS_RUN: AtomicU32 = AtomicU32::new(0);
+/// The installer's last word, kept so the page that gives up can quote it
+/// rather than showing a spinner over nothing.
+static LAST_INSTALL_LINE: Mutex<String> = Mutex::new(String::new());
 /// Whether closing the window hides it instead of ending the app. Read from
 /// the status document on every ladder pass; `false` until one has been read,
 /// so a window that has learned nothing yet still closes when told to.
@@ -206,6 +244,92 @@ fn wait_for_retry(app: &AppHandle) {
     }
 }
 
+/// Wait on the error page, and keep checking behind it.
+///
+/// The whole of the reported defect, in one function. Until 6.58.1 a start
+/// that ran out of budget called [`wait_for_retry`] -- an unbounded loop on a
+/// static page -- and `watch_health`, the entire self-healing reconnect
+/// machinery, was reachable only from the success branch. The user waited at
+/// that page while the server they were waiting for answered seven seconds
+/// later, and closing and reopening the app was literally the only recovery.
+///
+/// Now the page is the same page and the loop behind it is alive: it probes
+/// the health URL on the document's own cadence and returns the moment the
+/// server answers, so the ladder runs again and the dashboard loads with
+/// nothing asked of the user. Retry still returns immediately -- it is an
+/// accelerator now, not the only way out.
+///
+/// Returns true when the server answered.
+fn wait_for_retry_or_health(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    status: &Status,
+    health_url: &str,
+    message: &str,
+) -> bool {
+    RETRY_REQUESTED.store(false, Ordering::SeqCst);
+    let poll = Duration::from_secs_f64(status.health_poll_seconds.max(0.5));
+    let mut probed_at = Instant::now();
+    show_page(
+        window,
+        &Page::Error {
+            message: ladder::still_checking_text(message, 0.0),
+            server_log: Some(status.server_log.clone()),
+        },
+    );
+    loop {
+        if RETRY_REQUESTED.swap(false, Ordering::SeqCst) {
+            return false;
+        }
+        if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
+            return false;
+        }
+        if probed_at.elapsed() >= poll {
+            probed_at = Instant::now();
+            if health::is_healthy(health_url) {
+                return true;
+            }
+            // Repainted every probe, for the reason the reconnect banner is:
+            // a page that never changes is indistinguishable from a page
+            // behind a loop that has stopped.
+            show_page(
+                window,
+                &Page::Error {
+                    message: ladder::still_checking_text(message, 0.0),
+                    server_log: Some(status.server_log.clone()),
+                },
+            );
+        }
+        std::thread::sleep(RETRY_POLL);
+    }
+}
+
+/// The same idea one rung lower: MCC is not installed, the installer has had
+/// its attempts, and the window watches for `mcc-desktop` to become runnable
+/// instead of installing it again forever.
+fn wait_for_install_to_land(app: &AppHandle) {
+    RETRY_REQUESTED.store(false, Ordering::SeqCst);
+    let mut checked_at = Instant::now();
+    loop {
+        if RETRY_REQUESTED.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
+            return;
+        }
+        if checked_at.elapsed() >= INSTALL_RECHECK {
+            checked_at = Instant::now();
+            if !matches!(
+                process::print_status(),
+                Err(process::StatusRunError::NotInstalled)
+            ) {
+                return;
+            }
+        }
+        std::thread::sleep(RETRY_POLL);
+    }
+}
+
 // -- tray -------------------------------------------------------------------
 
 fn set_tray_status(text: &str) {
@@ -288,34 +412,54 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 // -- the ladder -------------------------------------------------------------
 
 /// Run the install script, streaming its output into the window.
-fn run_install(window: &WebviewWindow) {
+///
+/// Returns the installer's last meaningful line, which is what the page that
+/// gives up quotes. A first install is minutes long and the only thing the
+/// user has to go on is what the installer itself said.
+fn run_install(window: &WebviewWindow, attempt: u32) -> String {
     let command = install::install_command_for_this_machine();
     show_page(
         window,
         &Page::Installing {
             command: command.display.clone(),
+            message: format!(
+                "My Claude Code is not installed here yet, so this window is \
+                 installing it (attempt {attempt} of {INSTALL_ATTEMPTS}). This \
+                 takes a few minutes the first time."
+            ),
         },
     );
     set_tray_status("Installing My Claude Code...");
-    let outcome = process::run_install(&command, |line| append_output(window, line));
-    match outcome {
-        Ok(0) => append_output(window, "-- install finished, checking again --"),
-        Ok(code) => append_output(
-            window,
-            &format!("-- the installer exited with status {code} --"),
-        ),
-        Err(error) => append_output(window, &format!("-- {error} --")),
-    }
+    let mut last = String::new();
+    let outcome = process::run_install(&command, |line| {
+        append_output(window, line);
+        if !line.trim().is_empty() && !line.starts_with("-- still installing") {
+            last = line.to_owned();
+        }
+    });
+    let clean = matches!(outcome, Ok(0));
+    let ending = match outcome {
+        Ok(0) => "-- install finished, checking again --".to_owned(),
+        Ok(code) => format!("-- the installer exited with status {code} --"),
+        Err(error) => format!("-- {error} --"),
+    };
+    append_output(window, &ending);
+    // A clean install has nothing to complain about, so the useful last word
+    // is the installer's own; anything else is the failure itself.
+    if clean { last } else { ending }
 }
 
 /// Poll `/health` until the server answers, or until the documents own start
 /// budget runs out (C9).
-fn wait_for_start(window: &WebviewWindow, status: &Status, health_url: &str) -> bool {
+fn wait_for_start(window: &WebviewWindow, status: &Status, health_url: &str, attempt: u32) -> bool {
     let started = Instant::now();
     let interval = Duration::from_secs_f64(status.health_check_interval_seconds.max(0.05));
     loop {
         if health::is_healthy(health_url) {
             return true;
+        }
+        if QUITTING.load(Ordering::SeqCst) {
+            return false;
         }
         let elapsed = started.elapsed().as_secs_f64();
         if !ladder::start_may_continue(status, elapsed) {
@@ -324,11 +468,7 @@ fn wait_for_start(window: &WebviewWindow, status: &Status, health_url: &str) -> 
         show_page(
             window,
             &Page::Starting {
-                message: format!(
-                    "Starting the My Claude Code server... ({elapsed:.0}s of \
-                     {:.0}s)",
-                    status.start_timeout_seconds
-                ),
+                message: ladder::start_progress_text(status, elapsed, attempt),
             },
         );
         std::thread::sleep(interval);
@@ -370,9 +510,15 @@ fn restatus_during_reconnect(window: &WebviewWindow, episode: &mut Episode) -> b
     if ladder::respawn_verdict(&fresh, episode.respawned) != Respawn::Start {
         return false;
     }
-    episode.respawned = true;
     match process::spawn_server() {
         Ok(_) => {
+            // Only now. Setting it before the spawn -- which is what this did
+            // until 6.58.1 -- meant a spawn that *failed* burned the episode's
+            // one attempt for the whole reconnect budget, twenty-two minutes.
+            // And the commonest reason for a spawn to fail is the one where
+            // the retry matters most: an update helper has renamed
+            // mcc-server.exe aside and will put it back in a moment.
+            episode.respawned = true;
             set_tray_status("Server: starting");
             true
         }
@@ -572,8 +718,37 @@ fn ladder_pass(app: &AppHandle, window: &WebviewWindow) {
     let raw = match process::print_status() {
         Ok(raw) => raw,
         Err(process::StatusRunError::NotInstalled) => {
-            // Decision Q4: do not merely offer. Run it, show it, then loop.
-            run_install(window);
+            // Decision Q4: do not merely offer. Run it, show it, then loop --
+            // but a bounded number of times. The ladder thread loops, so an
+            // installer that succeeds without putting mcc-desktop on *this*
+            // process's PATH (the ordinary Windows first launch: PATH changes
+            // reach new processes only) used to mean installing MCC again
+            // every few minutes for as long as the window was open, under a
+            // spinner, with no way out but quitting. That is the first-launch
+            // hang, and it is the same shape as the start one: a wait with no
+            // end and no explanation.
+            let used = INSTALLS_RUN.load(Ordering::SeqCst);
+            if used >= INSTALL_ATTEMPTS {
+                set_tray_status("My Claude Code is not installed");
+                let last = LAST_INSTALL_LINE
+                    .lock()
+                    .map(|line| line.clone())
+                    .unwrap_or_default();
+                show_page(
+                    window,
+                    &Page::Error {
+                        message: install::install_did_not_take_message(used, &last),
+                        server_log: None,
+                    },
+                );
+                wait_for_install_to_land(app);
+                return;
+            }
+            INSTALLS_RUN.store(used.saturating_add(1), Ordering::SeqCst);
+            let last = run_install(window, used.saturating_add(1));
+            if let Ok(mut line) = LAST_INSTALL_LINE.lock() {
+                *line = last;
+            }
             return;
         }
         Err(process::StatusRunError::Failed { code, stderr }) => {
@@ -617,6 +792,10 @@ fn ladder_pass(app: &AppHandle, window: &WebviewWindow) {
         }
     };
 
+    // A status document that could be read is proof the install took, so the
+    // next time MCC goes missing the window gets its attempts again.
+    INSTALLS_RUN.store(0, Ordering::SeqCst);
+
     ensure_tray(app, &status);
     ensure_activation_watcher(app, &status);
     apply_status(window, &status);
@@ -632,39 +811,58 @@ fn ladder_pass(app: &AppHandle, window: &WebviewWindow) {
             admin_url,
             health_url,
         } => {
-            set_tray_status("Server: starting");
-            show_page(
-                window,
-                &Page::Starting {
-                    message: "Starting the My Claude Code server...".to_owned(),
-                },
-            );
-            if let Err(error) = process::spawn_server() {
-                show_page(
-                    window,
-                    &Page::Error {
-                        message: error,
-                        server_log: Some(status.server_log.clone()),
-                    },
-                );
-                wait_for_retry(app);
-                return;
+            // The document says how many attempts a start gets (C9). Each one
+            // is a full `start_timeout_seconds` of probing; only the first
+            // necessarily spawns, because a child that is still running is a
+            // server that is still coming up and a second one would only lose
+            // the bind race.
+            let attempts = ladder::start_attempts(&status);
+            let mut child: Option<std::process::Child> = None;
+            let mut spawn_error: Option<String> = None;
+            let mut healthy = false;
+            for attempt in 1..=attempts {
+                if QUITTING.load(Ordering::SeqCst) {
+                    return;
+                }
+                let running = child.as_mut().is_some_and(process::still_running);
+                if ladder::start_attempt_action(attempt, running) == StartAttempt::Spawn {
+                    set_tray_status("Server: starting");
+                    show_page(
+                        window,
+                        &Page::Starting {
+                            message: ladder::start_progress_text(&status, 0.0, attempt),
+                        },
+                    );
+                    match process::spawn_server() {
+                        Ok(started) => {
+                            child = Some(started);
+                            spawn_error = None;
+                        }
+                        // Not fatal any more, and not the end of the attempts:
+                        // during an update the server shim is renamed aside
+                        // for a few seconds, and the old code turned those few
+                        // seconds into a Retry wall.
+                        Err(error) => spawn_error = Some(error),
+                    }
+                }
+                if wait_for_start(window, &status, &health_url, attempt) {
+                    healthy = true;
+                    break;
+                }
             }
-            if wait_for_start(window, &status, &health_url) {
+            if healthy {
                 set_tray_status("Server: running");
                 show_dashboard(window, &admin_url);
                 watch_health(app, window, &status);
-            } else {
-                set_tray_status("Server: did not start");
-                show_page(
-                    window,
-                    &Page::Error {
-                        message: ladder::start_timeout_message(&status),
-                        server_log: Some(status.server_log.clone()),
-                    },
-                );
+                wait_for_retry(app);
+                return;
             }
-            wait_for_retry(app);
+            set_tray_status("Server: did not start");
+            let message = spawn_error.unwrap_or_else(|| ladder::start_timeout_message(&status));
+            // And the page is not the end: the loop behind it keeps probing,
+            // so a server that binds late is picked up without the user
+            // touching anything.
+            wait_for_retry_or_health(app, window, &status, &health_url, &message);
         }
         Decision::NotOurServer { server_mode } => {
             set_tray_status("Server: not running");
@@ -715,11 +913,14 @@ fn ladder_pass(app: &AppHandle, window: &WebviewWindow) {
 
 /// Build and run the application.
 pub fn run() {
-    tauri::Builder::default()
-        // First, so a second launch is answered before anything else is set up.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+    let mut builder = tauri::Builder::default();
+    // First, so a second launch is answered before anything else is set up.
+    if !separate_instance(std::env::var(SEPARATE_INSTANCE_ENV).ok().as_deref()) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             raise(app);
-        }))
+        }));
+    }
+    builder
         .invoke_handler(tauri::generate_handler![shell_retry, shell_ready])
         // The first page this window ever finishes loading is the shell's own,
         // and its URL is whatever the platform's asset protocol actually is --
@@ -793,6 +994,16 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_launch_stands_apart_only_when_it_was_asked_to() {
+        // Unset, empty and whitespace all mean the ordinary single-instance
+        // behaviour: a second launch raises the window you already have.
+        assert!(!separate_instance(None));
+        assert!(!separate_instance(Some("")));
+        assert!(!separate_instance(Some("   ")));
+        assert!(separate_instance(Some("1")));
+    }
 
     #[test]
     fn closing_hides_the_window_when_there_is_a_tray_to_hide_into() {

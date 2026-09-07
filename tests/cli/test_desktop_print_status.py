@@ -60,6 +60,7 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     "autostart_reconcile": bool,
     "server_log": str,
     "start_timeout_seconds": float,
+    "server_start_retries": int,
     "health_check_interval_seconds": float,
     "health_poll_seconds": float,
     "health_failure_threshold": int,
@@ -259,6 +260,40 @@ def test_reconnect_restatus_seconds_is_in_the_golden_key_set(
     _presence(monkeypatch, "healthy")
 
     assert desktop_status()["reconnect_restatus_seconds"] == 12.5
+
+
+def test_server_start_retries_is_in_the_golden_key_set(config_dir, monkeypatch) -> None:
+    """How many attempts a start gets before the window calls it a failure.
+
+    C9 again, and the whole of the reported defect: a window that compiled in
+    "one attempt of fifteen seconds" gave up seven seconds before a server
+    that took twenty-two seconds to bind actually answered.
+    """
+
+    assert "server_start_retries" in STATUS_KEYS
+    _settings(monkeypatch, desktop_server_start_retries=2)
+    _presence(monkeypatch, "healthy")
+
+    assert desktop_status()["server_start_retries"] == 2
+
+
+def test_server_start_retries_defaults_to_two_further_attempts(
+    config_dir, monkeypatch
+) -> None:
+    """Three attempts of the start timeout, which is the user's decision.
+
+    15 s x 3 = 45 s of probing before anything that looks like a failure is
+    shown, against a measured 22-25 s startup on a real configuration.
+    """
+
+    _settings(monkeypatch)
+    _presence(monkeypatch, "free")
+
+    payload = desktop_status()
+    assert payload["server_start_retries"] == 2
+    assert (
+        payload["start_timeout_seconds"] * (payload["server_start_retries"] + 1) == 45.0
+    )
 
 
 def test_carries_the_port_conflict_message_when_foreign(

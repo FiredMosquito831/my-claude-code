@@ -87,15 +87,106 @@ pub fn not_our_server_message(server_mode: &str) -> String {
     )
 }
 
-/// The sentence shown when a start never came up.
-pub fn start_timeout_message(status: &Status) -> String {
+/// How many start attempts one status document licenses: the first, plus its
+/// retries. Never zero -- a document asking for no attempt at all would be a
+/// window that starts nothing and explains nothing.
+pub fn start_attempts(status: &Status) -> u32 {
+    status.server_start_retries.saturating_add(1).max(1)
+}
+
+/// The whole start budget, across every attempt.
+pub fn total_start_seconds(status: &Status) -> f64 {
+    status.start_timeout_seconds * f64::from(start_attempts(status))
+}
+
+/// What the next attempt of a start should actually do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartAttempt {
+    /// Start `mcc-server`. The first attempt always does; a later one only
+    /// when the child the previous attempt started is already gone.
+    Spawn,
+    /// Keep polling the health URL and start nothing.
+    ///
+    /// This is the half of the retry that is easy to get wrong. A server that
+    /// is still coming up has not bound its port yet, so every probe this
+    /// window can make says "free" -- and a retry that read that as licence to
+    /// spawn would start a second server into the bind race the first one is
+    /// about to win. A running child is the one signal that tells "slow" from
+    /// "gone", and it is a signal this shell already holds.
+    KeepWaiting,
+}
+
+/// Decide what attempt number `attempt` should do. Pure.
+pub fn start_attempt_action(attempt: u32, previous_child_running: bool) -> StartAttempt {
+    if attempt <= 1 || !previous_child_running {
+        StartAttempt::Spawn
+    } else {
+        StartAttempt::KeepWaiting
+    }
+}
+
+/// The line under the spinner while a start is being waited out.
+///
+/// It names the attempt because a window that silently restarts its own
+/// fifteen-second countdown twice looks exactly like a window that is stuck.
+pub fn start_progress_text(status: &Status, elapsed_seconds: f64, attempt: u32) -> String {
+    let attempts = start_attempts(status);
+    let budget = status.start_timeout_seconds;
+    if attempts == 1 {
+        return format!(
+            "Starting the My Claude Code server... ({elapsed_seconds:.0}s of \
+             {budget:.0}s)"
+        );
+    }
     format!(
-        "The server did not answer within {:.0} seconds. Its log is at {}.",
-        status.start_timeout_seconds, status.server_log
+        "Starting the My Claude Code server... ({elapsed_seconds:.0}s of \
+         {budget:.0}s, attempt {attempt} of {attempts})"
+    )
+}
+
+/// The sentence shown when every start attempt has been spent.
+///
+/// It is deliberately not the end of the story, and it says so: the window
+/// goes on checking behind this page, so a server that binds a minute late is
+/// still picked up without the user doing anything. Retry is an accelerator,
+/// not the only way out -- which is what it was until 6.58.1, and what made
+/// "close the app and open it again" the only recovery anybody found.
+pub fn start_timeout_message(status: &Status) -> String {
+    let attempts = start_attempts(status);
+    let total = total_start_seconds(status);
+    let tried = if attempts == 1 {
+        format!("within {total:.0} seconds")
+    } else {
+        format!(
+            "within {total:.0} seconds ({attempts} attempts of {:.0}s)",
+            status.start_timeout_seconds
+        )
+    };
+    format!(
+        "The server did not answer {tried}. Its log is at {}. This window is \
+         still checking, so if the server is only slow it will appear here on \
+         its own -- Retry just checks again now.",
+        status.server_log
+    )
+}
+
+/// An error page that is still being worked behind, repainted as it is worked.
+///
+/// A page painted once and never touched again is what made a loop that was in
+/// fact probing every five seconds indistinguishable from a frozen window --
+/// the same lesson the reconnect banner learned in 6.50.0, applied to the one
+/// page that had no loop behind it at all until now.
+pub fn still_checking_text(base: &str, seconds_since_probe: f64) -> String {
+    format!(
+        "{} Last checked {} ago.",
+        base.trim(),
+        human_duration(seconds_since_probe)
     )
 }
 
 /// Whether a start that has been running for `elapsed_seconds` may keep going.
+///
+/// One attempt's worth. The attempts themselves are counted by the caller.
 pub fn start_may_continue(status: &Status, elapsed_seconds: f64) -> bool {
     elapsed_seconds < status.start_timeout_seconds
 }
@@ -374,6 +465,86 @@ mod tests {
     }
 
     #[test]
+    fn a_start_gets_three_attempts_of_the_documents_budget() {
+        // The user's decision, in numbers: 15s, then two more, and only then
+        // anything that looks like a failure. Their real configuration takes
+        // 22-25s to bind, which no single 15s budget can fit.
+        let status = status_with(|document| {
+            document["start_timeout_seconds"] = serde_json::json!(15.0);
+        });
+        assert_eq!(start_attempts(&status), 3);
+        assert!((total_start_seconds(&status) - 45.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn the_attempt_count_comes_from_the_document_and_not_from_this_binary() {
+        // C9, the same rule as every other budget here.
+        let single = status_with(|document| {
+            document["server_start_retries"] = serde_json::json!(0);
+        });
+        assert_eq!(start_attempts(&single), 1);
+        let patient = status_with(|document| {
+            document["server_start_retries"] = serde_json::json!(9);
+        });
+        assert_eq!(start_attempts(&patient), 10);
+    }
+
+    #[test]
+    fn a_retry_never_starts_a_second_server_while_the_first_is_still_running() {
+        // The trap: a server that has not finished starting has not bound its
+        // port, so every probe says "free". A retry that spawned on that
+        // reading would put two servers into one bind race.
+        assert_eq!(start_attempt_action(1, false), StartAttempt::Spawn);
+        assert_eq!(start_attempt_action(2, true), StartAttempt::KeepWaiting);
+        assert_eq!(start_attempt_action(3, true), StartAttempt::KeepWaiting);
+        // A child that has exited is a different matter: nothing is coming up,
+        // so the retry is a real retry.
+        assert_eq!(start_attempt_action(2, false), StartAttempt::Spawn);
+        assert_eq!(start_attempt_action(3, false), StartAttempt::Spawn);
+    }
+
+    #[test]
+    fn the_countdown_says_which_attempt_it_is_on() {
+        // A window that silently restarts the same fifteen-second countdown
+        // twice is indistinguishable from a window that is stuck.
+        let status = status_with(|document| {
+            document["start_timeout_seconds"] = serde_json::json!(15.0);
+        });
+        let text = start_progress_text(&status, 7.0, 2);
+        assert!(text.contains("attempt 2 of 3"), "{text}");
+        assert!(text.contains("7s of 15s"), "{text}");
+
+        // With retries switched off there is no attempt to name.
+        let single = status_with(|document| {
+            document["server_start_retries"] = serde_json::json!(0);
+        });
+        let text = start_progress_text(&single, 1.0, 1);
+        assert!(!text.contains("attempt"), "{text}");
+    }
+
+    #[test]
+    fn the_start_error_page_says_it_is_still_checking() {
+        // Q2, in the user's own words: they waited at this page and nothing
+        // happened, because nothing was still happening. The page now promises
+        // what the loop behind it actually does.
+        let status = status_with(|document| {
+            document["start_timeout_seconds"] = serde_json::json!(15.0);
+        });
+        let message = start_timeout_message(&status);
+        assert!(message.contains("45 seconds"), "{message}");
+        assert!(message.contains("3 attempts of 15s"), "{message}");
+        assert!(message.contains("still checking"), "{message}");
+        assert!(message.contains("/home/example/config/logs/server.log"));
+    }
+
+    #[test]
+    fn the_page_behind_a_live_loop_says_when_it_last_checked() {
+        let text = still_checking_text("The server did not answer.", 3.0);
+        assert!(text.starts_with("The server did not answer."), "{text}");
+        assert!(text.ends_with("Last checked 3 s ago."), "{text}");
+    }
+
+    #[test]
     fn reconnect_verdict_asks_for_a_restatus_at_the_documents_cadence() {
         // C9: the cadence is 30s because the document says 30s, not because
         // this binary counts to six.
@@ -523,7 +694,8 @@ mod tests {
         );
         let message = start_timeout_message(&status);
         assert!(message.contains("/home/example/config/logs/server.log"));
-        assert!(message.contains("30 seconds"));
+        // 30s per attempt, three attempts.
+        assert!(message.contains("90 seconds"), "{message}");
         assert!(start_may_continue(&status, 29.9));
         assert!(!start_may_continue(&status, 30.0));
     }

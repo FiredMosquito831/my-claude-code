@@ -388,7 +388,14 @@ class DesktopController:
         except OSError as exc:
             raise DesktopError(f"Could not start the MCC server: {exc}") from exc
 
-        deadline = time.monotonic() + settings.desktop_server_start_timeout
+        # The same total budget the desktop window uses: the timeout is one
+        # attempt, and ``desktop_server_start_retries`` buys the rest. A flat
+        # 15s against a 22-25s startup is why "the server did not answer" was
+        # reported for servers that answered seven seconds later.
+        budget = settings.desktop_server_start_timeout * (
+            max(0, int(settings.desktop_server_start_retries)) + 1
+        )
+        deadline = time.monotonic() + budget
         root_url = local_proxy_root_url(settings)
         while time.monotonic() < deadline:
             if preflight_proxy(root_url) is None:

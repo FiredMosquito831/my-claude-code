@@ -335,3 +335,68 @@ def test_retain_files_setting_rejects_a_value_outside_its_range(monkeypatch) -> 
         build("100001")
     assert build("0").server_log_retain_files == 0
     assert build("100000").server_log_retain_files == 100_000
+
+
+def test_a_start_rotates_the_previous_server_log_instead_of_truncating_it(
+    tmp_path,
+) -> None:
+    """R7: a restart used to destroy the one file that explains a restart.
+
+    ``configure_logging`` opened with ``log_path.write_text("")``, so the
+    history of every hang investigated so far had to be reconstructed from
+    database rows and file mtimes.
+    """
+
+    log_path = tmp_path / "server.log"
+    log_path.write_text("the run that is being investigated\n", encoding="utf-8")
+
+    logging_config.configure_logging(log_path, force=True)
+    logger.complete()
+
+    rotated = sorted(tmp_path.glob("server.*.log"))
+    assert len(rotated) == 1, rotated
+    assert "the run that is being investigated" in rotated[0].read_text(
+        encoding="utf-8"
+    )
+    # And the live log is the new run's, not the old one's.
+    assert "the run that is being investigated" not in log_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_the_first_start_of_all_has_nothing_to_rotate(tmp_path) -> None:
+    """No previous log, and an empty one, are both nothing to keep."""
+
+    log_path = tmp_path / "server.log"
+    logging_config.configure_logging(log_path, force=True)
+    logger.complete()
+    assert not list(tmp_path.glob("server.*.log"))
+
+    # An empty file is not history either -- rotating it would spend one of the
+    # retained slots on nothing.
+    log_path.write_text("", encoding="utf-8")
+    logging_config.configure_logging(log_path, force=True)
+    logger.complete()
+    assert not list(tmp_path.glob("server.*.log"))
+
+
+def test_rotation_stays_inside_the_retain_cap(tmp_path) -> None:
+    """The rotated logs a restart leaves behind are the sweep's to cap.
+
+    Rotating on every start without a cap would turn a crash loop into a
+    directory of thousands of files, so the two have to be one mechanism:
+    ``SERVER_LOG_RETAIN_FILES`` counts loguru's rotations and these together.
+    """
+
+    log_path = tmp_path / "server.log"
+    for run in range(6):
+        log_path.write_text(f"run {run}\n", encoding="utf-8")
+        logging_config.configure_logging(log_path, force=True, retain_files=2)
+        logger.complete()
+
+    rotated = sorted(tmp_path.glob("server.*.log"))
+    assert len(rotated) == 2, rotated
+    # The two kept are the newest two, so the most recent restart is always
+    # the one still on disk.
+    kept = {path.read_text(encoding="utf-8").strip() for path in rotated}
+    assert kept == {"run 4", "run 5"}

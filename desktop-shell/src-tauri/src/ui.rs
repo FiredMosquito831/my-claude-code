@@ -22,7 +22,13 @@ pub enum Page {
     /// The server is being started, and `/health` is being polled.
     Starting { message: String },
     /// MCC is not installed and the install script is running.
-    Installing { command: String },
+    ///
+    /// It carries a message of its own because the page falls back to
+    /// "Checking the server..." when a state has none -- so for the whole of a
+    /// first install, which is minutes, this window used to say it was
+    /// checking something. A spinner over a stale sentence is the shape of
+    /// every "it just hangs" report there has ever been.
+    Installing { command: String, message: String },
     /// The port is free but starting the server is not this windows job.
     NotOurServer { message: String },
     /// Someone else holds the port. The message is Pythons, verbatim.
@@ -104,9 +110,13 @@ mod tests {
         let command = crate::install::install_command("linux");
         let script = render_script(&Page::Installing {
             command: command.display.clone(),
+            message: "Installing My Claude Code.".to_owned(),
         });
         assert!(script.contains("curl -fsSL"));
         assert!(script.contains("install.sh"));
+        // And it says what it is doing rather than leaving the page on its
+        // "Checking the server..." fallback for the length of an install.
+        assert!(script.contains("Installing My Claude Code."), "{script}");
     }
 
     #[test]
@@ -129,6 +139,7 @@ mod tests {
             },
             Page::Installing {
                 command: String::new(),
+                message: String::new(),
             },
             Page::NotOurServer {
                 message: String::new(),

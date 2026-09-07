@@ -32,6 +32,9 @@ class _Settings:
     host = "127.0.0.1"
     port = 9101
     desktop_server_start_timeout = 5.0
+    # One attempt here: this suite proves what the child's environment is, not
+    # how long the parent is willing to wait for it.
+    desktop_server_start_retries = 0
     desktop_health_check_interval = 0.01
 
 

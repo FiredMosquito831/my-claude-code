@@ -3459,6 +3459,40 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   the server; the tray's <em>Quit</em> does.
                 </p>
                 <p>
+                  <strong>A slow start is not a failed one, and giving up is not
+                  final.</strong> The window gives the server it starts
+                  <code>DESKTOP_SERVER_START_TIMEOUT</code> (15&nbsp;s) to answer,
+                  and since 6.58.1 it does that three times &mdash;
+                  <code>DESKTOP_SERVER_START_RETRIES</code> (2) more attempts,
+                  45&nbsp;s in all &mdash; before it says anything went wrong, with
+                  the countdown naming the attempt (<em>attempt 2 of 3</em>). A real
+                  configuration takes 22&ndash;25&nbsp;s to bind, because everything
+                  loaded at startup happens <em>before</em> the port opens, and a
+                  single 15&nbsp;s budget gave up about seven seconds early. A retry
+                  never starts a second server: a starting server has not bound its
+                  port, so every check says <em>free</em>, and what the window
+                  watches instead is whether the child it started is still running.
+                  The page you get if all three attempts run out keeps checking on
+                  the health poll, so a server that binds late loads the dashboard
+                  on its own &mdash; <em>Retry</em> is an accelerator now, not the
+                  only way out.
+                </p>
+                <p class="guide-note">
+                  <strong>First launch, when MCC is not installed at all.</strong>
+                  The window runs the project's installer and shows its output, and
+                  since 6.58.1 it does that at most three times. An installer that
+                  succeeds without putting <code>mcc-desktop</code> on the running
+                  window's <code>PATH</code> &mdash; the ordinary Windows first
+                  launch, since a <code>PATH</code> change reaches only new
+                  processes &mdash; used to mean reinstalling every few minutes
+                  forever under a spinner that said <em>Checking the server</em>.
+                  It now says what it is doing, quotes the installer's last line,
+                  tells you that quitting and reopening the window is the fix, and
+                  keeps watching for <code>mcc-desktop</code> to appear. The
+                  installer itself is stopped after 15&nbsp;minutes rather than
+                  holding the window for the session.
+                </p>
+                <p>
                   <strong>Getting the app without the command line.</strong> Every
                   release carries an installer for all three systems:
                   <strong>MyClaudeCode-Setup-windows-x86_64.exe</strong> (per-user, no
@@ -4148,6 +4182,17 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   for you to stop the server, or installing, or finished, says which
                   &mdash; rather than looking like nothing happened. A half-written final
                   line is skipped rather than treated as the end of the story.
+                </p>
+                <p class="guide-note">
+                  <strong>A restart no longer destroys the log that would explain
+                  it.</strong> Until 6.58.1 every server start emptied
+                  <code>logs/server.log</code>, so the one file worth opening after a
+                  restart went wrong had been erased by that restart. A start now
+                  moves the previous log aside as
+                  <code>logs/server.&lt;timestamp&gt;.log</code>, and the same
+                  <code>SERVER_LOG_RETAIN_FILES</code> that caps rotations caps these
+                  &mdash; the newest ten survive, older ones are swept on the next
+                  start.
                 </p>
                 <h3 id="guide-security">Lock it down</h3>
                 <table class="guide-table">

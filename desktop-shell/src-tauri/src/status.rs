@@ -46,6 +46,12 @@ pub struct Status {
     pub close_to_tray: bool,
     pub server_log: String,
     pub start_timeout_seconds: f64,
+    /// How many further start attempts follow the first one before the window
+    /// stops calling itself "starting". C9 again: the shell counts the
+    /// attempts, but it never decides how many there are. A flat single
+    /// attempt of `start_timeout_seconds` is what parked this window on a
+    /// Retry button seven seconds before the server answered.
+    pub server_start_retries: u32,
     pub health_check_interval_seconds: f64,
     pub health_poll_seconds: f64,
     pub health_failure_threshold: u32,
@@ -135,6 +141,7 @@ pub(crate) fn sample_json() -> serde_json::Value {
         "start_at_login": false,
         "server_log": "/home/example/config/logs/server.log",
         "start_timeout_seconds": 30.0,
+        "server_start_retries": 2,
         "health_check_interval_seconds": 0.5,
         "health_poll_seconds": 5.0,
         "health_failure_threshold": 3,
@@ -218,6 +225,34 @@ mod tests {
             .as_object_mut()
             .expect("an object")
             .remove("reconnect_restatus_seconds");
+        let error = parse_status(&document.to_string()).expect_err("refused");
+        assert!(matches!(error, StatusError::Malformed(_)));
+    }
+
+    #[test]
+    fn parses_server_start_retries() {
+        let status = parse_status(&sample_json().to_string()).expect("sample parses");
+        assert_eq!(status.server_start_retries, 2);
+        let mut document = sample_json();
+        document["server_start_retries"] = serde_json::json!(0);
+        assert_eq!(
+            parse_status(&document.to_string())
+                .expect("parses")
+                .server_start_retries,
+            0
+        );
+    }
+
+    #[test]
+    fn a_document_without_server_start_retries_is_malformed() {
+        // C9. Defaulting it here would be this binary deciding how long a
+        // user's machine gets to start a server, which is precisely the
+        // decision the status document exists to carry.
+        let mut document = sample_json();
+        document
+            .as_object_mut()
+            .expect("an object")
+            .remove("server_start_retries");
         let error = parse_status(&document.to_string()).expect_err("refused");
         assert!(matches!(error, StatusError::Malformed(_)));
     }

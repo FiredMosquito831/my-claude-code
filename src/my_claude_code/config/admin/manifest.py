@@ -1941,6 +1941,22 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "DESKTOP_SERVER_START_RETRIES",
+        "Server start retries",
+        "desktop",
+        "number",
+        settings_attr="desktop_server_start_retries",
+        default="2",
+        description=(
+            "How many further attempts the desktop window makes after the "
+            "first start timeout expires. The default gives a start three "
+            "attempts of the timeout above -- 45 seconds -- before anything "
+            "that looks like a failure is shown, and the window keeps "
+            "checking even then. Applies the next time mcc-desktop starts, "
+            "not to a window already open."
+        ),
+    ),
+    ConfigFieldSpec(
         "DESKTOP_ADMIN_REQUEST_TIMEOUT",
         "Admin API timeout",
         "desktop",
