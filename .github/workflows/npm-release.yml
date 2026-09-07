@@ -17,15 +17,27 @@
 #   warning: a tag that publishes a launcher claiming a version the Python
 #   package never had is a package nobody can reason about.
 #
-# WHY A MISSING SECRET IS NOT A FAILURE
+# HOW IT AUTHENTICATES: TRUSTED PUBLISHING (OIDC), TOKEN ONLY AS A FALLBACK
 #
-#   `NPM_TOKEN` is a granular access token the repository owner creates by
-#   hand (Read+write on packages for the `@firedmosquito831` scope, with
-#   "Bypass two-factor authentication" ticked -- npm refuses a publish from a
-#   token that has neither 2FA nor the bypass, and classic tokens cannot carry
-#   it). Until it exists this job must announce that clearly and exit green: a
-#   release is a release of the *server*, and the shipping of a convenience
-#   launcher must never turn a good release red.
+#   npm's documented way to publish from CI is a trusted publisher: the
+#   package on npmjs.com names this repository and this workflow file, the
+#   job asks GitHub for a short-lived OIDC identity token (`id-token: write`),
+#   and npm accepts the publish from that identity alone. No secret is stored
+#   anywhere, nothing expires, nothing can leak, and because the repository is
+#   public npm attaches a provenance attestation automatically. It needs npm
+#   11.5.1 or newer, which is why the job upgrades npm before publishing.
+#
+#   The one-time setup is on npmjs.com, package Settings -> Trusted Publisher:
+#   GitHub Actions, user `FiredMosquito831`, repository `my-claude-code`,
+#   workflow filename `npm-release.yml`, environment empty. Until that exists
+#   an OIDC publish is refused; the job then prints the setup as a warning
+#   and ends green, because a release is a release of the *server* and the
+#   shipping of a convenience launcher must never turn a good release red.
+#
+#   `NPM_TOKEN` (a granular access token with "Bypass two-factor
+#   authentication") is honoured if it is set, as a fallback for a registry
+#   that cannot do OIDC. With a token present a failed publish IS a failure:
+#   the operator asked for it explicitly.
 
 name: npm publish
 
@@ -59,10 +71,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      # Provenance: npm records the workflow, the commit and the runner that
-      # built the tarball, and shows it on the package page. It costs nothing
-      # and it is the only thing that makes "this really came from the repo"
-      # checkable by a stranger.
+      # The OIDC identity token trusted publishing runs on, and what npm
+      # signs the provenance attestation with.
       id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -72,28 +82,35 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Check the secret exists
-        # A missing token is reported once, here, as a notice -- every later
-        # step is skipped and the job ends green. `secrets` cannot be read in
-        # an `if:` on a step of a reusable-callable job, so the answer is
-        # carried in an output instead.
-        id: secret
+      - name: Use an npm that can do trusted publishing
+        # Trusted publishing arrived in npm 11.5.1; the npm bundled with a
+        # Node release can lag it.
+        run: |
+          set -euo pipefail
+          npm install -g npm@latest
+          npm --version
+
+      - name: Decide how to authenticate
+        # `secrets` cannot be read in an `if:` on a step, so the answer is
+        # carried in an output. OIDC is the default; a token is only ever a
+        # fallback the operator set on purpose.
+        id: auth
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${NPM_TOKEN:-}" ]; then
-            echo "have=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::NPM_TOKEN is not set, so nothing was published to npm. The release itself is unaffected. Add a granular npm access token (Read+write on packages for the @firedmosquito831 scope, with 'Bypass two-factor authentication' ticked) as the repository secret NPM_TOKEN; the next release publishes automatically."
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "mode=token" >> "$GITHUB_OUTPUT"
+            echo "::notice::NPM_TOKEN is set; publishing with the token instead of trusted publishing."
           else
-            echo "have=true" >> "$GITHUB_OUTPUT"
+            echo "mode=oidc" >> "$GITHUB_OUTPUT"
+            echo "publishing via trusted publishing (OIDC); no token in play"
           fi
 
       - name: Stamp the version from the tag and check it against pyproject
-        if: steps.secret.outputs.have == 'true'
         id: version
         env:
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
@@ -119,7 +136,6 @@ jobs:
           echo "publishing $version"
 
       - name: Skip if this version is already on the registry
-        if: steps.secret.outputs.have == 'true'
         id: registry
         working-directory: packaging/npm
         env:
@@ -139,8 +155,24 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: npm publish
-        if: steps.secret.outputs.have == 'true' && steps.registry.outputs.publish == 'true'
+      - name: npm publish (trusted publishing)
+        if: steps.auth.outputs.mode == 'oidc' && steps.registry.outputs.publish == 'true'
+        working-directory: packaging/npm
+        # setup-node writes an `_authToken=${NODE_AUTH_TOKEN}` line into the
+        # runner's .npmrc; with no token exported npm ignores it and uses the
+        # OIDC identity. A refusal here almost always means the trusted
+        # publisher has not been configured on npmjs.com yet, so the job says
+        # exactly what to do and stays green.
+        run: |
+          set -uo pipefail
+          if npm publish --access public --provenance; then
+            echo "published via trusted publishing"
+          else
+            echo "::warning::npm refused the trusted (OIDC) publish. One-time setup on npmjs.com: open the package, Settings -> Trusted Publisher -> GitHub Actions, user FiredMosquito831, repository my-claude-code, workflow filename npm-release.yml, environment empty, Save. The next release then publishes on its own. (A granular NPM_TOKEN secret with 'Bypass two-factor authentication' is honoured as a fallback.) The server release itself is unaffected."
+          fi
+
+      - name: npm publish (token fallback)
+        if: steps.auth.outputs.mode == 'token' && steps.registry.outputs.publish == 'true'
         working-directory: packaging/npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

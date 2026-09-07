@@ -435,18 +435,27 @@ tag against `pyproject.toml`, skips a version already on the registry, and runs
 `tests/contracts/test_npm_package_contract.py`, so the bump that goes into a
 release carries the launcher with it.
 
-**If the job logged a notice and published nothing**, the repository secret
-`NPM_TOKEN` is missing. That is a deliberate skip, not a failure — a convenience
-launcher must never turn a good server release red. To arm it, create a
-**granular** npm access token (classic tokens cannot publish here) with:
+**How it authenticates.** Trusted publishing (OIDC), npm's documented CI
+route: the package on npmjs.com names this repository and this workflow file,
+the job asks GitHub for a short-lived identity token (`id-token: write`), and
+npm accepts the publish from that identity. No secret is stored anywhere,
+nothing expires, and npm attaches a provenance attestation automatically. The
+one-time setup is on npmjs.com, package **Settings -> Trusted Publisher**:
+GitHub Actions, user `FiredMosquito831`, repository `my-claude-code`, workflow
+filename `npm-release.yml`, environment empty.
 
-* **Read and write** on packages for the `@firedmosquito831` scope, and
-* **Bypass two-factor authentication** ticked — npm refuses a publish from a
-  token that has neither 2FA nor the bypass;
+**If the job logged a warning and published nothing**, npm refused the OIDC
+publish, which almost always means that trusted-publisher entry does not exist
+yet. That is a deliberate skip, not a failure -- a convenience launcher must
+never turn a good server release red. Add the entry; the *next* release
+publishes automatically, and the skipped one can be published by re-running the
+workflow from its tag (`workflow_dispatch`, `tag: vN`).
 
-then add it as the repository secret `NPM_TOKEN`. The *next* release publishes
-automatically; the skipped one can be published by re-running the workflow from
-its tag (`workflow_dispatch`, `tag: vN`).
+**Token fallback.** A repository secret `NPM_TOKEN` (a **granular** npm access
+token with **Read and write** on packages for the `@firedmosquito831` scope and
+**Bypass two-factor authentication** ticked) is honoured when present and
+replaces OIDC for that run. With a token set, a failed publish is a real
+failure. Prefer OIDC: tokens expire and leak, an identity does neither.
 
 `@firedmosquito831/my-claude-code@6.52.0` was published by hand before this
 workflow existed and is deliberately not backfilled.
