@@ -32,6 +32,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [Which apps have a button](#which-apps-have-a-button)
   - [Antigravity](#antigravity)
   - [Hyper / HyperCharm](#hyper--hypercharm)
+  - [Tutorial: configure a desktop app, and undo it](#tutorial-configure-a-desktop-app-and-undo-it)
   - [Without a browser: `mcc-apps`](#without-a-browser-mcc-apps)
 - [7. Tutorial: connect another CLI](#7-tutorial-connect-another-cli)
 - [8. Providers and API keys](#8-providers-and-api-keys)
@@ -39,10 +40,14 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [Custom providers](#custom-providers)
 - [9. Model tiers and routing](#9-model-tiers-and-routing)
   - [Tiers for every other coding agent](#tiers-for-every-other-coding-agent)
+  - [Images, the vision adapter, and outbound image size](#images-and-the-vision-adapter)
+  - [Tutorial: describe mode](#tutorial-describe-mode)
   - [Tutorial: manage many models](#tutorial-manage-many-models)
+  - [Catalogue refresh, and what MCC learned](#catalogue-refresh-and-what-mcc-learned)
 - [10. Web search](#10-web-search)
 - [11. Analytics](#11-analytics)
   - [Tutorial: read the request detail](#tutorial-read-the-request-detail)
+  - [Tutorial: read a request's cost](#tutorial-read-a-requests-cost)
   - [The Token Optimizer page](#the-token-optimizer-page)
 - [12. Multi-key rotation](#12-multi-key-rotation)
   - [Tutorial: why my key was benched](#tutorial-why-my-key-was-benched)
@@ -1096,6 +1101,40 @@ Hyper has no launcher command of its own, and will not get one. **Hyper**
 application of its own. **Crush is its official client**, and Crush is already
 both an MCC harness (`mcc-crush`) and a card in this group. Point Crush here
 and you have pointed Hyper's client here.
+
+<a id="tutorial-configure-a-desktop-app-and-undo-it"></a>
+
+### Tutorial: configure a desktop app, and undo it
+
+Codex desktop, start to finish. Every other card works the same way.
+
+**1. Open the card.** **Coding agents** → scroll to **Desktop apps** → *Codex desktop*. Read the four lines that matter before you press anything:
+
+| Line | On this card |
+|---|---|
+| Config file | `~/.codex/config.toml` |
+| MCC owns | `model_providers.mcc` |
+| Replaces | `model_provider`, `model` |
+| Base URL | `http://127.0.0.1:8082/v1` |
+
+*MCC owns* is the key that is created and is removed again by either undo mode. *Replaces* is the list that makes the second undo mode meaningful — Codex has no UI for picking a model once a custom `model_provider` is set, so Configure has to write `model` too.
+
+**2. Press *What will this write?*** You get a unified diff of your real file. Nothing has been written, and nothing is written by this button — the plan is computed server-side and thrown away. Read the `-` lines: those are your values, and they are what *Restore the original values* would put back.
+
+**3. Press *Configure*.** Three things happen in order: your file is copied to `~/.codex/config.toml.mcc-backup` (once, before the first edit ever), the plan is recomputed server-side rather than trusted from the browser, and the edit is applied to the parsed document — so comments, key order and every setting MCC does not own survive byte for byte.
+
+**4. Export the token.** The card says `MCC_AUTH_TOKEN — not exported yet`. MCC never sets an environment variable for you, so export it in the shell you start Codex from and press *Reload*; the next status poll reports whether it took.
+
+**5. Check the badge.** It should now read *configured by MCC*. If you later hand-edit one of the owned keys it becomes *configured but drifted* — a statement, not an error. Nothing is corrected behind your back; press *Configure* again to take MCC's values back.
+
+**Undoing it.** The card offers both modes and they answer different questions:
+
+```
+mcc-apps undo codex_desktop              # remove MCC's keys, touch nothing else
+mcc-apps undo codex_desktop --restore    # ...and put back the model / model_provider you had
+```
+
+Use plain undo if you never had `model` set — restoring it would resurrect a key you never wrote. Use `--restore` if you did, and want your own choice back. Both remove `model_providers.mcc` entirely; the `.mcc-backup` stays where it is either way.
 
 ### Without a browser: `mcc-apps`
 
@@ -2398,6 +2437,60 @@ You do not have to work out which of your models are affected: a tier that needs
 
 The adapter is a route like any other, so it gets its own **Add fallback** chain. One unreachable vision model would otherwise lose every image on the machine.
 
+#### Outbound image size
+
+Since 6.53.0 every outbound picture is resized before it is sent, on the deep copy the router already takes — your client's own request is never mutated, and every dialect converter is handed pre-shrunk data.
+
+```bash
+IMAGE_MAX_LONG_EDGE=1568   # long edge in px; 0 sends what the client sent
+IMAGE_JPEG_QUALITY=0       # 0 = never re-encode; >0 = JPEG at this quality
+IMAGE_DETAIL=auto          # OpenAI's per-image fidelity field: auto | low | high
+```
+
+`IMAGE_MAX_LONG_EDGE` ships **on**, at 1568 — the budget Anthropic itself resizes to. On three of the four billing families that is token-neutral, because they already resize server-side; on the fourth, OpenAI's patch-billed models, it is a 41% saving and the one case where the model genuinely sees less. Set `0` to turn it off.
+
+`IMAGE_JPEG_QUALITY` is opt-in for a reason: these are screenshots of text and code, which is the worst case there is for JPEG ringing. `0` never changes the format. Any image with an alpha channel is skipped whatever this says.
+
+`IMAGE_DETAIL=auto` emits no field at all, which is unchanged behaviour. It is meaningless outside the OpenAI dialects and is not emitted there.
+
+All three live on **Model Config**, beside the vision adapter. The **Models** page carries a `billed/est` chip on a provider row once there is enough traffic to compare — the input tokens that host actually billed against what MCC's per-family estimator predicted — and the request detail shows the same comparison per request, with a `+ adapter` line when a describe hop contributed tokens of its own.
+
+#### Images a tool returned
+
+An image nested inside a tool result cannot ride in an OpenAI-format tool message at all. `TOOL_RESULT_IMAGE_DELIVERY` chooses what happens to it:
+
+| Value | What is sent |
+|---|---|
+| `auto` *(default)* | the picture is hoisted into a short `user` message right after the tool output — unless the answering model is published as unable to read one, in which case a plain sentence naming the tool takes its place |
+| `attach` | always hoist the picture |
+| `strip` | never send it; always the sentence |
+
+There is deliberately no option to send base64 text: that is what cost 324,000 prompt tokens for one 213 KB screenshot before 6.49.0, for a picture the model never saw. The request detail marks what happened with an `image_delivery` line, so a request that lost a picture says so.
+
+<a id="tutorial-describe-mode"></a>
+
+### Tutorial: describe mode
+
+The case this exists for: your Sonnet tier is a fast, cheap, text-only model, and Claude Code keeps sending screenshots mid-conversation. In `route` mode the whole request goes to the vision model, which then has to answer a coding question it has no context for. In `describe` mode the screenshot becomes words and *your* model answers.
+
+**1. Set a vision adapter.** **Model Config** → **Vision Adapter** → pick a model that reads images. Give it a fallback or two; one unreachable vision model would otherwise lose every image on the machine.
+
+**2. Switch the mode.** Under the adapter's chain, **Vision Adapter Mode** → *Describe the image, keep the model*. The line under it tells you which tiers this currently covers — those are the tiers whose models cannot read images.
+
+```bash
+VISION_ADAPTER_MODE=describe   # default: route
+```
+
+**3. Send a screenshot.** Then open **Analytics → Requests** and find the row. You will see **two** rows for the one turn: the describe call against the vision model, and the answer from the model your route actually picked. That is deliberate — a describe hop is a different model on a different key, so it is priced on its own row rather than folded into the answering model's figure.
+
+**4. Send the same screenshot again.** There is no second describe call. Descriptions are cached against the image itself, so a screenshot Claude Code re-sends every turn is described once. Clear the cache from **Requests → Clear image descriptions** when you switch to a better vision model.
+
+**What it costs, exactly.** One extra sub-request *per image*, not per request, and only for images the answering model could not have read anyway. A model that can see is simply sent the picture, which is cheaper than two calls and always better.
+
+**What it cannot cost you.** An answer. A describe call that fails falls back to `route`; a route with nowhere to divert to falls back to the placeholder sentence. Each describe call is an ordinary routed request, so the vision chain's own fallbacks, pause list, health registry and retry policy all apply to it.
+
+Pick `describe` when the picture is *context*. Pick `route` when the picture *is* the question.
+
 <a id="tutorial-manage-many-models"></a>
 
 ### Tutorial: manage many models
@@ -2465,6 +2558,43 @@ The action bar says how much of the work is already done — *Hide 3 selected (2
 Ticking models one at a time writes one exact pattern each, and that adds up: a real install reached **994 exact deny patterns and not a single glob** — a ~30 KB line in the managed env file, parsed and rewritten on every write. **Migrate exact patterns to globs**, beside *Save patterns*, folds every provider whose models are *all* individually hidden into one `provider/*`.
 
 It is offered, never applied on its own. Pressing it previews: how many patterns become how many, which providers, and how many models are hidden before and after. The fold is only offered when those last two numbers are equal — the migration is verified model by model and abandoned whole if it would move even one — and the write that follows is undoable from the same panel. One thing does change going forward: a `provider/*` glob also hides models that provider publishes *later*, which is the point of a policy and is worth knowing before you accept it.
+
+### Catalogue refresh, and what MCC learned
+
+Two things on the **Models** page answer "why does MCC think *that* about this model?".
+
+#### The catalogue re-reads itself
+
+```bash
+MODEL_DISCOVERY_REFRESH_SECONDS=3600   # 0 turns the background sweep off
+MODEL_PROBE_NEW_MODELS=false           # probe models the sweep has just discovered
+```
+
+Every usable provider's `/models` is refetched in the background once an hour, so a gateway that added a model this morning is listed this afternoon without a restart. The line under **Providers and models** reads *"Catalogues: last refreshed 12 min ago, next in 48 min."*, and says *"Automatic model catalogue refresh is off (`MODEL_DISCOVERY_REFRESH_SECONDS=0`)"* when you turn it off — a catalogue whose age is unanswerable is how "this gateway added a model today" became a support question. The server log prints `catalogue changed: +N -M` only when the list actually moved.
+
+> This is **not** Claude Code's model discovery. `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` is a variable MCC *writes* for Claude Code and never reads; it decides whether Claude Code's own picker lists this catalog. The setting above decides how often MCC re-reads its providers.
+
+#### What this host taught MCC
+
+Every negative MCC holds was learned from something the upstream itself said: an output ceiling named in a 400, a retry that only succeeded once a reasoning field was dropped, a probe that came back without vision. They are persisted to `~/.mcc/learned_facts.json`, so a restart does not re-pay every rejection.
+
+They also **expire**, and that is the point. MCC stops sending the thing that would produce a positive — it never asks for more than a learned cap again — so a host that raises its own ceiling has no way to tell us. Three evidence classes, three clocks:
+
+| Evidence | What it is | Good for |
+|---|---|---|
+| **Stated** | a number or an enum the host named in its own words: an output cap, the effort words it accepts, the validator its `/models` last sent | 30 days |
+| **Inferred** | "it worked once the field was gone": a rejected reasoning field, no streamed usage, no vision, no tool calls | 7 days |
+| **Withheld** | a model id the backend refused by name | 72 hours |
+
+**Expiry never deletes.** A fact past its clock is still loaded and still shown — marked *stale* — and simply stops being applied. The next real request re-pays one rejection and the row is fresh again. That is the self-healing a restart used to give for free, put back on a timer.
+
+**Reading them.** The **Learned** filter chip on the Models page narrows to models this host has corrected. Open one and the **What this host taught MCC** block lists each fact with its age, its evidence, and whether it *disagrees with the catalogue* — which is the interesting case, because it means the published metadata is wrong for this deployment.
+
+**Probing instead of waiting.** **Probe capabilities** on a provider card sends a handful of deliberately tiny requests — a one-pixel image, a trivial tool definition — so a model's real vision and tool support are known before a real request pays to discover them. A probe is narrow on purpose: it only ever records an absence the host demonstrated, never a capability the catalogue already claims.
+
+**Forgetting.** Three scopes: *Forget* on one row, the forget button on a provider card, and **Forget everything learned** under **Requests**. Use them when something changed on the host's side — a raised quota, a new deployment behind the same name — and you do not want to wait out the clock.
+
+> No response text is ever stored. Evidence is the bounded, redacted excerpt the recovery matchers already produce for their log lines; for a probe it is a status word and at most an HTTP code.
 
 ### Reasoning control
 
@@ -2923,6 +3053,34 @@ Details worth knowing:
 The Models page shows the resolved input, output, cache and reasoning rates per model, in USD per million tokens, each with the ladder rung it came from — so you can see exactly what a request would be priced from before you send one.
 
 Controls live on this page under **Cost estimation**: the master toggle (on by default), which sources may price a request (`auto`, `reported only`, or `computed only` — the last ignores the host's own figure, which is how you audit a provider's billing against a published price), and the LiteLLM source (off by default; it costs one more cached 2.3 MB file and one conditional fetch a day).
+
+<a id="tutorial-read-a-requests-cost"></a>
+
+### Tutorial: read a request's cost
+
+**Where the numbers are.** **Analytics** → the **Cost** panel. Three cards across the top: **Reported** (what the hosts themselves billed), **Estimated** (computed from a published price), and **Priced** — an *"N of M priced"* denominator. Below them, the same three columns broken down by provider, by model, by harness and by day.
+
+**Read the denominator first.** `7 of 8 priced` means one request in that range has no price at all, so the two totals above it are totals of seven requests, not eight. Without that number a window where nine models in ten are unpriced looks like a cheap week.
+
+**Never add the two totals together.** They are different kinds of claim. Reported is a bill; estimated is arithmetic on a published rate. One merged figure would launder the guess into a fact, and afterwards nobody could tell which half was which — so MCC does not offer one.
+
+**Then open the request.** **Requests** → click a row. The modal's cost line names which of the four rungs answered:
+
+| You see | It means |
+|---|---|
+| an amount, no badge | the host reported this figure itself |
+| `est.` **models.dev** | computed from models.dev's price for this provider's bucket |
+| `est.` **LiteLLM** | computed from LiteLLM's map — only if you turned that source on |
+| `est.` **cross-provider** | a vote across same-named rows in *other* providers' catalogues. Same model, different seller. Treat it as an order of magnitude |
+| `— not priced` | nothing published a rate for this model |
+
+**"Why did my image cost that much?"** Open the attempt list in the same modal. If the request carried a picture that the routed model could not read and you are in [describe mode](#tutorial-describe-mode), there is a **second row**: the describe call, against the vision model, priced from its own rate card. The modal says so explicitly. Folding that into the answering model's figure would make that model look more expensive than it was and hide what describe mode cost — so it stays a separate row, and the total you should compare against yesterday is the sum of the rows, which the modal shows.
+
+The other half of an image's cost is tokens, not rates: check the `billed/est` chip on the provider row on the **Models** page and the `Estimated input` line in the request detail. If billed is far above estimated on a model that only ever sees screenshots, `IMAGE_MAX_LONG_EDGE` is the setting to look at.
+
+**"What does 'not priced' mean?"** Exactly what it says: no source published a rate for that model. It is a dash and never `$0.00`, because `$0.00` is a claim the request was free and only a source that publishes a zero — a `:free` model's own catalogue entry — may make it. Two things make a dash more likely: a model nothing but its own gateway has ever listed, and `COST_ESTIMATION_MODE=reported_only`, which stores a host's own figure or nothing at all. Turning on `COST_SOURCE_LITELLM_ENABLED` buys back most of the misses.
+
+**Nothing is backfilled.** A request logged before 6.54.0 stays unpriced forever. Pricing it at today's rates would produce a confident number that was never anybody's bill.
 
 ### Web search analytics
 

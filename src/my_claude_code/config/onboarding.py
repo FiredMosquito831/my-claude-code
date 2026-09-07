@@ -261,6 +261,33 @@ def build_state(
             target="#codingAgentsList",
         ),
         OnboardingStep(
+            id="desktop_apps",
+            label="Point a desktop app here (optional)",
+            description=(
+                "Some applications MCC cannot launch - they are already "
+                "running, and the only way in is the one config file each "
+                "reads at startup. The Desktop apps group writes that file "
+                "for you, and takes it back out again."
+            ),
+            view="coding_agents",
+            optional=True,
+            # Same reason as the step above: configuring an app writes a file
+            # outside MCC's own configuration, so nothing here is derivable.
+            # Opening the page that explains it is the observable event.
+            done="coding_agents" in visited,
+            instructions=(
+                "Open the Coding agents page and scroll to Desktop apps.",
+                "Pick a card whose badge does not say not installed.",
+                "Press What will this write? - it shows a real diff of your "
+                "real file and writes nothing.",
+                "Press Configure. Your file is backed up once before the "
+                "first edit, and every byte MCC does not own is kept.",
+                "Undo offers two modes: remove MCC's keys, or also restore "
+                "the values MCC replaced.",
+            ),
+            target="#desktopAppsList",
+        ),
+        OnboardingStep(
             id="websearch",
             label="Enable web search (optional)",
             description=(

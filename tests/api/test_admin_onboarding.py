@@ -14,6 +14,7 @@ EXPECTED_STEP_IDS = (
     "models",
     "client",
     "coding_agents",
+    "desktop_apps",
     "websearch",
     "messaging",
     "analytics",
