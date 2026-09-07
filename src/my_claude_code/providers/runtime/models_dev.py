@@ -1703,10 +1703,15 @@ TOOL_CALL_FIELD: _LadderField[bool] = _LadderField(
     minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
 )
 
-#: The four price rates, in the catalogue's own vocabulary. models.dev
-#: publishes all four under ``cost``; ``ProviderModelInfo`` carries only the
-#: first two, so the cache rates have no provider rung and resolve from
-#: tier 3 down or not at all.
+#: The five price rates, in the catalogue's own vocabulary. models.dev
+#: publishes all five under ``cost``; ``ProviderModelInfo`` carries only the
+#: first two, so the cache and reasoning rates have no provider rung and
+#: resolve from tier 3 down or not at all.
+#:
+#: ``reasoning`` was added in 6.54.0 with per-request costing. Almost no model
+#: publishes it, and that is the point: absent is not zero, so a model without
+#: one prices its reasoning tokens as output -- which is what the hosts that
+#: do not publish a separate rate actually bill.
 PRICE_FIELDS: tuple[_LadderField[float], ...] = tuple(
     _LadderField(
         name=name,
@@ -1719,6 +1724,7 @@ PRICE_FIELDS: tuple[_LadderField[float], ...] = tuple(
         ("output_price", "output"),
         ("cache_read_price", "cache_read"),
         ("cache_write_price", "cache_write"),
+        ("reasoning_price", "reasoning"),
     )
 )
 
@@ -1922,7 +1928,7 @@ def model_tool_call_tiered(
 def model_prices_tiered(
     provider_id: str, model_id: str, path: Path | None = None
 ) -> dict[str, tuple[float | None, ResolutionTier | None]]:
-    """The four published rates for one model, each with its own rung.
+    """The published rates for one model, each with its own rung.
 
     Per field, not per source, for the same reason the reasoning capability is
     resolved per field: a bucket that publishes ``input``/``output`` but no

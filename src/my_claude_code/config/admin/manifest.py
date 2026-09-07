@@ -153,6 +153,17 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
         "Rotation policy is per pool and lives on each provider's card.",
     ),
     ConfigSectionSpec(
+        "cost",
+        "Cost estimation",
+        "What each request cost, and who said so. The ladder is the one every "
+        "other model fact walks: the host's own reported figure first, then "
+        "this provider's models.dev bucket, then LiteLLM's price map if you "
+        "turn it on, then a cross-provider vote. A request nothing prices is "
+        "stored as not priced and shown as a dash, never as $0.00, which "
+        "would be a claim it was free. Reported and estimated amounts are "
+        "shown side by side on every card and are never added together.",
+    ),
+    ConfigSectionSpec(
         "request_log",
         "Request log storage",
         "What the request log keeps, and therefore what the tables above and "
@@ -1699,6 +1710,58 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "pool on it. One measured request spent 51 of its 57 seconds "
             "asleep between retries of a model that was refusing in 0.2s. "
             "Off restores retry-then-rotate."
+        ),
+    ),
+    # ---- Cost estimation -------------------------------------------------
+    ConfigFieldSpec(
+        "COST_ESTIMATION_ENABLED",
+        "Estimate request cost",
+        "cost",
+        "boolean",
+        settings_attr="cost_estimation_enabled",
+        default="true",
+        affects_providers=False,
+        description=(
+            "Works out what each request cost and stores it beside the "
+            "request. Off, the cost column and the Analytics cost cards stay "
+            "empty for new requests; rows already priced keep their figures."
+        ),
+    ),
+    ConfigFieldSpec(
+        "COST_ESTIMATION_MODE",
+        "Which sources may price a request",
+        "cost",
+        "select",
+        settings_attr="cost_estimation_mode",
+        default="auto",
+        affects_providers=False,
+        options=(
+            ConfigOptionSpec("auto", "The whole ladder (recommended)"),
+            ConfigOptionSpec("reported_only", "Only what the host reports"),
+            ConfigOptionSpec("computed_only", "Always compute, ignore the host"),
+        ),
+        description=(
+            "Auto takes the host's own figure where it reports one and "
+            "computes from a published price where it does not. Reported only "
+            "leaves everything else unpriced. Computed only ignores the host's "
+            "figure entirely, which is how you audit a provider's billing "
+            "against a published price."
+        ),
+    ),
+    ConfigFieldSpec(
+        "COST_SOURCE_LITELLM_ENABLED",
+        "Use LiteLLM's price map too",
+        "cost",
+        "boolean",
+        settings_attr="cost_source_litellm_enabled",
+        default="false",
+        affects_providers=False,
+        description=(
+            "Adds LiteLLM's model_prices_and_context_window.json below "
+            "models.dev: the widest published price table there is, and the "
+            "only one that names a separate reasoning rate. Costs one cached "
+            "2.3 MB file and one conditional fetch a day. Fetched live and "
+            "integrity-checked on every refresh, never shipped in the package."
         ),
     ),
     # ---- Request log: what to keep ---------------------------------------

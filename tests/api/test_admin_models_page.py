@@ -1220,6 +1220,10 @@ def test_capability_payload_reports_tool_calls_and_every_price(monkeypatch):
             "output_price": (15.0, ResolutionTier.OPENROUTER_EXACT),
             "cache_read_price": (0.3, ResolutionTier.MODELS_DEV_BUCKET_EXACT),
             "cache_write_price": (None, None),
+            # Added in 6.54.0 with per-request costing. Almost nothing
+            # publishes one, and absent is not zero: reasoning then prices as
+            # output, which is what those hosts actually bill.
+            "reasoning_price": (None, None),
         },
     )
 

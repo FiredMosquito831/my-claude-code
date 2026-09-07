@@ -7376,3 +7376,53 @@ details.turn-pane > summary:focus-visible {
 .models-learned-forget {
   margin-left: auto;
 }
+
+/* ---------------------------------------------------------------------------
+   Per-request cost (6.54.0)
+
+   Two rules carry the whole design. An estimate wears a badge and a reported
+   figure does not, because a number computed from a published price and a
+   number a host actually billed are different claims. And an unpriced request
+   is drawn in the muted colour with a dash -- never as $0.00, which would be
+   a claim that it was free.
+   --------------------------------------------------------------------------- */
+
+.cost-amount {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cost-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cost-unpriced {
+  color: var(--muted);
+}
+
+.cost-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.cost-note {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.cost-panel {
+  margin-bottom: 16px;
+}

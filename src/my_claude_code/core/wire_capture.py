@@ -35,9 +35,12 @@ emitted whole and first; only ``messages``/``tools`` degrade, to counts and
 names; and the output always parses as JSON.
 """
 
+import hashlib
+import hmac
 import json
+import re
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -105,6 +108,110 @@ _REASONING_KEYS = (
 
 _DISABLED_VALUES = frozenset({"none", "disabled", "off", "false", "0", ""})
 
+# A value that is nothing but a long run of hex or base64url is a credential
+# often enough, and is *never* a knob worth reading, so it is redacted here on
+# entropy alone.
+#
+# Deliberately NOT in ``core.diagnostics``: that scrubber runs over free error
+# text, where a bare 64-hex run is usually a sha256 digest an operator needs to
+# see. Here the values are structured -- one JSON leaf at a time, already
+# stripped of prompt text -- so a whole-value match cannot swallow half a
+# sentence, and the sentence it would have swallowed does not exist.
+#
+# Anchored whole-value on purpose. ``fullmatch`` means a session signature is
+# redacted and a model id containing a hex-looking segment is not.
+_ENTROPY_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # 32 or 64 hex characters: the MD5/SHA-1/SHA-256-shaped session tokens
+    # several gateways mint.
+    re.compile(r"[0-9a-fA-F]{32}"),
+    re.compile(r"[0-9a-fA-F]{64}"),
+    # A base64/base64url run of 40+ characters that carries at least one
+    # digit and both cases. Prose and identifiers fail one of those three
+    # tests; a random key passes all of them.
+    re.compile(r"[A-Za-z0-9+/_-]{40,}={0,2}"),
+)
+
+# The shortest string that may be compared against a configured credential.
+# Below this a "credential" is a placeholder ("test", "none", "changeme") and
+# hashing it would redact every innocuous field that happens to repeat it.
+MIN_HASHED_CREDENTIAL_CHARS = 16
+
+# sha256 hex digests of the credentials this process is configured with.
+#
+# ``core`` may not import ``config``, and it must not hold a secret in memory
+# either, so the digests are pushed down from the settings layer and the values
+# themselves never arrive. Redaction by *shape* cannot catch a credential whose
+# shape nobody published -- a custom provider's key can be any string at all --
+# and a value equal to a key this proxy was configured with is a credential by
+# definition, whatever it looks like and whatever key it sits under.
+#
+# Process-wide, so ``tests/conftest.py`` resets it between tests.
+_CREDENTIAL_DIGESTS: frozenset[str] = frozenset()
+
+
+def install_credential_digests(values: Iterable[str]) -> None:
+    """Record sha256 digests of the configured credentials for redaction.
+
+    The values are hashed immediately and discarded; nothing here ever logs a
+    credential or a digest. Called from the settings-aware layer at startup and
+    whenever configuration is reloaded.
+    """
+    global _CREDENTIAL_DIGESTS
+    digests = {
+        hashlib.sha256(value.encode("utf-8")).hexdigest()
+        for value in values
+        if isinstance(value, str) and len(value) >= MIN_HASHED_CREDENTIAL_CHARS
+    }
+    _CREDENTIAL_DIGESTS = frozenset(digests)
+
+
+def reset_credential_digests() -> None:
+    """Forget every configured-credential digest."""
+    global _CREDENTIAL_DIGESTS
+    _CREDENTIAL_DIGESTS = frozenset()
+
+
+def _is_configured_credential(text: str) -> bool:
+    """Whether ``text`` is exactly a credential this process was configured with."""
+    if not _CREDENTIAL_DIGESTS or len(text) < MIN_HASHED_CREDENTIAL_CHARS:
+        return False
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    # Constant time against every candidate, and never short-circuited on a
+    # match, so the comparison leaks neither the value nor which key matched.
+    matched = False
+    for known in _CREDENTIAL_DIGESTS:
+        matched |= hmac.compare_digest(digest, known)
+    return matched
+
+
+def _is_high_entropy_secret(text: str) -> bool:
+    """Whether a whole value looks like a bare credential run."""
+    stripped = text.strip()
+    if len(stripped) < 32:
+        return False
+    for pattern in _ENTROPY_VALUE_PATTERNS:
+        if not pattern.fullmatch(stripped):
+            continue
+        if pattern.pattern.startswith("[0-9a-fA-F]"):
+            return True
+        # The base64 rung needs the mixed-alphabet evidence; a 40-character
+        # lowercase word is not a key.
+        has_digit = any(character.isdigit() for character in stripped)
+        has_upper = any(character.isupper() for character in stripped)
+        has_lower = any(character.islower() for character in stripped)
+        if has_digit and has_upper and has_lower:
+            return True
+    return False
+
+
+def redact_string_value(text: str) -> str:
+    """Redact one structured string leaf, by exact match, entropy, then shape."""
+    if _is_configured_credential(text):
+        return REDACTED
+    if _is_high_entropy_secret(text):
+        return REDACTED
+    return redact_sensitive_error_text(text)
+
 
 def _is_secret_key(key: str) -> bool:
     lowered = key.lower()
@@ -116,11 +223,17 @@ def _is_secret_key(key: str) -> bool:
 def redact_wire_value(value: Any) -> Any:
     """Recursively redact credentials by key name and by value shape.
 
-    Two passes, because either alone leaks. A key named ``api_key`` is redacted
+    Four passes, because each alone leaks. A key named ``api_key`` is redacted
     whatever it holds, which covers a provider-specific auth field with an
-    unrecognizable value; and every remaining string is run through the
-    project's credential-shape scrubber, which covers a key smuggled into a
-    field nobody thought to name (``sk-``, ``nvapi-``, ``gsk_``, ``Bearer x``).
+    unrecognizable value. Every remaining string is then compared against the
+    credentials this process was configured with (by digest -- see
+    :func:`install_credential_digests`), which catches a configured key under
+    any name and in any shape; screened for a bare high-entropy run, which
+    catches the 32/64-hex and base64 session tokens no published prefix
+    describes; and finally run through the project's credential-shape scrubber,
+    which covers a key smuggled into a field nobody thought to name (``sk-``,
+    ``nvapi-``, ``gsk_``, ``csk-``, ``xai-``, ``fw_``, ``ya29.``, ``AKIA``, a
+    JWT, ``Bearer x``).
     """
     if isinstance(value, Mapping):
         out: dict[str, Any] = {}
@@ -129,7 +242,7 @@ def redact_wire_value(value: Any) -> Any:
             out[key] = REDACTED if _is_secret_key(key) else redact_wire_value(item)
         return out
     if isinstance(value, str):
-        return redact_sensitive_error_text(value)
+        return redact_string_value(value)
     if isinstance(value, list | tuple):
         return [redact_wire_value(item) for item in value]
     return value

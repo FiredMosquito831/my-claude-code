@@ -864,3 +864,49 @@ SUPPORTED_PROVIDER_IDS: tuple[str, ...] = tuple(PROVIDER_CATALOG.keys())
 
 if len(set(SUPPORTED_PROVIDER_IDS)) != len(SUPPORTED_PROVIDER_IDS):
     raise AssertionError("Duplicate provider ids in PROVIDER_CATALOG key order")
+
+
+#: Settings attributes that hold a secret but belong to no provider descriptor.
+_EXTRA_CREDENTIAL_ATTRS: tuple[str, ...] = (
+    "anthropic_auth_token",
+    "exa_api_key",
+    "tavily_api_key",
+    "brave_search_api_key",
+    "jina_api_key",
+    "serper_api_key",
+    "firecrawl_api_key",
+    "linkup_api_key",
+    "perplexity_search_api_key",
+    "parallel_api_key",
+    "searchapi_api_key",
+    "serpapi_api_key",
+    "ollama_search_api_key",
+)
+
+
+def configured_credential_values(settings: object) -> tuple[str, ...]:
+    """Every non-empty credential this configuration carries, deduplicated.
+
+    Used by the wire-body redactor, which hashes them and keeps only the
+    digests: a value equal to a key this proxy is configured with is a
+    credential whatever key it arrives under and whatever shape it has, and
+    shape rules alone can never cover a custom provider's key.
+
+    Duck-typed rather than typed against ``Settings`` so this module keeps
+    importing nothing. Anything unreadable or non-string is skipped: a
+    redaction helper must never be the reason a request fails.
+    """
+    attrs = [
+        descriptor.credential_attr
+        for descriptor in PROVIDER_CATALOG.values()
+        if descriptor.credential_attr
+    ]
+    attrs.extend(_EXTRA_CREDENTIAL_ATTRS)
+    found: list[str] = []
+    seen: set[str] = set()
+    for attr in attrs:
+        value = getattr(settings, attr, None)
+        if isinstance(value, str) and value.strip() and value not in seen:
+            seen.add(value)
+            found.append(value)
+    return tuple(found)

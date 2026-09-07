@@ -382,6 +382,12 @@ DASHBOARD_RECONNECT_TIMEOUT_SECONDS = (
     900.0 + SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT + 120.0
 )
 
+# Per-request cost estimation.
+# How the pricing ladder may be walked. Mirrors ``application.cost.COST_MODES``,
+# which cannot be imported here because ``config`` imports nothing.
+COST_ESTIMATION_MODE_DEFAULT = "auto"
+COST_ESTIMATION_MODES = ("auto", "reported_only", "computed_only")
+
 # Request log storage.
 REQUEST_LOG_MAX_ROWS_DEFAULT = 50_000
 REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT = 50_000

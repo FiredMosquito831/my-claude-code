@@ -11,6 +11,7 @@ from my_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from my_claude_code.core.reported_cost import record_reported_usage
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -117,6 +118,11 @@ class DeepSeekProvider(OpenAIChatProvider):
         a miss is a token the cache did not serve, not a token written at a
         premium, which is what Anthropic's field means.
         """
+        # The base implementation is not called -- DeepSeek's cache split has
+        # nothing to do with ``prompt_tokens_details`` -- so the reported-cost
+        # read it performs has to happen here too, or this one provider would
+        # be the only host whose ``usage.cost`` was silently dropped.
+        record_reported_usage(usage_info)
         cache_hit_tokens = usage_int(usage_info, "prompt_cache_hit_tokens")
         if cache_hit_tokens is None:
             return {}

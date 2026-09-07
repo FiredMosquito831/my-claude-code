@@ -11,6 +11,7 @@ import json
 import pytest
 
 from my_claude_code.config.constants import REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT
+from my_claude_code.core import wire_capture
 from my_claude_code.core.wire_capture import (
     _CONTENT_FIELDS,
     _SAMPLING_FIELDS,
@@ -465,3 +466,96 @@ def test_a_provider_can_record_a_reasoning_adaptation() -> None:
     wire_capture._WIRE_TRACE.set(None)
     # No trace installed: recording must not raise.
     record_reasoning_adaptation(ReasoningAdaptationKind.SUPPRESSED, "ignored")
+
+
+# --------------------------------------------------------------------------
+# Credential value shapes (6.54.0). Nine shapes reached ``wire_body``
+# verbatim: the key-name pass cannot see a credential under an innocuous key,
+# and the shape pass knew only six prefixes.
+# --------------------------------------------------------------------------
+
+_JWT = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+    ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ"
+    ".dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(_JWT, id="jwt"),
+        pytest.param("ya29.a0ARrdaM9xQfakeGoogleOauthAccessTokenValue", id="ya29"),
+        pytest.param("AKIAIOSFODNN7EXAMPLE", id="aws_access_key_id"),
+        pytest.param("csk-abcdef0123456789abcdef0123456789", id="cerebras"),
+        pytest.param("xai-abcdef0123456789abcdef0123456789", id="xai"),
+        pytest.param("fw_abcdef0123456789abcdef0123456789", id="fireworks"),
+        pytest.param("a" * 32, id="bare_32_hex"),
+        pytest.param("0123456789abcdef" * 4, id="bare_64_hex"),
+        pytest.param("aGVsbG8gd29ybGQgdGhpcyBpcyBhIEZBS0Uga2V5MTIzNDU2Nzg5", id="b64"),
+    ],
+)
+def test_a_credential_shape_under_an_innocuous_key_is_redacted(value):
+    """Every measured leak, under the key the audit used: ``foo``."""
+    redacted = wire_capture.redact_wire_value(
+        {"extra_body": {"vendor": {"foo": value}}}
+    )
+    assert redacted["extra_body"]["vendor"]["foo"] == REDACTED
+    assert value not in json.dumps(redacted)
+
+
+def test_a_jwt_under_an_innocuous_key_is_redacted():
+    body = {"extra_body": {"vendor": {"trace_jwt": _JWT}}}
+    assert wire_capture.redact_wire_value(body)["extra_body"]["vendor"][
+        "trace_jwt"
+    ] == (REDACTED)
+
+
+def test_a_bare_hex_run_under_an_innocuous_key_is_redacted():
+    signature = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    body = {"extra_body": {"vendor": {"session_signature": signature}}}
+    redacted = wire_capture.redact_wire_value(body)
+    assert redacted["extra_body"]["vendor"]["session_signature"] == REDACTED
+
+
+def test_an_ordinary_model_id_is_not_mistaken_for_a_credential():
+    """The entropy rung is whole-value and must not eat routing knobs."""
+    body = {
+        "model": "anthropic/claude-sonnet-4-5-20250929",
+        "user": "workspace-42",
+        "reasoning_effort": "high",
+        "max_tokens": 8192,
+    }
+    assert wire_capture.redact_wire_value(body) == body
+
+
+def test_a_configured_credential_is_redacted_by_hash():
+    """A key this proxy is configured with is a credential in any field.
+
+    Shape rules cannot cover a custom provider's key, which may be any string
+    at all -- including one that looks exactly like a model id.
+    """
+    secret = "this-is-a-custom-gateway-key"
+    body = {"extra_body": {"vendor": {"routing_hint": secret}}}
+    assert (
+        wire_capture.redact_wire_value(body)["extra_body"]["vendor"]["routing_hint"]
+        == secret
+    ), "not configured yet, so it is just a string"
+
+    wire_capture.install_credential_digests([secret])
+    try:
+        redacted = wire_capture.redact_wire_value(body)
+    finally:
+        wire_capture.reset_credential_digests()
+    assert redacted["extra_body"]["vendor"]["routing_hint"] == REDACTED
+
+
+def test_a_short_configured_value_is_never_hashed():
+    """A placeholder credential must not redact every field that repeats it."""
+    wire_capture.install_credential_digests(["test"])
+    try:
+        assert wire_capture.redact_wire_value({"tool_choice": "test"}) == {
+            "tool_choice": "test"
+        }
+    finally:
+        wire_capture.reset_credential_digests()

@@ -57,6 +57,7 @@ REQUEST_FIELD_IDS: tuple[str, ...] = (
     "input_uncached",
     "tokens_out",
     "turns_with_tools",
+    "cost",
     "ladder",
 )
 REQUEST_FIELD_LABELS: dict[str, str] = {
@@ -73,6 +74,7 @@ REQUEST_FIELD_LABELS: dict[str, str] = {
     "input_uncached": "Input uncached",
     "tokens_out": "Tokens out",
     "turns_with_tools": "Turns with tools",
+    "cost": "Cost",
     "ladder": "Upstream retry ladder",
 }
 
@@ -247,6 +249,10 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
     "input_uncached": ("tokens_in",),
     "tokens_out": ("tokens_out",),
     "turns_with_tools": ("tool_call_count",),
+    # Both columns, always together: an amount whose source is unknown is not
+    # a number a reader may act on, and a source with no amount is the record
+    # of an attempt to price, not a price.
+    "cost": ("cost_usd", "cost_source"),
     "input": ("input_text", "input_chars"),
     "output": ("output_text", "output_chars"),
     "tool_calls": ("tool_calls", "tool_call_count"),
@@ -327,6 +333,8 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "input_sha256",
     "output_sha256",
     "cache_hit_rate",
+    "cost_usd",
+    "cost_source",
     "ladder_tries",
     "ladder_statuses",
     "ladder_root_cause",
@@ -375,6 +383,8 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "input_sha256": "Input SHA-256",
     "output_sha256": "Output SHA-256",
     "cache_hit_rate": "Cache hit rate",
+    "cost_usd": "Cost (USD)",
+    "cost_source": "Cost source",
     "ladder_tries": "Upstream tries",
     "ladder_statuses": "Upstream statuses",
     "ladder_root_cause": "Root cause",
@@ -500,6 +510,32 @@ _REQUEST_AGGREGATE: dict[str, tuple[tuple[str, str], ...]] = {
     "tokens_out": (("tokens_out", "COALESCE(SUM(tokens_out), 0)"),),
     "turns_with_tools": (
         ("turns_with_tools", "SUM(CASE WHEN tool_call_count > 0 THEN 1 ELSE 0 END)"),
+    ),
+    # Reported and estimated are summed separately and never added together.
+    # A total that mixes what a host billed with what MCC computed launders a
+    # guess into a fact, and no reader can tell afterwards which half was
+    # which. ``cost_priced``/``cost_requests`` are the "N of M priced"
+    # denominator: a sum over a partly priced group is not a group total, and
+    # without the count beside it there is no way to know that.
+    #
+    # Bare ``SUM`` on purpose, with no ``COALESCE``: SQLite sums zero rows to
+    # NULL, and NULL is the correct answer for a group nothing priced.
+    "cost": (
+        ("cost_usd", "SUM(cost_usd)"),
+        (
+            "cost_reported_usd",
+            "SUM(CASE WHEN cost_source = 'provider' THEN cost_usd END)",
+        ),
+        (
+            "cost_estimated_usd",
+            "SUM(CASE WHEN cost_source IS NOT NULL"
+            " AND cost_source <> 'provider' THEN cost_usd END)",
+        ),
+        (
+            "cost_priced",
+            "SUM(CASE WHEN cost_usd IS NOT NULL THEN 1 ELSE 0 END)",
+        ),
+        ("cost_requests", "COUNT(*)"),
     ),
     "tool_calls": (
         ("tool_calls", "COALESCE(SUM(tool_call_count), 0)"),

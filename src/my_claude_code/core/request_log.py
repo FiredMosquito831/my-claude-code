@@ -11,7 +11,7 @@ import sqlite3
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from compression import zstd
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -165,6 +165,43 @@ SERVED_BY_KEY_SQL = (
     f" COALESCE(resolved_model, '{UNKNOWN_PROVIDER_KEY}')"
 )
 
+#: Dimensions the cost breakdown is grouped by, and the SQL that names each
+#: key. Mirrors ``core.export._REQUEST_DIMENSION_SQL`` deliberately: a cost card
+#: and an export of the same window must group the same rows under the same key
+#: or one of the two is lying about the other.
+_COST_DIMENSION_SQL: dict[str, str] = {
+    "provider": PROVIDER_KEY_SQL,
+    "model": "COALESCE(resolved_model, '(unknown)')",
+    "harness": "COALESCE(harness, '(unknown)')",
+    "day": "strftime('%Y-%m-%d', ts_epoch, 'unixepoch')",
+}
+
+
+def _cost_row(row: Any, *, key: str | None) -> dict[str, Any]:
+    """Shape one cost aggregate, keeping every NULL a NULL."""
+    shaped: dict[str, Any] = {
+        "reported_usd": row["reported_usd"],
+        "estimated_usd": row["estimated_usd"],
+        "priced": row["priced"] or 0,
+        "requests": row["requests"] or 0,
+    }
+    if key is not None:
+        shaped["key"] = key
+    return shaped
+
+
+def _cost_sort_key(row: Mapping[str, Any]) -> tuple[float, int]:
+    """Order cost rows by spend, then by volume.
+
+    The zeros here are an ordering decision, not a stored value: an unpriced
+    group sorts last rather than being renamed to free.
+    """
+    return (
+        (row.get("reported_usd") or 0.0) + (row.get("estimated_usd") or 0.0),
+        row.get("requests") or 0,
+    )
+
+
 # Days of per-rule history the optimizer page plots. Fourteen daily buckets is
 # what a sparkline can carry legibly; the companion table shows the same rows.
 _OPTIMIZATION_SERIES_DAYS = 14
@@ -235,6 +272,11 @@ _LIST_METADATA_COLUMNS = (
     # can be labelled without being opened, and so the harness filter and the
     # rows it selects are visibly the same fact.
     "harness",
+    # What it cost and who said so. Both, always: an amount whose provenance
+    # the reader cannot see is a number they cannot act on, and the list row
+    # is where the "est." badge is decided.
+    "cost_usd",
+    "cost_source",
 )
 
 _SCHEMA = """
@@ -939,6 +981,23 @@ _ADDED_COLUMNS = (
         "image_bytes_out",
         "ALTER TABLE requests ADD COLUMN image_bytes_out INTEGER",
     ),
+    # Added in 6.54.0. What this request cost, in USD, and which source said
+    # so. Resolved once, at the capture commit, and never recomputed at read
+    # time: a price that changes next month must not silently rewrite last
+    # month's bill.
+    #
+    # NULL is "not priced" and it has to survive every layer above this one.
+    # It is emphatically NOT zero -- zero is a claim that the request was free,
+    # which is a claim only a source that publishes a zero may make. Three of
+    # the five implementations surveyed for this feature destroy that
+    # distinction, each at a different layer, so there is no
+    # ``COALESCE(cost_usd, 0)`` anywhere that reads this column.
+    #
+    # Deliberately NOT backfilled. Historical rows stay NULL forever: pricing
+    # 275,000 old requests at today's rates would produce a confident number
+    # that was never anybody's bill.
+    ("cost_usd", "ALTER TABLE requests ADD COLUMN cost_usd REAL"),
+    ("cost_source", "ALTER TABLE requests ADD COLUMN cost_source TEXT"),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -966,6 +1025,13 @@ _ATTEMPT_ADDED_COLUMNS = (
     # "not measured" meaning on every row that already exists.
     ("tokens_in", "ALTER TABLE request_attempts ADD COLUMN tokens_in INTEGER"),
     ("tokens_out", "ALTER TABLE request_attempts ADD COLUMN tokens_out INTEGER"),
+    # Added in 6.54.0 with per-request costing. A describe hop is a real call
+    # to a real model on a real key, and since 6.53.0 it reports its own
+    # tokens, so it can be priced -- separately from the request that provoked
+    # it, because it is a different model on a different route. NULL is "not
+    # priced", never zero, exactly as on the parent row.
+    ("cost_usd", "ALTER TABLE request_attempts ADD COLUMN cost_usd REAL"),
+    ("cost_source", "ALTER TABLE request_attempts ADD COLUMN cost_source TEXT"),
 )
 
 # Written in this order by ``_record_to_row``. The INSERT's column list, its
@@ -1027,6 +1093,8 @@ _REQUEST_INSERT_COLUMNS = (
     "est_image_tokens",
     "image_bytes_in",
     "image_bytes_out",
+    "cost_usd",
+    "cost_source",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -1080,6 +1148,8 @@ _ATTEMPT_INSERT_COLUMNS = (
     "ladder_tries",
     "tokens_in",
     "tokens_out",
+    "cost_usd",
+    "cost_source",
 )
 
 # Blank, not zero: a request whose attempts predate the ladder measured
@@ -1273,6 +1343,13 @@ class RouteAttempt:
     # counters come from the client-facing stream, not from here.
     tokens_in: int | None = None
     tokens_out: int | None = None
+    # What this attempt cost on its own, and which rung of the pricing ladder
+    # said so. Filled for a describe hop, which is the one attempt kind that
+    # reports usage; NULL everywhere else, because an ordinary attempt's cost
+    # is the request row's and duplicating it here would double every total
+    # that ever joined the two tables.
+    cost_usd: float | None = None
+    cost_source: str | None = None
 
 
 # ---------------------------------------------------- recovery observability --
@@ -1454,6 +1531,12 @@ class RequestRecord:
     # when nothing was resized.
     image_bytes_in: int | None = None
     image_bytes_out: int | None = None
+    # What this request cost in USD and which rung of the pricing ladder said
+    # so -- "provider", "models_dev", "litellm" or "cross_provider". Both None
+    # when nothing priced it, which is a different fact from a cost of zero and
+    # is stored, read and rendered as a different fact all the way out.
+    cost_usd: float | None = None
+    cost_source: str | None = None
     images: tuple[CapturedImage, ...] = ()
     attempts: tuple[RouteAttempt, ...] = ()
     tool_calls: list[dict[str, Any]] | None = None
@@ -3038,6 +3121,8 @@ class RequestLogStore:
                 attempt.ladder_tries,
                 attempt.tokens_in,
                 attempt.tokens_out,
+                attempt.cost_usd,
+                attempt.cost_source,
             )
             for record in batch
             for attempt in record.attempts
@@ -3068,7 +3153,8 @@ class RequestLogStore:
         rows = conn.execute(
             "SELECT attempt, provider, model_ref, outcome, error_kind,"
             " error_message, duration_ms, params, wire_body, reasoning_emitted,"
-            " key_index, key_label, ladder_tries, tokens_in, tokens_out"
+            " key_index, key_label, ladder_tries, tokens_in, tokens_out,"
+            " cost_usd, cost_source"
             " FROM request_attempts"
             " WHERE request_id = ? ORDER BY attempt",
             (request_id,),
@@ -3101,6 +3187,12 @@ class RequestLogStore:
                 "key_index": row["key_index"],
                 "key_label": row["key_label"],
                 "ladder_tries": row["ladder_tries"],
+                # What this hop cost on its own. A describe attempt is a real
+                # call to a real model on a real key; NULL everywhere else,
+                # because an ordinary attempt's cost is the request row's and
+                # repeating it here would double every joined total.
+                "cost_usd": row["cost_usd"],
+                "cost_source": row["cost_source"],
             }
             for row in rows
         ]
@@ -3361,6 +3453,8 @@ class RequestLogStore:
             record.est_image_tokens,
             record.image_bytes_in,
             record.image_bytes_out,
+            record.cost_usd,
+            record.cost_source,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose
@@ -3595,6 +3689,97 @@ class RequestLogStore:
             ]
         return rows, total
 
+    def cost_breakdown(
+        self,
+        *,
+        limit: int = 20,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        q: str | None = None,
+        local: str | None = None,
+        harness: str | None = None,
+    ) -> dict[str, Any]:
+        """What the filtered traffic cost, split by provenance, per dimension.
+
+        Deliberately not served from the stats rollup. The rollup is keyed on
+        nine dimensions and counts integers; adding a currency to it would mean
+        a versioned rebuild of every bucket on every installation, and the
+        question here -- "what did this cost, and how much of the answer is a
+        guess" -- is asked on a page, not on the hot path.
+
+        **Reported and estimated are summed apart and never added together.**
+        A merged total silently launders an estimate into a fact, and no reader
+        can tell afterwards which half was which. The two arrive as two numbers
+        and are rendered as two numbers.
+
+        **Every sum ships with its denominator.** ``priced`` of ``requests`` is
+        what makes a partial total readable as a partial total; without it a
+        window where nine of ten models are unpriced looks like a cheap week.
+
+        Bare ``SUM`` throughout, with no ``COALESCE``: SQLite sums zero rows to
+        NULL, and NULL -- not zero -- is the correct answer for a group nothing
+        priced.
+        """
+        where, args = self._where(
+            provider=provider,
+            model=model,
+            status=status,
+            endpoint=endpoint,
+            key=key,
+            since=since,
+            until=until,
+            q=q,
+            local=local,
+            harness=harness,
+        )
+        limit = max(1, min(limit, 200))
+        measures = (
+            "SUM(CASE WHEN cost_source = 'provider' THEN cost_usd END)"
+            " AS reported_usd,"
+            " SUM(CASE WHEN cost_source IS NOT NULL"
+            " AND cost_source <> 'provider' THEN cost_usd END) AS estimated_usd,"
+            " SUM(CASE WHEN cost_usd IS NOT NULL THEN 1 ELSE 0 END) AS priced,"
+            " COUNT(*) AS requests"
+        )
+        result: dict[str, Any] = {}
+        with self._connection() as conn:
+            totals = conn.execute(
+                f"SELECT {measures} FROM requests{where}", args
+            ).fetchone()
+            result["totals"] = _cost_row(totals, key=None)
+            result["by_source"] = [
+                {
+                    "key": row["key"],
+                    "cost_usd": row["cost_usd"],
+                    "requests": row["requests"],
+                }
+                for row in conn.execute(
+                    "SELECT cost_source AS key, SUM(cost_usd) AS cost_usd,"
+                    f" COUNT(*) AS requests FROM requests{where}"
+                    f"{' AND' if where else ' WHERE'} cost_source IS NOT NULL"
+                    " GROUP BY cost_source ORDER BY cost_source",
+                    args,
+                ).fetchall()
+            ]
+            for name, expression in _COST_DIMENSION_SQL.items():
+                rows = conn.execute(
+                    f"SELECT {expression} AS key, {measures}"
+                    f" FROM requests{where} GROUP BY key",
+                    args,
+                ).fetchall()
+                ordered = sorted(
+                    (_cost_row(row, key=row["key"]) for row in rows),
+                    key=_cost_sort_key,
+                    reverse=True,
+                )
+                result[f"by_{name}"] = ordered[:limit]
+        return result
+
     def get_request(self, request_id: str) -> dict[str, Any] | None:
         with self._connection() as conn:
             cursor = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,))
@@ -3625,6 +3810,7 @@ class RequestLogStore:
         since: float | None = None,
         until: float | None = None,
         q: str | None = None,
+        local: str | None = None,
         harness: str | None = None,
         page_size: int = 1_000,
     ) -> Generator[dict[str, Any]]:
@@ -3651,6 +3837,7 @@ class RequestLogStore:
             since=since,
             until=until,
             q=q,
+            local=local,
             harness=harness,
         )
         conn = self._connect()
@@ -3705,6 +3892,7 @@ class RequestLogStore:
         since: float | None = None,
         until: float | None = None,
         q: str | None = None,
+        local: str | None = None,
         harness: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield the aggregated (grouped) records for an export.
@@ -3722,6 +3910,7 @@ class RequestLogStore:
             since=since,
             until=until,
             q=q,
+            local=local,
             harness=harness,
         )
         group_sql = ", ".join(group_by)
