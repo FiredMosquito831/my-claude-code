@@ -27,25 +27,31 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [The embedded webview (pywebview), and its caveat](#the-embedded-webview-pywebview-and-its-caveat)
 - [4. Tutorial: connect Claude Code (CLI)](#4-tutorial-connect-claude-code-cli)
 - [5. Tutorial: connect Claude Desktop](#5-tutorial-connect-claude-desktop)
-- [6. Tutorial: connect another CLI](#6-tutorial-connect-another-cli)
-- [7. Providers and API keys](#7-providers-and-api-keys)
+- [6. Point a desktop app here](#6-point-a-desktop-app-here)
+  - [The two undo modes](#the-two-undo-modes)
+  - [Which apps have a button](#which-apps-have-a-button)
+  - [Antigravity](#antigravity)
+  - [Hyper / HyperCharm](#hyper--hypercharm)
+  - [Without a browser: `mcc-apps`](#without-a-browser-mcc-apps)
+- [7. Tutorial: connect another CLI](#7-tutorial-connect-another-cli)
+- [8. Providers and API keys](#8-providers-and-api-keys)
   - [Using Claude models](#using-claude-models)
   - [Custom providers](#custom-providers)
-- [8. Model tiers and routing](#8-model-tiers-and-routing)
+- [9. Model tiers and routing](#9-model-tiers-and-routing)
   - [Tiers for every other coding agent](#tiers-for-every-other-coding-agent)
   - [Tutorial: manage many models](#tutorial-manage-many-models)
-- [9. Web search](#9-web-search)
-- [10. Analytics](#10-analytics)
+- [10. Web search](#10-web-search)
+- [11. Analytics](#11-analytics)
   - [Tutorial: read the request detail](#tutorial-read-the-request-detail)
   - [The Token Optimizer page](#the-token-optimizer-page)
-- [11. Multi-key rotation](#11-multi-key-rotation)
+- [12. Multi-key rotation](#12-multi-key-rotation)
   - [Tutorial: why my key was benched](#tutorial-why-my-key-was-benched)
   - [The RTK token optimizer](#the-rtk-token-optimizer)
-- [12. Limits and resilience](#12-limits-and-resilience)
-- [13. Updating](#13-updating)
+- [13. Limits and resilience](#13-limits-and-resilience)
+- [14. Updating](#14-updating)
   - [Stopping and restarting, and how long it takes](#stopping-and-restarting-and-how-long-it-takes)
-- [14. Security and networking](#14-security-and-networking)
-- [15. Troubleshooting](#15-troubleshooting)
+- [15. Security and networking](#15-security-and-networking)
+- [16. Troubleshooting](#16-troubleshooting)
 - [Appendix: what changed in 6.x](#appendix-what-changed-in-6x)
 
 ---
@@ -991,7 +997,125 @@ With **Model discovery** on, the app populates its picker from MCC's `/v1/models
 
 ---
 
-## 6. Tutorial: connect another CLI
+## 6. Point a desktop app here
+
+Section 5 is a tutorial for one application. This section is the general case:
+**Coding agents -> Desktop apps** lists every desktop application MCC knows
+about, says what state each one is in on this machine, and — for the ones whose
+configuration lives in a file MCC can find — gives you one button to write it
+and one to take it back out.
+
+MCC never launches these applications, and never sets an environment variable
+on your behalf. The card tells you what to export and what to restart; you do
+both.
+
+### What each card can say
+
+| Badge | What it means |
+|---|---|
+| **Not installed** | None of the marker paths this app creates on first run exists here. |
+| **Installed, not configured** | The app is here; its config file has no MCC keys, or does not exist yet. |
+| **Configured by MCC** | MCC's keys are present and are exactly what a re-apply would write. |
+| **Configured but drifted** | MCC's keys are present but different — a hand edit, a stale token, or an older MCC. |
+| **Config file will not parse** | The file exists and is not valid. MCC will not write a document it cannot read. |
+| **Not routable** | This app cannot be pointed here at all. The card gives the reason and the date it was measured. |
+
+### What Configure writes, and what it leaves alone
+
+Press **What will this write?** first. It returns a real unified diff of your
+real file, with any credential masked, and touches nothing on disk.
+
+When you press **Configure**, MCC:
+
+- copies your file to a `.mcc-backup` sibling, once, before its first ever edit
+  — so the backup is always your pre-MCC file rather than yesterday's MCC output;
+- writes exactly one subtree (`model_providers.mcc`, `provider.mcc`, and so on)
+  and carries every other key through byte-for-byte, comments included;
+- never writes a literal token. Where the app takes a reference — `env_key`,
+  `$VAR`, `{env:VAR}`, `${input:...}` — MCC writes the reference. Where the app
+  resolves nothing at all, MCC keeps the value in a file of its own at mode
+  0600 rather than in a document you edit.
+
+Re-applying with the same models is a no-op: no rewrite, no changed mtime, no
+second backup.
+
+### The two undo modes
+
+Undo offers a picker, because there are two honest answers:
+
+- **Remove MCC's keys only** — deletes what MCC owns and leaves every other
+  byte alone. The default, and the one that cannot surprise anyone.
+- **Restore the original values** — additionally puts back the values MCC
+  *replaced*. Codex's `model`, Goose's `GOOSE_PROVIDER` and Antigravity's
+  `modelProvider` are values you may already have set to something of your own,
+  and MCC records what was there before it overwrote them. If the file has been
+  rewritten since MCC configured it, this mode refuses rather than reverting an
+  edit you made on purpose, and points you at the backup.
+
+The same two modes now apply to **Configure Claude Code**. Before 6.55.0 that
+page overwrote `ANTHROPIC_BASE_URL` without remembering what it held, so a
+user who had it pointed at another gateway lost it. It is remembered now.
+
+### Which apps have a button
+
+| App | Configure button | Notes |
+|---|---|---|
+| **Codex desktop** | yes | Also writes `model = "mcc/best"`, by necessity: with a custom `model_provider` the app has no UI to pick a model. |
+| **OpenCode desktop** | yes | Token stays a `{env:...}` reference. |
+| **Crush** | yes | Also the official client for Charm's Hyper/HyperCharm. |
+| **VS Code (Copilot custom endpoint)** | yes | MCC owns exactly one element of `chatLanguageModels.json`, matched by name; nothing else in the array is touched. |
+| **Goose desktop** | yes | Keys written into Goose's `config.yaml` are *ignored* by Goose, so MCC writes none: it owns a whole provider file and Goose reads the key from its keyring. |
+| **Antigravity (`agy`)** | yes | See below. |
+| **Roo Code** | yes | Uses Roo's own import hook, so MCC owns the settings file outright. |
+| **Command Code** | status only | Already configured by `mcc-commandcode` since 6.27.0; the card reports and does not re-mechanise. |
+| **Claude Desktop** | instructions | Its gateway settings are entered in a dialog, and Anthropic documents the dialog rather than a file. The card gives you the six values with copy buttons. A button follows once the persistence path is established — MCC does not guess one. |
+| **Kimi desktop, Qwen desktop, LM Studio, Warp** | not routable | Each card carries the measured reason and its date. |
+
+### Antigravity
+
+`agy` **is** routable, as of a 2026-09-07 measurement, and MCC needed no new
+inbound surface for it: with `modelProvider` set to `gemini`, `agy` speaks the
+**public** Gemini API, which MCC has served at `/v1beta` for some time. Two
+limits are worth knowing before you turn it on:
+
+- `modelProvider` is the switch, not the base URL. With that key absent, `agy`
+  talks to Google's own backend whatever `GOOGLE_GEMINI_BASE_URL` says.
+- `agy` validates `--model` against its own catalogue *before* it sends
+  anything, so the `mcc/*` tier aliases cannot be named. Use `agy`'s own model
+  ids; MCC routes them through the resolution ladder like any other name.
+
+Antigravity has no launcher command of its own, and does not need one:
+`agy` publishes no verified settings-path override, so a launcher would have
+to write the same file this card already writes, with the same backup and the
+same undo, and would add nothing.
+
+### Hyper / HyperCharm
+
+Hyper has no launcher command of its own, and will not get one. **Hyper**
+(hyper.charm.land) is a gateway and an API — it ships no CLI and no desktop
+application of its own. **Crush is its official client**, and Crush is already
+both an MCC harness (`mcc-crush`) and a card in this group. Point Crush here
+and you have pointed Hyper's client here.
+
+### Without a browser: `mcc-apps`
+
+```
+mcc-apps list                      every app and its state
+mcc-apps status <app>              one app: its file, its keys, what to export
+mcc-apps configure <app>           write MCC's keys
+mcc-apps configure <app> --preview show the diff and write nothing
+mcc-apps undo <app>                remove MCC's keys
+mcc-apps undo <app> --restore      remove them and put back what MCC replaced
+```
+
+It calls the same routes the page does, so a card and the command cannot
+disagree about what would be written. It needs the MCC server running.
+
+It is **not** `mcc-desktop` — that command is MCC's own tray application.
+
+---
+
+## 7. Tutorial: connect another CLI
 
 > **A coding agent is not a provider.**
 > The CLIs in this section sit **downstream** of MCC: they send requests to it.
@@ -1751,7 +1875,7 @@ substitution.
 
 ---
 
-## 7. Providers and API keys
+## 8. Providers and API keys
 
 Open the **Providers** tab. Every provider is one card in a single searchable grid — there are 56 of them, so start by typing in **Search providers**. It matches the provider's name, its id and its environment variable, so `groq`, `GROQ_API_KEY` and `alibaba` all find what you would expect. **Only configured** hides everything you have not set up yet.
 
@@ -1877,7 +2001,7 @@ One caveat on capabilities. models.dev, which supplies context windows, output c
 
 ---
 
-## 8. Model tiers and routing
+## 9. Model tiers and routing
 
 MCC routes by **tier**, not by a single model. Fable, Opus, Sonnet, Haiku and a fallback each map to a real model on your provider.
 
@@ -2402,7 +2526,7 @@ A 400 that names a **sampling** parameter — `top_p`, `temperature`, `seed` —
 
 ---
 
-## 9. Web search
+## 10. Web search
 
 Claude Code's `web_search` is an Anthropic **server tool**: normally Anthropic executes the search and bills you for it. MCC intercepts and fulfils it locally against a provider you choose, so **no Anthropic search credits are used**, and it works with any model provider.
 
@@ -2501,7 +2625,7 @@ All **66** advanced options are editable from the Web Search tab's **Advanced op
 
 ---
 
-## 10. Analytics
+## 11. Analytics
 
 Two separate local SQLite stores under `~/.mcc/logs/`, both written by a background thread so they never block a request.
 
@@ -2822,7 +2946,7 @@ WEBSEARCH_LOG_CONTENT_MAX_CHARS=2000000 # cap per input/output JSON payload
 
 ---
 
-## 11. Multi-key rotation
+## 12. Multi-key rotation
 
 Both model and web search providers accept several keys in one variable:
 
@@ -2915,7 +3039,7 @@ MCC reads RTK's own `rtk gain` report and shows the resulting savings on the [To
 
 ---
 
-## 12. Limits and resilience
+## 13. Limits and resilience
 
 <div align="center">
   <img src="../assets/admin-limits.png" alt="Limits and resilience configuration" width="860">
@@ -3010,7 +3134,7 @@ Two cards that used to live here now sit where you see their effect. The `REQUES
 
 ---
 
-## 13. Updating
+## 14. Updating
 
 <div align="center">
   <img src="../assets/admin-version.png" alt="Version panel" width="860">
@@ -3075,7 +3199,7 @@ Re-running the install command does exactly the same thing and always fetches th
 
 ---
 
-## 14. Security and networking
+## 15. Security and networking
 
 Worth understanding before you expose anything.
 
@@ -3102,7 +3226,7 @@ Provider API keys are never sent to your agent, never written to the analytics s
 
 ---
 
-## 15. Troubleshooting
+## 16. Troubleshooting
 
 **`mcc-server: command not found` right after installing.**
 Close and reopen your terminal. The installer extends `PATH`; an existing shell won't see it. This is the single most common install issue.

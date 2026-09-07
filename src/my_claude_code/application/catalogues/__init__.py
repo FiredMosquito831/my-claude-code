@@ -39,6 +39,7 @@ from my_claude_code.application.catalogues.gemini_cli import (
 from my_claude_code.application.catalogues.gemini_cli import (
     build_gemini_cli_catalogue,
 )
+from my_claude_code.application.catalogues.goose import build_goose_catalogue
 from my_claude_code.application.catalogues.kilo import build_kilo_catalogue
 from my_claude_code.application.catalogues.kimi import build_kimi_catalogue
 from my_claude_code.application.catalogues.opencode import (
@@ -48,6 +49,7 @@ from my_claude_code.application.catalogues.opencode import build_opencode_catalo
 from my_claude_code.application.catalogues.pi import build_pi_catalogue
 from my_claude_code.application.catalogues.qwen import AUTH_TYPE as QWEN_AUTH_TYPE
 from my_claude_code.application.catalogues.qwen import build_qwen_catalogue
+from my_claude_code.application.catalogues.vscode import build_vscode_catalogue
 
 type CatalogueSerialiser = Callable[
     [Iterable[CatalogueModel]], tuple[dict[str, Any], DefaultedFields]
@@ -61,11 +63,13 @@ SERIALISERS: dict[str, CatalogueSerialiser] = {
     "crush": build_crush_catalogue,
     "droid": build_droid_catalogue,
     "gemini_cli": build_gemini_cli_catalogue,
+    "goose": build_goose_catalogue,
     "kilo": build_kilo_catalogue,
     "kimi": build_kimi_catalogue,
     "opencode": build_opencode_catalogue,
     "pi": build_pi_catalogue,
     "qwen": build_qwen_catalogue,
+    "vscode": build_vscode_catalogue,
 }
 
 #: Where each format keeps its per-model entries. Two shapes exist and both
@@ -87,11 +91,13 @@ MODEL_ENTRY_PATHS: dict[str, tuple[str, ...]] = {
     "crush": ("providers", CRUSH_PROVIDER_ID, "models"),
     "droid": (DROID_MODELS_KEY,),
     "gemini_cli": GEMINI_CLI_ALIASES_PATH,
+    "goose": ("custom_provider", "model_details"),
     "kilo": ("provider", OPENCODE_PROVIDER_ID, "models"),
     "kimi": ("models",),
     "opencode": ("provider", OPENCODE_PROVIDER_ID, "models"),
     "pi": ("models",),
     "qwen": ("modelProviders", QWEN_AUTH_TYPE),
+    "vscode": ("chatLanguageModel", "models"),
 }
 
 #: The second document a harness reads, for the one format that has two.

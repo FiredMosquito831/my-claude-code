@@ -79,9 +79,15 @@ def test_an_unservable_harness_is_listed_with_its_dated_reason(monkeypatch, tmp_
     assert antigravity["command_lines"] == []
     assert antigravity["command"] == ""
     assert antigravity["catalogue"] is None
-    assert "verified 2026-09-02" in antigravity["unavailable_reason"]
-    assert "agy 1.0.14" in antigravity["unavailable_reason"]
-    assert "cloudcode-pa.googleapis.com" in antigravity["unavailable_reason"]
+    # Re-measured 2026-09-07: agy *is* routable, through the public Gemini
+    # API MCC already serves, but through the Desktop apps card rather than a
+    # launcher. The reason still carries a date and the two measured limits,
+    # which is the whole contract this assertion exists to hold.
+    reason = antigravity["unavailable_reason"]
+    assert "2026-09-07" in reason
+    assert "Desktop apps card" in reason
+    assert "modelProvider" in reason
+    assert "mcc/*" in reason
 
     gemini = by_id["gemini_cli"]
     assert gemini["available"] is True

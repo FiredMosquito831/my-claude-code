@@ -1358,6 +1358,104 @@ const ROUTES = {
     ],
     harnesses: {},
   },
+  "/admin/api/desktop-apps": {
+    apps: [
+      { id: "codex_desktop", display_name: "Codex desktop",
+        summary: "Codex desktop and CLI share one config document.",
+        status: "servable", doc_url: "https://example.invalid/codex",
+        unavailable_reason: "", protocol: "openai_chat_completions",
+        base_url: "http://127.0.0.1:8082/v1", token_form: "env_name_field",
+        token_reference: "", token_env_var: "MCC_AUTH_TOKEN",
+        attribution_header: "http_headers", restart_required: true,
+        open_command: "codex", notes: ["Codex has no UI for picking a model."],
+        instruction_fields: [], owned_key: "model_providers.mcc",
+        display_path: "~/.codex/config.toml", sidecar_path: "",
+        overwrites: ["model_provider", "model"], sets_default_model: true,
+        probe: { state: "configured", document_path: "/home/u/.codex/config.toml",
+          document_exists: true, error: "", token_env_present: true,
+          restorable: true } },
+      { id: "opencode_desktop", display_name: "OpenCode desktop",
+        summary: "OpenCode expands {env:...} references.",
+        status: "servable", doc_url: "https://example.invalid/opencode",
+        unavailable_reason: "", protocol: "openai_chat_completions",
+        base_url: "http://127.0.0.1:8082/v1", token_form: "env_reference",
+        token_reference: "{env:MCC_AUTH_TOKEN}", token_env_var: "MCC_AUTH_TOKEN",
+        attribution_header: "headers", restart_required: true,
+        open_command: "opencode", notes: [], instruction_fields: [],
+        owned_key: "provider.mcc", display_path: "%APPDATA%/opencode/opencode.json",
+        sidecar_path: "", overwrites: [], sets_default_model: false,
+        probe: { state: "drifted", document_path: "/home/u/opencode.json",
+          document_exists: true, error: "", token_env_present: false,
+          restorable: false } },
+      { id: "goose_desktop", display_name: "Goose desktop",
+        summary: "MCC owns a whole file and names it in config.yaml.",
+        status: "servable", doc_url: "https://example.invalid/goose",
+        unavailable_reason: "", protocol: "openai_chat_completions",
+        base_url: "http://127.0.0.1:8082", token_form: "env_only",
+        token_reference: "", token_env_var: "MCC_AUTH_TOKEN",
+        attribution_header: "", restart_required: true, open_command: "goose",
+        notes: ["Goose ignores API keys written into config.yaml."],
+        instruction_fields: [], owned_key: "",
+        display_path: "%APPDATA%/Block/goose/config/config.yaml",
+        sidecar_path: "%APPDATA%/Block/goose/config/custom_providers/mcc.json",
+        overwrites: ["GOOSE_PROVIDER"], sets_default_model: false,
+        probe: { state: "installed", document_path: "/home/u/config.yaml",
+          document_exists: false, error: "", token_env_present: false,
+          restorable: false } },
+      { id: "crush_desktop", display_name: "Crush",
+        summary: "Charm's Crush expands $VAR.", status: "servable",
+        doc_url: "https://example.invalid/crush", unavailable_reason: "",
+        protocol: "openai_chat_completions", base_url: "http://127.0.0.1:8082/v1",
+        token_form: "env_reference", token_reference: "$MCC_AUTH_TOKEN",
+        token_env_var: "MCC_AUTH_TOKEN", attribution_header: "extra_headers",
+        restart_required: true, open_command: "crush", notes: [],
+        instruction_fields: [], owned_key: "providers.mcc",
+        display_path: "~/.config/crush/crush.json", sidecar_path: "",
+        overwrites: [], sets_default_model: false,
+        probe: { state: "not_installed", document_path: "/home/u/crush.json",
+          document_exists: false, error: "", token_env_present: false,
+          restorable: false } },
+      { id: "claude_desktop", display_name: "Claude Desktop",
+        summary: "Claude Desktop has a native gateway mode.",
+        status: "instructions_only", doc_url: "https://example.invalid/claude",
+        unavailable_reason: "", protocol: "anthropic_messages",
+        base_url: "http://127.0.0.1:8082", token_form: "in_app",
+        token_reference: "", token_env_var: "ANTHROPIC_AUTH_TOKEN",
+        attribution_header: "inferenceCustomHeaders", restart_required: true,
+        open_command: "",
+        notes: ["MCC does not guess a persistence path for these settings."],
+        instruction_fields: [
+          { label: "Connection", value: "Gateway" },
+          { label: "Base URL", value: "http://127.0.0.1:8082" },
+          { label: "Auth scheme", value: "Bearer" },
+          { label: "API key", value: "the value of ANTHROPIC_AUTH_TOKEN" },
+          { label: "Models", value: "mcc/best, mcc/good, mcc/medium, mcc/cheap" },
+          { label: "Custom headers", value: "x-mcc-harness: claude_desktop" },
+        ],
+        owned_key: "", display_path: "", sidecar_path: "", overwrites: [],
+        sets_default_model: false,
+        probe: { state: "not_installed", document_path: "", document_exists: false,
+          error: "", token_env_present: false, restorable: false } },
+      { id: "warp", display_name: "Warp",
+        summary: "Rejects loopback and private addresses.",
+        status: "not_routable", doc_url: "https://example.invalid/warp",
+        unavailable_reason: "Warp rejects 127.0.0.1 and private IP ranges outright. Verified 2026-09-07.",
+        protocol: "openai_chat_completions", base_url: "http://127.0.0.1:8082/v1",
+        token_form: "env_reference", token_reference: "", token_env_var: "",
+        attribution_header: "", restart_required: true, open_command: "",
+        notes: [], instruction_fields: [], owned_key: "", display_path: "",
+        sidecar_path: "", overwrites: [], sets_default_model: false,
+        probe: { state: "not_routable", document_path: "", document_exists: false,
+          error: "", token_env_present: false, restorable: false } },
+    ],
+  },
+  "/admin/api/desktop-apps/codex_desktop/plan": {
+    document_path: "/home/u/.codex/config.toml",
+    diff: "--- a/config.toml\n+++ b/config.toml\n+[model_providers.mcc]\n+base_url = \"http://127.0.0.1:8082/v1\"\n+env_key = \"MCC_AUTH_TOKEN\"\n",
+    sidecar_path: "", sidecar_diff: "",
+    overwritten_keys: ["model_provider", "model"], no_op: false,
+    actions: ["Restart Codex desktop to pick this up."],
+  },
   "/admin/api/requests/harness-usage": {
     enabled: true,
     days: 7,
@@ -3824,6 +3922,7 @@ const codingAgentsLink = navLinks.find(
   (link) => link.dataset.view === "coding_agents",
 );
 const codingAgents = { present: Boolean(codingAgentsLink) };
+const desktopApps = { present: false };
 if (codingAgentsLink) {
   codingAgentsLink.click();
   await new Promise((resolve) => setTimeout(resolve, 160));
@@ -3868,6 +3967,84 @@ if (codingAgentsLink) {
       : null,
   }));
   codingAgents.gatewayNote = flatten(doc.getElementById("codingAgentsGatewayNote"));
+
+  /* ------------------------------------------------- desktop apps
+     Six cards covering every state a probe can return, plus the two card
+     shapes that have no button at all. What is asserted here is what the
+     server's answer *became* in the DOM: the badge, the preview the plan
+     button fetched, and which of the two undo modes each card offers. */
+  const desktopList = doc.getElementById("desktopAppsList");
+  const desktopCards = Array.from(
+    desktopList.querySelectorAll(".desktop-app-card"),
+  );
+  desktopApps.present = Boolean(desktopList);
+  desktopApps.cardCount = desktopCards.length;
+  desktopApps.ownershipNote = flatten(
+    doc.getElementById("desktopAppsOwnershipNote"),
+  );
+  desktopApps.cards = desktopCards.map((card) => ({
+    id: card.dataset.desktopApp,
+    title: card.querySelector("h4").textContent,
+    badge: card.querySelector(".agent-state").textContent,
+    badgeState: card.querySelector(".agent-state").dataset.state,
+    drifted: card.querySelector(".agent-state").classList.contains("drifted"),
+    unavailable: card
+      .querySelector(".agent-state")
+      .classList.contains("unavailable"),
+    unavailableReason: card.querySelector(".agent-unavailable-reason")
+      ? flatten(card.querySelector(".agent-unavailable-reason"))
+      : null,
+    driftNote: card.querySelector(".desktop-drift-note")
+      ? flatten(card.querySelector(".desktop-drift-note"))
+      : null,
+    metaTerms: Array.from(card.querySelectorAll(".desktop-app-meta dt")).map(
+      (dt) => dt.textContent,
+    ),
+    metaValues: Array.from(card.querySelectorAll(".desktop-app-meta dd")).map(
+      (dd) => dd.textContent,
+    ),
+    hasConfigure: Boolean(card.querySelector('[data-role="configure"]')),
+    configureLabel: card.querySelector('[data-role="configure"]')
+      ? card.querySelector('[data-role="configure"]').textContent
+      : null,
+    hasPreview: Boolean(card.querySelector('[data-role="preview"]')),
+    hasUndo: Boolean(card.querySelector('[data-role="undo"]')),
+    undoModes: Array.from(
+      card.querySelectorAll('[data-role="undo-mode"] option'),
+    ).map((option) => ({
+      value: option.value,
+      label: option.textContent,
+      disabled: option.disabled,
+    })),
+    hasDefaultModelCheckbox: Boolean(
+      card.querySelector('[data-role="default-model"]'),
+    ),
+    instructionLabels: Array.from(
+      card.querySelectorAll(".desktop-instruction-label"),
+    ).map((label) => label.textContent),
+    instructionValues: Array.from(
+      card.querySelectorAll(".desktop-instruction-value"),
+    ).map((value) => value.textContent),
+    copyButtons: card.querySelectorAll(".desktop-copy-button").length,
+    notes: Array.from(card.querySelectorAll(".desktop-app-notes p")).map((p) =>
+      flatten(p),
+    ),
+  }));
+
+  // Press "What will this write?" on the one card whose plan the fixture
+  // serves, and record what landed in the preview block.
+  const codexCard = desktopList.querySelector(
+    '.desktop-app-card[data-desktop-app="codex_desktop"]',
+  );
+  if (codexCard) {
+    codexCard.querySelector('[data-role="preview"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const preview = codexCard.querySelector(".desktop-preview");
+    desktopApps.preview = {
+      hidden: preview.hidden,
+      text: preview.textContent,
+    };
+  }
 
   /* ------------------------------------------------------------- tiers
      Five rows per agent that has a picker, none for the one that does not,
@@ -4241,6 +4418,7 @@ console.log(
       themePicker,
       customProviders,
       codingAgents,
+      desktopApps,
       rtkToggles,
       anthropicOAuthCard,
       fetched: Array.from(new Set(fetchCalls)).sort(),

@@ -98,6 +98,14 @@ const state = {
   autostartOptions: null,
   rtk: null,
   rtkBusy: false,
+  // Every desktop application MCC knows about, from /admin/api/desktop-apps.
+  // Null until the Coding agents view is opened: the probe stats every marker
+  // path on the machine, which is not work to do on a page nobody looked at.
+  desktopApps: null,
+  // What the last Configure or Undo said, per app id. A write is followed by
+  // a reload, which rebuilds the card and would otherwise discard the one
+  // sentence telling the user what just happened to their file.
+  desktopAppMessages: {},
   // Every registered coding-agent harness, from /admin/api/harnesses. Owned
   // here rather than by the Coding agents view because the Token Optimizer
   // page's RTK checkboxes are generated from the same list.
@@ -397,6 +405,7 @@ async function loadDashboardState() {
   await loadVersionInfo();
   await loadDesktopState();
   await loadHarnesses();
+  await loadDesktopApps();
   await loadRtkState();
   await loadClaudeSettings();
   initClaudeConnectCopyButtons();
@@ -485,6 +494,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
 
   if (activeView.id === "coding_agents") {
     loadHarnesses().catch((error) => showMessage(error.message, "error"));
+    loadDesktopApps().catch((error) => showMessage(error.message, "error"));
   }
 
   if (activeView.id === "docs") {
@@ -8244,6 +8254,417 @@ function harnessCard(harness) {
     card.append(hint);
   }
   return card;
+}
+
+/* --------------------------------------------------------------------- */
+/* Desktop apps                                                            */
+/* --------------------------------------------------------------------- */
+/* The applications MCC does not launch. A CLI harness card answers "is this
+   installed, and what does MCC tell it"; a desktop card has to answer a
+   different question -- "is the one file this app reads currently pointed at
+   MCC, and what exactly would change if I pressed the button" -- so it is its
+   own component rather than a fourth branch inside `harnessCard`.
+
+   Six states, and they are the probe's, not the browser's: the server decides
+   whether an app is configured or drifted by comparing the file's owned
+   subtree against what a re-apply would write, which is a comparison only the
+   server can make. The card renders the answer. */
+
+const DESKTOP_STATE_LABELS = {
+  not_installed: "Not installed",
+  not_routable: "Not routable",
+  installed: "Installed, not configured",
+  configured: "Configured by MCC",
+  drifted: "Configured but drifted",
+  unreadable: "Config file will not parse",
+};
+
+const DESKTOP_STATE_CLASS = {
+  configured: "agent-state installed",
+  drifted: "agent-state drifted",
+  not_routable: "agent-state unavailable",
+  unreadable: "agent-state unavailable",
+};
+
+async function loadDesktopApps() {
+  try {
+    const payload = await api("/admin/api/desktop-apps");
+    state.desktopApps = Array.isArray(payload.apps) ? payload.apps : [];
+    renderDesktopApps();
+  } catch (error) {
+    state.desktopApps = [];
+    renderDesktopApps(error.message);
+  }
+}
+
+function renderDesktopApps(errorMessage) {
+  const list = byId("desktopAppsList");
+  if (!list) return;
+  list.textContent = "";
+
+  if (errorMessage) {
+    const failed = document.createElement("p");
+    failed.className = "field-description";
+    failed.textContent = `Could not load desktop apps: ${errorMessage}`;
+    list.append(failed);
+    return;
+  }
+  (state.desktopApps || []).forEach((app) => {
+    list.append(desktopAppCard(app));
+  });
+}
+
+function desktopAppCard(app) {
+  const card = document.createElement("div");
+  card.className = "coding-agent-card desktop-app-card";
+  card.dataset.desktopApp = app.id;
+
+  const probe = app.probe || {};
+  const stateId = probe.state || "not_installed";
+
+  const heading = document.createElement("div");
+  heading.className = "agent-heading";
+  const title = document.createElement("h4");
+  title.textContent = app.display_name;
+  const badge = document.createElement("span");
+  badge.className = DESKTOP_STATE_CLASS[stateId] || "agent-state";
+  badge.textContent = DESKTOP_STATE_LABELS[stateId] || stateId;
+  badge.dataset.state = stateId;
+  heading.append(title, badge);
+  card.append(heading);
+
+  if (app.summary) {
+    const summary = document.createElement("p");
+    summary.className = "agent-summary";
+    summary.textContent = app.summary;
+    card.append(summary);
+  }
+
+  if (app.status === "not_routable") {
+    // The evidence verbatim, with the date it was measured. No buttons:
+    // there is nothing to press, and a disabled button would imply there
+    // might be one day.
+    const reason = document.createElement("p");
+    reason.className = "agent-unavailable-reason";
+    reason.textContent = app.unavailable_reason || "";
+    card.append(reason);
+    card.append(desktopAppMeta(app));
+    return card;
+  }
+
+  if (app.status === "instructions_only") {
+    card.append(desktopInstructionTable(app));
+    card.append(desktopAppNotes(app));
+    card.append(desktopAppMeta(app));
+    return card;
+  }
+
+  card.append(desktopAppMeta(app));
+
+  if (stateId === "unreadable") {
+    const error = document.createElement("p");
+    error.className = "agent-unavailable-reason";
+    error.textContent = `MCC will not write a file it cannot read: ${probe.error || ""}`;
+    card.append(error);
+    return card;
+  }
+
+  if (stateId === "drifted") {
+    const drift = document.createElement("p");
+    drift.className = "desktop-drift-note";
+    drift.textContent =
+      "One of the keys MCC owns has been changed since MCC wrote it -- by hand, " +
+      "by the app, or by an older MCC. Configure will bring it back in line.";
+    card.append(drift);
+  }
+
+  card.append(desktopAppActions(app));
+  card.append(desktopAppNotes(app));
+  return card;
+}
+
+/** The facts a card states whatever its state: file, owned key, URL, token. */
+function desktopAppMeta(app) {
+  const meta = document.createElement("dl");
+  meta.className = "agent-meta desktop-app-meta";
+  const probe = app.probe || {};
+
+  const rows = [];
+  if (app.display_path) rows.push(["Config file", app.display_path]);
+  if (app.owned_key) rows.push(["MCC owns", app.owned_key]);
+  if ((app.overwrites || []).length) {
+    rows.push(["Replaces", app.overwrites.join(", ")]);
+  }
+  if (app.sidecar_path) rows.push(["MCC-owned file", app.sidecar_path]);
+  if (app.base_url) rows.push(["Base URL", app.base_url]);
+  if (app.token_reference) rows.push(["Token", app.token_reference]);
+  if (app.token_env_var) {
+    rows.push([
+      app.token_env_var,
+      probe.token_env_present
+        ? "exported where the server can see it"
+        : "not exported yet -- export it before starting the app",
+    ]);
+  }
+  if (app.open_command) rows.push(["Open with", app.open_command]);
+
+  rows.forEach(([label, value]) => {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const definition = document.createElement("dd");
+    definition.textContent = value;
+    meta.append(term, definition);
+  });
+
+  const link = document.createElement("dt");
+  link.textContent = "Documented at";
+  const anchor = document.createElement("dd");
+  const href = document.createElement("a");
+  href.href = app.doc_url;
+  href.target = "_blank";
+  href.rel = "noreferrer noopener";
+  href.textContent = app.doc_url;
+  anchor.append(href);
+  meta.append(link, anchor);
+
+  return meta;
+}
+
+function desktopAppNotes(app) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "desktop-app-notes";
+  (app.notes || []).forEach((note) => {
+    const line = document.createElement("p");
+    line.className = "field-description";
+    line.textContent = note;
+    wrapper.append(line);
+  });
+  return wrapper;
+}
+
+/** Claude Desktop's values, each with a copy button.
+ *
+ * A button here would have to guess where the app persists these settings, and
+ * Anthropic documents the dialog rather than a file. Writing a merge into a
+ * guessed path is exactly the failure this whole feature exists to avoid, so
+ * the card hands over the values and a human types them. */
+function desktopInstructionTable(app) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "desktop-instructions";
+
+  const lead = document.createElement("p");
+  lead.className = "field-description";
+  lead.textContent = "Enter these in the app's own dialog:";
+  wrapper.append(lead);
+
+  (app.instruction_fields || []).forEach((field) => {
+    const row = document.createElement("div");
+    row.className = "desktop-instruction-row";
+
+    const label = document.createElement("span");
+    label.className = "desktop-instruction-label";
+    label.textContent = field.label;
+
+    const value = document.createElement("code");
+    value.className = "desktop-instruction-value";
+    value.textContent = field.value;
+
+    row.append(label, value, desktopCopyButton(field.value));
+    wrapper.append(row);
+  });
+  return wrapper;
+}
+
+/** A copy button for one value, feature-detected and quietly optional.
+ *
+ * 127.0.0.1 over plain http is a secure context under the browser's localhost
+ * exception, so the clipboard is expected to work here; a browser that refuses
+ * leaves the text selectable, which is what it was before. */
+function desktopCopyButton(text) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "guide-copy-button desktop-copy-button";
+  button.textContent = "Copy";
+  button.setAttribute("aria-label", `Copy ${text}`);
+  if (!navigator.clipboard || !navigator.clipboard.writeText) {
+    button.disabled = true;
+    return button;
+  }
+  button.addEventListener("click", () => {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        button.textContent = "Copied";
+        window.setTimeout(() => {
+          button.textContent = "Copy";
+        }, 1500);
+      })
+      .catch(() => {});
+  });
+  return button;
+}
+
+/** Configure, Undo with its mode picker, and the preview the two hang off. */
+function desktopAppActions(app) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "desktop-app-actions";
+  const probe = app.probe || {};
+  const configured = probe.state === "configured" || probe.state === "drifted";
+
+  const preview = document.createElement("pre");
+  preview.className = "desktop-preview";
+  preview.hidden = true;
+
+  const status = document.createElement("p");
+  status.className = "desktop-app-status";
+  status.setAttribute("role", "status");
+  status.textContent = state.desktopAppMessages[app.id] || "";
+
+  // Said once, then forgotten: it describes the write that just happened, not
+  // a state of the file, so it must not survive the next reload of the page.
+  const say = (message) => {
+    state.desktopAppMessages[app.id] = message;
+    status.textContent = message;
+  };
+
+  const row = document.createElement("div");
+  row.className = "desktop-action-row";
+
+  // The opt-in checkbox. Codex's card does not show it: there, not writing a
+  // model leaves a provider its own UI cannot select, so it is not a choice.
+  let defaultModel = null;
+  if (!app.sets_default_model && app.status === "servable") {
+    const label = document.createElement("label");
+    label.className = "desktop-default-model";
+    defaultModel = document.createElement("input");
+    defaultModel.type = "checkbox";
+    defaultModel.dataset.role = "default-model";
+    label.append(defaultModel, document.createTextNode(" Also set its default model to mcc/best"));
+    wrapper.append(label);
+  }
+
+  const wants = () => ({
+    set_default_model: defaultModel ? defaultModel.checked : false,
+  });
+
+  const previewButton = document.createElement("button");
+  previewButton.type = "button";
+  previewButton.className = "secondary-button";
+  previewButton.dataset.role = "preview";
+  previewButton.textContent = "What will this write?";
+  previewButton.addEventListener("click", async () => {
+    say("");
+    try {
+      const plan = await api(`/admin/api/desktop-apps/${app.id}/plan`, {
+        method: "POST",
+        body: JSON.stringify(wants()),
+      });
+      preview.hidden = false;
+      preview.textContent = desktopPlanText(plan);
+    } catch (error) {
+      say(error.message);
+    }
+  });
+
+  const configure = document.createElement("button");
+  configure.type = "button";
+  configure.className = "primary-button";
+  configure.dataset.role = "configure";
+  configure.textContent = configured ? "Re-apply" : "Configure";
+  configure.addEventListener("click", async () => {
+    say("");
+    try {
+      const result = await api(`/admin/api/desktop-apps/${app.id}/configure`, {
+        method: "POST",
+        body: JSON.stringify(wants()),
+      });
+      say(
+        result.changed
+          ? `Wrote ${result.document_path}.` +
+            (result.backup_path ? ` Your original is at ${result.backup_path}.` : "")
+          : "No change: the file already said this.",
+      );
+      await loadDesktopApps();
+    } catch (error) {
+      say(error.message);
+    }
+  });
+
+  row.append(previewButton, configure);
+
+  if (configured) {
+    // Two modes, both offered, because both are right answers to different
+    // questions. Removing MCC's keys cannot surprise anyone and is the
+    // default; restoring is the only thing that brings back a value MCC
+    // replaced, and it is only offered when MCC actually recorded one.
+    const mode = document.createElement("select");
+    mode.className = "desktop-undo-mode";
+    mode.dataset.role = "undo-mode";
+    [
+      ["keys_only", "Remove MCC's keys only"],
+      ["restore", "Restore the original values"],
+    ].forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      if (value === "restore" && !probe.restorable) {
+        option.disabled = true;
+        option.textContent = `${label} (MCC replaced nothing here)`;
+      }
+      mode.append(option);
+    });
+
+    const undo = document.createElement("button");
+    undo.type = "button";
+    undo.className = "secondary-button";
+    undo.dataset.role = "undo";
+    undo.textContent = "Undo";
+    undo.addEventListener("click", async () => {
+      say("");
+      try {
+        const result = await api(`/admin/api/desktop-apps/${app.id}/undo`, {
+          method: "POST",
+          body: JSON.stringify({ mode: mode.value }),
+        });
+        const restored = (result.restored_keys || []).join(", ");
+        say(
+          result.changed
+            ? `Removed MCC's keys from ${result.document_path}.` +
+              (restored ? ` Restored your values at: ${restored}.` : "")
+            : "Nothing of MCC's was in that file.",
+        );
+        await loadDesktopApps();
+      } catch (error) {
+        say(error.message);
+      }
+    });
+    row.append(mode, undo);
+  }
+
+  wrapper.append(row, preview, status);
+  return wrapper;
+}
+
+/** Render one plan as the text the preview block shows.
+ *
+ * The diff arrives already masked -- the server never sends a credential to
+ * this page -- and the restart line is a plain sentence rather than a state
+ * MCC pretends to detect, because for most of these apps the next read is not
+ * observable. */
+function desktopPlanText(plan) {
+  if (plan.no_op) return "Already exactly what MCC would write. Nothing to do.";
+  const parts = [];
+  parts.push(`--- ${plan.document_path}`);
+  parts.push(plan.diff || "(no change to this document)");
+  if (plan.sidecar_diff) {
+    parts.push(`--- ${plan.sidecar_path}  (a file MCC owns outright)`);
+    parts.push(plan.sidecar_diff);
+  }
+  if ((plan.overwritten_keys || []).length) {
+    parts.push(`Replaces existing values at: ${plan.overwritten_keys.join(", ")}`);
+  }
+  (plan.actions || []).forEach((action) => parts.push(`-> ${action}`));
+  return parts.join("\n");
 }
 
 /* ------------------------------------------------------------- agent tiers

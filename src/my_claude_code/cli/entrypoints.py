@@ -70,6 +70,8 @@ Manage and inspect:
                           docs/ANTHROPIC-SUBSCRIPTION.md first)
   mcc-compact-log         Compact the request log (deduplicate + compress)
   mcc-rtk                 Manage the RTK token optimizer
+  mcc-apps                Point desktop apps here, and take it back out
+                          (list | status | configure | undo)
   mcc-help                Show this command reference
 
 The legacy fcc-* commands ({_legacy_alias_line()},
@@ -171,6 +173,13 @@ def rtk(argv: Sequence[str] | None = None) -> None:
     from my_claude_code.cli.rtk_commands import rtk_command
 
     rtk_command(argv)
+
+
+def apps(argv: Sequence[str] | None = None) -> None:
+    """Configure desktop applications to route through this proxy."""
+    from my_claude_code.cli.apps_command import apps_command
+
+    apps_command(argv)
 
 
 def migrate_config_dir(argv: Sequence[str] | None = None) -> int:
