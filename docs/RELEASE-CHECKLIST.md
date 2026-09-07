@@ -131,6 +131,30 @@ not worth a re-shoot. These were re-captured:
 - `admin-websearch.png`, `admin-websearch-analytics.png`, `admin-messaging.png`,
   `admin-key-performance.png` — the remaining pages.
 
+**Added in the 6.55.1 documentation pass**, for the surfaces the 6.49.0–6.55.0
+releases introduced. Each is a real capture against a scratch config, not the
+live install:
+
+- `admin-desktop-apps.png` — the **Desktop apps** group at the bottom of Coding
+  agents: one card per application, the file each would edit, the keys MCC
+  owns and replaces, and the **What will this write?** / **Configure** pair.
+- `admin-catalogue-refresh.png` — the Models page header: the hourly catalogue
+  refresh readout ("last refreshed … next in …") and the **Learned** filter chip.
+- `admin-models-learned.png` — one model's **What this host taught MCC** block:
+  each learned fact with its age, its evidence, whether it disagrees with the
+  catalogue, and its **Forget** link.
+- `admin-models-billed-est.png` — provider rows carrying the `billed/est` ratio
+  chip, the only thing that audits the per-family input-token estimator.
+- `admin-analytics-cost.png` — the **Cost** panel: reported and estimated side
+  by side, the "N of M priced" denominator, and the four breakdowns.
+- `admin-vision-adapter-mode.png` — Model Config's vision adapter with the
+  **Vision Adapter Mode** selector and the **Tool-Returned Images** control.
+
+A capture whose page needs data an empty scratch instance cannot produce — a
+learned fact, a priced request, a `billed/est` ratio — is taken against a
+scratch config seeded with a fake provider, never against the live install.
+Check the footer path in the shot: it must be a scratch `.env`.
+
 **The one exception: `assets/admin-update-banner.png`.** The update banner only
 renders when a newer release actually exists, which an offline scratch instance
 running the version under development cannot produce. It is not reachable from

@@ -1498,15 +1498,19 @@
                 <a href="#guide-keys">Add a provider</a>
                 <a href="#guide-claude-models">Use Claude models</a>
                 <a href="#guide-models">Map model tiers</a>
+                <a href="#guide-learned">What MCC knows and learned</a>
                 <a href="#guide-agent-tiers">Tiers for every agent</a>
                 <a href="#guide-reasoning">Reasoning</a>
                 <a href="#guide-cli">Claude Code</a>
                 <a href="#guide-desktop">Claude Desktop</a>
+                <a href="#guide-desktop-apps">Point a desktop app here</a>
                 <a href="#guide-other">Point another CLI here</a>
                 <a href="#guide-openai-clients">Connect any OpenAI-compatible client</a>
                 <a href="#guide-gemini-clients">Connect a Gemini client</a>
                 <a href="#guide-websearch">Search the web</a>
+                <a href="#guide-images">Images, and what they cost</a>
                 <a href="#guide-analytics">See what happened</a>
+                <a href="#guide-cost">What a request cost</a>
                 <a href="#guide-attribution">Which agent sent this?</a>
                 <a href="#guide-deploy">Desktop &amp; RTK</a>
                 <a href="#guide-optimizer">Token Optimizer page</a>
@@ -2076,6 +2080,90 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   the vision adapter stepped in.
                 </p>
 
+                <h3 id="guide-learned">What MCC knows and learned</h3>
+                <p>
+                  The <strong>Models</strong> page is where every model MCC has
+                  discovered lives, and it answers two different questions about each
+                  one: what its provider <em>publishes</em>, and what this deployment
+                  has actually <em>taught</em> MCC by refusing something.
+                </p>
+                <p>
+                  <strong>Catalogues re-read themselves.</strong> Every usable
+                  provider's model list is fetched again in the background once an hour,
+                  so a gateway that added a model this morning is listed this afternoon
+                  without a restart. The line under <em>Providers and models</em> says
+                  when that last happened and when it happens next; the server log says
+                  <code>catalogue changed: +N -M</code> when the list actually moved.
+                  <code>MODEL_DISCOVERY_REFRESH_SECONDS</code> is the interval, in
+                  seconds, and <code>0</code> turns the sweep off &mdash; in which case
+                  the same line says so rather than going quiet.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-catalogue-refresh.png"
+                     alt="The Models page header: the catalogue refresh readout and the All / Visible / Hidden / Configured / Overridden / Learned filter chips"
+                     loading="lazy">
+                <p class="guide-note">
+                  <strong>This is not Claude Code's model discovery.</strong>
+                  <code>CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY</code> is a variable
+                  MCC <em>writes</em> for Claude Code and never reads; it decides whether
+                  Claude Code's own picker lists this catalog. The setting above decides
+                  how often MCC re-reads its providers. Changing one does nothing to the
+                  other.
+                </p>
+                <p>
+                  <strong>The <em>Learned</em> chip filters to models this host has
+                  corrected.</strong> Every negative MCC holds was learned from something
+                  the upstream itself said &mdash; a 400 naming an output ceiling, a
+                  retry that only succeeded once a reasoning field was dropped, a probe
+                  that came back without vision. Open a model and the
+                  <strong>What this host taught MCC</strong> block lists them with the
+                  evidence, the age, and a <em>Forget</em> link.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-models-learned.png"
+                     alt="A model's learned facts: what the host taught MCC, the evidence for each, and a Forget link per row"
+                     loading="lazy">
+                <p>
+                  Facts survive a restart &mdash; they are written to
+                  <code>~/.mcc/learned_facts.json</code> &mdash; so an upgrade does not
+                  re-pay every 400. They expire because they have to: MCC stops sending
+                  the thing that would produce a positive, so a host that raises its own
+                  cap has no way to tell us. Three evidence classes, three clocks:
+                </p>
+                <table class="guide-table">
+                  <thead><tr><th>Evidence</th><th>Example</th><th>Good for</th></tr></thead>
+                  <tbody>
+                    <tr><td><strong>Stated</strong></td><td>a number or an enum the host named in its own words &mdash; an output cap, the effort words it accepts</td><td>30 days</td></tr>
+                    <tr><td><strong>Inferred</strong></td><td>&ldquo;it worked once the field was gone&rdquo; &mdash; a rejected reasoning field, no streamed usage, no vision, no tool calls</td><td>7 days</td></tr>
+                    <tr><td><strong>Withheld</strong></td><td>a model id the backend refused by name</td><td>72 hours</td></tr>
+                  </tbody>
+                </table>
+                <p class="guide-note">
+                  <strong>Expiry never deletes.</strong> A fact past its clock is still
+                  loaded and still shown &mdash; marked <em>stale</em> &mdash; and simply
+                  stops being applied. The next real request re-pays one rejection and
+                  the row is fresh again. That is the self-healing a restart used to give
+                  for free, put back on a timer.
+                </p>
+                <p class="guide-note">
+                  <strong>Probe capabilities asks instead of waiting.</strong> The button
+                  on a provider card sends a handful of deliberately tiny requests &mdash;
+                  a one-pixel image, a trivial tool definition &mdash; and writes down
+                  what came back, so a model's real vision and tool support are known
+                  before a real request pays for the discovery. A probe is
+                  <em>narrow</em>: it only ever records an absence the host demonstrated,
+                  never a capability the catalogue already claims. No response text is
+                  stored for any fact &mdash; the evidence is a bounded, redacted excerpt,
+                  and for a probe it is a status word and at most an HTTP code.
+                </p>
+                <p>
+                  <strong>Forgetting works at three scopes.</strong> <em>Forget</em> on a
+                  row drops that one fact; the button on a provider card drops
+                  everything learned about that provider; <em>Forget everything learned</em>
+                  under <a href="#guide-analytics">Requests</a> clears the store. Use it
+                  when you have changed something on the host's side &mdash; a raised
+                  quota, a new deployment behind the same name &mdash; and do not want to
+                  wait out the clock.
+                </p>
+
                 <h3 id="guide-agent-tiers">Tiers for every agent</h3>
                 <p>
                   Claude Code never names a model: it asks for
@@ -2325,6 +2413,98 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   fills itself from <code>/v1/models</code>, so you can leave the model list
                   empty. The initial warning dialog is safe to ignore. With a gateway
                   active the app runs <strong>local sessions only</strong>.
+                </p>
+
+                <h3 id="guide-desktop-apps">Point a desktop app here</h3>
+                <p>
+                  Some applications MCC cannot launch. They are already running, or
+                  they are not, and the only way in is the one configuration file each
+                  reads at startup. The <strong>Desktop apps</strong> group at the
+                  bottom of the <strong>Coding agents</strong> page is one card per
+                  app, and a card writes that file for you.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-desktop-apps.png"
+                     alt="The Desktop apps group on the Coding agents page: one card per application, each with a Configure button"
+                     loading="lazy">
+                <p><strong>Do it in four steps.</strong></p>
+                <ol>
+                  <li>
+                    <strong>Read the card.</strong> Every one names the exact file it
+                    would edit, which keys MCC would own, which keys it would
+                    <em>replace</em>, and the base URL it would write. The badge beside
+                    the title is the app's current state: <em>not installed</em>,
+                    <em>installed, not configured</em>, <em>configured by MCC</em>,
+                    <em>configured but drifted</em>, or <em>config file will not
+                    parse</em>.
+                  </li>
+                  <li>
+                    <strong>Press <em>What will this write?</em></strong> It renders a
+                    real unified diff of the real document and touches no disk. Nothing
+                    has been written at this point and nothing will be until you press
+                    the other button.
+                  </li>
+                  <li>
+                    <strong>Press <em>Configure</em>.</strong> Your original file is
+                    copied to a <code>.mcc-backup</code> beside it before the first
+                    edit, once. Every byte MCC does not own is parsed, carried through
+                    and written back unchanged &mdash; comments and key order included,
+                    which is why each app declares its own document format rather than
+                    being round-tripped through JSON.
+                  </li>
+                  <li>
+                    <strong>Export the token if the card says to.</strong> MCC never
+                    sets an environment variable on your behalf, so a card whose app
+                    wants one prints the export and the next status poll reports
+                    whether it took.
+                  </li>
+                </ol>
+                <p class="guide-note">
+                  <strong>Two ways to undo, and they answer different questions.</strong>
+                  <em>Remove MCC's keys</em> takes out exactly what MCC put in and leaves
+                  every other byte alone &mdash; the mode that cannot surprise anyone,
+                  and the default. <em>Restore the original values</em> additionally puts
+                  back what MCC replaced, read from the side record written at
+                  Configure time. Use the first if you never had that key set; use the
+                  second if you had your own model or provider there and want it back.
+                  A key MCC only <em>added</em> is removed by both.
+                </p>
+                <p class="guide-note">
+                  <strong>The drift badge is not an error.</strong> It means an owned key
+                  no longer holds what MCC wrote &mdash; you hand-edited the file, or the
+                  app rewrote it. Nothing is corrected behind your back. Press
+                  <em>Configure</em> again to take MCC's values back, or Undo to hand the
+                  file over entirely.
+                </p>
+                <table class="guide-table">
+                  <thead><tr><th>App</th><th>What the card does</th></tr></thead>
+                  <tbody>
+                    <tr><td>Codex desktop</td><td>Writes <code>~/.codex/config.toml</code>. The desktop app and the CLI share one provider table, so this points both. Codex has no model picker once a custom provider is set, so Configure also writes <code>model</code> &mdash; the one value it overwrites by necessity, and the reason the restore mode exists.</td></tr>
+                    <tr><td>Goose desktop</td><td>Owns a whole custom-providers file and names it from <code>config.yaml</code>. Goose reads API keys from its keyring, so no token is written into the file.</td></tr>
+                    <tr><td>OpenCode desktop</td><td>Same provider map as the CLI, with <code>{env:&hellip;}</code> references expanded by OpenCode itself, so no token reaches the file.</td></tr>
+                    <tr><td>VS Code (Copilot)</td><td>Owns exactly one element of the custom-endpoints array and reorders nothing. Reload the window for the import to run.</td></tr>
+                    <tr><td>Crush</td><td>Charm's Crush &mdash; also the official client for Hyper/HyperCharm, which ships no client of its own. Its provider type for an OpenAI-compatible endpoint is <code>openai-compat</code>.</td></tr>
+                    <tr><td>Roo Code</td><td>VS Code extension; its provider profile is written the same way.</td></tr>
+                    <tr><td>Antigravity (<code>agy</code>)</td><td>Routable since 6.55.0 through the <a href="#guide-gemini-clients">Gemini surface</a>: with <code>modelProvider</code> set to <code>gemini</code>, <code>agy</code> speaks the public Gemini API MCC already serves at <code>/v1beta</code>. Two limits: it must be given <code>GEMINI_API_KEY</code> and <code>GOOGLE_GEMINI_BASE_URL</code> as exports before it starts, and it rejects <code>mcc/*</code> names before sending anything, so models are named with <code>agy</code>'s own ids. The Antigravity <em>IDE</em> lists custom endpoints as unsupported; this card is the CLI only.</td></tr>
+                    <tr><td>Command Code</td><td>A status card. It has been configured by <code>mcc-commandcode</code> since 6.27.0 and this adds no new mechanism &mdash; it reports the state and how to open it. Command Code ships no desktop application.</td></tr>
+                    <tr><td>Claude Desktop</td><td>Instructions, not a button. Its gateway settings are entered in a dialog, and Anthropic documents the dialog rather than a file, so MCC shows the exact values with copy buttons instead of guessing a persistence path. See <a href="#guide-desktop">Point Claude Desktop here</a>.</td></tr>
+                  </tbody>
+                </table>
+                <p class="guide-note">
+                  <strong>An app that cannot be pointed here says so, with a date.</strong>
+                  Kimi's and Qwen's desktop builds, LM Studio and Warp each carry a
+                  dated reason rather than silence, so &ldquo;can I use this through
+                  MCC?&rdquo; has an answer you can re-check rather than an absence you
+                  have to test yourself.
+                </p>
+                <p>
+                  <strong>Without a browser.</strong> <code>mcc-apps list</code>,
+                  <code>mcc-apps status &lt;app&gt;</code>,
+                  <code>mcc-apps configure &lt;app&gt; [--preview]</code> and
+                  <code>mcc-apps undo &lt;app&gt; [--restore]</code> are the same four
+                  actions against the same routes the page uses, so a card and a command
+                  cannot disagree about what would be written. The server has to be
+                  running: resolving what to write means walking the model ladder, which
+                  only the server can do.
                 </p>
 
                 <h3 id="guide-other">Point another CLI here</h3>
@@ -2790,6 +2970,114 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   Advanced options drawers, and each states what leaving it blank does.
                 </p>
 
+                <h3 id="guide-images">Images, and what they cost</h3>
+                <p>
+                  A screenshot is the most expensive thing an agent routinely sends, and
+                  three separate mechanisms decide what actually leaves this machine.
+                  They are all on <strong>Model Config</strong>.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-vision-adapter-mode.png"
+                     alt="Model Config: the vision adapter, its mode selector, and the Tool-Returned Images control"
+                     loading="lazy">
+                <h4>1. An image a tool returned arrives as an image</h4>
+                <p>
+                  A browser screenshot, or a <code>Read</code> of a PNG, comes back
+                  nested inside a tool result &mdash; and no OpenAI-format chat message
+                  can carry a picture there. Before 6.49.0 that picture was sent as
+                  base64 <em>text</em>, which every OpenAI-dialect provider tokenised at
+                  roughly a token per byte: one 213&nbsp;KB screenshot measured
+                  <strong>324,000 prompt tokens</strong>, and the model never saw a
+                  picture at any price. Now it is hoisted into a short <code>user</code>
+                  message straight after the tool output, marked as tool output rather
+                  than as something you typed, with a one-line note left behind pointing
+                  at it.
+                </p>
+                <p>
+                  <code>TOOL_RESULT_IMAGE_DELIVERY</code> chooses the rule.
+                  <code>auto</code> (the default) attaches the picture unless the model
+                  that answers is published as unable to read one, in which case a plain
+                  sentence naming the tool takes its place; <code>attach</code> always
+                  sends it; <code>strip</code> never does. There is deliberately no
+                  option to go back to base64 text. The request detail marks what
+                  happened with an <code>image_delivery</code> line, so a request that
+                  lost a picture says so.
+                </p>
+                <h4>2. Oversized pictures are shrunk before they are sent</h4>
+                <p>
+                  <code>IMAGE_MAX_LONG_EDGE</code> ships at <strong>1568</strong> &mdash;
+                  Anthropic's own resize budget &mdash; and applies to the deep copy the
+                  router already takes, so your client's request is never mutated and
+                  every dialect converter is handed pre-shrunk data. On three of the four
+                  billing families this is token-neutral because they resize server-side
+                  anyway; on the fourth, OpenAI's patch-billed models, it is a real 41%
+                  saving and the one case where the model genuinely sees less.
+                  <code>0</code> sends exactly what the client sent.
+                </p>
+                <p class="guide-note">
+                  <strong>Two knobs beside it, both opt-in.</strong>
+                  <code>IMAGE_JPEG_QUALITY</code> re-encodes a resized image as JPEG;
+                  <code>0</code> &mdash; the default &mdash; never changes the format,
+                  because these are screenshots of text and code and that is the worst
+                  case there is for JPEG ringing. An image with an alpha channel is
+                  skipped whatever it says. <code>IMAGE_DETAIL</code> is OpenAI's
+                  per-image fidelity field; <code>auto</code> emits nothing at all, and
+                  it is meaningless outside the OpenAI dialects.
+                </p>
+                <p>
+                  <strong>Was the estimate right?</strong> A provider row on the
+                  <a href="#guide-learned">Models</a> page carries a
+                  <code>billed/est</code> chip once there is enough traffic to compare:
+                  the input tokens that host actually billed against what MCC's
+                  per-family estimator predicted. A ratio near <code>1.0&times;</code>
+                  means the estimator has this family right; a large one means it does
+                  not, and the number is the only thing that can audit that.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-models-billed-est.png"
+                     alt="Provider rows on the Models page, one carrying a billed/est ratio chip"
+                     loading="lazy">
+                <h4>3. A blind model can be given the words instead</h4>
+                <p>
+                  Plenty of fast, cheap models cannot read a screenshot. Set a
+                  <strong>Vision adapter</strong> and MCC diverts &mdash; but only when
+                  the tier's own model is <em>known</em> not to accept images. A model
+                  whose provider publishes nothing is left alone, because rerouting on
+                  silence moves traffic away from models that handle images perfectly
+                  well.
+                </p>
+                <p>
+                  <strong>Vision Adapter Mode</strong> &mdash;
+                  <code>VISION_ADAPTER_MODE</code> in the env file &mdash; picks what
+                  &ldquo;divert&rdquo; means, and the default is unchanged from every
+                  release before 6.51.0:
+                </p>
+                <table class="guide-table">
+                  <thead><tr><th>Mode</th><th>What happens</th><th>Pick it when</th></tr></thead>
+                  <tbody>
+                    <tr><td><code>route</code> (default)</td><td>the whole request is handed to the vision chain, and the vision model answers it</td><td>the picture <em>is</em> the question</td></tr>
+                    <tr><td><code>describe</code></td><td>each image is sent to the vision chain on its own &mdash; say what is there, verbatim where legible, do not interpret &mdash; and its answer replaces the image in the transcript. <strong>The model your route picked then answers</strong>, with the screenshot rendered as words</td><td>the picture is <em>context</em>: a fast text-only model doing the coding and a screenshot arriving mid-conversation</td></tr>
+                  </tbody>
+                </table>
+                <p class="guide-note">
+                  <strong>What describe mode actually costs.</strong> One extra
+                  sub-request per image, not per request &mdash; and descriptions are
+                  cached on the image itself, so a screenshot Claude Code re-sends every
+                  turn is described once. Each describe call is an ordinary routed
+                  request: the vision chain's own fallbacks, pause list, health registry
+                  and retries apply, and it gets its own row in the request log against
+                  the request that carried the picture, priced separately so it cannot
+                  make the answering model look more expensive than it was. Clear the
+                  cache from <strong>Requests &rarr; Clear image descriptions</strong>
+                  when a better vision model arrives.
+                </p>
+                <p class="guide-note">
+                  <strong>Nothing here can cost you an answer.</strong> A describe call
+                  that fails falls back to <code>route</code>; a route with nowhere to
+                  divert to falls back to the placeholder sentence. And both modes fire
+                  only when the answering model is <em>published</em> as unable to read
+                  images &mdash; a model that can see is simply sent the picture, which
+                  is cheaper than two calls and always better.
+                </p>
+
                 <h3 id="guide-analytics">See what a request actually did</h3>
                 <p>
                   Two local SQLite stores under <code>~/.mcc/logs/</code>, written by a
@@ -2969,6 +3257,84 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>WEBSEARCH_LOG_CAPTURE_CONTENT=false</code> withholds the payloads
                   <em>and</em> the query text, keeping only lengths and hashes. API keys are
                   never written to either store &mdash; only masked labels.
+                </p>
+
+                <h3 id="guide-cost">What a request cost</h3>
+                <p>
+                  Every request is priced once, at the moment it is written to the log,
+                  and the answer is stored beside it with the name of the source that
+                  produced it. It is never recomputed when you look at it: a price that
+                  changes next month must not silently rewrite last month's bill.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-analytics-cost.png"
+                     alt="The Cost panel on Analytics: reported and estimated totals side by side, the N of M priced denominator, and breakdowns by provider, model, harness and day"
+                     loading="lazy">
+                <p>
+                  <strong>Pricing walks the same ladder every other model fact
+                  walks</strong> &mdash; the host's own answer first, then this
+                  provider's catalogue, then a reference catalogue, then a vote across
+                  other providers. The rung that answered is what tells you how much to
+                  trust the number, so it is carried back and shown:
+                </p>
+                <table class="guide-table">
+                  <thead><tr><th>Rung</th><th>Shown as</th><th>Where it comes from</th></tr></thead>
+                  <tbody>
+                    <tr><td>1</td><td><em>(no badge)</em></td><td>the host's own reported cost, when it returns one</td></tr>
+                    <tr><td>2</td><td><code>est.</code> models.dev</td><td>the models.dev price for this provider's own bucket</td></tr>
+                    <tr><td>3</td><td><code>est.</code> LiteLLM</td><td>LiteLLM's published price map, if you turn that source on</td></tr>
+                    <tr><td>4</td><td><code>est.</code> cross-provider</td><td>a vote across same-named rows in <em>other</em> providers' catalogues. The model is the same; the seller is not</td></tr>
+                    <tr><td>&mdash;</td><td><code>&mdash;</code> <strong>not priced</strong></td><td>nothing published a rate</td></tr>
+                  </tbody>
+                </table>
+                <p class="guide-note">
+                  <strong>&ldquo;Not priced&rdquo; is a dash, never
+                  <code>$0.00</code>.</strong> Those are different facts.
+                  <code>$0.00</code> is a claim the request was free, and only a source
+                  that actually publishes a zero &mdash; a <code>:free</code> model's own
+                  catalogue entry &mdash; may make it. So every total carries an
+                  <strong>&ldquo;N of M priced&rdquo;</strong> denominator beside it, and
+                  a partial total can never be misread as a complete one.
+                </p>
+                <p class="guide-note">
+                  <strong>Reported and estimated are never added together.</strong> One
+                  merged figure would launder a guess into a fact and afterwards nobody
+                  could tell which half was which. The panel shows two numbers, per
+                  provider, per model, per harness and per day.
+                </p>
+                <p>Three things surprise people, so they are worth stating:</p>
+                <ul>
+                  <li>
+                    <strong>One request is priced from one rung, whole.</strong> A source
+                    that names an input rate but no cache-read rate has not priced a
+                    request that read from cache &mdash; that request falls to the next
+                    rung entire rather than being stitched together from two sources into
+                    a number nobody published.
+                  </li>
+                  <li>
+                    <strong>Nothing is backfilled.</strong> Requests logged before 6.54.0
+                    stay unpriced forever. Pricing them at today's rates would produce a
+                    confident number that was never anybody's bill.
+                  </li>
+                  <li>
+                    <strong>A <a href="#guide-images">describe</a> hop is its own
+                    row.</strong> It is a different model on a different key; folding it
+                    into the answering model's figure would hide what describe mode
+                    actually cost.
+                  </li>
+                </ul>
+                <p>
+                  The controls are on this page under <strong>Cost estimation</strong>:
+                  the master switch (<code>COST_ESTIMATION_ENABLED</code>, on),
+                  which sources may answer (<code>COST_ESTIMATION_MODE</code> &mdash;
+                  <code>auto</code>, <code>reported_only</code>, or
+                  <code>computed_only</code>, the last being how you audit a provider's
+                  own billing against a published price), and the LiteLLM source
+                  (<code>COST_SOURCE_LITELLM_ENABLED</code>, off &mdash; it costs one more
+                  cached 2.3&nbsp;MB file and one conditional fetch a day, and buys the
+                  misses). The <a href="#guide-learned">Models</a> page shows the
+                  resolved input, output, cache and reasoning rates per model in USD per
+                  million tokens, each with the rung it came from &mdash; so you can see
+                  what a request would be priced from before you send one.
                 </p>
 
                 <h3 id="guide-attribution">Which agent sent this?</h3>
@@ -3745,6 +4111,15 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   script waits 600&nbsp;s rather than six hours.
                 </p>
 
+                <p class="guide-note">
+                  <strong>A deferred update is not a silent one.</strong> Since 6.50.0
+                  the background helper appends a line per stage to a progress file under
+                  the staging directory in <code>~/.mcc</code>, and the version panel
+                  reads the last complete line back. So a Windows update that is waiting
+                  for you to stop the server, or installing, or finished, says which
+                  &mdash; rather than looking like nothing happened. A half-written final
+                  line is skipped rather than treated as the end of the story.
+                </p>
                 <h3 id="guide-security">Lock it down</h3>
                 <table class="guide-table">
                   <thead><tr><th>Surface</th><th>Default bind</th><th>Access control</th></tr></thead>
