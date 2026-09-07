@@ -385,6 +385,16 @@ def test_install_sh_fresh_install_is_verified(posix_harness: PosixHarness) -> No
         and FCC_WHEEL_NAME in call
         for call in calls
     )
+    # The interpreter is provisioned first, once, with the footprint flags.
+    # Folded into this case rather than run as a second full install: the fake
+    # mcc-server a second concurrent run executes is what the uninstaller's
+    # pgrep guard trips over under xdist.
+    python_calls = [c for c in calls if c.startswith("uv:python install")]
+    assert python_calls == ["uv:python install --no-bin --no-registry 3.14.0"], calls
+    assert calls.index(python_calls[0]) < next(
+        index for index, call in enumerate(calls) if call.startswith("uv:tool install")
+    )
+    assert "Installing Python 3.14.0 through uv" in result.stdout
     assert f"download:{FCC_WHEEL_URL}" in calls
     assert any(call.startswith("sha256sum:") for call in calls)
     assert not any(call.startswith("git:") for call in calls)
@@ -2682,22 +2692,6 @@ def test_installers_still_do_not_install_coding_agents() -> None:
         assert "claude.ai/install" not in text
         assert "chatgpt.com/codex/install" not in text
         assert "install whichever of those you use yourself" in text
-
-
-def test_install_sh_installs_python_before_the_tool_environment_at_runtime(
-    posix_harness: PosixHarness,
-) -> None:
-    """The order on a real run, not just in the source."""
-    result = posix_harness.run()
-
-    assert result.returncode == 0, result.stderr
-    calls = posix_harness.calls()
-    python_calls = [c for c in calls if c.startswith("uv:python install")]
-    assert python_calls == ["uv:python install --no-bin --no-registry 3.14.0"], calls
-    assert calls.index(python_calls[0]) < next(
-        index for index, call in enumerate(calls) if call.startswith("uv:tool install")
-    )
-    assert "Installing Python 3.14.0 through uv" in result.stdout
 
 
 def test_install_sh_stops_when_the_python_download_fails(

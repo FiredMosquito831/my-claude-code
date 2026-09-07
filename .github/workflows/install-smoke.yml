@@ -56,6 +56,9 @@ jobs:
             echo "MCC_CONFIG_DIR=${scratch}/config"
             echo "XDG_CONFIG_HOME=${scratch}/home/.config"
             echo "XDG_DATA_HOME=${scratch}/home/.local/share"
+            # A real machine has SHELL set; the runner does not, and without it
+            # `uv tool update-shell` misidentifies the shell and refuses.
+            echo "SHELL=/bin/bash"
           } >> "$GITHUB_ENV"
 
           # A PATH holding a symlink to every command the runner's PATH offered
