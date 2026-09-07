@@ -159,6 +159,14 @@ add_known_bin_directories() {
         add_path_entry "$XDG_BIN_HOME"
     fi
 
+    # uv's standalone installer writes its binaries to $XDG_DATA_HOME/../bin
+    # when XDG_DATA_HOME is set, which is NOT $HOME/.local/bin on a machine
+    # that points XDG_DATA_HOME elsewhere. Missing this is how a fresh install
+    # ends with "uv was installed, but it is not available on PATH".
+    if [ -n "${XDG_DATA_HOME:-}" ]; then
+        add_path_entry "${XDG_DATA_HOME%/}/../bin"
+    fi
+
     if [ -n "${HOME:-}" ]; then
         add_path_entry "$HOME/.local/bin"
         add_path_entry "$HOME/.cargo/bin"

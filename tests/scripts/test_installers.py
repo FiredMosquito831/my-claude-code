@@ -2708,3 +2708,17 @@ def test_install_sh_stops_when_the_python_download_fails(
     assert result.returncode != 0
     assert "is installed and verified." not in result.stdout
     assert not any(call.startswith("uv:tool install") for call in posix_harness.calls())
+
+
+def test_install_sh_finds_uv_where_xdg_data_home_puts_it() -> None:
+    """uv installs to $XDG_DATA_HOME/../bin, not always $HOME/.local/bin.
+
+    A machine that sets XDG_DATA_HOME somewhere other than ~/.local/share gets
+    its uv written to a directory install.sh never looked in, and the install
+    dies with "uv was installed, but it is not available on PATH" right after
+    the uv installer reported success. Caught by the ubuntu-latest smoke job.
+    """
+    shell = _install_sh()
+
+    assert 'add_path_entry "${XDG_DATA_HOME%/}/../bin"' in shell
+    assert 'if [ -n "${XDG_DATA_HOME:-}" ]; then' in shell
