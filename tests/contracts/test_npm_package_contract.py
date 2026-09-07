@@ -26,6 +26,7 @@ So they are checked here:
   that does not allow deletions.
 """
 
+import hashlib
 import json
 import re
 import shutil
@@ -42,6 +43,7 @@ PACKAGE_DIR = REPO_ROOT / "packaging" / "npm"
 MANIFEST_PATH = PACKAGE_DIR / "package.json"
 LAUNCHER = PACKAGE_DIR / "bin" / "my-claude-code.js"
 POSTINSTALL = PACKAGE_DIR / "bin" / "postinstall.js"
+RUNTIME = PACKAGE_DIR / "bin" / "runtime-install.js"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "npm-release.yml"
 
 PACKAGE_NAME = "@firedmosquito831/my-claude-code"
@@ -136,7 +138,9 @@ def test_the_published_licence_is_the_repository_licence() -> None:
 
 
 @requires_node
-@pytest.mark.parametrize("script", [LAUNCHER, POSTINSTALL], ids=lambda p: p.name)
+@pytest.mark.parametrize(
+    "script", [LAUNCHER, POSTINSTALL, RUNTIME], ids=lambda p: p.name
+)
 def test_the_shipped_javascript_parses(script: Path) -> None:
     """A syntax error in a published bin is a broken install, not a red test."""
     assert NODE is not None
@@ -151,37 +155,69 @@ def test_the_shipped_javascript_parses(script: Path) -> None:
 
 # -------------------------------------------------------------- postinstall
 
-#: Replaces `spawnSync` before `postinstall.js` requires it, records what it
-#: was asked to run, and reports success. Nothing is executed: the point of
-#: these tests is that the *decision* to install is right, and running a real
-#: installer to find out would install a real server on the machine running
-#: the suite.
-_SPAWN_RECORDER = """
+#: Node preload. It stands in for everything the package touches outside
+#: itself -- the platform it believes it is on, the processes it spawns, and
+#: the network it downloads from -- and records each in one log. Nothing is
+#: executed and nothing is fetched: the point of these tests is that the
+#: *decision* is right on machines this suite will never run on, and finding
+#: out by running a real installer would install a real server on this one.
+_STUBS = """
 'use strict';
 const fs = require('node:fs');
 const childProcess = require('node:child_process');
 const record = process.env.MCC_TEST_SPAWN_LOG;
+
+// `process.platform` and `process.arch` are read-only accessors, not fields;
+// redefining them here is the only way to ask a Linux question on Windows.
+for (const key of ['platform', 'arch']) {
+  const value = process.env['MCC_TEST_' + key.toUpperCase()];
+  if (value) Object.defineProperty(process, key, { value, configurable: true });
+}
+
+function log(entry) {
+  fs.appendFileSync(record, JSON.stringify(entry) + '\\n');
+}
+
 childProcess.spawnSync = function (command, args) {
-  fs.appendFileSync(record, JSON.stringify({ command, args }) + '\\n');
-  return { status: 0, error: undefined };
+  log({ command, args });
+  // The Linux branch asks `command -v dpkg` to choose between the .deb and
+  // the tarball, and expects stdout, not just a status.
+  if (String((args && args[1]) || '').includes('dpkg')) {
+    const present = process.env.MCC_TEST_HAS_DPKG === '1';
+    return { status: present ? 0 : 1, stdout: present ? '/usr/bin/dpkg\\n' : '' };
+  }
+  return { status: Number(process.env.MCC_TEST_SPAWN_STATUS || '0'), stdout: '' };
+};
+
+// { "<asset name>": "<body>" }; anything else is a 404.
+const bodies = JSON.parse(process.env.MCC_TEST_FETCH || '{}');
+globalThis.fetch = async function (url) {
+  log({ fetch: String(url) });
+  const name = String(url).split('/').pop();
+  if (!(name in bodies)) return { ok: false, status: 404 };
+  const payload = Buffer.from(bodies[name], 'utf8');
+  return { ok: true, status: 200, arrayBuffer: async () => payload };
 };
 """
 
 
-def _run_postinstall(
-    tmp_path: Path, environment: dict[str, str]
+def _run_node(
+    tmp_path: Path,
+    script: Path,
+    environment: dict[str, str],
+    argv: list[str] | None = None,
 ) -> tuple[int, str, list[dict[str, object]]]:
-    """Run the hook with a stubbed `spawnSync`; return status, output, spawns."""
+    """Run one of the bins under the stubs; return status, output, calls."""
     assert NODE is not None
     recorder = tmp_path / "recorder.js"
-    recorder.write_text(_SPAWN_RECORDER, encoding="utf-8")
+    recorder.write_text(_STUBS, encoding="utf-8")
     log = tmp_path / "spawns.jsonl"
     log.write_text("", encoding="utf-8")
 
     # A clean environment, not the suite's: `CI` is set on every CI runner and
     # would make three of these four cases test the same branch.
     result = subprocess.run(
-        [NODE, "--require", str(recorder), str(POSTINSTALL)],
+        [NODE, "--require", str(recorder), str(script), *(argv or [])],
         capture_output=True,
         text=True,
         check=False,
@@ -192,12 +228,28 @@ def _run_postinstall(
             **environment,
         },
     )
-    spawns = [
-        _mapping(json.loads(line), "a recorded spawn")
+    calls = [
+        _mapping(json.loads(line), "a recorded call")
         for line in log.read_text(encoding="utf-8").splitlines()
         if line
     ]
-    return result.returncode, result.stdout + result.stderr, spawns
+    return result.returncode, result.stdout + result.stderr, calls
+
+
+def _run_postinstall(
+    tmp_path: Path, environment: dict[str, str]
+) -> tuple[int, str, list[dict[str, object]]]:
+    return _run_node(tmp_path, POSTINSTALL, environment)
+
+
+def _spawns(calls: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [call for call in calls if "command" in call]
+
+
+def _invocation(spawn: dict[str, object]) -> str:
+    arguments = spawn["args"]
+    assert isinstance(arguments, list)
+    return " ".join([str(spawn["command"]), *(str(item) for item in arguments)])
 
 
 @requires_node
@@ -243,30 +295,426 @@ def test_ignore_scripts_is_honoured_even_when_npm_still_runs_the_hook(
 
 
 @requires_node
-def test_a_global_install_runs_the_official_installer_with_the_desktop_flag(
+def test_a_global_install_runs_the_official_installer_not_a_copy(
     tmp_path: Path,
 ) -> None:
-    """The whole point of the hook: same commands as the installer, plus the app."""
-    status, _, spawns = _run_postinstall(tmp_path, {"npm_config_global": "true"})
-    assert status == 0
-    assert len(spawns) == 1, f"expected exactly one installer invocation, got {spawns}"
-
-    arguments = spawns[0]["args"]
-    assert isinstance(arguments, list)
-    invocation = " ".join([str(spawns[0]["command"]), *(str(x) for x in arguments)])
-    assert "raw.githubusercontent.com/FiredMosquito831/my-claude-code" in invocation, (
-        "the hook must run the project's own install script, not a copy"
+    """The hook must never grow its own installer: it runs the repository's."""
+    _, _, calls = _run_postinstall(
+        tmp_path,
+        {"npm_config_global": "true", "MCC_NPM_INSTALL": "server"},
     )
+    spawns = _spawns(calls)
+    assert len(spawns) == 1, f"expected exactly one installer invocation, got {spawns}"
+    invocation = _invocation(spawns[0])
+    assert "raw.githubusercontent.com/FiredMosquito831/my-claude-code" in invocation
     if sys.platform == "win32":
-        assert "powershell" in invocation
-        assert "install.ps1" in invocation
-        # `-Desktop` bound to the script's own param() block, which needs the
-        # scriptblock form: `irm … | iex` cannot pass a parameter at all.
+        assert "powershell" in invocation and "install.ps1" in invocation
+        # The scriptblock form, because `irm … | iex` cannot pass a parameter
+        # to the script's own param() block at all.
         assert "scriptblock]::Create" in invocation
-        assert invocation.rstrip().endswith("-Desktop")
     else:
         assert "install.sh" in invocation
-        assert "sh -s -- --desktop" in invocation
+
+
+# ------------------------------------------------------ the decision matrix
+
+#: A body whose digest the checksum fixture will agree with, and one it will
+#: not. The content is irrelevant; only the hash is under test.
+_ASSET_BODY = "not really an installer"
+_ASSET_DIGEST = hashlib.sha256(_ASSET_BODY.encode()).hexdigest()
+
+SUMS_ASSET = "SHA256SUMS-desktop-shell.txt"
+
+
+def _fetch_fixture(
+    asset: str, *, body: str = _ASSET_BODY, digest: str | None = None
+) -> str:
+    """The stub's URL -> body table: the sums file plus one release asset.
+
+    The sums file is written in the exact shape `shell-release.yml` asserts
+    before it uploads: 64 hex characters, two spaces, the file name.
+    """
+    return json.dumps(
+        {
+            SUMS_ASSET: f"{digest or _ASSET_DIGEST}  {asset}\n",
+            asset: body,
+        }
+    )
+
+
+WINDOWS_SETUP = "MyClaudeCode-Setup-windows-x86_64.exe"
+LINUX_DEB = "MyClaudeCode-linux-x86_64.deb"
+LINUX_TARBALL = "MyClaudeCode-linux-x86_64.tar.gz"
+MACOS_DMG = "MyClaudeCode-macos-universal.dmg"
+
+
+def _install(
+    tmp_path: Path,
+    environment: dict[str, str],
+    argv: list[str] | None = None,
+) -> tuple[int, str, list[dict[str, object]]]:
+    """`npx … install …` under the stubs, with a scratch download directory."""
+    downloads = tmp_path / "downloads"
+    downloads.mkdir(exist_ok=True)
+    return _run_node(
+        tmp_path,
+        LAUNCHER,
+        {"MCC_NPM_DOWNLOAD_DIR": str(downloads), **environment},
+        ["install", *(argv or [])],
+    )
+
+
+#: platform, arch, environment, and whether a desktop app should be installed.
+#: This is the table the whole feature exists to get right, and every row is a
+#: machine this suite cannot run on.
+_MATRIX = [
+    ("win32", "x64", {}, True, "a Windows laptop"),
+    ("darwin", "arm64", {}, True, "an Apple Silicon Mac"),
+    ("linux", "x64", {"DISPLAY": ":0"}, True, "an X11 desktop"),
+    ("linux", "x64", {"WAYLAND_DISPLAY": "wayland-0"}, True, "a Wayland desktop"),
+    ("linux", "x64", {}, False, "a headless VPS"),
+    ("linux", "x64", {"WSL_DISTRO_NAME": "Ubuntu"}, False, "WSL without a display"),
+    (
+        "linux",
+        "x64",
+        {"DISPLAY": ":0", "SSH_CONNECTION": "1 2 3 4"},
+        False,
+        "SSH with X11 forwarding",
+    ),
+    ("win32", "x64", {"CI": "true"}, False, "a Windows CI runner"),
+    (
+        "linux",
+        "arm64",
+        {"DISPLAY": ":0"},
+        False,
+        "an arm64 Linux desktop, which has no build",
+    ),
+]
+
+
+@requires_node
+@pytest.mark.parametrize(
+    ("platform", "arch", "environment", "wants_desktop", "description"),
+    _MATRIX,
+    ids=[row[4] for row in _MATRIX],
+)
+def test_the_runtime_decides_which_shape_to_install(
+    tmp_path: Path,
+    platform: str,
+    arch: str,
+    environment: dict[str, str],
+    wants_desktop: bool,
+    description: str,
+) -> None:
+    """Server always; the desktop app only where there is a session for it.
+
+    A headless box getting launcher shortcuts is merely untidy. A laptop
+    getting no application is the whole reason people prefer the one-line
+    installer to npm, so both directions are asserted here.
+    """
+    status, output, calls = _install(
+        tmp_path,
+        {
+            "MCC_TEST_PLATFORM": platform,
+            "MCC_TEST_ARCH": arch,
+            "MCC_TEST_HAS_DPKG": "0",
+            "MCC_TEST_FETCH": _fetch_fixture(
+                {"win32": WINDOWS_SETUP, "darwin": MACOS_DMG}.get(
+                    platform, LINUX_TARBALL
+                )
+            ),
+            **environment,
+        },
+    )
+    assert status == 0, output
+    assert f"on {platform}/{arch}" in output, "the decision line must name the runtime"
+
+    server = [
+        call
+        for call in _spawns(calls)
+        if "install.ps1" in _invocation(call) or "install.sh" in _invocation(call)
+    ]
+    assert len(server) == 1, f"the server is installed on every machine; got {server}"
+    invocation = _invocation(server[0])
+    flagged = "-Desktop" in invocation or "--desktop" in invocation
+    assert flagged is wants_desktop, (
+        f"on {description} the installer flag should be "
+        f"{'on' if wants_desktop else 'off'}: {invocation}"
+    )
+    downloaded = [call for call in calls if "fetch" in call]
+    assert bool(downloaded) is wants_desktop, (
+        f"on {description} the desktop download should "
+        f"{'happen' if wants_desktop else 'not happen'}: {downloaded}"
+    )
+
+
+@requires_node
+@pytest.mark.parametrize(
+    ("argv", "environment", "server", "desktop"),
+    [
+        (["--server-only"], {}, True, False),
+        (["--no-desktop"], {}, True, False),
+        (["--desktop-only"], {}, False, True),
+        ([], {"MCC_NPM_INSTALL": "server"}, True, False),
+        ([], {"MCC_NPM_INSTALL": "desktop"}, False, True),
+        ([], {"MCC_NPM_INSTALL": "both"}, True, True),
+        ([], {"MCC_NPM_INSTALL": "none"}, False, False),
+        # A flag beats the environment: whoever is typing decides last.
+        (["--server-only"], {"MCC_NPM_INSTALL": "both"}, True, False),
+    ],
+    ids=lambda value: str(value),
+)
+def test_the_overrides_beat_the_detected_runtime(
+    tmp_path: Path,
+    argv: list[str],
+    environment: dict[str, str],
+    server: bool,
+    desktop: bool,
+) -> None:
+    """Detection is a default, not a policy: images and scripts must be able to say."""
+    status, output, calls = _install(
+        tmp_path,
+        {
+            # A headless Linux box, so every "desktop" result below comes from
+            # the override and not from the machine.
+            "MCC_TEST_PLATFORM": "linux",
+            "MCC_TEST_ARCH": "x64",
+            "MCC_TEST_HAS_DPKG": "0",
+            "MCC_TEST_FETCH": _fetch_fixture(LINUX_TARBALL),
+            **environment,
+        },
+        argv,
+    )
+    assert status == 0, output
+    ran_installer = any("install.sh" in _invocation(call) for call in _spawns(calls))
+    assert ran_installer is server
+    assert any("fetch" in call for call in calls) is desktop
+
+
+@requires_node
+def test_an_unknown_value_for_the_environment_override_is_refused(
+    tmp_path: Path,
+) -> None:
+    """Silently installing "both" for a typo is how a Dockerfile gets a surprise."""
+    status, output, calls = _install(tmp_path, {"MCC_NPM_INSTALL": "yes"})
+    assert status == 1
+    assert "not one of server, desktop, both, none" in output
+    assert _spawns(calls) == []
+
+
+@requires_node
+def test_install_help_lists_every_override_and_installs_nothing(
+    tmp_path: Path,
+) -> None:
+    status, output, calls = _install(
+        tmp_path, {"MCC_TEST_PLATFORM": "win32", "MCC_TEST_ARCH": "x64"}, ["--help"]
+    )
+    assert status == 0
+    for flag in (
+        "--server-only",
+        "--desktop-only",
+        "--no-desktop",
+        "--yes-sudo",
+        "MCC_NPM_INSTALL",
+    ):
+        assert flag in output, f"`install --help` does not mention {flag}"
+    assert calls == [], "`--help` must not install or download anything"
+
+
+# ------------------------------------------------------- download and verify
+
+
+@requires_node
+def test_the_windows_installer_runs_silently_and_per_user(tmp_path: Path) -> None:
+    """/VERYSILENT because a postinstall hook has no console to answer a dialog."""
+    status, output, calls = _install(
+        tmp_path,
+        {
+            "MCC_TEST_PLATFORM": "win32",
+            "MCC_TEST_ARCH": "x64",
+            "MCC_TEST_FETCH": _fetch_fixture(WINDOWS_SETUP),
+        },
+        ["--desktop-only"],
+    )
+    assert status == 0, output
+    setup = [
+        call for call in _spawns(calls) if str(call["command"]).endswith(WINDOWS_SETUP)
+    ]
+    assert len(setup) == 1, (
+        f"expected the downloaded setup.exe to be run once, got {calls}"
+    )
+    arguments = setup[0]["args"]
+    assert isinstance(arguments, list)
+    assert "/VERYSILENT" in arguments
+    assert "/SUPPRESSMSGBOXES" in arguments
+    assert "/NORESTART" in arguments
+    # No elevation: the .iss is PrivilegesRequired=lowest and nothing here asks
+    # for more, so a global npm install never raises a UAC prompt.
+    assert not any(
+        str(argument).lower().startswith("/allusers") for argument in arguments
+    )
+    # It ran the file that was verified, from the scratch download directory.
+    assert str(setup[0]["command"]).startswith(str(tmp_path / "downloads"))
+
+
+@requires_node
+def test_a_verified_download_is_written_before_it_is_run(tmp_path: Path) -> None:
+    status, output, _ = _install(
+        tmp_path,
+        {
+            "MCC_TEST_PLATFORM": "win32",
+            "MCC_TEST_ARCH": "x64",
+            "MCC_TEST_FETCH": _fetch_fixture(WINDOWS_SETUP),
+        },
+        ["--desktop-only"],
+    )
+    assert status == 0, output
+    written = tmp_path / "downloads" / WINDOWS_SETUP
+    assert written.read_text(encoding="utf-8") == _ASSET_BODY
+    assert _ASSET_DIGEST in output, "the digest it verified must be printed"
+
+
+@requires_node
+def test_a_bad_digest_refuses_to_run_the_file_and_deletes_it(tmp_path: Path) -> None:
+    """The one failure mode with a security consequence, so it is asserted twice.
+
+    Nothing may be executed, and nothing may be left on disk for a later run
+    -- or for anything else on the machine -- to pick up.
+    """
+    status, output, calls = _install(
+        tmp_path,
+        {
+            "MCC_TEST_PLATFORM": "win32",
+            "MCC_TEST_ARCH": "x64",
+            "MCC_TEST_FETCH": _fetch_fixture(WINDOWS_SETUP, digest="0" * 64),
+        },
+        ["--desktop-only"],
+    )
+    assert status == 1, output
+    assert "failed its SHA-256 check" in output
+    assert not (tmp_path / "downloads" / WINDOWS_SETUP).exists(), (
+        "an installer that failed verification was left on disk"
+    )
+    assert not any(
+        str(call.get("command", "")).endswith(WINDOWS_SETUP) for call in _spawns(calls)
+    ), "an unverified installer was executed"
+
+
+@requires_node
+def test_a_failed_desktop_half_still_leaves_the_server_installed(
+    tmp_path: Path,
+) -> None:
+    """`npm install -g` on a flaky network should not throw away the server."""
+    status, output, calls = _install(
+        tmp_path,
+        {
+            "MCC_TEST_PLATFORM": "win32",
+            "MCC_TEST_ARCH": "x64",
+            # No fixture at all: every fetch 404s.
+            "MCC_TEST_FETCH": "{}",
+        },
+    )
+    assert status == 0, output
+    assert any("install.ps1" in _invocation(call) for call in _spawns(calls))
+    assert "the desktop app is not" in output
+    assert "--desktop-only" in output, "it must say how to retry just the desktop half"
+
+
+@requires_node
+def test_linux_prints_the_sudo_line_instead_of_escalating(tmp_path: Path) -> None:
+    """A package manager that silently calls sudo is one nobody should install."""
+    status, output, calls = _install(
+        tmp_path,
+        {
+            "MCC_TEST_PLATFORM": "linux",
+            "MCC_TEST_ARCH": "x64",
+            "DISPLAY": ":0",
+            "MCC_TEST_HAS_DPKG": "1",
+            "MCC_TEST_FETCH": _fetch_fixture(LINUX_DEB),
+        },
+        ["--desktop-only"],
+    )
+    assert status == 0, output
+    assert f"sudo dpkg -i {tmp_path / 'downloads' / LINUX_DEB}" in output
+    assert "--yes-sudo" in output
+    assert not any(str(call["command"]) == "sudo" for call in _spawns(calls)), (
+        "the .deb path escalated without being asked"
+    )
+
+
+@requires_node
+def test_yes_sudo_is_the_only_thing_that_runs_dpkg(tmp_path: Path) -> None:
+    status, output, calls = _install(
+        tmp_path,
+        {
+            "MCC_TEST_PLATFORM": "linux",
+            "MCC_TEST_ARCH": "x64",
+            "DISPLAY": ":0",
+            "MCC_TEST_HAS_DPKG": "1",
+            "MCC_TEST_FETCH": _fetch_fixture(LINUX_DEB),
+        },
+        ["--desktop-only", "--yes-sudo"],
+    )
+    assert status == 0, output
+    dpkg = [call for call in _spawns(calls) if str(call["command"]) == "sudo"]
+    assert len(dpkg) == 1, f"expected one `sudo dpkg -i`, got {calls}"
+    assert dpkg[0]["args"] == ["dpkg", "-i", str(tmp_path / "downloads" / LINUX_DEB)]
+
+
+@requires_node
+def test_a_linux_desktop_without_dpkg_takes_the_per_user_tarball(
+    tmp_path: Path,
+) -> None:
+    """Fedora and Arch have a desktop and no dpkg; the tarball needs no root."""
+    status, output, calls = _install(
+        tmp_path,
+        {
+            "MCC_TEST_PLATFORM": "linux",
+            "MCC_TEST_ARCH": "x64",
+            "WAYLAND_DISPLAY": "wayland-0",
+            "MCC_TEST_HAS_DPKG": "0",
+            "MCC_TEST_FETCH": _fetch_fixture(LINUX_TARBALL),
+        },
+        ["--desktop-only"],
+    )
+    assert status == 0, output
+    assert any(LINUX_TARBALL in str(call.get("fetch", "")) for call in calls)
+    unpacked = [call for call in _spawns(calls) if str(call["command"]) == "tar"]
+    assert len(unpacked) == 1, f"expected the tarball to be unpacked once, got {calls}"
+    assert any("install-desktop.sh" in _invocation(call) for call in _spawns(calls)), (
+        "the tarball's own per-user installer must be the thing that runs"
+    )
+
+
+@requires_node
+def test_every_download_url_is_the_versionless_latest_one(tmp_path: Path) -> None:
+    """`releases/latest/download/...` so a new release needs no npm publish."""
+    _, _, calls = _install(
+        tmp_path,
+        {
+            "MCC_TEST_PLATFORM": "win32",
+            "MCC_TEST_ARCH": "x64",
+            "MCC_TEST_FETCH": _fetch_fixture(WINDOWS_SETUP),
+        },
+        ["--desktop-only"],
+    )
+    fetched = [str(call["fetch"]) for call in calls if "fetch" in call]
+    assert fetched, "nothing was downloaded"
+    for url in fetched:
+        assert url.startswith(
+            "https://github.com/FiredMosquito831/my-claude-code/releases/latest/download/"
+        ), url
+    assert any(url.endswith(SUMS_ASSET) for url in fetched), (
+        "the checksum file must be fetched from the same release as the asset"
+    )
+
+
+def test_the_asset_names_are_the_ones_the_release_workflow_uploads() -> None:
+    """A renamed asset would 404 at install time and nowhere earlier."""
+    workflow = _read(REPO_ROOT / ".github" / "workflows" / "shell-release.yml")
+    for asset in (WINDOWS_SETUP, LINUX_DEB, LINUX_TARBALL, MACOS_DMG, SUMS_ASSET):
+        assert asset in workflow, f"{asset} is not uploaded by shell-release.yml"
+        assert asset in _read(RUNTIME), f"{asset} is not known to runtime-install.js"
 
 
 # ----------------------------------------------------------------- workflow
