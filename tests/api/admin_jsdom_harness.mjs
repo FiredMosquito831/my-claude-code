@@ -1415,27 +1415,61 @@ const ROUTES = {
         probe: { state: "not_installed", document_path: "/home/u/crush.json",
           document_exists: false, error: "", token_env_present: false,
           restorable: false } },
+      // Servable since 6.56.0, against the configuration library Anthropic's
+      // MDM page documents. MCC owns a whole document there and merges one
+      // foreign key of _meta.json.
       { id: "claude_desktop", display_name: "Claude Desktop",
         summary: "Claude Desktop has a native gateway mode.",
-        status: "instructions_only", doc_url: "https://example.invalid/claude",
+        status: "servable", doc_url: "https://example.invalid/claude",
         unavailable_reason: "", protocol: "anthropic_messages",
-        base_url: "http://127.0.0.1:8082", token_form: "in_app",
-        token_reference: "", token_env_var: "ANTHROPIC_AUTH_TOKEN",
+        base_url: "http://127.0.0.1:8082", token_form: "mcc_owned_file",
+        token_reference: "", token_env_var: "",
         attribution_header: "inferenceCustomHeaders", restart_required: true,
         open_command: "",
-        notes: ["MCC does not guess a persistence path for these settings."],
+        notes: ["Relaunch Claude Desktop to load it."],
         instruction_fields: [
-          { label: "Connection", value: "Gateway" },
-          { label: "Base URL", value: "http://127.0.0.1:8082" },
-          { label: "Auth scheme", value: "Bearer" },
-          { label: "API key", value: "the value of ANTHROPIC_AUTH_TOKEN" },
-          { label: "Models", value: "mcc/best, mcc/good, mcc/medium, mcc/cheap" },
+          { label: "Inference provider", value: "Gateway" },
+          { label: "Gateway base URL", value: "http://127.0.0.1:8082" },
+          { label: "Gateway auth scheme", value: "Bearer" },
+          { label: "Credential kind", value: "Static API key" },
           { label: "Custom headers", value: "x-mcc-harness: claude_desktop" },
         ],
-        owned_key: "", display_path: "", sidecar_path: "", overwrites: [],
+        owned_key: 'entries[id == "mcc-9c2f"]',
+        display_path: "%LOCALAPPDATA%/Claude-3p/configLibrary/_meta.json",
+        sidecar_path: "%LOCALAPPDATA%/Claude-3p/configLibrary/mcc-9c2f.json",
+        sidecar_keys: [
+          "inferenceProvider", "inferenceGatewayBaseUrl",
+          "inferenceGatewayApiKey", "inferenceCredentialKind",
+          "modelDiscoveryEnabled", "inferenceCustomHeaders",
+        ],
+        managed_source_labels: [
+          "Machine policy (HKLM\\SOFTWARE\\Policies\\Claude)",
+        ],
+        overwrites: ["appliedId"], sets_default_model: false,
+        probe: { state: "configured",
+          document_path: "/home/u/Claude-3p/configLibrary/_meta.json",
+          document_exists: true, error: "", token_env_present: false,
+          restorable: true, managed_by: "", managed_keys: [] } },
+      // A machine whose organisation manages the app: the card has no button
+      // at all, and says what is enforcing that.
+      { id: "roo_code", display_name: "Roo Code (VS Code)",
+        summary: "Roo Code publishes an import hook.",
+        status: "servable", doc_url: "https://example.invalid/roo",
+        unavailable_reason: "", protocol: "openai_chat_completions",
+        base_url: "http://127.0.0.1:8082/v1", token_form: "mcc_owned_file",
+        token_reference: "", token_env_var: "", attribution_header: "",
+        restart_required: false, open_command: "code", notes: [],
+        instruction_fields: [], owned_key: "roo-cline.autoImportSettingsPath",
+        display_path: "%APPDATA%/Code/User/settings.json",
+        sidecar_path: "<MCC config dir>/roo-code-settings.json",
+        sidecar_keys: [], managed_source_labels: ["Device policy"],
+        overwrites: ["roo-cline.autoImportSettingsPath"],
         sets_default_model: false,
-        probe: { state: "not_installed", document_path: "", document_exists: false,
-          error: "", token_env_present: false, restorable: false } },
+        probe: { state: "managed", document_path: "/home/u/settings.json",
+          document_exists: false, error: "", token_env_present: false,
+          restorable: false,
+          managed_by: "Machine policy (HKLM\\SOFTWARE\\Policies\\Claude)",
+          managed_keys: ["inferenceProvider"] } },
       { id: "warp", display_name: "Warp",
         summary: "Rejects loopback and private addresses.",
         status: "not_routable", doc_url: "https://example.invalid/warp",
@@ -1592,6 +1626,14 @@ if (!window.requestAnimationFrame) {
   window.requestAnimationFrame = (fn) => window.setTimeout(() => fn(Date.now()), 0);
   window.cancelAnimationFrame = (id) => window.clearTimeout(id);
 }
+// jsdom has no layout engine and does not implement scrollIntoView, so the
+// real one would throw where the page scrolls to a Guide anchor. Recording
+// the calls is also the only way to prove a Guide link *did* scroll, which is
+// half of what that link is for.
+const scrolledTo = [];
+window.Element.prototype.scrollIntoView = function scrollIntoViewStub() {
+  scrolledTo.push(this.id || this.className || this.tagName);
+};
 const fetchCalls = [];
 // The pause write is emulated in the fetch stub below, so the six lists have
 // to live somewhere the stub can read and update between calls.
@@ -4369,10 +4411,51 @@ const themePicker = {
     .map((option) => option.dataset.themeValue),
 };
 
+/* ---------------------------------------------------------- guide links
+   Every surface that has a Guide section now carries a small link into it.
+   Two things can be wrong and neither shows up as an error: the anchor can
+   name a heading that no longer exists, and the click can switch the view
+   without scrolling anywhere. Both are checked here against the real DOM. */
+const guideLinks = (() => {
+  const rendered = Array.from(doc.querySelectorAll(".guide-link")).map((link) => ({
+    purpose: link.dataset.guidePurpose,
+    anchor: link.dataset.guideAnchor,
+    resolves: Boolean(doc.getElementById(link.dataset.guideAnchor)),
+    view: link.closest(".admin-view")
+      ? link.closest(".admin-view").dataset.view
+      : null,
+  }));
+
+  // Click one and watch what it does: the Guide view has to become the active
+  // one, and the anchor has to be scrolled to.
+  const sample = doc.querySelector('.guide-link[data-guide-purpose="cli"]');
+  let clicked = null;
+  if (sample) {
+    const before = scrolledTo.length;
+    sample.click();
+    const guideView = doc.getElementById("view-guide");
+    clicked = {
+      anchor: sample.dataset.guideAnchor,
+      guideViewVisible: Boolean(guideView) && guideView.hidden === false,
+      navActive: Boolean(
+        doc.querySelector('button.nav-link[data-view="guide"].active'),
+      ),
+      scrolledAfter: scrolledTo.slice(before),
+    };
+  }
+  return { rendered, clicked };
+})();
+// The rAF the scroll runs in has to be allowed to fire before it is reported.
+await new Promise((resolve) => setTimeout(resolve, 50));
+if (guideLinks.clicked) {
+  guideLinks.clicked.scrolledAnchors = scrolledTo.slice();
+}
+
 console.log(
   JSON.stringify(
     {
       fatal: null,
+      guideLinks,
       scriptErrors,
       consoleErrors,
       navLabels: navLinks.map((link) => link.textContent),

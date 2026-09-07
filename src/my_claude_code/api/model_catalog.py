@@ -13,7 +13,12 @@ from my_claude_code.core.gateway_model_ids import (
     no_thinking_gateway_model_id,
 )
 from my_claude_code.core.model_visibility import ModelVisibility
-from my_claude_code.core.tier_refs import TIER_LABELS, TIER_ORDER, tier_ref
+from my_claude_code.core.tier_refs import (
+    TIER_FAMILY_TIERS,
+    TIER_LABELS,
+    TIER_ORDER,
+    tier_ref,
+)
 
 DISCOVERED_MODEL_CREATED_AT = "1970-01-01T00:00:00Z"
 
@@ -39,6 +44,16 @@ class ModelResponse(BaseModel):
     display_name: str
     id: str
     type: Literal["model"] = "model"
+    # Claude Desktop's gateway mode filters auto-discovered models down to ids
+    # that are "recognizably Claude" and opts an opaque alias in when the
+    # gateway states its Claude family tier here
+    # (https://claude.com/docs/third-party/claude-desktop/gateway, "Models").
+    # Set on the five ``mcc/*`` aliases only: every other id is either already
+    # a Claude protocol name or a provider ref MCC makes no such claim about.
+    # ``None`` on the rest, and serialised as ``null``, which is not a tier
+    # name and so filters exactly as the absent field did.
+    anthropic_family_tier: str | None = None
+    is_family_default: bool | None = None
 
 
 class ModelsListResponse(BaseModel):
@@ -147,13 +162,30 @@ def build_models_list_response(
                 if chain.primary
                 else TIER_LABELS[tier]
             )
+            family_tier, family_default = TIER_FAMILY_TIERS[tier]
             _append_unique_model(
-                models, seen, _discovered_model_response(ref, display_name=label)
+                models,
+                seen,
+                _discovered_model_response(
+                    ref,
+                    display_name=label,
+                    family_tier=family_tier,
+                    family_default=family_default,
+                ),
             )
             _append_unique_model(
                 models,
                 seen,
-                _discovered_model_response(gateway_model_id(ref), display_name=label),
+                _discovered_model_response(
+                    gateway_model_id(ref),
+                    display_name=label,
+                    family_tier=family_tier,
+                    # Both spellings are the same route, so only one of them
+                    # may claim to be the family's default entry: two defaults
+                    # for one tier is a picker that opens on whichever the
+                    # client happened to read last.
+                    family_default=False,
+                ),
             )
 
     return ModelsListResponse(
@@ -164,11 +196,19 @@ def build_models_list_response(
     )
 
 
-def _discovered_model_response(model_id: str, *, display_name: str) -> ModelResponse:
+def _discovered_model_response(
+    model_id: str,
+    *,
+    display_name: str,
+    family_tier: str | None = None,
+    family_default: bool | None = None,
+) -> ModelResponse:
     return ModelResponse(
         id=model_id,
         display_name=display_name,
         created_at=DISCOVERED_MODEL_CREATED_AT,
+        anthropic_family_tier=family_tier,
+        is_family_default=family_default,
     )
 
 

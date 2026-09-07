@@ -179,6 +179,34 @@ TIER_REASONING_SETTINGS: dict[ModelTier, str] = {
 }
 
 
+#: The Claude family tier each ``mcc/*`` alias is advertised as on
+#: ``GET /v1/models``, and whether it is that family's default entry.
+#:
+#: Claude Desktop's gateway mode auto-discovers models from ``GET /v1/models``
+#: and "shows only models whose IDs are recognizably Claude"; a gateway serving
+#: a Claude model under an opaque alias opts it in by returning
+#: ``anthropic_family_tier`` -- "a Claude tier name such as ``sonnet`` or
+#: ``opus``" -- optionally with ``is_family_default: true`` where several
+#: models map to one tier
+#: (https://claude.com/docs/third-party/claude-desktop/gateway, "Models").
+#: ``mcc/best`` is exactly such an opaque alias, so without this the five tiers
+#: were filtered out of the picker of the one desktop app MCC now configures.
+#:
+#: The mapping is the ladder's own, not an invention: ``mcc/good`` *is* the
+#: Opus route and ``mcc/medium`` the Sonnet route, so each alias is advertised
+#: as the family whose route it names. ``mcc/best`` is the Fable route, which
+#: is the strongest rung, and is advertised as ``opus`` and marked default
+#: because the two documented tier names do not include a stronger one. Vision
+#: is a capability reservation rather than a rung and rides on ``sonnet``.
+TIER_FAMILY_TIERS: dict[ModelTier, tuple[str, bool]] = {
+    ModelTier.BEST: ("opus", True),
+    ModelTier.GOOD: ("opus", False),
+    ModelTier.MEDIUM: ("sonnet", True),
+    ModelTier.CHEAP: ("haiku", True),
+    ModelTier.VISION: ("sonnet", False),
+}
+
+
 def tier_ref(tier: ModelTier) -> str:
     """Return the wire id for one tier, e.g. ``mcc/best``."""
 
@@ -248,6 +276,7 @@ def is_tier_ref(model_name: str | None) -> bool:
 
 __all__ = [
     "GLOBAL_TIER_SETTINGS",
+    "TIER_FAMILY_TIERS",
     "TIER_LABELS",
     "TIER_NAMESPACE",
     "TIER_ORDER",

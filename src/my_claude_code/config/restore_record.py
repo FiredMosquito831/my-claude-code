@@ -21,13 +21,17 @@ So Configure records, for every value it *overwrote* rather than created, the
 prior value and whether the key was present at all; and Undo offers two modes:
 
 ``KEYS_ONLY``
-    Delete what MCC owns. Foreign keys stay byte-identical. This is what
-    ``remove_owned_block`` has always done and remains the default, because it
-    is the mode that cannot surprise anyone.
+    Delete what MCC *created*, put back what MCC *replaced*, and leave every
+    foreign byte identical. The default, and the mode that never refuses: with
+    no record it can only delete, and it says so rather than erroring.
 
 ``RESTORE``
-    Delete what MCC created *and put back what MCC replaced*. Only this mode
-    reads the record.
+    The same, guaranteed: it requires the record and refuses when the document
+    has been rewritten since. Only this mode consumes the record.
+
+Both read it, which is the 6.56.0 correction. Before that, ``KEYS_ONLY``
+deleted a replaced value outright and then dropped the record, so a user's own
+Codex ``model`` was destroyed and ``RESTORE`` could no longer bring it back.
 
 **Why the document hash is stored.** A restore is only honest if the document
 is still the one MCC edited. Both mature peers surveyed for this work shipped
@@ -65,9 +69,12 @@ KEY_WAS_ABSENT = "absent"
 class UndoMode(StrEnum):
     """Which of the two undo modes the caller asked for."""
 
-    #: Remove MCC's keys and leave everything else exactly as it is.
+    #: Remove MCC's keys, put back any value MCC replaced, and leave every
+    #: other byte exactly as it is. Never refuses: no record and no hash check.
     KEYS_ONLY = "keys_only"
-    #: Remove MCC's keys and restore the values MCC overwrote.
+    #: The same, but guaranteed against the record: it requires one and
+    #: refuses when the document has been rewritten since MCC wrote it. This
+    #: is the mode that consumes the record.
     RESTORE = "restore"
 
 

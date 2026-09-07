@@ -296,8 +296,26 @@ def _harness_payload() -> dict[str, Any]:
     }
 
 
+def _resolved_binary_path(binary: str) -> str | None:
+    """Return the absolute path of a binary on PATH, or None.
+
+    ``shutil.which`` searches the current directory first on Windows, and
+    returns what it found *as it searched for it*: the live payload reported
+    ``.\\claude.EXE`` for Claude Code while every other harness reported an
+    absolute path. A relative path in a status pane is misleading -- it reads
+    as though the lookup depends on where the server happened to be started --
+    so it is made absolute here. ``os.path.abspath`` rather than
+    ``Path.resolve``: resolving would also follow the symlink or shim that npm
+    and pipx install, and the card is answering "what will run", not "what does
+    it eventually point at".
+    """
+
+    found = shutil.which(binary)
+    return os.path.abspath(found) if found else None
+
+
 def _harness_entry(spec: HarnessSpec, rtk_enabled: bool) -> dict[str, Any]:
-    binary_path = shutil.which(spec.binary)
+    binary_path = _resolved_binary_path(spec.binary)
     return {
         "id": spec.id,
         "display_name": spec.display_name,
@@ -345,6 +363,8 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
             "model_count": None,
             "defaulted_model_count": None,
             "defaulted_record_in_document": True,
+            "model_count_label": catalogue.model_count_label,
+            "model_count_note": catalogue.model_count_note,
         }
 
     merge = catalogue.merge
@@ -374,6 +394,9 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         # False only where the CLI refuses unknown root keys, so the
         # generated file cannot carry MCC's own record of what it guessed.
         "defaulted_record_in_document": catalogue.carries_defaulted_record,
+        # What the count means, for the one format where it is not models.
+        "model_count_label": catalogue.model_count_label,
+        "model_count_note": catalogue.model_count_note,
     }
     document = _read_catalogue(path, catalogue.document_format)
     if document is None:

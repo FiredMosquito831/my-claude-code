@@ -7,8 +7,10 @@ import pytest
 
 from my_claude_code.config.admin.manifest import FIELD_BY_KEY
 from my_claude_code.config.onboarding import (
+    OnboardingAgent,
     OnboardingError,
     build_state,
+    detect_agents,
     load_persisted,
     save_persisted,
 )
@@ -29,8 +31,7 @@ EXPECTED_STEP_IDS = (
     "provider",
     "models",
     "client",
-    "coding_agents",
-    "desktop_apps",
+    "connect_agents",
     "websearch",
     "messaging",
     "analytics",
@@ -348,3 +349,112 @@ class TestStepInstructionsAndTargets:
         for target in data_key_targets:
             key = target.split('"')[1]
             assert key in FIELD_BY_KEY, f"{key!r} is not a real admin config field key"
+
+
+class TestConnectAgentsStep:
+    """The Get Started step that lists what is actually on this machine.
+
+    Until 6.56.0 there were two steps here and both were "done" because the
+    user had *visited* the Coding agents page -- a fact about navigation, not
+    about anything being connected. These assert the replacement: real
+    detection, and completion derived from real traffic or a real file.
+    """
+
+    def test_the_step_lists_clis_and_desktop_apps_it_detected(
+        self, monkeypatch, tmp_path
+    ):
+        _set_home(monkeypatch, tmp_path)
+        agents = detect_agents(
+            env={"HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+        )
+
+        state = build_state(
+            claude_settings_configured=False, has_requests=False, agents=agents
+        )
+        step = next(s for s in state.steps if s.id == "connect_agents")
+
+        assert step.agents == agents
+        assert {agent.kind for agent in step.agents} == {"cli", "desktop"}
+        assert any(agent.id == "claude" for agent in step.agents)
+        assert any(agent.id == "claude_desktop" for agent in step.agents)
+        # A NOT_ROUTABLE app is not something the user can connect, so it is
+        # not offered as one.
+        assert not any(agent.id == "lm_studio" for agent in step.agents)
+
+    def test_the_step_links_to_both_guide_sections(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        state = build_state(claude_settings_configured=False, has_requests=False)
+        step = next(s for s in state.steps if s.id == "connect_agents")
+
+        assert step.guide_anchors == ("guide-cli", "guide-desktop-apps")
+
+    def test_no_agent_no_traffic_leaves_the_step_undone(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        state = build_state(
+            claude_settings_configured=False, has_requests=False, agents=()
+        )
+
+        assert not next(s for s in state.steps if s.id == "connect_agents").done
+
+    def test_one_request_in_seven_days_completes_the_step(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        agents = (
+            OnboardingAgent(
+                id="codex",
+                display_name="Codex",
+                kind="cli",
+                installed=True,
+                requests_7d=1,
+            ),
+        )
+
+        state = build_state(
+            claude_settings_configured=False, has_requests=False, agents=agents
+        )
+
+        assert next(s for s in state.steps if s.id == "connect_agents").done
+
+    def test_a_configured_desktop_app_completes_the_step_without_traffic(
+        self, monkeypatch, tmp_path
+    ):
+        """Two ways to be connected, and a file that points here is one."""
+
+        _set_home(monkeypatch, tmp_path)
+        agents = (
+            OnboardingAgent(
+                id="codex_desktop",
+                display_name="Codex desktop",
+                kind="desktop",
+                installed=True,
+                state="configured",
+            ),
+        )
+
+        state = build_state(
+            claude_settings_configured=False, has_requests=False, agents=agents
+        )
+
+        assert next(s for s in state.steps if s.id == "connect_agents").done
+
+    def test_detection_reports_the_same_answer_as_the_coding_agents_page(
+        self, monkeypatch, tmp_path
+    ):
+        """One detection, not two that agree until one is edited."""
+
+        from my_claude_code.config.desktop_apply import is_installed
+        from my_claude_code.config.desktop_apps import DESKTOP_APPS_BY_ID
+
+        _set_home(monkeypatch, tmp_path)
+        env = {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+        agents = {a.id: a for a in detect_agents(env=env) if a.kind == "desktop"}
+
+        for app_id, agent in agents.items():
+            assert agent.installed is is_installed(DESKTOP_APPS_BY_ID[app_id], env)
+
+    def test_detection_never_raises_on_a_machine_it_cannot_probe(
+        self, monkeypatch, tmp_path
+    ):
+        """The checklist is the first page a new user sees; it cannot throw."""
+
+        _set_home(monkeypatch, tmp_path)
+        assert detect_agents(env={}) is not None

@@ -39,6 +39,7 @@ from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.catalogues import MODEL_ENTRY_PATHS, serialise
 from my_claude_code.application.catalogues.base import DEFAULTED_KEY
 from my_claude_code.config.desktop_apps import (
+    CLAUDE_DESKTOP_CONFIG_ID,
     DESKTOP_PROVIDER_ID,
     BaseUrlShape,
     DesktopAppSpec,
@@ -113,7 +114,15 @@ def owned_block(
     """
 
     if not spec.catalogue_format_id:
-        return None
+        # An app whose owned block carries no model list at all. Claude
+        # Desktop's element of ``_meta.json.entries`` is the case: a label and
+        # the id the merge engine writes from the spec, and nothing else -- its
+        # models live in the sidecar's own document, or come from the app's own
+        # discovery call. Returning ``None`` here would leave the entry out of
+        # the index and the app would never offer MCC's configuration.
+        if not spec.provider.constants:
+            return None
+        return dict(spec.provider.constants)
 
     document, _defaulted = serialise(spec.catalogue_format_id, models)
     document = with_harness_id(document, spec.id)
@@ -187,10 +196,43 @@ def sidecar_document(
     models: Iterable[CatalogueModel],
     *,
     proxy_root_url: str,
+    auth_token: str = "",
 ) -> dict[str, Any] | None:
-    """Return the whole document MCC owns for an app that keeps one."""
+    """Return the whole document MCC owns for an app that keeps one.
 
-    if spec.sidecar is None or not spec.catalogue_format_id:
+    Two shapes, both declared rather than branched on. Most owned files are a
+    provider envelope plus a serialised model catalogue, which is exactly
+    :func:`owned_block`. Claude Desktop's is a fixed set of settings --
+    ``inferenceProvider``, the gateway URL, the credential, the credential
+    kind, the discovery switch -- declared as ``DesktopSidecar.fields`` with
+    ``{base_url}`` and ``{token}`` where this install's values go.
+
+    ``auth_token`` is a *literal* credential and reaches only this function and
+    only for a sidecar declaring ``holds_credential``; the file it lands in is
+    written 0600 by ``config/desktop_apply._write_owned_file``, and the plan
+    diff masks the field before any of it is rendered.
+    """
+
+    if spec.sidecar is None:
+        return None
+
+    if spec.sidecar.fields:
+        base_url = base_url_for(spec, proxy_root_url)
+        document: dict[str, Any] = {}
+        for key, value in spec.sidecar.fields.items():
+            if isinstance(value, str):
+                document[key] = value.replace("{base_url}", base_url).replace(
+                    "{token}", auth_token
+                )
+            else:
+                document[key] = value
+        if spec.sidecar.headers_key and spec.attribution_header_field:
+            document[spec.sidecar.headers_key] = with_harness_id(
+                {HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL}, spec.id
+            )
+        return document
+
+    if not spec.catalogue_format_id:
         return None
     return owned_block(spec, models, proxy_root_url=proxy_root_url)
 
@@ -222,6 +264,13 @@ def overwritten_scalars(
                 # speaks the public Gemini API at GOOGLE_GEMINI_BASE_URL;
                 # without it, it goes to Google's own backend regardless.
                 scalars[label] = "gemini"
+            case "appliedId":
+                # Claude Desktop's configuration library loads whichever
+                # document ``appliedId`` names at launch. It is the one foreign
+                # key MCC touches here, and the reason this card has a restore
+                # record at all: a user who had authored their own gateway
+                # configuration had it applied, and Undo puts that id back.
+                scalars[label] = CLAUDE_DESKTOP_CONFIG_ID
             case "roo-cline.autoImportSettingsPath":
                 # Filled in by the caller, which is the only party that knows
                 # where the sidecar landed on this machine.

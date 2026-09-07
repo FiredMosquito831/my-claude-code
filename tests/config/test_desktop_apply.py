@@ -57,13 +57,40 @@ def env_for(home) -> dict[str, str]:
     }
 
 
+def make_marker(home, spec) -> Path:
+    """Create one directory that makes this app read as installed.
+
+    A glob marker cannot be resolved before it exists -- that is the whole
+    point of it, and why ``resolve_path`` answers ``None`` for one that matches
+    nothing -- so the pattern is turned into a concrete name here. ``*`` stands
+    in for a publisher hash or an extension version, and any value satisfies
+    the glob, so the test uses a fixed one.
+    """
+
+    env = env_for(home)
+    for candidate in spec.detect.markers:
+        if candidate.platforms and "win32" not in candidate.platforms:
+            continue
+        if not candidate.glob:
+            resolved = desktop_apply.resolve_path((candidate,), env)
+            if resolved is None:
+                continue
+            resolved.mkdir(parents=True, exist_ok=True)
+            return resolved
+        base, _directed = desktop_apply._base_directory(candidate, env)
+        assert base is not None
+        parts = [part.replace("*", "0test0") for part in candidate.relative_parts]
+        resolved = base.joinpath(*parts)
+        resolved.mkdir(parents=True, exist_ok=True)
+        return resolved
+    raise AssertionError(f"{spec.id} declares no marker for this platform")
+
+
 def prepare(home, spec, contents: str | None) -> None:
     """Create the app's marker directory, and its document when given one."""
 
     env = env_for(home)
-    marker = desktop_apply.resolve_path(spec.detect.markers, env)
-    assert marker is not None
-    marker.mkdir(parents=True, exist_ok=True)
+    make_marker(home, spec)
     if contents is None:
         return
     path = document_path(spec, env)
@@ -143,16 +170,98 @@ def test_undo_keys_only_removes_mcc_and_leaves_the_rest(tmp_path):
         scalars={"model_provider": "mcc", "model": "mcc/best"},
         record_path=record,
     )
-    desktop_apply.undo(spec, env=env, mode=UndoMode.KEYS_ONLY, record_path=record)
+    result = desktop_apply.undo(
+        spec, env=env, mode=UndoMode.KEYS_ONLY, record_path=record
+    )
 
     text = document_path(spec, env).read_text(encoding="utf-8", newline=None)
     assert "model_providers.mcc" not in text
+    # ``model_provider`` did not exist before MCC, so it is deleted.
     assert "model_provider" not in text
-    # The user's own model was *overwritten*, so keys-only leaves it removed:
-    # putting it back is what the other mode is for.
-    assert 'model = "gpt-5.6-luna"' not in text
+    # ``model`` did, and MCC overwrote it. Keys-only puts it back: the mode
+    # says "remove MCC's keys", and this was never one of MCC's keys. Before
+    # 6.56.0 this line was deleted outright and the record was then emptied,
+    # so the value was unrecoverable through the UI.
+    assert 'model = "gpt-5.6-luna"' in text
+    assert result.restored_keys == ("model",)
     assert "# a comment the user wrote" in text
     assert '[projects."C:/work"]' in text
+
+
+def test_undo_keys_only_keeps_the_record_so_restore_still_works(tmp_path):
+    """The record answers a question that survives an undo."""
+
+    spec = desktop_app("codex_desktop")
+    prepare(tmp_path, spec, CODEX_DOCUMENT)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=BLOCK,
+        scalars={"model_provider": "mcc", "model": "mcc/best"},
+        record_path=record,
+    )
+    desktop_apply.undo(spec, env=env, mode=UndoMode.KEYS_ONLY, record_path=record)
+
+    from my_claude_code.config.restore_record import read_entry
+
+    entry = read_entry(spec.id, path=record)
+    assert entry is not None
+    assert any(
+        value.key_path == ("model",) and value.prior_value == "gpt-5.6-luna"
+        for value in entry.overwritten
+    )
+    # Before 6.56.0 this was ``{"subjects": []}`` and the pre-MCC value existed
+    # nowhere the UI could reach. The record is what makes a later Configure
+    # remember the *first* answer rather than MCC's own, so keeping it is not
+    # bookkeeping: it is the only surviving copy of what the user had.
+
+
+@pytest.mark.parametrize(
+    "app_id, key",
+    [
+        ("codex_desktop", "model"),
+        ("goose_desktop", "GOOSE_PROVIDER"),
+        ("antigravity", "modelProvider"),
+        ("roo_code", "roo-cline.autoImportSettingsPath"),
+    ],
+)
+def test_keys_only_undo_restores_every_apps_overwritten_value(tmp_path, app_id, key):
+    """The regression, for every app that declares ``overwritten_keys``.
+
+    One shape per format -- TOML, YAML, JSON, and JSON with a dotted key that
+    is a single literal key rather than a path -- because the delete that lost
+    the value lived in two different branches of ``undo``.
+    """
+
+    spec = desktop_app(app_id)
+    prepare(tmp_path, spec, None)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+    path = document_path(spec, env)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    assert spec.document is not None
+    if spec.document.document_format.value == "toml":
+        path.write_text(f'{key} = "mine"\n', encoding="utf-8", newline="")
+    elif spec.document.document_format.value == "yaml":
+        path.write_text(f"{key}: mine\n", encoding="utf-8", newline="")
+    else:
+        path.write_text(json.dumps({key: "mine"}, indent=2) + "\n", encoding="utf-8")
+
+    desktop_apply.apply(
+        spec, env=env, block=None, scalars={key: "mcc"}, record_path=record
+    )
+    assert "mcc" in path.read_text(encoding="utf-8", newline=None)
+
+    result = desktop_apply.undo(
+        spec, env=env, mode=UndoMode.KEYS_ONLY, record_path=record
+    )
+
+    assert key in result.restored_keys
+    assert "mine" in path.read_text(encoding="utf-8", newline=None)
 
 
 def test_undo_restore_puts_back_the_scalar_mcc_overwrote(tmp_path):
@@ -534,3 +643,229 @@ def test_a_masked_json_preview_is_still_valid_json(tmp_path):
         if line.startswith(("+", " ")) and not line.startswith("+++")
     )
     json.loads(added)
+
+
+# ------------------------------------------------- Claude Desktop
+
+CLAUDE_META = (
+    json.dumps(
+        {
+            "appliedId": "3fd258a0-0379-416e-b3b5-0b72a6ac5392",
+            "entries": [
+                {"id": "3fd258a0-0379-416e-b3b5-0b72a6ac5392", "name": "My own gateway"}
+            ],
+        },
+        indent=2,
+    )
+    + "\n"
+)
+
+CLAUDE_BLOCK: dict[str, object] = {"name": "My Claude Code (MCC)"}
+CLAUDE_SIDECAR: dict[str, object] = {
+    "inferenceProvider": "gateway",
+    "inferenceGatewayBaseUrl": "http://127.0.0.1:8082",
+    "inferenceGatewayApiKey": "scratch-token",
+    "inferenceCredentialKind": "static",
+    "modelDiscoveryEnabled": True,
+    "inferenceCustomHeaders": {"x-mcc-harness": "claude_desktop"},
+}
+
+
+def test_claude_desktop_owns_a_file_and_merges_exactly_one_foreign_key(tmp_path):
+    """The shape read off this machine: a document library plus its index.
+
+    MCC writes a whole document of its own and touches ``_meta.json`` in two
+    places -- ``appliedId``, which is what makes the app load it, and one
+    element of ``entries``. Every configuration the user authored survives.
+    """
+
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+
+    result = desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars={"appliedId": "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"},
+        sidecar_document=CLAUDE_SIDECAR,
+        record_path=record,
+    )
+
+    meta = json.loads(document_path(spec, env).read_text(encoding="utf-8"))
+    assert meta["appliedId"] == "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"
+    names = [entry["name"] for entry in meta["entries"]]
+    assert "My own gateway" in names
+    assert "My Claude Code (MCC)" in names
+    assert len(meta["entries"]) == 2
+
+    sidecar = desktop_apply.sidecar_path_for(spec, env)
+    assert sidecar is not None
+    assert json.loads(sidecar.read_text(encoding="utf-8")) == CLAUDE_SIDECAR
+    assert result.changed
+
+
+def test_claude_desktop_undo_puts_the_users_own_configuration_back(tmp_path):
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+    path = document_path(spec, env)
+    original = path.read_bytes()
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars={"appliedId": "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"},
+        sidecar_document=CLAUDE_SIDECAR,
+        record_path=record,
+    )
+    result = desktop_apply.undo(
+        spec, env=env, mode=UndoMode.RESTORE, record_path=record
+    )
+
+    assert path.read_bytes() == original
+    assert result.removed_sidecar
+    sidecar = desktop_apply.sidecar_path_for(spec, env)
+    assert sidecar is not None
+    assert not sidecar.exists()
+
+
+def test_claude_desktop_keys_only_undo_also_restores_the_applied_id(tmp_path):
+    """The user's applied configuration is a value MCC replaced, not one it made."""
+
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars={"appliedId": "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"},
+        sidecar_document=CLAUDE_SIDECAR,
+        record_path=record,
+    )
+    result = desktop_apply.undo(
+        spec, env=env, mode=UndoMode.KEYS_ONLY, record_path=record
+    )
+
+    meta = json.loads(document_path(spec, env).read_text(encoding="utf-8"))
+    assert meta["appliedId"] == "3fd258a0-0379-416e-b3b5-0b72a6ac5392"
+    assert result.restored_keys == ("appliedId",)
+
+
+def test_a_policy_key_disables_configure_and_the_probe_says_why(tmp_path, monkeypatch):
+    """The local library is the lowest-precedence source Claude Desktop reads.
+
+    A managed profile replaces it wholesale and makes the app's own
+    configuration window read-only, so a Configure that wrote the library
+    anyway would leave a file that does nothing and a card claiming otherwise.
+    """
+
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+
+    monkeypatch.setattr(
+        desktop_apply,
+        "_registry_value_names",
+        lambda hive, subkey: ("inferenceProvider",) if hive == "HKLM" else (),
+    )
+
+    probe = desktop_apply.probe(spec, env=env)
+    assert probe.state is DesktopAppState.MANAGED
+    assert "Machine policy" in probe.managed_by
+    assert probe.managed_keys == ("inferenceProvider",)
+
+    with pytest.raises(desktop_apply.DesktopApplyError) as failure:
+        desktop_apply.apply(
+            spec,
+            env=env,
+            block=CLAUDE_BLOCK,
+            scalars={},
+            sidecar_document=CLAUDE_SIDECAR,
+        )
+    assert "outranks the file MCC writes" in str(failure.value)
+
+
+def test_an_update_only_policy_leaves_configure_available(tmp_path, monkeypatch):
+    """Anthropic documents an app-behavior key group that does not take over.
+
+    A fleet may pin an update policy without managing the whole configuration,
+    and on those devices the locally authored config still applies -- so MCC's
+    button has to stay live.
+    """
+
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+
+    monkeypatch.setattr(
+        desktop_apply,
+        "_registry_value_names",
+        lambda hive, subkey: ("disableAutoUpdates", "egressProxyUrl"),
+    )
+
+    assert desktop_apply.managed_override(spec, env) == ("", ())
+    assert desktop_apply.probe(spec, env=env).state is not DesktopAppState.MANAGED
+
+
+def test_a_json_document_written_without_a_trailing_newline_keeps_none(tmp_path):
+    """A Configure/Undo cycle has to end exactly where it started.
+
+    Claude Desktop writes its own ``_meta.json`` with no trailing newline --
+    read off this machine on 2026-09-07 -- and MCC's JSON writer appended one,
+    so the cycle finished one byte away from the original. Every other
+    normalisation an object document suffers is the format's price; this one
+    was avoidable.
+    """
+
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META.rstrip("\n"))
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+    path = document_path(spec, env)
+    original = path.read_bytes()
+    assert not original.endswith(b"\n")
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars={"appliedId": "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"},
+        sidecar_document=CLAUDE_SIDECAR,
+        record_path=record,
+    )
+    assert not path.read_bytes().endswith(b"\n")
+
+    desktop_apply.undo(spec, env=env, mode=UndoMode.KEYS_ONLY, record_path=record)
+    assert path.read_bytes() == original
+
+
+def test_an_untouched_configuration_library_reads_as_installed_not_drifted(tmp_path):
+    """ "Drifted" is a claim that MCC wrote here and something changed it.
+
+    Claude Desktop's footprint is an element of ``entries`` plus the
+    ``appliedId`` pointing at it -- not the scalar alone. Judging it by the
+    scalar, as Goose and Antigravity are judged, made a library holding only
+    the user's own configuration report ``drifted`` on a machine MCC had never
+    written to. Caught on the scratch server before this shipped.
+    """
+
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+
+    probe = desktop_apply.probe(
+        spec,
+        env=env,
+        expected_block=CLAUDE_BLOCK,
+        expected_scalars={"appliedId": "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"},
+        expected_sidecar=CLAUDE_SIDECAR,
+    )
+
+    assert probe.state is DesktopAppState.INSTALLED

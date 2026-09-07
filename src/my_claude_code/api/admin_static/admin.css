@@ -7544,3 +7544,90 @@ details.turn-pane > summary:focus-visible {
 .desktop-instructions {
   margin: 0.75rem 0;
 }
+
+/* ----------------------------------------------------------- guide links
+   One small link per surface, into the Guide section that explains it. It
+   has to read as an aside rather than as an action: the surface it sits on
+   is the thing the reader came for, and a link styled like a button would
+   compete with the Configure beside it. */
+.guide-link {
+  margin-left: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--line-strong);
+  white-space: nowrap;
+}
+
+.guide-link::before {
+  content: "› ";
+  opacity: 0.7;
+}
+
+.guide-link:hover,
+.guide-link:focus-visible {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* A list that has asked the server and not been answered yet. Said in words
+   rather than drawn as a skeleton: both lists here are a handful of rows and
+   the honest fact is "a request is in flight", not a shape. */
+.list-loading {
+  margin: 0;
+  padding: 0.75rem 0;
+  opacity: 0.75;
+}
+
+/* ------------------------------------------- Get Started: connect agents */
+.get-started-step-guides {
+  margin: 0 0 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.get-started-step-guides .guide-link {
+  margin-left: 0;
+}
+
+.get-started-agents {
+  margin: 0 0 0.75rem;
+}
+
+.get-started-agent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.get-started-agent {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+}
+
+.get-started-agent-detail {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.get-started-agent-traffic {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.get-started-agent-configure {
+  padding: 0.15rem 0.55rem;
+  font-size: 0.75rem;
+}

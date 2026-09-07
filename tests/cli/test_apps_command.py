@@ -94,13 +94,14 @@ def test_status_of_a_not_routable_app_gives_the_dated_reason(scratch, capsys):
     assert "127.0.0.1" in out
 
 
-def test_status_of_an_instruction_card_lists_the_values_to_type(scratch, capsys):
+def test_status_of_claude_desktop_names_the_file_it_writes(scratch, capsys):
+    """It has a Configure button now, so status reports a file, not a dialog."""
+
     module.apps_command(["status", "claude_desktop"])
     out = capsys.readouterr().out
 
-    assert "set these by hand" in out
-    assert "Gateway" in out
-    assert "mcc/best" in out
+    assert "config file" in out
+    assert "configLibrary" in out
 
 
 def test_configure_preview_prints_the_diff_and_writes_nothing(scratch, capsys):
@@ -154,7 +155,10 @@ def test_undo_without_restore_leaves_the_users_other_keys(scratch, capsys):
     text = scratch.read_text(encoding="utf-8", newline=None)
 
     assert "Removed MCC's keys" in out
-    assert "Restored" not in out
+    # Keys-only puts back a value MCC replaced; it deletes only what MCC
+    # created. Before 6.56.0 it deleted the user's own model line as well.
+    assert "Restored your original values at: model" in out
+    assert 'model = "gpt-5.6-luna"' in text
     assert "model_providers.mcc" not in text
     assert "# a comment the user wrote" in text
 
@@ -167,13 +171,13 @@ def test_an_unknown_app_exits_non_zero_and_lists_the_real_ones(scratch, capsys):
     assert "codex_desktop" in capsys.readouterr().err
 
 
-def test_configuring_an_instruction_card_refuses_with_what_to_do_instead(
+def test_configuring_a_not_routable_card_refuses_with_what_to_do_instead(
     scratch, capsys
 ):
     with pytest.raises(SystemExit):
-        module.apps_command(["configure", "claude_desktop"])
+        module.apps_command(["configure", "lm_studio"])
 
-    assert "mcc-apps status claude_desktop" in capsys.readouterr().err
+    assert "mcc-apps status lm_studio" in capsys.readouterr().err
 
 
 def test_the_command_reports_a_server_that_is_not_running(monkeypatch, capsys):

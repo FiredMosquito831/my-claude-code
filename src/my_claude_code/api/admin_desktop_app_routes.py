@@ -28,6 +28,7 @@ Every route is loopback-and-local-Origin only, through the same
 
 import asyncio
 import os
+import sys
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -65,6 +66,7 @@ from my_claude_code.config.desktop_apps import (
     desktop_app,
 )
 from my_claude_code.config.harness_tiers import current_harness_tiers
+from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.restore_record import UndoMode
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import Settings
@@ -141,7 +143,20 @@ def _documents(
     return (
         owned_block(spec, models, proxy_root_url=proxy_root_url),
         overwritten_scalars(spec, set_default_model=set_default_model),
-        sidecar_document(spec, models, proxy_root_url=proxy_root_url),
+        sidecar_document(
+            spec,
+            models,
+            proxy_root_url=proxy_root_url,
+            # The literal credential, and only for a sidecar that declares it
+            # holds one. It is the same token Configure Claude Code writes, so
+            # a user who runs both is not handed two different answers to "what
+            # is MCC's key".
+            auth_token=(
+                proxy_auth_token(settings.anthropic_auth_token)
+                if spec.sidecar is not None and spec.sidecar.holds_credential
+                else ""
+            ),
+        ),
     )
 
 
@@ -153,6 +168,8 @@ def _probe_payload(probe: DesktopProbe) -> dict[str, Any]:
         "error": probe.error,
         "token_env_present": probe.token_env_present,
         "restorable": probe.restorable,
+        "managed_by": probe.managed_by,
+        "managed_keys": list(probe.managed_keys),
     }
 
 
@@ -201,6 +218,28 @@ def _spec_payload(
         "owned_key": spec.owned_key_label,
         "display_path": spec.document.display_path if spec.document else "",
         "sidecar_path": spec.sidecar.display_path if spec.sidecar else "",
+        # Key names only. The card says which settings MCC writes into the
+        # file it owns; the values include a literal credential and never
+        # leave the server.
+        "sidecar_keys": (
+            [
+                *spec.sidecar.fields,
+                *([spec.sidecar.headers_key] if spec.sidecar.headers_key else []),
+            ]
+            if spec.sidecar is not None
+            else []
+        ),
+        # Only the sources that can apply *here*. Listing the macOS managed
+        # preferences path on a Windows card is noise the reader has to filter
+        # out, and it makes the row read as a list of things that are true
+        # rather than as a list of things that could outrank MCC on this box.
+        "managed_source_labels": [
+            source.label
+            for source in spec.managed_sources
+            if source.path is None
+            or not source.path.platforms
+            or sys.platform in source.path.platforms
+        ],
         "overwrites": [
             ".".join(key_path)
             for key_path in (spec.document.overwritten_keys if spec.document else ())
@@ -236,6 +275,7 @@ def _list_payload(settings: Settings, services: ApiServices) -> dict[str, Any]:
     for spec in DESKTOP_APPS:
         expected_block: dict[str, Any] | None = None
         expected_scalars: dict[str, object] | None = None
+        expected_sidecar: dict[str, Any] | None = None
         if spec.status is DesktopAppStatus.SERVABLE and spec.document is not None:
             models = (
                 build_catalogue_models(
@@ -249,12 +289,23 @@ def _list_payload(settings: Settings, services: ApiServices) -> dict[str, Any]:
             )
             expected_block = owned_block(spec, models, proxy_root_url=proxy_root_url)
             expected_scalars = overwritten_scalars(spec)
+            expected_sidecar = sidecar_document(
+                spec,
+                models,
+                proxy_root_url=proxy_root_url,
+                auth_token=(
+                    proxy_auth_token(settings.anthropic_auth_token)
+                    if spec.sidecar is not None and spec.sidecar.holds_credential
+                    else ""
+                ),
+            )
         try:
             probe = probe_desktop(
                 spec,
                 env=os.environ,
                 expected_block=expected_block,
                 expected_scalars=expected_scalars,
+                expected_sidecar=expected_sidecar,
             )
         except DesktopApplyError:
             probe = None
@@ -337,6 +388,7 @@ async def configure_desktop_app(
             env=os.environ,
             expected_block=block,
             expected_scalars=scalars,
+            expected_sidecar=sidecar,
         )
         return {
             "changed": result.changed,
