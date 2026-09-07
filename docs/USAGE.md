@@ -1,6 +1,6 @@
 # My Claude Code — Complete Usage Guide
 
-From a fresh machine to a tuned setup: installing, connecting Claude Code and Claude Desktop, adding providers, routing models, web search, and analytics.
+From a fresh machine to a tuned setup: installing, connecting every coding agent MCC routes for — Claude Code, Codex, OpenCode, Gemini CLI, Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command Code, Droid, Pi, Kilo — and the desktop apps beside them, adding providers, routing models, web search, and analytics. Claude Code is one client among many; it is first in the tutorials only because it is the one most readers arrive with.
 
 The [README](../README.md) is the overview. This is the long-form manual.
 
@@ -63,7 +63,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
 
 ## 1. How it works
 
-My Claude Code is a **local server that speaks Anthropic's API**. Your coding agent believes it is talking to Anthropic. The proxy receives that request, forwards it to whichever provider you configured — NVIDIA NIM, OpenRouter, a local Ollama, 56 of them — and translates the response back into Anthropic's wire format.
+My Claude Code is a **local router that speaks four protocols at once**: Anthropic's Messages API, OpenAI's Chat Completions and Responses APIs, and Google's Gemini API. Whichever one your coding agent already speaks, it believes it is talking to that vendor. The proxy receives the request, forwards it to whichever provider you configured — NVIDIA NIM, OpenRouter, a local Ollama, 57 of them — and translates the response back into the wire format the agent asked in.
 
 <div align="center">
   <img src="../assets/how-it-works.svg" alt="Request flow from agent through the proxy to a provider" width="760">
