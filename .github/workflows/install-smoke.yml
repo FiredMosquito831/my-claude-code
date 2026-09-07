@@ -112,10 +112,12 @@ jobs:
           set -eu
           scratch="${RUNNER_TEMP}/fresh-machine"
 
-          # install.sh puts uv in ~/.local/bin and extends its OWN PATH; this
-          # step is a fresh shell with the trimmed PATH, exactly like the new
-          # terminal the closing message tells the user to open.
-          PATH="$HOME/.local/bin:$PATH"
+          # uv's own installer writes to $XDG_DATA_HOME/../bin when
+          # XDG_DATA_HOME is set, which is the scratch profile here and not
+          # $HOME/.local/bin. This step is a fresh shell with the withheld PATH,
+          # exactly like the new terminal the closing message tells the user to
+          # open, so it adds that directory the way a login shell would.
+          PATH="${scratch}/home/.local/bin:$PATH"
           uv_bin="$(command -v uv || true)"
           [ -n "$uv_bin" ] || { echo "::error::install.sh did not provide uv"; exit 1; }
           echo "uv installed at: $uv_bin ($("$uv_bin" --version))"
