@@ -6,6 +6,7 @@ import logging
 import os
 import traceback
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from loguru import logger
@@ -42,12 +43,31 @@ from my_claude_code.messaging.platforms.ports import (
     MessagingRuntime,
 )
 from my_claude_code.messaging.voice import Transcriber
+from my_claude_code.providers.chatgpt_oauth.provider import (
+    CHATGPT_OAUTH_PROVIDER_ID,
+    WITHHELD_MODEL_IDS,
+)
+from my_claude_code.providers.recovery import (
+    FACT_MODEL_WITHHELD,
+    SOURCE_PROBE,
+    LearnedFactStore,
+    learned_fact_store,
+)
+from my_claude_code.providers.runtime.capability_probes import (
+    ALL_PROBES,
+    DEFAULT_PROBES,
+    MAX_MODELS_PER_PROBE_RUN,
+    PROBE_FACT_KINDS,
+    probe_model_capabilities,
+)
+from my_claude_code.providers.runtime.config import provider_credential
 from my_claude_code.providers.runtime.discovery import cache_enriched_model_infos
 from my_claude_code.providers.runtime.reasoning_probe import (
     ReasoningProbeOutcome,
     probe_reasoning_dialect,
 )
 
+from .discovery_timer import ProviderDiscoveryTimer, resolve_refresh_interval
 from .provider_manager import ProviderRuntimeManager
 
 RestartCallback = Callable[[], Awaitable[None] | None]
@@ -107,6 +127,21 @@ def startup_failure_message(settings: Settings, exc: Exception) -> str:
     return f"Server startup failed: exc_type={type(exc).__name__}"
 
 
+def _withheld_sink(store: LearnedFactStore) -> Callable[[str], None]:
+    """Write one newly withheld model id through to the durable store."""
+
+    def remember(model_id: str) -> None:
+        store.record(
+            CHATGPT_OAUTH_PROVIDER_ID,
+            model_id,
+            FACT_MODEL_WITHHELD,
+            True,
+            evidence="the backend refused this model id by name",
+        )
+
+    return remember
+
+
 class ApplicationRuntime:
     """Own every process-lifetime resource used by one server instance."""
 
@@ -133,6 +168,14 @@ class ApplicationRuntime:
         self._closed = False
         self._provider_manager_closed = False
         self._close_lock = asyncio.Lock()
+        # The durable store of what every host has taught this proxy about
+        # itself, and the loop that keeps the catalogues current. Both are
+        # owned here rather than in ``runtime.asgi``, which owns lifespan only.
+        self._learned_facts = learned_fact_store()
+        self._discovery_timer = ProviderDiscoveryTimer(
+            self.provider_manager.refresh_model_list_cache_periodic,
+            lambda: self.settings.model_discovery_refresh_seconds,
+        )
 
     @property
     def settings(self) -> Settings:
@@ -149,8 +192,14 @@ class ApplicationRuntime:
         logger.info("Starting Claude Code Proxy...")
         try:
             warn_if_process_auth_token(self.settings)
+            # Before the first sweep and before the first request: a provider
+            # built during the sweep asks the store for its memory, and a
+            # memory handed out empty would re-pay every 400 this proxy has
+            # already paid for.
+            self._load_learned_facts()
             await self._validate_configured_models_best_effort()
             self.provider_manager.start_model_list_refresh()
+            self._discovery_timer.start()
             await self._start_messaging_if_configured()
             logging.getLogger("uvicorn.error").info(
                 "Admin UI: %s (local-only)",
@@ -391,6 +440,146 @@ class ApplicationRuntime:
         payload["model"] = models[0] if models else ""
         return payload
 
+    async def probe_provider_capabilities(
+        self, provider_id: str, models: tuple[str, ...] = ()
+    ) -> dict[str, Any]:
+        """Measure what one provider's host actually does, and store it.
+
+        Bounded on purpose. A gateway listing 400 models behind one button
+        press is 400-1200 upstream requests, so at most
+        :data:`MAX_MODELS_PER_PROBE_RUN` models are probed per press and the
+        count is stated before it runs. Nothing here ever touches the request
+        path: this is reached only from the provider card.
+
+        A host that answers 401/402/403 before it validates a body has told us
+        nothing about the model, so it is recorded as unprobeable with its
+        status code and no verdict is guessed at.
+        """
+
+        target = self._probe_target(provider_id)
+        if target is None:
+            return {
+                "provider_id": provider_id,
+                "status": "unknown",
+                "detail": "not configured",
+                "results": [],
+            }
+        base_url, api_key, proxy = target
+        known = sorted(self.cached_model_ids().get(provider_id, frozenset()))
+        chosen = [model for model in models if model] or known
+        chosen = chosen[:MAX_MODELS_PER_PROBE_RUN]
+        probes = ALL_PROBES if self.settings.model_probe_new_models else DEFAULT_PROBES
+        results: list[dict[str, Any]] = []
+        unprobeable = ""
+        for model in chosen:
+            outcomes = await probe_model_capabilities(
+                base_url, api_key, model, probes=probes, proxy=proxy
+            )
+            for outcome in outcomes:
+                results.append(outcome.as_payload())
+                if outcome.detail.startswith("unprobeable"):
+                    unprobeable = outcome.detail
+                if outcome.status != "learned":
+                    continue
+                kind = PROBE_FACT_KINDS.get(outcome.probe)
+                if kind is None:
+                    continue
+                self._learned_facts.record(
+                    provider_id,
+                    model,
+                    kind,
+                    outcome.value,
+                    source=SOURCE_PROBE,
+                    evidence=outcome.detail,
+                )
+            if unprobeable:
+                # Every further model would get the same non-answer from the
+                # same credential and cost another request to find out.
+                break
+        self._learned_facts.flush()
+        return {
+            "provider_id": provider_id,
+            "status": "unprobeable" if unprobeable else "probed",
+            "detail": unprobeable,
+            "models": chosen,
+            "probes": list(probes),
+            "results": results,
+        }
+
+    def _probe_target(self, provider_id: str) -> tuple[str, str, str | None] | None:
+        """Resolve one provider's base URL and credential, registry-first.
+
+        No per-provider branch: a custom provider carries its own base URL and
+        keys on its registry entry, and every other provider is described by
+        its catalogue descriptor plus the credential ``provider_credential``
+        already reads out of settings for discovery.
+        """
+
+        registry = get_provider_registry()
+        entry = registry.get(provider_id)
+        if entry is not None:
+            key = entry.api_keys[0] if entry.api_keys else ""
+            if entry.base_url and key:
+                return entry.base_url, key, entry.proxy
+            return None
+        descriptor = registry.all_descriptors().get(provider_id)
+        if descriptor is None:
+            return None
+        base_url = descriptor.default_base_url or ""
+        if descriptor.base_url_attr:
+            configured = getattr(self.settings, descriptor.base_url_attr, "")
+            if isinstance(configured, str) and configured.strip():
+                base_url = configured.strip()
+        credential = provider_credential(descriptor, self.settings)
+        if not base_url or not credential:
+            return None
+        proxy = None
+        if descriptor.proxy_attr:
+            value = getattr(self.settings, descriptor.proxy_attr, None)
+            proxy = value if isinstance(value, str) and value.strip() else None
+        return base_url, credential, proxy
+
+    def learned_facts_by_model(self) -> dict[str, list[dict[str, Any]]]:
+        """Every stored fact, grouped by ``provider/model`` for the page."""
+
+        now = datetime.now(UTC)
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for fact in self._learned_facts.all_facts():
+            row = fact.as_row()
+            row["age_seconds"] = fact.age_seconds(now)
+            row["ttl_seconds"] = fact.ttl_seconds
+            row["stale"] = fact.is_stale(now)
+            row["retired"] = fact.retired
+            row["detail"] = fact.detail
+            grouped.setdefault(f"{fact.provider_id}/{fact.model_id}", []).append(row)
+        return grouped
+
+    def forget_learned_facts(
+        self, provider_id: str, model_id: str = "", fact_kind: str = ""
+    ) -> int:
+        """Forget one row, one model, one provider, or everything."""
+
+        if not provider_id:
+            return self._learned_facts.forget_all()
+        if not model_id:
+            return self._learned_facts.forget_provider(provider_id)
+        return self._learned_facts.forget(provider_id, model_id, fact_kind)
+
+    def catalogue_refresh_status(self) -> dict[str, Any]:
+        """When the background sweep last ran, and when it is next due."""
+
+        interval = resolve_refresh_interval(
+            self.settings.model_discovery_refresh_seconds
+        )
+        return {
+            "enabled": interval > 0,
+            "interval_seconds": interval,
+            "configured_seconds": self.settings.model_discovery_refresh_seconds,
+            "last_refreshed_at": self.provider_manager.last_catalogue_refresh_at,
+            "next_refresh_at": self._discovery_timer.next_refresh_at,
+            "running": self._discovery_timer.running,
+        }
+
     async def refresh_models(self) -> ProviderModelRefreshResult:
         return await self.provider_manager.refresh_model_list_cache()
 
@@ -553,7 +742,30 @@ class ApplicationRuntime:
             await workflow.publish_startup_notice(components.startup_notice)
         logger.info("{} platform started with messaging workflow", components.name)
 
+    def _load_learned_facts(self) -> None:
+        """Read the durable store and seed the process-wide shapes from it.
+
+        The withheld-model set is a module singleton rather than provider
+        state, because a provider instance is rebuilt on every config apply
+        while the backend's opinion of a model id is not; loading it is
+        therefore a separate step from handing out a recovery memory.
+        """
+
+        self._learned_facts.enable_persistence()
+        WITHHELD_MODEL_IDS.load(
+            self._learned_facts.withheld_model_ids(CHATGPT_OAUTH_PROVIDER_ID)
+        )
+        WITHHELD_MODEL_IDS.sink = _withheld_sink(self._learned_facts)
+
     async def _close_owned_resources(self) -> bool:
+        # Cancelled before the provider manager closes, so a sweep in flight
+        # is abandoned rather than racing the shutdown that asked for it.
+        await self._discovery_timer.close()
+        await best_effort(
+            "learned_facts.flush",
+            self._learned_facts.close(),
+            log_verbose_errors=self.settings.log_api_error_tracebacks,
+        )
         await best_effort(
             "request_log.flush",
             asyncio.to_thread(reset_request_log_stores),

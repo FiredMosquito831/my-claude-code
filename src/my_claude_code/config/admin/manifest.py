@@ -507,6 +507,44 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "want."
         ),
     ),
+    # ---- Keeping the catalogue current ---------------------------------
+    ConfigFieldSpec(
+        "MODEL_DISCOVERY_REFRESH_SECONDS",
+        "Refresh model catalogues every (seconds)",
+        "models",
+        "number",
+        settings_attr="model_discovery_refresh_seconds",
+        default="3600",
+        restart_required=True,
+        description=(
+            "How often every usable provider's model list is re-read in the "
+            "background, so a model a gateway added today appears without a "
+            "restart. 0 turns it off; anything between 1 and 300 is raised to "
+            "300, because a sweep is one upstream request per provider. A "
+            "provider whose sweep fails with 401 or 403 is backed off "
+            "exponentially rather than asked again every tick. Unrelated to "
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY, which is a Claude "
+            "Code variable MCC writes for the agent and never reads itself."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_PROBE_NEW_MODELS",
+        "Probe models the refresh discovers",
+        "models",
+        "boolean",
+        settings_attr="model_probe_new_models",
+        default="false",
+        restart_required=True,
+        advanced=True,
+        description=(
+            "Off by default and deliberately so. A sweep that found 40 new "
+            "models overnight would otherwise send 40-120 unattended upstream "
+            "requests against a credential nobody is watching, and some hosts "
+            "bill or answer 403 before they validate a body. Leave this off "
+            "and press Probe capabilities on the provider card instead, which "
+            "states the request count before it runs."
+        ),
+    ),
     ConfigFieldSpec(
         "REASONING_POLICY",
         "Reasoning Policy",

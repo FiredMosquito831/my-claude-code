@@ -28,6 +28,15 @@ class ResolutionTier(IntEnum):
     the vendor prefix**. Resolution stops at the first rung that answers, and
     the rung is carried back so callers can say how much to trust the number.
 
+    Tier 0 is above all of it and is the only rung that is not a lookup at
+    all: a **probe**, run against this deployment behind this credential, that
+    read the answer out of the host's own refusal. Tier 1 is what the host
+    *says*; tier 0 is what it *does*, and where a reseller gateway resells a
+    model on a smaller deployment the published claim is the one that is
+    wrong. A probe may therefore only ever **narrow** -- it can lower a cap or
+    remove a capability, never raise one -- which is what keeps outranking a
+    published catalogue safe.
+
     Tiers 1-4 are authoritative: they are this model, on this provider (or on
     the models.dev bucket that describes exactly this provider). Tiers 5-6 are
     the *reference* rung: one curated catalogue (OpenRouter's) that describes
@@ -38,6 +47,7 @@ class ResolutionTier(IntEnum):
     before they may supply a number or an effort vocabulary.
     """
 
+    PROBED_DEPLOYMENT = 0
     PROVIDER_EXACT = 1
     PROVIDER_TAG_STRIPPED = 2
     MODELS_DEV_BUCKET_EXACT = 3

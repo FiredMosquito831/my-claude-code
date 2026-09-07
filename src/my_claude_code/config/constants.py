@@ -292,6 +292,21 @@ FALLBACK_REASONING_ANSWER_TIMEOUT_DEFAULT = 0.0
 STREAM_COMMIT_HOLDBACK_MAX_BYTES_DEFAULT = 65_536
 # Used only when a rate-limited provider sends no Retry-After to obey.
 RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT = 60.0
+
+# How often the background sweep re-reads every usable provider's ``/models``.
+# Hourly is where the field converges (OpenCode 60 min, CLIProxyAPI 3 h,
+# claude-code-router 10 min), and a catalogue that only ever changed at startup
+# meant a model a gateway added this morning stayed invisible until a restart.
+# 0 turns the sweep off entirely; the enforced floor below stops a typo turning
+# it into a hot loop against 57 upstreams.
+MODEL_DISCOVERY_REFRESH_SECONDS_DEFAULT = 3600.0
+# The smallest interval the loop will honour once the sweep is on at all.
+MODEL_DISCOVERY_REFRESH_MINIMUM_SECONDS = 300.0
+# Whether a model that appears in a sweep is probed unattended. Off: a sweep
+# that found 40 new models overnight would otherwise be 40-120 upstream
+# requests against credentials nobody is watching, and some hosts bill or 403
+# before they validate a body.
+MODEL_PROBE_NEW_MODELS_DEFAULT = False
 # Escalating bench for a credential the provider keeps rejecting with 401/403,
 # indexed by consecutive auth failures and clamped at the last entry. Auth is
 # the one failure a key can own outright, so it is the one ladder that stays.

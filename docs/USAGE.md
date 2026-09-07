@@ -2268,7 +2268,43 @@ It means exactly one thing: this host answered a real request with a 400 whose o
 
 The same holds for the output cap a host states in a 400: the number is read out of the host's own message, applied to that request, and used to clamp later ones. It only ever lowers what is asked for.
 
-**Both memories are per process, and that is deliberate.** They live on the provider instance, so a config reload, a restart, or an update rebuilds the provider and forgets everything it had learned. Nothing is written to `~/.mcc`. A host that was briefly misconfigured therefore heals by itself rather than staying blacklisted until someone notices — at the cost of paying each 400 once more after a restart, which is one request per model.
+**Since 6.52.0 these facts survive a restart — with an age, a source, and an expiry.** They used to be per process: a config reload, a restart or an update rebuilt the provider and forgot everything, so a host that was briefly misconfigured healed by itself at the cost of re-paying every 400 once per restart. That self-healing property has not been given up; it has been moved from the restart onto a clock.
+
+Each fact is written to `~/.mcc/learned_facts.json` with the time it was first learned, the time evidence last confirmed it, how many times it has been confirmed, the source (`rejection`, `probe`, or `observation`), and a bounded, redacted excerpt of the host's own words. **No response text is stored** — the excerpt is at most 160 characters and passes through the same redactor that guards discovery failures.
+
+A fact stops being applied once its evidence class expires. Expiry never deletes: the row stays in the file, stays on the Models page marked *stale, will be re-verified*, and the next real request re-pays exactly one 400 and brings it back to life. Three classes, three clocks:
+
+| Evidence | Examples | Lasts |
+|---|---|---|
+| The host **stated** a number or an enum | an output cap, an effort vocabulary | **30 days** |
+| A refusal **inferred** from a successful strip | a refused reasoning field, a refused `stream_options.include_usage`, a probed absence | **7 days** |
+| A **withheld model id** — the weakest negative here | a 404 that may really have been an outage | **72 hours** |
+
+A model that disappears from a provider's catalogue has its facts stopped immediately, because the deployment behind them is gone; they are not deleted, and a model that comes back has to earn them again.
+
+Everything is visible and everything can be forgotten. The Models page has a **Learned** facet, a chip per fact on the model row carrying its value, source and age, and a *Forget* control beside each. The provider card has *Forget everything learned about this provider*, and the Requests page has *Forget all learned facts* beside *Clear image descriptions*. Forgetting reaches the live provider immediately — it does not wait for a restart.
+
+One more fact was added in the same release: a host that answers `stream_options.include_usage` with a 400 is now remembered. Before 6.52.0 nothing recorded that at all, so such a host cost a failed try and a retry on **every single request**, not once per process.
+
+##### Probing what a host actually does
+
+*Probe capabilities* on a provider card measures the deployment instead of reading its catalogue. Each probe is one small request that sends a value no correct host can accept and reads the answer out of the 400: an absurd output budget (which generates no output tokens at all on the 400 path), and a 1×1 image block. `max_tokens` is 16, and at most **25 models** are covered per press — the button states the request count before it runs.
+
+Three outcomes, and the difference matters. **Learned** means the host refused in its own words, and that becomes a stored fact. **Ignored** means the host answered 200, which proves the request was accepted and *not* that the feature works — a host can accept an image block and never look at it — so nothing is recorded. **Unknown** covers a 401, 402 or 403 answered before the body was validated, a timeout, or a 5xx: nothing was measured, so the page says *could not be probed (403)* rather than a verdict.
+
+A probe result ranks **above** the provider's own `/models` (resolution tier 0, *probed on this deployment*), because tier 1 is what the host says and a probe is what it does — and a reseller gateway's catalogue routinely describes the upstream model rather than the deployment it rents. That is only safe because a probe may **only narrow**: it can lower a cap or remove a capability, never raise one. Where a probe and the catalogue disagree the Models page says so beside the field, because that disagreement is a catalogue lying about a deployment.
+
+Probes never run on the request path — not on a first request, not on a fallback, not lazily. They are an operator action. `MODEL_PROBE_NEW_MODELS` (off) would let the background refresh probe models it has just discovered; leave it off unless you want 40 new models overnight to mean 40–120 unattended upstream requests. Tool-calling and streamed-usage probes are implemented but shipped behind that same switch, because a correct host answers them by generating billable output tokens.
+
+##### Keeping catalogues current
+
+`MODEL_DISCOVERY_REFRESH_SECONDS` (default **3600**, `0` turns it off) re-reads every usable provider's `/models` in the background, so a model a gateway added this morning appears without a restart. A value between 1 and 300 is raised to 300: one sweep is one upstream request per provider.
+
+The sweep is quiet by design. A provider whose model set is unchanged logs nothing at all; a provider whose set moved logs exactly one line — `catalogue changed: +3 -1 for openrouter (now 412 models)`. The Models page shows *last refreshed* and *next in* beside its Reload button, or says the refresh is off.
+
+It also refuses to make things worse. A tick that lands while a sweep is already running is skipped, never queued. A config apply always wins over a tick, because both go through the same lock. A provider that answered 401 or 403 is skipped for 1, then 2, then 4, then 8 ticks rather than asked again on the hour. And a sweep that comes back with less than half of a provider's cached models is treated as a failed sweep, not as hundreds of deletions.
+
+This setting has nothing to do with `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`, which is a Claude Code variable MCC *writes* for the agent and never reads itself.
 
 A 400 that names a **sampling** parameter — `top_p`, `temperature`, `seed` — is never treated as a reasoning rejection: dropping thinking would not have fixed it, so the error is raised. So is a 400 that names nothing recognisable at all; Command Code's Anthropic endpoint answers a malformed `thinking` value with a bare `Invalid input`, and a gateway that vague gets a visible failure rather than a guess.
 

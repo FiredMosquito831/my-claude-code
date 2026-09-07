@@ -70,6 +70,10 @@ SOURCE_PROVIDER_OR_MODELS_DEV = "provider_or_models_dev"
 SOURCE_MODELS_DEV = "models_dev"
 SOURCE_APPROXIMATE = "approximate"
 SOURCE_HOST_DIALECT = "host_dialect"
+# A fact this deployment taught MCC about itself, from its own rejection or
+# from a probe. Not a lookup at any tier: nothing was consulted, something was
+# measured.
+SOURCE_LEARNED = "learned"
 
 ReasoningDialectLookup = Callable[[str, str], ReasoningDialect | None]
 SOURCE_UNKNOWN = "unknown"
@@ -80,7 +84,38 @@ SOURCE_LABELS: dict[str, str] = {
     SOURCE_MODELS_DEV: "models.dev",
     SOURCE_APPROXIMATE: "approximate cross-provider",
     SOURCE_HOST_DIALECT: "host dialect",
+    SOURCE_LEARNED: "learned from this host",
     SOURCE_UNKNOWN: "unknown",
+}
+
+# What each stored fact kind is called in the row's chip. Short, because the
+# chip carries an age and a source beside it.
+FACT_KIND_LABELS: dict[str, str] = {
+    "output_cap": "output cap",
+    "reasoning_field_rejected": "reasoning field refused",
+    "model_withheld": "withheld from listings",
+    "stream_usage_unsupported": "no streamed usage",
+    "effort_enum": "effort words",
+    "vision_unsupported": "no vision",
+    "tool_calls_unsupported": "no tool calls",
+    "models_etag": "catalogue validator",
+}
+
+# Which capability field a fact narrows, so the chip can be drawn beside the
+# ladder's claim about the same thing and the two can be compared. A fact with
+# no entry here is still listed on the row; it simply narrows nothing the
+# capability panel shows.
+FACT_CAPABILITY_FIELDS: dict[str, str] = {
+    "output_cap": "max_output_tokens",
+    "vision_unsupported": "supports_vision",
+    "tool_calls_unsupported": "supports_tool_calls",
+}
+
+# Where a learned fact's source word comes from, in the operator's language.
+LEARNED_SOURCE_LABELS: dict[str, str] = {
+    "rejection": "the host's own rejection",
+    "probe": "a probe of this deployment",
+    "observation": "observed on a response",
 }
 
 # Why a model is in the picker at all -- a different question from where any
@@ -108,6 +143,7 @@ DIALECT_ORIGIN_LABELS: dict[ReasoningDialectOrigin, str] = {
 
 # What each rung of the ladder means, for the page's per-field tier column.
 TIER_LABELS: dict[ResolutionTier, str] = {
+    ResolutionTier.PROBED_DEPLOYMENT: "probed on this deployment",
     ResolutionTier.PROVIDER_EXACT: "provider /models, exact id",
     ResolutionTier.PROVIDER_TAG_STRIPPED: "provider /models, tag stripped",
     ResolutionTier.MODELS_DEV_BUCKET_EXACT: "models.dev bucket, exact id",
@@ -308,6 +344,81 @@ def dialect_payload(dialect: ReasoningDialect | None) -> dict[str, Any]:
             for field, since in dialect.learned_rejections
         ],
     }
+
+
+def learned_key(provider_id: str, model_id: str) -> str:
+    """The key a learned-fact lookup is addressed by, for one model."""
+
+    return f"{provider_id}/{model_id}"
+
+
+def _learned_disagreement(fact: Mapping[str, Any], claimed: Any) -> bool | None:
+    """Whether a fact and the ladder's claim about the same field agree.
+
+    ``None`` when the ladder has no claim to compare against -- an unknown is
+    not a disagreement, and drawing it as one would make every unpublished
+    field look like a catalogue caught lying.
+    """
+
+    if claimed is None:
+        return None
+    kind = str(fact.get("fact_kind") or "")
+    value = fact.get("value")
+    if kind == "output_cap":
+        return isinstance(value, int) and isinstance(claimed, int) and value == claimed
+    # Every other mapped kind is a bare negative: the fact says the capability
+    # is absent, so the claim agrees only when it also says no.
+    return claimed is False
+
+
+def learned_payload(fact: Mapping[str, Any]) -> dict[str, Any]:
+    """Render one stored fact for the Models page."""
+
+    source = str(fact.get("source") or "")
+    kind = str(fact.get("fact_kind") or "")
+    return {
+        "fact_kind": kind,
+        "fact_label": FACT_KIND_LABELS.get(kind, kind),
+        "value": fact.get("value"),
+        "detail": fact.get("detail") or "",
+        "source": source,
+        "source_label": LEARNED_SOURCE_LABELS.get(source, source),
+        "learned_at": fact.get("learned_at"),
+        "last_confirmed_at": fact.get("last_confirmed_at"),
+        "age_seconds": fact.get("age_seconds"),
+        "ttl_seconds": fact.get("ttl_seconds"),
+        # Stale means "no longer applied", never "deleted". The row stays so an
+        # operator can see what MCC used to believe and why it stopped.
+        "stale": bool(fact.get("stale")),
+        "retired": bool(fact.get("retired")),
+        "hits": fact.get("hits"),
+        "evidence": fact.get("evidence") or "",
+    }
+
+
+def attach_learned_facts(
+    capabilities: dict[str, Any], facts: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Hang each fact on the capability field it narrows, and list them all.
+
+    The disagreement is the single most valuable thing this feature produces --
+    it is a catalogue lying about a deployment -- so it is computed here and
+    rendered without being clicked.
+    """
+
+    rendered: list[dict[str, Any]] = []
+    for fact in facts:
+        entry = learned_payload(fact)
+        field_name = FACT_CAPABILITY_FIELDS.get(entry["fact_kind"])
+        field = capabilities.get(field_name) if field_name else None
+        if isinstance(field, dict):
+            entry["field"] = field_name
+            entry["agrees"] = _learned_disagreement(fact, field.get("value"))
+            # Applied facts narrow the field they hang on; a stale one is
+            # shown beside it and explicitly does not.
+            field["learned"] = dict(entry)
+        rendered.append(entry)
+    return rendered
 
 
 def capability_payload(
@@ -927,10 +1038,23 @@ def _model_entry(
     configured_refs: frozenset[str],
     dialect_lookup: ReasoningDialectLookup | None = None,
     measured: Mapping[str, Any] | None = None,
+    learned: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     provider_id = parse_provider_type(model_ref)
     model_id = parse_model_name(model_ref) if "/" in model_ref else model_ref
     model_row = overrides.models.get(normalize_override_key(model_ref), {})
+    capabilities = capability_payload(
+        provider_id,
+        model_id,
+        info,
+        dialect=(
+            None if dialect_lookup is None else dialect_lookup(provider_id, model_id)
+        ),
+    )
+    learned_facts = attach_learned_facts(
+        capabilities,
+        () if learned is None else learned.get(learned_key(provider_id, model_id), ()),
+    )
     return {
         "model_ref": model_ref,
         "model_id": model_id,
@@ -951,16 +1075,11 @@ def _model_entry(
         # zeroed row: never measured is not the same fact as measured
         # zero, and the chip must not claim the first as the second.
         "reasoning_measured": None if measured is None else dict(measured),
-        "capabilities": capability_payload(
-            provider_id,
-            model_id,
-            info,
-            dialect=(
-                None
-                if dialect_lookup is None
-                else dialect_lookup(provider_id, model_id)
-            ),
-        ),
+        # What this deployment has taught MCC about itself, each entry with its
+        # source, its age and whether it is still applied. Empty for the
+        # common case, which is why the column is blank on most rows.
+        "learned": learned_facts,
+        "capabilities": capabilities,
     }
 
 
@@ -973,6 +1092,8 @@ def build_models_page_payload(
     *,
     measured: Mapping[str, Mapping[str, Any]] | None = None,
     measured_days: int = REASONING_MEASUREMENT_DAYS,
+    learned: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    catalogue_refresh: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Everything the Models page renders, in one request.
 
@@ -1000,6 +1121,7 @@ def build_models_page_payload(
                 configured_refs=configured_refs,
                 dialect_lookup=dialect_lookup,
                 measured=None if measured is None else measured.get(model_ref),
+                learned=learned,
             )
         )
 
@@ -1022,6 +1144,12 @@ def build_models_page_payload(
         "source_labels": dict(SOURCE_LABELS),
         "provenance_labels": dict(PROVENANCE_LABELS),
         "measured_days": measured_days,
+        "fact_labels": dict(FACT_KIND_LABELS),
+        "learned_source_labels": dict(LEARNED_SOURCE_LABELS),
+        # When the background sweep last ran and when it is next due, so the
+        # page can say "last refreshed 12 min ago, next in 48 min" rather than
+        # leaving a catalogue's age unanswerable.
+        "catalogue_refresh": dict(catalogue_refresh or {}),
     }
 
 

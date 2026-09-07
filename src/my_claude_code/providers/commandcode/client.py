@@ -109,6 +109,7 @@ class CommandCodeProvider(BaseProvider):
             config,
             provider_name="COMMANDCODE",
             rate_limiter=rate_limiter,
+            provider_id=COMMANDCODE_PROVIDER_ID,
         )
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect | None:

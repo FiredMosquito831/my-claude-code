@@ -104,6 +104,7 @@ class AnthropicOAuthProvider(AnthropicProvider):
         rate_limiter: ProviderRateLimiter,
         auth: AnthropicOAuthAuth | None = None,
         require_claude_code_cli: bool = True,
+        provider_id: str = "",
     ) -> None:
         resolved = auth if auth is not None else _auth_for(config)
         super().__init__(
@@ -111,6 +112,7 @@ class AnthropicOAuthProvider(AnthropicProvider):
             rate_limiter=rate_limiter,
             auth=resolved,
             provider_name=PROVIDER_NAME,
+            provider_id=provider_id,
         )
         self._oauth = resolved
         self._require_claude_code_cli = require_claude_code_cli

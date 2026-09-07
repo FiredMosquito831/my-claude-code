@@ -3,7 +3,7 @@
 import asyncio
 import platform
 import uuid
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from typing import Any
 
 import httpx
@@ -46,7 +46,7 @@ from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import (
     ReasoningStripRecovery,
     RecoveryLadder,
-    RecoveryMemory,
+    learned_fact_store,
 )
 from my_claude_code.providers.runtime.served_models import resolve_served_models
 
@@ -77,7 +77,11 @@ CHATGPT_OAUTH_DEFAULT_BASE = "https://chatgpt.com/backend-api"
 #: subscription can be routed as either and the request log records whichever
 #: id the route named. The observed rung has to look under both or it would
 #: lose half its evidence depending on how the operator spelled the route.
-CHATGPT_OAUTH_PROVIDER_IDS: tuple[str, ...] = ("chatgpt_oauth", "openai")
+#: The catalogue id the durable learned-facts store keys on. The alias below
+#: is the second id the same backend is reachable under; both share one
+#: backend opinion, so both share one set of facts.
+CHATGPT_OAUTH_PROVIDER_ID = "chatgpt_oauth"
+CHATGPT_OAUTH_PROVIDER_IDS: tuple[str, ...] = (CHATGPT_OAUTH_PROVIDER_ID, "openai")
 
 #: Last resort, and nothing else: the five ids Codex CLI 0.151.0 publishes with
 #: ``visibility: "list"``. It exists so a brand-new offline install with no
@@ -105,31 +109,45 @@ MODEL_DENIAL_MARKERS: tuple[str, ...] = (
 class WithheldModelIds:
     """Model ids this process has watched the backend refuse, by name.
 
-    Deliberately the weakest possible form of a negative:
+    Still the weakest possible form of a negative:
 
-    * **per-process and never persisted** -- a restart forgets it, so a model
-      OpenAI adds (or a 404 that was really an outage) costs one wasted
-      request per process rather than a permanent hole in the catalogue;
     * **withheld from listings only**. It never benches a credential, never
       marks a model unsupported, and never removes a ref the operator
       configured: exactly the hide-only contract this project's visibility
       globs already have. A route that names a withheld id still resolves and
       still serves.
+    * **expires in hours, not days.** Before 6.52.0 it was per process, and a
+      restart was what made a 404-that-was-really-an-outage recoverable. It is
+      persisted now, so the restart is replaced by a 72-hour TTL
+      (``recovery.facts.WITHHELD_FACT_TTL_SECONDS``): long enough that a
+      restart storm does not re-pay one wasted request per model, short enough
+      that a model OpenAI launches is never a permanent hole in the catalogue.
 
     It replaces a hand-written blocklist whose two entries happened to be
     right for a reason the code never recorded.
     """
 
-    __slots__ = ("_ids",)
+    __slots__ = ("_ids", "sink")
 
     def __init__(self) -> None:
         self._ids: set[str] = set()
+        #: Called with one model id the first time it is withheld, so the
+        #: durable store learns it. ``None`` keeps the old per-process shape.
+        self.sink: Callable[[str], None] | None = None
+
+    def load(self, model_ids: Iterable[str]) -> None:
+        """Adopt the ids the store loaded, without writing them back."""
+        self._ids.update(
+            model_id for model_id in model_ids if model_id and model_id.strip()
+        )
 
     def remember(self, model_id: str) -> bool:
         """Record one refusal; ``True`` the first time this id is seen."""
         if not model_id.strip() or model_id in self._ids:
             return False
         self._ids.add(model_id)
+        if self.sink is not None:
+            self.sink(model_id)
         return True
 
     def __contains__(self, model_id: object) -> bool:
@@ -329,7 +347,9 @@ class ChatGPTOAuthProvider(BaseProvider):
             return CHATGPT_OAUTH_REASONING_DIALECT
         return narrow_dialect_by_rejections(CHATGPT_OAUTH_REASONING_DIALECT, rejections)
 
-    def _remember_reasoning_rejection(self, body: dict[str, Any], field: str) -> None:
+    def _remember_reasoning_rejection(
+        self, body: dict[str, Any], field: str, evidence: str = ""
+    ) -> None:
         """Record that this model refused a reasoning field, once it is proven.
 
         Reached only after the stripped body was actually accepted, so the
@@ -338,7 +358,9 @@ class ChatGPTOAuthProvider(BaseProvider):
         model = body.get("model")
         if not isinstance(model, str):
             return
-        if not self._recovery_memory.remember_rejection(model, field):
+        if not self._recovery_memory.remember_rejection(
+            model, field, evidence=evidence
+        ):
             return
         record_reasoning_adaptation(
             ReasoningAdaptationKind.SUPPRESSED,
@@ -370,7 +392,9 @@ class ChatGPTOAuthProvider(BaseProvider):
         # reasoning half is wired: the Responses encoder emits no output-token
         # field at all, so there is no budget for a host to cap and an
         # output-cap rung here would be a rung that can never fire.
-        self._recovery_memory = RecoveryMemory()
+        self._recovery_memory = learned_fact_store().memory_for(
+            CHATGPT_OAUTH_PROVIDER_ID
+        )
         self._recovery_ladder = RecoveryLadder(
             (ReasoningStripRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),)
         )
@@ -564,6 +588,7 @@ class ChatGPTOAuthProvider(BaseProvider):
                     # refusal is only written down once the retry is accepted.
                     used_retry_kinds: set[str] = set()
                     stripped_reasoning: str | None = None
+                    stripped_evidence = ""
                     # A local of this generator, not the enclosing function's
                     # body: a recovery rewrites what goes on the wire for this
                     # attempt only.
@@ -617,12 +642,13 @@ class ChatGPTOAuthProvider(BaseProvider):
                                 raise
                             if recovered.stripped_reasoning_field is not None:
                                 stripped_reasoning = recovered.stripped_reasoning_field
+                                stripped_evidence = recovered.evidence
                             attempt_body = recovered.body
                             continue
                         break
                     if stripped_reasoning is not None:
                         self._remember_reasoning_rejection(
-                            attempt_body, stripped_reasoning
+                            attempt_body, stripped_reasoning, stripped_evidence
                         )
                     try:
                         if response.status_code >= 400:

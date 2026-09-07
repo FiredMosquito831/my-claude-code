@@ -111,6 +111,13 @@ LIMIT_RANGES: dict[str, LimitRange] = {
         0, 8_192, "0 uses the holdback clock alone"
     ),
     "rate_limit_cooldown_seconds": LimitRange(0.0, DAY, "0 does not pause"),
+    # A sweep of 57 providers is 57 upstream fetches; a day is the longest
+    # interval that still counts as "kept current". 0 is the only value that
+    # means something other than an interval, and the loop enforces its own
+    # 300-second floor above it -- a clamp here could not express both.
+    "model_discovery_refresh_seconds": LimitRange(
+        0.0, DAY, "0 turns the background catalogue refresh off"
+    ),
     # Below this a cooldown is not worth spending a chain slot on; the ceiling
     # is ten minutes, past which nothing would ever be stepped over.
     "fallback_cooldown_step_over_floor": LimitRange(

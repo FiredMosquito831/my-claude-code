@@ -50,6 +50,8 @@ from .constants import (
     MAX_OUTPUT_TOKENS_CONTEXT_MARGIN,
     MAX_OUTPUT_TOKENS_FLOOR,
     MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
+    MODEL_DISCOVERY_REFRESH_SECONDS_DEFAULT,
+    MODEL_PROBE_NEW_MODELS_DEFAULT,
     MODEL_VISIBILITY_ALLOW_DEFAULT,
     MODEL_VISIBILITY_DENY_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
@@ -853,6 +855,26 @@ class Settings(BaseSettings):
         description=(
             "Visible characters that must arrive before output commits, on "
             "top of the holdback seconds. 0 uses the clock alone."
+        ),
+    )
+    # How often every usable provider's /models is re-read in the background.
+    # Unrelated to CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY, which is a
+    # Claude Code variable MCC writes and never reads.
+    model_discovery_refresh_seconds: float = Field(
+        default=MODEL_DISCOVERY_REFRESH_SECONDS_DEFAULT,
+        validation_alias="MODEL_DISCOVERY_REFRESH_SECONDS",
+        description=(
+            "Seconds between background provider catalogue refreshes. "
+            "0 turns the refresh off."
+        ),
+    )
+    # Whether the sweep probes models it has just discovered. Off in v1.
+    model_probe_new_models: bool = Field(
+        default=MODEL_PROBE_NEW_MODELS_DEFAULT,
+        validation_alias="MODEL_PROBE_NEW_MODELS",
+        description=(
+            "Whether a model that appears in a background sweep is probed "
+            "without anyone asking."
         ),
     )
     # Applied only when a rate-limited provider sends no Retry-After header.

@@ -69,6 +69,7 @@ from my_claude_code.providers.recovery import (
     ReasoningStripRecovery,
     RecoveryLadder,
     RecoveryMemory,
+    learned_fact_store,
 )
 from my_claude_code.providers.stream_recovery import (
     MIDSTREAM_RECOVERY_ATTEMPTS,
@@ -161,13 +162,22 @@ class OpenAIChatProvider(BaseProvider):
             )
         self._api_key = config.api_key
         self._base_url = profile.base_url(config.base_url).rstrip("/")
-        # What this host has taught this process about itself: per-model output
-        # caps it stated, and reasoning fields it refused. Per provider
-        # instance and keyed by the bare model id, so a gateway that takes
+        # What this host has taught MCC about itself: per-model output caps it
+        # stated, reasoning fields it refused, and whether it takes streamed
+        # usage. Keyed by the bare model id, so a gateway that takes
         # ``reasoning_effort`` on one model and rejects it on another -- which
-        # the OpenCode probe showed is real -- learns per model. The ISO date
-        # is what the Models page shows.
-        self._recovery_memory = RecoveryMemory()
+        # the OpenCode probe showed is real -- learns per model.
+        #
+        # Since 6.52.0 the memory comes from the durable store, keyed on the
+        # catalogue id: a config apply rebuilds this object, and what a host
+        # said about itself does not stop being true because an HTTP client
+        # was reconstructed. A provider with no catalogue id (a bare test
+        # construction) gets an unpersisted memory, exactly as before.
+        self._recovery_memory = (
+            learned_fact_store().memory_for(provider_id)
+            if provider_id
+            else RecoveryMemory()
+        )
         log_tag = f"{profile.provider_name}_STREAM"
         self._output_cap_recovery = OutputCapRecovery(
             self._recovery_memory, log_tag=log_tag
@@ -419,11 +429,16 @@ class OpenAIChatProvider(BaseProvider):
     async def _create_stream(self, body: dict) -> tuple[Any, dict]:
         """Create a streaming chat completion with bounded request fallbacks."""
         body = self._output_cap_recovery.apply_learned(body)
+        body = self._apply_learned_stream_usage(body)
         used_retry_kinds: set[str] = set()
         # Per attempt-chain, deliberately a local rather than instance state:
         # concurrent requests share this provider, and unlike the monotonic
         # output-cap table this value is consumed once the retry is accepted.
         stripped_reasoning: str | None = None
+        # The rung that produced the current body, and the host's own words
+        # that provoked it. Both are only acted on once the retry is accepted:
+        # a rewrite that did not fix anything is not evidence about the host.
+        rewrite_evidence: dict[str, str] = {}
 
         while True:
             try:
@@ -443,7 +458,15 @@ class OpenAIChatProvider(BaseProvider):
                     stream=True,
                 )
                 if stripped_reasoning is not None:
-                    self._remember_reasoning_rejection(body, stripped_reasoning)
+                    self._remember_reasoning_rejection(
+                        body,
+                        stripped_reasoning,
+                        rewrite_evidence.get("reasoning_field", ""),
+                    )
+                if "stream_usage" in used_retry_kinds:
+                    self._remember_stream_usage_refusal(
+                        body, rewrite_evidence.get("stream_usage", "")
+                    )
                 return stream, body
             except Exception as error:
                 decision = self._recovery_ladder.next_body(
@@ -451,6 +474,8 @@ class OpenAIChatProvider(BaseProvider):
                 )
                 if decision.body is None:
                     raise
+                if decision.kind:
+                    rewrite_evidence[decision.kind] = decision.evidence
                 if decision.stripped_reasoning_field is not None:
                     stripped_reasoning = decision.stripped_reasoning_field
                 body = decision.body
@@ -475,7 +500,42 @@ class OpenAIChatProvider(BaseProvider):
         )
         return retry_body
 
-    def _remember_reasoning_rejection(self, body: dict, field: str) -> None:
+    def _apply_learned_stream_usage(self, body: dict) -> dict:
+        """Drop streamed usage up front on a host already proven to refuse it.
+
+        Before 6.52.0 nothing recorded that refusal at all, so a host that
+        rejects ``stream_options.include_usage`` paid a failed try and a retry
+        on *every single request* -- not once per process, once per request.
+        This is the same proactive move ``apply_learned`` makes for a cap, and
+        the same rule applies: it only ever removes.
+        """
+        model = body.get("model")
+        if not isinstance(model, str):
+            return body
+        if not self._recovery_memory.stream_usage_refused(model):
+            return body
+        stripped = clone_without_stream_usage(body)
+        return stripped if stripped is not None else body
+
+    def _remember_stream_usage_refusal(self, body: dict, evidence: str) -> None:
+        """Record a proven streamed-usage refusal, once the rewrite worked."""
+        model = body.get("model")
+        if not isinstance(model, str):
+            return
+        if not self._recovery_memory.remember_stream_usage_refusal(
+            model, evidence=evidence
+        ):
+            return
+        logger.warning(
+            "{}_STREAM: {} refuses stream_options.include_usage -- later "
+            "requests omit it without paying the rejection",
+            self._provider_name,
+            model,
+        )
+
+    def _remember_reasoning_rejection(
+        self, body: dict, field: str, evidence: str = ""
+    ) -> None:
         """Record that this model refused a reasoning field, once it is proven.
 
         Reached only after the stripped body was accepted, so the strip is what
@@ -486,7 +546,9 @@ class OpenAIChatProvider(BaseProvider):
         model = body.get("model")
         if not isinstance(model, str):
             return
-        if not self._recovery_memory.remember_rejection(model, field):
+        if not self._recovery_memory.remember_rejection(
+            model, field, evidence=evidence
+        ):
             return
         record_reasoning_adaptation(
             ReasoningAdaptationKind.SUPPRESSED,

@@ -7168,8 +7168,79 @@ function customProviderDialect(provider) {
     probeCustomProviderDialect(provider, probe),
   );
 
-  wrap.append(input, save, probe);
+  const capabilities = document.createElement("button");
+  capabilities.type = "button";
+  capabilities.className = "ghost-button cp-capability-probe";
+  capabilities.textContent = "Probe capabilities";
+  capabilities.addEventListener("click", () =>
+    probeProviderCapabilities(provider, capabilities),
+  );
+
+  const forget = document.createElement("button");
+  forget.type = "button";
+  forget.className = "ghost-button cp-forget-learned";
+  forget.textContent = "Forget everything learned";
+  forget.addEventListener("click", () => {
+    if (
+      !window.confirm(
+        `Forget every fact MCC has learned about ${provider.display_name || provider.provider_id}? ` +
+          "Caps, refusals and probe results all go, and each is re-learned " +
+          "the next time this host says it again.",
+      )
+    ) {
+      return;
+    }
+    forgetLearnedFacts({ providerId: provider.provider_id }, forget);
+  });
+
+  wrap.append(input, save, probe, capabilities, forget);
   return wrap;
+}
+
+/* Bounded, stated, and never on the request path: the confirm text names the
+   number of upstream requests before any are sent, because a gateway listing
+   400 models behind one button is 400-1200 of them. */
+async function probeProviderCapabilities(provider, button) {
+  const models = Math.min(Number(provider.model_count) || 0, 25);
+  if (
+    !window.confirm(
+      `Probe ${models || "up to 25"} model(s) on ${provider.display_name || provider.provider_id}? ` +
+        "That is one small upstream request per model per probe (2 probes), " +
+        "each capped at 16 output tokens. Nothing runs on the request path.",
+    )
+  ) {
+    return;
+  }
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Probing";
+  try {
+    const result = await api(
+      `/admin/api/providers/${provider.provider_id}/probe`,
+      { method: "POST", body: JSON.stringify({ models: [] }) },
+    );
+    const learned = (result.results || []).filter(
+      (row) => row.status === "learned",
+    ).length;
+    if (result.status === "unprobeable") {
+      showMessage(
+        `${provider.display_name || provider.provider_id} could not be probed ` +
+          `(${result.detail}). Nothing was claimed.`,
+        "warn",
+      );
+    } else {
+      showMessage(
+        `Probed ${(result.models || []).length} model(s); learned ${learned} fact(s). ` +
+          "See the Models page.",
+        learned ? "ok" : "warn",
+      );
+    }
+  } catch (error) {
+    showMessage(`Could not probe capabilities: ${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 
 /** Per-key health for a custom pool, in the static pool's own badges. */
@@ -12769,6 +12840,22 @@ const REQUEST_LOG_CLEAR_CONFIRMATION = "delete-all-request-log-rows";
 // Must match ``IMAGE_DESCRIPTION_CLEAR_CONFIRMATION`` in api/admin_routes.py.
 const IMAGE_DESCRIPTION_CLEAR_CONFIRMATION = "clear-all-image-descriptions";
 
+const forgetAllLearnedButton = byId("reqForgetLearnedButton");
+if (forgetAllLearnedButton) {
+  forgetAllLearnedButton.addEventListener("click", () => {
+    if (
+      !window.confirm(
+        "Forget every fact MCC has learned about every host? Caps, refusals " +
+          "and probe results all go. Each one is re-learned the next time a " +
+          "host says it again, at the cost of one rejected request per model.",
+      )
+    ) {
+      return;
+    }
+    forgetLearnedFacts({}, forgetAllLearnedButton);
+  });
+}
+
 byId("reqClearDescriptionsButton").addEventListener("click", () => {
   if (
     !window.confirm(
@@ -14037,6 +14124,9 @@ function modelsMatchesFacet(model) {
   if (facet === "overridden") {
     return Object.keys(model.override || {}).length > 0;
   }
+  if (facet === "learned") {
+    return Array.isArray(model.learned) && model.learned.length > 0;
+  }
   return true;
 }
 
@@ -14257,6 +14347,7 @@ function renderModelsTree() {
   });
 
   renderModelsFacets();
+  renderCatalogueRefreshReadout();
   renderModelsTreeSummary(providers.length, matching.length, shown);
   syncModelsSelectionUi();
 
@@ -14332,6 +14423,9 @@ const MODELS_FACETS = [
   ["hidden", "Hidden"],
   ["configured", "Configured"],
   ["overridden", "Overridden"],
+  // "Show me every model MCC has learned something about" was a question the
+  // page could not answer at all before 6.52.0.
+  ["learned", "Learned"],
 ];
 
 function renderModelsFacets() {
@@ -14810,10 +14904,55 @@ function buildModelSummary(model) {
       "reply contained thinking text. Succeeded attempts only.";
     second.appendChild(chip);
   }
+  // What this deployment taught MCC about itself, with its age and whether it
+  // is still being applied. Blank for the common case: most models have never
+  // said anything about themselves.
+  appendLearnedChips(second, model.learned);
   // The pattern that overrules this row is named in the row's own visibility
   // readout, which is drawn whether or not the summary is on screen.
   if (second.childElementCount) summary.appendChild(second);
   return summary;
+}
+
+/* "3 d ago" beats an ISO timestamp in a chip that has to fit beside four
+   others; the exact instant is in the tooltip and in the panel below. */
+function learnedAgeText(seconds) {
+  if (typeof seconds !== "number" || !isFinite(seconds)) return "age unknown";
+  if (seconds < 90) return "just now";
+  if (seconds < 5400) return `${Math.round(seconds / 60)} min ago`;
+  if (seconds < 172800) return `${Math.round(seconds / 3600)} h ago`;
+  return `${Math.round(seconds / 86400)} d ago`;
+}
+
+function learnedChipText(fact) {
+  const label = fact.fact_label || fact.fact_kind;
+  const value =
+    typeof fact.value === "number" ? ` ${fact.value.toLocaleString()}` : "";
+  const detail = fact.detail ? ` ${fact.detail}` : "";
+  return `${label}${value}${detail} · ${learnedAgeText(fact.age_seconds)}`;
+}
+
+function appendLearnedChips(row, facts) {
+  if (!Array.isArray(facts) || !facts.length) return;
+  facts.forEach((fact) => {
+    const chip = buildModelsChip(
+      "learned",
+      fact.stale ? `${learnedChipText(fact)} · stale` : learnedChipText(fact),
+    );
+    if (fact.stale) chip.classList.add("models-chip-learned-stale");
+    if (fact.agrees === false) chip.classList.add("models-chip-learned-disagree");
+    chip.title = [
+      `Learned from ${fact.source_label || fact.source}.`,
+      fact.evidence,
+      fact.stale
+        ? "Past its age limit, so it is no longer applied; the next real " +
+          "request re-checks it and this row comes back to life."
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    row.appendChild(chip);
+  });
 }
 
 function fillModelBody(body, model, editable) {
@@ -14841,6 +14980,140 @@ function fillModelReadouts(readouts, model) {
   );
   const listing = buildListingPanel(model.listing);
   if (listing) readouts.appendChild(listing);
+  const learned = buildLearnedPanel(model);
+  if (learned) readouts.appendChild(learned);
+}
+
+/* Every fact MCC holds about this model, with its source, both timestamps,
+   whether it is still applied, and a Forget control. A probe verdict is drawn
+   beside the ladder's claim about the same field with an explicit agree /
+   disagree marker: a disagreement is a catalogue lying about a deployment,
+   which is the single most valuable thing this feature produces. */
+function buildLearnedPanel(model) {
+  const facts = Array.isArray(model.learned) ? model.learned : [];
+  if (!facts.length) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "models-learned";
+  const head = document.createElement("p");
+  head.className = "models-subhead";
+  head.textContent = "What this host taught MCC";
+  wrap.appendChild(head);
+
+  facts.forEach((fact) => {
+    const row = document.createElement("div");
+    row.className = "models-learned-row";
+    if (fact.stale) row.classList.add("is-stale");
+
+    const what = document.createElement("span");
+    what.className = "models-learned-what";
+    what.textContent = learnedChipText(fact);
+    row.appendChild(what);
+
+    const source = document.createElement("span");
+    source.className = "models-learned-source";
+    source.textContent = fact.source_label || fact.source || "";
+    row.appendChild(source);
+
+    if (fact.agrees === true || fact.agrees === false) {
+      const verdict = document.createElement("span");
+      verdict.className = fact.agrees
+        ? "models-learned-agree"
+        : "models-learned-disagree";
+      verdict.textContent = fact.agrees
+        ? `agrees with the catalogue on ${fact.field}`
+        : `disagrees with the catalogue on ${fact.field}`;
+      row.appendChild(verdict);
+    }
+
+    if (fact.stale) {
+      const stale = document.createElement("span");
+      stale.className = "models-learned-stale";
+      stale.textContent = fact.retired
+        ? "the model left this catalogue -- not applied"
+        : "stale, will be re-verified";
+      row.appendChild(stale);
+    }
+
+    if (fact.evidence) {
+      const evidence = document.createElement("span");
+      evidence.className = "models-learned-evidence";
+      evidence.textContent = fact.evidence;
+      row.appendChild(evidence);
+    }
+
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "ghost-button models-learned-forget";
+    forget.textContent = "Forget";
+    forget.addEventListener("click", () =>
+      forgetLearnedFacts(
+        {
+          providerId: providerIdOf(model.model_ref),
+          modelId: modelIdOf(model.model_ref),
+          factKind: fact.fact_kind,
+        },
+        forget,
+      ),
+    );
+    row.appendChild(forget);
+    wrap.appendChild(row);
+  });
+  return wrap;
+}
+
+function providerIdOf(modelRef) {
+  const index = String(modelRef || "").indexOf("/");
+  return index < 0 ? String(modelRef || "") : String(modelRef).slice(0, index);
+}
+
+function modelIdOf(modelRef) {
+  const index = String(modelRef || "").indexOf("/");
+  return index < 0 ? String(modelRef || "") : String(modelRef).slice(index + 1);
+}
+
+/* One endpoint, three granularities: an empty provider means everything, a
+   provider with no model means that provider, and all three fields means one
+   row. They are the same operation at three scopes. */
+async function forgetLearnedFacts(payload, button) {
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/admin/api/model-admin/learned/forget", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    showMessage(`Forgot ${result.forgotten} learned fact(s).`, "ok");
+    await loadModelsView(true);
+  } catch (error) {
+    showMessage(`Could not forget: ${error.message}`, "error");
+    if (button) button.disabled = false;
+  }
+}
+
+/* "last refreshed 12 min ago, next in 48 min", or a plain sentence naming the
+   setting when the sweep is off. A catalogue whose age is unanswerable is how
+   "this gateway added a model today" became a support question. */
+function renderCatalogueRefreshReadout() {
+  const target = byId("modelsRefreshReadout");
+  if (!target) return;
+  const status = (modelsState.data && modelsState.data.catalogue_refresh) || {};
+  if (!status.enabled) {
+    target.textContent =
+      "Automatic model catalogue refresh is off (MODEL_DISCOVERY_REFRESH_SECONDS=0).";
+    return;
+  }
+  const now = Date.now() / 1000;
+  const parts = [];
+  parts.push(
+    status.last_refreshed_at
+      ? `last refreshed ${learnedAgeText(now - status.last_refreshed_at)}`
+      : "not refreshed yet in this process",
+  );
+  if (status.next_refresh_at && status.next_refresh_at > now) {
+    parts.push(
+      `next in ${Math.max(1, Math.round((status.next_refresh_at - now) / 60))} min`,
+    );
+  }
+  target.textContent = `Catalogues: ${parts.join(", ")}.`;
 }
 
 /* Short chip text per provenance. The long sentence is the server's
