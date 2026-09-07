@@ -313,20 +313,33 @@ def test_every_action_is_sha_pinned() -> None:
         )
 
 
-def test_a_missing_secret_skips_instead_of_failing_the_release() -> None:
+def test_trusted_publishing_is_the_default_and_a_token_is_only_a_fallback() -> None:
+    """npm's documented CI route is OIDC; no long-lived secret is required."""
+    text = _read(WORKFLOW)
+    assert "mode=oidc" in text and "mode=token" in text
+    assert "npm install -g npm@latest" in text, (
+        "trusted publishing needs npm >= 11.5.1, which a Node release can lag"
+    )
+    oidc = [s for s in _steps() if "mode == 'oidc'" in str(s.get("if", ""))]
+    token = [s for s in _steps() if "mode == 'token'" in str(s.get("if", ""))]
+    assert len(oidc) == 1 and len(token) == 1, (
+        "exactly one publish step per authentication mode, guarded so they "
+        "never both run"
+    )
+    assert "env" not in oidc[0], "an OIDC publish must not export a token"
+    assert token[0]["env"] == {"NODE_AUTH_TOKEN": "${{ secrets.NPM_TOKEN }}"}
+
+
+def test_a_refused_oidc_publish_explains_the_setup_and_keeps_the_release_green() -> (
+    None
+):
     """A convenience launcher must never turn a good server release red."""
     text = _read(WORKFLOW)
-    assert "secrets.NPM_TOKEN" in text
-    assert "::notice::NPM_TOKEN is not set" in text
-    guarded = [
-        step
-        for step in _steps()
-        if "if" in step and "steps.secret.outputs.have == 'true'" in str(step["if"])
-    ]
-    assert len(guarded) >= 3, (
-        "every step after the secret check must be guarded by it, or a missing "
-        "token fails the release instead of skipping the publish"
-    )
+    assert "::warning::npm refused the trusted (OIDC) publish" in text
+    assert "Settings -> Trusted Publisher" in text
+    assert "workflow filename npm-release.yml" in text
+    oidc = next(s for s in _steps() if "mode == 'oidc'" in str(s.get("if", "")))
+    assert "if npm publish --access public --provenance; then" in str(oidc["run"])
 
 
 def test_the_publish_refuses_a_tag_that_disagrees_with_pyproject() -> None:
@@ -343,12 +356,12 @@ def test_an_already_published_version_is_a_no_op() -> None:
     assert "is already published" in text
 
 
-def test_the_publish_step_is_public_and_carries_provenance() -> None:
+def test_every_publish_step_is_public_and_carries_provenance() -> None:
     publish = [
-        step for step in _steps() if str(step.get("run", "")).startswith("npm publish")
+        step
+        for step in _steps()
+        if "npm publish --access public --provenance" in str(step.get("run", ""))
     ]
-    assert len(publish) == 1, "expected exactly one npm publish step"
-    step = publish[0]
-    assert str(step["run"]).strip() == "npm publish --access public --provenance"
-    assert step["working-directory"] == "packaging/npm"
-    assert step["env"] == {"NODE_AUTH_TOKEN": "${{ secrets.NPM_TOKEN }}"}
+    assert len(publish) == 2, "expected one publish step per authentication mode"
+    for step in publish:
+        assert step["working-directory"] == "packaging/npm"
