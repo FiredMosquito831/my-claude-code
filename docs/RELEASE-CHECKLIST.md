@@ -112,6 +112,17 @@ reads its fields by name), so a new wheel is always safe under an old shell; a
 new shell under an old wheel is not. Move the shell pin after the release that
 starts emitting, never before.
 
+### Adding a value to `server_presence`
+
+Same rule, one step stricter. A *key* an old shell has never heard of is
+ignored; a *value* it has never heard of is refused loudly -- the shell prints
+"a server state this window does not know" rather than guessing at the nearest
+neighbour, which is the right instinct and the reason unknown keys are safe to
+add anywhere else. So a new presence is opt-in behind `--presence-v2`, an old
+shell does not ask for it, and the shell pin moves in the release *after* the
+one that starts emitting it. `draining` did this in 6.50.0; `starting` and
+`mcc-stale` did it in 6.59.0.
+
 ## 4. Dashboard screenshots (manual step)
 
 The admin dashboard screenshots go stale whenever a view is rebuilt, not only

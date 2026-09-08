@@ -35,6 +35,27 @@ pub enum Decision {
     /// exactly what a user does when a restart looks stuck, that page was the
     /// routine outcome of the routine workaround.
     Draining,
+    /// MCC's own server has bound the port and is still working through its
+    /// startup. New in 6.59.0, and the whole reason the presence exists: before
+    /// the listener moved in front of the work, the twenty seconds of a start
+    /// were reported as `free`, and `free` is what this ladder turns into
+    /// `Start`. A window that arrived during a start therefore spawned a second
+    /// server, which lost the bind race and died without a word.
+    ///
+    /// The answer is the same as `Draining`'s: wait, say what it is doing, and
+    /// let the next pass of the ladder pick the server up. It is emphatically
+    /// not `Start`.
+    Starting { stage: Option<String> },
+    /// MCC's own server is holding the port and is not answering at all. Not a
+    /// conflict: the "something else is on the port" page told the user to stop
+    /// another program and change the port, and following that advice about
+    /// MCC's own python.exe is how a slow start became a dead end. Measured on
+    /// the reporter's machine, where the holder was always MCC.
+    ///
+    /// Treated exactly like `Starting`: wait, and let the next pass of the
+    /// ladder pick it up once the server answers or the next start takes the
+    /// port back from it.
+    Stale,
     /// A presence value this build has no branch for. Treated like a schema
     /// mismatch rather than silently mapped onto the nearest neighbour.
     UnknownPresence { presence: String },
@@ -58,6 +79,10 @@ pub fn decide(status: &Status) -> Decision {
             }),
         },
         "draining" => Decision::Draining,
+        "starting" => Decision::Starting {
+            stage: status.server_starting_stage.clone(),
+        },
+        "mcc-stale" => Decision::Stale,
         "free" if status.server_mode == "spawn" => Decision::Start {
             admin_url: status.admin_url.clone(),
             health_url: status.health_url.clone(),
@@ -75,6 +100,32 @@ pub fn decide(status: &Status) -> Decision {
 pub fn draining_message(status: &Status) -> String {
     format!(
         "The My Claude Code server is shutting down and is refusing new          requests until it has finished. Waiting for it, then reconnecting          for up to {:.0} minutes.",
+        status.reconnect_timeout_seconds / 60.0
+    )
+}
+
+/// The sentence shown while MCC's own server finishes starting.
+///
+/// It names the stage when the server named one, because "starting" on its own
+/// is what a stuck window says too, and the difference between a wait and a
+/// hang is whether the page changes.
+pub fn starting_message(status: &Status) -> String {
+    match status.server_starting_stage.as_deref() {
+        Some(stage) if !stage.trim().is_empty() => format!(
+            "The My Claude Code server is starting ({stage}). Waiting for it,              then reconnecting for up to {:.0} minutes.",
+            status.reconnect_timeout_seconds / 60.0
+        ),
+        _ => format!(
+            "The My Claude Code server is starting. Waiting for it, then              reconnecting for up to {:.0} minutes.",
+            status.reconnect_timeout_seconds / 60.0
+        ),
+    }
+}
+
+/// The sentence shown while MCC's own server holds the port in silence.
+pub fn stale_message(status: &Status) -> String {
+    format!(
+        "A My Claude Code server is holding the port but is not answering yet.          Waiting for it, then reconnecting for up to {:.0} minutes.",
         status.reconnect_timeout_seconds / 60.0
     )
 }
@@ -351,6 +402,81 @@ mod tests {
                 admin_url: "http://127.0.0.1:9999/admin".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn a_starting_server_is_waited_for_and_never_spawned_into() {
+        // The whole reason the presence exists. Before the listener moved in
+        // front of the work, the twenty seconds of a start were reported as
+        // `free` -- and `free` is what this ladder turns into `Start`, so a
+        // window that arrived during a start spawned a second server into the
+        // bind race the first one was about to win.
+        let status = status_with(|document| {
+            document["server_presence"] = serde_json::json!("starting");
+            document["server_starting_stage"] = serde_json::json!("configured-models");
+        });
+        assert_eq!(
+            decide(&status),
+            Decision::Starting {
+                stage: Some("configured-models".to_owned())
+            }
+        );
+    }
+
+    #[test]
+    fn mcc_holding_the_port_in_silence_is_never_a_port_conflict() {
+        // The page this replaces told the user to stop another program and
+        // change the port, about MCC's own python.exe.
+        let status = status_with(|document| {
+            document["server_presence"] = serde_json::json!("mcc-stale");
+        });
+        assert_eq!(decide(&status), Decision::Stale);
+        assert!(stale_message(&status).contains("not answering"));
+    }
+
+    #[test]
+    fn a_starting_server_without_a_stage_is_still_a_wait() {
+        // The stage is a courtesy from a newer wheel. Its absence must not
+        // demote the decision to something that starts a second server.
+        let status = status_with(|document| {
+            document["server_presence"] = serde_json::json!("starting");
+        });
+        assert_eq!(decide(&status), Decision::Starting { stage: None });
+    }
+
+    #[test]
+    fn the_starting_page_names_the_stage_when_there_is_one() {
+        // "Starting" on its own is what a stuck window says too. The
+        // difference between a wait and a hang is whether the page changes.
+        let status = status_with(|document| {
+            document["server_presence"] = serde_json::json!("starting");
+            document["server_starting_stage"] = serde_json::json!("catalogue");
+        });
+        let message = starting_message(&status);
+        assert!(message.contains("catalogue"), "{message}");
+        assert!(message.contains("starting"), "{message}");
+
+        let bare = status_with(|document| {
+            document["server_presence"] = serde_json::json!("starting");
+        });
+        assert!(
+            !starting_message(&bare).contains('('),
+            "{}",
+            starting_message(&bare)
+        );
+    }
+
+    #[test]
+    fn a_document_without_the_starting_stage_key_still_parses() {
+        // C3: every wheel before 6.59.0 emits a document without it, and this
+        // shell keeps working against those.
+        let status = status_with(|document| {
+            document
+                .as_object_mut()
+                .expect("object")
+                .remove("server_starting_stage");
+        });
+        assert!(status.server_starting_stage.is_none());
     }
 
     #[test]

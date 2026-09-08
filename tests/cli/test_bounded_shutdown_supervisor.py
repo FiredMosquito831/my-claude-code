@@ -46,7 +46,9 @@ def _run_supervisor(action_name: str, *, runtime_closed: bool):
     get_settings.cache_clear = MagicMock()
     callbacks: dict[str, Callable[[], None]] = {}
 
-    def build_asgi_app(_settings, restart_callback, process_restart_callback):
+    def build_asgi_app(
+        _settings, restart_callback, process_restart_callback, **_kwargs
+    ):
         callbacks["reload"] = restart_callback
         callbacks["replace"] = process_restart_callback
         return SimpleNamespace(runtime=SimpleNamespace(is_closed=runtime_closed))
@@ -56,7 +58,7 @@ def _run_supervisor(action_name: str, *, runtime_closed: bool):
             self.config = config
             self.should_exit = False
 
-        def run(self):
+        def run(self, sockets=None):
             # What the runtime does when a config apply or an installed update
             # asks for a restart: the callback runs, the stop clock starts, and
             # the drain then overruns (runtime_closed=False).
@@ -65,9 +67,14 @@ def _run_supervisor(action_name: str, *, runtime_closed: bool):
     with (
         patch.object(commands, "get_settings", get_settings),
         patch.object(
-            commands.uvicorn, "Config", side_effect=lambda app, **kw: kw | {"app": app}
+            commands.uvicorn,
+            "Config",
+            side_effect=lambda app, **kw: SimpleNamespace(
+                app=app, kwargs=kw, bind_socket=lambda: None
+            ),
         ),
         patch.object(commands.uvicorn, "Server", side_effect=FakeServer),
+        patch.object(commands, "_bind_listening_socket", return_value=None),
         patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
         patch.object(commands, "_schedule_open_admin_browser"),
         patch.object(commands, "kill_all_best_effort"),
@@ -145,7 +152,7 @@ def test_the_supervisor_arms_no_watchdog_for_a_reload() -> None:
         get_settings.cache_clear = MagicMock()
         callbacks: dict[str, Callable[[], None]] = {}
 
-        def build_asgi_app(_s, restart_callback, process_restart_callback):
+        def build_asgi_app(_s, restart_callback, process_restart_callback, **_kwargs):
             callbacks["reload"] = restart_callback
             return SimpleNamespace(runtime=SimpleNamespace(is_closed=True))
 
@@ -154,7 +161,7 @@ def test_the_supervisor_arms_no_watchdog_for_a_reload() -> None:
                 self.config = config
                 self.should_exit = False
 
-            def run(self):
+            def run(self, sockets=None):
                 callbacks["reload"]()
 
         with (
@@ -162,9 +169,12 @@ def test_the_supervisor_arms_no_watchdog_for_a_reload() -> None:
             patch.object(
                 commands.uvicorn,
                 "Config",
-                side_effect=lambda app, **kw: kw | {"app": app},
+                side_effect=lambda app, **kw: SimpleNamespace(
+                    app=app, kwargs=kw, bind_socket=lambda: None
+                ),
             ),
             patch.object(commands.uvicorn, "Server", side_effect=FakeServer),
+            patch.object(commands, "_bind_listening_socket", return_value=None),
             patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
             patch.object(commands, "_schedule_open_admin_browser"),
             patch.object(commands, "kill_all_best_effort"),
@@ -202,7 +212,7 @@ def test_a_signal_stop_starts_the_stop_clock() -> None:
             observed["uvicorn_handler_ran"] = True
             self.should_exit = True
 
-        def run(self):
+        def run(self, sockets=None):
             self.handle_exit(2, None)
             observed["requested_during_run"] = stop_deadline().requested
             observed["budget"] = stop_deadline().budget
@@ -210,9 +220,14 @@ def test_a_signal_stop_starts_the_stop_clock() -> None:
     with (
         patch.object(commands, "get_settings", get_settings),
         patch.object(
-            commands.uvicorn, "Config", side_effect=lambda app, **kw: kw | {"app": app}
+            commands.uvicorn,
+            "Config",
+            side_effect=lambda app, **kw: SimpleNamespace(
+                app=app, kwargs=kw, bind_socket=lambda: None
+            ),
         ),
         patch.object(commands.uvicorn, "Server", side_effect=SignalledServer),
+        patch.object(commands, "_bind_listening_socket", return_value=None),
         patch.object(
             commands,
             "build_asgi_app",

@@ -41,6 +41,9 @@ def test_a_loopback_bind_without_a_token_still_starts() -> None:
         patch.object(commands, "probe_port_available", return_value=True),
         patch.object(commands.uvicorn, "Server", return_value=server),
         patch.object(commands.uvicorn, "Config"),
+        # The supervisor binds its own listening socket since 6.59.0; a unit
+        # test of the auth guard must not open one.
+        patch.object(commands, "_bind_listening_socket", return_value=None),
     ):
         action = commands._run_supervised_server(
             _settings(host="127.0.0.1", token=""), open_admin_browser=False
@@ -57,6 +60,9 @@ def test_a_reachable_bind_with_a_token_still_starts() -> None:
         patch.object(commands, "probe_port_available", return_value=True),
         patch.object(commands.uvicorn, "Server", return_value=server),
         patch.object(commands.uvicorn, "Config"),
+        # The supervisor binds its own listening socket since 6.59.0; a unit
+        # test of the auth guard must not open one.
+        patch.object(commands, "_bind_listening_socket", return_value=None),
     ):
         action = commands._run_supervised_server(
             _settings(host="0.0.0.0", token="freecc"), open_admin_browser=False

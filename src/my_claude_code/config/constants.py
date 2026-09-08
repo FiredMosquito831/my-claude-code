@@ -351,6 +351,14 @@ PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT = 1.0
 
 # Graceful shutdown budget (seconds). Since 6.41.0 this bounds the WHOLE stop,
 # not one wait inside it: at the instant a stop is requested it becomes a single
+# What the server does when its configured port is already held at start.
+# ``always`` stops the holder and takes the port -- the user's rule, and the
+# only one that recovers from MCC's own leftovers without a human. ``mcc-only``
+# limits that to processes this install can positively identify as its own;
+# ``never`` is the pre-6.59.0 behaviour, which was to diagnose and exit.
+SERVER_PORT_TAKEOVER_DEFAULT = "always"
+SERVER_PORT_TAKEOVER_CHOICES = ("always", "mcc-only", "never")
+
 # wall-clock deadline (core/stop_deadline.py) shared by uvicorn's connection
 # drain, the streaming-response cleanup, the provider-generation drain and the
 # ASGI lifespan shutdown. A small fixed teardown margin sits past it for the

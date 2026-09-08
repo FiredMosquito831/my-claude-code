@@ -1,6 +1,7 @@
 """Single production composition root for the FCC server."""
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from my_claude_code.api.app import create_app
@@ -22,6 +23,8 @@ def build_asgi_app(
     settings: Settings,
     restart_callback: RestartCallback | None = None,
     process_restart_callback: RestartCallback | None = None,
+    startup_failed_callback: Callable[[], None] | None = None,
+    serving_predicate: Callable[[], bool] | None = None,
 ) -> RuntimeASGIApp:
     """Construct the complete server application and its resource owner."""
     log_path = Path(os.getenv("LOG_FILE", server_log_path()))
@@ -46,7 +49,12 @@ def build_asgi_app(
         admin=runtime,
         tasks=runtime,
     )
-    return RuntimeASGIApp(create_app(services), runtime)
+    return RuntimeASGIApp(
+        create_app(services),
+        runtime,
+        startup_failed_callback=startup_failed_callback,
+        serving_predicate=serving_predicate,
+    )
 
 
 def _create_transcriber(settings: Settings) -> Transcriber | None:

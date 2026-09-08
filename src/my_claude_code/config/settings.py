@@ -75,6 +75,8 @@ from .constants import (
     REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT,
     REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT,
     SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
+    SERVER_PORT_TAKEOVER_CHOICES,
+    SERVER_PORT_TAKEOVER_DEFAULT,
     STREAM_COMMIT_HOLDBACK_CHARS_DEFAULT,
     STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
     STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT,
@@ -1420,6 +1422,14 @@ class Settings(BaseSettings):
         default=SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
         validation_alias="SERVER_GRACEFUL_SHUTDOWN_SECONDS",
     )
+    # What to do when the configured port is already held at start. See
+    # ``cli/port_takeover.py``: the holder is identified by process, never by
+    # what it answers over HTTP, because a starting MCC, a draining MCC and a
+    # wedged MCC all answer differently and none of them answers "I am MCC".
+    server_port_takeover: str = Field(
+        default=SERVER_PORT_TAKEOVER_DEFAULT,
+        validation_alias="SERVER_PORT_TAKEOVER",
+    )
     # Seconds an ``mcc-<agent>`` launcher waits for the server to build a
     # harness catalogue document that is not on disk yet. Read by the launcher
     # process, not by the server: it is the budget for one cold-start
@@ -1533,6 +1543,25 @@ class Settings(BaseSettings):
         if value is ReasoningPreference.INHERIT:
             raise ValueError("REASONING_POLICY cannot inherit")
         return value
+
+    @field_validator("server_port_takeover")
+    @classmethod
+    def validate_server_port_takeover(cls, value: str) -> str:
+        """Refuse an unknown policy rather than silently taking a port.
+
+        Every other choice field in this file clamps or warns, because a bad
+        value there costs an answer. A bad value here would decide whether
+        another program on this machine keeps running, so it is the one place
+        that would rather not start at all.
+        """
+
+        normalised = (value or "").strip().lower()
+        if normalised in SERVER_PORT_TAKEOVER_CHOICES:
+            return normalised
+        raise ValueError(
+            "SERVER_PORT_TAKEOVER must be one of "
+            f"{', '.join(SERVER_PORT_TAKEOVER_CHOICES)}, got {value!r}"
+        )
 
     @field_validator("whisper_device")
     @classmethod
@@ -1970,6 +1999,26 @@ class Settings(BaseSettings):
         env_file=LazyEnvFiles(),
         env_file_encoding="utf-8",
         extra="ignore",
+        # The single biggest cost of starting this server, removed by one key.
+        #
+        # pydantic-settings' default dotenv behaviour is to fold every variable
+        # in the file into the model, including ones no field claims, so that a
+        # model with ``extra="allow"`` can see them. Working out which ones
+        # nothing claims means, for every variable in the file, walking every
+        # field and asking whether its annotation is "complex" -- O(variables x
+        # fields). On this user's configuration that is 280 x 355 = 99,376
+        # annotation inspections, and it cost **5.9 of the 6.7 seconds** every
+        # ``Settings()`` took. Every process pays it: the server at startup,
+        # and ``mcc-desktop --print-status`` on every pass of the desktop
+        # ladder, which is why merely deciding whether to start a server took
+        # ten seconds.
+        #
+        # ``only_existing`` says: take the variables the model actually
+        # declares and stop. That is exactly what ``extra="ignore"`` above
+        # already does with the result -- the extras were computed at that
+        # price and then discarded -- so nothing observable changes. Measured
+        # on a size-realistic 47 KB, 280-key ``.env``: 5.96s -> 0.81s.
+        dotenv_filtering="only_existing",
     )
 
 

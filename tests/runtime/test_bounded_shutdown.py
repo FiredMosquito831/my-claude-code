@@ -29,6 +29,7 @@ from my_claude_code.config.constants import (
 )
 from my_claude_code.config.settings import Settings
 from my_claude_code.core import stop_deadline as stop_deadline_module
+from my_claude_code.core.startup_state import startup_state
 from my_claude_code.core.stop_deadline import (
     MAX_STOP_BUDGET_SECONDS,
     MIN_STOP_BUDGET_SECONDS,
@@ -257,6 +258,10 @@ async def test_requests_are_served_normally_until_a_stop_is_requested() -> None:
         served.append(str(scope["path"]))
 
     app = RuntimeASGIApp(inner_app, runtime)
+    # A server that is up is a server that finished starting. Since 6.59.0 the
+    # listener is bound before the startup work, so "no stop requested" is only
+    # half of "serving normally": the startup gate owns the other half.
+    startup_state().mark_ready()
 
     async def send(message: Message) -> None:
         raise AssertionError("the gate must not answer while the server is up")

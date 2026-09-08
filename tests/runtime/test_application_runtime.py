@@ -704,12 +704,45 @@ async def test_startup_failure_closes_owned_transcriber() -> None:
     with (
         patch.object(
             manager,
-            "validate_configured_models",
-            AsyncMock(side_effect=RuntimeError("startup failed")),
+            "start_model_list_refresh",
+            MagicMock(side_effect=RuntimeError("startup failed")),
         ),
         pytest.raises(RuntimeError, match="startup failed"),
     ):
         await runtime.start()
+
+    assert transcriber.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_provider_probe_that_raises_no_longer_stops_the_start() -> None:
+    """The probe moved behind readiness, so it cannot refuse a start any more.
+
+    That is the point of moving it: it asks every configured provider over the
+    network whether the models named in the configuration exist, and the server
+    has always continued past a failed probe. Waiting for it only ever delayed
+    the first request by however slow the slowest provider was that morning.
+    """
+
+    events: list[str] = []
+    manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
+    transcriber = TrackingTranscriber(events)
+    runtime = ApplicationRuntime(manager, transcriber=transcriber)
+
+    with patch.object(
+        manager,
+        "validate_configured_models",
+        AsyncMock(side_effect=RuntimeError("upstream said no")),
+    ):
+        await runtime.start()
+        task = runtime.configured_model_validation_task
+        assert task is not None
+        # It is caught and named rather than left as an unretrieved task
+        # exception, which is a console warning at interpreter exit and nothing
+        # a user would ever see.
+        await task
+        assert task.exception() is None
+        await runtime.close()
 
     assert transcriber.close_calls == 1
 

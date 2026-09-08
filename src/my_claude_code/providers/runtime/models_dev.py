@@ -1860,6 +1860,29 @@ def _field_cross_vote[T: Hashable](
     return None
 
 
+#: One answer per (catalogue revision, field, provider, model). The ladder
+#: below is pure with respect to the catalogue file, and the catalogue file is
+#: already the key of every index cache underneath it -- so a second identical
+#: question can only ever produce the same answer.
+#:
+#: Measured on the reporter's configuration: resolving the ladder took **5.7
+#: seconds** of a start, four ``PRICE_FIELDS`` at a time, recomputed for every
+#: model of every provider, each cross-provider miss logging a paragraph. It is
+#: the largest single block of CPU in the whole startup and the source of the
+#: log storm around it. Nothing about it was new -- it has cost that since long
+#: before 6.41.2.
+_FIELD_ANSWER_LOCK = threading.Lock()
+_field_answer_cache: dict[
+    tuple[Path, float, str, str, str], tuple[Any, ResolutionTier | None]
+] = {}
+
+#: A bound, so a proxy asked about tens of thousands of model ids over a long
+#: run cannot grow this without limit. Cleared wholesale rather than evicted
+#: one by one: the entries are cheap to recompute and the catalogue revision
+#: rolls the whole cache anyway.
+_FIELD_ANSWER_CACHE_MAX = 20000
+
+
 def _model_field_tiered[T: Hashable](
     field: _LadderField[T], provider_id: str, model_id: str, path: Path | None
 ) -> tuple[T | None, ResolutionTier | None]:
@@ -1872,6 +1895,35 @@ def _model_field_tiered[T: Hashable](
     allowed to read outside it, so a wrong same-name row cannot override its
     own catalogue's answer.
     """
+
+    cache_path = path if path is not None else models_dev_cache_path()
+    try:
+        mtime = cache_path.stat().st_mtime
+    except OSError:
+        mtime = None
+    key = (
+        (cache_path, mtime, field.name, provider_id, model_id)
+        if mtime is not None
+        else None
+    )
+    if key is not None:
+        with _FIELD_ANSWER_LOCK:
+            memo = _field_answer_cache.get(key)
+        if memo is not None:
+            return memo
+    answer = _resolve_model_field_tiered(field, provider_id, model_id, path)
+    if key is not None:
+        with _FIELD_ANSWER_LOCK:
+            if len(_field_answer_cache) >= _FIELD_ANSWER_CACHE_MAX:
+                _field_answer_cache.clear()
+            _field_answer_cache[key] = answer
+    return answer
+
+
+def _resolve_model_field_tiered[T: Hashable](
+    field: _LadderField[T], provider_id: str, model_id: str, path: Path | None
+) -> tuple[T | None, ResolutionTier | None]:
+    """The ladder itself. See :func:`_model_field_tiered` for the memo."""
 
     field_index = _cached_field_index(field, path)
     bucket = field_index.get(provider_id)

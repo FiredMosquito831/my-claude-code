@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 from typing import cast
@@ -7,12 +8,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import my_claude_code.runtime.asgi as asgi_module
 from my_claude_code.application.errors import (
     ApplicationUnavailableError,
     InvalidRequestError,
 )
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.startup_state import startup_state
 from my_claude_code.messaging.transcription import TranscriptionService
 from my_claude_code.providers.nvidia_nim.client import NvidiaNimProvider
 from my_claude_code.providers.nvidia_nim.voice import NvidiaNimTranscriber
@@ -25,6 +28,21 @@ from my_claude_code.runtime.asgi import RuntimeASGIApp
 from my_claude_code.runtime.bootstrap import _create_transcriber, build_asgi_app
 from my_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.api.support import create_test_app
+
+
+@pytest.fixture(autouse=True)
+def _fresh_startup_state():
+    """Reset the process-wide startup state around every test in this module.
+
+    ``startup_state()`` is one object per process, exactly like
+    ``stop_deadline()``: a test that drives a lifespan to readiness leaves it
+    ready for whatever runs next in the same xdist worker, and an assertion
+    about "not ready yet" then depends on test order.
+    """
+
+    startup_state().begin()
+    yield
+    startup_state().begin()
 
 
 def _settings(**updates: object) -> Settings:
@@ -183,6 +201,12 @@ async def test_model_validation_failure_does_not_block_runtime_startup():
         ),
     ):
         await runtime.start()
+        # Off the readiness path since 6.59.0: the probe asks every configured
+        # provider over the network, and it is best-effort, so making the
+        # server wait for it only ever delayed the first request.
+        task = runtime.configured_model_validation_task
+        assert task is not None
+        await task
         await runtime.close()
 
     validation.assert_awaited_once()
@@ -215,21 +239,24 @@ async def test_runtime_asgi_app_starts_and_closes_owner_once():
     runtime.start = AsyncMock()
     runtime.close = AsyncMock(return_value=True)
     app = RuntimeASGIApp(AsyncMock(), runtime)
-    received = iter(
-        [
-            {"type": "lifespan.startup"},
-            {"type": "lifespan.shutdown"},
-        ]
-    )
     sent: list[dict[str, str]] = []
+    shutdown = asyncio.Event()
 
     async def receive():
-        return next(received)
+        if not sent:
+            return {"type": "lifespan.startup"}
+        await shutdown.wait()
+        return {"type": "lifespan.shutdown"}
 
     async def send(message):
         sent.append(message)
 
-    await app({"type": "lifespan"}, receive, send)
+    lifespan = asyncio.create_task(app({"type": "lifespan"}, receive, send))
+    # The startup is a task now, so it is waited for explicitly rather than
+    # implicitly by the lifespan message that used to await it.
+    await _finished_startup(app)
+    shutdown.set()
+    await asyncio.wait_for(lifespan, timeout=5)
 
     runtime.start.assert_awaited_once()
     runtime.close.assert_awaited_once()
@@ -240,27 +267,165 @@ async def test_runtime_asgi_app_starts_and_closes_owner_once():
 
 
 @pytest.mark.asyncio
+async def test_the_lifespan_answers_before_the_startup_work_runs() -> None:
+    """The bind-first switch, asserted where it is made.
+
+    uvicorn creates its listening socket the instant this message is answered,
+    so answering it before the work rather than after it is the difference
+    between twenty seconds of "free port" and twenty seconds of "starting".
+    """
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_start() -> None:
+        started.set()
+        await release.wait()
+
+    runtime = MagicMock(spec=ApplicationRuntime)
+    runtime.settings = _settings()
+    runtime.start = AsyncMock(side_effect=slow_start)
+    runtime.close = AsyncMock(return_value=True)
+    app = RuntimeASGIApp(AsyncMock(), runtime)
+    sent: list[dict[str, str]] = []
+    shutdown = asyncio.Event()
+
+    async def receive():
+        if not sent:
+            return {"type": "lifespan.startup"}
+        await shutdown.wait()
+        return {"type": "lifespan.shutdown"}
+
+    async def send(message):
+        sent.append(message)
+
+    lifespan = asyncio.create_task(app({"type": "lifespan"}, receive, send))
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+    # Answered while ``runtime.start`` is still blocked, which is the point.
+    assert sent == [{"type": "lifespan.startup.complete"}]
+    assert not startup_state().ready
+
+    release.set()
+    shutdown.set()
+    await asyncio.wait_for(lifespan, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_a_startup_that_fails_after_the_bind_asks_to_end_the_process() -> None:
+    """uvicorn used to end the process for us. Now the supervisor must.
+
+    A listener that stays up answering ``starting`` for ever after its startup
+    raised is strictly worse than the old crash: nothing would ever start a
+    working server on that port, because the port is not free.
+    """
+
+    runtime = MagicMock(spec=ApplicationRuntime)
+    runtime.settings = _settings(log_api_error_tracebacks=False)
+    runtime.start = AsyncMock(side_effect=RuntimeError("secret"))
+    runtime.close = AsyncMock(return_value=True)
+    failures: list[bool] = []
+    app = RuntimeASGIApp(
+        AsyncMock(), runtime, startup_failed_callback=lambda: failures.append(True)
+    )
+    sent: list[dict[str, str]] = []
+    shutdown = asyncio.Event()
+
+    async def receive():
+        if not sent:
+            return {"type": "lifespan.startup"}
+        await shutdown.wait()
+        return {"type": "lifespan.shutdown"}
+
+    async def send(message):
+        sent.append(message)
+
+    lifespan = asyncio.create_task(app({"type": "lifespan"}, receive, send))
+    await _finished_startup(app)
+    shutdown.set()
+    await asyncio.wait_for(lifespan, timeout=5)
+
+    assert failures == [True]
+    assert startup_state().failed
+    # The startup itself is still reported as complete: the socket is bound and
+    # the process is on its way out under the supervisor's own stop path.
+    assert sent[0] == {"type": "lifespan.startup.complete"}
+
+
+@pytest.mark.asyncio
+async def test_the_startup_work_waits_until_the_listener_is_serving() -> None:
+    """Bind-first is only true if the bind actually happens first.
+
+    Startup is not purely cooperative -- provider construction and the openai
+    import block the loop for seconds at a time -- so a task scheduled ahead of
+    uvicorn's own ``create_server`` can starve the very call it was moved in
+    front of, and the port stays free for the whole start anyway.
+    """
+
+    serving = False
+    app = RuntimeASGIApp(
+        AsyncMock(),
+        _ready_runtime(),
+        serving_predicate=lambda: serving,
+    )
+    sent: list[dict[str, str]] = []
+    shutdown = asyncio.Event()
+
+    async def receive():
+        if not sent:
+            return {"type": "lifespan.startup"}
+        await shutdown.wait()
+        return {"type": "lifespan.shutdown"}
+
+    async def send(message):
+        sent.append(message)
+
+    lifespan = asyncio.create_task(app({"type": "lifespan"}, receive, send))
+    await asyncio.sleep(0.05)
+    assert not startup_state().ready
+
+    serving = True
+    for _ in range(100):
+        if startup_state().ready:
+            break
+        await asyncio.sleep(0.01)
+    assert startup_state().ready
+
+    shutdown.set()
+    await asyncio.wait_for(lifespan, timeout=5)
+
+
+def _ready_runtime() -> MagicMock:
+    runtime = MagicMock(spec=ApplicationRuntime)
+    runtime.settings = _settings()
+    runtime.start = AsyncMock()
+    runtime.close = AsyncMock(return_value=True)
+    return runtime
+
+
+@pytest.mark.asyncio
 async def test_runtime_asgi_app_reports_incomplete_owned_shutdown() -> None:
     runtime = MagicMock(spec=ApplicationRuntime)
     runtime.settings = _settings()
     runtime.start = AsyncMock()
     runtime.close = AsyncMock(return_value=False)
     app = RuntimeASGIApp(AsyncMock(), runtime)
-    received = iter(
-        [
-            {"type": "lifespan.startup"},
-            {"type": "lifespan.shutdown"},
-        ]
-    )
     sent: list[dict[str, str]] = []
+    shutdown = asyncio.Event()
 
     async def receive():
-        return next(received)
+        if not sent:
+            return {"type": "lifespan.startup"}
+        await shutdown.wait()
+        return {"type": "lifespan.shutdown"}
 
     async def send(message):
         sent.append(message)
 
-    await app({"type": "lifespan"}, receive, send)
+    lifespan = asyncio.create_task(app({"type": "lifespan"}, receive, send))
+    await _finished_startup(app)
+    shutdown.set()
+    await asyncio.wait_for(lifespan, timeout=5)
 
     assert sent == [
         {"type": "lifespan.startup.complete"},
@@ -269,29 +434,37 @@ async def test_runtime_asgi_app_reports_incomplete_owned_shutdown() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_asgi_app_reports_concise_startup_failure():
+async def test_runtime_asgi_app_logs_a_concise_startup_failure(caplog):
     runtime = MagicMock(spec=ApplicationRuntime)
     runtime.settings = _settings(log_api_error_tracebacks=False)
     runtime.start = AsyncMock(side_effect=RuntimeError("secret"))
     runtime.close = AsyncMock()
-    app = RuntimeASGIApp(AsyncMock(), runtime)
+    messages: list[str] = []
+    app = RuntimeASGIApp(
+        AsyncMock(), runtime, startup_failed_callback=lambda: messages.append("stop")
+    )
     sent: list[dict[str, str]] = []
+    shutdown = asyncio.Event()
 
     async def receive():
-        return {"type": "lifespan.startup"}
+        if not sent:
+            return {"type": "lifespan.startup"}
+        await shutdown.wait()
+        return {"type": "lifespan.shutdown"}
 
     async def send(message):
         sent.append(message)
 
-    await app({"type": "lifespan"}, receive, send)
+    with patch.object(asgi_module.logger, "error") as error:
+        lifespan = asyncio.create_task(app({"type": "lifespan"}, receive, send))
+        await _finished_startup(app)
+        shutdown.set()
+        await asyncio.wait_for(lifespan, timeout=5)
 
-    assert sent == [
-        {
-            "type": "lifespan.startup.failed",
-            "message": "Server startup failed: exc_type=RuntimeError",
-        }
-    ]
-    runtime.close.assert_not_awaited()
+    assert messages == ["stop"]
+    logged = " ".join(str(call.args) for call in error.call_args_list)
+    assert "exc_type=RuntimeError" in logged
+    assert "secret" not in logged
 
 
 def test_bootstrap_configures_default_log_and_publishes_only_services(tmp_path):
@@ -402,3 +575,15 @@ def test_bootstrap_selects_nvidia_transcriber_without_loading_riva() -> None:
 
 def test_bootstrap_disables_transcription_as_one_owned_resource() -> None:
     assert _create_transcriber(_settings(voice_note_enabled=False)) is None
+
+
+async def _finished_startup(app: RuntimeASGIApp) -> None:
+    """Wait for the background startup the lifespan scheduled."""
+
+    for _ in range(500):
+        task = app.startup_task
+        if task is not None:
+            await asyncio.wait([task], timeout=5)
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the lifespan never scheduled a startup task")

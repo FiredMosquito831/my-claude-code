@@ -876,6 +876,89 @@ configure_and_verify_my_claude_code() {
         fail "Expected my-claude-code $FCC_VERSION; found: $installed_version"
 }
 
+precompile_bytecode() {
+    # Write __pycache__ for the freshly installed tool environment.
+    #
+    # Measured on Windows, and the same shape everywhere: the FIRST server
+    # start after an update costs about 3.5 seconds more than every later one,
+    # because CPython compiles every module it imports and writes the .pyc
+    # files as it goes. With releases arriving hourly, "the first start after
+    # an update" is most starts the user ever sees -- and it is the part of a
+    # start that happens before the port is bound.
+    #
+    # Best effort by design: a failure costs those seconds back and nothing
+    # else, so it must never fail an install that otherwise worked.
+    if [ "$dry_run" -eq 1 ]; then
+        return 0
+    fi
+    uv_tool_root=$("$uv_bin" tool dir 2>/dev/null) || return 0
+    [ -n "$uv_tool_root" ] || return 0
+    tool_dir="$uv_tool_root/my-claude-code"
+    for python in "$tool_dir/bin/python" "$tool_dir/bin/python3" "$tool_dir/Scripts/python.exe"; do
+        if [ -x "$python" ]; then
+            printf 'Precompiling My Claude Code (saves a few seconds on the next start)...\n'
+            "$python" -m compileall -q "$tool_dir" >/dev/null 2>&1 || true
+            return 0
+        fi
+    done
+    return 0
+}
+
+mcc_config_dir() {
+    # The same three rungs the server walks, in the same order: an explicit
+    # MCC_CONFIG_DIR, then ~/.mcc, then a legacy ~/.fcc an older install left
+    # behind. A hard-coded path here would write a scratch install's receipt
+    # into the real config home.
+    if [ -n "${MCC_CONFIG_DIR:-}" ]; then
+        printf '%s' "$MCC_CONFIG_DIR"
+        return
+    fi
+    if [ -d "$HOME/.mcc" ]; then
+        printf '%s' "$HOME/.mcc"
+        return
+    fi
+    if [ -d "$HOME/.fcc" ]; then
+        printf '%s' "$HOME/.fcc"
+        return
+    fi
+    printf '%s' "$HOME/.mcc"
+}
+
+install_progress_started=""
+install_progress_path=""
+
+write_install_progress() {
+    # Append one liveness record to the update receipt this machine shares --
+    # the same file, fields and sentences the deferred update helper writes
+    # (src/my_claude_code/application/release_updates.py and
+    # src/my_claude_code/config/update_progress.py). Until 6.59.0 only the
+    # helper wrote it, so a hand-run installer was invisible to every reader:
+    # the desktop shell saw no installer in flight and was free to start one of
+    # its own into the tool directory this script is writing.
+    #
+    # Never fails the install: every write is best effort.
+    stage="$1"
+    message="$2"
+    if [ "$dry_run" -eq 1 ]; then
+        return 0
+    fi
+    if [ -z "$install_progress_path" ]; then
+        updates_dir="$(mcc_config_dir)/updates"
+        mkdir -p "$updates_dir" 2>/dev/null || return 0
+        install_progress_path="$updates_dir/progress.json"
+        install_progress_started="$(date -u +%s 2>/dev/null || printf '0')"
+        # A fresh episode starts a fresh file, exactly as the helper does.
+        : > "$install_progress_path" 2>/dev/null || return 0
+    fi
+    helper_done=false
+    case "$stage" in
+        done|failed|recovered) helper_done=true ;;
+    esac
+    printf '{"stage":"%s","message":"%s","at":"%s","parent":0,"helper_pid":%s,"started_at":%s,"helper_done":%s,"version":"%s","source":"install.sh"}
+'         "$stage"         "$message"         "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '')"         "$$"         "${install_progress_started:-0}"         "$helper_done"         "${FCC_VERSION:-}"         >> "$install_progress_path" 2>/dev/null || true
+    return 0
+}
+
 parse_args "$@"
 validate_args
 add_known_bin_directories
@@ -893,11 +976,18 @@ step "Installing Python $PYTHON_VERSION through uv"
 install_managed_python
 
 step "Installing or updating My Claude Code"
-install_my_claude_code
+# From here to the last line, anything that reads the update receipt sees an
+# installer in flight and stays out of the way.
+write_install_progress installing "Installing the new version."
+if ! install_my_claude_code; then
+    write_install_progress failed "The install failed."
+    exit 1
+fi
 
 step "Configuring PATH and verifying My Claude Code"
 configure_and_verify_my_claude_code
 
+precompile_bytecode
 enable_rtk_for_agents
 create_desktop_shortcut
 
@@ -943,3 +1033,7 @@ else
     printf '\nTo use an update installed while the server is running, restart the proxy\n'
     printf 'with: mcc-server\n'
 fi
+
+# The terminal record. Whichever way the install went, the receipt stops
+# saying "installing" and the helper-alive gate reopens for everyone else.
+write_install_progress done "The new version is installed."

@@ -29,6 +29,11 @@ pub struct Status {
     pub admin_url: String,
     pub health_url: String,
     pub server_presence: String,
+    /// The startup stage a `starting` server named, when it named one. Optional
+    /// because every wheel before 6.59.0 emits a document without it, and this
+    /// shell has to keep working against those (C3).
+    #[serde(default)]
+    pub server_starting_stage: Option<String>,
     pub port_conflict: Option<String>,
     pub server_mode: String,
     pub window_width: u32,
@@ -129,6 +134,7 @@ pub(crate) fn sample_json() -> serde_json::Value {
         "admin_url": "http://127.0.0.1:9999/admin",
         "health_url": "http://127.0.0.1:9999/health",
         "server_presence": "healthy",
+        "server_starting_stage": serde_json::Value::Null,
         "port_conflict": serde_json::Value::Null,
         "server_mode": "spawn",
         "window": "auto",

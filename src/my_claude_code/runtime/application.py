@@ -6,6 +6,7 @@ import logging
 import os
 import traceback
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
@@ -36,6 +37,7 @@ from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
 from my_claude_code.core.request_log import reset_request_log_stores
+from my_claude_code.core.startup_state import startup_state
 from my_claude_code.messaging.platforms import factory as messaging_platform_factory
 from my_claude_code.messaging.platforms.factory import MessagingPlatformOptions
 from my_claude_code.messaging.platforms.ports import (
@@ -71,6 +73,38 @@ from .discovery_timer import ProviderDiscoveryTimer, resolve_refresh_interval
 from .provider_manager import ProviderRuntimeManager
 
 RestartCallback = Callable[[], Awaitable[None] | None]
+
+#: Heavy third-party modules this server always ends up importing, imported on
+#: a worker thread at the top of startup.
+#:
+#: They are lazy imports everywhere else on purpose -- ``openai`` alone costs
+#: about 3.5 seconds on the reporter's machine, and most ``mcc-*`` commands
+#: never touch it. But the server always does, and before 6.59.0 it did so
+#: from *inside the event loop*, while constructing its first provider. An
+#: import is not a suspension point, so the freshly bound listener spent those
+#: 3.5 seconds accepting connections and answering none of them -- a /health
+#: probe with a 3-second timeout would have timed out against a server that had
+#: already declared itself ready.
+#:
+#: A worker thread fixes it where moving the import earlier does not: an import
+#: is mostly stat and read syscalls, and the GIL is released across every one
+#: of them, so the event loop keeps its slices and the ``starting`` gate keeps
+#: answering while the module loads.
+PREWARM_MODULES = ("openai",)
+
+
+def prewarm_heavy_imports() -> None:
+    """Import :data:`PREWARM_MODULES` now. Best effort, never raises.
+
+    If an import fails, the lazy import at the original call site still runs
+    exactly as it did before -- this is an optimisation, not a dependency.
+    """
+
+    for name in PREWARM_MODULES:
+        try:
+            __import__(name)
+        except Exception:
+            logger.debug("Prewarming {name} failed; it imports lazily.", name=name)
 
 
 async def best_effort(
@@ -166,6 +200,10 @@ class ApplicationRuntime:
         self._cli_manager: cli_managed.ManagedClaudeSessionManager | None = None
         self._started = False
         self._closed = False
+        # The configured-model probe, which runs behind readiness. Held so the
+        # shutdown can cancel it rather than leave a network call outliving the
+        # provider generation it is using.
+        self._validation_task: asyncio.Task[None] | None = None
         self._provider_manager_closed = False
         self._close_lock = asyncio.Lock()
         # The durable store of what every host has taught this proxy about
@@ -182,6 +220,12 @@ class ApplicationRuntime:
         return self.provider_manager.current_settings()
 
     @property
+    def configured_model_validation_task(self) -> asyncio.Task[None] | None:
+        """The configured-model probe that runs behind readiness, if started."""
+
+        return self._validation_task
+
+    @property
     def is_closed(self) -> bool:
         """Whether this runtime released its complete ownership graph."""
         return self._closed
@@ -190,17 +234,39 @@ class ApplicationRuntime:
         if self._started:
             return
         logger.info("Starting Claude Code Proxy...")
+        state = startup_state()
         try:
             warn_if_process_auth_token(self.settings)
             # Before the first sweep and before the first request: a provider
             # built during the sweep asks the store for its memory, and a
             # memory handed out empty would re-pay every 400 this proxy has
             # already paid for.
+            # First, and on a worker thread. See ``PREWARM_MODULES``.
+            state.mark("prewarm")
+            await asyncio.to_thread(prewarm_heavy_imports)
+            state.mark("learned-facts")
             self._load_learned_facts()
-            await self._validate_configured_models_best_effort()
+            # The single most expensive stage on a real config -- it probes
+            # every configured provider over the network. It used to run
+            # before the listener existed, which is most of why a start looked
+            # like a free port for twenty seconds.
+            state.mark("catalogue")
             self.provider_manager.start_model_list_refresh()
+            state.mark("rediscovery")
             self._discovery_timer.start()
+            state.mark("messaging")
             await self._start_messaging_if_configured()
+            # Off the readiness path, and the single largest thing on it: this
+            # asks every configured provider, over the network, whether the
+            # models named in the configuration exist. It is best-effort -- it
+            # logs and returns, it never refuses to start -- so making the
+            # server wait for it only ever delayed the first request by however
+            # slow the slowest provider was that morning. Measured at 3.6s on a
+            # scratch config and around 9s on the reporter's.
+            state.mark("configured-models")
+            self._validation_task = asyncio.create_task(
+                self._validate_configured_models_best_effort()
+            )
             logging.getLogger("uvicorn.error").info(
                 "Admin UI: %s (local-only)",
                 local_admin_url(self.settings),
@@ -636,14 +702,33 @@ class ApplicationRuntime:
         }
 
     async def _validate_configured_models_best_effort(self) -> None:
+        """Probe every configured model, and never let the result stop a start.
+
+        Since 6.59.0 this runs as a task behind readiness rather than in front
+        of it, so an exception here has nowhere to propagate to: an unretrieved
+        task exception would be a warning on the console at interpreter exit
+        and nothing else. Everything is caught and named instead. That is not a
+        widening of the contract -- the method was already "best effort", and
+        the server has always continued past a failed probe -- it is what
+        makes the contract true now that nobody is awaiting it.
+        """
+
         try:
             await self.provider_manager.validate_configured_models()
+        except asyncio.CancelledError:
+            raise
         except ApplicationUnavailableError as exc:
             logger.warning(
                 "Configured provider model validation failed during startup; "
                 "server will continue and requests will fail at provider resolution "
                 "when config is incomplete. {}",
                 exc.message,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Configured provider model validation raised during startup; "
+                "the server is already serving and continues. exc_type={}",
+                type(exc).__name__,
             )
 
     async def _start_messaging_if_configured(self) -> None:
@@ -758,6 +843,14 @@ class ApplicationRuntime:
         WITHHELD_MODEL_IDS.sink = _withheld_sink(self._learned_facts)
 
     async def _close_owned_resources(self) -> bool:
+        # Cancelled before the provider manager closes, so a probe in flight is
+        # abandoned rather than racing the shutdown that asked for it. Same
+        # reason as the discovery timer below, and for the same task shape.
+        task = self._validation_task
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await task
         # Cancelled before the provider manager closes, so a sweep in flight
         # is abandoned rather than racing the shutdown that asked for it.
         await self._discovery_timer.close()
