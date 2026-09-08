@@ -442,6 +442,7 @@ def test_the_shipped_rate_limit_of_zero_survives_the_factory():
     )
 
     provider = create_provider("nvidia_nim", settings)
+    assert isinstance(provider, NvidiaNimProvider)
 
     assert provider._rate_limiter._proactive_limiter.unlimited is True
 
@@ -455,6 +456,7 @@ def test_a_configured_rate_limit_still_reaches_the_limiter():
     )
 
     provider = create_provider("nvidia_nim", settings)
+    assert isinstance(provider, NvidiaNimProvider)
     limiter = provider._rate_limiter._proactive_limiter
 
     assert limiter.unlimited is False
