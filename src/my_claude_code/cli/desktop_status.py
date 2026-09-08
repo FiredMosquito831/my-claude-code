@@ -23,8 +23,18 @@ Three rules hold this file together:
 removed or changes type; adding a key does not bump it, because a reader is
 required to tolerate keys it does not know. 6.44.0 added four shell keys,
 6.45.0 added ``autostart_reconcile``, 6.50.0 added
-``reconnect_restatus_seconds`` and 6.58.1 added ``server_start_retries``; the
-schema stayed at 1 every time, for exactly that reason.
+``reconnect_restatus_seconds``, 6.58.1 added ``server_start_retries`` and
+6.60.0 added ``shell_installed_tag``; the schema stayed at 1 every time, for
+exactly that reason.
+
+``shell_installed_tag`` is the key BUG-0 needed. The document has carried
+``shell_release_tag`` -- what this *wheel* pins -- since 6.44.0, and nothing
+read it; a window that compares it with its own compiled-in tag learns it is
+stale, which is the whole of the fix. The receipt's tag rides beside it so a
+reader can also tell "the window running is old" from "the file on disk is
+old", which are different problems with different remedies. Per the two-release
+rule below the shell only *tolerates* it in 6.60.0; it may be required from
+6.61.0.
 
 Note the asymmetry a new key creates, because it is the one thing to get right
 when adding another. An *old* reader tolerates a key it has never heard of, so
@@ -128,6 +138,7 @@ STATUS_KEYS: tuple[str, ...] = (
     "shell_tray",
     "shell_binary",
     "shell_release_tag",
+    "shell_installed_tag",
     "shell_ready",
     "update",
 )

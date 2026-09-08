@@ -112,6 +112,16 @@ reads its fields by name), so a new wheel is always safe under an old shell; a
 new shell under an old wheel is not. Move the shell pin after the release that
 starts emitting, never before.
 
+### Adding a key the *shell* writes back
+
+`shell_installed_tag` was added in 6.60.0 and is the first key that exists so
+the wheel and the window can disagree *out loud*. The two-release rule is the
+same: 6.60.0 emits it and the shell merely tolerates it; a shell may require it
+from 6.61.0; the pin moves after that. The reason to add it at all is that
+`shell_release_tag` (what the wheel pins) and the receipt's tag (what is on
+disk) are different facts with different remedies, and the window compares a
+*third* -- the tag compiled into itself.
+
 ### Adding a value to `server_presence`
 
 Same rule, one step stricter. A *key* an old shell has never heard of is
@@ -487,6 +497,49 @@ The pin therefore only ever moves forward to a tag whose wheel is already publis
 **When the shell has not changed, leave the pin alone.** Every user who already
 has that binary reads a receipt and downloads nothing; moving the pin for its own
 sake makes all of them re-download an identical window.
+
+### Since 6.60.0: moving the pin actually moves the machines
+
+Before 6.60.0 this section's last step was a lie of omission. Moving the pin
+moved what the *wheel wanted*; it moved what a *user ran* only if that user
+happened to start their window from the Python tray, because
+`ensure_desktop_shell()` had exactly one caller (`ShellWindow.create()`). Anyone
+launching `MyClaudeCode.exe` from the Start Menu, the taskbar or the
+Programs-folder install kept the build they first received. One person kept
+v6.43.0 for fifteen pin moves.
+
+Two things follow for this procedure.
+
+**The tag has to be stamped into the binary.** `shell-release.yml` passes
+`MCC_SHELL_RELEASE_TAG` to `cargo build`; the binary reads it with `option_env!`
+into `mcc_shell::RELEASE_TAG`, prints it for `--version`, and compares it with
+the `shell_release_tag` in the status document. A build without it says
+"(development build)" and never claims to be stale. **Never build a release
+asset outside that workflow**, and if a leg is re-run by hand, re-run the whole
+workflow with the tag rather than a bare `cargo build` -- an asset with no stamp
+is one that can never notice a later pin. Step 7 below now checks it.
+
+**Step 7 gains one line.** After proving path A, ask the binary what it is:
+
+```bash
+/tmp/mcc-pin-shell/MyClaudeCode --version
+```
+
+It must print `My Claude Code desktop app vN` -- the same `vN` the receipt
+beside it names. If it says "(development build)", the release assets were built
+without the stamp and the pin move should be held until they are rebuilt.
+
+**And a user upgrading *through* 6.60.0 needs one manual step**, once, because
+the mechanism that fetches the app is itself what is being fixed. The release
+notes have to say so:
+
+```bash
+mcc-desktop --ensure-shell
+```
+
+(or one launch from the tray, which does the same thing). Every pin move after
+that reaches the machine on its own: the window notices on launch, stages the
+new build beside itself, and swaps it in on the next start.
 
 
 ## 9. The npm package (`packaging/npm/`, `npm-release.yml`)

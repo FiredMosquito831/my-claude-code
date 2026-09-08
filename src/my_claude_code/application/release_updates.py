@@ -188,6 +188,14 @@ class ReleaseStatus:
     # startup budget (not a fixed client constant), so the dashboard's
     # reconnect window tracks the real cost of the handoff.
     dashboard_reconnect_timeout_seconds: float = DASHBOARD_RECONNECT_TIMEOUT_SECONDS
+    # The desktop app's own half of "are you up to date". The wheel updates
+    # itself every release; until 6.60.0 the window never did, because the pin
+    # was enforced by a process (the Python tray) that need not be running --
+    # so a user could sit on a 15-release-old window while the banner said
+    # everything was current. The banner now covers both halves.
+    shell_installed_tag: str | None = None
+    shell_pinned_tag: str | None = None
+    shell_update_available: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -206,6 +214,9 @@ class ReleaseStatus:
             "dashboard_reconnect_timeout_seconds": (
                 self.dashboard_reconnect_timeout_seconds
             ),
+            "shell_installed_tag": self.shell_installed_tag,
+            "shell_pinned_tag": self.shell_pinned_tag,
+            "shell_update_available": self.shell_update_available,
         }
 
 
@@ -298,6 +309,7 @@ async def get_release_status(*, force: bool = False) -> ReleaseStatus:
         staged_install=_CACHE.staged_install,
         pending_upgrade=pending,
     )
+    _apply_desktop_shell_state(status)
     # Track the real handoff cost: install budget + the operator's configured
     # graceful-drain budget + a startup margin, so the dashboard's reconnect
     # window follows the live setting rather than the default constant.
@@ -322,6 +334,35 @@ async def get_release_status(*, force: bool = False) -> ReleaseStatus:
     status.published_at = payload.get("published_at")
     status.update_available = is_newer(latest, running)
     return status
+
+
+def _apply_desktop_shell_state(status: ReleaseStatus) -> None:
+    """Fill in the three desktop-app keys. Best effort, and a read only.
+
+    Imported inside the function on purpose:
+    ``tests/contracts/test_desktop_shell_not_on_the_server_path.py`` asserts
+    that a fresh interpreter which builds the ASGI app has never imported
+    ``config.desktop_shell`` -- it costs ``tarfile``, ``zipfile``, ``hashlib``
+    and ``urllib`` for a download only ``mcc-desktop`` makes. Answering a
+    dashboard request is not the server's cold start, so paying for it here is
+    fine; paying for it at import time is not.
+
+    Any failure leaves the three keys at their defaults. A version banner that
+    could not read a receipt must still render the version.
+    """
+
+    try:
+        from my_claude_code.config.desktop_shell import desktop_shell_update_report
+
+        report = desktop_shell_update_report()
+    except Exception as exc:
+        logger.debug("Desktop app pin check failed: {}", type(exc).__name__)
+        return
+    installed = report.get("shell_installed_tag")
+    pinned = report.get("shell_pinned_tag")
+    status.shell_installed_tag = installed if isinstance(installed, str) else None
+    status.shell_pinned_tag = pinned if isinstance(pinned, str) else None
+    status.shell_update_available = bool(report.get("shell_update_available"))
 
 
 def _uv_tool_dir(uv_executable: str | None = None) -> Path | None:

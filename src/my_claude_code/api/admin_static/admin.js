@@ -7891,6 +7891,30 @@ function renderVersionBanners() {
     return;
   }
 
+  // The desktop app is the other half of "are you up to date". Until 6.60.0
+  // the pin was enforced only by the Python tray, so a window launched from
+  // the Start Menu could sit fifteen releases behind while this panel said
+  // everything was current. It is a banner of its own and not a line in the
+  // wheel's, because the two update by different mechanisms and at different
+  // moments: the wheel restarts the server, the app changes on its next start.
+  if (info.shell_update_available && info.shell_pinned_tag) {
+    const banner = document.createElement("div");
+    banner.className = "version-banner";
+    const body = document.createElement("div");
+    body.className = "version-banner-body";
+    const title = document.createElement("div");
+    title.className = "version-banner-title";
+    title.textContent = `Desktop app ${info.shell_pinned_tag} available — it updates the next time you restart the app`;
+    const detail = document.createElement("div");
+    detail.className = "version-banner-detail";
+    detail.textContent = info.shell_installed_tag
+      ? `The window you are looking at is ${info.shell_installed_tag}. The new one is downloaded and verified in the background, then swapped in when the app next starts.`
+      : "The new one is downloaded and verified in the background, then swapped in when the app next starts.";
+    body.append(title, detail);
+    banner.appendChild(body);
+    container.appendChild(banner);
+  }
+
   if (!info.update_available || !info.latest) return;
   if (localStorage.getItem(versionDismissKey(info.latest)) === "1") return;
 
@@ -7962,6 +7986,14 @@ function renderVersionPanel() {
     ["Latest", info?.latest ? `v${info.latest}` : "—"],
     ["Last checked", formatCheckedAt(info?.checked_at)],
   ];
+  if (info?.shell_installed_tag || info?.shell_pinned_tag) {
+    entries.push([
+      "Desktop app",
+      info.shell_update_available
+        ? `${info.shell_installed_tag || "unknown"} → ${info.shell_pinned_tag} on next restart`
+        : info.shell_installed_tag || info.shell_pinned_tag,
+    ]);
+  }
   entries.forEach(([label, value]) => {
     const dl = document.createElement("dl");
     const dt = document.createElement("dt");
@@ -8070,10 +8102,17 @@ async function runVersionUpgrade(button) {
       renderVersionIndicator();
       renderVersionBanners();
       renderVersionPanel();
+      const serverHalf = state.versionInfo.current
+        ? `Updated and restarted on v${state.versionInfo.current}`
+        : "Updated and restarted";
+      // Both halves, because an update that moves the shell pin leaves the
+      // window on the old build until it is restarted, and a message that only
+      // named the server would be telling the user they are finished when they
+      // are not.
       showMessage(
-        state.versionInfo.current
-          ? `Updated and restarted on v${state.versionInfo.current}`
-          : "Updated and restarted",
+        state.versionInfo.shell_update_available && state.versionInfo.shell_pinned_tag
+          ? `${serverHalf}. The desktop app updates to ${state.versionInfo.shell_pinned_tag} the next time you restart it.`
+          : serverHalf,
         "ok",
       );
     } else {

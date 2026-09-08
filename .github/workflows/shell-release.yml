@@ -171,12 +171,30 @@ jobs:
         # instead of embedding it, so a shipped binary would look for a `ui/`
         # directory the user does not have. This is the single line that
         # separates a release build from a development one.
+        #
+        # `MCC_SHELL_RELEASE_TAG` is the other thing that separates them, and
+        # it is new in 6.60.0. The binary reads it with `option_env!` into
+        # `mcc_shell::RELEASE_TAG`, prints it for `--version`, and -- the point
+        # of the whole exercise -- compares it with the `shell_release_tag` the
+        # wheel reports, so a window that is not the pinned one can say so and
+        # ask `mcc-desktop --ensure-shell` to fix it. Without this the constant
+        # is `None`, `--version` says "development build", and the window never
+        # claims to be stale. It is the tag the assets are being uploaded to,
+        # not the ref being built, for the same reason the installer stamps
+        # that one: a dispatch that builds `main` into an old tag produces
+        # assets that belong to that tag.
+        env:
+          MCC_SHELL_RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: cargo build --release --locked --features custom-protocol --target ${{ matrix.target }}
 
       - name: Smoke (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: desktop-shell
+        # The same variable, so the smoke can assert the stamp actually reached
+        # the binary rather than only that `--version` prints something.
+        env:
+          MCC_SHELL_RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: ./smoke/windows.ps1 -Binary "src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }}"
 
       - name: Smoke (Linux)

@@ -204,6 +204,10 @@ class ApplicationRuntime:
         # shutdown can cancel it rather than leave a network call outliving the
         # provider generation it is using.
         self._validation_task: asyncio.Task[None] | None = None
+        # The desktop-app pin check, which also runs behind readiness. Held
+        # for the same reason: the shutdown cancels it rather than leaving a
+        # file read outliving the runtime that started it.
+        self._shell_pin_task: asyncio.Task[None] | None = None
         self._provider_manager_closed = False
         self._close_lock = asyncio.Lock()
         # The durable store of what every host has taught this proxy about
@@ -271,6 +275,12 @@ class ApplicationRuntime:
                 "Admin UI: %s (local-only)",
                 local_admin_url(self.settings),
             )
+            # Behind readiness and off the loop: one receipt read on a worker
+            # thread, so a stale desktop app is named in the log the moment the
+            # server is up rather than only when somebody opens the dashboard.
+            # BUG-0's symptom was silence -- the wheel updated itself fifteen
+            # times while the window did not, and nothing anywhere said so.
+            self._shell_pin_task = asyncio.create_task(self._report_stale_desktop_app())
             self._started = True
         except asyncio.CancelledError:
             await self.close()
@@ -842,15 +852,49 @@ class ApplicationRuntime:
         )
         WITHHELD_MODEL_IDS.sink = _withheld_sink(self._learned_facts)
 
+    async def _report_stale_desktop_app(self) -> None:
+        """Say once, in the log, when the installed desktop app is not the pin.
+
+        Best effort in the strongest sense: it reads one JSON receipt on a
+        worker thread and logs. It never downloads, never writes, and never
+        raises into the startup path -- an unreadable receipt is not a reason a
+        server does not start.
+
+        The import is function-local because
+        ``tests/contracts/test_desktop_shell_not_on_the_server_path.py`` pins
+        that building the ASGI app has not imported the fetcher; running behind
+        readiness is not building the app.
+        """
+
+        try:
+            from my_claude_code.config.desktop_shell import (
+                desktop_shell_update_report,
+            )
+
+            report = await asyncio.to_thread(desktop_shell_update_report)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("Desktop app pin check failed: {}", type(exc).__name__)
+            return
+        if not report.get("shell_update_available"):
+            return
+        logger.info(
+            "The My Claude Code desktop app on this machine is {} and this "
+            "release pins {}. It updates the next time you restart the app.",
+            report.get("shell_installed_tag"),
+            report.get("shell_pinned_tag"),
+        )
+
     async def _close_owned_resources(self) -> bool:
         # Cancelled before the provider manager closes, so a probe in flight is
         # abandoned rather than racing the shutdown that asked for it. Same
         # reason as the discovery timer below, and for the same task shape.
-        task = self._validation_task
-        if task is not None and not task.done():
-            task.cancel()
-            with suppress(asyncio.CancelledError, Exception):
-                await task
+        for task in (self._validation_task, self._shell_pin_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await task
         # Cancelled before the provider manager closes, so a sweep in flight
         # is abandoned rather than racing the shutdown that asked for it.
         await self._discovery_timer.close()

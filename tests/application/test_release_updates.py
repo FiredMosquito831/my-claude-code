@@ -1141,3 +1141,82 @@ def test_a_failed_install_puts_the_launchers_it_moved_aside_back(tmp_path) -> No
     assert guard < reap
     # The receipt says which launchers came back, so a failure is legible.
     assert "restored_shims = $restoredShims" in script
+
+
+# ------------------------------------------------- the desktop app's own pin
+#
+# The version panel used to answer "are you up to date" for the wheel alone.
+# The wheel updates itself every release; the desktop app did not, because its
+# pin was enforced by a process that need not be running -- so a user could sit
+# fifteen releases behind and still read "Already up to date" (BUG-0). These
+# three keys are what the banner renders.
+
+
+@pytest.mark.asyncio
+async def test_status_carries_the_desktop_apps_pin(monkeypatch) -> None:
+    from my_claude_code.config import desktop_shell
+
+    monkeypatch.setattr(release_updates, "current_version", lambda: "6.60.0")
+
+    async def _fetch():
+        return None, None
+
+    monkeypatch.setattr(release_updates, "_fetch_latest_release", _fetch)
+    monkeypatch.setattr(desktop_shell, "installed_release_tag", lambda: "v6.43.0")
+
+    payload = (await get_release_status(force=True)).as_dict()
+
+    assert payload["shell_installed_tag"] == "v6.43.0"
+    assert payload["shell_pinned_tag"] == desktop_shell.DESKTOP_SHELL_RELEASE_TAG
+    assert payload["shell_update_available"] is True
+
+
+def test_the_desktop_pin_is_decided_in_one_place(monkeypatch) -> None:
+    """Not a second implementation of "is the app stale"."""
+
+    from my_claude_code.config import desktop_shell
+
+    status = release_updates.ReleaseStatus(current="6.60.0")
+    monkeypatch.setattr(
+        desktop_shell,
+        "installed_release_tag",
+        lambda: desktop_shell.DESKTOP_SHELL_RELEASE_TAG,
+    )
+
+    release_updates._apply_desktop_shell_state(status)
+
+    assert status.shell_installed_tag == desktop_shell.DESKTOP_SHELL_RELEASE_TAG
+    assert status.shell_update_available is False
+
+
+def test_no_desktop_app_is_not_an_update_anybody_asked_for(monkeypatch) -> None:
+    """Most installs have no window at all; a banner for one is noise."""
+
+    from my_claude_code.config import desktop_shell
+
+    status = release_updates.ReleaseStatus(current="6.60.0")
+    monkeypatch.setattr(desktop_shell, "installed_release_tag", lambda: None)
+
+    release_updates._apply_desktop_shell_state(status)
+
+    assert status.shell_installed_tag is None
+    assert status.shell_update_available is False
+
+
+def test_a_receipt_that_cannot_be_read_still_renders_a_version(monkeypatch) -> None:
+    """A banner must never be the reason a dashboard request fails."""
+
+    from my_claude_code.config import desktop_shell
+
+    status = release_updates.ReleaseStatus(current="6.60.0")
+
+    def _explode() -> dict[str, object]:
+        raise OSError("the receipt is on a drive that is not answering")
+
+    monkeypatch.setattr(desktop_shell, "desktop_shell_update_report", _explode)
+
+    release_updates._apply_desktop_shell_state(status)
+
+    assert status.shell_installed_tag is None
+    assert status.shell_pinned_tag is None
+    assert status.shell_update_available is False

@@ -3034,3 +3034,36 @@ def test_clicking_a_guide_link_opens_the_guide_and_scrolls_to_the_section(
     assert clicked["guideViewVisible"] is True
     assert clicked["navActive"] is True
     assert clicked["anchor"] in clicked["scrolledAnchors"]
+
+
+class TestDesktopAppUpdateBanner:
+    """The version panel now answers for the window as well as for the wheel.
+
+    Until 6.60.0 the desktop app's pin was enforced by a process that need not
+    be running, so the dashboard could tell a user they were up to date while
+    the window they were reading it in was fifteen releases old (BUG-0).
+    """
+
+    def test_a_stale_desktop_app_gets_its_own_banner(self, rendered) -> None:
+        banner = rendered["desktopAppBanner"]["stale"]["banners"]
+
+        assert "Desktop app v6.60.0 available" in banner
+        # The sentence has to say when it takes effect, because the answer is
+        # "not now" and a banner that does not say so reads as a failure.
+        assert "the next time you restart the app" in banner
+        assert "v6.43.0" in banner, "it names what is actually running"
+
+    def test_the_panel_names_both_ends_of_the_move(self, rendered) -> None:
+        panel = rendered["desktopAppBanner"]["stale"]["panel"]
+
+        assert "Desktop app" in panel
+        assert "v6.43.0" in panel and "v6.60.0" in panel
+        assert "on next restart" in panel
+
+    def test_a_current_desktop_app_says_nothing(self, rendered) -> None:
+        state = rendered["desktopAppBanner"]["current"]
+
+        assert "Desktop app v" not in state["banners"]
+        assert "available" not in state["banners"]
+        # But the panel still reports what is installed, so a person can check.
+        assert "v6.60.0" in state["panel"]
