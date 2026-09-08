@@ -111,6 +111,12 @@ LIMIT_RANGES: dict[str, LimitRange] = {
         0, 8_192, "0 uses the holdback clock alone"
     ),
     "rate_limit_cooldown_seconds": LimitRange(0.0, DAY, "0 does not pause"),
+    # The proactive per-provider pace. 0 is the default and the only value that
+    # means something other than a rate. The ceiling is a sanity bound on a
+    # hand-typed number: above it the window can no longer be the thing that
+    # holds a request back, so it is indistinguishable from 0 while still
+    # costing a queue.
+    "provider_rate_limit": LimitRange(0, 100_000, "0 applies no proactive limit"),
     # A sweep of 57 providers is 57 upstream fetches; a day is the longest
     # interval that still counts as "kept current". 0 is the only value that
     # means something other than an interval, and the loop enforces its own

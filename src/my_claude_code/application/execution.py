@@ -505,9 +505,12 @@ class _AttemptLedger:
     def __init__(
         self,
         model_refs: tuple[str, ...],
-        attempts: tuple[RoutedMessagesRequest, ...],
+        resolved: tuple[ResolvedModel, ...],
         observer: AttemptResultObserver | None,
     ) -> None:
+        # ``resolved`` rather than the routed attempts: since 6.62.0 a rung is
+        # only routed when it is reached, and the ledger must be able to write
+        # a "never reached" row for a rung nothing ever routed.
         self._observer = observer
         self._records: dict[int, RouteAttemptRecord] = {}
         self._started: dict[int, float] = {}
@@ -516,9 +519,7 @@ class _AttemptLedger:
             self._records[index] = RouteAttemptRecord(
                 attempt=index,
                 provider_id=(
-                    attempts[index].resolved.provider_id
-                    if index < len(attempts)
-                    else ""
+                    resolved[index].provider_id if index < len(resolved) else ""
                 ),
                 model_ref=ref,
                 outcome="skipped",
@@ -824,7 +825,9 @@ class ProviderExecutor:
         )
         if not order:
             failure = _all_paused_failure(plan.paused_env_var)
-            ledger = _AttemptLedger(plan.model_refs(), attempts, on_attempt_result)
+            ledger = _AttemptLedger(
+                plan.model_refs(), plan.resolved_models(), on_attempt_result
+            )
             ledger.mark_paused((), plan.paused_refs)
             ledger.publish()
             raise failure
@@ -841,7 +844,9 @@ class ProviderExecutor:
         # Every model on the route starts as "never reached". Each one that is
         # tried, benched or timed out overwrites its own entry, so what is left
         # at the end is the whole chain's story rather than only the winner's.
-        ledger = _AttemptLedger(plan.model_refs(), attempts, on_attempt_result)
+        ledger = _AttemptLedger(
+            plan.model_refs(), plan.resolved_models(), on_attempt_result
+        )
         ledger.mark_benched(order, self._health.why)
         # Second, so a model that is both benched and paused reads as paused.
         ledger.mark_paused(order, plan.paused_refs)
@@ -1820,7 +1825,7 @@ class ProviderExecutor:
 
     def _prepare_from(
         self,
-        attempts: tuple[RoutedMessagesRequest, ...],
+        attempts: Sequence[RoutedMessagesRequest],
         order: tuple[int, ...],
         start: int,
         failures: list[BaseException],
@@ -1941,7 +1946,7 @@ class ProviderExecutor:
 
     @staticmethod
     def _candidate_order(
-        attempts: tuple[RoutedMessagesRequest, ...],
+        attempts: Sequence[RoutedMessagesRequest],
         order: tuple[int, ...],
         start: int,
         prefer_provider: str | None,

@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
-from my_claude_code.config.settings import Settings
+from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.anthropic import MessagesRequest
 from my_claude_code.core.anthropic.server_tool_sse import (
     SERVER_TOOL_USE,
@@ -204,7 +204,11 @@ async def stream_web_server_tool_response(
     try:
         if tool_name == "web_search":
             query = str(tool_input["query"])
-            settings = Settings()
+            # The process-wide one, like every other call site. Building a
+            # fresh ``Settings`` here read and validated the whole environment
+            # on the event loop for every web search -- 46.5 ms on a
+            # 384-key configuration, paid while other requests waited.
+            settings = get_settings()
             search_options = web_search_tool_options(request)
             if search_options.max_uses is not None and search_options.max_uses < 1:
                 raise _MaxUsesExceeded(

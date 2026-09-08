@@ -1651,11 +1651,14 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "provider_retries",
         "number",
         settings_attr="provider_rate_limit",
-        default="1",
+        default="0",
         description=(
             "Requests one provider may start inside the window below. This is a "
-            "client-side pace, not the provider's own limit; it exists to stop a "
-            "burst turning into a wall of 429s."
+            "client-side pace, not the provider's own limit. 0, the default, "
+            "paces nothing: a provider that is really over quota answers 429 "
+            "with a Retry-After, which is obeyed either way. Set a positive "
+            "number only to hold a metered key back on purpose -- it is counted "
+            "per provider, and every routing attempt spends one."
         ),
     ),
     ConfigFieldSpec(

@@ -511,9 +511,9 @@ def _answering_model(plan: Any, body: dict[str, Any]) -> str | None:
     answered = body.get("model")
     if not isinstance(answered, str) or not answered:
         return None
-    for attempt in plan.attempts:
-        if attempt.resolved.provider_model == answered:
-            return str(attempt.resolved.provider_model_ref)
+    for resolved in plan.resolved_models():
+        if resolved.provider_model == answered:
+            return str(resolved.provider_model_ref)
     return None
 
 

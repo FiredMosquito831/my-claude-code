@@ -74,14 +74,85 @@ class ModelsDevCache:
     validated_at: datetime | None = None
 
 
-def read_models_dev_cache(path: Path | None = None) -> ModelsDevCache | None:
-    """Return the cached models.dev index, or None when absent/corrupt."""
-    cache_path = path if path is not None else models_dev_cache_path()
+#: How many distinct cache paths keep a parsed payload. One in production --
+#: the config directory's -- and a handful in a test session; the bound exists
+#: so a long-lived process that is pointed at many paths cannot accumulate a
+#: 4.9 MB dictionary for each of them.
+_PAYLOAD_CACHE_MAX_PATHS = 4
+
+_payload_lock = threading.Lock()
+#: path -> ((mtime_ns, size), parsed payload). Insertion-ordered, so the
+#: oldest entry is the one evicted.
+_payload_cache: dict[Path, tuple[tuple[int, int], dict[str, Any]]] = {}
+
+
+def _cache_generation(cache_path: Path) -> tuple[int, int] | None:
+    try:
+        stat = cache_path.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _read_models_dev_payload(cache_path: Path) -> dict[str, Any] | None:
+    """The parsed cache file, parsed once per on-disk generation.
+
+    The file is 4.9 MB and ``json.loads`` of it measured 147 ms. Ten index
+    shapes are built from it -- reasoning, vision, tool calls, context length,
+    five prices, the cross-provider table -- and until 6.62.0 each one read and
+    parsed the whole file for itself, on the event loop, in the first requests
+    after every restart: measured loop gaps of 336 ms on the TTFT path and
+    1,108 ms during finalisation. Each shape still memoizes its own built
+    index; what they now share is the parse.
+
+    The returned mapping is handed out by reference and must be treated as
+    read-only. Every builder walks it and copies out what it needs, which is
+    what makes one shared parse safe.
+    """
+
+    generation = _cache_generation(cache_path)
+    if generation is None:
+        return None
+    with _payload_lock:
+        cached = _payload_cache.get(cache_path)
+        if cached is not None and cached[0] == generation:
+            return cached[1]
     try:
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
     except OSError, ValueError:
         return None
     if not isinstance(payload, dict):
+        return None
+    # Re-stated after the read, not before: a refresh that lands mid-read would
+    # otherwise be filed under the generation it replaced and served stale
+    # until the next write.
+    generation_after = _cache_generation(cache_path)
+    if generation_after is None:
+        return payload
+    with _payload_lock:
+        _payload_cache[cache_path] = (generation_after, payload)
+        while len(_payload_cache) > _PAYLOAD_CACHE_MAX_PATHS:
+            _payload_cache.pop(next(iter(_payload_cache)))
+    return payload
+
+
+def reset_models_dev_payload_cache() -> None:
+    """Forget every parsed payload. Tests only."""
+
+    with _payload_lock:
+        _payload_cache.clear()
+
+
+def read_models_dev_cache(path: Path | None = None) -> ModelsDevCache | None:
+    """Return the cached models.dev index, or None when absent/corrupt.
+
+    The payload is shared (see :func:`_read_models_dev_payload`); the small
+    record around it is rebuilt on every call, because ``fresh`` is a statement
+    about the clock rather than about the bytes.
+    """
+    cache_path = path if path is not None else models_dev_cache_path()
+    payload = _read_models_dev_payload(cache_path)
+    if payload is None:
         return None
     index = payload.get("index")
     fetched_raw = payload.get("fetched_at")
@@ -648,11 +719,11 @@ def _lookup_in_bucket_tiered[T](
     so "x" and "x:free" coexisting keep their own distinct entries.
     """
     stripped = strip_model_id_tag(model_id)
-    rungs: tuple[tuple[ResolutionTier, set[str]], ...] = (
+    rungs: tuple[tuple[ResolutionTier, frozenset[str]], ...] = (
         (ResolutionTier.MODELS_DEV_BUCKET_EXACT, normalize_candidates(model_id)),
         (
             ResolutionTier.MODELS_DEV_BUCKET_TAG_STRIPPED,
-            normalize_candidates(stripped) if stripped is not None else set(),
+            normalize_candidates(stripped) if stripped is not None else frozenset(),
         ),
     )
     for tier, candidates in rungs:
@@ -1794,6 +1865,31 @@ _field_index_cache: dict[tuple[Path, str], tuple[float, dict[str, dict[str, Any]
 _field_cross_index_cache: dict[
     tuple[Path, str], tuple[float, dict[str, tuple[Any, ...]]]
 ] = {}
+
+
+def prewarm_models_dev_indexes(path: Path | None = None) -> bool:
+    """Build every index shape from the on-disk cache, once, off the loop.
+
+    Called from a worker thread during startup. Each shape is memoized per
+    on-disk generation already, so this is not a new mechanism -- it is the
+    same lazy build, moved off the event loop and in front of the first
+    request instead of inside it. A request that arrives first still builds
+    what it needs itself and is correct either way; it simply no longer holds
+    the loop for a second doing it while every other request waits.
+
+    Returns whether there was a cache to build from.
+    """
+
+    if _cache_generation(path if path is not None else models_dev_cache_path()) is None:
+        return False
+    _cached_raw_index(path)
+    _cached_reasoning_index(path)
+    _cached_cross_provider_index(path)
+    _cached_output_limit_index(path)
+    for field in (CONTEXT_LENGTH_FIELD, VISION_FIELD, TOOL_CALL_FIELD, *PRICE_FIELDS):
+        _cached_field_index(field, path)
+        _cached_field_cross_index(field, path)
+    return True
 
 
 def _cached_field_index[T](

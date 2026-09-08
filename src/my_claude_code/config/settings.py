@@ -65,6 +65,8 @@ from .constants import (
     MODEL_PROBE_NEW_MODELS_DEFAULT,
     MODEL_VISIBILITY_ALLOW_DEFAULT,
     MODEL_VISIBILITY_DENY_DEFAULT,
+    PROVIDER_RATE_LIMIT_DEFAULT,
+    PROVIDER_RATE_WINDOW_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
@@ -1023,9 +1025,11 @@ class Settings(BaseSettings):
     featherless_proxy: str = Field(default="", validation_alias="FEATHERLESS_PROXY")
 
     # ==================== Provider Rate Limiting ====================
-    provider_rate_limit: int = Field(default=40, validation_alias="PROVIDER_RATE_LIMIT")
+    provider_rate_limit: int = Field(
+        default=PROVIDER_RATE_LIMIT_DEFAULT, validation_alias="PROVIDER_RATE_LIMIT"
+    )
     provider_rate_window: int = Field(
-        default=60, validation_alias="PROVIDER_RATE_WINDOW"
+        default=PROVIDER_RATE_WINDOW_DEFAULT, validation_alias="PROVIDER_RATE_WINDOW"
     )
     provider_max_concurrency: int = Field(
         default=5, validation_alias="PROVIDER_MAX_CONCURRENCY"

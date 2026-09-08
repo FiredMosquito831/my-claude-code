@@ -24,6 +24,7 @@ from my_claude_code.core.stop_deadline import (
 )
 
 from .application import ApplicationRuntime, startup_failure_message
+from .warmup import start_request_path_warmup
 
 # What a request that arrives during the drain is told. A plain 503 rather than
 # a new wire frame: the harness already knows how to retry one, and inventing a
@@ -278,6 +279,11 @@ class RuntimeASGIApp:
         """
 
         state = startup_state()
+        # First, and off the loop: the OpenAI SDK import and the models.dev
+        # index build are the two things the first request used to pay for
+        # while holding the event loop. Started before the wait rather than
+        # after readiness so it overlaps the whole of startup.
+        start_request_path_warmup()
         await self._wait_until_serving()
         try:
             await self.runtime.start()

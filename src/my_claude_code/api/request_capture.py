@@ -644,11 +644,15 @@ class RequestCapture:
             # ``/v1/messages`` -- whose reader drains the stream -- read as a
             # success. The terminal event is the fact that tells them apart.
             status = self._status_after_consumer_stopped()
-            self._finalize(status)
+            await self._finalize_off_loop(status)
             await try_close_async_iterator(body)
             raise
         except asyncio.CancelledError:
             status = self._status_after_consumer_stopped()
+            # Deliberately the synchronous form. This task is already being
+            # cancelled, so a fresh await here is not reliably resumed, and
+            # losing the row is worse than holding the loop for a request
+            # nobody is waiting on any more.
             self._finalize(status)
             raise
         except BaseException as exc:
@@ -661,7 +665,7 @@ class RequestCapture:
             raise
         finally:
             if status != "cancelled":
-                self._finalize(status)
+                await self._finalize_off_loop(status)
 
     def _status_after_consumer_stopped(
         self,
@@ -982,9 +986,51 @@ class RequestCapture:
         )
 
     def _finalize(self, status: Literal["success", "error", "cancelled"]) -> None:
+        """Complete the record and hand it to the store, on this thread.
+
+        The synchronous form, kept for the short-circuit paths that never had
+        a stream: an error raised before the wrapper took over, and a
+        non-streamed answer built from one complete message. The streaming
+        path uses :meth:`_finalize_off_loop` instead.
+        """
+        record = self._begin_finalize(status)
+        if record is None:
+            return
+        self._compute_finalize_fields(record)
+        self._commit_finalize(record)
+
+    async def _finalize_off_loop(
+        self, status: Literal["success", "error", "cancelled"]
+    ) -> None:
+        """Complete the record with the arithmetic moved to a worker thread.
+
+        Everything between the client's last token and the store's queue is
+        real CPU: a PIL decode and thumbnail per picture, a full tiktoken pass
+        over the prompt, and the pricing ladder -- which may itself build a
+        models.dev index. None of it can change what this request answered,
+        because the answer has already been streamed. All of it used to run on
+        the event loop, so one request's bookkeeping delayed every other
+        request in flight: the heartbeat caught gaps of 371 ms and 1,108 ms
+        inside this method alone. Off the loop, the numbers land in the log a
+        few milliseconds later and nothing else waits for them.
+
+        Awaited inside the request's own task on purpose, so the graceful
+        shutdown budget still bounds it -- a fire-and-forget thread would
+        outlive the loop it was started from.
+        """
+        record = self._begin_finalize(status)
+        if record is None:
+            return
+        await asyncio.to_thread(self._compute_finalize_fields, record)
+        self._commit_finalize(record)
+
+    def _begin_finalize(
+        self, status: Literal["success", "error", "cancelled"]
+    ) -> RequestRecord | None:
+        """Fill in what is already known; None when there is nothing to do."""
         if self._finalized or self._store is None:
             self._finalized = True
-            return
+            return None
         self._finalized = True
         record = self._record
         self._merge_provider_reasoning_adaptations()
@@ -1019,22 +1065,42 @@ class RequestCapture:
         if self._error is not None:
             record.error_kind, record.error_message = self._error
         record.input_image_count = len(self._images) or None
-        if self._images:
-            record.images = capture_images(
-                self._images,
-                max_pixels=self._capture_images_pixels,
-                store_pixels=self._capture_images_pixels > 0,
-                sent_sizes=self._image_sent_sizes,
-            )
         if self._image_bytes is not None:
             record.image_bytes_in, record.image_bytes_out = self._image_bytes
         self._apply_adapter_tokens(record)
+        return record
+
+    def _compute_finalize_fields(self, record: RequestRecord) -> None:
+        """The expensive half: thumbnails, the token estimate, the price.
+
+        Kept together in one method because it is one hop off the loop, and
+        because all three share the rule that has always governed them -- an
+        answered request is never reported as failed because arithmetic about
+        it was. ``capture_images`` is the only one that did not already say so
+        in code, and it is guarded here for the same reason.
+        """
+        if self._images:
+            try:
+                record.images = capture_images(
+                    self._images,
+                    max_pixels=self._capture_images_pixels,
+                    store_pixels=self._capture_images_pixels > 0,
+                    sent_sizes=self._image_sent_sizes,
+                )
+            except Exception as exc:
+                logger.debug("Request image capture skipped: {}", exc)
         self._apply_estimate(record)
         self._apply_cost(record)
+
+    def _commit_finalize(self, record: RequestRecord) -> None:
+        """Attach what only the loop knows, and hand the row to the store."""
+        store = self._store
+        if store is None:
+            return
         record.key_index = self._credential.index
         record.key_label = self._credential.label
         record.attempts = tuple(self._attempts)
-        self._store.enqueue(record)
+        store.enqueue(record)
 
 
 def build_capture(

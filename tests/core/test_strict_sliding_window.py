@@ -46,8 +46,14 @@ async def test_rejected_conditional_acquisition_does_not_consume_capacity():
 async def test_conditional_acquisition_records_predicate_commit_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The window starts where the request committed, not where it queued.
+
+    White-box on ``_times`` because that deque *is* the window: the slot is
+    reserved by the pump before the condition runs, and the reservation has to
+    be moved to the instant the condition said yes or the window would start
+    one loop resumption early.
+    """
     now = 0.0
-    sleep_delays: list[float] = []
     lim = StrictSlidingWindowLimiter(rate_limit=1, rate_window=10)
 
     def advance_during_condition() -> bool:
@@ -55,22 +61,27 @@ async def test_conditional_acquisition_records_predicate_commit_time(
         now = 100.0
         return True
 
-    async def advance_during_sleep(delay: float) -> None:
-        nonlocal now
-        sleep_delays.append(delay)
-        now += delay
-
     monkeypatch.setattr(rate_limit_module.time, "monotonic", lambda: now)
-    monkeypatch.setattr(rate_limit_module.asyncio, "sleep", advance_during_sleep)
 
     assert await lim.acquire_if(advance_during_condition) is True
-    await lim.acquire()
 
-    assert sleep_delays == [10.0]
+    assert list(lim._times) == [100.0]
 
 
 def test_strict_window_rejects_invalid_config():
     with pytest.raises(ValueError):
-        StrictSlidingWindowLimiter(rate_limit=0, rate_window=1.0)
+        StrictSlidingWindowLimiter(rate_limit=-1, rate_window=1.0)
     with pytest.raises(ValueError):
         StrictSlidingWindowLimiter(rate_limit=1, rate_window=0.0)
+
+
+@pytest.mark.asyncio
+async def test_a_zero_limit_admits_immediately_and_records_nothing():
+    """0 is the shipped default: no proactive pacing at all."""
+    lim = StrictSlidingWindowLimiter(rate_limit=0, rate_window=60)
+
+    assert lim.unlimited is True
+    for _ in range(500):
+        await asyncio.wait_for(lim.acquire(), timeout=0.5)
+    assert list(lim._times) == []
+    assert await lim.acquire_if(lambda: False) is False

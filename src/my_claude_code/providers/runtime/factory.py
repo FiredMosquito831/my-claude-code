@@ -4,6 +4,10 @@ import dataclasses
 from collections.abc import Callable
 
 from my_claude_code.application.errors import UnknownProviderError
+from my_claude_code.config.constants import (
+    PROVIDER_RATE_LIMIT_DEFAULT,
+    PROVIDER_RATE_WINDOW_DEFAULT,
+)
 from my_claude_code.config.credentials import mask_key_label
 from my_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
@@ -260,9 +264,21 @@ def _create_single_provider(
     settings: Settings,
 ) -> BaseProvider:
     """Create one provider instance bound to a single credential."""
+    # ``is None`` rather than ``or``: 0 is a meaningful value for the limit
+    # -- it is the shipped default and it means "pace nothing" -- and ``or``
+    # read it as unset and substituted 40, which is how the proactive window
+    # stayed on for a release that had turned it off.
     rate_limiter = ProviderRateLimiter(
-        rate_limit=config.rate_limit or 40,
-        rate_window=config.rate_window or 60.0,
+        rate_limit=(
+            PROVIDER_RATE_LIMIT_DEFAULT
+            if config.rate_limit is None
+            else config.rate_limit
+        ),
+        rate_window=(
+            PROVIDER_RATE_WINDOW_DEFAULT
+            if not config.rate_window
+            else config.rate_window
+        ),
         max_concurrency=config.max_concurrency,
         max_retries=max(0, config.retry_attempts - 1),
         backoff_base_seconds=config.retry_backoff_base_seconds,

@@ -3406,7 +3406,7 @@ The rule behind the table is "judge a key only on signals about the key". The sa
 
 - **`LOCKED_OUT`, one key, others healthy** — that key is wrong, expired or revoked. Remove it from the pool; the ladder is not going to heal a dead key, and by the third rejection it is out for a day.
 - **`LOCKED_OUT`, every key** — it is not the keys. Check that the provider is the one the key belongs to, and that your account still has API access.
-- **`COOLDOWN` constantly, on every key** — you are over the provider's rate limit, not short of keys. Lower `PROVIDER_RATE_LIMIT` / `PROVIDER_MAX_CONCURRENCY` on **Limits & Resilience → Retries & throughput** rather than adding a fourth key that will cool down alongside the other three.
+- **`COOLDOWN` constantly, on every key** — you are over the provider's rate limit, not short of keys. Set `PROVIDER_RATE_LIMIT` (off since 6.62.0) and lower `PROVIDER_MAX_CONCURRENCY` on **Limits & Resilience → Retries & throughput** rather than adding a fourth key that will cool down alongside the other three.
 - **All keys `HEALTHY`, requests still failing** — nothing is wrong with your credentials. Read the chain panel's error kind: this is a model, deadline or benching question, and it lives on [Limits and resilience](#12-limits-and-resilience).
 
 > **The deliberate gap.** A key that fails with a 5xx or a transport fault on *every single request* is never benched — rotation tries it once per request and the chain absorbs the cost. That is the trade MCC made knowingly: the failure classes that could identify such a key were the same ones emptying healthy pools by the thousand. A 401 or 403 still locks it out, which is how a genuinely dead key gets caught.
@@ -3511,6 +3511,10 @@ Benching never empties a chain: if every model on a route is benched they are tr
 ### Retries & throughput
 
 How hard one model is tried before the chain is used at all: the retries on a 5xx or a dropped connection (a 429 is routed around instead — see **Credential health**), the attempts a provider makes on its own before routing ever sees the failure, the recovery attempts after output has started and the connection dropped, and the exponential backoff between them — first wait, ceiling, and the random jitter that stops several clients retrying in lockstep. The same card carries the client-side pace: requests per window, the window, and how many streams one provider may have open at once.
+
+**The client-side pace ships off.** `PROVIDER_RATE_LIMIT` is `0` since 6.62.0, meaning MCC paces nothing of its own: requests go upstream as fast as your client sends them. It used to ship at 40 requests per 60 seconds, per provider, against limits no provider had published — and because every routing attempt spends one slot, a route that averaged three attempts began throttling after about thirteen client requests a minute. Measured on one machine, 24 concurrent requests took a median of 938 ms and a 95th percentile of **54 seconds**, all of it MCC waiting for its own window. A provider that really is over its quota answers `429` with a `Retry-After`, and **Credential health** obeys that either way.
+
+Set a positive number only to hold a metered key back on purpose. When you do, the queue is fair: since 6.62.0 waiters are admitted in the order they arrived, so a paced request waits its turn rather than losing a lottery. `PROVIDER_MAX_CONCURRENCY` (default 5) is unchanged and was never the problem — it is an ordinary semaphore and it was always fair.
 
 ### Credential health
 

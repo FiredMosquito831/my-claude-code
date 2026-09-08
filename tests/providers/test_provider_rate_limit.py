@@ -376,10 +376,17 @@ class TestProviderRateLimiter:
             )
 
     @pytest.mark.asyncio
-    async def test_init_rate_limit_zero_raises(self):
-        """rate_limit <= 0 raises ValueError."""
-        with pytest.raises(ValueError, match="rate_limit must be > 0"):
-            ProviderRateLimiter(rate_limit=0, rate_window=60)
+    async def test_init_rate_limit_zero_disables_the_proactive_window(self):
+        """0 is the shipped default and means "pace nothing", not "reject"."""
+        limiter = ProviderRateLimiter(rate_limit=0, rate_window=60)
+        for _ in range(50):
+            assert await limiter.wait_if_blocked() is False
+
+    @pytest.mark.asyncio
+    async def test_init_negative_rate_limit_raises(self):
+        """rate_limit < 0 is not a rate and not an "off"; it is a typo."""
+        with pytest.raises(ValueError, match="rate_limit must be >= 0"):
+            ProviderRateLimiter(rate_limit=-1, rate_window=60)
 
     @pytest.mark.asyncio
     async def test_init_rate_window_zero_raises(self):
