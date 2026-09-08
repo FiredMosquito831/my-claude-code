@@ -672,11 +672,22 @@ def stage_desktop_shell(
     running, not necessarily the one in ``~/.local/bin``. ``None`` means the
     default install (the tray's copy).
 
-    Nothing here overwrites ``target``. A verified replacement is written to
-    ``target.new`` with its receipt beside it, and the next start of the window
-    performs the rename -- the one moment nothing holds the file open. The one
-    exception is a ``target`` that does not exist at all: there is no running
-    process to protect, so it is installed outright and no restart is needed.
+    **A running window is never written over, and the operating system is what
+    decides whether one is running.** The verified executable is written beside
+    the target and then replaced onto it with ``os.replace``: Windows refuses
+    that for a file that is a *running image*, and POSIX makes it safe by
+    construction (a running process keeps the inode it started from). So a
+    target nothing is running is installed outright, a target something is
+    running stays exactly where it is, and the file is left as
+    ``target.new`` for the next start of the window to rename in -- the one
+    moment nothing holds it open.
+
+    That distinction is not a nicety. Staging unconditionally would make the
+    *transition* into this mechanism impossible: the binary a user upgrading
+    from before 6.60.0 is running has no swap step in it, so a ``.new`` left
+    beside it would sit there forever and the pin still would not reach the
+    machine. Nothing may replace a running window; everything else should just
+    be updated.
 
     Returns the document ``--ensure-shell`` prints:
     ``{updated, from_tag, to_tag, staged_path, restart_required}``.
@@ -703,20 +714,54 @@ def stage_desktop_shell(
         return result
 
     exists = binary.is_file()
-    destination = staged_binary_path(binary) if exists else binary
-    asset, digest = _place_verified_binary(
-        destination, timeout=timeout, install=not exists
-    )
-    _write_receipt_at(
-        staged_receipt_path(binary) if exists else receipt_path_for(binary),
-        asset,
-        digest,
-    )
+    if not exists:
+        asset, digest = _place_verified_binary(binary, timeout=timeout, install=True)
+        _write_receipt_at(receipt_path_for(binary), asset, digest)
+        result["updated"] = True
+        result["staged_path"] = str(binary)
+        return result
 
+    staged = staged_binary_path(binary)
+    asset, digest = _place_verified_binary(staged, timeout=timeout, install=False)
+    if _replace_if_not_running(staged, binary):
+        _write_receipt_at(receipt_path_for(binary), asset, digest)
+        result["updated"] = True
+        result["staged_path"] = str(binary)
+        return result
+
+    _write_receipt_at(staged_receipt_path(binary), asset, digest)
     result["updated"] = True
-    result["staged_path"] = str(destination)
-    result["restart_required"] = exists
+    result["staged_path"] = str(staged)
+    result["restart_required"] = True
     return result
+
+
+def _replace_if_not_running(staged: Path, binary: Path) -> bool:
+    """Move ``staged`` onto ``binary``, unless something is running ``binary``.
+
+    Deliberately one ``os.replace`` and no probing. There is no portable way to
+    ask "is anybody running this file", and every approximation of one -- a
+    process list, a lock file, a pid written somewhere -- is a second answer
+    that can disagree with the first. The operating system already knows:
+
+    * **Windows** refuses to replace a file that is mapped as a running image,
+      with a sharing violation. That refusal *is* the check, and it is the one
+      that cannot be wrong.
+    * **POSIX** allows it and it is safe: a running process holds the inode it
+      started from, so replacing the directory entry affects only later starts.
+
+    Note what is *not* done here: :func:`_install_atomically`'s rename-aside.
+    That exists so the tray can install over a window it is about to launch;
+    using it here would move a *running* window's executable out from under it,
+    which is exactly what decision Q5 forbids. A refusal is the right answer,
+    and the caller turns it into a staged update and a restart.
+    """
+
+    try:
+        os.replace(staged, binary)
+    except OSError:
+        return False
+    return True
 
 
 def ensure_desktop_shell(
