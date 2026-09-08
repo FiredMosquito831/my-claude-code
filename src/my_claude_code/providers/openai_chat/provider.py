@@ -80,6 +80,7 @@ from my_claude_code.providers.stream_recovery import (
     is_retryable_stream_error,
 )
 
+from .chunks import adopt_chat_stream
 from .profiles import OpenAIChatProfile
 from .request_policy import build_openai_chat_request_body
 from .tool_calls import (
@@ -458,11 +459,13 @@ class OpenAIChatProvider(BaseProvider):
                 # can. ``stream`` is passed as a keyword, so it is recorded
                 # alongside rather than read back out of the dict.
                 record_wire_request(create_body, stream=True)
-                stream = await self._rate_limiter.execute_with_retry(
-                    self._client.chat.completions.create,
-                    provider_failure_override=self._provider_failure_override,
-                    **create_body,
-                    stream=True,
+                stream = adopt_chat_stream(
+                    await self._rate_limiter.execute_with_retry(
+                        self._client.chat.completions.create,
+                        provider_failure_override=self._provider_failure_override,
+                        **create_body,
+                        stream=True,
+                    )
                 )
                 if stripped_reasoning is not None:
                     self._remember_reasoning_rejection(
