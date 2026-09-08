@@ -15,6 +15,7 @@ that is a change of its own.
 """
 
 import sys
+import types
 
 import pytest
 
@@ -83,6 +84,23 @@ def test_a_tray_the_operator_switched_off_stays_off(monkeypatch):
     assert not desktop_window.python_tray_is_running()
 
 
+def _fake_tray(monkeypatch, launched: list[str]):
+    """Stand a tray adapter in for pystray's, which CI does not have.
+
+    ``pystray`` is declared ``win32 or darwin`` in ``pyproject.toml``, so
+    importing ``cli.desktop_tray`` on the Linux runner raises. Patching the
+    attribute would import it; publishing a module in its place does not, and
+    it is the import itself -- whether ``_launch_host`` reaches for the Python
+    tray at all -- that these two tests are about.
+    """
+
+    module = types.ModuleType("my_claude_code.cli.desktop_tray")
+    monkeypatch.setattr(
+        module, "launch", lambda: launched.append("PystrayDesktopTray"), raising=False
+    )
+    monkeypatch.setitem(sys.modules, "my_claude_code.cli.desktop_tray", module)
+
+
 def test_the_host_runs_without_a_pystray_tray_when_the_shell_owns_it(monkeypatch):
     """The entry point, which is where the second icon would actually appear."""
 
@@ -90,13 +108,10 @@ def test_the_host_runs_without_a_pystray_tray_when_the_shell_owns_it(monkeypatch
 
     monkeypatch.setattr(desktop_window, "shell_owns_tray", lambda: True)
     launched: list[str] = []
+    _fake_tray(monkeypatch, launched)
     monkeypatch.setattr(
         "my_claude_code.cli.desktop.launch_desktop",
         lambda factory, **_kwargs: launched.append(factory.__name__),
-    )
-    monkeypatch.setattr(
-        "my_claude_code.cli.desktop_tray.launch",
-        lambda: launched.append("PystrayDesktopTray"),
     )
     desktop_entrypoint._launch_host()
     assert launched == ["WindowOnlyHost"]
@@ -107,9 +122,27 @@ def test_the_host_still_runs_the_pystray_tray_when_it_owns_the_icon(monkeypatch)
 
     monkeypatch.setattr(desktop_window, "shell_owns_tray", lambda: False)
     launched: list[str] = []
-    monkeypatch.setattr(
-        "my_claude_code.cli.desktop_tray.launch",
-        lambda: launched.append("PystrayDesktopTray"),
-    )
+    _fake_tray(monkeypatch, launched)
     desktop_entrypoint._launch_host()
     assert launched == ["PystrayDesktopTray"]
+
+
+def test_a_machine_with_no_python_tray_at_all_still_gets_a_host(monkeypatch):
+    """The Linux case, and the CI runner's: there is no pystray to import.
+
+    ``_launch_host`` must fall through to the window-only host rather than
+    raising -- a machine with a desktop app and no tray module is a supported
+    install, not a crash.
+    """
+
+    from my_claude_code.cli import desktop_entrypoint
+
+    monkeypatch.setattr(desktop_window, "shell_owns_tray", lambda: False)
+    launched: list[str] = []
+    monkeypatch.setitem(sys.modules, "my_claude_code.cli.desktop_tray", None)
+    monkeypatch.setattr(
+        "my_claude_code.cli.desktop.launch_desktop",
+        lambda factory, **_kwargs: launched.append(factory.__name__),
+    )
+    desktop_entrypoint._launch_host()
+    assert launched == ["WindowOnlyHost"]
