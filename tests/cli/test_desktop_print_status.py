@@ -27,6 +27,10 @@ from my_claude_code.cli.launchers.common import PreflightResult
 from my_claude_code.cli.port_diagnostics import PortOwner
 from my_claude_code.config import paths
 from my_claude_code.config.settings import Settings, get_settings
+from my_claude_code.core.startup_state import (
+    STARTING_MARKER_HEADER,
+    STARTING_MARKER_VALUE,
+)
 from my_claude_code.core.stop_deadline import (
     SHUTDOWN_MARKER_HEADER,
     SHUTDOWN_MARKER_VALUE,
@@ -47,6 +51,11 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     "admin_url": str,
     "health_url": str,
     "server_presence": str,
+    # The stage a `starting` server named, and ``null`` for every other
+    # presence. Added in 6.59.0 alongside the presence itself; adding a key
+    # does not bump `schema`, because a reader must tolerate one it does not
+    # know (C3).
+    "server_starting_stage": (str, type(None)),
     "port_conflict": (str, type(None)),
     "server_mode": str,
     "window": str,
@@ -124,6 +133,26 @@ def _preflight(presence: str) -> PreflightResult:
                 SHUTDOWN_MARKER_HEADER: SHUTDOWN_MARKER_VALUE,
             },
             error="returned HTTP 503",
+        )
+    if presence == "starting":
+        # Spelled as the exact head the startup gate sends, for the same reason
+        # ``draining`` is: the value only means anything if it is recognised
+        # from the wire rather than from what the caller already knew.
+        return PreflightResult(
+            status_code=503,
+            headers={
+                "content-type": "application/json",
+                "retry-after": "1",
+                STARTING_MARKER_HEADER: STARTING_MARKER_VALUE,
+            },
+            error="returned HTTP 503",
+            body=json.dumps(
+                {
+                    "status": "starting",
+                    "stage": "configured-models",
+                    "elapsed_ms": 4321,
+                }
+            ),
         )
     return PreflightResult(error="unreachable")
 
@@ -604,3 +633,87 @@ def test_close_to_tray_is_resolved_for_the_window_that_reads_it(
         desktop_config.DesktopState(tray_enabled=True, close_to_tray=False)
     )
     assert desktop_status()["close_to_tray"] is False
+
+
+def test_a_starting_server_is_reported_as_starting_with_its_stage(
+    config_dir, monkeypatch
+) -> None:
+    """Not free, not foreign, not draining.
+
+    Before the listener moved in front of the work, the whole of a start read
+    as ``free`` -- and ``free`` is exactly what a shell, a tray or a launcher
+    reads as licence to start a server. The second one lost the bind race and
+    died without a word.
+    """
+
+    _presence(monkeypatch, "starting")
+
+    payload = desktop_status(presence_v2=True)
+
+    assert payload["server_presence"] == "starting"
+    assert payload["server_starting_stage"] == "configured-models"
+    # A stranger on the port is a different page with a different instruction,
+    # and MCC's own starting server must never land on it.
+    assert payload["port_conflict"] is None
+
+
+def test_the_starting_presence_is_only_reported_to_a_caller_that_asked(
+    config_dir, monkeypatch
+) -> None:
+    """Same compatibility window ``draining`` has.
+
+    A shell built before this value existed refuses a presence it has no branch
+    for rather than guessing at the nearest neighbour, which is the right
+    instinct -- so an old window must keep seeing the values it was written
+    against.
+    """
+
+    _presence(monkeypatch, "starting")
+
+    assert desktop_status()["server_presence"] == "free"
+    assert desktop_status(presence_v2=True)["server_presence"] == "starting"
+
+
+def test_every_other_presence_reports_no_starting_stage(
+    config_dir, monkeypatch
+) -> None:
+    for presence in ("healthy", "draining", "free"):
+        _presence(monkeypatch, presence)
+        assert desktop_status(presence_v2=True)["server_starting_stage"] is None
+
+
+def test_mcc_holding_the_port_in_silence_is_not_reported_as_foreign(
+    config_dir, monkeypatch
+) -> None:
+    """The page the reporter actually saw, and why it was wrong.
+
+    Their shell said "Port 8082 is held by another program, which is not the
+    MCC server" while the only holder was MCC's own python.exe. Reproduced on a
+    scratch server: while a freshly ready server builds its first provider
+    generation it blocks its event loop for seconds at a time, the probe times
+    out, and "held port, no answer" used to read as a stranger.
+    """
+
+    _presence(monkeypatch, "unreachable")
+    monkeypatch.setattr(desktop_module, "port_is_held_by_mcc", lambda host, port: True)
+
+    payload = desktop_status(presence_v2=True)
+
+    assert payload["server_presence"] == "mcc-stale"
+    assert payload["port_conflict"] is None
+    # An old reader that did not ask for the new values keeps the old three.
+    assert desktop_status()["server_presence"] == "foreign"
+
+
+def test_a_genuine_stranger_on_the_port_is_still_foreign(
+    config_dir, monkeypatch
+) -> None:
+    """The one case the port-conflict page is for, and it still reaches it."""
+
+    _presence(monkeypatch, "unreachable")
+    monkeypatch.setattr(desktop_module, "port_is_held_by_mcc", lambda host, port: False)
+
+    payload = desktop_status(presence_v2=True)
+
+    assert payload["server_presence"] == "foreign"
+    assert payload["port_conflict"]

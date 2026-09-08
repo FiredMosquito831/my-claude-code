@@ -1387,6 +1387,36 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "SERVER_PORT_TAKEOVER",
+        "Port takeover on start",
+        "deadlines",
+        "select",
+        settings_attr="server_port_takeover",
+        default="always",
+        restart_required=True,
+        options=(
+            ConfigOptionSpec("always", "Stop whatever holds the port"),
+            ConfigOptionSpec("mcc-only", "Stop only My Claude Code's own processes"),
+            ConfigOptionSpec("never", "Stop nothing; refuse to start"),
+        ),
+        description=(
+            "What happens when this server starts and something is already "
+            "listening on its port. Always -- the default -- stops the holder "
+            "and takes the port, which is what makes a restart or an update "
+            "come back on its own: the commonest holder by far is My Claude "
+            "Code's own previous process, one that overran its drain or that "
+            "the desktop app started twice. A holder that is not My Claude "
+            "Code is named in one WARNING line in the server log before it is "
+            "stopped. Mcc-only stops only processes this install can identify "
+            "as its own and leaves anything else alone -- pick it if this "
+            "port might legitimately belong to another program. Never is the "
+            "behaviour of 6.58.4 and earlier: the server names the holder and "
+            "refuses to start, and you sort it out by hand. The holder is "
+            "identified by its process, never by what it answers on the port, "
+            "because a server that is still starting answers nothing at all."
+        ),
+    ),
+    ConfigFieldSpec(
         "CATALOGUE_FETCH_TIMEOUT_SECONDS",
         "Coding agent catalogue build budget",
         "deadlines",

@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
@@ -51,6 +52,10 @@ from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_
 from my_claude_code.config.settings import get_settings
 from my_claude_code.config.update_progress import active_update
 from my_claude_code.core.interprocess_lock import InterprocessFileLock
+from my_claude_code.core.startup_state import (
+    STARTING_MARKER_HEADER,
+    STARTING_MARKER_VALUE,
+)
 from my_claude_code.core.stop_deadline import (
     HARD_EXIT_GRACE_SECONDS,
     SHUTDOWN_MARKER_HEADER,
@@ -94,7 +99,7 @@ WINDOW_CLOSE_POLL_SECONDS = 1.0
 #: reach a child process nobody in the middle knows how to pass a flag to.
 SKIP_AUTOSTART_ENV = "MCC_DESKTOP_SKIP_AUTOSTART"
 
-#: Four distinguishable states of the configured host:port.
+#: Six distinguishable states of the configured host:port.
 #:
 #: ``draining`` is the newest and the narrowest: MCC's own server is answering
 #: on the port, but it has been asked to stop and its shutdown gate is refusing
@@ -107,7 +112,27 @@ SKIP_AUTOSTART_ENV = "MCC_DESKTOP_SKIP_AUTOSTART"
 #: A reader written before this value existed has no branch for it, and the
 #: desktop shell refuses a presence it does not know rather than guessing, so
 #: an old window against a new wheel must keep seeing the old three.
-type ServerPresence = Literal["healthy", "foreign", "free", "draining"]
+#:
+#: ``starting`` is MCC's own server, bound and answering, but still working
+#: through its startup. Added in 6.59.0 with the bind-first listener: before it, the whole
+#: of a twenty-second start read as ``free``, and "free" is what a shell, a
+#: tray or a launcher reads as licence to start a server -- so a start could
+#: not be told from an absence, and a second server was routinely spawned into
+#: the bind race the first one was about to win.
+#:
+#: ``mcc-stale`` is 6.59.0's other new value: MCC's own process holds the
+#: port and answers nothing at all. Measured on this machine -- while a
+#: freshly ready server builds its first provider generation it blocks its
+#: event loop for seconds at a time, so a probe times out -- and every
+#: release before 6.59.0 read "held port, no answer" as a *stranger* and told
+#: the user that something else was on the port. It was MCC's own python.exe
+#: every time. Deciding this by process rather than by the HTTP answer is the
+#: whole of the fix, and it leaves ``foreign`` meaning what it says.
+#:
+#: Both are behind ``presence_v2``, for the compatibility reason above.
+type ServerPresence = Literal[
+    "healthy", "foreign", "free", "draining", "starting", "mcc-stale"
+]
 
 #: Every value ``probe_server_presence`` can return, opt-in included. Any table
 #: that enumerates presences is checked against this.
@@ -116,6 +141,8 @@ SERVER_PRESENCES: tuple[ServerPresence, ...] = (
     "free",
     "foreign",
     "draining",
+    "starting",
+    "mcc-stale",
 )
 
 
@@ -164,7 +191,42 @@ def is_draining_response(result: PreflightResult) -> bool:
         return False
     if result.header(SHUTDOWN_MARKER_HEADER) == SHUTDOWN_MARKER_VALUE:
         return True
+    # The startup gate sends a ``retry-after`` too, and an explicit marker must
+    # always beat the heuristic that exists only for servers too old to send
+    # one. Without this line 6.59.0's own starting server reads as draining --
+    # which is a wait for something that is going away rather than coming up.
+    if result.header(STARTING_MARKER_HEADER) == STARTING_MARKER_VALUE:
+        return False
     return bool((result.header("retry-after") or "").strip())
+
+
+def is_starting_response(result: PreflightResult) -> bool:
+    """Whether this ``/health`` answer is MCC's own startup gate.
+
+    Strictly by the marker header, with no ``retry-after`` fallback of the kind
+    ``is_draining_response`` keeps for one release of overlap. There is nothing
+    to be compatible with: no release before 6.59.0 answered anything at all
+    while it was starting, so a 503 without this header is somebody else's.
+    """
+
+    if result.status_code != 503:
+        return False
+    return result.header(STARTING_MARKER_HEADER) == STARTING_MARKER_VALUE
+
+
+def starting_stage(result: PreflightResult) -> str | None:
+    """The stage named in a "starting" refusal, if it named one."""
+
+    if not result.body.strip():
+        return None
+    try:
+        payload = json.loads(result.body)
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    stage = payload.get("stage")
+    return stage if isinstance(stage, str) and stage.strip() else None
 
 
 def probe_server_presence(
@@ -185,15 +247,86 @@ def probe_server_presence(
     ladder cannot be handed a value it has no branch for.
     """
 
+    return probe_server_state(settings, presence_v2=presence_v2).presence
+
+
+@dataclass(frozen=True, slots=True)
+class ServerState:
+    """One probe's whole answer: the presence, and the stage when starting."""
+
+    presence: ServerPresence
+    #: The startup stage named by a ``starting`` refusal, else ``None``. It is
+    #: the server's own stage name (``configured-models``, ``catalogue``...),
+    #: passed through verbatim rather than translated here, so a reader shows
+    #: what the log shows.
+    stage: str | None = None
+
+
+def probe_server_state(settings: Any, *, presence_v2: bool = False) -> ServerState:
+    """One probe, reported in full. See :func:`probe_server_presence`."""
+
     result = preflight_result(local_proxy_root_url(settings))
     if result.ok:
-        return "healthy"
+        return ServerState("healthy")
+    # Drain before start, deliberately: a server asked to stop during a slow
+    # start answers with the shutdown marker, and a caller told "starting"
+    # about a server that is on its way out would wait for something that is
+    # never coming back.
     if presence_v2 and is_draining_response(result):
-        return "draining"
+        return ServerState("draining")
+    if is_starting_response(result):
+        # Not gated on ``presence_v2`` inside this function: the caller that
+        # asked for the old three values gets them from the mapping below, and
+        # every other caller -- the tray, the launchers -- wants the truth.
+        state = ServerState("starting", starting_stage(result))
+        return state if presence_v2 else ServerState("free", state.stage)
     host = (settings.host or "127.0.0.1").strip()
     if probe_port_available(host, settings.port):
-        return "free"
-    return "foreign"
+        return ServerState("free")
+    if presence_v2 and port_is_held_by_mcc(host, settings.port):
+        # Held, not answering, and demonstrably ours. Never ``foreign``: the
+        # port-conflict page tells the user to stop another program and change
+        # the port, and following that advice about MCC's own server is how a
+        # routine slow start became a dead end.
+        return ServerState("mcc-stale")
+    return ServerState("foreign")
+
+
+def port_is_held_by_mcc(host: str, port: int) -> bool:
+    """Whether the process holding ``host:port`` is one of MCC's own.
+
+    Imported lazily so the probe stays as cheap as its docstring promises: a
+    caller that finds a healthy server never pays for the process lookup, and
+    only the "held but silent" branch shells out at all. The listener itself is
+    found through this module's own ``diagnose_port_owner``, the same call the
+    port-conflict message uses, so one probe answers both questions.
+    """
+
+    from my_claude_code.cli.port_takeover import identity_for_owner
+
+    identity = identity_for_owner(diagnose_port_owner(host, port))
+    return identity is not None and identity.is_mcc
+
+
+def stale_server_message(settings: Any) -> str:
+    """What to say about MCC's own server that holds the port and is silent."""
+
+    return (
+        f"A My Claude Code server is holding port {settings.port} but is not "
+        f"answering. It is starting, busy, or wedged. Starting the server "
+        f"again takes the port back from it."
+    )
+
+
+def starting_message(settings: Any, stage: str | None = None) -> str:
+    """What to say about a server that has bound its port and is coming up."""
+
+    where = f" ({stage})" if stage else ""
+    return (
+        f"The My Claude Code server on port {settings.port} has started and is "
+        f"still loading{where}. It answers as soon as it is ready; starting a "
+        f"second one would only take the port away from it."
+    )
 
 
 def draining_message(settings: Any) -> str:
@@ -374,9 +507,16 @@ class DesktopController:
         if load_desktop_state().server_mode != "spawn":
             return
         settings = get_settings()
-        presence = probe_server_presence(settings, presence_v2=True)
+        state = probe_server_state(settings, presence_v2=True)
+        presence = state.presence
         if presence == "healthy":
             return
+        if presence == "starting":
+            # MCC's own server, bound and working through its startup. The
+            # whole point of the bind-first listener is that this is now
+            # visible: before 6.59.0 it read as a free port, and a free port is
+            # what this method reads as "start one".
+            raise DesktopError(starting_message(settings, state.stage))
         # An update helper is replacing the tool environment this very command
         # lives in. Spawning here starts a server out of an install that is
         # half-written, and the helper starts one itself the moment it is done
@@ -391,6 +531,11 @@ class DesktopController:
             # draining process still holds, and the old code called it a
             # stranger on the port.
             raise DesktopError(draining_message(settings))
+        if presence == "mcc-stale":
+            # Ours, holding the port, silent. The server's own takeover deals
+            # with it on the next start; what this must not do is call it a
+            # stranger.
+            raise DesktopError(stale_server_message(settings))
         if presence == "foreign":
             raise DesktopError(port_conflict_message(settings))
         self._spawn_server(settings)

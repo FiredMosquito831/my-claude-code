@@ -54,6 +54,20 @@ UPDATE_PROGRESS_STAGES: tuple[str, ...] = (
     "recovered",
 )
 
+#: The exact sentence each writer of this receipt uses for a stage, so the two
+#: writers cannot drift. ``application/release_updates.py`` generates the
+#: deferred helper; ``scripts/install.ps1`` and ``scripts/install.sh`` are the
+#: hand-run one-liner. Until 6.59.0 only the helper wrote a receipt at all, so
+#: a user who ran the installer themselves -- which the reporter does, and did
+#: at 01:10 on the day of the incident -- was invisible to every reader of this
+#: file: the desktop shell saw no helper, decided nothing was in flight, and
+#: was free to start an install of its own into the tool directory the
+#: one-liner was writing. A contract test pins these strings against all three
+#: scripts.
+INSTALLING_MESSAGE = "Installing the new version."
+INSTALL_DONE_MESSAGE = "The new version is installed."
+INSTALL_FAILED_MESSAGE = "The install failed."
+
 #: How far past its last receipt a helper is still believed to be working when
 #: its process id cannot be checked at all. ``uv`` can spend minutes inside one
 #: stage, and the helper is single-threaded PowerShell that cannot heartbeat

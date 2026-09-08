@@ -3,6 +3,7 @@
 import errno
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -23,6 +24,7 @@ from my_claude_code.cli.port_diagnostics import (
     probe_port_available,
     wait_for_port_free,
 )
+from my_claude_code.cli.port_takeover import take_port
 from my_claude_code.cli.process_registry import kill_all_best_effort
 from my_claude_code.config.env_migrations import (
     explicit_env_file_migration_warning,
@@ -41,6 +43,7 @@ from my_claude_code.config.proxy_auth import open_proxy_without_auth_error
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.process_handoff import external_upgrade_helper_pending
+from my_claude_code.core.startup_state import LISTENER_STAGE, startup_state
 from my_claude_code.core.stop_deadline import (
     HARD_EXIT_GRACE_SECONDS,
     STOP_TEARDOWN_MARGIN_SECONDS,
@@ -50,6 +53,11 @@ from my_claude_code.core.stop_deadline import (
 from my_claude_code.runtime.bootstrap import build_asgi_app
 
 _WINDOWS = os.name == "nt"
+
+#: Pending-connection queue for the listening socket. uvicorn's own
+#: default, kept so binding the socket here changes nothing but who
+#: owns it.
+SERVER_BACKLOG = 2048
 
 
 class ServerExitAction(Enum):
@@ -288,6 +296,10 @@ def serve() -> None:
             while True:
                 _migrate_legacy_env_if_missing()
                 _migrate_config_env_keys()
+                # Every generation restarts the clock, including the in-process
+                # RELOAD that builds a second application in this same process.
+                startup_state().begin()
+                startup_state().mark("settings")
                 settings = get_settings()
                 should_open_admin = (
                     settings.open_admin_browser and not opened_admin_browser
@@ -306,6 +318,43 @@ def serve() -> None:
             return
     finally:
         kill_all_best_effort()
+
+
+def _bind_listening_socket(settings: Settings) -> socket.socket:
+    """Bind and listen, exclusively, before uvicorn exists.
+
+    Deliberately NOT ``uvicorn.Config.bind_socket()``. That sets
+    ``SO_REUSEADDR``, and ``SO_REUSEADDR`` does not mean on Windows what it
+    means on POSIX: there it lets a *second* socket bind an address a live
+    listener already holds, and the two then share it with no error and no
+    defined winner. Measured on this machine -- a second ``mcc-server`` bound
+    straight over a healthy one and both processes reported themselves as
+    running. ``SO_EXCLUSIVEADDRUSE`` is the Windows spelling of the guarantee
+    POSIX gives by default: one owner, and a bind failure for anybody else.
+
+    Binding here rather than inside uvicorn also closes the window between the
+    port takeover above and the bind, and holds the port from the first
+    instant of ``server.run`` rather than from the event loop's first pass.
+    """
+
+    family = socket.AF_INET6 if ":" in settings.host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if _WINDOWS and exclusive is not None:
+            sock.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+        else:
+            # POSIX: this only permits rebinding a port left in TIME_WAIT,
+            # which is what makes a restart immediate rather than a minute
+            # away. It cannot displace a live listener.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((settings.host, int(settings.port)))
+        sock.listen(SERVER_BACKLOG)
+        sock.set_inheritable(True)
+    except BaseException:
+        sock.close()
+        raise
+    return sock
 
 
 def _schedule_open_admin_browser(settings: Settings) -> None:
@@ -342,6 +391,11 @@ def _run_supervised_server(
         raise SystemExit(1)
 
     requested = ServerExitAction.STOP
+    # Whether the background startup raised. uvicorn used to end the process
+    # for us when the lifespan startup failed; now that the listener binds
+    # first, ending it is this supervisor's job -- and it has to be ended,
+    # because the alternative is a socket that answers "starting" for ever.
+    startup_failed = False
     # When the stop clock started, for the "drain finished" line below. ``None``
     # means no stop has been requested yet.
     stop_started_at: float | None = None
@@ -406,10 +460,22 @@ def _run_supervised_server(
     def request_process_restart() -> None:
         request(ServerExitAction.REPLACE_PROCESS)
 
+    def report_startup_failure() -> None:
+        nonlocal startup_failed
+        startup_failed = True
+        request(ServerExitAction.STOP)
+
+    def listener_is_serving() -> bool:
+        server = server_holder.get("server")
+        return bool(server is not None and server.started)
+
+    startup_state().mark("application")
     asgi_app = build_asgi_app(
         settings,
         restart_callback=request_restart,
         process_restart_callback=request_process_restart,
+        startup_failed_callback=report_startup_failure,
+        serving_predicate=listener_is_serving,
     )
     config = uvicorn.Config(
         asgi_app,
@@ -429,14 +495,56 @@ def _run_supervised_server(
     # budget -- for it to free before declaring a genuine conflict. Never kills
     # the owner; at worst it is diagnosed and the start is abandoned.
     bind_wait = max(5.0, min(float(settings.server_graceful_shutdown_seconds), 60.0))
-    if not probe_port_available(
-        settings.host, settings.port
-    ) and not wait_for_port_free(settings.host, settings.port, timeout=bind_wait):
-        _log_bind_failure(settings, _address_in_use_error(settings))
-        raise SystemExit(1)
+    if not probe_port_available(settings.host, settings.port):
+        # The port is held. A short grace first, because a previous generation
+        # that is a beat from releasing the socket should not be killed for
+        # it -- but only a short one: the user's rule is that starting the
+        # server takes the port, and waiting out a full drain budget before
+        # even looking at the holder is how a restart came to take half a
+        # minute. Under SERVER_PORT_TAKEOVER=never the old, patient wait is
+        # still what happens, because there nothing else can.
+        grace = bind_wait if settings.server_port_takeover == "never" else 2.0
+        if wait_for_port_free(settings.host, settings.port, timeout=grace):
+            pass
+        else:
+            outcome = take_port(
+                settings.host,
+                settings.port,
+                settings.server_port_takeover,
+                wait_seconds=bind_wait,
+            )
+            if not outcome.free:
+                _log_bind_failure(settings, _address_in_use_error(settings))
+                raise SystemExit(1)
+            logger.info(
+                "Port {port} taken back: {what}.",
+                port=settings.port,
+                what=outcome.describe(),
+            )
+    # Bind here, in the supervisor, rather than leaving it to uvicorn.
+    #
+    # This is the load-bearing half of "bind the listener first". uvicorn
+    # creates its socket inside ``Server.startup()``, *after* the ASGI lifespan
+    # startup -- so even with the lifespan answered immediately, the socket
+    # appears only once the event loop next runs, and the background startup
+    # (which is not purely cooperative: provider construction and the
+    # configured-model probe block the loop for up to a second at a time) could
+    # be scheduled in front of it. Binding before uvicorn exists closes both
+    # that window and the one between the port takeover above and the bind:
+    # nothing can take the port back in between, because it was never let go.
+    try:
+        listening_socket = _bind_listening_socket(settings)
+    except OSError as exc:
+        _log_bind_failure(settings, exc)
+        raise SystemExit(1) from exc
+    logger.info(
+        "Listening on {url}; answering /health with 'starting' until ready.",
+        url=local_proxy_root_url(settings),
+    )
+    startup_state().mark(LISTENER_STAGE)
     try:
         try:
-            server.run()
+            server.run(sockets=[listening_socket])
         finally:
             # Control is back in the supervisor, so the ordered stop path won
             # and the watchdog has nothing left to guard. Anything after this
@@ -457,6 +565,12 @@ def _run_supervised_server(
                 err=exc,
             )
         raise
+    if startup_failed:
+        # Nothing to supervise: the application never came up. Exiting non-zero
+        # is what a caller -- the desktop shell, the tray, a terminal -- reads
+        # as "this did not work", and it is what the lifespan failure used to
+        # produce before the listener moved in front of it.
+        raise SystemExit(1)
     if stop_started_at is not None:
         # The other half of the pair. Together the two lines are the whole
         # timeline of a stop, which is what an after-the-fact question about a

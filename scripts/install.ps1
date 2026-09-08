@@ -724,6 +724,44 @@ function Get-UvToolDir {
     return Join-Path $toolDir "my-claude-code"
 }
 
+function Invoke-PrecompileBytecode {
+    <#
+        .SYNOPSIS
+        Write __pycache__ for the freshly installed tool environment.
+
+        .DESCRIPTION
+        Measured on this machine: the FIRST server start after an update costs
+        about 3.5 seconds more than every later one, because CPython compiles
+        every module it imports and writes the .pyc files as it goes. With
+        releases arriving hourly, "the first start after an update" is most
+        starts the user ever sees -- and it is the part of a start that happens
+        before the port is bound, so it is the part they wait through with
+        nothing on screen.
+
+        `compileall -q` in the tool environment pays it once, here, where the
+        user is already watching an installer. Best effort by design: a failure
+        costs the 3.5 seconds back and nothing else, so it must never fail an
+        install that otherwise worked.
+    #>
+    param([Parameter(Mandatory = $true)] [string] $UvPath)
+
+    try {
+        $toolDir = Get-UvToolDir -UvPath $UvPath
+        if ([string]::IsNullOrWhiteSpace($toolDir)) {
+            return
+        }
+        $sitePackages = Join-Path $toolDir "Lib\site-packages\my_claude_code"
+        $python = Join-Path $toolDir "Scripts\python.exe"
+        if (-not (Test-Path -LiteralPath $sitePackages)) { return }
+        if (-not (Test-Path -LiteralPath $python)) { return }
+        Write-Host "Precompiling My Claude Code (saves a few seconds on the next start)..."
+        & $python -m compileall -q $sitePackages *> $null
+    }
+    catch {
+        # An optimisation, never a requirement.
+    }
+}
+
 function Invoke-RenameThenReinstall {
     param(
         [Parameter(Mandatory = $true)] [string] $UvPath,
@@ -1159,6 +1197,67 @@ function Get-MccConfigDir {
     return $modern
 }
 
+function Write-InstallProgress {
+    <#
+        .SYNOPSIS
+        Append one liveness record to the update receipt this machine shares.
+
+        .DESCRIPTION
+        The same file, the same fields and the same sentences the deferred
+        update helper writes (src/my_claude_code/application/release_updates.py
+        and src/my_claude_code/config/update_progress.py). Until 6.59.0 only
+        the helper wrote it, so a hand-run `irm install.ps1 | iex` was invisible
+        to every reader: the desktop shell saw no installer in flight and was
+        free to start one of its own into the tool directory this script is
+        writing -- two installers, one target, which is exactly the collision
+        the helper-alive gate was added to prevent.
+
+        Never throws. A receipt nobody can write must not be the reason an
+        install fails.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Stage,
+        [Parameter(Mandatory = $true)][string] $Message
+    )
+
+    if ($DryRun) {
+        # A dry run changes nothing, so it must not claim an installer is
+        # running: a reader that believed it would refuse to install for the
+        # next fifteen minutes.
+        return
+    }
+    try {
+        if (-not $script:InstallProgressPath) {
+            $updatesDir = Join-Path (Get-MccConfigDir) "updates"
+            if (-not (Test-Path -LiteralPath $updatesDir)) {
+                New-Item -ItemType Directory -Path $updatesDir -Force | Out-Null
+            }
+            $script:InstallProgressPath = Join-Path $updatesDir "progress.json"
+            $script:InstallProgressEncoding = New-Object System.Text.UTF8Encoding($false)
+            $script:InstallProgressStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+            # A fresh episode starts a fresh file, exactly as the helper does: a
+            # stale 'done' left by the previous update would otherwise be the
+            # first thing a reader sees and believes.
+            [System.IO.File]::WriteAllText($script:InstallProgressPath, '', $script:InstallProgressEncoding)
+        }
+        $record = [ordered]@{
+            stage       = $Stage
+            message     = $Message
+            at          = (Get-Date).ToUniversalTime().ToString('o')
+            parent      = 0
+            helper_pid  = $PID
+            started_at  = $script:InstallProgressStarted
+            helper_done = ($Stage -in @('done', 'failed', 'recovered'))
+            version     = $script:InstallProgressVersion
+            source      = 'install.ps1'
+        }
+        $line = ($record | ConvertTo-Json -Compress) + [Environment]::NewLine
+        [System.IO.File]::AppendAllText($script:InstallProgressPath, $line, $script:InstallProgressEncoding)
+    }
+    catch {
+    }
+}
+
 function New-DesktopShortcut {
     if (-not $script:EnableDesktop) {
         return
@@ -1575,7 +1674,20 @@ Write-Step "Installing Python $PythonVersion through uv"
 Install-ManagedPython
 
 Write-Step "Installing or updating My Claude Code"
-$InstalledVersion = Install-FreeClaudeCode
+# From here until the last line of this script, anything that reads the update
+# receipt sees an installer in flight and stays out of the way. `finally` is
+# load-bearing: a throw between here and the end would otherwise leave
+# `installing` on disk with no terminal record, and the pid check would keep it
+# believed for as long as this pid stays alive.
+Write-InstallProgress -Stage 'installing' -Message 'Installing the new version.'
+try {
+    $InstalledVersion = Install-FreeClaudeCode
+}
+catch {
+    Write-InstallProgress -Stage 'failed' -Message 'The install failed.'
+    throw
+}
+$script:InstallProgressVersion = $InstalledVersion
 
 if ($script:RenamedWhileRunning) {
     # Installed while launchers were open: the old tool env and the old shims
@@ -1585,6 +1697,7 @@ if ($script:RenamedWhileRunning) {
     Write-Step "Configuring PATH and verifying My Claude Code"
     Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
 
+    Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling")
     Enable-RtkForAgents
     New-DesktopShortcut
 
@@ -1626,6 +1739,7 @@ else {
     Write-Step "Configuring PATH and verifying My Claude Code"
     Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
 
+    Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling")
     Enable-RtkForAgents
     New-DesktopShortcut
 
@@ -1633,3 +1747,8 @@ else {
     Write-Host "My Claude Code $InstalledVersion is installed and verified."
     Write-MccCommandReference
 }
+
+# The terminal record. Every branch above ends here, so whichever way the
+# install went, the receipt stops saying "installing" and the helper-alive gate
+# reopens for everyone else.
+Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'

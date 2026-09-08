@@ -355,6 +355,7 @@ def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
         _settings: Settings,
         restart_callback: Callable[[], None],
         process_restart_callback: Callable[[], None],
+        **_kwargs: object,
     ):
         assert callable(process_restart_callback)
         restart_callbacks.append(restart_callback)
@@ -368,19 +369,20 @@ def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
             self.should_exit = False
             servers.append(self)
 
-        def run(self):
+        def run(self, sockets=None):
             if len(servers) == 1:
                 restart_callbacks[-1]()
                 assert self.should_exit is True
                 self.config.app.runtime.is_closed = True
 
     def fake_config(app, **kwargs):
-        return SimpleNamespace(app=app, kwargs=kwargs)
+        return SimpleNamespace(app=app, kwargs=kwargs, bind_socket=lambda: None)
 
     with (
         patch.object(commands, "get_settings", get_settings),
         patch.object(commands.uvicorn, "Config", side_effect=fake_config),
         patch.object(commands.uvicorn, "Server", side_effect=FakeServer),
+        patch.object(commands, "_bind_listening_socket", return_value=None),
         patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
         patch.object(commands, "_schedule_open_admin_browser") as schedule_open_admin,
         patch.object(commands, "kill_all_best_effort") as kill_all,
@@ -407,6 +409,7 @@ def test_serve_supervisor_replaces_process_after_update() -> None:
         _settings: Settings,
         restart_callback: Callable[[], None],
         process_restart_callback: Callable[[], None],
+        **_kwargs: object,
     ):
         assert callable(restart_callback)
         process_callbacks.append(process_restart_callback)
@@ -417,18 +420,19 @@ def test_serve_supervisor_replaces_process_after_update() -> None:
             self.config = config
             self.should_exit = False
 
-        def run(self):
+        def run(self, sockets=None):
             process_callbacks[-1]()
             assert self.should_exit is True
             self.config.app.runtime.is_closed = True
 
     def fake_config(app, **kwargs):
-        return SimpleNamespace(app=app, kwargs=kwargs)
+        return SimpleNamespace(app=app, kwargs=kwargs, bind_socket=lambda: None)
 
     with (
         patch.object(commands, "get_settings", get_settings),
         patch.object(commands.uvicorn, "Config", side_effect=fake_config),
         patch.object(commands.uvicorn, "Server", side_effect=FakeServer),
+        patch.object(commands, "_bind_listening_socket", return_value=None),
         patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
         patch.object(commands, "_schedule_open_admin_browser"),
         patch.object(commands, "_replace_server_process") as replace_process,
@@ -517,6 +521,7 @@ def test_serve_supervisor_refuses_restart_after_incomplete_shutdown() -> None:
         _settings: Settings,
         restart_callback: Callable[[], None],
         process_restart_callback: Callable[[], None],
+        **_kwargs: object,
     ):
         assert callable(process_restart_callback)
         restart_callbacks.append(restart_callback)
@@ -534,18 +539,19 @@ def test_serve_supervisor_refuses_restart_after_incomplete_shutdown() -> None:
             self.should_exit = False
             servers.append(self)
 
-        def run(self):
+        def run(self, sockets=None):
             if len(servers) == 1:
                 restart_callbacks[-1]()
                 assert self.should_exit is True
 
     def fake_config(app, **kwargs):
-        return SimpleNamespace(app=app, kwargs=kwargs)
+        return SimpleNamespace(app=app, kwargs=kwargs, bind_socket=lambda: None)
 
     with (
         patch.object(commands, "get_settings", get_settings),
         patch.object(commands.uvicorn, "Config", side_effect=fake_config),
         patch.object(commands.uvicorn, "Server", side_effect=FakeServer),
+        patch.object(commands, "_bind_listening_socket", return_value=None),
         patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
         patch.object(commands, "_schedule_open_admin_browser"),
         patch.object(commands, "kill_all_best_effort") as kill_all,
@@ -1629,7 +1635,9 @@ def test_graceful_shutdown_budget_comes_from_settings() -> None:
     get_settings.cache_clear = MagicMock()
     captured: dict = {}
 
-    def build_asgi_app(_settings, restart_callback, process_restart_callback):
+    def build_asgi_app(
+        _settings, restart_callback, process_restart_callback, **_kwargs
+    ):
         return SimpleNamespace(runtime=SimpleNamespace(is_closed=True))
 
     class FakeServer:
@@ -1637,7 +1645,7 @@ def test_graceful_shutdown_budget_comes_from_settings() -> None:
             self.config = config
             self.should_exit = False
 
-        def run(self):
+        def run(self, sockets=None):
             self.config.app.runtime.is_closed = True
 
     with (
@@ -1650,6 +1658,7 @@ def test_graceful_shutdown_budget_comes_from_settings() -> None:
             ),
         ),
         patch.object(commands.uvicorn, "Server", side_effect=FakeServer),
+        patch.object(commands, "_bind_listening_socket", return_value=None),
         patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
         patch.object(commands, "_schedule_open_admin_browser"),
         patch.object(commands, "kill_all_best_effort"),
@@ -1677,7 +1686,9 @@ def test_graceful_shutdown_budget_tracks_a_configured_override() -> None:
     get_settings.cache_clear = MagicMock()
     captured: dict = {}
 
-    def build_asgi_app(_settings, restart_callback, process_restart_callback):
+    def build_asgi_app(
+        _settings, restart_callback, process_restart_callback, **_kwargs
+    ):
         return SimpleNamespace(runtime=SimpleNamespace(is_closed=True))
 
     class FakeServer:
@@ -1685,7 +1696,7 @@ def test_graceful_shutdown_budget_tracks_a_configured_override() -> None:
             self.config = config
             self.should_exit = False
 
-        def run(self):
+        def run(self, sockets=None):
             self.config.app.runtime.is_closed = True
 
     with (
@@ -1698,6 +1709,7 @@ def test_graceful_shutdown_budget_tracks_a_configured_override() -> None:
             ),
         ),
         patch.object(commands.uvicorn, "Server", side_effect=FakeServer),
+        patch.object(commands, "_bind_listening_socket", return_value=None),
         patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
         patch.object(commands, "_schedule_open_admin_browser"),
         patch.object(commands, "kill_all_best_effort"),
@@ -1723,6 +1735,7 @@ def test_process_replace_is_not_downgraded_by_a_later_reload() -> None:
         _settings: Settings,
         restart_callback: Callable[[], None],
         process_restart_callback: Callable[[], None],
+        **_kwargs: object,
     ):
         process_callbacks.append(process_restart_callback)
         restart_callbacks.append(restart_callback)
@@ -1733,7 +1746,7 @@ def test_process_replace_is_not_downgraded_by_a_later_reload() -> None:
             self.config = config
             self.should_exit = False
 
-        def run(self):
+        def run(self, sockets=None):
             # Self-update requests a process replace; then a config change
             # arrives and requests a reload before the runtime fully closes.
             process_callbacks[-1]()
@@ -1745,6 +1758,7 @@ def test_process_replace_is_not_downgraded_by_a_later_reload() -> None:
         patch.object(commands, "get_settings", get_settings),
         patch.object(commands.uvicorn, "Config", side_effect=_fake_config),
         patch.object(commands.uvicorn, "Server", side_effect=FakeServer),
+        patch.object(commands, "_bind_listening_socket", return_value=None),
         patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
         patch.object(commands, "_schedule_open_admin_browser"),
         patch.object(commands, "_replace_server_process") as replace_process,
@@ -1771,6 +1785,7 @@ def test_process_replace_is_refused_when_runtime_did_not_close() -> None:
         _settings: Settings,
         restart_callback: Callable[[], None],
         process_restart_callback: Callable[[], None],
+        **_kwargs: object,
     ):
         process_callbacks.append(process_restart_callback)
         return SimpleNamespace(runtime=SimpleNamespace(is_closed=False))
@@ -1780,7 +1795,7 @@ def test_process_replace_is_refused_when_runtime_did_not_close() -> None:
             self.config = config
             self.should_exit = False
 
-        def run(self):
+        def run(self, sockets=None):
             process_callbacks[-1]()
             assert self.should_exit is True
             # The runtime never reaches is_closed: a real in-flight drain.
@@ -1794,6 +1809,7 @@ def test_process_replace_is_refused_when_runtime_did_not_close() -> None:
         patch.object(commands, "get_settings", get_settings),
         patch.object(commands.uvicorn, "Config", side_effect=_fake_config),
         patch.object(commands.uvicorn, "Server", side_effect=FakeServer),
+        patch.object(commands, "_bind_listening_socket", return_value=None),
         patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
         patch.object(commands, "_schedule_open_admin_browser"),
         patch.object(commands, "_replace_server_process") as replace_process,
@@ -1828,6 +1844,7 @@ def test_config_reload_not_degraded_to_stop_when_runtime_still_closing() -> None
         _settings: Settings,
         restart_callback: Callable[[], None],
         process_restart_callback: Callable[[], None],
+        **_kwargs: object,
     ):
         restart_callbacks.append(restart_callback)
         # The runtime never reports closed: a real in-flight drain (e.g. the
@@ -1839,7 +1856,7 @@ def test_config_reload_not_degraded_to_stop_when_runtime_still_closing() -> None
             self.config = config
             self.should_exit = False
 
-        def run(self):
+        def run(self, sockets=None):
             nonlocal runs
             runs += 1
             if runs == 1:
@@ -1851,6 +1868,7 @@ def test_config_reload_not_degraded_to_stop_when_runtime_still_closing() -> None
         patch.object(commands, "get_settings", get_settings),
         patch.object(commands.uvicorn, "Config", side_effect=_fake_config),
         patch.object(commands.uvicorn, "Server", side_effect=FakeServer),
+        patch.object(commands, "_bind_listening_socket", return_value=None),
         patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
         patch.object(commands, "_schedule_open_admin_browser"),
         patch.object(commands, "kill_all_best_effort") as kill_all,
@@ -1904,6 +1922,7 @@ def test_bind_failure_surfaces_the_port_owner() -> None:
         _settings: Settings,
         restart_callback: Callable[[], None],
         process_restart_callback: Callable[[], None],
+        **_kwargs: object,
     ):
         return SimpleNamespace(runtime=SimpleNamespace(is_closed=True))
 
@@ -1912,7 +1931,7 @@ def test_bind_failure_surfaces_the_port_owner() -> None:
             self.config = config
             self.should_exit = False
 
-        def run(self):
+        def run(self, sockets=None):
             raise SystemExit(1)
 
     errors: list = []
@@ -1924,6 +1943,7 @@ def test_bind_failure_surfaces_the_port_owner() -> None:
         patch.object(commands, "get_settings", get_settings),
         patch.object(commands.uvicorn, "Config", side_effect=_fake_config),
         patch.object(commands.uvicorn, "Server", side_effect=FakeServer),
+        patch.object(commands, "_bind_listening_socket", return_value=None),
         patch.object(commands, "build_asgi_app", side_effect=build_asgi_app),
         patch.object(commands, "_schedule_open_admin_browser"),
         patch.object(commands, "probe_port_available", return_value=False),

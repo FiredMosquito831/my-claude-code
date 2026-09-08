@@ -3,6 +3,7 @@
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from dotenv import dotenv_values
@@ -124,18 +125,69 @@ def configured_env_files(model_config: Mapping[str, Any]) -> tuple[Path, ...]:
     return tuple(Path(item) for item in configured)
 
 
+#: Parsed dotenv files, keyed by path and validated against the file's own
+#: (mtime_ns, size). Not an ``lru_cache``: the file is edited by the dashboard
+#: while the server runs, and a cache that could not see that would serve a
+#: stale credential after a save.
+_ENV_FILE_CACHE: dict[Path, tuple[tuple[int, int], dict[str, str | None]]] = {}
+_ENV_FILE_CACHE_LOCK = Lock()
+
+
+def _env_file_values(path: Path) -> dict[str, str | None] | None:
+    """Parse ``path`` once per revision of it, not once per lookup.
+
+    ``env_file_override`` is called for every credential-rotation key of every
+    provider as the provider generation is built. Each call used to re-parse
+    the whole ``.env`` -- python-dotenv reads the file, tokenises it, and then
+    runs ``${VAR}`` interpolation by copying ``os.environ`` for every single
+    value. On a 47 KB, 280-key file that is about 35 ms a call, and a
+    57-provider configuration makes hundreds of calls: it was most of the
+    thirteen seconds that appeared in the log as a slow run of
+    "ProviderRateLimiter initialized" lines.
+
+    The stat is kept because the dashboard rewrites this file while the server
+    is running; a cache keyed on the path alone would answer with the value the
+    user just changed away from.
+    """
+
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    revision = (stat.st_mtime_ns, stat.st_size)
+    with _ENV_FILE_CACHE_LOCK:
+        cached = _ENV_FILE_CACHE.get(path)
+        if cached is not None and cached[0] == revision:
+            return cached[1]
+    try:
+        values = dict(dotenv_values(path))
+    except OSError:
+        return None
+    with _ENV_FILE_CACHE_LOCK:
+        _ENV_FILE_CACHE[path] = (revision, values)
+    return values
+
+
+def clear_env_file_cache() -> None:
+    """Forget every parsed dotenv file. For tests that rewrite one in place.
+
+    A test can write two different files to the same path inside one
+    filesystem-timestamp tick, which is the one case the (mtime, size) check
+    cannot see.
+    """
+
+    with _ENV_FILE_CACHE_LOCK:
+        _ENV_FILE_CACHE.clear()
+
+
 def env_file_value(path: Path, key: str) -> str | None:
     """Return a dotenv value when the file explicitly defines the key."""
 
     if not path.is_file():
         return None
 
-    try:
-        values = dotenv_values(path)
-    except OSError:
-        return None
-
-    if key not in values:
+    values = _env_file_values(path)
+    if values is None or key not in values:
         return None
     value = values[key]
     return "" if value is None else value

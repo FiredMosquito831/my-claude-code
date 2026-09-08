@@ -67,7 +67,7 @@ from typing import Any
 from my_claude_code.cli.desktop import (
     autostart_reconcile_enabled,
     port_conflict_message,
-    probe_server_presence,
+    probe_server_state,
 )
 from my_claude_code.cli.desktop_window import SHELL_TRAY_ENV
 from my_claude_code.config.constants import (
@@ -104,6 +104,7 @@ STATUS_KEYS: tuple[str, ...] = (
     "admin_url",
     "health_url",
     "server_presence",
+    "server_starting_stage",
     "port_conflict",
     "server_mode",
     "window",
@@ -173,7 +174,8 @@ def desktop_status(*, presence_v2: bool = False) -> dict[str, Any]:
     settings = get_settings()
     resolution = config_dir_resolution()
     state = load_desktop_state()
-    presence = probe_server_presence(settings, presence_v2=presence_v2)
+    server = probe_server_state(settings, presence_v2=presence_v2)
+    presence = server.presence
     root_url = local_proxy_root_url(settings)
     shell_tray = shell_tray_enabled(state)
 
@@ -189,6 +191,11 @@ def desktop_status(*, presence_v2: bool = False) -> dict[str, Any]:
         "admin_url": local_admin_url(settings),
         "health_url": f"{root_url}/health",
         "server_presence": presence,
+        # The server's own stage name while it is starting, and ``null``
+        # otherwise. A window that can say "loading provider catalogues"
+        # instead of a bare spinner is the difference between a wait a user
+        # sits through and one they kill the app over.
+        "server_starting_stage": server.stage,
         # Only a stranger on the port needs explaining, and the explanation
         # names the holding process. Anything else would be noise a shell has
         # to learn to ignore.

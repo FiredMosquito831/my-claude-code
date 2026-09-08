@@ -358,6 +358,55 @@ Keep this process running. Once healthy, the Admin UI opens in your browser auto
 http://127.0.0.1:8082/admin
 ```
 
+#### What starting looks like (6.59.0)
+
+The server binds its port **before** it loads anything. Until it is ready every
+route answers `503` with a body that says so, and an `x-mcc-starting: 1` header
+so a program can tell it apart from a stranger on the port:
+
+```json
+{"status": "starting", "stage": "configured-models", "elapsed_ms": 4321}
+```
+
+That matters more than it sounds. Until 6.59.0 the listener appeared only after
+the whole of startup had finished, so for twenty-odd seconds a probe found
+**nothing at all** on the port — and "nothing on the port" is what the desktop
+app, the tray and every launcher read as "start a server here". They did, the
+second server lost the race for the socket, and it died without a word.
+`mcc-desktop --print-status --presence-v2` now reports `starting` alongside
+`healthy`, `draining`, `free` and `foreign`, with the stage in
+`server_starting_stage`.
+
+The log carries the whole timeline, one line per stage:
+
+```text
+STARTUP: settings +2990ms
+STARTUP: application +3131ms
+STARTUP: listener +3150ms
+STARTUP: prewarm +3351ms
+STARTUP: learned-facts +5260ms
+STARTUP: catalogue +5261ms
+STARTUP: ready +5264ms
+```
+
+The clock starts at the process, not at the first log line, because most of a
+cold start is interpreter and imports. If a start ever gets slow again, that
+table is the first thing to read — and 6.59.0 exists partly because nothing
+measured it before, and the cost had roughly tripled since 6.41.2 unnoticed.
+
+#### If something else is on the port
+
+`SERVER_PORT_TAKEOVER` on **Limits & Resilience** decides. The default,
+`always`, stops the holder and takes the port — because the holder is almost
+always MCC's own previous process, one that overran its drain or that the
+desktop app started twice, and refusing to start because of one of those is
+refusing to recover. A holder that is *not* MCC is named in one `WARNING` line
+in the server log before it is stopped. Set it to **mcc-only** to limit that to
+processes this install can identify as its own, or **never** for the behaviour of
+6.58.4 and earlier (name the holder, refuse to start). The holder is identified
+by its **process** — image name and command line — never by what it answers on
+the port, because a server that is still starting answers nothing at all.
+
 <div align="center">
   <img src="../assets/admin-page.png" alt="Admin dashboard overview" width="860">
 </div>
@@ -3583,6 +3632,7 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `FALLBACK_RESUME_AFTER_COMMIT` | `true` | **New in 6.18.0.** Rather than only ending a half-written answer, hand the text already sent to the next model on the route and splice its continuation into the same message. Falls back to the row above whenever the continuation is unusable, so it can only lengthen an answer, never break one. `false` stops at the short message. |
 | `STREAM_COMMIT_HOLDBACK_CHARS` | `0` | **New in 6.18.0.** Visible characters that must arrive before output is released, on top of `STREAM_COMMIT_HOLDBACK_SECONDS`. Raising it means a model that writes a word and dies has shown you nothing, so the route restarts on the next model invisibly; the cost is that much time-to-first-visible-word on every request. `0` uses the clock alone. |
 | `HARNESS_TIER_ALIASES` | `true` | **New in 6.38.0.** Lists `mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` at the top of every coding agent's generated picker, each a name for one of MCC's own routes rather than a model of its own. Off keeps those pickers to concrete refs; the router still resolves an alias a client sends anyway, so an agent already configured on one keeps working. Per-agent chains live in `~/.mcc/harness_tiers.json`, written by the **Coding agents** page. See [Tiers for every other coding agent](#tiers-for-every-other-coding-agent). |
+| `SERVER_PORT_TAKEOVER` | `always` | **New in 6.59.0.** What happens when the server starts and its port is already held. `always` stops the holder and takes the port; a holder that is not MCC is named in one `WARNING` line first. Setting it to mcc-only stops only processes this install can identify as its own; never is the pre-6.59.0 behaviour — name the holder and refuse to start. Identification is by process, never by the HTTP answer. |
 | `SERVER_GRACEFUL_SHUTDOWN_SECONDS` | `20` | **Changed in 6.41.0** — was `300`, and it used to bound only uvicorn's connection wait while the response cleanup, the provider drain and the ASGI lifespan had no bound at all (a request against a silent upstream meant a server that never exited). It is now one deadline for the whole stop, new requests are refused with `503` for its duration, and the process exits a few seconds past it. Lower an inherited `300` unless you would rather wait five minutes for a restart than cut a long request. |
 | `CREDENTIAL_CIRCUIT_THRESHOLD` | **removed at 6.0.0** | The circuit breaker it configured no longer exists for provider pools. A stale line is ignored, not fatal — delete it. |
 

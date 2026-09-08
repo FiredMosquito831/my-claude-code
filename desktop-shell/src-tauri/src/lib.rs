@@ -992,6 +992,36 @@ fn ladder_pass(app: &AppHandle, window: &WebviewWindow) {
             show_page(window, &Page::PortConflict { message });
             wait_for_retry(app);
         }
+        Decision::Starting { .. } => {
+            // MCC's own server, mid-start. Not a free port and not a conflict:
+            // it already holds the socket, and a spawn here would start a
+            // second server into a bind race the first one is about to win.
+            // Returning rather than blocking on Retry is what makes this
+            // self-healing -- the ladder thread loops, and the next pass sees
+            // `healthy`.
+            set_tray_status("Server: starting");
+            show_page(
+                window,
+                &Page::Reconnecting {
+                    message: ladder::starting_message(&status),
+                },
+            );
+            wait_for_drain(app, &status);
+        }
+        Decision::Stale => {
+            // Ours, holding the port, silent. Waiting is right and the port
+            // conflict page is wrong: the server's own takeover reclaims the
+            // port on the next start, and this window must not send the user
+            // off to stop "another program" that is My Claude Code.
+            set_tray_status("Server: not answering");
+            show_page(
+                window,
+                &Page::Reconnecting {
+                    message: ladder::stale_message(&status),
+                },
+            );
+            wait_for_drain(app, &status);
+        }
         Decision::Draining => {
             // MCC's own server, mid-stop. Not a conflict and not a free port:
             // wait for it to finish and let the next pass of the ladder pick

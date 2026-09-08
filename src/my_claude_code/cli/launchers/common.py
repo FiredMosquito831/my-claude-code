@@ -38,6 +38,12 @@ class PreflightResult:
     status_code: int | None = None
     headers: dict[str, str] = field(default_factory=dict)
     error: str | None = None
+    #: The first kilobyte of the response body, when there was one. Only a
+    #: refusal carries anything worth reading here: the startup gate names the
+    #: stage it is in, and a window that can say "loading provider catalogues"
+    #: instead of "starting" is the difference between a wait and a hang. Bounded
+    #: because this is a diagnostic, not a transfer.
+    body: str = ""
 
     @property
     def ok(self) -> bool:
@@ -58,6 +64,26 @@ def _lowercased(pairs: object) -> dict[str, str]:
     if items is None:
         return {}
     return {str(key).strip().lower(): str(value) for key, value in items()}
+
+
+#: Bytes of a refusal body kept for diagnosis. The startup gate's body is a
+#: couple of hundred; anything much larger is not this protocol.
+_MAX_BODY_BYTES = 1024
+
+
+def _read_body(response: object) -> str:
+    """Read a bounded, best-effort body off a response-like object."""
+
+    read = getattr(response, "read", None)
+    if not callable(read):
+        return ""
+    try:
+        raw = read(_MAX_BODY_BYTES)
+    except Exception:
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return str(raw)
 
 
 def preflight_result(proxy_root_url: str) -> PreflightResult:
@@ -81,6 +107,7 @@ def preflight_result(proxy_root_url: str) -> PreflightResult:
             status_code=int(exc.code),
             headers=_lowercased(exc.headers),
             error=f"returned HTTP {exc.code}",
+            body=_read_body(exc),
         )
     except URLError as exc:
         return PreflightResult(error=str(exc.reason))
