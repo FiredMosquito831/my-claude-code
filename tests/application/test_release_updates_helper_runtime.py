@@ -25,10 +25,15 @@ import pytest
 
 from my_claude_code.application import release_updates
 
-pytestmark = [
-    pytest.mark.skipif(os.name != "nt", reason="the deferred helper is Windows-only"),
-    pytest.mark.xdist_group(name="release-updates-helper-runtime"),
-]
+# Skipped at COLLECTION on anything but Windows, rather than per test. A test
+# that is skipped never runs the autouse fixture that redirects HOME, so it
+# reaches the hermeticity guard's teardown with whatever configuration
+# directory the worker had resolved before it -- and on a Linux runner that is
+# the real one. Not collecting the module at all leaves nothing to tear down.
+if os.name != "nt":  # pragma: no cover - the deferred helper is Windows-only
+    pytest.skip("the deferred helper is a Windows mechanism", allow_module_level=True)
+
+pytestmark = [pytest.mark.xdist_group(name="release-updates-helper-runtime")]
 
 _SHIMS = ("mcc-claude", "mcc-server", "mcc-desktop")
 
