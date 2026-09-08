@@ -41,6 +41,14 @@ from my_claude_code.config.constants import (
 )
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.config.settings import get_settings
+from my_claude_code.config.update_progress import (
+    UPDATE_PROGRESS_FILENAME,
+    UPDATE_PROGRESS_STAGES,
+    UPDATE_STAGE_DIRNAME,
+    active_update,
+    read_update_progress,
+    update_progress_path,
+)
 from my_claude_code.core.process_handoff import (
     reset_process_handoff_for_tests,
     set_external_upgrade_helper_pending,
@@ -65,28 +73,25 @@ _HTTP_TIMEOUT_SECONDS = 10.0
 _UPGRADE_TIMEOUT_SECONDS = 900.0
 _WHEEL_SUFFIX = ".whl"
 _WINDOWS = os.name == "nt"
-_STAGE_DIRNAME = "updates"
+_STAGE_DIRNAME = UPDATE_STAGE_DIRNAME
 _PENDING_RESULT_FILENAME = "pending-upgrade.json"
-#: One JSON object per line, appended by the deferred helper as it moves
-#: between stages. JSON *lines* rather than one document on purpose: the
-#: writer is a detached PowerShell process that may be killed at any point
-#: and the reader is a desktop window polling while that happens, so an
-#: append can never leave a half-rewritten document behind, and a torn final
-#: line costs the reader one stale stage rather than the whole file.
-UPDATE_PROGRESS_FILENAME = "progress.json"
-
-#: The stages the helper reports, in the order it reports them. The reader
-#: shows whatever string it finds rather than switching on this tuple -- a
-#: second copy of the list in the desktop shell would be a second source of
-#: truth -- but the sequence is pinned by a test so a stage cannot silently
-#: stop being written.
-UPDATE_PROGRESS_STAGES: tuple[str, ...] = (
-    "waiting-for-parent",
-    "installing",
-    "starting",
-    "done",
-    "failed",
-)
+#: The progress receipt's name, stage vocabulary and readers moved to
+#: ``config.update_progress`` in 6.58.3: ``cli`` may not import ``application``
+#: (import-boundary contract) and ``cli.desktop_status`` now has to publish
+#: whether a helper is running. Re-exported here because the module that
+#: *writes* the receipt is still this one, and every existing importer named
+#: it here.
+__all__ = [
+    "UPDATE_PROGRESS_FILENAME",
+    "UPDATE_PROGRESS_STAGES",
+    "active_update",
+    "current_version",
+    "get_release_status",
+    "perform_upgrade",
+    "update_progress",
+    "update_progress_path",
+    "upgrade_to_latest",
+]
 # Bound on how long the helper waits for this process to exit before it stops
 # waiting and ends the parent itself. It is the SERVER'S OWN stop budget, not a
 # number of the helper's own: the parent bounds its stop at
@@ -476,35 +481,14 @@ def _stage_dir() -> Path:
     return config_dir_path() / _STAGE_DIRNAME
 
 
-def update_progress_path() -> Path:
-    """Where the deferred helper appends its stage receipts."""
-
-    return _stage_dir() / UPDATE_PROGRESS_FILENAME
-
-
 def update_progress() -> dict[str, Any] | None:
     """The most recent stage the deferred helper reported, if any.
 
-    The last parseable line wins. A trailing line that is still being written
-    -- the file is appended to by a detached process -- is skipped rather than
-    treated as the end of the story, because the stage before it is still true.
+    The reader itself is ``config.update_progress.read_update_progress``; this
+    name stays because it is the one the dashboard and the tests already use.
     """
 
-    try:
-        raw = update_progress_path().read_text(encoding="utf-8-sig")
-    except OSError:
-        return None
-    for line in reversed(raw.splitlines()):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            parsed = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(parsed, dict):
-            return parsed
-    return None
+    return read_update_progress()
 
 
 def pending_upgrade_result() -> dict[str, Any] | None:
@@ -620,6 +604,7 @@ def _deferred_helper_script(
     tool_dir: Path | None = None,
     commands: list[str] | None = None,
     wait_seconds: float | None = None,
+    version: str | None = None,
 ) -> str:
     """PowerShell that waits for this process to exit, then installs.
 
@@ -642,6 +627,17 @@ def _deferred_helper_script(
     quoted_names = ", ".join(_powershell_literal(name) for name in names)
     bin_dir_literal = _powershell_literal(str(bin_dir) if bin_dir else "")
     tool_dir_literal = _powershell_literal(str(tool_dir) if tool_dir else "")
+    version_literal = _powershell_literal(version or "")
+    # Launchers the RUNNING desktop shell needs in order to keep asking what is
+    # going on. Renaming these aside is what turned an update into a race: the
+    # shell reads `NotInstalled` from its status ladder and, by design, starts
+    # an install of its own into the same tool directory. They are not shims
+    # this update has to move -- uv overwrites them in place, and if one is
+    # momentarily locked the staged fallback keeps it, exactly like any other.
+    quoted_never_rename = ", ".join(
+        _powershell_literal(name)
+        for name in ("mcc-desktop.exe", "fcc-desktop.exe", "MyClaudeCode.exe")
+    )
     return f"""$ErrorActionPreference = 'Stop'
 $parent = {os.getpid()}
 # One JSON object per line, appended as this script moves between stages. It is
@@ -652,6 +648,17 @@ $parent = {os.getpid()}
 # The desktop window reads this file and says which stage it is in.
 $progressPath = {_powershell_literal(str(progress_path))}
 $progressEncoding = New-Object System.Text.UTF8Encoding($false)
+# Liveness, not just narration. Every record carries the helper's own process
+# id, when it started, and whether it has finished, so a reader can answer the
+# one question that stops an update racing itself: IS AN INSTALLER RUNNING
+# RIGHT NOW? A stage name alone cannot answer it -- a helper killed mid-install
+# leaves 'installing' behind forever -- and neither can a heartbeat, because
+# this is single-threaded PowerShell blocked inside uv for minutes at a time.
+# The pid is the fact; `helper_done` is the fast path for the ordinary ending.
+$helperPid = $PID
+$helperStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$targetVersion = {version_literal}
+$script:HelperDone = $false
 function Write-Stage($stage, $message) {{
     try {{
         $record = [ordered]@{{
@@ -659,6 +666,10 @@ function Write-Stage($stage, $message) {{
             message = $message
             at = (Get-Date).ToUniversalTime().ToString('o')
             parent = $parent
+            helper_pid = $helperPid
+            started_at = $helperStarted
+            helper_done = $script:HelperDone
+            version = $targetVersion
         }}
         $line = ($record | ConvertTo-Json -Compress) + [Environment]::NewLine
         [System.IO.File]::AppendAllText($progressPath, $line, $progressEncoding)
@@ -707,6 +718,7 @@ if (Test-ParentAlive) {{
     }}
 }}
 if (Test-ParentAlive) {{
+    $script:HelperDone = $true
     Write-Stage 'failed' 'The server could not be stopped, so the update was not applied.'
     $result = @{{ ok = $false; message = 'The server could not be stopped, so the update was not applied.' }}
     [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
@@ -743,12 +755,31 @@ $ErrorActionPreference = 'Continue'
 # be missed by all three -- and a rename that is REFUSED is recorded rather than
 # swallowed. A swallowed refusal is what let uv walk into a locked
 # `mcc-desktop.exe` and abort an entire install.
+#
+# One family of shims is EXEMPT from the rename. The desktop shell asks
+# `mcc-desktop --print-status` on every pass of its ladder; with that shim
+# renamed aside the shell reads NotInstalled and starts its own `uv tool
+# install` into this very tool directory. Measured 2026-09-07: the helper's
+# five attempts all failed against the shell's concurrent installer, the shell
+# won at 23:25:43, and the helper's "start the server again" step never ran
+# because it had already written a failure. uv overwrites these in place, and a
+# momentarily locked one is kept by the staged fallback exactly like any other,
+# so there was never anything the rename bought here.
 $binDir = {bin_dir_literal}
 $toolDir = {tool_dir_literal}
 $commandNames = @({quoted_names})
+$neverRename = @({quoted_never_rename})
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $managed = @{{}}
 $refused = @()
+# Every shim actually moved out of the way, so a failed install can put them
+# back. Without this list a failure is not recoverable: the old launchers are
+# sitting under '.old-' names, the new ones were never written, and the machine
+# has no `mcc-server` at all -- measured on a scratch install on 2026-09-08,
+# where the helper's own restart step then reported "could not be restarted
+# either". The install script has always restored on its failure path
+# (`Restore-LauncherShim`); the helper never did.
+$movedAside = @()
 if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
     foreach ($file in @(Get-ChildItem -Path $binDir -Filter '*.exe' -ErrorAction SilentlyContinue)) {{
         if (($file.Name -match '^(mcc|fcc)-.+\\.exe$') -or (@('my-claude-code.exe', 'free-claude-code.exe') -contains $file.Name.ToLowerInvariant())) {{
@@ -768,8 +799,10 @@ if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
     foreach ($fileName in ($managed.Keys | Sort-Object)) {{
         $shim = Join-Path $binDir $fileName
         if (-not (Test-Path -LiteralPath $shim -PathType Leaf)) {{ continue }}
+        if ($neverRename -contains $fileName) {{ continue }}
         try {{
             Rename-Item -LiteralPath $shim -NewName ($fileName + '.old-' + $stamp) -ErrorAction Stop
+            $movedAside += $fileName
         }}
         catch {{
             $refused += $fileName
@@ -780,14 +813,22 @@ $delays = @(0, 5, 10, 20, 30)
 $code = 1
 $attempts = 0
 $output = ''
-if ($refused.Count -eq 0) {{
-    foreach ($wait in $delays) {{
-        if ($wait -gt 0) {{ Start-Sleep -Seconds $wait }}
-        $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 | Out-String
-        $code = $LASTEXITCODE
-        $attempts = $delays.IndexOf($wait) + 1
-        if ($code -eq 0) {{ break }}
-    }}
+# The fast loop ALWAYS runs. It used to be skipped whenever a single rename was
+# refused, and one `mcc-claude` window the user had left open for the afternoon
+# is enough to refuse one -- which is the normal case on this machine, not an
+# edge case. Skipping cost the whole install its cheap path (measured:
+# attempts=5, meaning the fast loop never ran at all) for a lock the staged
+# fallback below was already written to survive. A refusal does mean uv will
+# probably trip over that one file, so it buys a single attempt rather than the
+# full backoff: the point is not to pay 65 seconds of sleeps on the way to a
+# path that handles the lock properly.
+$fastDelays = if ($refused.Count -eq 0) {{ $delays }} else {{ @(0) }}
+foreach ($wait in $fastDelays) {{
+    if ($wait -gt 0) {{ Start-Sleep -Seconds $wait }}
+    $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 | Out-String
+    $code = $LASTEXITCODE
+    $attempts = $attempts + 1
+    if ($code -eq 0) {{ break }}
 }}
 # Staged fallback: uv writes every shim and a complete receipt into a directory
 # nothing can be holding, and the shims are placed one at a time afterwards, so
@@ -856,6 +897,27 @@ if (($code -ne 0) -and $binDir) {{
     Remove-Item -LiteralPath $stageBin -Recurse -Force -ErrorAction SilentlyContinue
 }}
 $ErrorActionPreference = 'Stop'
+# Nothing was installed. Put back what was moved out of the way, or this
+# machine has no launchers at all: the old ones are under '.old-' names and the
+# new ones were never written. That is the difference between "the update
+# failed" and "the update failed and took your server with it".
+$restoredShims = @()
+if (($code -ne 0) -and $binDir) {{
+    foreach ($fileName in $movedAside) {{
+        $target = Join-Path $binDir $fileName
+        $aside = Join-Path $binDir ($fileName + '.old-' + $stamp)
+        if ((Test-Path -LiteralPath $aside -PathType Leaf) -and (-not (Test-Path -LiteralPath $target -PathType Leaf))) {{
+            try {{
+                Rename-Item -LiteralPath $aside -NewName $fileName -ErrorAction Stop
+                $restoredShims += $fileName
+            }}
+            catch {{
+                # Nothing further to try: the file is held by something, which
+                # means it is also still runnable under its old name.
+            }}
+        }}
+    }}
+}}
 # Report every command that is not there, rather than trusting the exit code.
 # A version check cannot substitute: the shims are version-agnostic launchers,
 # so an OLD shim reports the NEW version and "verified" would be a lie.
@@ -866,39 +928,73 @@ if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
             $missing += $name
         }}
     }}
-    # Reap the shims we moved aside. One still held by a live window refuses to
-    # delete; it is left for the next install to sweep.
-    Get-ChildItem -Path $binDir -Filter '*.exe.old-*' -ErrorAction SilentlyContinue |
-        ForEach-Object {{ Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }}
+    # Reap the shims we moved aside -- but only after an install that WORKED.
+    # On a failure the '.old-' files are the only launchers left and the sweep
+    # above has just put them back; deleting them here is how a failed update
+    # used to leave nothing at all behind.
+    if ($code -eq 0) {{
+        Get-ChildItem -Path $binDir -Filter '*.exe.old-*' -ErrorAction SilentlyContinue |
+            ForEach-Object {{ Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }}
+    }}
 }}
+# A shim whose rename was refused is NOT automatically a kept shim: uv may well
+# have overwritten it in place, and saying otherwise would tell the user to
+# restart a window that is already running the new code. The staged fallback's
+# copy is the only thing that knows, because it is the step that fails on a file
+# still held -- which is why $kept is built there and nowhere else, in both this
+# helper and scripts/install.ps1.
 # A shim that could not be replaced is NOT a failure: the command is present and
 # already runs the new code through the canonical tool directory. Report it as
 # refreshing on the next install and keep ok = true.
 $ok = ($code -eq 0) -and ($missing.Count -eq 0)
-$keptNote = if ($kept.Count -gt 0) {{ ' These launchers were locked and kept the file they had: ' + ($kept -join ', ') + '. They keep working and will refresh on the next install.' }} else {{ '' }}
+$restartNote = if ($targetVersion) {{ ' to pick up ' + $targetVersion }} else {{ '' }}
+$keptNote = if ($kept.Count -gt 0) {{ ' kept: ' + (($kept | ForEach-Object {{ $_ + '.exe (in use)' }}) -join ', ') + ' -- restart it' + $restartNote + '. These launchers were locked and kept the file they had. They keep working and will refresh on the next install.' }} else {{ '' }}
 $result = @{{
     ok = $ok
     exit_code = $code
     attempts = $attempts
     missing_commands = $missing
     kept_shims = $kept
+    restored_shims = $restoredShims
     message = if ($ok) {{ 'Deferred install completed.' + $keptNote }} elseif ($missing.Count -gt 0) {{ 'Installed, but these commands are missing: ' + ($missing -join ', ') + '. Close the mcc-claude window(s) and re-run the install command.' }} else {{ 'Deferred install failed after ' + $attempts + ' attempt(s).' }}
     output = $output
 }}
+$result['restarted'] = $false
 [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
 if ($ok) {{
     Write-Stage 'starting' 'Starting the updated server.'
 }} else {{
     Write-Stage 'failed' $result.message
 }}
+# The launcher lives in uv's bin directory, OUTSIDE the tool environment that
+# was just replaced, and it is a version-agnostic stub. So it starts a server on
+# both branches. Until 6.58.3 it ran only under `if ($ok)`, which is how a
+# failed update left the machine with no server at all and no automatic
+# recovery: the tool directory still held a perfectly good previous install and
+# nothing ever started it. A half-installed environment is not a reason to
+# withhold the old one -- uv either replaced the environment or it did not.
+$restarted = $false
+try {{
+    Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}
+    $restarted = $true
+}}
+catch {{
+    $restarted = $false
+}}
+$result['restarted'] = $restarted
+if (-not $ok) {{
+    # Say what went wrong AND what was done about it, in the one sentence the
+    # dashboard's update banner shows. "It failed" on its own sent the user
+    # looking for a server that nobody was going to start.
+    $result['message'] = $result.message + $(if ($restarted) {{ ' The previous version was restarted.' }} else {{ ' The previous version could not be restarted either.' }})
+}}
+[System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+$script:HelperDone = $true
 if ($ok) {{
     Remove-Item -Path {_powershell_literal(str(stage_dir / "wheel"))} -Recurse -Force -ErrorAction SilentlyContinue
-    # The launcher lives in uv's bin directory, outside the tool environment
-    # which was just replaced. Start it only after a successful install; a
-    # failed helper leaves the receipt for the dashboard and never starts a
-    # half-installed server.
-    Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}
     Write-Stage 'done' 'The updated server was started.'
+}} else {{
+    Write-Stage 'recovered' $result.message
 }}
 """
 
@@ -956,6 +1052,10 @@ def _spawn_deferred_upgrade(
                 # may run while the server is alive.
                 tool_dir=_installed_tool_dir(),
                 commands=_published_commands(),
+                # Named in the receipt so a window can say WHICH version is
+                # being installed while it waits, and so the kept-shim note can
+                # tell the user which version a restart of that window buys.
+                version=tag or None,
             ),
             encoding="utf-8",
         )

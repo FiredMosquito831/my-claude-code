@@ -83,6 +83,7 @@ from my_claude_code.config.server_urls import (
     local_proxy_root_url,
 )
 from my_claude_code.config.settings import get_settings
+from my_claude_code.config.update_progress import update_report
 from my_claude_code.core.version import package_version
 
 #: Bumped only when a key below is removed or retyped. See the module docstring.
@@ -127,6 +128,7 @@ STATUS_KEYS: tuple[str, ...] = (
     "shell_binary",
     "shell_release_tag",
     "shell_ready",
+    "update",
 )
 
 
@@ -236,6 +238,14 @@ def desktop_status(*, presence_v2: bool = False) -> dict[str, Any]:
         ),
         "shell_tray": shell_tray,
         **desktop_shell_report(),
+        # ``null`` unless a deferred update helper is running RIGHT NOW, which
+        # is the whole of the key: a reader that finds a document here must not
+        # start an install of its own, because one is already in flight. See
+        # ``config.update_progress`` for how "running" is decided (the helper's
+        # own pid, not a stage name). 6.58.3 emits it and the shell tolerates
+        # it; the shell may require it from 6.58.4 on, per the two-release rule
+        # in this module's docstring.
+        "update": update_report(),
     }
 
 

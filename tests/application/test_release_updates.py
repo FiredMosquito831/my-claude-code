@@ -18,6 +18,7 @@ from my_claude_code.application.release_updates import (
     reset_cache_for_tests,
     upgrade_to_latest,
 )
+from my_claude_code.config import update_progress
 
 
 @pytest.fixture(autouse=True)
@@ -740,11 +741,16 @@ def test_deferred_helper_writes_the_receipt_without_a_bom(tmp_path) -> None:
     relaunch attempt.
     """
     script = _deferred_script(tmp_path)
-    assert script.count("[System.IO.File]::WriteAllText") == 4
+    # Five whole-file writes: the progress truncation, the "could not be
+    # stopped" result, and the outcome receipt TWICE -- once before the server
+    # is started and once after, so the receipt on disk is complete even if the
+    # helper dies during the relaunch, and so it can then say whether a server
+    # is running (6.58.3 starts one on the failure branch too).
+    assert script.count("[System.IO.File]::WriteAllText") == 5
     assert script.count("[System.IO.File]::AppendAllText") == 1
     # One shared encoder object for the progress receipt, plus one at each of
-    # the three whole-file writes that do not share it.
-    assert script.count("UTF8Encoding($false)") == 4
+    # the four whole-file writes that do not share it.
+    assert script.count("UTF8Encoding($false)") == 5
     assert "Set-Content" not in script
     first_write = script.index("[System.IO.File]::WriteAllText")
     launch = script.index("Start-Process -FilePath")
@@ -930,11 +936,20 @@ def test_the_progress_reader_takes_the_last_complete_line(
 ) -> None:
     """Reading back what the helper wrote, torn final line included."""
 
-    monkeypatch.setattr(release_updates, "_stage_dir", lambda: tmp_path)
+    # The reader moved to ``config.update_progress`` in 6.58.3 so ``cli`` could
+    # use it without importing ``application``; ``release_updates`` re-exports
+    # it, and this test still exercises it through the old name.
+    monkeypatch.setattr(update_progress, "config_dir_path", lambda: tmp_path)
     assert release_updates.update_progress() is None
 
     path = release_updates.update_progress_path()
-    assert path == tmp_path / release_updates.UPDATE_PROGRESS_FILENAME
+    assert (
+        path
+        == tmp_path
+        / update_progress.UPDATE_STAGE_DIRNAME
+        / release_updates.UPDATE_PROGRESS_FILENAME
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     path.write_text(
         '{"stage": "waiting-for-parent", "message": "Waiting."}\n'
@@ -956,3 +971,173 @@ def test_the_progress_reader_takes_the_last_complete_line(
     # And a BOM from Windows PowerShell 5.1 does not hide it.
     path.write_bytes(b'\xef\xbb\xbf{"stage": "done"}')
     assert release_updates.update_progress() == {"stage": "done"}
+
+
+def test_the_helper_never_renames_the_shells_own_launcher(tmp_path) -> None:
+    """`mcc-desktop.exe` is what the running window asks; it must stay put.
+
+    The 2026-09-07 failure, in one file rename. The helper moved every managed
+    shim aside, `mcc-desktop` included; the Tauri shell calls
+    `mcc-desktop --print-status` on every pass of its ladder, read
+    `NotInstalled`, and -- by design -- started its own `uv tool install` into
+    the very tool directory the helper was writing. The helper lost all five
+    attempts and never reached the step that starts a server.
+
+    The rename bought nothing here: uv overwrites these in place, and one that
+    happens to be locked is kept by the staged fallback exactly like any other
+    shim.
+    """
+
+    bin_dir = tmp_path / "bin"
+    script = release_updates._deferred_helper_script(
+        uv_executable=r"C:\tools\uv.exe",
+        command=[r"C:\tools\uv.exe", "tool", "install", "--force", "pkg"],
+        result_path=tmp_path / "result.json",
+        stage_dir=tmp_path,
+        server_launcher=bin_dir / "fcc-server.exe",
+        working_directory=tmp_path / "cwd",
+        bin_dir=bin_dir,
+        commands=["mcc-claude", "mcc-server", "mcc-desktop"],
+    )
+
+    assert "$neverRename = @(" in script
+    for exempt in ("mcc-desktop.exe", "fcc-desktop.exe", "MyClaudeCode.exe"):
+        assert f"'{exempt}'" in script, exempt
+    # The exemption is applied in the rename loop, before the rename itself.
+    loop = script[script.index("foreach ($fileName in ($managed.Keys") :]
+    skip = loop.index("$neverRename -contains $fileName")
+    assert skip < loop.index("Rename-Item -LiteralPath $shim")
+    # It is an exemption from the RENAME only. The command is still verified as
+    # present afterwards, so a genuinely missing mcc-desktop is still reported.
+    assert "'mcc-desktop'" in script
+
+
+def test_a_refused_rename_still_attempts_the_fast_install(tmp_path) -> None:
+    """One `mcc-claude` window open must not cost the whole install its fast path.
+
+    The guard was `if ($refused.Count -eq 0)`, so a single refused rename --
+    and the user keeps `mcc-claude` windows open for hours, which refuses one --
+    skipped the fast loop entirely. The evidence was `attempts = 5` rather than
+    the 10 a fast loop plus a staged loop would give.
+    """
+
+    script = _deferred_script(tmp_path)
+
+    assert "if ($refused.Count -eq 0) {\n    foreach ($wait in $delays)" not in script
+    # The loop is no longer inside a refusal guard at all.
+    fast = script.index("$fastDelays =")
+    loop = script.index("foreach ($wait in $fastDelays)")
+    assert fast < loop
+    # A refusal buys one attempt rather than the full backoff: the staged
+    # fallback behind it is the path that actually survives the lock, and 65
+    # seconds of sleeps on the way there is not a fast path.
+    assert (
+        "if ($refused.Count -eq 0) {{ $delays }} else {{ @(0) }}".replace(
+            "{{", "{"
+        ).replace("}}", "}")
+        in script
+    )
+    # And the staged fallback still runs when the fast loop failed.
+    assert "if (($code -ne 0) -and $binDir) {" in script
+
+
+def test_a_failed_install_still_starts_a_server(tmp_path) -> None:
+    """A failed update must never leave the machine with no server.
+
+    `Start-Process` used to sit under `if ($ok)`, so a helper that failed left
+    the user with the old install on disk, nothing running, and no automatic
+    recovery -- which is exactly what happened on 2026-09-07 at 23:24:04.
+    """
+
+    script = _deferred_script(tmp_path)
+
+    start = script.index("Start-Process -FilePath")
+    # Nothing between the receipt and the start gates it on success.
+    preamble = script[script.index("$ok = ($code -eq 0)") : start]
+    assert "if ($ok)" in preamble  # the stage line, which is allowed to branch
+    assert script.count("Start-Process -FilePath") == 1
+    # The start is outside every `if ($ok)` block: the terminal stage after it
+    # is 'done' on success and 'recovered' on failure, and both are reached.
+    assert "Write-Stage 'recovered'" in script
+    assert script.index("Write-Stage 'recovered'") > start
+    assert script.index("Write-Stage 'done'") > start
+    # The outcome receipt says whether a server is running, and the message
+    # says so in words, because the banner shows the message.
+    assert "$result['restarted'] = $restarted" in script
+    assert "The previous version was restarted." in script
+    assert "The previous version could not be restarted either." in script
+
+
+def test_the_helper_records_its_own_liveness(tmp_path) -> None:
+    """Every receipt line names the helper, so nobody has to guess.
+
+    A stage name alone cannot answer "is an installer running right now?" -- a
+    helper killed mid-install leaves 'installing' behind forever -- and the
+    answer is what stops the shell starting a second one.
+    """
+
+    script = _deferred_script(tmp_path)
+
+    assert "$helperPid = $PID" in script
+    assert "[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()" in script
+    for field in ("helper_pid = $helperPid", "started_at = $helperStarted"):
+        assert field in script, field
+    assert "helper_done = $script:HelperDone" in script
+    assert "version = $targetVersion" in script
+    # Set exactly where the helper is finished: before the terminal stages and
+    # nowhere before the install.
+    assert script.count("$script:HelperDone = $true") == 2
+    assert script.index("$script:HelperDone = $true") < script.index(
+        "Write-Stage 'installing'"
+    )
+
+
+def test_the_helper_names_the_version_it_is_installing(tmp_path) -> None:
+    """So the window can say WHAT it is waiting for, not just that it waits."""
+
+    script = release_updates._deferred_helper_script(
+        uv_executable=r"C:\tools\uv.exe",
+        command=[r"C:\tools\uv.exe", "tool", "install", "--force", "pkg"],
+        result_path=tmp_path / "result.json",
+        stage_dir=tmp_path,
+        server_launcher=tmp_path / "bin" / "fcc-server.exe",
+        working_directory=tmp_path / "cwd",
+        bin_dir=tmp_path / "bin",
+        version="6.58.3",
+    )
+    assert "$targetVersion = '6.58.3'" in script
+    # And the kept-shim note tells the user what restarting that window buys.
+    assert "' to pick up ' + $targetVersion" in script
+    assert "'.exe (in use)'" in script
+    assert "-- restart it" in script
+
+
+def test_a_failed_install_puts_the_launchers_it_moved_aside_back(tmp_path) -> None:
+    """Otherwise "the update failed" also means "and your server is gone".
+
+    Found on a scratch install on 2026-09-08, running the real update path with
+    an install that could not succeed: every managed shim had been renamed to
+    `<name>.exe.old-<stamp>`, the new ones were never written, and the sweep at
+    the end DELETED the aside copies. The helper's own restart step then
+    reported "the previous version could not be restarted either" -- correctly,
+    because there was no longer an `fcc-server.exe` to start. `install.ps1` has
+    always restored on its failure path; the helper never did.
+    """
+
+    script = _deferred_script(tmp_path)
+
+    assert "$movedAside += $fileName" in script
+    restore = script.index(
+        "if (($code -ne 0) -and $binDir) {\n    foreach ($fileName in $movedAside)"
+    )
+    verify = script.index("$missing = @()")
+    start = script.index("Start-Process -FilePath")
+    # Put back first, then judge what is missing, then start something.
+    assert restore < verify < start
+    # And the sweep that deletes the aside copies runs ONLY after an install
+    # that worked -- on a failure they are the only launchers left.
+    reap = script.index("Get-ChildItem -Path $binDir -Filter '*.exe.old-*'")
+    guard = script.rindex("if ($code -eq 0) {", 0, reap)
+    assert guard < reap
+    # The receipt says which launchers came back, so a failure is legible.
+    assert "restored_shims = $restoredShims" in script

@@ -49,6 +49,7 @@ from my_claude_code.config.desktop_shell import (
 from my_claude_code.config.paths import DESKTOP_LOCK_FILENAME, config_dir_path
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import get_settings
+from my_claude_code.config.update_progress import active_update
 from my_claude_code.core.interprocess_lock import InterprocessFileLock
 from my_claude_code.core.stop_deadline import (
     HARD_EXIT_GRACE_SECONDS,
@@ -206,6 +207,28 @@ def draining_message(settings: Any) -> str:
     )
 
 
+def updating_message(record: dict[str, Any]) -> str:
+    """What to say about an update helper that is mid-install.
+
+    Names the version and how long it has been going, because the sentence it
+    replaces ("could not start the server") sent the user off to reinstall by
+    hand -- into the same tool directory the helper was writing.
+    """
+
+    version = str(record.get("version") or "").strip()
+    target = f" to {version}" if version else ""
+    started = record.get("started_at")
+    elapsed = ""
+    if isinstance(started, int | float):
+        seconds = max(0, int(time.time() - float(started)))
+        elapsed = f" ({seconds}s so far)"
+    return (
+        f"My Claude Code is updating{target}: the installer is running{elapsed}. "
+        f"It starts the server itself when it is done -- including when the "
+        f"install fails, in which case the previous version comes back."
+    )
+
+
 def port_conflict_message(settings: Any) -> str:
     """Name the process holding the port, not just the fact that it is held."""
 
@@ -354,6 +377,14 @@ class DesktopController:
         presence = probe_server_presence(settings, presence_v2=True)
         if presence == "healthy":
             return
+        # An update helper is replacing the tool environment this very command
+        # lives in. Spawning here starts a server out of an install that is
+        # half-written, and the helper starts one itself the moment it is done
+        # -- on both branches now, success or failure -- so the only thing a
+        # spawn can add is a second server racing for the port.
+        in_flight = active_update()
+        if in_flight is not None:
+            raise DesktopError(updating_message(in_flight))
         if presence == "draining":
             # MCC's own server, mid-stop. Neither a conflict to report nor a
             # port to bind: a spawn here loses the race with the socket the

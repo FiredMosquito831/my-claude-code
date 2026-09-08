@@ -84,6 +84,34 @@ python -m zipfile -l dist/my_claude_code-*.whl | grep -E "my_claude_code/|free_c
 Both should appear. Then upload to the release repo's release (the existing
 publish flow), and the checksum-verified in-place update path serves it.
 
+### If you touched the Windows update helper
+
+`application/release_updates.py` renders the detached PowerShell helper and
+`scripts/install.ps1` is its twin: they solve the same locked-shim problem and
+the contract tests in `tests/scripts/test_installers.py` pin the shape they must
+share (rename-aside, staged fallback, receipt rewrite, kept shims). Change one
+and change the other, and remember what is *not* checked by reading the script:
+
+- `tests/application/test_release_updates_helper_runtime.py` actually runs the
+  rendered helper on Windows against a file locked with a share mode of zero --
+  the same lock a live `mcc-claude` window holds. It is the only test that would
+  have caught the guard that skipped the fast install path on any refusal, and
+  it takes about three minutes because it sits out the helper's real backoff.
+- The receipt the helper writes is a liveness signal, not only narration. Every
+  line carries `helper_pid`, `started_at` and `helper_done`, and three separate
+  readers (`config.update_progress`, `mcc-desktop --print-status`'s `update`
+  key, and the shell's `update_progress::active_helper`) use them to refuse to
+  start a second installer. Removing a field breaks all three.
+
+### Adding a key to `--print-status`
+
+`update` was added in 6.58.3 and the two-release rule applies to it as it did to
+`server_start_retries`: the wheel emits the key one release, the shell may
+*require* it the next. An old shell tolerates a key it has never heard of (it
+reads its fields by name), so a new wheel is always safe under an old shell; a
+new shell under an old wheel is not. Move the shell pin after the release that
+starts emitting, never before.
+
 ## 4. Dashboard screenshots (manual step)
 
 The admin dashboard screenshots go stale whenever a view is rebuilt, not only

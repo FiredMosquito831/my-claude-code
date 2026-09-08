@@ -29,6 +29,14 @@ pub enum Page {
     /// checking something. A spinner over a stale sentence is the shape of
     /// every "it just hangs" report there has ever been.
     Installing { command: String, message: String },
+    /// An update helper is installing, and this window is watching it.
+    ///
+    /// Deliberately not `Installing`: that page names a command this window is
+    /// running and streams its output, and titling this one "Installing My
+    /// Claude Code" would say the window is doing the very thing it is
+    /// carefully not doing. The distinction is the whole fix -- one installer
+    /// at a time -- so the window says which one it is.
+    Updating { message: String },
     /// The port is free but starting the server is not this windows job.
     NotOurServer { message: String },
     /// Someone else holds the port. The message is Pythons, verbatim.
@@ -141,6 +149,9 @@ mod tests {
                 command: String::new(),
                 message: String::new(),
             },
+            Page::Updating {
+                message: String::new(),
+            },
             Page::NotOurServer {
                 message: String::new(),
             },
@@ -157,6 +168,55 @@ mod tests {
         ];
         for page in pages {
             assert!(render_script(&page).contains("\"kind\":\""), "{page:?}");
+        }
+    }
+
+    #[test]
+    fn every_kind_has_a_heading_in_the_page_that_renders_it() {
+        // The page falls back to the product name for a kind it has never
+        // heard of, so a new variant does not break anything -- it just wears
+        // somebody else's heading, or none. `Updating` was added in 6.58.3 for
+        // exactly the reason a fallback is not good enough: it must not say
+        // "Installing My Claude Code" while the whole point is that this
+        // window is NOT installing anything.
+        let document = include_str!("../../ui/index.html");
+        for page in [
+            Page::Checking,
+            Page::Starting {
+                message: String::new(),
+            },
+            Page::Installing {
+                command: String::new(),
+                message: String::new(),
+            },
+            Page::Updating {
+                message: String::new(),
+            },
+            Page::NotOurServer {
+                message: String::new(),
+            },
+            Page::PortConflict {
+                message: String::new(),
+            },
+            Page::Reconnecting {
+                message: String::new(),
+            },
+            Page::Error {
+                message: String::new(),
+                server_log: None,
+            },
+        ] {
+            let json = serde_json::to_string(&page).expect("a page serializes");
+            let kind = json
+                .split("\"kind\":\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .expect("a kind");
+            assert!(
+                document.contains(&format!("{kind}:"))
+                    || document.contains(&format!("\"{kind}\":")),
+                "ui/index.html has no heading for the {kind} page"
+            );
         }
     }
 }

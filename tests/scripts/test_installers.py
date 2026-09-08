@@ -2017,6 +2017,57 @@ def test_updater_helper_matches_the_installer_rename_and_staged_fallback() -> No
     assert "uv-receipt.toml" in updater
 
 
+def test_neither_installer_skips_its_fast_path_over_a_refused_rename() -> None:
+    """The 6.58.3 lockstep, in the one place the two scripts can drift.
+
+    Both had the same guard and the same bug: a rename that a live launcher
+    refused took the install off its cheap path entirely. The user keeps
+    `mcc-claude` windows open for hours, so that refusal is the normal case,
+    not the edge one -- and the staged fallback behind the fast path was
+    already written to survive exactly this lock.
+    """
+
+    powershell = _install_ps1()
+    updater = _release_updates_py()
+
+    # The installer: the direct run is no longer inside a refusal guard.
+    assert "if (($refusedShims.Count -eq 0) -or (-not $canStage))" not in powershell
+    assert "The direct install ALWAYS runs." in powershell
+    # A refusal is still reported, and still routes to the staged install.
+    assert "Could not move $(Split-Path -Leaf $move.Original) aside" in powershell
+    assert "Installing through a staging directory instead" in powershell
+
+    # The updater helper: same change, same reason.
+    assert "if ($refused.Count -eq 0) {\n    foreach" not in updater
+    assert "$fastDelays" in updater
+    assert "The fast loop ALWAYS runs." in updater
+
+
+def test_neither_installer_moves_the_desktop_shells_own_launcher_aside() -> None:
+    """`mcc-desktop` is what the running window asks; moving it starts a race.
+
+    The window reads `NotInstalled` from a missing shim and, by design, runs
+    the installer itself -- into the tool directory the helper is writing.
+    """
+
+    updater = _release_updates_py()
+    assert "$neverRename" in updater
+    # Rendered through `_powershell_literal`, so the source spells the names as
+    # a Python tuple rather than as PowerShell literals.
+    assert '"mcc-desktop.exe", "fcc-desktop.exe", "MyClaudeCode.exe"' in updater
+    assert "$neverRename -contains $fileName" in updater
+
+
+def test_the_updater_helper_always_leaves_a_server_running() -> None:
+    """A failed update used to end with no server and no recovery."""
+
+    updater = _release_updates_py()
+    assert updater.count("Start-Process -FilePath") == 1
+    assert "$result['restarted'] = $restarted" in updater
+    assert "The previous version was restarted." in updater
+    assert "Write-Stage 'recovered'" in updater
+
+
 def test_updater_helper_script_is_valid_powershell_after_rendering() -> None:
     """The helper is generated from an f-string; a bad escape would ship."""
     script = _deferred_helper_script(

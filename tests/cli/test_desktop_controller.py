@@ -2,6 +2,7 @@
 
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -128,6 +129,54 @@ class TestEnsureServer:
         controller.ensure_server()
 
         assert spawned == []
+
+    def test_a_live_update_helper_is_waited_for_rather_than_raced(
+        self, monkeypatch, tmp_path
+    ):
+        """The tray's half of the fix the desktop shell got.
+
+        An update helper is rewriting the tool environment this very command
+        lives in. Spawning here starts a server out of a half-written install,
+        and the helper starts one itself the moment it is done -- on both
+        branches now -- so a spawn can only add a second server racing for the
+        port.
+        """
+
+        controller, spawned = _controller(
+            monkeypatch, tmp_path, "spawn", preflight_result="down"
+        )
+        monkeypatch.setattr(
+            desktop_module,
+            "active_update",
+            lambda: {
+                "stage": "installing",
+                "version": "6.58.3",
+                "started_at": time.time() - 12,
+            },
+        )
+
+        with pytest.raises(DesktopError) as raised:
+            controller.ensure_server()
+
+        assert spawned == []
+        # It names the version and how long it has been going: the sentence it
+        # replaces ("could not start the server") sent the user off to
+        # reinstall by hand, into the directory the helper was writing.
+        assert "6.58.3" in str(raised.value)
+        assert "installer is running" in str(raised.value)
+        assert "s so far" in str(raised.value)
+
+    def test_no_helper_running_is_the_ordinary_case(self, monkeypatch, tmp_path):
+        """A gate that blocked without a receipt would be a tray that never starts."""
+
+        controller, spawned = _controller(
+            monkeypatch, tmp_path, "spawn", preflight_result="down"
+        )
+        monkeypatch.setattr(desktop_module, "active_update", lambda: None)
+
+        controller.ensure_server()
+
+        assert len(spawned) == 1
 
 
 class TestRestartServer:
