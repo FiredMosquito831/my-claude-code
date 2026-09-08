@@ -59,6 +59,15 @@ $FccRepo = "FiredMosquito831/my-claude-code"
 $FccLatestReleaseUrl = "https://api.github.com/repos/$FccRepo/releases/latest"
 $PythonVersion = "3.14.0"
 $MinUvVersion = "0.11.0"
+# What a complete install actually costs on disk, so a full-disk failure can
+# say how much room to make instead of retrying. Measured on 2026-09-09 with a
+# scratch UV_TOOL_DIR / UV_TOOL_BIN_DIR / UV_CACHE_DIR / UV_PYTHON_INSTALL_DIR:
+# see the commit message for the per-directory split. The recommendation is
+# larger than the measurement because uv unpacks the interpreter and the wheel
+# through its cache before it hardlinks them into place, so the peak is above
+# the resting footprint.
+$InstallFootprintMb = 340
+$InstallRecommendedMb = 1024
 $UvInstallUrl = "https://astral.sh/uv/install.ps1"
 # Absolute path to the uv this script verified, set by Ensure-Uv. A fresh uv
 # install lands in a directory the CURRENT shell may not have on PATH, so every
@@ -137,7 +146,8 @@ function Format-Command {
 function Invoke-NativeCommand {
     param(
         [string] $FilePath,
-        [string[]] $Arguments = @()
+        [string[]] $Arguments = @(),
+        [string] $CaptureTo = ""
     )
 
     $commandText = Format-Command -FilePath $FilePath -Arguments $Arguments
@@ -147,12 +157,173 @@ function Invoke-NativeCommand {
     }
 
     $global:LASTEXITCODE = 0
-    & $FilePath @Arguments
+    if ([string]::IsNullOrWhiteSpace($CaptureTo)) {
+        & $FilePath @Arguments
+    }
+    else {
+        # uv's diagnosis of a failure is in the text it prints, never in its
+        # exit code: a full disk and a locked file both come back as a non-zero
+        # status and nothing else. The exception this function throws carries
+        # only "Command failed with exit code N", which is why the installer
+        # used to answer a full disk by retrying around locked files three
+        # times. Tee uv's output to a file so the caller can read WHY, while
+        # the user still watches the install happen.
+        $previousPreference = $ErrorActionPreference
+        # Windows PowerShell 5.1 turns a native command's stderr into an
+        # ErrorRecord, and under "Stop" the FIRST line uv writes to stderr
+        # would end the install before uv had finished. Capturing is a read.
+        $ErrorActionPreference = "Continue"
+        try {
+            & $FilePath @Arguments 2>&1 |
+                ForEach-Object { [string] $_ } |
+                Tee-Object -FilePath $CaptureTo
+        }
+        finally {
+            $ErrorActionPreference = $previousPreference
+        }
+    }
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
         throw "Command failed with exit code ${exitCode}: $commandText"
     }
 }
+
+# How a uv failure is classified from the text uv printed. The same two tables
+# exist in scripts/install.sh, and a contract test compares them, because the
+# two installers must reach the same verdict about the same machine.
+#
+#   disk-full  the volume is out of space. Retrying cannot help, and the ladder
+#              below (rename the tool dir aside, install through a staging
+#              directory) writes MORE files, so it makes a full disk worse.
+#   locked     a file is held by another process. This is what the ladder is
+#              for, and it is the only thing the ladder is for.
+#   unknown    everything else keeps the historical behaviour: try the ladder,
+#              because a failure the ladder happens to fix is still a fixed
+#              install, and then fail honestly.
+$UvDiskFullSignatures = @(
+    "os error 112",
+    "not enough space on the disk",
+    "no space left on device",
+    "enospc"
+)
+$UvLockedSignatures = @(
+    "os error 32",
+    "access is denied",
+    "being used by another process"
+)
+
+function Get-UvFailureCategory {
+    param([string] $Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return "unknown"
+    }
+    $haystack = $Text.ToLowerInvariant()
+    # Disk-full is tested first on purpose: when a message somehow carries both
+    # shapes, the one the ladder cannot fix has to win.
+    foreach ($signature in $UvDiskFullSignatures) {
+        if ($haystack.Contains($signature)) {
+            return "disk-full"
+        }
+    }
+    foreach ($signature in $UvLockedSignatures) {
+        if ($haystack.Contains($signature)) {
+            return "locked"
+        }
+    }
+    return "unknown"
+}
+
+function Read-CapturedOutput {
+    param([string] $Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return ""
+    }
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            return ""
+        }
+        return [IO.File]::ReadAllText($Path)
+    }
+    catch {
+        return ""
+    }
+}
+
+function New-CapturePath {
+    return Join-Path ([IO.Path]::GetTempPath()) ("mcc-uv-" + [guid]::NewGuid().ToString("N") + ".log")
+}
+
+function Get-FreeSpaceMb {
+    param([string] $Path)
+
+    try {
+        $root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Path))
+        if ([string]::IsNullOrWhiteSpace($root)) {
+            return $null
+        }
+        $drive = New-Object System.IO.DriveInfo($root)
+        return [math]::Round($drive.AvailableFreeSpace / 1MB, 0)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-InstallTargetDirectory {
+    param([string] $UvPath)
+
+    if (-not [string]::IsNullOrWhiteSpace($UvPath)) {
+        try {
+            $toolRoot = Invoke-NativeCapture -FilePath $UvPath -Arguments @("tool", "dir")
+            if (-not [string]::IsNullOrWhiteSpace($toolRoot)) {
+                return $toolRoot
+            }
+        }
+        catch {
+            # uv could not answer -- on a full disk that is entirely likely.
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:UV_TOOL_DIR)) {
+        return $env:UV_TOOL_DIR
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        return (Join-Path $env:APPDATA "uv")
+    }
+    return $PWD.Path
+}
+
+function Get-DiskFullMessage {
+    param([string] $UvPath)
+
+    $target = Get-InstallTargetDirectory -UvPath $UvPath
+    $drive = ""
+    try {
+        $drive = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($target))
+    }
+    catch {
+        $drive = ""
+    }
+    if ([string]::IsNullOrWhiteSpace($drive)) {
+        $drive = "the install drive"
+    }
+    $free = Get-FreeSpaceMb $target
+    $freeText = if ($null -eq $free) { "could not be read" } else { "$free MB" }
+
+    $lines = @(
+        "",
+        "The install stopped because $drive has no space left.",
+        "  free on ${drive}: $freeText",
+        "  this install needs: about $InstallFootprintMb MB (Python $PythonVersion, the tool environment and the uv cache it unpacks through); leave $InstallRecommendedMb MB free",
+        "  it writes to: $target",
+        "A full disk is not a locked file. Retrying writes more files, so the installer stops here instead.",
+        "Free space on $drive and run the install command again.",
+        "uv tool install --force removes the previous environment before it writes the new one, so this machine has no mcc-server until that re-run finishes."
+    )
+    return ($lines -join "`n")
+}
+
 
 function Remove-AnsiEscape {
     param([string] $Text)
@@ -682,9 +853,10 @@ function Install-FreeClaudeCode {
         }
     }
 
+    $capturePath = New-CapturePath
     try {
         try {
-            Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments
+            Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments -CaptureTo $capturePath
         }
         catch {
             # Nothing of ours looked like it was running, yet uv could not write.
@@ -692,6 +864,18 @@ function Install-FreeClaudeCode {
             # launcher started from a copy, a shim held by a scanner rather than
             # by us), so never let "os error 32" out of here without trying the
             # path built for locked files. Only a failure of THAT is a failure.
+            #
+            # But FIRST read what uv said. A machine that is simply out of space
+            # used to take this branch too, and the ladder below then renamed the
+            # tool directory aside and installed through a staging directory --
+            # two more attempts, both writing files, on a volume with no room for
+            # any of them. Three failures and eight minutes to say "the install
+            # failed", when the first line uv printed said "os error 112".
+            $category = Get-UvFailureCategory (Read-CapturedOutput $capturePath)
+            if ($category -eq "disk-full") {
+                Write-Host (Get-DiskFullMessage -UvPath $uvPath)
+                exit 1
+            }
             Write-Host "The install did not finish ($($_.Exception.Message)); retrying around locked files."
             $toolDir = Get-UvToolDir -UvPath $uvPath
             if ($null -eq $toolDir) {
@@ -710,6 +894,7 @@ function Install-FreeClaudeCode {
     }
     finally {
         Remove-Item -LiteralPath (Split-Path -Parent $wheelPath) -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $capturePath -Force -ErrorAction SilentlyContinue
     }
     return $release.Version
 }
@@ -848,15 +1033,38 @@ function Invoke-RenameThenReinstall {
     foreach ($move in $refusedShims) {
         Write-Host "Could not move $(Split-Path -Leaf $move.Original) aside: $($move.Error)"
     }
+    $capturePath = New-CapturePath
+    $diskFull = $false
     try {
-        Invoke-NativeCommand -FilePath $UvPath -Arguments $Arguments
+        Invoke-NativeCommand -FilePath $UvPath -Arguments $Arguments -CaptureTo $capturePath
         $installed = $true
     }
     catch {
         $installError = $_.Exception.Message
+        if ((Get-UvFailureCategory (Read-CapturedOutput $capturePath)) -eq "disk-full") {
+            # The staging directory below is one more copy of the same files on
+            # the same volume. Do not attempt it, and do not pretend the reason
+            # was a lock.
+            $diskFull = $true
+        }
         if ($refusedShims.Count -gt 0) {
             $installError = "$installError ($($refusedShims.Count) launcher shim(s) could not be moved aside)"
         }
+    }
+    finally {
+        Remove-Item -LiteralPath $capturePath -Force -ErrorAction SilentlyContinue
+    }
+
+    if ((-not $installed) -and $diskFull) {
+        # Put the machine back the way it was before this function moved things
+        # aside, then say the one true thing about it.
+        Remove-Item -LiteralPath $ToolDir -Recurse -Force -ErrorAction SilentlyContinue
+        if ((-not [string]::IsNullOrWhiteSpace($renamed)) -and (Test-Path -LiteralPath $renamed -PathType Container)) {
+            Rename-Item -LiteralPath $renamed -NewName (Split-Path -Leaf $ToolDir) -ErrorAction SilentlyContinue
+        }
+        Restore-LauncherShim -Backups $shimBackups
+        Write-Host (Get-DiskFullMessage -UvPath $UvPath)
+        exit 1
     }
 
     if ((-not $installed) -and $canStage) {
@@ -1355,22 +1563,32 @@ function Configure-AndConfirmFreeClaudeCode {
     # reports the NEW version. A user was told the install was verified while
     # seven of their commands did not exist. Never report success for a command
     # that is not there.
+    #
+    # Ask the DIRECTORY, never PATH. This used to call Get-ApplicationCommand --
+    # `Get-Command -CommandType Application`, i.e. the FIRST hit on PATH -- and
+    # throw when the file it found was not in the uv tool bin directory. On
+    # Windows npm's global bin (%APPDATA%\npm) precedes ~/.local/bin, so a
+    # leftover `my-claude-code.cmd` from an older version of the npm package
+    # made this check decide that a complete, correct install had put its files
+    # somewhere illegal -- permanently, on every later run of the one-liner too.
+    # Which program a NAME resolves to is a fact about PATH order on the user's
+    # machine; it is not a failed install. install.sh has always tested the file
+    # (`[ ! -x "$tool_bin/$command_name" ]`) and was immune to the whole class.
     $installedCommands = @{}
     $missingCommands = @()
+    $shadowedCommands = @()
     foreach ($commandName in Get-LauncherCommands) {
-        $command = Get-ApplicationCommand $commandName
-        if (-not $command) {
+        $launcher = Get-LauncherInBinDirectory -BinDir $toolBinPath -Name $commandName
+        if ($null -eq $launcher) {
             $missingCommands += $commandName
             continue
         }
-        $commandDirectory = ([IO.Path]::GetFullPath((Split-Path -Parent $command.Source))).TrimEnd(
-            [IO.Path]::DirectorySeparatorChar,
-            [IO.Path]::AltDirectorySeparatorChar
-        )
-        if (-not $commandDirectory.Equals($toolBinPath, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "'$commandName' resolved outside the uv tool bin directory: $($command.Source)"
+        $installedCommands[$commandName] = $launcher
+
+        $shadow = Get-ShadowingProgram -Name $commandName -BinDir $toolBinPath
+        if ($null -ne $shadow) {
+            $shadowedCommands += [pscustomobject]@{ Name = $commandName; Path = $shadow }
         }
-        $installedCommands[$commandName] = $command.Source
     }
 
     if ($missingCommands.Count -gt 0) {
@@ -1379,6 +1597,8 @@ function Configure-AndConfirmFreeClaudeCode {
         Write-Host "Close the mcc-claude window(s) and re-run the install command."
         exit 1
     }
+
+    Write-ShadowingProgramWarning -Shadowed $shadowedCommands -BinDir $toolBinPath
 
     $installedVersion = Invoke-NativeCapture -FilePath $installedCommands["mcc-server"] -Arguments @("--version")
     if ($installedVersion -ne "my-claude-code $ExpectedVersion") {
@@ -1435,6 +1655,111 @@ function Write-MccCommandReference {
     Write-Host ""
     Write-Host "To use an update installed while the server is running, restart the proxy"
     Write-Host "with: mcc-server"
+}
+
+function Get-LauncherInBinDirectory {
+    param(
+        [Parameter(Mandatory = $true)] [string] $BinDir,
+        [Parameter(Mandatory = $true)] [string] $Name
+    )
+
+    # uv writes .exe shims on Windows. The other shapes are here so this
+    # answers the same question about any launcher a bin directory can hold,
+    # which is also what lets the installer tests drive it with .cmd stubs.
+    foreach ($suffix in @(".exe", ".cmd", ".bat", "")) {
+        $candidate = Join-Path $BinDir ($Name + $suffix)
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Get-NpmGlobalBinDirectory {
+    # Where npm writes the shims for a global install. On Windows the prefix IS the
+    # directory holding them (%APPDATA%\npm\<name>.cmd), not a bin/ under it,
+    # and npm.cmd itself lives there too. No subprocess: this runs once per
+    # shadowed name and only to make a warning more useful.
+    $directories = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        $directories += (Join-Path $env:APPDATA "npm")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:npm_config_prefix)) {
+        $directories += $env:npm_config_prefix
+    }
+    $npm = Get-ApplicationCommand "npm"
+    if ($npm) {
+        $directories += (Split-Path -Parent $npm.Source)
+    }
+    return @($directories | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+function Get-ShadowingProgram {
+    param(
+        [Parameter(Mandatory = $true)] [string] $Name,
+        [Parameter(Mandatory = $true)] [string] $BinDir
+    )
+
+    # A diagnosis, never a verification: every path out of here that is not "a
+    # different file answers to this name" returns $null rather than failing.
+    try {
+        $command = Get-ApplicationCommand $Name
+        if (-not $command) {
+            return $null
+        }
+        $directory = ([IO.Path]::GetFullPath((Split-Path -Parent $command.Source))).TrimEnd(
+            [IO.Path]::DirectorySeparatorChar,
+            [IO.Path]::AltDirectorySeparatorChar
+        )
+        if ($directory.Equals($BinDir, [StringComparison]::OrdinalIgnoreCase)) {
+            return $null
+        }
+        return $command.Source
+    }
+    catch {
+        return $null
+    }
+}
+
+function Write-ShadowingProgramWarning {
+    param(
+        [object[]] $Shadowed = @(),
+        [string] $BinDir = ""
+    )
+
+    if ($null -eq $Shadowed -or $Shadowed.Count -eq 0) {
+        return
+    }
+
+    $npmDirectories = @()
+    foreach ($directory in (Get-NpmGlobalBinDirectory)) {
+        try {
+            $npmDirectories += ([IO.Path]::GetFullPath($directory)).TrimEnd(
+                [IO.Path]::DirectorySeparatorChar,
+                [IO.Path]::AltDirectorySeparatorChar
+            )
+        }
+        catch {
+            # An unusable prefix simply cannot be the one shadowing us.
+        }
+    }
+
+    $fromNpm = $false
+    Write-Host ""
+    foreach ($entry in $Shadowed) {
+        Write-Host "WARNING: Another program earlier on PATH answers to this name: $($entry.Name) -> $($entry.Path)"
+        foreach ($directory in $npmDirectories) {
+            if ($entry.Path.StartsWith($directory + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+                $fromNpm = $true
+            }
+        }
+    }
+    Write-Host "The install itself is fine: every command was verified in $BinDir."
+    Write-Host "Until that other program is removed, or the uv bin directory comes first on PATH, typing the name above runs it instead."
+    if ($fromNpm) {
+        Write-Host "That path belongs to npm. An older version of the npm package published this name; remove it with:"
+        Write-Host "  npm uninstall -g @firedmosquito831/my-claude-code"
+    }
 }
 
 function Get-LauncherCommands {

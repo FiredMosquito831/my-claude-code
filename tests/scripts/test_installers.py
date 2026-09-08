@@ -188,6 +188,15 @@ if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
     if [ "$FAIL_STEP" = "fcc-install" ]; then
         exit 33
     fi
+    if [ "$FAIL_STEP" = "fcc-install-disk-full" ]; then
+        echo "error: Failed to install my-claude-code" >&2
+        echo "  Caused by: failed to write to file: No space left on device (os error 28)" >&2
+        exit 2
+    fi
+    if [ "$FAIL_STEP" = "fcc-install-locked" ]; then
+        echo "error: failed to copy mcc-claude: Text file busy (access is denied)" >&2
+        exit 2
+    fi
     mkdir -p "$FAKE_TOOL_BIN"
     for name in mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi \
         mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi \
@@ -796,10 +805,19 @@ if not exist "%FAKE_PYTHON_DIR%\cpython-3.14.0" mkdir "%FAKE_PYTHON_DIR%\cpython
 exit /b 0
 :install
 if "%FAIL_STEP%"=="fcc-install" exit /b 53
+if "%FAIL_STEP%"=="fcc-install-disk-full" goto install_disk_full
+if "%FAIL_STEP%"=="fcc-install-locked" goto install_locked
 if not exist "%FAKE_TOOL_BIN%" mkdir "%FAKE_TOOL_BIN%"
 for %%N in (fcc-anthropic-oauth-login fcc-chatgpt-oauth-login fcc-claude fcc-claude-old fcc-codex fcc-compact-log fcc-desktop fcc-help fcc-init fcc-migrate fcc-pi fcc-rtk fcc-server free-claude-code mcc-aider mcc-anthropic-oauth-login mcc-apps mcc-chatgpt-oauth-login mcc-claude mcc-claude-old mcc-cline mcc-codex mcc-commandcode mcc-compact-log mcc-crush mcc-desktop mcc-droid mcc-gemini mcc-goose mcc-help mcc-init mcc-kilo mcc-kimi mcc-migrate mcc-opencode mcc-opencode2 mcc-pi mcc-qwen mcc-rtk mcc-server my-claude-code) do copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%FAKE_TOOL_BIN%\%%N.cmd" >nul
 if "%FAIL_STEP%"=="fcc-missing" del /q "%FAKE_TOOL_BIN%\mcc-server.cmd" >nul
 exit /b 0
+:install_disk_full
+echo error: Failed to install my-claude-code 1>&2
+echo   Caused by: failed to write to file: There is not enough space on the disk. (os error 112) 1>&2
+exit /b 2
+:install_locked
+echo error: failed to copy mcc-desktop.exe: The process cannot access the file because it is being used by another process. (os error 32) 1>&2
+exit /b 2
 :update_shell
 if "%FAIL_STEP%"=="path-update" exit /b 54
 exit /b 0
@@ -1332,6 +1350,14 @@ def _extract_function_definition(installer_text: str, name: str) -> str:
 # too. Extracting them from the real installer keeps the runtime tests honest:
 # a change to any of them is exercised rather than stubbed.
 _RENAME_DEPENDENCIES = (
+    # 6.64.0: the ladder is for locked files only, so it reads what uv printed
+    # before it renames anything aside. These come with it.
+    "Get-UvFailureCategory",
+    "Read-CapturedOutput",
+    "New-CapturePath",
+    "Get-FreeSpaceMb",
+    "Get-InstallTargetDirectory",
+    "Get-DiskFullMessage",
     "Get-LauncherCommands",
     "Get-ManagedShimName",
     "Rename-LauncherShimsAside",
@@ -1345,14 +1371,43 @@ _RENAME_DEPENDENCIES = (
 
 def _rename_functions_file(installer_text: str, path: Path) -> Path:
     """Write every function Invoke-RenameThenReinstall needs to one file."""
+    # The classification tables and the footprint figures are module-level in
+    # install.ps1, and Set-StrictMode makes an unset variable fatal, so they
+    # travel with the functions that read them.
+    preamble = "".join(
+        _braced_or_assignment(installer_text, name)
+        for name in (
+            "$UvDiskFullSignatures",
+            "$UvLockedSignatures",
+            "$InstallFootprintMb",
+            "$InstallRecommendedMb",
+            "$PythonVersion",
+        )
+    )
     path.write_text(
-        "".join(
+        preamble
+        + "".join(
             _extract_function_definition(installer_text, name)
             for name in _RENAME_DEPENDENCIES
         ),
         encoding="utf-8",
     )
     return path
+
+
+def _braced_or_assignment(installer_text: str, name: str) -> str:
+    """The top-level assignment of `name` in install.ps1, verbatim."""
+    lines = installer_text.splitlines()
+    prefix = f"{name} = "
+    for index, line in enumerate(lines):
+        if not line.startswith(prefix):
+            continue
+        if not line.rstrip().endswith("@("):
+            return line + "\n"
+        for end in range(index + 1, len(lines)):
+            if lines[end].rstrip() == ")":
+                return "\n".join(lines[index : end + 1]) + "\n"
+    raise AssertionError(f"install.ps1 no longer assigns {name}")
 
 
 def test_install_ps1_rename_reinstall_renames_tool_dir_and_runs_uv(
@@ -1401,7 +1456,7 @@ def test_install_ps1_rename_reinstall_renames_tool_dir_and_runs_uv(
         f"""Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 function Invoke-NativeCommand {{
-    param([string] $FilePath, [string[]] $Arguments = @())
+    param([string] $FilePath, [string[]] $Arguments = @(), [string] $CaptureTo = "")
     $global:LASTEXITCODE = 0
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {{ throw "Command failed with exit code $($LASTEXITCODE): $FilePath" }}
@@ -1488,7 +1543,7 @@ def test_install_ps1_rename_reinstall_restores_old_dir_on_failed_install(
         f"""Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 function Invoke-NativeCommand {{
-    param([string] $FilePath, [string[]] $Arguments = @())
+    param([string] $FilePath, [string[]] $Arguments = @(), [string] $CaptureTo = "")
     $global:LASTEXITCODE = 0
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {{ throw "Command failed with exit code $($LASTEXITCODE): $FilePath" }}
@@ -1602,7 +1657,7 @@ def test_install_ps1_renames_every_launcher_shim_before_uv_install(
         f"""Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 function Invoke-NativeCommand {{
-    param([string] $FilePath, [string[]] $Arguments = @())
+    param([string] $FilePath, [string[]] $Arguments = @(), [string] $CaptureTo = "")
     $global:LASTEXITCODE = 0
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {{ throw "Command failed with exit code $($LASTEXITCODE): $FilePath" }}
@@ -1675,53 +1730,23 @@ def test_install_ps1_never_reports_verified_with_missing_commands(
     shim reports the NEW version. A user was told "installed and verified"
     while seven of their commands did not exist at all.
     """
-    installer_text = (_repo_root() / "scripts" / "install.ps1").read_text(
-        encoding="utf-8"
-    )
-    func_file = tmp_path / "ConfigureAndConfirm.ps1"
-    func_file.write_text(
-        # Configure-AndConfirmFreeClaudeCode runs the uv it pinned during
-        # Ensure-Uv rather than re-searching PATH, so the resolver comes with
-        # it and the module-level pin has to exist under Set-StrictMode.
-        '$script:UvPath = ""\n'
-        + _extract_function_definition(installer_text, "Resolve-UvPath")
-        + _extract_function_definition(installer_text, "Get-LauncherCommands")
-        + _extract_function_definition(
-            installer_text, "Configure-AndConfirmFreeClaudeCode"
-        ),
-        encoding="utf-8",
-    )
-
-    tool_bin = tmp_path / "tool-bin"
-    tool_bin.mkdir(parents=True, exist_ok=True)
-
-    runner = tmp_path / "run-verify.ps1"
-    runner.write_text(
-        f"""Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-$toolBin = "{(tool_bin.as_posix())}"
-function Get-ApplicationCommand {{
-    param([string] $Name)
-    if ($Name -eq "uv") {{ return [pscustomobject]@{{ Source = "C:\\fake\\uv.exe" }} }}
-    if (($env:FAKE_MISSING -split ",") -contains $Name) {{ return $null }}
-    return [pscustomobject]@{{ Source = (Join-Path $toolBin ($Name + ".exe")) }}
-}}
-function Invoke-NativeCommand {{ param([string] $FilePath, [string[]] $Arguments = @()) }}
-function Invoke-NativeCapture {{
-    param([string] $FilePath, [string[]] $Arguments = @())
-    if ($FilePath -eq "C:\\fake\\uv.exe") {{ return $toolBin }}
-    return "my-claude-code 6.30.1"
-}}
-function Add-PathEntry {{ param([string] $PathEntry) }}
-$DryRun = $false
-. "{(func_file.as_posix())}"
-Configure-AndConfirmFreeClaudeCode -ExpectedVersion "6.30.1"
-Write-Host "My Claude Code 6.30.1 is installed and verified."
-""",
-        encoding="utf-8",
-    )
+    # Configure-AndConfirmFreeClaudeCode runs the uv it pinned during Ensure-Uv
+    # rather than re-searching PATH, and since 6.64.0 it also reads the bin
+    # directory and diagnoses a shadowing program, so the whole family comes
+    # with it and the module-level pin has to exist under Set-StrictMode.
+    tool_bin = _populated_tool_bin(tmp_path)
+    runner = _verification_runner(tmp_path, _verification_functions(tmp_path), tool_bin)
 
     def run(missing: str) -> subprocess.CompletedProcess[str]:
+        # The check now reads the DIRECTORY, so "missing" means the file is
+        # gone -- which is exactly what uv leaves behind when it aborts on a
+        # locked shim partway through writing the entrypoints.
+        for name in _launcher_commands():
+            shim = tool_bin / f"{name}.exe"
+            if name in {item for item in missing.split(",") if item}:
+                shim.unlink(missing_ok=True)
+            elif not shim.exists():
+                shim.write_text("shim", encoding="utf-8")
         return subprocess.run(
             [
                 powershell_harness.powershell,
@@ -1734,7 +1759,7 @@ Write-Host "My Claude Code 6.30.1 is installed and verified."
             check=False,
             capture_output=True,
             text=True,
-            env=powershell_harness.env | {"FAKE_MISSING": missing},
+            env=powershell_harness.env | {"FAKE_SHADOW": ""},
         )
 
     # Exactly the shape of the reported defect: uv aborted alphabetically at
@@ -2720,7 +2745,7 @@ def test_installers_pin_the_uv_they_installed_by_absolute_path() -> None:
     powershell = _install_ps1()
 
     assert "uv_bin=$(command -v uv)" in shell
-    assert 'run "$uv_bin" tool install' in shell
+    assert 'run_uv_capturing "$uv_bin" tool install' in shell
     assert 'run "$uv_bin" tool update-shell' in shell
     assert 'tool_bin=$("$uv_bin" tool dir --bin)' in shell
     # No bare `uv` subcommand invocation survives in either script.
@@ -2794,3 +2819,536 @@ def test_install_sh_finds_uv_where_xdg_data_home_puts_it() -> None:
 
     assert 'add_path_entry "${XDG_DATA_HOME%/}/../bin"' in shell
     assert 'if [ -n "${XDG_DATA_HOME:-}" ]; then' in shell
+
+
+# --------------------------------------------------------------- PR-1 (6.64.0)
+
+
+def _launcher_commands() -> list[str]:
+    """The names Get-LauncherCommands returns, read out of install.ps1."""
+    body = _extract_function_definition(_install_ps1(), "Get-LauncherCommands")
+    return re.findall(r'"([A-Za-z0-9._-]+)"', body.split("return @(", 1)[1])
+
+
+def _verification_runner(tmp_path: Path, func_file: Path, tool_bin: Path) -> Path:
+    """A harness around Configure-AndConfirmFreeClaudeCode.
+
+    ``FAKE_SHADOW`` is a path returned by the stubbed Get-ApplicationCommand
+    for the name ``my-claude-code`` -- the leftover npm shim, the thing that
+    used to make this function throw.
+    """
+    runner = tmp_path / "run-verify.ps1"
+    runner.write_text(
+        f"""Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$toolBin = "{tool_bin.as_posix()}"
+function Get-ApplicationCommand {{
+    param([string] $Name)
+    if ($Name -eq "uv") {{ return [pscustomobject]@{{ Source = "C:\\fake\\uv.exe" }} }}
+    if ($Name -eq "npm") {{ return $null }}
+    if ($Name -eq "my-claude-code" -and $env:FAKE_SHADOW) {{
+        return [pscustomobject]@{{ Source = $env:FAKE_SHADOW }}
+    }}
+    if (Test-Path -LiteralPath (Join-Path $toolBin ($Name + ".exe")) -PathType Leaf) {{
+        return [pscustomobject]@{{ Source = (Join-Path $toolBin ($Name + ".exe")) }}
+    }}
+    return $null
+}}
+function Invoke-NativeCommand {{ param([string] $FilePath, [string[]] $Arguments = @(), [string] $CaptureTo = "") }}
+function Invoke-NativeCapture {{
+    param([string] $FilePath, [string[]] $Arguments = @())
+    if ($FilePath -eq "C:\\fake\\uv.exe") {{ return $toolBin }}
+    return "my-claude-code 6.30.1"
+}}
+function Add-PathEntry {{ param([string] $PathEntry) }}
+$DryRun = $false
+. "{func_file.as_posix()}"
+Configure-AndConfirmFreeClaudeCode -ExpectedVersion "6.30.1"
+Write-Host "My Claude Code 6.30.1 is installed and verified."
+""",
+        encoding="utf-8",
+    )
+    return runner
+
+
+def _verification_functions(tmp_path: Path) -> Path:
+    installer_text = _install_ps1()
+    func_file = tmp_path / "ConfigureAndConfirm.ps1"
+    func_file.write_text(
+        '$script:UvPath = ""\n'
+        + _extract_function_definition(installer_text, "Resolve-UvPath")
+        + _extract_function_definition(installer_text, "Get-LauncherInBinDirectory")
+        + _extract_function_definition(installer_text, "Get-NpmGlobalBinDirectory")
+        + _extract_function_definition(installer_text, "Get-ShadowingProgram")
+        + _extract_function_definition(installer_text, "Write-ShadowingProgramWarning")
+        + _extract_function_definition(installer_text, "Get-LauncherCommands")
+        + _extract_function_definition(
+            installer_text, "Configure-AndConfirmFreeClaudeCode"
+        ),
+        encoding="utf-8",
+    )
+    return func_file
+
+
+def _run_verification(
+    powershell_harness: PowerShellHarness,
+    runner: Path,
+    shadow: str,
+    npm_prefix: str = "",
+) -> subprocess.CompletedProcess[str]:
+    environment = powershell_harness.env | {"FAKE_SHADOW": shadow}
+    if npm_prefix:
+        environment["npm_config_prefix"] = npm_prefix
+    else:
+        environment.pop("npm_config_prefix", None)
+    return subprocess.run(
+        [
+            powershell_harness.powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(runner),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+
+def _populated_tool_bin(tmp_path: Path) -> Path:
+    tool_bin = tmp_path / "tool-bin"
+    tool_bin.mkdir(parents=True, exist_ok=True)
+    for name in _launcher_commands():
+        (tool_bin / f"{name}.exe").write_text("shim", encoding="utf-8")
+    return tool_bin
+
+
+def test_install_ps1_verifies_the_file_in_the_uv_bin_dir_not_what_path_resolves(
+    powershell_harness: PowerShellHarness,
+    tmp_path: Path,
+) -> None:
+    """A shim ahead of us on PATH is not a failed install.
+
+    `npm install -g @firedmosquito831/my-claude-code` published a bin called
+    `my-claude-code` from 6.53.1 to 6.63.0. That is a console script of the
+    WHEEL, and on Windows `%APPDATA%\npm` precedes `~/.local/bin` on PATH, so
+    the verification -- which asked PATH -- resolved npm's shim, found it
+    outside the uv tool bin directory and threw:
+
+        'my-claude-code' resolved outside the uv tool bin directory: ...
+
+    after a complete and correct install of all 41 commands, and again on every
+    later run of the one-liner. install.sh tests the FILE and was immune to the
+    whole class; this makes the Windows installer do the same.
+    """
+    tool_bin = _populated_tool_bin(tmp_path)
+    runner = _verification_runner(tmp_path, _verification_functions(tmp_path), tool_bin)
+    npm_bin = tmp_path / "npm-bin"
+    npm_bin.mkdir()
+    shim = npm_bin / "my-claude-code.cmd"
+    shim.write_text("@echo off\n", encoding="utf-8")
+
+    result = _run_verification(powershell_harness, runner, str(shim))
+
+    assert result.returncode == 0, (
+        "a PATH-order fact about the machine failed the install:\n"
+        + result.stdout
+        + result.stderr
+    )
+    assert "resolved outside the uv tool bin directory" not in (
+        result.stdout + result.stderr
+    )
+    assert "is installed and verified." in result.stdout
+
+
+def test_install_ps1_names_the_shadowing_program_and_the_npm_remedy(
+    powershell_harness: PowerShellHarness,
+    tmp_path: Path,
+) -> None:
+    """Warn, name the path, and print the exact command that removes it."""
+    tool_bin = _populated_tool_bin(tmp_path)
+    runner = _verification_runner(tmp_path, _verification_functions(tmp_path), tool_bin)
+    npm_bin = tmp_path / "npm-bin"
+    npm_bin.mkdir()
+    shim = npm_bin / "my-claude-code.cmd"
+    shim.write_text("@echo off\n", encoding="utf-8")
+
+    result = _run_verification(
+        powershell_harness, runner, str(shim), npm_prefix=str(npm_bin)
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "WARNING: Another program earlier on PATH answers to this name" in (
+        result.stdout
+    )
+    assert "my-claude-code -> " in result.stdout
+    assert str(shim) in result.stdout, "the warning must name the actual path"
+    assert "npm uninstall -g @firedmosquito831/my-claude-code" in result.stdout
+    assert "is installed and verified." in result.stdout
+
+
+def test_install_ps1_still_refuses_when_a_launcher_is_absent_from_the_uv_bin_dir(
+    powershell_harness: PowerShellHarness,
+    tmp_path: Path,
+) -> None:
+    """The 6.30.1 honesty guarantee survives the new check (invariant 2)."""
+    tool_bin = _populated_tool_bin(tmp_path)
+    (tool_bin / "mcc-kimi.exe").unlink()
+    (tool_bin / "mcc-crush.exe").unlink()
+    runner = _verification_runner(tmp_path, _verification_functions(tmp_path), tool_bin)
+
+    result = _run_verification(powershell_harness, runner, "")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "verified" not in result.stdout
+    assert "Installed, but these commands are missing:" in result.stdout
+    for name in ("mcc-kimi", "mcc-crush"):
+        assert name in result.stdout
+
+
+def test_a_full_disk_stops_the_install_instead_of_retrying_around_locked_files(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    """A full disk took the locked-file ladder three times, then lied about why.
+
+    Every uv failure reached the same bare `catch`, whose first act was to
+    print "retrying around locked files" and start renaming the tool directory
+    aside and installing through a staging directory -- more files, on a volume
+    with no room for any. The user's log shows three attempts and eight minutes
+    to reach "My Claude Code install failed", when uv's first line said
+    "os error 112".
+    """
+    powershell_harness.require_mockable_file_hash()
+    powershell_harness.add_uv("0.11.28")
+    result = powershell_harness.run(fail_step="fcc-install-disk-full")
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, output
+    installs = [call for call in powershell_harness.calls() if "tool install" in call]
+    assert len(installs) == 1, f"the ladder ran on a full disk: {installs}"
+    assert "retrying around locked files" not in output, output
+    assert "staging directory" not in output, output
+    assert "has no space left" in output, output
+    assert "340 MB" in output, "it must say how much room to make"
+    assert "1024 MB" in output, "it must give the recommended headroom"
+    assert "no mcc-server until that re-run finishes" in output, (
+        "it must say that --force already removed the previous environment"
+    )
+    assert "is installed and verified." not in output
+
+
+def test_a_locked_shim_still_takes_the_rename_and_staged_ladder(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    """Invariant 3: a real lock still gets the whole ladder.
+
+    Which rung it starts on depends on the machine -- if any launcher is
+    running, Install-FreeClaudeCode enters Invoke-RenameThenReinstall directly
+    rather than through the direct-install catch -- so the assertion is that
+    the ladder ran, not which sentence announced it. What must never happen is
+    the disk-full stop, because "os error 32" is precisely what the ladder is
+    for.
+    """
+    powershell_harness.require_mockable_file_hash()
+    powershell_harness.add_uv("0.11.28")
+    result = powershell_harness.run(fail_step="fcc-install-locked")
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, output
+    assert (
+        "retrying around locked files" in output
+        or "Installing through a staging directory instead" in output
+    ), output
+    assert "has no space left" not in output, output
+    installs = [call for call in powershell_harness.calls() if "tool install" in call]
+    assert len(installs) > 1, f"the ladder was skipped for a real lock: {installs}"
+
+
+def test_install_sh_warns_about_a_shadowing_program_without_failing(
+    posix_harness: PosixHarness,
+) -> None:
+    """POSIX parity: name it, print the npm remedy, and still exit 0."""
+    shadow_dir = posix_harness.root / "npm-bin"
+    shadow_dir.mkdir(parents=True, exist_ok=True)
+    shim = shadow_dir / "my-claude-code"
+    shim.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    shim.chmod(0o755)
+
+    environment = dict(posix_harness.env)
+    environment["PATH"] = f"{shadow_dir}{os.pathsep}{environment['PATH']}"
+    result = subprocess.run(
+        ["sh", str(_repo_root() / "scripts" / "install.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "WARNING: Another program earlier on PATH answers to this name" in output
+    assert str(shim) in output
+    assert "is installed and verified." in output
+
+
+def test_install_sh_stops_on_no_space_left_on_device(
+    posix_harness: PosixHarness,
+) -> None:
+    """The POSIX twin of the disk-full stop."""
+    result = posix_harness.run(fail_step="fcc-install-disk-full")
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, output
+    installs = [call for call in posix_harness.calls() if "tool install" in call]
+    assert len(installs) == 1, f"uv was run more than once on a full disk: {installs}"
+    assert "has no space left" in output, output
+    assert "340 MB" in output, output
+    assert "no mcc-server until that re-run finishes" in output, output
+
+
+def test_installers_classify_uv_failures_from_captured_output() -> None:
+    """Static, so it runs on every platform (WORKING-NOTES section 20).
+
+    Both installers must capture what uv printed -- the exit code alone cannot
+    tell a full disk from a locked file -- and both classification tables must
+    list the same signatures, or the two installers would reach different
+    verdicts about the same machine.
+    """
+    powershell = _install_ps1()
+    shell = _install_sh()
+
+    # Captured, not thrown away.
+    assert "-CaptureTo $capturePath" in powershell, (
+        "install.ps1 runs uv without keeping its output; the classification "
+        "below can only read 'Command failed with exit code N'"
+    )
+    assert "run_uv_capturing" in shell, "install.sh throws uv's output away"
+
+    disk_full = (
+        "os error 112",
+        "not enough space on the disk",
+        "no space left on device",
+        "enospc",
+    )
+    locked = ("os error 32", "access is denied", "being used by another process")
+    for signature in disk_full + locked:
+        assert signature in powershell, f"install.ps1 does not know {signature!r}"
+        assert signature in shell, f"install.sh does not know {signature!r}"
+
+    # The ladder is for locks only.
+    assert "disk-full" in powershell and "disk-full" in shell
+    assert "Get-UvFailureCategory" in powershell
+    assert "classify_uv_failure" in shell
+
+
+# ------------------------------------------------------------- D5: install.cmd
+
+
+def _install_cmd() -> str:
+    return (_repo_root() / "scripts" / "install.cmd").read_text(encoding="utf-8")
+
+
+def test_install_cmd_bypasses_the_execution_policy_and_uses_a_file() -> None:
+    """The whole point of the CMD route.
+
+    PowerShell's execution policy applies to script FILES, so a saved
+    install.ps1 is refused under the default RemoteSigned/Restricted. The batch
+    file therefore passes -ExecutionPolicy Bypass -File itself, and never asks
+    the user to change a machine-wide setting with Set-ExecutionPolicy.
+    """
+    batch = _install_cmd()
+
+    assert "-NoProfile" in batch
+    assert "-ExecutionPolicy Bypass" in batch
+    assert "-File" in batch
+    assert "Set-ExecutionPolicy" not in batch, (
+        "the CMD route must never change a machine-wide execution policy"
+    )
+
+
+def test_install_cmd_forwards_every_flag_the_ps1_accepts() -> None:
+    """A drift guard over the two files' argument surfaces."""
+    batch = _install_cmd()
+    powershell = _install_ps1()
+    param_block = powershell.split(")", 1)[0]
+
+    mapping = {
+        "--desktop": "-Desktop",
+        "--rtk": "-Rtk",
+        "--dry-run": "-DryRun",
+        "--help": "-Help",
+        "--version": "-Version",
+        "--voice-nim": "-VoiceNim",
+        "--voice-local": "-VoiceLocal",
+        "--voice-all": "-VoiceAll",
+        "--torch-backend": "-TorchBackend",
+    }
+    for flag, switch in mapping.items():
+        assert f'"%~1"=="{flag}"' in batch, f"install.cmd does not accept {flag}"
+        assert switch in batch, f"install.cmd never passes {switch}"
+        assert f"[switch] ${switch[1:]}" in param_block or (
+            f"] ${switch[1:]}" in param_block
+        ), f"install.ps1 has no {switch} parameter"
+
+    # And nothing in the param() block is unreachable from the batch file.
+    for name in re.findall(r"\]\s*\$([A-Za-z]+)", param_block):
+        if name in {"RemainingArgs"}:
+            continue
+        assert f"-{name}" in batch, (
+            f"install.ps1 accepts -{name} but install.cmd maps no flag onto it"
+        )
+
+
+def test_install_cmd_propagates_the_exit_code() -> None:
+    """`exit /b`, never a bare `exit`.
+
+    A bare `exit` closes the console window when the file is double-clicked,
+    which takes the error message with it, and it does not return a status to a
+    caller that chained onto this command.
+    """
+    batch = _install_cmd()
+
+    for line in batch.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("exit"):
+            assert stripped.lower().startswith("exit /b"), (
+                f"a bare exit closes the window: {stripped!r}"
+            )
+    assert 'set "MCC_EXIT=%ERRORLEVEL%"' in batch, (
+        "the PowerShell exit status must be captured before anything else "
+        "overwrites ERRORLEVEL"
+    )
+    assert "exit /b %MCC_EXIT%" in batch, (
+        "the installer's own status must reach the caller"
+    )
+
+
+def test_install_cmd_names_the_missing_curl_case() -> None:
+    """curl.exe is the one prerequisite this route adds; say so once, clearly."""
+    batch = _install_cmd()
+
+    assert "where curl.exe" in batch
+    assert "curl.exe was not found on PATH" in batch
+    assert "Windows 10 1803" in batch, (
+        "say which Windows versions ship curl.exe, the way install.sh names the "
+        "package for the local distro"
+    )
+
+
+def test_install_cmd_downloads_the_same_script_the_readme_publishes() -> None:
+    """One installer, three doors: the raw URL must be the same everywhere."""
+    batch = _install_cmd()
+    readme = (_repo_root() / "README.md").read_text(encoding="utf-8")
+    runtime = (
+        _repo_root() / "packaging" / "npm" / "bin" / "runtime-install.js"
+    ).read_text(encoding="utf-8")
+
+    raw = (
+        "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts"
+    )
+    assert f"{raw}/install.ps1" in batch
+    assert f'REPO_RAW = "{raw}"' in runtime
+    assert f"{raw}/install.ps1" in readme, "the README still publishes this URL"
+    assert f"{raw}/install.cmd" in readme, (
+        "the README must publish the CMD route it now leads with"
+    )
+
+
+def test_install_cmd_keeps_the_downloaded_script_when_a_run_fails() -> None:
+    """A failed install must leave something to read, and say where it is."""
+    batch = _install_cmd()
+
+    assert 'del /q "%MCC_SCRIPT%"' in batch, "a successful run cleans up after itself"
+    failure = batch.split(":install_failed", 1)[1].split("\n:", 1)[0]
+    assert "del " not in failure, "a failed run must keep the script"
+    assert "%MCC_SCRIPT%" in failure, "the failure must name the file it kept"
+
+
+def test_the_smoke_job_calls_the_batch_file_rather_than_chaining_to_it() -> None:
+    """`call`, or everything after the line silently does not run.
+
+    A .cmd started from another .cmd WITHOUT `call` transfers control and never
+    returns. The first version of the Windows smoke job left it out, so the
+    assertions after the install were never reached and the step's exit code
+    was the installer's rather than the check's -- caught on the runner.
+    """
+    workflow = (_repo_root() / ".github" / "workflows" / "install-smoke.yml").read_text(
+        encoding="utf-8"
+    )
+
+    invocations = [
+        line.strip()
+        for line in workflow.splitlines()
+        if "scripts\\install.cmd" in line and not line.lstrip().startswith("- name:")
+    ]
+    assert invocations, "the Windows smoke job no longer runs install.cmd"
+    for line in invocations:
+        assert "call scripts" in line, (
+            f"install.cmd is invoked without `call`, so nothing after it runs: {line!r}"
+        )
+
+
+def test_install_ps1_behaves_the_same_under_scriptblock_and_file(
+    powershell_harness: PowerShellHarness,
+    tmp_path: Path,
+) -> None:
+    """Both published invocation shapes, one behaviour (invariant 10).
+
+    WORKING-NOTES section 17: `-File` gives a function script scope that the
+    published `& ([scriptblock]::Create(...))` form does not, so a `$script:`
+    bug is INVISIBLE under -File and fatal under the scriptblock. 4.18.2
+    shipped to fix exactly that. Publishing install.cmd makes -File a supported
+    surface, so both shapes are exercised here rather than assumed equal.
+
+    The -File run is the real installer file with the harness's network doubles
+    inserted after its param() block, so it runs under genuine -File semantics.
+    """
+    powershell_harness.add_uv("0.11.28")
+    scriptblock = powershell_harness.run("-DryRun")
+
+    installer = _install_ps1()
+    doubles = powershell_harness.wrapper.read_text(encoding="utf-8")
+    doubles = doubles.split("$installer = [scriptblock]::Create", 1)[0]
+    doubles = doubles.replace("Set-StrictMode -Version Latest\n", "").replace(
+        '$ErrorActionPreference = "Stop"\n', ""
+    )
+    # The param() block ends at the first line that is exactly ")" -- not at
+    # the first ")\n", which is the `$RemainingArgs = @()` default two lines
+    # above it.
+    head, separator, tail = installer.partition("\n)\n")
+    assert separator, "install.ps1 no longer opens with a param() block"
+    head = head + separator
+    as_file = tmp_path / "install-as-file.ps1"
+    as_file.write_text(head + doubles + tail, encoding="utf-8")
+
+    file_form = subprocess.run(
+        [
+            powershell_harness.powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(as_file),
+            "-DryRun",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=powershell_harness.env | {"FAIL_STEP": ""},
+    )
+
+    assert scriptblock.returncode == file_form.returncode, (
+        "the two invocation shapes disagree about the exit code\n"
+        f"scriptblock:\n{scriptblock.stdout}{scriptblock.stderr}\n"
+        f"-File:\n{file_form.stdout}{file_form.stderr}"
+    )
+
+    def steps(text: str) -> list[str]:
+        return [line for line in text.splitlines() if line.startswith("==> ")]
+
+    assert steps(scriptblock.stdout) == steps(file_form.stdout), (
+        "the two invocation shapes ran different steps\n"
+        f"scriptblock:\n{scriptblock.stdout}\n-File:\n{file_form.stdout}"
+    )

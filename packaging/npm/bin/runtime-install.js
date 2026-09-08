@@ -287,6 +287,173 @@ function windowsInstallArgv(installer, directory) {
   return { command: installer, args: argv };
 }
 
+/**
+ * The name this package used to publish, and must never publish again.
+ *
+ * `my-claude-code` is a console script of the WHEEL (`[project.scripts]`), and
+ * on Windows npm's global bin directory precedes `~/.local/bin` on PATH. So an
+ * `npm install -g` of 6.53.1 through 6.63.0 left `%APPDATA%\npm\my-claude-code.cmd`
+ * sitting in front of the real launcher -- and `install.ps1` verified its
+ * launchers by asking PATH, resolved npm's shim, concluded that a complete
+ * install had put its files somewhere illegal, and threw. Permanently: every
+ * later run of the one-liner failed the same way, on a machine where nothing
+ * was wrong.
+ *
+ * 6.64.0 publishes one bin, `mcc`, which no wheel entry point claims. This
+ * removes the leftover from the earlier versions, because npm does not
+ * reliably reap a bin its package stopped declaring, and because the machines
+ * that need it most are exactly the ones already broken.
+ */
+const STALE_BIN_NAME = "my-claude-code";
+const PACKAGE_NAME = "@firedmosquito831/my-claude-code";
+
+/** npm's global bin directory, or null when this is not a global install. */
+function npmGlobalBinDirectory(env, platform) {
+  const prefix = env.npm_config_global_prefix || env.npm_config_prefix;
+  if (!prefix) return null;
+  // On Windows the prefix IS the directory holding the shims; everywhere else
+  // they are in bin/ under it.
+  return platform === "win32" ? prefix : path.join(prefix, "bin");
+}
+
+/** Every shape npm writes a global bin in, for one name. */
+function globalShimPaths(binDir, name, platform) {
+  if (platform === "win32") {
+    return [
+      path.join(binDir, name),
+      path.join(binDir, `${name}.cmd`),
+      path.join(binDir, `${name}.ps1`),
+    ];
+  }
+  return [path.join(binDir, name)];
+}
+
+/**
+ * Is this file a shim npm wrote for THIS package?
+ *
+ * A symlink's target and a .cmd shim's text both name the package directory
+ * they point into, so the check is the package name -- never the file name.
+ * Deleting a `my-claude-code` that belongs to somebody else would be exactly
+ * the kind of damage this whole change exists to stop.
+ */
+function isShimForThisPackage(file) {
+  let text = null;
+  try {
+    const stat = fs.lstatSync(file);
+    text = stat.isSymbolicLink() ? fs.readlinkSync(file) : fs.readFileSync(file, "utf8");
+  } catch {
+    return false;
+  }
+  if (typeof text !== "string") return false;
+  return text.replace(/\\/g, "/").includes(PACKAGE_NAME);
+}
+
+/** Remove the `my-claude-code` shim an earlier version of this package left. */
+function removeStaleGlobalShim(options) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const log = options.log ?? ((message) => console.log(`my-claude-code: ${message}`));
+  const binDir = options.binDir ?? npmGlobalBinDirectory(env, platform);
+  if (!binDir) return [];
+
+  const removed = [];
+  for (const file of globalShimPaths(binDir, STALE_BIN_NAME, platform)) {
+    if (!isShimForThisPackage(file)) continue;
+    try {
+      fs.rmSync(file, { force: true });
+      removed.push(file);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(
+        `could not remove the old ${STALE_BIN_NAME} command at ${file}: ${message}. ` +
+          `Remove it by hand, or run \`npm uninstall -g ${PACKAGE_NAME}\` and install again.`
+      );
+    }
+  }
+  if (removed.length > 0) {
+    log(
+      `removed the old ${STALE_BIN_NAME} command this package used to publish (${removed.join(", ")}). ` +
+        "It shadowed the launcher the installer provides, which is what made the installer refuse to verify itself."
+    );
+  }
+  return removed;
+}
+
+/**
+ * Where the installer's full output is kept for a hook that cannot show it,
+ * or null when nothing here can be written.
+ *
+ * `os.tmpdir()` is a guess -- it reads TMPDIR/TEMP/TMP and falls back to the
+ * system directory, and on a Windows runner with a stripped environment that
+ * fallback was `C:\Windows\temp`, which did not exist. So the directory is
+ * created and the path is probed HERE, where a failure is a missing log and
+ * not a crashed install.
+ */
+function installerLogPath() {
+  const candidate = path.join(os.tmpdir(), `mcc-install-${process.pid}.log`);
+  try {
+    fs.mkdirSync(path.dirname(candidate), { recursive: true });
+    fs.writeFileSync(candidate, "");
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run the official installer, streaming its output into a log file.
+ *
+ * `npm install -g` swallows a postinstall's stdout, and on failure replays the
+ * WHOLE captured stream under an `npm error` prefix -- which is how a fresh
+ * machine came to read a page of ordinary uv progress as if every line were an
+ * error. So the full text goes to a file, only the installer's own step lines
+ * (`==> ...`) and its warnings reach the console, and the failure message
+ * names both the file and `--foreground-scripts`.
+ */
+function runInstallerLogged(command, args, log, logPath) {
+  return new Promise((resolve, reject) => {
+    let stream = null;
+    if (logPath) {
+      try {
+        stream = fs.createWriteStream(logPath, { flags: "a" });
+        // A WriteStream reports a failed open ASYNCHRONOUSLY, as an 'error'
+        // event -- and an unhandled 'error' on a stream throws out of the
+        // event loop and kills the process. That is a log file taking an
+        // install down with it, which is the opposite of the point.
+        stream.on("error", () => {
+          stream = null;
+        });
+      } catch {
+        stream = null;
+      }
+    }
+    const child = childProcess.spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let pending = "";
+    const consume = (chunk) => {
+      const text = chunk.toString();
+      if (stream) stream.write(text);
+      pending += text;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (line.startsWith("==> ") || line.startsWith("WARNING:")) {
+          log(line);
+        }
+      }
+    };
+    child.stdout.on("data", consume);
+    child.stderr.on("data", consume);
+    child.on("error", (error) => {
+      if (stream) stream.end();
+      reject(new Error(`could not run ${command}: ${error.message}`));
+    });
+    child.on("close", (code) => {
+      if (stream) stream.end();
+      resolve(code ?? 1);
+    });
+  });
+}
+
 function run(command, args, options) {
   const result = childProcess.spawnSync(command, args, { stdio: "inherit", ...options });
   if (result.error) throw new Error(`could not run ${command}: ${result.error.message}`);
@@ -425,10 +592,28 @@ async function performInstall(options) {
 
   if (decision.server) {
     const { command, args } = serverInstallerCommand(platform, decision.desktopFlag);
-    const status = run(command, args);
+    const logPath = options.logPath ?? installerLogPath();
+    log(
+      logPath
+        ? `installing the server; the installer's full output goes to ${logPath}`
+        : "installing the server (no writable temporary directory, so the full output is not being kept)"
+    );
+    const status = await runInstallerLogged(command, args, log, logPath);
     if (status !== 0) {
+      // Say which half landed. This used to claim "Nothing was left
+      // half-installed by this hook" unconditionally -- and on the machine
+      // that prompted this change the server WAS installed and the desktop app
+      // was not, so the one sentence the user had was the false one.
       console.error(
-        `my-claude-code: the installer exited ${status}. Nothing was left half-installed by this hook; rerun \`mcc install\` or install manually from https://github.com/FiredMosquito831/my-claude-code`
+        `my-claude-code: the server installer exited ${status}.\n` +
+          `my-claude-code: the desktop app was not attempted. The server may be partly installed: check with \`mcc-server --version\`, ` +
+          "and the installer names any command that is missing.\n" +
+          (logPath
+            ? `my-claude-code: the full output is in ${logPath}.\n`
+            : "my-claude-code: the full output could not be kept (no writable temporary directory).\n") +
+          "my-claude-code: retry the server with `npx @firedmosquito831/my-claude-code install --server-only`, the app with " +
+          "`npx @firedmosquito831/my-claude-code install --desktop-only`, or rerun " +
+          "`npm install -g --foreground-scripts @firedmosquito831/my-claude-code` to watch the installer live."
       );
       return status;
     }
@@ -465,7 +650,15 @@ async function performInstall(options) {
 
 module.exports = {
   DESKTOP_ASSETS,
+  PACKAGE_NAME,
   REPO_RAW,
+  STALE_BIN_NAME,
+  globalShimPaths,
+  installerLogPath,
+  isShimForThisPackage,
+  npmGlobalBinDirectory,
+  removeStaleGlobalShim,
+  runInstallerLogged,
   performInstall,
   serverInstallerCommand,
   HELP,

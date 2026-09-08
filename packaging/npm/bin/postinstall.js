@@ -63,6 +63,18 @@ function skipReason(env) {
 }
 
 async function main() {
+  // Take back the `my-claude-code` command this package published up to
+  // 6.63.0, on EVERY global install -- before the opt-outs, because this is a
+  // migration and not an install. It is a console script of the wheel, and on
+  // Windows npm's global bin sits ahead of the uv tool bin directory on PATH,
+  // so the shim shadowed the real launcher and made `install.ps1` refuse to
+  // verify an install that had in fact worked. Somebody who sets
+  // MCC_NPM_SKIP_INSTALL=1 still wants the broken shim gone; npm does not
+  // reliably reap a bin its package has stopped declaring.
+  if (process.env.npm_config_global === "true") {
+    runtime.removeStaleGlobalShim({ log: note });
+  }
+
   const reason = skipReason(process.env);
   if (reason !== null) {
     note(reason);
