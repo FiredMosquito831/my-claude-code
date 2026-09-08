@@ -67,6 +67,27 @@ pub struct Status {
     /// here either -- a compiled-in cadence would be this binary deciding how
     /// often to run a process on the user's machine.
     pub reconnect_restatus_seconds: f64,
+    /// Which release of *this binary* the wheel on this machine pins.
+    ///
+    /// Emitted since 6.44.0 and read by nobody until 6.60.0, which is the
+    /// whole of BUG-0: the pin was enforced only by `ShellWindow.create()`, so
+    /// a window launched from the Start Menu could sit fifteen releases behind
+    /// the wheel forever. The shell now compares it with the tag stamped into
+    /// this build and asks `mcc-desktop --ensure-shell` to stage the right one.
+    ///
+    /// Optional, per C3: a window must keep working against a wheel that does
+    /// not send it, and `None` simply means the comparison cannot be made.
+    #[serde(default)]
+    pub shell_release_tag: Option<String>,
+    /// Where the wheel believes the shell it manages is installed, and `null`
+    /// when there is not a verified one. A fallback for naming the binary to
+    /// update when this process cannot read its own path.
+    #[serde(default)]
+    pub shell_binary: Option<String>,
+    /// What the receipt beside that binary says. Added in 6.60.0; tolerated
+    /// here, not required, per the two-release rule in `desktop_status.py`.
+    #[serde(default)]
+    pub shell_installed_tag: Option<String>,
 }
 
 /// Why a status document could not be used.

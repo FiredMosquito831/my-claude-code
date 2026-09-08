@@ -1,10 +1,15 @@
-//! The three processes this shell ever starts, and nothing else.
+//! The four processes this shell ever starts, and nothing else.
 //!
 //! 1. `mcc-desktop --print-status`, read for its stdout. This is the only way
 //!    the shell learns where anything is (C1).
 //! 2. `mcc-server`, started when -- and only when -- the ladder says `Start`.
 //! 3. The projects own install script, when `mcc-desktop` is not on `PATH`
 //!    (decision Q4).
+//! 4. `mcc-desktop --ensure-shell`, when the tag compiled into this binary
+//!    disagrees with the tag the status document pins (BUG-0, decision Q5).
+//!    Note what that is and is not: this window does not download, verify or
+//!    choose anything -- it asks the Python side to, and reads the one JSON
+//!    line it prints. C5 stands.
 //!
 //! It never takes `desktop.lock`, never writes `desktop.json`, and never
 //! registers autostart (C4). Every one of those stays Pythons.
@@ -102,10 +107,23 @@ pub fn print_status_within(wall: Duration) -> Result<String, StatusRunError> {
     let (program, mut args) = resolve(DESKTOP_COMMAND_ENV, DESKTOP_COMMAND);
     args.push("--print-status".to_owned());
     args.push(PRESENCE_V2_FLAG.to_owned());
+    run_for_stdout(&program, &args, wall)
+}
 
-    let mut command = Command::new(&program);
+/// Run one short-lived child, bounded, and return its stdout.
+///
+/// The whole of the care here is the two pipes and the wall, and both are
+/// load-bearing: a child that fills a pipe deadlocks against a parent waiting
+/// on the other, and a child with no wall blocks the ladder thread -- which is
+/// also the thread that would have painted the page explaining why.
+fn run_for_stdout(
+    program: &str,
+    args: &[String],
+    wall: Duration,
+) -> Result<String, StatusRunError> {
+    let mut command = Command::new(program);
     command
-        .args(&args)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -139,10 +157,11 @@ pub fn print_status_within(wall: Duration) -> Result<String, StatusRunError> {
             let _ = child.kill();
             let _ = child.wait();
             return Err(StatusRunError::Unrunnable(format!(
-                "{program} --print-status did not answer within {:.0} seconds, so \
+                "{program} {} did not answer within {:.0} seconds, so \
                  it was stopped. Something is holding it up -- a shim being \
                  scanned, or a configuration directory on a drive that is not \
                  answering.",
+                args.first().map(String::as_str).unwrap_or_default(),
                 wall.as_secs_f64()
             )));
         }
@@ -158,6 +177,30 @@ pub fn print_status_within(wall: Duration) -> Result<String, StatusRunError> {
         });
     }
     Ok(out)
+}
+
+/// How long `mcc-desktop --ensure-shell` may take.
+///
+/// It downloads an archive of a few megabytes and verifies two digests, on a
+/// connection this window knows nothing about, so it is bounded by the
+/// download timeout Python uses (60s for each of two reads) plus room for the
+/// extraction -- not by the 15s that bounds a status read. It runs on a thread
+/// of its own, so nothing the user can see is waiting on it.
+const ENSURE_SHELL_WALL: Duration = Duration::from_secs(300);
+
+/// Ask Python to bring `target` up to the pinned release. Returns its stdout.
+///
+/// `target` is this process's own executable: the copy that has to change is
+/// the one being run, which on Windows is as likely to be
+/// `%LOCALAPPDATA%/Programs/My Claude Code` (the native installer's) as
+/// `~/.local/bin` (the tray's). Python stages the replacement beside it and
+/// prints `{updated, from_tag, to_tag, staged_path, restart_required}`.
+pub fn ensure_shell(target: &std::path::Path) -> Result<String, StatusRunError> {
+    let (program, mut args) = resolve(DESKTOP_COMMAND_ENV, DESKTOP_COMMAND);
+    args.push("--ensure-shell".to_owned());
+    args.push("--target".to_owned());
+    args.push(target.display().to_string());
+    run_for_stdout(&program, &args, ENSURE_SHELL_WALL)
 }
 
 /// Read one pipe to the end on its own thread.

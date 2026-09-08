@@ -22,11 +22,12 @@ pub mod install;
 pub mod ladder;
 pub mod process;
 pub mod status;
+pub mod swap;
 pub mod ui;
 pub mod update_progress;
 pub mod window_state;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -44,11 +45,42 @@ use crate::update_progress::Stage;
 /// The single windows label. One window, one label, everywhere.
 const MAIN_WINDOW: &str = "main";
 
+/// The release this binary was built from, stamped in by `shell-release.yml`
+/// (`MCC_SHELL_RELEASE_TAG`), and printed by `--version`.
+///
+/// `option_env!` rather than `env!`: a developer build has no release to name,
+/// and refusing to compile without one would mean this window could only be
+/// built in CI. `None` is "I do not know what I am", and a window that does
+/// not know what it is never claims to be stale -- asking Python to replace a
+/// binary on a guess is exactly the wrong response to missing information.
+pub const RELEASE_TAG: Option<&str> = option_env!("MCC_SHELL_RELEASE_TAG");
+
+/// Whether the wheel on this machine pins a different release of this window.
+///
+/// The comparison BUG-0 needed and nothing more: two strings, from two places
+/// that are updated by two different mechanisms. Unknown on either side means
+/// no. A trimmed comparison because a tag that arrives with a newline is the
+/// same tag.
+pub fn shell_is_stale(compiled: Option<&str>, pinned: Option<&str>) -> bool {
+    match (compiled, pinned) {
+        (Some(compiled), Some(pinned)) => {
+            let (compiled, pinned) = (compiled.trim(), pinned.trim());
+            !compiled.is_empty() && !pinned.is_empty() && compiled != pinned
+        }
+        _ => false,
+    }
+}
+
 /// First-paint size, used only until the status document says what the
 /// operator configured. Not a configuration value: nothing about the config
 /// directory, the port or the URL is decided here (C1).
-const FIRST_PAINT_WIDTH: f64 = 1100.0;
-const FIRST_PAINT_HEIGHT: f64 = 800.0;
+///
+/// It matches `DESKTOP_WINDOW_WIDTH`/`HEIGHT`'s own default deliberately --
+/// "by default it should start 1400x900" -- so the window does not visibly
+/// resize itself a second after opening on the overwhelmingly common machine
+/// where the operator has not changed either setting.
+const FIRST_PAINT_WIDTH: f64 = 1400.0;
+const FIRST_PAINT_HEIGHT: f64 = 900.0;
 
 /// The tray mark, compiled in. The tray has to exist before any status has
 /// been read, so it cannot come from a file the installer may not have put
@@ -90,6 +122,35 @@ const INSTALL_RECHECK: Duration = Duration::from_secs(5);
 /// and the window-state directory: nothing a normal launch reads.
 pub const SEPARATE_INSTANCE_ENV: &str = "MCC_SHELL_SEPARATE_INSTANCE";
 
+/// How long a process started by "Restart now" waits before it does anything.
+///
+/// Not a cosmetic pause. The window that presses that button is holding the
+/// single-instance group: `tauri-plugin-single-instance` registers a mutex and
+/// a hidden window under the app identifier, and a second launch that finds
+/// that window hands its arguments to it and *exits*. So a staged binary
+/// started while the old one is still shutting down would hand itself straight
+/// back to the process it was meant to replace, and the user would be left
+/// with no window and an update that did not happen.
+///
+/// The old process sets this on the child and then exits; the child waits it
+/// out before it builds anything. It is bounded and short: the parent's exit
+/// is `app.exit(0)` on a window that has already saved its geometry.
+///
+/// The other handover -- an ordinary launch finding a `.new` beside it -- does
+/// not need this and does not set it: that parent has not registered anything
+/// yet, because the swap runs before the Tauri builder.
+pub const SWAP_DELAY_ENV: &str = "MCC_SHELL_SWAP_DELAY_MS";
+
+/// The delay `SWAP_DELAY_ENV` asks for, clamped to something a person will sit
+/// through. Anything unreadable is no delay at all.
+pub fn swap_delay(raw: Option<&str>) -> Duration {
+    let millis = raw
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+        .min(10_000);
+    Duration::from_millis(millis)
+}
+
 /// Whether this launch should stand apart from the single-instance group.
 pub fn separate_instance(raw: Option<&str>) -> bool {
     raw.is_some_and(|value| !value.trim().is_empty())
@@ -107,6 +168,27 @@ static LAST_INSTALL_LINE: Mutex<String> = Mutex::new(String::new());
 /// so a window that has learned nothing yet still closes when told to.
 static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(false);
 static TRAY_BUILT: AtomicBool = AtomicBool::new(false);
+/// Whether a verified replacement for this binary is staged and waiting for a
+/// restart, and which release it is. Set once, by the thread that ran
+/// `mcc-desktop --ensure-shell`.
+static UPDATE_STAGED: AtomicBool = AtomicBool::new(false);
+static STAGED_TAG: Mutex<Option<String>> = Mutex::new(None);
+/// Whether the pin has already been compared with this build's tag. Once per
+/// launch: the answer cannot change while the process runs, and re-running a
+/// download every ladder pass would be a denial of service on the release page.
+static SHELL_PIN_CHECKED: AtomicBool = AtomicBool::new(false);
+/// Whether this launch has already applied the configured window size. The
+/// geometry rules are per *launch*, not per ladder pass -- a window that
+/// re-centred itself every five seconds would be worse than one that opened in
+/// the wrong place.
+static GEOMETRY_APPLIED: AtomicBool = AtomicBool::new(false);
+/// This process's own executable, resolved once and after any rename the swap
+/// step made, so `--ensure-shell` is pointed at the file that is actually
+/// running.
+static EXE_PATH: OnceLock<PathBuf> = OnceLock::new();
+/// Whether this launch was asked to forget the remembered geometry. Read in
+/// `setup()`, which is the first place the data directory is known.
+static RESET_WINDOW: AtomicBool = AtomicBool::new(false);
 static ACTIVATION_STARTED: AtomicBool = AtomicBool::new(false);
 static QUITTING: AtomicBool = AtomicBool::new(false);
 
@@ -126,6 +208,7 @@ const LAST_CONFIG_DIR_FILE: &str = "last-config-dir.txt";
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static LOCAL_URL: OnceLock<String> = OnceLock::new();
 static TRAY_STATUS_ITEM: Mutex<Option<MenuItem<Wry>>> = Mutex::new(None);
+static TRAY_UPDATE_ITEM: Mutex<Option<MenuItem<Wry>>> = Mutex::new(None);
 
 // -- commands the page may call -------------------------------------------
 
@@ -163,10 +246,28 @@ fn data_dir(app: &AppHandle) -> PathBuf {
         .clone()
 }
 
+/// Remember where the window is -- but only while it is somewhere (BUG-7).
+///
+/// The guard is the fix. Tray **Quit** called this on a window a close-to-tray
+/// had already hidden, and Windows answers `inner_size` and `outer_position`
+/// for a hidden, minimized window with `0x0` at `-32000, -32000`. Those values
+/// were written to `window.json` and restored verbatim on the next launch, so
+/// the app came back as a tray icon with no window anywhere on any screen.
+/// It happened to this user twice on 2026-09-08.
+///
+/// Skipping is right and clamping is not: a hidden window has no geometry
+/// worth recording, and what is already on disk is the last geometry it really
+/// had. A read that fails is treated the same way -- an unanswerable question
+/// is not a reason to overwrite a good answer with a guess.
 fn save_geometry(window: &WebviewWindow) {
     let Some(directory) = DATA_DIR.get() else {
         return;
     };
+    let visible = window.is_visible().unwrap_or(false);
+    let minimized = window.is_minimized().unwrap_or(false);
+    if !window_state::may_save_geometry(visible, minimized) {
+        return;
+    }
     let maximized = window.is_maximized().unwrap_or(false);
     let mut state = window_state::WindowState {
         maximized,
@@ -373,9 +474,41 @@ fn ensure_tray(app: &AppHandle, status: &Status) {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open My Claude Code", true, None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "Checking the server...", false, None::<&str>)?;
+    // Disabled and quiet until there is something staged. The item exists from
+    // the start rather than being added later because a tray menu cannot grow
+    // an item after it is built, and a menu that changes shape under the
+    // cursor is worse than one line that is greyed out.
+    let update = MenuItem::with_id(
+        app,
+        "restart-update",
+        "Desktop app is up to date",
+        false,
+        None::<&str>,
+    )?;
+    // The escape hatch for BUG-7. It is in the tray and not in the window
+    // because the whole failure mode is that there is no window to click.
+    let reset = MenuItem::with_id(
+        app,
+        "reset-window",
+        "Reset window position",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&open, &status, &separator, &quit])?;
+    let second_separator = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &open,
+            &status,
+            &separator,
+            &update,
+            &reset,
+            &second_separator,
+            &quit,
+        ],
+    )?;
 
     let mut builder = TrayIconBuilder::with_id("mcc-shell-tray")
         .tooltip("My Claude Code")
@@ -383,6 +516,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => raise(app),
+            "restart-update" => restart_into_staged(app),
+            "reset-window" => reset_window_position(app),
             "quit" => {
                 QUITTING.store(true, Ordering::SeqCst);
                 if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -416,6 +551,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     }
     builder.build(app)?;
 
+    if let Ok(mut guard) = TRAY_UPDATE_ITEM.lock() {
+        *guard = Some(update);
+    }
+    // A staged update found before the tray existed still has to reach it.
+    announce_staged_update();
     if let Ok(mut guard) = TRAY_STATUS_ITEM.lock() {
         *guard = Some(status);
     }
@@ -777,16 +917,226 @@ fn apply_status(window: &WebviewWindow, status: &Status) {
     let Some(directory) = DATA_DIR.get() else {
         return;
     };
-    let remembered = window_state::load(&window_state::state_path(directory));
-    if remembered.width.is_none() || remembered.height.is_none() {
-        // First run: the size the operator configured in Python is the size
-        // the window opens at, so DESKTOP_WINDOW_WIDTH/HEIGHT keep meaning
-        // something now that geometry is remembered here.
-        let (width, height) =
-            remembered.size_or(status.window_width.max(480), status.window_height.max(320));
-        let _ = window.set_size(tauri::LogicalSize::new(f64::from(width), f64::from(height)));
-        let _ = window.center();
+    apply_window_size(window, directory, status);
+}
+
+/// Decide, once per launch, whether the configured size wins over what was
+/// remembered -- and apply it if it does (BUG-7).
+///
+/// Two rules, both the user's, and both broken before 6.60.0:
+///
+/// * a remembered geometry that is not on any screen, or is below the window's
+///   own minimum, is not restored at all: the window opens at the *configured*
+///   size, centred. Until now `setup()` restored `0x0` at `-32000, -32000`
+///   without looking at it.
+/// * a configured size that has changed since this shell last applied it is
+///   honoured once, even though something is remembered. Until now
+///   `DESKTOP_WINDOW_WIDTH`/`HEIGHT` meant something on the first run and
+///   nothing ever again.
+///
+/// Otherwise the remembered geometry stands, which is what makes dragging the
+/// window's corner stick. `last_applied_*` is written whenever the configured
+/// size is applied, and it lives in the shell's own state file rather than in
+/// `desktop.json` where Python keeps the same idea for Chromium: C4 forbids
+/// this binary writing under the configuration directory.
+fn apply_window_size(window: &WebviewWindow, directory: &Path, status: &Status) {
+    if GEOMETRY_APPLIED.swap(true, Ordering::SeqCst) {
+        return;
     }
+    let path = window_state::state_path(directory);
+    let mut remembered = window_state::load(&path);
+    let configured = (
+        status.window_width.max(window_state::MIN_WIDTH),
+        status.window_height.max(window_state::MIN_HEIGHT),
+    );
+    if !remembered.configured_size_wins(configured, &work_areas(window)) {
+        return;
+    }
+    let _ = window.set_size(tauri::LogicalSize::new(
+        f64::from(configured.0),
+        f64::from(configured.1),
+    ));
+    let _ = window.center();
+    remembered.last_applied_width = Some(configured.0);
+    remembered.last_applied_height = Some(configured.1);
+    // The size is recorded, the position is not: `center()` has not finished
+    // when this runs, and the next ordinary save writes the real rectangle.
+    remembered.width = Some(configured.0);
+    remembered.height = Some(configured.1);
+    remembered.x = None;
+    remembered.y = None;
+    let _ = window_state::save(&path, &remembered);
+}
+
+/// The work areas of every connected monitor, in physical pixels.
+///
+/// The *work* area and not the full bounds, so a window remembered entirely
+/// behind the taskbar is treated as unreachable -- which it is. An empty list
+/// (no display server, or a query that failed) is passed through as an empty
+/// list, and `geometry_is_usable` answers "keep the geometry" rather than
+/// pretending it knows better.
+fn work_areas(window: &WebviewWindow) -> Vec<window_state::Rect> {
+    window
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(|monitor| {
+            let area = monitor.work_area();
+            window_state::Rect {
+                x: area.position.x,
+                y: area.position.y,
+                width: area.size.width,
+                height: area.size.height,
+            }
+        })
+        .collect()
+}
+
+/// Throw away the remembered geometry and open at the configured size again.
+/// The tray's "Reset window position", and what `--reset-window` arranges for
+/// the launch that follows it.
+fn reset_window_position(app: &AppHandle) {
+    if let Some(directory) = DATA_DIR.get() {
+        let _ = window_state::clear(&window_state::state_path(directory));
+    }
+    GEOMETRY_APPLIED.store(false, Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = window.unmaximize();
+        let _ = window.set_size(tauri::LogicalSize::new(
+            FIRST_PAINT_WIDTH,
+            FIRST_PAINT_HEIGHT,
+        ));
+        let _ = window.center();
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// Ask Python to stage the pinned shell, once, when this build is not it.
+///
+/// The whole of BUG-0's second half. Until 6.60.0 the pin was enforced only by
+/// `ShellWindow.create()` -- the Python tray's window factory -- so a user who
+/// launched `MyClaudeCode.exe` from the Start Menu, the taskbar, or the
+/// Programs-folder install kept whichever shell they first received. This user
+/// ran v6.43.0 for fifteen releases while the wheel moved to 6.58.4, and every
+/// fix shipped in between was source-only for them.
+///
+/// What runs here is one command on a thread of its own. It downloads nothing
+/// and decides nothing (C5 stands, decision Q5): `mcc-desktop --ensure-shell`
+/// does the fetch, both digest checks and the staging, and prints a JSON line.
+/// The window's part is to notice the disagreement, to stay out of the way
+/// while it is resolved, and to offer the restart that completes it.
+fn ensure_shell_if_stale(app: &AppHandle, status: &Status) {
+    if !shell_is_stale(RELEASE_TAG, status.shell_release_tag.as_deref()) {
+        return;
+    }
+    if SHELL_PIN_CHECKED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let Some(target) = exe_path() else {
+        // No path to name and nothing sane to guess at. The dashboard's own
+        // Update banner still reports the disagreement.
+        eprintln!("the desktop app is out of date, but its own path could not be resolved");
+        return;
+    };
+    let pinned = status.shell_release_tag.clone();
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        match process::ensure_shell(&target) {
+            Ok(output) => {
+                let staged = serde_json::from_str::<serde_json::Value>(&output)
+                    .ok()
+                    .and_then(|report| {
+                        report
+                            .get("restart_required")
+                            .and_then(serde_json::Value::as_bool)
+                    })
+                    .unwrap_or(false);
+                if !staged {
+                    return;
+                }
+                if let Ok(mut guard) = STAGED_TAG.lock() {
+                    *guard = pinned;
+                }
+                UPDATE_STAGED.store(true, Ordering::SeqCst);
+                let _ = handle.run_on_main_thread(announce_staged_update);
+            }
+            Err(error) => {
+                // Never a page: the window is attached to a working server and
+                // a failed background download is not a reason to take the
+                // dashboard away from the user.
+                eprintln!("the desktop app update could not be staged: {error:?}");
+            }
+        }
+    });
+}
+
+/// Put the staged update in front of the user, in the one surface a window
+/// showing the dashboard still owns.
+///
+/// The tray, not a page. Navigating away from the dashboard to announce an
+/// update the user has not asked for would be a worse defect than the one this
+/// fixes; the dashboard's own Update banner carries the same sentence for
+/// anyone looking at the window rather than the tray.
+fn announce_staged_update() {
+    if !UPDATE_STAGED.load(Ordering::SeqCst) {
+        return;
+    }
+    let tag = STAGED_TAG
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .unwrap_or_else(|| "a new version".to_owned());
+    if let Ok(guard) = TRAY_UPDATE_ITEM.lock() {
+        if let Some(item) = guard.as_ref() {
+            let _ = item.set_text(format!(
+                "Desktop app update ready -- restart the app to use {tag}"
+            ));
+            let _ = item.set_enabled(true);
+        }
+    }
+    set_tray_status(&format!("Update ready: restart to use {tag}"));
+}
+
+/// Start the staged binary and end this process. The tray's "Restart now".
+///
+/// Deliberately not a rename: this process is the file that would have to be
+/// written over. It starts `MyClaudeCode.exe.new`, which does the three
+/// renames itself before it builds anything (`swap::adopt`), at the one moment
+/// nothing holds either file open.
+fn restart_into_staged(app: &AppHandle) {
+    let Some(current) = exe_path() else {
+        return;
+    };
+    let staged = swap::staged_path(&current);
+    if !staged.is_file() {
+        return;
+    }
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        save_geometry(&window);
+    }
+    match std::process::Command::new(&staged)
+        // See `SWAP_DELAY_ENV`: this process still holds the single-instance
+        // group, and a child that started now would hand itself back to it.
+        .env(SWAP_DELAY_ENV, "2000")
+        .spawn()
+    {
+        Ok(_) => {
+            QUITTING.store(true, Ordering::SeqCst);
+            app.exit(0);
+        }
+        Err(error) => eprintln!("the staged desktop app could not be started: {error}"),
+    }
+}
+
+/// This process's own executable, resolved once -- and after the swap step, so
+/// it names the file this process actually answers to.
+fn exe_path() -> Option<PathBuf> {
+    EXE_PATH
+        .get()
+        .cloned()
+        .or_else(|| std::env::current_exe().ok())
 }
 
 /// Start the doorbell watcher, once, on the directory Python named.
@@ -912,6 +1262,7 @@ fn ladder_pass(app: &AppHandle, window: &WebviewWindow) {
     ensure_tray(app, &status);
     ensure_activation_watcher(app, &status);
     apply_status(window, &status);
+    ensure_shell_if_stale(app, &status);
 
     match ladder::decide(&status) {
         Decision::Attach { admin_url } => {
@@ -1054,8 +1405,113 @@ fn ladder_pass(app: &AppHandle, window: &WebviewWindow) {
 
 // -- entry point ------------------------------------------------------------
 
+/// What the command line asked for, before a window exists.
+///
+/// Three answers, and only three: this is a window, not a CLI. `--version`
+/// exists so a release smoke -- and a person -- can ask a binary which release
+/// it is without reading its bytes, which is the question BUG-0 made
+/// unanswerable. `--reset-window` is BUG-7's escape hatch for the case where
+/// there is no window left to click a tray item in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Invocation {
+    Run,
+    PrintVersion,
+    ResetWindow,
+}
+
+/// Read the invocation from the arguments, ignoring the program name.
+///
+/// Pure, and unknown arguments simply run the window: an app launched by a
+/// desktop environment can be handed arguments nobody here chose, and refusing
+/// to open because of one would be a window that does not open.
+pub fn invocation(args: &[String]) -> Invocation {
+    for argument in args {
+        match argument.as_str() {
+            "--version" | "-V" => return Invocation::PrintVersion,
+            "--reset-window" => return Invocation::ResetWindow,
+            _ => {}
+        }
+    }
+    Invocation::Run
+}
+
+/// The release this binary names itself, for `--version`.
+pub fn version_line() -> String {
+    format!(
+        "My Claude Code desktop app {}",
+        RELEASE_TAG.unwrap_or("(development build)")
+    )
+}
+
+/// Take over from a staged replacement, or hand over to one. Runs before
+/// anything else in `run()`; see `swap` for the whole argument.
+///
+/// Returns `false` when this process has handed over and must exit.
+fn take_over_or_hand_over() -> bool {
+    let Ok(current) = std::env::current_exe() else {
+        return true;
+    };
+    match swap::plan(&current, swap::staged_path(&current).is_file()) {
+        swap::Plan::Nothing => {
+            if let Some(directory) = current.parent() {
+                swap::sweep_aside(directory);
+            }
+            let _ = EXE_PATH.set(current);
+            true
+        }
+        swap::Plan::Adopt { canonical } => {
+            let _ = EXE_PATH.set(swap::adopt(&current, &canonical));
+            true
+        }
+        swap::Plan::Relaunch { staged } => match std::process::Command::new(&staged).spawn() {
+            Ok(_) => false,
+            Err(error) => {
+                // A staged binary that will not start is not a reason to have
+                // no window: carry on as the build we already are, and leave
+                // the staged file for the next attempt.
+                eprintln!("the staged desktop app could not be started: {error}");
+                let _ = EXE_PATH.set(current);
+                true
+            }
+        },
+    }
+}
+
 /// Build and run the application.
 pub fn run() {
+    // First of all: if the process that started us is still finishing, wait.
+    // It is holding the single-instance group and the file we are about to
+    // rename. See `SWAP_DELAY_ENV`.
+    let delay = swap_delay(std::env::var(SWAP_DELAY_ENV).ok().as_deref());
+    if !delay.is_zero() {
+        std::thread::sleep(delay);
+    }
+
+    // Then, before the single-instance plugin, before the builder, before
+    // anything else: a start is the one moment at which neither the old binary
+    // nor the staged one is being held open, and it is the only moment the
+    // swap can be made.
+    if !take_over_or_hand_over() {
+        return;
+    }
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match invocation(&args) {
+        Invocation::PrintVersion => {
+            // `windows_subsystem = "windows"` means Windows allocates no
+            // console of its own, but an inherited or redirected stdout still
+            // works -- which is how a script asks this question.
+            println!("{}", version_line());
+            return;
+        }
+        // The file itself is deleted in `setup()`, which is the first
+        // place the data directory is resolved -- and it is deleted there
+        // before the window is built, so the very first paint is already the
+        // configured size, centred.
+        Invocation::ResetWindow => RESET_WINDOW.store(true, Ordering::SeqCst),
+        Invocation::Run => {}
+    }
+
     let mut builder = tauri::Builder::default();
     // First, so a second launch is answered before anything else is set up.
     if !separate_instance(std::env::var(SEPARATE_INSTANCE_ENV).ok().as_deref()) {
@@ -1097,12 +1553,19 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let directory = data_dir(&handle);
-            let remembered = window_state::load(&window_state::state_path(&directory));
+            let state_path = window_state::state_path(&directory);
+            if RESET_WINDOW.load(Ordering::SeqCst) {
+                let _ = window_state::clear(&state_path);
+            }
+            let remembered = window_state::load(&state_path);
 
             let window =
                 WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::App("index.html".into()))
                     .title("My Claude Code")
-                    .min_inner_size(640.0, 480.0)
+                    .min_inner_size(
+                        f64::from(window_state::MIN_WIDTH),
+                        f64::from(window_state::MIN_HEIGHT),
+                    )
                     .inner_size(FIRST_PAINT_WIDTH, FIRST_PAINT_HEIGHT)
                     .center()
                     .build()?;
@@ -1110,14 +1573,30 @@ pub fn run() {
             // Remembered geometry is physical, and is re-applied physically,
             // so a window on a scaled display comes back the size it was
             // rather than the size a logical round trip would make it.
-            if let (Some(width), Some(height)) = (remembered.width, remembered.height) {
-                let _ = window.set_size(tauri::PhysicalSize::new(width, height));
-            }
-            if let (Some(x), Some(y)) = (remembered.x, remembered.y) {
-                let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
-            }
-            if remembered.maximized {
-                let _ = window.maximize();
+            //
+            // It is applied only when it survives `geometry_is_usable`
+            // (BUG-7). A rectangle that does not is left alone entirely: the
+            // window keeps the first-paint size the builder just centred, and
+            // `apply_window_size` replaces it with the operator's configured
+            // size the moment the first status document arrives. Restoring an
+            // off-screen rectangle "and then fixing it" would show the user a
+            // window that vanishes.
+            let usable = remembered
+                .rect()
+                .is_some_and(|rect| window_state::geometry_is_usable(rect, &work_areas(&window)));
+            if usable {
+                if let Some(rect) = remembered.rect() {
+                    let _ = window.set_size(tauri::PhysicalSize::new(rect.width, rect.height));
+                    let _ = window.set_position(tauri::PhysicalPosition::new(rect.x, rect.y));
+                }
+                if remembered.maximized {
+                    let _ = window.maximize();
+                }
+            } else if remembered != window_state::WindowState::default() {
+                eprintln!(
+                    "the remembered window geometry is not on any screen; opening at the \
+                     configured size instead"
+                );
             }
             let ladder_handle = handle.clone();
             std::thread::spawn(move || {
@@ -1137,6 +1616,70 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_asks_to_be_replaced_only_when_it_knows_it_is_the_wrong_one() {
+        // BUG-0: the wheel pinned v6.58.3 and the machine ran v6.43.0 for
+        // fifteen releases, because nothing ever compared the two.
+        assert!(shell_is_stale(Some("v6.43.0"), Some("v6.59.0")));
+        assert!(!shell_is_stale(Some("v6.59.0"), Some("v6.59.0")));
+        // Whitespace is not a release.
+        assert!(!shell_is_stale(Some("v6.59.0"), Some(" v6.59.0\n")));
+        // A build with no tag of its own -- a developer's -- must never ask
+        // Python to replace it: it does not know what it is, and acting on
+        // missing information is how a working window gets swapped for a guess.
+        assert!(!shell_is_stale(None, Some("v6.59.0")));
+        assert!(!shell_is_stale(Some(""), Some("v6.59.0")));
+        // And a wheel too old to say what it pins is not an accusation either.
+        assert!(!shell_is_stale(Some("v6.43.0"), None));
+        assert!(!shell_is_stale(Some("v6.43.0"), Some("")));
+    }
+
+    #[test]
+    fn a_restart_waits_for_the_window_that_asked_for_it_to_finish() {
+        // The window pressing "Restart now" is holding the single-instance
+        // group. A child that started immediately would find its window, hand
+        // its arguments over and exit -- leaving no window and no update.
+        assert_eq!(swap_delay(Some("2000")), Duration::from_millis(2000));
+        // Nothing to wait for on an ordinary launch.
+        assert_eq!(swap_delay(None), Duration::ZERO);
+        assert_eq!(swap_delay(Some("")), Duration::ZERO);
+        assert_eq!(swap_delay(Some("soon")), Duration::ZERO);
+        // And never long enough to look like a window that did not open.
+        assert_eq!(swap_delay(Some("600000")), Duration::from_millis(10_000));
+    }
+
+    #[test]
+    fn the_command_line_has_exactly_three_answers() {
+        assert_eq!(invocation(&[]), Invocation::Run);
+        assert_eq!(
+            invocation(&["--version".to_owned()]),
+            Invocation::PrintVersion
+        );
+        assert_eq!(invocation(&["-V".to_owned()]), Invocation::PrintVersion);
+        assert_eq!(
+            invocation(&["--reset-window".to_owned()]),
+            Invocation::ResetWindow
+        );
+        // An argument a desktop environment supplied is not a reason to
+        // refuse to open a window.
+        assert_eq!(
+            invocation(&["--enable-features=Whatever".to_owned()]),
+            Invocation::Run
+        );
+    }
+
+    #[test]
+    fn the_version_line_says_what_this_build_is_or_says_it_does_not_know() {
+        let line = version_line();
+        assert!(line.starts_with("My Claude Code desktop app "), "{line}");
+        match RELEASE_TAG {
+            // The release build: `shell-release.yml` stamps the tag it is
+            // uploading to, and `--version` is how a smoke reads it back.
+            Some(tag) => assert!(line.ends_with(tag), "{line}"),
+            None => assert!(line.ends_with("(development build)"), "{line}"),
+        }
+    }
 
     #[test]
     fn a_launch_stands_apart_only_when_it_was_asked_to() {

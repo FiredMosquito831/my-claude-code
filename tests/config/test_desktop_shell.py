@@ -15,6 +15,7 @@ binary behind, because the receipt is what the next launch trusts.
 
 import hashlib
 import io
+import json
 import os
 import tarfile
 import zipfile
@@ -427,3 +428,174 @@ class TestReport:
 
         assert report["shell_ready"] is True
         assert report["shell_binary"] == str(desktop_shell_path())
+
+
+class TestStage:
+    """``mcc-desktop --ensure-shell``: the command BUG-0 was missing.
+
+    Until 6.60.0 the pin was enforced by ``ShellWindow.create()`` alone, so a
+    window launched from the Start Menu -- or from the Programs-folder install
+    the native installer makes -- kept whatever shell it first received. One
+    user ran v6.43.0 for fifteen releases while the wheel moved to 6.58.4.
+    """
+
+    def test_a_binary_that_already_matches_the_pin_costs_no_network(
+        self, release, shell_dir
+    ) -> None:
+        fetch_desktop_shell()
+        release.requested.clear()
+
+        report = desktop_shell.stage_desktop_shell()
+
+        assert report == {
+            "updated": False,
+            "from_tag": DESKTOP_SHELL_RELEASE_TAG,
+            "to_tag": DESKTOP_SHELL_RELEASE_TAG,
+            "staged_path": None,
+            "restart_required": False,
+        }
+        assert release.requested == [], "an unchanged pin must not touch the network"
+
+    def test_a_missing_binary_is_installed_outright_and_needs_no_restart(
+        self, release, shell_dir
+    ) -> None:
+        """There is no running process to protect, so there is nothing to stage."""
+
+        report = desktop_shell.stage_desktop_shell()
+
+        binary = desktop_shell.desktop_shell_path()
+        assert report["updated"] is True
+        assert report["from_tag"] is None
+        assert report["to_tag"] == DESKTOP_SHELL_RELEASE_TAG
+        assert report["restart_required"] is False
+        assert report["staged_path"] == str(binary)
+        assert binary.read_bytes() == _PAYLOAD
+        assert desktop_shell.is_desktop_shell_installed()
+
+    def test_a_stale_binary_is_staged_beside_itself_and_never_written_over(
+        self, release, shell_dir
+    ) -> None:
+        """The whole contract: the running window's file is not touched."""
+
+        binary = desktop_shell.desktop_shell_path()
+        shell_dir.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(b"the window the user is looking at")
+        desktop_shell.receipt_path_for(binary).write_text(
+            json.dumps({"tag": "v6.43.0", "sha256": "0" * 64}), encoding="utf-8"
+        )
+
+        report = desktop_shell.stage_desktop_shell()
+
+        staged = desktop_shell.staged_binary_path(binary)
+        assert report["updated"] is True
+        assert report["from_tag"] == "v6.43.0"
+        assert report["to_tag"] == DESKTOP_SHELL_RELEASE_TAG
+        assert report["restart_required"] is True
+        assert report["staged_path"] == str(staged)
+        assert binary.read_bytes() == b"the window the user is looking at"
+        assert staged.read_bytes() == _PAYLOAD
+        # And the receipt waits beside it, so the swap is one more rename and
+        # not a second question for Python.
+        staged_receipt = json.loads(
+            desktop_shell.staged_receipt_path(binary).read_text(encoding="utf-8")
+        )
+        assert staged_receipt["tag"] == DESKTOP_SHELL_RELEASE_TAG
+        assert staged_receipt["sha256"] == release.digest
+        # Until the swap, the install on disk is still the old one. Anything
+        # else would have the status document claiming a version nobody runs.
+        assert desktop_shell.installed_release_tag_at(binary) == "v6.43.0"
+
+    def test_a_named_target_is_updated_rather_than_the_default_install(
+        self, release, shell_dir, tmp_path
+    ) -> None:
+        """The Programs-folder case: the window names its own executable."""
+
+        programs = tmp_path / "Programs" / "My Claude Code"
+        programs.mkdir(parents=True)
+        binary = programs / desktop_shell.desktop_shell_binary_name()
+        binary.write_bytes(b"the installed window")
+        desktop_shell.receipt_path_for(binary).write_text(
+            json.dumps({"tag": "v6.58.3", "sha256": "0" * 64}), encoding="utf-8"
+        )
+
+        report = desktop_shell.stage_desktop_shell(binary)
+
+        assert report["from_tag"] == "v6.58.3"
+        assert report["restart_required"] is True
+        assert report["staged_path"] == str(desktop_shell.staged_binary_path(binary))
+        assert desktop_shell.staged_binary_path(binary).read_bytes() == _PAYLOAD
+        assert desktop_shell.staged_receipt_path(binary).is_file()
+        # The default install is somewhere else entirely and was not touched.
+        assert not desktop_shell.desktop_shell_path().exists()
+
+    def test_a_swapped_archive_is_refused_and_nothing_is_staged(
+        self, release, shell_dir
+    ) -> None:
+        """Verification is not relaxed for the staging path."""
+
+        binary = desktop_shell.desktop_shell_path()
+        shell_dir.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(b"the window the user is looking at")
+        release.archive = b"not the archive that was published"
+
+        with pytest.raises(DesktopShellError, match="Checksum verification failed"):
+            desktop_shell.stage_desktop_shell()
+
+        assert binary.read_bytes() == b"the window the user is looking at"
+        assert not desktop_shell.staged_binary_path(binary).exists()
+
+    def test_the_base_url_can_be_pointed_at_a_feed_that_is_not_github(
+        self, monkeypatch, shell_dir
+    ) -> None:
+        """So the end-to-end proof can serve the release from loopback.
+
+        The override moves *where* the assets come from and nothing else: both
+        digest checks still run against them.
+        """
+
+        monkeypatch.setenv(
+            desktop_shell.DESKTOP_SHELL_BASE_URL_ENV, "http://127.0.0.1:9/feed/"
+        )
+
+        assert desktop_shell.desktop_shell_base_url() == "http://127.0.0.1:9/feed"
+
+        monkeypatch.delenv(desktop_shell.DESKTOP_SHELL_BASE_URL_ENV)
+        assert (
+            desktop_shell.desktop_shell_base_url()
+            == desktop_shell.DESKTOP_SHELL_RELEASE_BASE_URL
+        )
+
+
+class TestUpdateReport:
+    def test_nothing_installed_is_not_an_update_anybody_asked_for(
+        self, shell_dir
+    ) -> None:
+        report = desktop_shell.desktop_shell_update_report()
+
+        assert report == {
+            "shell_installed_tag": None,
+            "shell_pinned_tag": DESKTOP_SHELL_RELEASE_TAG,
+            "shell_update_available": False,
+        }
+
+    def test_a_stale_receipt_is_an_update(self, shell_dir) -> None:
+        shell_dir.mkdir(parents=True, exist_ok=True)
+        desktop_shell.desktop_shell_receipt_path().write_text(
+            json.dumps({"tag": "v6.43.0"}), encoding="utf-8"
+        )
+
+        report = desktop_shell.desktop_shell_update_report()
+
+        assert report["shell_installed_tag"] == "v6.43.0"
+        assert report["shell_update_available"] is True
+
+    def test_a_current_receipt_is_not(self, shell_dir) -> None:
+        shell_dir.mkdir(parents=True, exist_ok=True)
+        desktop_shell.desktop_shell_receipt_path().write_text(
+            json.dumps({"tag": DESKTOP_SHELL_RELEASE_TAG}), encoding="utf-8"
+        )
+
+        assert (
+            desktop_shell.desktop_shell_update_report()["shell_update_available"]
+            is False
+        )

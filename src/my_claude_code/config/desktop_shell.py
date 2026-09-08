@@ -79,10 +79,29 @@ DESKTOP_SHELL_BINARY_STEM = "MyClaudeCode"
 #: The install receipt, beside the binary.
 DESKTOP_SHELL_RECEIPT_FILENAME = "MyClaudeCode.receipt.json"
 
+#: What a *staged* replacement is called, beside the file it will become.
+#:
+#: A running executable may not be written over -- that is the whole of BUG-0's
+#: second half -- so ``--ensure-shell`` puts the verified new binary next to the
+#: old one under this suffix and stops there. The window that starts next finds
+#: it and does the rename itself (``swap_staged_binary`` in the shell's
+#: ``lib.rs``), which is the one moment nothing is holding the old file open.
+DESKTOP_SHELL_STAGED_SUFFIX = ".new"
+
 #: Overrides the install directory. Exists so a smoke run -- or a test -- can
 #: exercise the whole fetch without writing into the developer's ``~/.local/bin``,
 #: which on a real machine holds the live ``mcc-server`` shim.
 DESKTOP_SHELL_DIR_ENV = "MCC_DESKTOP_SHELL_DIR"
+
+#: Overrides where the release assets are fetched from. The same family of
+#: override as :data:`DESKTOP_SHELL_DIR_ENV`, and it exists for the same
+#: reason: proving the staging path end to end means serving a release feed,
+#: and pointing that proof at the real GitHub would make the proof depend on
+#: the internet and would put load on a release page for a test. The digest
+#: checks are *not* relaxed when it is set -- a loopback feed has to publish a
+#: ``SHA256SUMS-desktop-shell.txt`` that agrees with the pin below, exactly as
+#: the real release does.
+DESKTOP_SHELL_BASE_URL_ENV = "MCC_DESKTOP_SHELL_BASE_URL"
 
 #: ``off`` disables the shell entirely: ``auto`` (the default) lets it lead the
 #: window chain. Read from the environment rather than declared as a ``Settings``
@@ -182,6 +201,48 @@ def desktop_shell_receipt_path() -> Path:
     return desktop_shell_dir() / DESKTOP_SHELL_RECEIPT_FILENAME
 
 
+def receipt_path_for(binary: Path) -> Path:
+    """Return the receipt that describes ``binary``, beside it.
+
+    Takes the binary rather than a directory because there is more than one
+    place a shell can live now: ``~/.local/bin`` (delivery path A), and
+    ``%LOCALAPPDATA%/Programs/My Claude Code`` or ``/usr/bin`` when the
+    native installer put it there (path B). ``--ensure-shell`` updates
+    *whichever one is running*, so every path here is derived from that file.
+    """
+
+    return binary.with_name(DESKTOP_SHELL_RECEIPT_FILENAME)
+
+
+def staged_binary_path(binary: Path) -> Path:
+    """Return where a verified replacement for ``binary`` is staged."""
+
+    return binary.with_name(f"{binary.name}{DESKTOP_SHELL_STAGED_SUFFIX}")
+
+
+def staged_receipt_path(binary: Path) -> Path:
+    """Return where the staged binary's receipt waits for the swap."""
+
+    return binary.with_name(
+        f"{DESKTOP_SHELL_RECEIPT_FILENAME}{DESKTOP_SHELL_STAGED_SUFFIX}"
+    )
+
+
+def desktop_shell_base_url() -> str:
+    """Return the base URL the release assets are fetched from.
+
+    :data:`DESKTOP_SHELL_BASE_URL_ENV` wins when it is set, so a proof can
+    serve the feed from loopback. Nothing else about the fetch changes: the
+    published checksum file is still downloaded, still parsed, and still has to
+    agree with the digest pinned in this module.
+    """
+
+    override = os.environ.get(DESKTOP_SHELL_BASE_URL_ENV, "").strip()
+    if override:
+        return override.rstrip("/")
+    return DESKTOP_SHELL_RELEASE_BASE_URL
+
+
 def desktop_shell_enabled() -> bool:
     """Return whether the shell may be used at all on this machine.
 
@@ -225,11 +286,11 @@ def release_for_current_platform() -> tuple[str, str]:
 # ------------------------------------------------------------- the receipt
 
 
-def read_receipt() -> dict[str, str] | None:
-    """Return the install receipt, or ``None`` when there is not a valid one."""
+def read_receipt_at(path: Path) -> dict[str, str] | None:
+    """Return the receipt at ``path``, or ``None`` when there is not a valid one."""
 
     try:
-        data = json.loads(desktop_shell_receipt_path().read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except OSError, ValueError, TypeError:
         return None
     if not isinstance(data, dict):
@@ -241,11 +302,41 @@ def read_receipt() -> dict[str, str] | None:
     }
 
 
+def read_receipt() -> dict[str, str] | None:
+    """Return the receipt beside the default install, or ``None``."""
+
+    return read_receipt_at(desktop_shell_receipt_path())
+
+
 def installed_release_tag() -> str | None:
     """Return the tag the installed binary came from, or ``None``."""
 
     receipt = read_receipt()
     return None if receipt is None else receipt.get("tag")
+
+
+def installed_release_tag_at(binary: Path) -> str | None:
+    """Return the tag ``binary`` came from, per the receipt beside it."""
+
+    receipt = read_receipt_at(receipt_path_for(binary))
+    return None if receipt is None else receipt.get("tag")
+
+
+def binary_matches_pin(binary: Path) -> bool:
+    """Return whether ``binary`` is exactly what the pin asks for.
+
+    The same two-part test :func:`is_desktop_shell_installed` makes -- the file
+    is there, and the receipt beside it names this build's tag and digest --
+    asked of one named path rather than of the default one.
+    """
+
+    if not binary.is_file():
+        return False
+    receipt = read_receipt_at(receipt_path_for(binary))
+    if receipt is None or receipt.get("tag") != DESKTOP_SHELL_RELEASE_TAG:
+        return False
+    expected = release_for(sys.platform, platform.machine())
+    return expected is not None and receipt.get("sha256") == expected[1]
 
 
 def is_desktop_shell_installed() -> bool:
@@ -256,19 +347,10 @@ def is_desktop_shell_installed() -> bool:
     the pin moved and the next launch must fetch again.
     """
 
-    if not desktop_shell_path().is_file():
-        return False
-    receipt = read_receipt()
-    if receipt is None:
-        return False
-    if receipt.get("tag") != DESKTOP_SHELL_RELEASE_TAG:
-        return False
-    expected = release_for(sys.platform, platform.machine())
-    return expected is not None and receipt.get("sha256") == expected[1]
+    return binary_matches_pin(desktop_shell_path())
 
 
-def _write_receipt(asset: str, digest: str) -> None:
-    path = desktop_shell_receipt_path()
+def _write_receipt_at(path: Path, asset: str, digest: str) -> None:
     payload = json.dumps(
         {
             "tag": DESKTOP_SHELL_RELEASE_TAG,
@@ -289,6 +371,10 @@ def _write_receipt(asset: str, digest: str) -> None:
         raise DesktopShellError(
             f"Could not record the desktop app install receipt at {path}: {exc}"
         ) from exc
+
+
+def _write_receipt(asset: str, digest: str) -> None:
+    _write_receipt_at(desktop_shell_receipt_path(), asset, digest)
 
 
 # --------------------------------------------------------------- the fetch
@@ -337,7 +423,7 @@ def _confirm_published_digest(asset: str, pinned: str, timeout: float) -> None:
     refusal here rather than an unexpected binary on someone's machine.
     """
 
-    sums_url = f"{DESKTOP_SHELL_RELEASE_BASE_URL}/{DESKTOP_SHELL_SUMS_ASSET}"
+    sums_url = f"{desktop_shell_base_url()}/{DESKTOP_SHELL_SUMS_ASSET}"
     published = parse_sha256sums(
         _download(sums_url, timeout).decode("utf-8", "replace")
     )
@@ -486,14 +572,28 @@ def _install_atomically(staged: Path, destination: Path) -> None:
         ) from exc
 
 
-def fetch_desktop_shell(
-    *, timeout: float = DESKTOP_SHELL_DOWNLOAD_TIMEOUT_SECONDS
-) -> Path:
-    """Download, verify and install the pinned shell. Returns its path."""
+def _place_verified_binary(
+    destination: Path, *, timeout: float, install: bool
+) -> tuple[str, str]:
+    """Download the pinned archive and put the executable at ``destination``.
+
+    The one download-verify-extract implementation in this module. Both callers
+    reach it: :func:`fetch_desktop_shell`, which installs over whatever is
+    there because the caller is about to *launch* the result, and
+    :func:`stage_desktop_shell`, which does not, because the file it would be
+    writing over is the window asking for the update.
+
+    ``install`` is that difference and nothing else. ``True`` replaces
+    ``destination`` (renaming a locked copy aside first); ``False`` leaves the
+    extracted file exactly where it was written, which the caller has already
+    named as a staging path.
+
+    Returns ``(asset, digest)`` so the caller can write the receipt that goes
+    with what it just placed.
+    """
 
     asset, pinned_digest = release_for_current_platform()
-    directory = desktop_shell_dir()
-    destination = directory / desktop_shell_binary_name()
+    directory = destination.parent
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -503,7 +603,7 @@ def fetch_desktop_shell(
 
     _confirm_published_digest(asset, pinned_digest, timeout)
 
-    payload = _download(f"{DESKTOP_SHELL_RELEASE_BASE_URL}/{asset}", timeout)
+    payload = _download(f"{desktop_shell_base_url()}/{asset}", timeout)
     digest = hashlib.sha256(payload).hexdigest()
     if digest != pinned_digest:
         raise DesktopShellError(
@@ -512,29 +612,111 @@ def fetch_desktop_shell(
         )
 
     _sweep_renamed_aside(directory)
-    staged = destination.with_name(f".{destination.name}.tmp")
+    written = (
+        destination.with_name(f".{destination.name}.tmp") if install else destination
+    )
     with tempfile.TemporaryDirectory(prefix="mcc-desktop-shell-") as scratch:
         archive_path = Path(scratch) / asset
         try:
             archive_path.write_bytes(payload)
-            _extract_binary(archive_path, asset, staged)
-            staged.chmod(
-                staged.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+            _extract_binary(archive_path, asset, written)
+            written.chmod(
+                written.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
             )
-            _install_atomically(staged, destination)
+            if install:
+                _install_atomically(written, destination)
         except DesktopShellError:
-            with suppress(OSError):
-                staged.unlink(missing_ok=True)
+            if install:
+                with suppress(OSError):
+                    written.unlink(missing_ok=True)
             raise
         except OSError as exc:
             with suppress(OSError):
-                staged.unlink(missing_ok=True)
+                written.unlink(missing_ok=True)
             raise DesktopShellError(
                 f"Could not install the desktop app at {destination}: {exc}"
             ) from exc
 
-    _write_receipt(asset, pinned_digest)
+    return asset, pinned_digest
+
+
+def fetch_desktop_shell(
+    *, timeout: float = DESKTOP_SHELL_DOWNLOAD_TIMEOUT_SECONDS
+) -> Path:
+    """Download, verify and install the pinned shell. Returns its path."""
+
+    destination = desktop_shell_dir() / desktop_shell_binary_name()
+    asset, pinned_digest = _place_verified_binary(
+        destination, timeout=timeout, install=True
+    )
+    _write_receipt_at(receipt_path_for(destination), asset, pinned_digest)
     return destination
+
+
+def stage_desktop_shell(
+    target: Path | None = None,
+    *,
+    timeout: float = DESKTOP_SHELL_DOWNLOAD_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    """Bring one shell binary up to the pin without ever writing over it.
+
+    This is what ``mcc-desktop --ensure-shell`` runs, and it is the answer to
+    BUG-0: until 6.60.0 the pin was enforced by ``ShellWindow.create()`` alone,
+    so a user who launched ``MyClaudeCode.exe`` from the Start Menu -- or from
+    the Programs-folder install the native installer makes -- kept whichever
+    shell they first received, forever. One user ran a 15-release-old window
+    for that reason.
+
+    ``target`` is the binary to bring up to date, which the *window* names
+    (its own ``current_exe()``): the file that has to change is the one that is
+    running, not necessarily the one in ``~/.local/bin``. ``None`` means the
+    default install (the tray's copy).
+
+    Nothing here overwrites ``target``. A verified replacement is written to
+    ``target.new`` with its receipt beside it, and the next start of the window
+    performs the rename -- the one moment nothing holds the file open. The one
+    exception is a ``target`` that does not exist at all: there is no running
+    process to protect, so it is installed outright and no restart is needed.
+
+    Returns the document ``--ensure-shell`` prints:
+    ``{updated, from_tag, to_tag, staged_path, restart_required}``.
+    """
+
+    if not desktop_shell_enabled():
+        raise DesktopShellError(
+            f"{DESKTOP_SHELL_ENABLED_ENV}=off, so the desktop app is not used."
+        )
+
+    binary = (target or desktop_shell_path()).expanduser()
+    to_tag = DESKTOP_SHELL_RELEASE_TAG
+    from_tag = installed_release_tag_at(binary)
+    result: dict[str, object] = {
+        "updated": False,
+        "from_tag": from_tag,
+        "to_tag": to_tag,
+        "staged_path": None,
+        "restart_required": False,
+    }
+
+    if binary_matches_pin(binary):
+        # The pin already reached this machine. Costs one JSON read.
+        return result
+
+    exists = binary.is_file()
+    destination = staged_binary_path(binary) if exists else binary
+    asset, digest = _place_verified_binary(
+        destination, timeout=timeout, install=not exists
+    )
+    _write_receipt_at(
+        staged_receipt_path(binary) if exists else receipt_path_for(binary),
+        asset,
+        digest,
+    )
+
+    result["updated"] = True
+    result["staged_path"] = str(destination)
+    result["restart_required"] = exists
+    return result
 
 
 def ensure_desktop_shell(
@@ -561,6 +743,32 @@ def ensure_desktop_shell(
     return fetch_desktop_shell(timeout=timeout)
 
 
+def desktop_shell_update_report() -> dict[str, object]:
+    """Return what is installed, what is pinned, and whether they disagree.
+
+    Three keys, no network, no writes: the receipt beside the default install
+    is read and compared with the pin. The dashboard's Update banner and the
+    server's startup line both use this, so "the desktop app is stale" is
+    decided once rather than by two readers of the same file.
+
+    ``shell_installed_tag`` is ``None`` when nothing is installed, or when
+    what is installed has no receipt we wrote. That is deliberately *not* an
+    available update: the overwhelming majority of MCC installs have no desktop
+    app at all, and a banner offering to update an app they never installed is
+    noise. An update is available when a receipt exists and names another tag
+    -- which is exactly the case BUG-0 left unattended for fifteen releases.
+    """
+
+    installed = installed_release_tag()
+    return {
+        "shell_installed_tag": installed,
+        "shell_pinned_tag": DESKTOP_SHELL_RELEASE_TAG,
+        "shell_update_available": (
+            installed is not None and installed != DESKTOP_SHELL_RELEASE_TAG
+        ),
+    }
+
+
 def desktop_shell_report() -> dict[str, object]:
     """Return what ``--print-status`` says about the shell. Reads only."""
 
@@ -569,5 +777,10 @@ def desktop_shell_report() -> dict[str, object]:
     return {
         "shell_binary": str(path) if ready else None,
         "shell_release_tag": DESKTOP_SHELL_RELEASE_TAG,
+        # What the receipt beside the installed binary says, which is the half
+        # BUG-0 turned on: the shell compares this with its own compiled-in tag
+        # and asks for a staged update when they disagree. ``null`` when there
+        # is no receipt to read.
+        "shell_installed_tag": installed_release_tag(),
         "shell_ready": ready,
     }

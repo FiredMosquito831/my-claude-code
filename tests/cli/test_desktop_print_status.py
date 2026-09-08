@@ -79,6 +79,12 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     "shell_tray": bool,
     "shell_binary": (str, type(None)),
     "shell_release_tag": str,
+    # What the receipt beside the installed binary says, and ``null`` when
+    # there is no receipt we wrote. Added in 6.60.0: the shell compares its own
+    # compiled-in tag with ``shell_release_tag`` above and this is the other
+    # half of the same question -- "is the file on disk old" as against "is the
+    # window running old". Tolerated by the 6.60.0 shell, requirable in 6.61.0.
+    "shell_installed_tag": (str, type(None)),
     "shell_ready": bool,
     # ``null`` unless an update helper is installing right now. A document,
     # not a flag, because the window renders it: which stage, which version,

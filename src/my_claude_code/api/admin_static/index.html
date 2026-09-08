@@ -3446,6 +3446,47 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   the install somewhere other than <code>~/.local/bin</code>. It is
                   unsigned, so Windows SmartScreen may warn on first run.
                 </p>
+                <p class="guide-note">
+                  <strong>Since 6.60.0 the app keeps itself on that pin, however you
+                  launch it.</strong> Until then the pin was checked in exactly one
+                  place &mdash; the moment the tray created a window &mdash; so anyone
+                  launching <code>MyClaudeCode.exe</code> from the Start Menu, the
+                  taskbar or the Programs-folder install ran whatever build they first
+                  received, forever. One person ran the v6.43.0 window for fifteen
+                  releases while the wheel updated itself every time. The app now
+                  compares the release stamped into it
+                  (<code>MyClaudeCode --version</code>) with the
+                  <code>shell_release_tag</code> the wheel reports and, when they
+                  disagree, runs <code>mcc-desktop --ensure-shell</code> in the
+                  background: one command that downloads the pinned build, checks both
+                  digests, and stages it <em>beside</em> the running executable as
+                  <code>MyClaudeCode.exe.new</code>. It never writes over the file you
+                  are running. The tray then offers
+                  <em>Desktop app update ready &mdash; restart the app to use vX</em>
+                  with a <em>Restart now</em>; ignore it and the swap happens the next
+                  time you start the app anyway. The previous build is kept for one run
+                  as <code>MyClaudeCode.old-&lt;stamp&gt;.exe</code>.
+                </p>
+                <p class="guide-note">
+                  <strong>The window can no longer save itself off-screen.</strong>
+                  Until 6.60.0 the tray's <em>Quit</em> saved the window's geometry
+                  <em>after</em> a close-to-tray had hidden it, and what Windows reports
+                  for a hidden, minimized window is <code>0&times;0</code> at
+                  <code>-32000, -32000</code>. That was written to disk and restored
+                  verbatim on the next launch, so the app came back as a tray icon with
+                  no window on any screen. Geometry is now never saved while the window
+                  is hidden or minimized, and a remembered rectangle that is not at
+                  least partly inside a connected monitor's work area &mdash; or is
+                  below the window's own minimum size &mdash; is not restored at all:
+                  the window opens at the configured
+                  <code>DESKTOP_WINDOW_WIDTH</code>&times;<code>DESKTOP_WINDOW_HEIGHT</code>
+                  (1400&times;900 by default), centred. Changing that size here now
+                  applies on the next launch even after you have resized the window by
+                  hand; resizing by hand still sticks otherwise. If you are ever left
+                  with a tray and no window, the tray's <em>Reset window position</em>
+                  &mdash; or <code>MyClaudeCode --reset-window</code> &mdash; forgets
+                  the remembered geometry and opens centred.
+                </p>
                 <p>
                   <strong>You do not have to start the server first.</strong>
                   <code>mcc-desktop</code> in <code>spawn</code> mode probes the port:
@@ -4151,6 +4192,24 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   publishes for it, and installs it; a mismatch aborts. Extras such as
                   voice support are preserved. Upgrading never restarts the server, so it
                   cannot drop an in-flight stream.
+                </p>
+                <p class="guide-note">
+                  <strong>An update has two halves, and since 6.60.0 the banner says
+                  so.</strong> The wheel &mdash; server, CLI, dashboard &mdash; updates
+                  itself. The <strong>desktop app</strong> is a compiled binary the
+                  wheel <em>pins</em> rather than carries, and nothing used to move it
+                  unless you happened to launch from the tray. The version panel now
+                  reports it (<code>v6.43.0 &rarr; v6.60.0 on next restart</code>), a
+                  banner says <em>Desktop app vX available &mdash; it updates the next
+                  time you restart the app</em>, and <em>Update now</em>'s success
+                  message names both halves rather than declaring you finished when
+                  half of you is not. See
+                  <a href="#guide-deploy">Desktop &amp; RTK</a> for the mechanism.
+                  <strong>Coming from a version before 6.60.0 takes one manual
+                  step</strong>, because the thing that fetches the app is part of what
+                  is being fixed: run <code>mcc-desktop --ensure-shell</code> once, or
+                  start the app from the tray once. Every update after that is
+                  automatic.
                 </p>
                 <p class="guide-note">
                   <strong>On Windows the install is deferred.</strong> Windows holds the

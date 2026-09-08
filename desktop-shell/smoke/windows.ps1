@@ -77,6 +77,31 @@ New-Item -ItemType Directory -Force -Path $Scratch | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Scratch 'config\logs') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Scratch 'data') | Out-Null
 
+# -- 1b. the binary knows which release it is ------------------------------
+# `--version` has to answer, and it has to answer without opening a window.
+# It is how the release proves the tag `shell-release.yml` stamped in actually
+# reached the binary -- the constant the window compares with the wheel's pin,
+# and therefore the whole of whether a stale desktop app can ever notice that
+# it is stale (BUG-0). A GUI-subsystem binary gets no console of its own, but a
+# redirected stdout still works, which is what this reads.
+$versionOut = Join-Path $Scratch 'version.txt'
+$versionProc = Start-Process -FilePath $Binary -ArgumentList '--version' -Wait -PassThru `
+    -RedirectStandardOutput $versionOut -WindowStyle Hidden
+if ($versionProc.ExitCode -ne 0) {
+    Fail "--version exited $($versionProc.ExitCode)"
+}
+$versionText = (Get-Content -LiteralPath $versionOut -Raw).Trim()
+if ($versionText -notmatch '^My Claude Code desktop app ') {
+    Fail "--version printed '$versionText'"
+}
+Ok "--version: $versionText"
+if ($env:MCC_SHELL_RELEASE_TAG) {
+    if (-not $versionText.EndsWith($env:MCC_SHELL_RELEASE_TAG)) {
+        Fail "--version says '$versionText' but this build was stamped $($env:MCC_SHELL_RELEASE_TAG)"
+    }
+    Ok "the stamped release tag reached the binary"
+}
+
 $statusPath = Join-Path $Scratch 'status.json'
 $callsPath = Join-Path $Scratch 'desktop-calls.log'
 $serverPath = Join-Path $Scratch 'server-started.log'

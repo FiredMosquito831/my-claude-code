@@ -582,7 +582,52 @@ mcc-desktop --server-mode spawn|attach|off
 mcc-desktop --autostart on|off
 mcc-desktop --status
 mcc-desktop --print-status
+mcc-desktop --ensure-shell [--target PATH]
 ```
+
+<a id="ensure-shell"></a>
+
+#### `--ensure-shell`: bring the desktop app up to this release's pin
+
+Every release pins one build of the desktop app, and until 6.60.0 that pin was
+checked in exactly one place: the moment the **tray** created a window. Launch
+`MyClaudeCode.exe` from the Start Menu, the taskbar, or the Programs-folder
+install instead — which is how most people launch an app — and nothing ever
+compared what you were running with what the wheel wanted. One person ran the
+v6.43.0 window for fifteen releases while the wheel updated itself every time,
+so every desktop fix shipped in between was, for them, source-only.
+
+`--ensure-shell` is that comparison as a command:
+
+```console
+$ mcc-desktop --ensure-shell
+{
+  "updated": true,
+  "from_tag": "v6.43.0",
+  "to_tag": "v6.60.0",
+  "staged_path": "C:\\Users\\me\\.local\\bin\\MyClaudeCode.exe.new",
+  "restart_required": true
+}
+```
+
+It reads the receipt beside the binary, and if it names another release it
+downloads that release's archive, checks its SHA-256 **twice** — against the
+digest pinned in the wheel and against the `SHA256SUMS-desktop-shell.txt` the
+release publishes, which must agree — and puts the verified executable *beside*
+the old one as `MyClaudeCode.exe.new`. It never writes over the file you are
+running. The next start of the app does the rename itself, which is the one
+moment nothing holds either file open.
+
+`--target` names the binary to update; without it the default install
+(`~/.local/bin`) is meant. The window passes its own executable, so the copy
+that changes is the one you actually launched — the Programs-folder install as
+readily as the tray's.
+
+You do not normally run this yourself. The app runs it for you: on launch it
+compares the release stamped into it (`MyClaudeCode.exe --version`) with the
+`shell_release_tag` in the status document, and when they disagree it stages the
+update in the background and offers **Restart now** in its tray menu. The
+dashboard's Update banner says the same thing.
 
 <a id="machine-readable-status"></a>
 
@@ -3406,6 +3451,45 @@ The dashboard shows your running version, checks the release feed (cached for si
 **Update now** downloads the release wheel, verifies its SHA-256 against the digest GitHub publishes for that asset, and installs it with `uv`. A checksum mismatch aborts. Extras you originally installed — voice support, for instance — are detected and preserved.
 
 **Upgrading never restarts the server.** A running process keeps serving the code it already loaded, so an upgrade can't drop an in-flight stream. You get a *restart required* banner and restart when convenient.
+
+<a id="the-desktop-app-updates-itself"></a>
+
+#### The desktop app now updates itself too (6.60.0)
+
+An update has two halves, and until 6.60.0 the dashboard only ever reported one
+of them. The wheel — the server, the CLI, the dashboard — updates itself every
+release. The **desktop app** is a compiled binary the wheel *pins* rather than
+carries, and that pin was enforced in one place only: the moment the Python tray
+created a window. Launch the app any other way and nothing compared what you
+were running with what the wheel wanted, forever. One person ran the v6.43.0
+window for fifteen releases while the banner told them they were up to date.
+
+Now:
+
+- **The app checks itself on launch.** It compares the release stamped into it
+  with the `shell_release_tag` the wheel reports, and when they disagree it runs
+  [`mcc-desktop --ensure-shell`](#ensure-shell) in the background — one command,
+  off the interface thread, that downloads and verifies the pinned build.
+- **It never replaces its own running executable.** The verified build is
+  *staged* beside it as `MyClaudeCode.exe.new`. The tray says **Desktop app
+  update ready — restart the app to use vX**, and **Restart now** starts the
+  staged build, which renames itself into place before it draws anything. If you
+  ignore the tray, the swap happens the next time you start the app anyway —
+  which is exactly what the banner promises. The previous build is kept for one
+  run as `MyClaudeCode.old-<stamp>.exe` and swept afterwards.
+- **The dashboard says so.** The Update banner gains *Desktop app vX available —
+  it updates the next time you restart the app*, the version panel shows
+  `v6.43.0 → v6.60.0 on next restart`, and **Update now**'s success message names
+  both halves rather than declaring you finished when half of you is not.
+- **The server says so.** One line in `logs/server.log`, once, behind readiness.
+
+`MyClaudeCode.exe --version` prints which release a binary is, which is the
+question that had no answer before.
+
+**Upgrading from a version before 6.60.0 takes one manual step**, because the
+mechanism that fetches the app is itself part of what is being fixed: run
+`mcc-desktop --ensure-shell` once (or start the app from the tray once), and
+every update after that is automatic.
 
 **A restart no longer destroys the log that would explain it.** Until 6.58.1
 every server start emptied `logs/server.log`, so the one file anyone would open

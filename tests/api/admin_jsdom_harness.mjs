@@ -4451,10 +4451,54 @@ if (guideLinks.clicked) {
   guideLinks.clicked.scrolledAnchors = scrolledTo.slice();
 }
 
+// The desktop app's own half of the version panel (6.60.0). The wheel and the
+// window update by different mechanisms and at different moments, and until
+// 6.60.0 the banner only ever reported one of them -- so a user could sit
+// fifteen releases behind on the window and read "Already up to date".
+//
+// Driven through `loadVersionInfo()` and the stubbed route rather than by
+// assigning `state` directly: `window.eval(script)` is an indirect eval, so
+// admin.js's top-level `const state` lives in that eval's own scope and is not
+// reachable from a later one. Going through the fetch the page really makes is
+// closer to the truth anyway.
+const desktopAppBanner = {};
+for (const [label, info] of [
+  [
+    "stale",
+    {
+      current: "6.60.0",
+      shell_installed_tag: "v6.43.0",
+      shell_pinned_tag: "v6.60.0",
+      shell_update_available: true,
+    },
+  ],
+  [
+    "current",
+    {
+      current: "6.60.0",
+      shell_installed_tag: "v6.60.0",
+      shell_pinned_tag: "v6.60.0",
+      shell_update_available: false,
+    },
+  ],
+]) {
+  ROUTES["/admin/api/version"] = info;
+  await window.eval("loadVersionInfo()");
+  desktopAppBanner[label] = {
+    banners: (doc.getElementById("versionBanners")?.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    panel: (doc.getElementById("versionDetails")?.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim(),
+  };
+}
+
 console.log(
   JSON.stringify(
     {
       fatal: null,
+      desktopAppBanner,
       guideLinks,
       scriptErrors,
       consoleErrors,

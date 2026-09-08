@@ -53,7 +53,8 @@ def _print_usage() -> None:
         "[--autostart on|off] "
         "[--start-at-login | --no-start-at-login | "
         "--tray-enabled | --no-tray-enabled | "
-        "--status | --print-status [--presence-v2] | --export-icon PATH]",
+        "--status | --print-status [--presence-v2] | "
+        "--ensure-shell [--target PATH] | --export-icon PATH]",
         file=sys.stderr,
     )
 
@@ -117,6 +118,10 @@ def launch(argv: Sequence[str] | None = None) -> None:
         _print_state()
         return
 
+    if args and args[0] == "--ensure-shell" and _ensure_shell_target_is_valid(args[1:]):
+        _ensure_shell(args[2] if len(args) == 3 else None)
+        return
+
     if args and args[0] == "--print-status" and set(args[1:]) <= {"--presence-v2"}:
         # Imported here, not at module scope, so the toggle paths above
         # keep their current import cost.
@@ -143,6 +148,55 @@ def launch(argv: Sequence[str] | None = None) -> None:
     except DesktopError as exc:
         _report_fatal_error(str(exc))
         raise SystemExit(1) from exc
+
+
+def _ensure_shell_target_is_valid(rest: tuple[str, ...]) -> bool:
+    """Whether what follows ``--ensure-shell`` is nothing, or ``--target PATH``."""
+
+    return not rest or (len(rest) == 2 and rest[0] == "--target")
+
+
+def _ensure_shell(target: str | None) -> None:
+    """Bring one desktop app binary up to the pinned release. Prints JSON.
+
+    The command BUG-0 was missing. Until 6.60.0 the only caller of the pin was
+    ``ShellWindow.create()``, reached only when the *Python tray* started -- so
+    a window launched from the Start Menu, from the taskbar, or from the
+    Programs-folder install ran whatever shell it first received and nothing
+    would ever move it. This is that check as a command anyone can run: the
+    window itself, on launch, when it finds its own compiled-in tag disagrees
+    with ``shell_release_tag``; the installers; and a person.
+
+    ``--target`` is the binary to update, and the window passes its own
+    ``current_exe()`` there: the copy that has to change is the one being run,
+    which is not always the one in ``~/.local/bin``. Without it the default
+    install is updated.
+
+    Nothing is written over. The verified replacement is staged beside the
+    running file and the next start swaps it in (decision Q5: the app never
+    replaces its own running executable; it asks Python to fetch and verify,
+    then relaunches into what Python staged).
+
+    Stdout is JSON and nothing else, because the window parses it; every
+    diagnostic goes to stderr.
+    """
+
+    # Imported here rather than at module scope: this module is on the path of
+    # every ``mcc-desktop`` toggle, and the fetcher costs ``tarfile``,
+    # ``zipfile``, ``hashlib`` and ``urllib``.
+    import json
+
+    from my_claude_code.config.desktop_shell import (
+        DesktopShellError,
+        stage_desktop_shell,
+    )
+
+    try:
+        report = stage_desktop_shell(Path(target) if target else None)
+    except DesktopShellError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from exc
+    print(json.dumps(report, indent=2))
 
 
 def _launch_host() -> None:
