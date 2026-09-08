@@ -235,13 +235,12 @@ jobs:
       # curl.exe and run from cmd.exe. It is run from the checkout rather than
       # from the raw URL, because the point is to test THIS branch's file --
       # but it is byte-for-byte the file the URL serves after a merge.
+      # `call` is not optional: a .cmd started from another .cmd WITHOUT it
+      # transfers control and never comes back, so everything after the line
+      # would silently not run -- which is exactly what the first version of
+      # this job did.
       - name: Run scripts\install.cmd
-        run: scripts\install.cmd
-
-      - name: The batch file returned the installer's own exit code
-        run: |
-          if not "%ERRORLEVEL%"=="0" exit /b 1
-          exit /b 0
+        run: call scripts\install.cmd
 
       - name: mcc-server --version, through the shim in the scratch bin dir
         run: |
@@ -277,7 +276,7 @@ jobs:
       # the installer stops after the download.
       - name: A failed run propagates ERRORLEVEL and keeps the script
         run: |
-          scripts\install.cmd --version 0.0.0
+          call scripts\install.cmd --version 0.0.0
           if "%ERRORLEVEL%"=="0" (
             echo ::error::a failed install returned 0
             exit /b 1
@@ -291,7 +290,7 @@ jobs:
 
       - name: An unknown flag is refused before anything is downloaded
         run: |
-          scripts\install.cmd --not-a-flag
+          call scripts\install.cmd --not-a-flag
           if not "%ERRORLEVEL%"=="2" (
             echo ::error::expected exit 2 for an unknown flag, got %ERRORLEVEL%
             exit /b 1

@@ -3266,6 +3266,30 @@ def test_install_cmd_keeps_the_downloaded_script_when_a_run_fails() -> None:
     assert "%MCC_SCRIPT%" in failure, "the failure must name the file it kept"
 
 
+def test_the_smoke_job_calls_the_batch_file_rather_than_chaining_to_it() -> None:
+    """`call`, or everything after the line silently does not run.
+
+    A .cmd started from another .cmd WITHOUT `call` transfers control and never
+    returns. The first version of the Windows smoke job left it out, so the
+    assertions after the install were never reached and the step's exit code
+    was the installer's rather than the check's -- caught on the runner.
+    """
+    workflow = (_repo_root() / ".github" / "workflows" / "install-smoke.yml").read_text(
+        encoding="utf-8"
+    )
+
+    invocations = [
+        line.strip()
+        for line in workflow.splitlines()
+        if "scripts\\install.cmd" in line and not line.lstrip().startswith("- name:")
+    ]
+    assert invocations, "the Windows smoke job no longer runs install.cmd"
+    for line in invocations:
+        assert "call scripts" in line, (
+            f"install.cmd is invoked without `call`, so nothing after it runs: {line!r}"
+        )
+
+
 def test_install_ps1_behaves_the_same_under_scriptblock_and_file(
     powershell_harness: PowerShellHarness,
     tmp_path: Path,

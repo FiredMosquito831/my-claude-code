@@ -379,9 +379,25 @@ function removeStaleGlobalShim(options) {
   return removed;
 }
 
-/** Where the installer's full output is kept for a hook that cannot show it. */
+/**
+ * Where the installer's full output is kept for a hook that cannot show it,
+ * or null when nothing here can be written.
+ *
+ * `os.tmpdir()` is a guess -- it reads TMPDIR/TEMP/TMP and falls back to the
+ * system directory, and on a Windows runner with a stripped environment that
+ * fallback was `C:\Windows\temp`, which did not exist. So the directory is
+ * created and the path is probed HERE, where a failure is a missing log and
+ * not a crashed install.
+ */
 function installerLogPath() {
-  return path.join(os.tmpdir(), `mcc-install-${process.pid}.log`);
+  const candidate = path.join(os.tmpdir(), `mcc-install-${process.pid}.log`);
+  try {
+    fs.mkdirSync(path.dirname(candidate), { recursive: true });
+    fs.writeFileSync(candidate, "");
+    return candidate;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -397,10 +413,19 @@ function installerLogPath() {
 function runInstallerLogged(command, args, log, logPath) {
   return new Promise((resolve, reject) => {
     let stream = null;
-    try {
-      stream = fs.createWriteStream(logPath, { flags: "a" });
-    } catch {
-      // A log we cannot write is not a reason to refuse the install.
+    if (logPath) {
+      try {
+        stream = fs.createWriteStream(logPath, { flags: "a" });
+        // A WriteStream reports a failed open ASYNCHRONOUSLY, as an 'error'
+        // event -- and an unhandled 'error' on a stream throws out of the
+        // event loop and kills the process. That is a log file taking an
+        // install down with it, which is the opposite of the point.
+        stream.on("error", () => {
+          stream = null;
+        });
+      } catch {
+        stream = null;
+      }
     }
     const child = childProcess.spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let pending = "";
@@ -568,7 +593,11 @@ async function performInstall(options) {
   if (decision.server) {
     const { command, args } = serverInstallerCommand(platform, decision.desktopFlag);
     const logPath = options.logPath ?? installerLogPath();
-    log(`installing the server; the installer's full output goes to ${logPath}`);
+    log(
+      logPath
+        ? `installing the server; the installer's full output goes to ${logPath}`
+        : "installing the server (no writable temporary directory, so the full output is not being kept)"
+    );
     const status = await runInstallerLogged(command, args, log, logPath);
     if (status !== 0) {
       // Say which half landed. This used to claim "Nothing was left
@@ -579,7 +608,9 @@ async function performInstall(options) {
         `my-claude-code: the server installer exited ${status}.\n` +
           `my-claude-code: the desktop app was not attempted. The server may be partly installed: check with \`mcc-server --version\`, ` +
           "and the installer names any command that is missing.\n" +
-          `my-claude-code: the full output is in ${logPath}.\n` +
+          (logPath
+            ? `my-claude-code: the full output is in ${logPath}.\n`
+            : "my-claude-code: the full output could not be kept (no writable temporary directory).\n") +
           "my-claude-code: retry the server with `npx @firedmosquito831/my-claude-code install --server-only`, the app with " +
           "`npx @firedmosquito831/my-claude-code install --desktop-only`, or rerun " +
           "`npm install -g --foreground-scripts @firedmosquito831/my-claude-code` to watch the installer live."

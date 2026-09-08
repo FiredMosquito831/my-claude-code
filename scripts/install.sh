@@ -921,6 +921,15 @@ configure_and_verify_my_claude_code() {
     fi
     [ -n "$tool_bin" ] || fail "uv returned an empty tool bin directory."
 
+    # The PATH the USER's next shell will search, captured BEFORE this script
+    # puts the tool bin directory at the front of its own. Without this the
+    # shadow check below could never fire: add_path_entry prepends $tool_bin,
+    # so `command -v` would always answer with our own launcher, whatever else
+    # is installed on the machine. What the warning is about is what the user
+    # gets when they type the name -- and that is decided by their profile, not
+    # by this process.
+    shadow_search_path="$PATH"
+
     add_path_entry "$tool_bin"
     export PATH
     hash -r 2>/dev/null || true
@@ -958,7 +967,7 @@ configure_and_verify_my_claude_code() {
             fi
             continue
         fi
-        resolved=$(command -v "$command_name" 2>/dev/null) || resolved=""
+        resolved=$(PATH="$shadow_search_path" command -v "$command_name" 2>/dev/null) || resolved=""
         if [ -n "$resolved" ] && [ "$resolved" != "$tool_bin/$command_name" ]; then
             shadowed_commands="$shadowed_commands$command_name -> $resolved
 "
