@@ -16,7 +16,10 @@ from my_claude_code.config.constants import (
 )
 from my_claude_code.core.credential_attribution import current_credential
 from my_claude_code.core.failures import failure_kind_name, find_execution_failure
-from my_claude_code.core.rate_limit import StrictSlidingWindowLimiter
+from my_claude_code.core.rate_limit import (
+    UNLIMITED_RATE_LIMIT,
+    StrictSlidingWindowLimiter,
+)
 from my_claude_code.core.trace import trace_event
 from my_claude_code.core.upstream_ladder import (
     record_limiter_wait,
@@ -113,7 +116,7 @@ class ProviderRateLimiter:
 
     def __init__(
         self,
-        rate_limit: int = 40,
+        rate_limit: int = UNLIMITED_RATE_LIMIT,
         rate_window: float = 60.0,
         max_concurrency: int = 5,
         max_retries: int = DEFAULT_UPSTREAM_MAX_RETRIES,
@@ -122,8 +125,8 @@ class ProviderRateLimiter:
         backoff_jitter_seconds: float = PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
         routes_around_model: bool = False,
     ):
-        if rate_limit <= 0:
-            raise ValueError("rate_limit must be > 0")
+        if rate_limit < 0:
+            raise ValueError("rate_limit must be >= 0")
         if rate_window <= 0:
             raise ValueError("rate_window must be > 0")
         if max_concurrency <= 0:
@@ -147,9 +150,14 @@ class ProviderRateLimiter:
         self._routes_around_model = routes_around_model
         self._blocked_until: float = 0
         self._concurrency_sem = asyncio.Semaphore(max_concurrency)
+        pace = (
+            "no proactive limit"
+            if self._proactive_limiter.unlimited
+            else f"{rate_limit} req / {rate_window}s"
+        )
         logger.info(
             "ProviderRateLimiter initialized "
-            f"({rate_limit} req / {rate_window}s, max_concurrency={max_concurrency})"
+            f"({pace}, max_concurrency={max_concurrency})"
         )
 
     async def wait_if_blocked(self) -> bool:

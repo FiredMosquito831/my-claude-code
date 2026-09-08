@@ -425,6 +425,45 @@ def test_azure_openai_without_a_base_url_names_the_variable_to_set():
     assert "AZURE_OPENAI_BASE_URL" in str(excinfo.value)
 
 
+def test_the_shipped_rate_limit_of_zero_survives_the_factory():
+    """0 is a value, not "unset".
+
+    ``providers/runtime/factory.py`` read the limit with ``config.rate_limit
+    or 40``, so the shipped 0 was substituted back to 40 and the proactive
+    window stayed on for a release that had turned it off. Measured: the
+    54-second tail was still there after the default changed.
+    """
+
+    settings = _make_settings(
+        nvidia_nim_api_key="test_nim_key",
+        provider_rate_limit=0,
+        provider_rate_window=60,
+        provider_max_concurrency=5,
+    )
+
+    provider = create_provider("nvidia_nim", settings)
+    assert isinstance(provider, NvidiaNimProvider)
+
+    assert provider._rate_limiter._proactive_limiter.unlimited is True
+
+
+def test_a_configured_rate_limit_still_reaches_the_limiter():
+    settings = _make_settings(
+        nvidia_nim_api_key="test_nim_key",
+        provider_rate_limit=7,
+        provider_rate_window=11,
+        provider_max_concurrency=3,
+    )
+
+    provider = create_provider("nvidia_nim", settings)
+    assert isinstance(provider, NvidiaNimProvider)
+    limiter = provider._rate_limiter._proactive_limiter
+
+    assert limiter.unlimited is False
+    assert limiter._rate_limit == 7
+    assert limiter._rate_window == 11.0
+
+
 def test_create_provider_instantiates_each_builtin():
     settings = _make_settings(
         gemini_api_key="test_gemini_key",

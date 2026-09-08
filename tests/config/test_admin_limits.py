@@ -242,13 +242,14 @@ def test_no_optimizer_field_is_orphaned() -> None:
     assert declared == set(OPTIMIZER_KEYS)
 
 
-# Six fields moved in from `runtime`, where the manifest deliberately mirrors
+# Fields moved in from `runtime`, where the manifest deliberately mirrors
 # what `.env.example` ships rather than the code default. That divergence is
 # recorded, with reasons, in DEFAULTS_THAT_DIFFER_FROM_THE_CODE below, and
 # checked by test_every_manifest_default_matches_the_settings_default -- which
 # generalises this check and has the escape hatch this one does not.
+# PROVIDER_RATE_LIMIT left this list in 6.62.0: the template and the code now
+# agree on 0, so the ordinary check covers it.
 DEFAULTS_OWNED_BY_THE_SHIPPED_TEMPLATE = (
-    "PROVIDER_RATE_LIMIT",
     "PROVIDER_RATE_WINDOW",
     "HTTP_READ_TIMEOUT",
     "HTTP_WRITE_TIMEOUT",
@@ -591,7 +592,6 @@ DEFAULTS_THAT_DIFFER_FROM_THE_CODE = {
     "ALIBABA_CODING_BASE_URL": _BUILT_IN_ENDPOINT,
     "ALIBABA_CODING_CN_BASE_URL": _BUILT_IN_ENDPOINT,
     "VERTEX_BASE_URL": _SHIPPED_TEMPLATE_VALUE,
-    "PROVIDER_RATE_LIMIT": _SHIPPED_TEMPLATE_VALUE,
     "PROVIDER_RATE_WINDOW": _SHIPPED_TEMPLATE_VALUE,
     "HTTP_READ_TIMEOUT": _SHIPPED_TEMPLATE_VALUE,
     "HTTP_WRITE_TIMEOUT": _SHIPPED_TEMPLATE_VALUE,

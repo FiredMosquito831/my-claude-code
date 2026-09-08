@@ -1,8 +1,9 @@
 """Model routing for Claude-compatible requests."""
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import overload
 
 from loguru import logger
 
@@ -177,6 +178,83 @@ class RouteDiversion(StrEnum):
     VISION_DESCRIBED = "vision_described"
 
 
+class LazyRouteChain(Sequence["RoutedMessagesRequest"]):
+    """The routes for one chain, each built the first time it is asked for.
+
+    Routing a rung is not free: it deep-copies the request, re-derives the
+    image delivery for that host, runs a PIL pass to shrink oversized pictures
+    to that host's billing family, and walks the models.dev ladder to decide
+    what reasoning may be sent. Until 6.62.0 every rung of the chain was routed
+    before the first attempt was made, so a three-rung chain carrying an image
+    paid three PIL passes and three ladder walks to answer a request that rung
+    one almost always answers.
+
+    The deep copy itself is 0.27 ms on an 80 KB tool-heavy request and is
+    deliberately kept: each attempt must own its own request, or a mutation
+    made for one host would follow the request to the next.
+
+    What is *not* lazy is the resolved chain. Which models are on the route,
+    in what order, is known without routing any of them, and it is what the
+    health registry, the pause list and the attempt ledger read -- so those
+    ask :attr:`resolved_models` and force nothing.
+    """
+
+    __slots__ = ("_built", "_chain", "_route_for")
+
+    def __init__(
+        self,
+        chain: tuple[ResolvedModel, ...],
+        route_for: Callable[[ResolvedModel], RoutedMessagesRequest],
+    ) -> None:
+        if not chain:
+            raise ValueError("A routed messages plan needs at least one attempt.")
+        self._chain = chain
+        self._route_for = route_for
+        self._built: list[RoutedMessagesRequest | None] = [None] * len(chain)
+
+    @property
+    def resolved_models(self) -> tuple[ResolvedModel, ...]:
+        """The chain this routes, without routing any of it."""
+        return self._chain
+
+    def __len__(self) -> int:
+        return len(self._chain)
+
+    @overload
+    def __getitem__(self, index: int) -> RoutedMessagesRequest: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[RoutedMessagesRequest]: ...
+
+    def __getitem__(
+        self, index: int | slice
+    ) -> RoutedMessagesRequest | Sequence[RoutedMessagesRequest]:
+        if isinstance(index, slice):
+            return tuple(self[i] for i in range(*index.indices(len(self._chain))))
+        position = index if index >= 0 else index + len(self._chain)
+        if not 0 <= position < len(self._chain):
+            raise IndexError(index)
+        built = self._built[position]
+        if built is None:
+            built = self._route_for(self._chain[position])
+            self._built[position] = built
+        return built
+
+    def __iter__(self) -> Iterator[RoutedMessagesRequest]:
+        for position in range(len(self._chain)):
+            yield self[position]
+
+
+def chain_resolved_models(
+    attempts: Sequence[RoutedMessagesRequest],
+) -> tuple[ResolvedModel, ...]:
+    """The resolved model behind each attempt, forcing nothing that is lazy."""
+
+    if isinstance(attempts, LazyRouteChain):
+        return attempts.resolved_models
+    return tuple(attempt.resolved for attempt in attempts)
+
+
 @dataclass(frozen=True, slots=True)
 class RoutedMessagesPlan:
     """One request and the ordered alternates to try if it cannot be served.
@@ -199,7 +277,7 @@ class RoutedMessagesPlan:
     simply gets no entry, which is how "skip the probe" is expressed.
     """
 
-    attempts: tuple[RoutedMessagesRequest, ...]
+    attempts: Sequence[RoutedMessagesRequest]
     diverted_from: str | None = None
     diversion: RouteDiversion | None = None
     probe_candidates: Mapping[str, ResolvedModel] = field(default_factory=dict)
@@ -229,8 +307,12 @@ class RoutedMessagesPlan:
     def has_fallbacks(self) -> bool:
         return len(self.attempts) > 1
 
+    def resolved_models(self) -> tuple[ResolvedModel, ...]:
+        """The chain, without routing any rung that has not been reached."""
+        return chain_resolved_models(self.attempts)
+
     def model_refs(self) -> tuple[str, ...]:
-        return tuple(attempt.resolved.provider_model_ref for attempt in self.attempts)
+        return tuple(resolved.provider_model_ref for resolved in self.resolved_models())
 
 
 VisionCapabilityLookup = Callable[[str, str], bool | None]
@@ -692,7 +774,7 @@ class ModelRouter:
                 request.model, chain, route_chain
             )
         plan = RoutedMessagesPlan(
-            tuple(self._route_for(request, resolved) for resolved in chain),
+            LazyRouteChain(chain, lambda resolved: self._route_for(request, resolved)),
             diverted_from=(route_chain[0].provider_model_ref if diverted else None),
             diversion=diversion,
             probe_candidates=self._probe_candidates(),

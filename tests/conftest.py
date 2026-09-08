@@ -270,6 +270,55 @@ def _reset_image_geometry_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_process_settings_cache():
+    """Forget the process-wide ``Settings`` between tests.
+
+    ``get_settings()`` is memoized for the life of the process and cleared
+    when a configuration is applied. Since 6.62.0 the web-tools path reads it
+    instead of building a fresh ``Settings`` per request, so a test that sets
+    an environment variable and then drives a web search would otherwise be
+    answered from whatever the previous test's environment produced.
+    """
+    from my_claude_code.config.settings import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_models_dev_payload_cache():
+    """Forget the parsed models.dev payload between tests.
+
+    Since 6.62.0 the 4.9 MB cache file is parsed once per on-disk generation
+    and every index shape is built from that one parse. The memo is keyed by
+    ``(path, mtime_ns, size)``, but two tests can write different payloads to
+    the same ``tmp_path`` within one filesystem timestamp tick, so the memo is
+    dropped between tests rather than trusted to notice.
+    """
+    from my_claude_code.providers.runtime import models_dev
+
+    models_dev.reset_models_dev_payload_cache()
+    yield
+    models_dev.reset_models_dev_payload_cache()
+
+
+@pytest.fixture(autouse=True)
+def _reset_normalize_candidates_cache():
+    """Forget memoised model-id match keys between tests.
+
+    ``core.model_ids.normalize_candidates`` is an ``lru_cache`` over a pure
+    function, so nothing it returns can go stale -- but a test that asserts on
+    its ``cache_info`` needs to start from zero.
+    """
+    from my_claude_code.core import model_ids
+
+    model_ids.normalize_candidates.cache_clear()
+    yield
+    model_ids.normalize_candidates.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def _reset_credential_digests():
     """Forget the configured-credential digests between tests.
 

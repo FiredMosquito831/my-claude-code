@@ -504,10 +504,9 @@ class MessagesHandler:
             return True
         if not described.unreachable_refs:
             return False
-        return all(
-            attempt.resolved.provider_model_ref in described.unreachable_refs
-            for attempt in plan.attempts
-        )
+        # ``model_refs`` rather than the attempts: this asks about the
+        # route, and routing a rung to answer it would undo the laziness.
+        return all(ref in described.unreachable_refs for ref in plan.model_refs())
 
     def _apply_message_routing_policies(
         self, plan: RoutedMessagesPlan

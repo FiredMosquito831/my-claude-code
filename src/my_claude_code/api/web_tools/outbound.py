@@ -15,7 +15,7 @@ from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp.abc import AbstractResolver, ResolveResult
 from loguru import logger
 
-from my_claude_code.config.settings import Settings
+from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.websearch.models import WebSearchResponse
 from my_claude_code.websearch.errors import WebSearchConfigError, WebSearchError
 from my_claude_code.websearch.registry import (
@@ -287,7 +287,7 @@ async def _run_web_search(
     ``supports_domain_filters``.
     """
 
-    settings = settings if settings is not None else Settings()
+    settings = settings if settings is not None else get_settings()
     trace = _SearchRouteTrace(
         route_id=uuid4().hex,
         ts_epoch=time.time(),

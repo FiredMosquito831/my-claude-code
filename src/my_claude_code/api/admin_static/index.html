@@ -4100,6 +4100,33 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   decision, and it belongs beside the chains it ends. The
                   Benching card links to it.
                 </p>
+                <h4>The client-side pace</h4>
+                <p>
+                  <strong>Provider rate limit</strong>
+                  (<code>PROVIDER_RATE_LIMIT</code>, on
+                  <strong>Retries &amp; throughput</strong>) ships at
+                  <strong>0</strong> since 6.62.0, which means MCC paces nothing
+                  of its own: requests go upstream as fast as your client sends
+                  them. It used to ship at 40 requests per 60 seconds, per
+                  provider, against limits no provider had published &mdash; and
+                  because every routing attempt spends a slot, a route averaging
+                  three attempts began throttling after about thirteen client
+                  requests a minute. On one measured machine, 24 concurrent
+                  requests took a median of 938&nbsp;ms and a 95th percentile of
+                  <strong>54 seconds</strong>, all of it MCC waiting for its own
+                  window.
+                </p>
+                <p>
+                  Nothing about a real limit changed. A provider that is over
+                  quota answers <code>429</code> with a <code>Retry-After</code>,
+                  and <strong>Credential health</strong> obeys it either way. Set
+                  a positive number only to hold a metered key back on purpose
+                  &mdash; and when you do, the queue is fair: waiters are
+                  admitted in the order they arrived, so a paced request waits
+                  its turn instead of losing a lottery.
+                  <code>PROVIDER_MAX_CONCURRENCY</code> (default 5) is unchanged
+                  and was never the problem.
+                </p>
                 <h4>What a key is judged on</h4>
                 <p>
                   The <strong>Credential health</strong> card holds the only two

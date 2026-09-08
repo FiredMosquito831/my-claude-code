@@ -345,6 +345,19 @@ FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT = 5.0
 # upstream limit takes to clear: at 60 the ladder ran 2/4/8/16 per key, which
 # measured ~100s across a three-key pool while the first-token deadline kept
 # ticking. Since 6.20.0 only a 5xx or a transport fault ever walks it.
+# The client-side pace MCC applies of its own accord, per provider, before a
+# request is sent. 0 -- the default since 6.62.0 -- means it applies none.
+# It shipped at 40 requests per 60 seconds against limits no provider had
+# published, and because every routing attempt spends a slot, a route whose
+# measured attempt count was 3.0 began throttling after ~13 client requests a
+# minute: 24 concurrent requests measured p50 938 ms against p95 54 397 ms, all
+# of it MCC waiting for its own window. Providers answer 429 with a Retry-After
+# when they mean it, and the reactive block obeys that. A positive value is
+# still honoured exactly as before, for a metered key an operator wants paced.
+PROVIDER_RATE_LIMIT_DEFAULT = 0
+# The window a positive limit is counted over. Meaningless while the limit
+# is 0, and 0 is not a window, so this one has no off value.
+PROVIDER_RATE_WINDOW_DEFAULT = 60
 PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT = 2.0
 PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT = 10.0
 PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT = 1.0
