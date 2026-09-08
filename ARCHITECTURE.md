@@ -277,6 +277,53 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
   home — is a logged warning and a fall-through to app-mode, never a refusal to launch.
   The shell resolves nothing itself: it is handed an absolute `mcc-desktop` in
   `MCC_SHELL_DESKTOP_COMMAND` and asks it for `--print-status` (contract C1).
+- **One lifecycle controller, in the shell (6.61.0).**
+  [desktop-shell/src-tauri/src/controller.rs](desktop-shell/src-tauri/src/controller.rs)
+  is a pure `step(state, observation, now) -> (State, Vec<Effect>)` over nine states
+  (`Booting`, `Attached`, `Starting`, `Reconnecting`, `Draining`, `Updating`,
+  `RestartPending`, `Installing`, `Blocked`), and `lib.rs` is the loop that samples the
+  world for it and applies at most one side effect per tick. It replaced seven
+  `wait_for_*` loops, each of which owned a piece of the timing and six of which could
+  reach a page with nothing running behind it. The invariant is a property test in the
+  module: **every state has an outgoing edge on every observation class**, and a healthy
+  server reaches `Attached` from every state in one tick.
+  Two clocks: a one-second paint tick (compiled in — the refresh rate of a countdown is
+  not an operator's decision) and the document's `tick_seconds` probe tick, ten seconds
+  by decision Q4. Only a probe tick may spawn, and a server that is dead — no health, no
+  live child, no helper installing, holder absent or ours — is started on it, forever,
+  with no attempt cap. `RestartPending` is the post-update path as a named edge: the
+  helper wrote a terminal stage, nothing answers, so the tick spawns — which is the fix
+  for "after Update-and-restart the app stops the server then only watches; F5 fixes
+  it", because the reload was previously the only thing that could reach a spawn.
+- **Who holds the port is decided by process (6.61.0).** `classify_port_holder` in
+  [cli/desktop.py](src/my_claude_code/cli/desktop.py) answers
+  `absent | ours_healthy | ours_starting | ours_draining | ours_stale | foreign` from
+  the listener's pid, image and command line — through `port_takeover.identity_for_owner`,
+  the same identification the server's own `SERVER_PORT_TAKEOVER` uses, so the two
+  cannot disagree about what "ours" means. It rides in `--print-status` as
+  `holder: {kind, pid, image}` alongside `server_pid`, and the shell holds a `foreign`
+  answer against `foreign_grace_seconds` before acting on it. `--print-status` is off
+  the tick path entirely: an attached window pays for one `/health` probe per tick and
+  the document is re-read only when the controller asks for holder or helper facts.
+- **The update helper installs and exits when a window is watching (6.61.0).** The shell
+  injects `window.__mccShellWatching` into every page it loads; the dashboard's Update
+  button sends `no_restart` when it is there; `apply-upgrade.ps1` then skips its
+  `Start-Process` and the shell's next tick starts the server. A dashboard in a browser
+  tab sends nothing and the helper restarts, which is what a headless machine needs.
+- **The server brings a stale desktop app up to the pin (6.61.0).**
+  `auto_update_desktop_shells` in `config/desktop_shell.py`, called once per server start
+  from `runtime/asgi.py` after `mark_ready()`, on a daemon thread, importing the module
+  lazily so the contract test above still holds. It is the same `stage_desktop_shell`
+  that `mcc-desktop --ensure-shell` runs, over every install location that carries a
+  receipt this code wrote. Guarded by `DESKTOP_SHELL_AUTO_UPDATE` (default true),
+  `DESKTOP_SHELL=off`, and a live update helper; a failure is one line and the next
+  server start is the retry.
+- **On Windows the shell owns the tray (6.61.0, decision Q2).** `shell_owns_tray()` in
+  `cli/desktop_window.py` is true on Windows and Linux wherever a desktop app is
+  installed; `python_tray_is_running()` defers to it, and `desktop_entrypoint._launch_host`
+  runs `WindowOnlyHost` rather than pystray. The Python tray remains the fallback for
+  machines with no desktop app, and for macOS, where pystray's backend must own the main
+  thread.
 - `mcc-rtk` (legacy alias `fcc-rtk`) calls `my_claude_code.cli.entrypoints:rtk`,
   which dispatches to [cli/rtk_commands.py](src/my_claude_code/cli/rtk_commands.py).
 

@@ -8,8 +8,13 @@
 //!
 //! What lives here, and nowhere else, is the window: a splash while the
 //! answer is being fetched, a tray icon, a single-instance guard, remembered
-//! geometry, and the ladder that decides between attaching to a healthy
-//! server, starting one, explaining a port conflict, or installing MCC.
+//! geometry, and the lifecycle controller that decides between attaching to a
+//! healthy server, starting one, explaining a port conflict, or installing MCC.
+//!
+//! From 6.61.0 all of that deciding lives in one pure function --
+//! `controller::step` -- run on one tick by [`run_controller`]. The seven
+//! `wait_for_*` loops it replaced each owned a piece of the timing, and six of
+//! them could reach a page with no loop behind it.
 //!
 //! Contracts this file is answerable for: C1 (nothing is resolved here),
 //! C4 (nothing under the configuration directory is written), C5 (no
@@ -17,9 +22,9 @@
 //! comes from the status document).
 
 pub mod activation;
+pub mod controller;
 pub mod health;
 pub mod install;
-pub mod ladder;
 pub mod process;
 pub mod status;
 pub mod swap;
@@ -37,13 +42,21 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::webview::{PageLoadEvent, WebviewWindowBuilder};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WindowEvent, Wry};
 
-use crate::ladder::{Decision, Reconnect, Respawn, StartAttempt};
+use crate::controller::Effect;
 use crate::status::Status;
 use crate::ui::Page;
-use crate::update_progress::Stage;
 
 /// The single windows label. One window, one label, everywhere.
 const MAIN_WINDOW: &str = "main";
+
+/// Injected into every document this window loads.
+///
+/// The dashboard's Update button reads `window.__mccShellWatching` and, when
+/// it is set, tells the server that the caller owns the restart -- so
+/// `apply-upgrade.ps1` installs and exits and this window's next tick starts
+/// the new server. The same page in a browser tab does not see it, and the
+/// helper restarts exactly as it did before (GAP-3, decision Q4).
+const SHELL_MARKER_SCRIPT: &str = "window.__mccShellWatching = true;";
 
 /// The release this binary was built from, stamped in by `shell-release.yml`
 /// (`MCC_SHELL_RELEASE_TAG`), and printed by `--version`.
@@ -87,27 +100,10 @@ const FIRST_PAINT_HEIGHT: f64 = 900.0;
 /// anywhere yet.
 const TRAY_ICON: &[u8] = include_bytes!("../icons/tray-icon.png");
 
-/// How often a blocked ladder re-checks whether Retry was pressed.
-const RETRY_POLL: Duration = Duration::from_millis(200);
-
 /// How long to let a freshly navigated local page define its receiver before
 /// pushing state at it. The push is idempotent and the page also picks up a
 /// pending state on load, so this is a smoothing delay, not a correctness one.
 const PAGE_SETTLE: Duration = Duration::from_millis(500);
-
-/// How many times MCC may be installed from this window before it stops
-/// trying and says why.
-///
-/// Not a budget from the status document, because there is no status document:
-/// this is the one state the shell is in when `mcc-desktop` cannot be run at
-/// all. Three, for the same reason a start gets three: the first one is the
-/// one that usually works, and a fourth would only be the third again.
-const INSTALL_ATTEMPTS: u32 = 3;
-
-/// How often the window re-checks for `mcc-desktop` after it has stopped
-/// installing. Each check runs a short-lived process, so this is not the
-/// 200ms Retry poll.
-const INSTALL_RECHECK: Duration = Duration::from_secs(5);
 
 /// Set to a non-empty value to launch a window that does not join the
 /// single-instance group.
@@ -157,6 +153,20 @@ pub fn separate_instance(raw: Option<&str>) -> bool {
 }
 
 static RETRY_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Whether the user pressed "Take port" (decision Q1). Only ever offered for a
+/// holder Python identified, by process, as one of MCC's own.
+static TAKE_PORT_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// The page this window is currently showing, kept so a reload can be answered
+/// with the same one.
+///
+/// BUG-2, and it is worth spelling out. Every page here was *pushed* into the
+/// document with `eval`; a reload -- F5, Ctrl+R, or a webview that reloaded
+/// itself -- threw the pushed state away and left a window that said "Checking
+/// the server..." over a loop that was in fact working. The page now asks for
+/// the current state on load (`shell_page`) and the shell re-pushes it when a
+/// load finishes, so the two halves cannot disagree. `None` means the window is
+/// showing the dashboard, which is not this shell's page to restore.
+static CURRENT_PAGE: Mutex<Option<Page>> = Mutex::new(None);
 /// Installs run in this session that did not end with a runnable
 /// `mcc-desktop`. Reset by the first status read that works.
 static INSTALLS_RUN: AtomicU32 = AtomicU32::new(0);
@@ -164,7 +174,7 @@ static INSTALLS_RUN: AtomicU32 = AtomicU32::new(0);
 /// rather than showing a spinner over nothing.
 static LAST_INSTALL_LINE: Mutex<String> = Mutex::new(String::new());
 /// Whether closing the window hides it instead of ending the app. Read from
-/// the status document on every ladder pass; `false` until one has been read,
+/// the status document on every status read; `false` until one has been read,
 /// so a window that has learned nothing yet still closes when told to.
 static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(false);
 static TRAY_BUILT: AtomicBool = AtomicBool::new(false);
@@ -175,10 +185,10 @@ static UPDATE_STAGED: AtomicBool = AtomicBool::new(false);
 static STAGED_TAG: Mutex<Option<String>> = Mutex::new(None);
 /// Whether the pin has already been compared with this build's tag. Once per
 /// launch: the answer cannot change while the process runs, and re-running a
-/// download every ladder pass would be a denial of service on the release page.
+/// download every tick would be a denial of service on the release page.
 static SHELL_PIN_CHECKED: AtomicBool = AtomicBool::new(false);
 /// Whether this launch has already applied the configured window size. The
-/// geometry rules are per *launch*, not per ladder pass -- a window that
+/// geometry rules are per *launch*, not per tick -- a window that
 /// re-centred itself every five seconds would be worse than one that opened in
 /// the wrong place.
 static GEOMETRY_APPLIED: AtomicBool = AtomicBool::new(false);
@@ -224,6 +234,28 @@ fn shell_retry() {
 #[tauri::command]
 fn shell_ready() -> bool {
     true
+}
+
+/// The page the controller is on, asked for by the document as it loads.
+///
+/// The other half of BUG-2's fix. A pushed state is lost by a reload; a state
+/// the page *pulls* cannot be. Both halves are kept because they answer
+/// different races -- this one covers a document that loaded before Rust
+/// noticed, and the re-push in `on_page_load` covers a document that loaded
+/// while Rust was between ticks.
+#[tauri::command]
+fn shell_page() -> Option<Page> {
+    CURRENT_PAGE.lock().ok().and_then(|guard| guard.clone())
+}
+
+/// The "Take port" button. Decision Q1: it is only ever rendered for a holder
+/// identified as MCC's own, and all it does is bring the next start forward --
+/// the kill is the server's own `SERVER_PORT_TAKEOVER`, inside `mcc-server`,
+/// where it belongs.
+#[tauri::command]
+fn shell_take_port() {
+    TAKE_PORT_REQUESTED.store(true, Ordering::SeqCst);
+    RETRY_REQUESTED.store(true, Ordering::SeqCst);
 }
 
 // -- window plumbing -------------------------------------------------------
@@ -304,6 +336,7 @@ fn raise(app: &AppHandle) {
 /// Show one of the shells own pages, navigating back from the dashboard if
 /// that is where the window currently is.
 fn show_page(window: &WebviewWindow, page: &Page) {
+    remember_page(Some(page.clone()));
     let local = LOCAL_URL.get().cloned().unwrap_or_default();
     let current = window.url().map(|url| url.to_string()).unwrap_or_default();
     let elsewhere = current != local;
@@ -316,12 +349,31 @@ fn show_page(window: &WebviewWindow, page: &Page) {
     let _ = window.eval(ui::render_script(page));
 }
 
+/// Record the page the window is on, for a reload to ask about.
+fn remember_page(page: Option<Page>) {
+    if let Ok(mut guard) = CURRENT_PAGE.lock() {
+        *guard = page;
+    }
+}
+
+/// Re-push the current page after a document finished loading.
+///
+/// A reload lands here, and so does the navigation back from the dashboard.
+/// Idempotent by construction: the page renders whatever it is given.
+fn repush_current_page(window: &WebviewWindow) {
+    let Some(page) = shell_page() else {
+        return;
+    };
+    let _ = window.eval(ui::render_script(&page));
+}
+
 fn append_output(window: &WebviewWindow, line: &str) {
     let _ = window.eval(ui::append_output_script(line));
 }
 
 /// Load the dashboard itself. The URL is whatever Python said it was (C1).
 fn show_dashboard(window: &WebviewWindow, admin_url: &str) {
+    remember_page(None);
     match url::Url::parse(admin_url) {
         Ok(parsed) => {
             let _ = window.navigate(parsed);
@@ -345,103 +397,6 @@ fn show_dashboard(window: &WebviewWindow, admin_url: &str) {
 /// cannot close at all.
 pub fn should_hide_on_close(close_to_tray: bool, quitting: bool) -> bool {
     close_to_tray && !quitting
-}
-
-/// Block until Retry is pressed. Returns when it is.
-fn wait_for_retry(app: &AppHandle) {
-    RETRY_REQUESTED.store(false, Ordering::SeqCst);
-    while !RETRY_REQUESTED.swap(false, Ordering::SeqCst) {
-        if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
-            return;
-        }
-        std::thread::sleep(RETRY_POLL);
-    }
-}
-
-/// Wait on the error page, and keep checking behind it.
-///
-/// The whole of the reported defect, in one function. Until 6.58.1 a start
-/// that ran out of budget called [`wait_for_retry`] -- an unbounded loop on a
-/// static page -- and `watch_health`, the entire self-healing reconnect
-/// machinery, was reachable only from the success branch. The user waited at
-/// that page while the server they were waiting for answered seven seconds
-/// later, and closing and reopening the app was literally the only recovery.
-///
-/// Now the page is the same page and the loop behind it is alive: it probes
-/// the health URL on the document's own cadence and returns the moment the
-/// server answers, so the ladder runs again and the dashboard loads with
-/// nothing asked of the user. Retry still returns immediately -- it is an
-/// accelerator now, not the only way out.
-///
-/// Returns true when the server answered.
-fn wait_for_retry_or_health(
-    app: &AppHandle,
-    window: &WebviewWindow,
-    status: &Status,
-    health_url: &str,
-    message: &str,
-) -> bool {
-    RETRY_REQUESTED.store(false, Ordering::SeqCst);
-    let poll = Duration::from_secs_f64(status.health_poll_seconds.max(0.5));
-    let mut probed_at = Instant::now();
-    show_page(
-        window,
-        &Page::Error {
-            message: ladder::still_checking_text(message, 0.0),
-            server_log: Some(status.server_log.clone()),
-        },
-    );
-    loop {
-        if RETRY_REQUESTED.swap(false, Ordering::SeqCst) {
-            return false;
-        }
-        if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
-            return false;
-        }
-        if probed_at.elapsed() >= poll {
-            probed_at = Instant::now();
-            if health::is_healthy(health_url) {
-                return true;
-            }
-            // Repainted every probe, for the reason the reconnect banner is:
-            // a page that never changes is indistinguishable from a page
-            // behind a loop that has stopped.
-            show_page(
-                window,
-                &Page::Error {
-                    message: ladder::still_checking_text(message, 0.0),
-                    server_log: Some(status.server_log.clone()),
-                },
-            );
-        }
-        std::thread::sleep(RETRY_POLL);
-    }
-}
-
-/// The same idea one rung lower: MCC is not installed, the installer has had
-/// its attempts, and the window watches for `mcc-desktop` to become runnable
-/// instead of installing it again forever.
-fn wait_for_install_to_land(app: &AppHandle) {
-    RETRY_REQUESTED.store(false, Ordering::SeqCst);
-    let mut checked_at = Instant::now();
-    loop {
-        if RETRY_REQUESTED.swap(false, Ordering::SeqCst) {
-            return;
-        }
-        if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
-            return;
-        }
-        if checked_at.elapsed() >= INSTALL_RECHECK {
-            checked_at = Instant::now();
-            if !matches!(
-                process::print_status(),
-                Err(process::StatusRunError::NotInstalled)
-            ) {
-                return;
-            }
-        }
-        std::thread::sleep(RETRY_POLL);
-    }
 }
 
 // -- tray -------------------------------------------------------------------
@@ -599,57 +554,7 @@ fn last_config_dir() -> Option<String> {
     Some(remembered.to_owned())
 }
 
-/// An update helper that is installing right now, if one is.
-fn helper_installing_now() -> Option<update_progress::ActiveHelper> {
-    update_progress::active_helper(&last_config_dir()?)
-}
-
-/// Watch an update helper finish instead of installing over the top of it.
-///
-/// The 2026-09-07 failure in one function: the helper renamed `mcc-desktop`
-/// aside, the ladder read `NotInstalled`, and the window started its own
-/// `uv tool install` into the tool directory the helper was mid-way through
-/// writing. The helper lost all five of its attempts and never reached the
-/// step that starts a server. So while a helper is alive the window says what
-/// it is waiting for and does nothing else -- and it repaints every pass,
-/// because a page that never changes is the thing that gets reported as a
-/// hang.
-///
-/// Returns when the helper is gone. Whether MCC is installed by then is the
-/// caller's question, asked the way it always is: by running the status
-/// command again.
-fn wait_for_update_helper(
-    app: &AppHandle,
-    window: &WebviewWindow,
-    first: update_progress::ActiveHelper,
-) {
-    set_tray_status("Updating My Claude Code...");
-    let mut helper = first;
-    loop {
-        show_page(
-            window,
-            &Page::Updating {
-                message: format!(
-                    "{} This window is waiting for it rather than starting a second \
-                     installer, and picks the dashboard up again by itself.",
-                    helper.describe()
-                ),
-            },
-        );
-        for _ in 0..(INSTALL_RECHECK.as_millis() / RETRY_POLL.as_millis()).max(1) {
-            if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
-                return;
-            }
-            std::thread::sleep(RETRY_POLL);
-        }
-        match helper_installing_now() {
-            Some(next) => helper = next,
-            None => return,
-        }
-    }
-}
-
-// -- the ladder -------------------------------------------------------------
+// -- installing MCC ---------------------------------------------------------
 
 /// Run the install script, streaming its output into the window.
 ///
@@ -664,8 +569,9 @@ fn run_install(window: &WebviewWindow, attempt: u32) -> String {
             command: command.display.clone(),
             message: format!(
                 "My Claude Code is not installed here yet, so this window is \
-                 installing it (attempt {attempt} of {INSTALL_ATTEMPTS}). This \
-                 takes a few minutes the first time."
+                 installing it (attempt {attempt} of {}). This takes a few \
+                 minutes the first time.",
+                controller::INSTALL_ATTEMPTS
             ),
         },
     );
@@ -687,222 +593,6 @@ fn run_install(window: &WebviewWindow, attempt: u32) -> String {
     // A clean install has nothing to complain about, so the useful last word
     // is the installer's own; anything else is the failure itself.
     if clean { last } else { ending }
-}
-
-/// Poll `/health` until the server answers, or until the documents own start
-/// budget runs out (C9).
-fn wait_for_start(window: &WebviewWindow, status: &Status, health_url: &str, attempt: u32) -> bool {
-    let started = Instant::now();
-    let interval = Duration::from_secs_f64(status.health_check_interval_seconds.max(0.05));
-    loop {
-        if health::is_healthy(health_url) {
-            return true;
-        }
-        if QUITTING.load(Ordering::SeqCst) {
-            return false;
-        }
-        let elapsed = started.elapsed().as_secs_f64();
-        if !ladder::start_may_continue(status, elapsed) {
-            return false;
-        }
-        show_page(
-            window,
-            &Page::Starting {
-                message: ladder::start_progress_text(status, elapsed, attempt),
-            },
-        );
-        std::thread::sleep(interval);
-    }
-}
-
-/// One reconnect episode's state. An episode begins at the first failed probe
-/// past the debounce and ends when the server answers again or the budget runs
-/// out. `respawned` is per-episode on purpose: it is what stops a server that
-/// crash-loops on start from being started again every cadence for the whole
-/// budget.
-struct Episode {
-    started: Instant,
-    last_restatus: Instant,
-    respawned: bool,
-}
-
-/// Re-read the status document mid-reconnect and act on the one unambiguous
-/// answer. Returns true when a server was started.
-///
-/// This is the half of the fix that answers "the server hangs until we close
-/// the desktop app and restart it manually". Closing and relaunching the app
-/// worked because relaunching re-runs the ladder; nothing else in the design
-/// ever did. Now the reconnect loop does, on the document's own cadence.
-///
-/// It never resolves anything (C1) and never installs anything (C5): the only
-/// action available to it is `spawn_server`, which spells the shim name and
-/// nothing else.
-fn restatus_during_reconnect(window: &WebviewWindow, episode: &mut Episode) -> bool {
-    episode.last_restatus = Instant::now();
-    let Ok(raw) = process::print_status() else {
-        // A status read that failed mid-reconnect is not news: the commonest
-        // reason is that the machine is busy applying an update. Keep polling.
-        return false;
-    };
-    let Ok(fresh) = status::parse_status(&raw) else {
-        return false;
-    };
-    if ladder::respawn_verdict(&fresh, episode.respawned) != Respawn::Start {
-        return false;
-    }
-    match process::spawn_server() {
-        Ok(_) => {
-            // Only now. Setting it before the spawn -- which is what this did
-            // until 6.58.1 -- meant a spawn that *failed* burned the episode's
-            // one attempt for the whole reconnect budget, twenty-two minutes.
-            // And the commonest reason for a spawn to fail is the one where
-            // the retry matters most: an update helper has renamed
-            // mcc-server.exe aside and will put it back in a moment.
-            episode.respawned = true;
-            set_tray_status("Server: starting");
-            true
-        }
-        Err(error) => {
-            // Say it in the window rather than only in a log nobody opens, but
-            // do not abandon the episode: the update helper may still start a
-            // server of its own well inside the budget.
-            append_output(window, &error);
-            false
-        }
-    }
-}
-
-/// Watch a dashboard that is already loaded. Returns when the window needs a
-/// page again -- i.e. when the reconnect budget has run out.
-fn watch_health(app: &AppHandle, window: &WebviewWindow, status: &Status) {
-    let poll = Duration::from_secs_f64(status.health_poll_seconds.max(0.5));
-    let mut failures: u32 = 0;
-    let mut episode: Option<Episode> = None;
-    let mut showing_banner = false;
-
-    loop {
-        std::thread::sleep(poll);
-        if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
-            return;
-        }
-        let probed_at = Instant::now();
-        let outcome = health::probe_outcome(&status.health_url);
-        if outcome.is_healthy() {
-            if showing_banner {
-                // It came back. Reload the dashboard rather than leaving the
-                // user looking at a banner about a problem that is over.
-                show_dashboard(window, &status.admin_url);
-                showing_banner = false;
-            }
-            failures = 0;
-            episode = None;
-            set_tray_status("Server: running");
-            continue;
-        }
-
-        failures = failures.saturating_add(1);
-        let episode = episode.get_or_insert_with(|| Episode {
-            started: Instant::now(),
-            // Not `Instant::now() - cadence`: the first thirty seconds of an
-            // outage are overwhelmingly a restart in progress, and re-reading
-            // the status document in that window would spawn a second server
-            // into a port the old one has not finished releasing.
-            last_restatus: Instant::now(),
-            respawned: false,
-        });
-        let elapsed = episode.started.elapsed().as_secs_f64();
-        match ladder::reconnect_verdict(status, failures, elapsed) {
-            // Below the debounce: a routine update must not paint anything.
-            Reconnect::Ignore => {}
-            Reconnect::Waiting => {
-                set_tray_status("Server: reconnecting");
-                // Re-read the whole document on the document's own cadence,
-                // and start a server if -- and only if -- the answer is the
-                // unambiguous one. Once per episode.
-                if ladder::should_restatus(status, episode.last_restatus.elapsed().as_secs_f64()) {
-                    restatus_during_reconnect(window, episode);
-                }
-                // Repainted every tick. The old banner was painted once and
-                // never touched again, so a loop that was in fact probing
-                // every five seconds was indistinguishable from a frozen
-                // window -- which is exactly what was reported.
-                let stage = update_progress::read_stage(&status.config_dir);
-                show_page(
-                    window,
-                    &Page::Reconnecting {
-                        message: ladder::reconnect_progress_text(
-                            status,
-                            elapsed,
-                            probed_at.elapsed().as_secs_f64(),
-                            &outcome.describe(),
-                            stage.as_ref().map(Stage::describe).as_deref(),
-                        ),
-                    },
-                );
-                showing_banner = true;
-            }
-            Reconnect::Failed { server_log } => {
-                set_tray_status("Server: not answering");
-                show_page(
-                    window,
-                    &Page::Error {
-                        message: format!(
-                            "The server never came back. The last check said: {}.",
-                            outcome.describe()
-                        ),
-                        server_log: Some(server_log),
-                    },
-                );
-                return;
-            }
-        }
-    }
-}
-
-/// Wait for a draining server to let go of the port, then let the ladder run
-/// again.
-///
-/// Bounded by the document's own reconnect budget, which is the same budget
-/// every other wait in this window uses (C9), and it repaints as it goes for
-/// the same reason the reconnect banner does. It starts nothing and kills
-/// nothing: the server hard-exits itself one beat past its own stop budget and
-/// the update helper force-kills the exact parent pid it was given, so a third
-/// killer here would only be a way to lose an in-flight request that two other
-/// bounded paths were about to end cleanly.
-fn wait_for_drain(app: &AppHandle, status: &Status) {
-    let poll = Duration::from_secs_f64(status.health_poll_seconds.max(0.5));
-    let started = Instant::now();
-    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
-        return;
-    };
-    loop {
-        std::thread::sleep(poll);
-        if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
-            return;
-        }
-        let probed_at = Instant::now();
-        let outcome = health::probe_outcome(&status.health_url);
-        if outcome.is_healthy() {
-            return;
-        }
-        let elapsed = started.elapsed().as_secs_f64();
-        if elapsed >= status.reconnect_timeout_seconds {
-            return;
-        }
-        let stage = update_progress::read_stage(&status.config_dir);
-        show_page(
-            &window,
-            &Page::Reconnecting {
-                message: ladder::reconnect_progress_text(
-                    status,
-                    elapsed,
-                    probed_at.elapsed().as_secs_f64(),
-                    &outcome.describe(),
-                    stage.as_ref().map(Stage::describe).as_deref(),
-                ),
-            },
-        );
-    }
 }
 
 /// Apply the parts of the status document that shape the window itself.
@@ -1161,245 +851,449 @@ fn ensure_activation_watcher(app: &AppHandle, status: &Status) {
     });
 }
 
-/// One pass of the ladder. Returns when the window needs another status read.
-fn ladder_pass(app: &AppHandle, window: &WebviewWindow) {
-    show_page(window, &Page::Checking);
+// -- the lifecycle loop -----------------------------------------------------
 
-    let raw = match process::print_status() {
-        Ok(raw) => raw,
-        Err(process::StatusRunError::NotInstalled) => {
-            // Decision Q4: do not merely offer. Run it, show it, then loop --
-            // but a bounded number of times. The ladder thread loops, so an
-            // installer that succeeds without putting mcc-desktop on *this*
-            // process's PATH (the ordinary Windows first launch: PATH changes
-            // reach new processes only) used to mean installing MCC again
-            // every few minutes for as long as the window was open, under a
-            // spinner, with no way out but quitting. That is the first-launch
-            // hang, and it is the same shape as the start one: a wait with no
-            // end and no explanation.
-            // An update helper rewriting the shims makes `mcc-desktop`
-            // briefly unrunnable, and that is not a machine without MCC on it
-            // -- it is a machine mid-update. Installing here is how one update
-            // came to race itself (R3). The helper starts a server itself when
-            // it is done, on both branches, so there is nothing to do but
-            // watch.
-            if let Some(helper) = helper_installing_now() {
-                wait_for_update_helper(app, window, helper);
-                return;
-            }
-            let used = INSTALLS_RUN.load(Ordering::SeqCst);
-            if used >= INSTALL_ATTEMPTS {
-                set_tray_status("My Claude Code is not installed");
-                let last = LAST_INSTALL_LINE
-                    .lock()
-                    .map(|line| line.clone())
-                    .unwrap_or_default();
-                show_page(
-                    window,
-                    &Page::Error {
-                        message: install::install_did_not_take_message(used, &last),
-                        server_log: None,
-                    },
-                );
-                wait_for_install_to_land(app);
-                return;
-            }
-            INSTALLS_RUN.store(used.saturating_add(1), Ordering::SeqCst);
-            let last = run_install(window, used.saturating_add(1));
-            if let Ok(mut line) = LAST_INSTALL_LINE.lock() {
-                *line = last;
-            }
+/// Everything the loop remembers between ticks.
+///
+/// Deliberately small, and deliberately *not* the state machine: the machine
+/// is [`controller::step`], which is pure. This is the sampler that feeds it --
+/// the last status document, the last probe, the child this window started,
+/// and the clocks the observation is measured against.
+struct Lifecycle {
+    state: controller::State,
+    status: Option<Status>,
+    /// The child this window started, if it is still ours to ask about. The
+    /// one signal that separates "still coming up" from "gone" while the port
+    /// is still free.
+    child: Option<std::process::Child>,
+    health: controller::Health,
+    holder: controller::Holder,
+    holder_since: Instant,
+    helper: controller::Helper,
+    status_health: controller::StatusHealth,
+    last_probe: Instant,
+    last_spawn: Option<Instant>,
+    last_restatus: Option<Instant>,
+    /// Whether this launch has already raised the window for a server that
+    /// came back (decision Q3: once, then never again).
+    raised: bool,
+    started: Instant,
+}
+
+impl Lifecycle {
+    fn new() -> Self {
+        Self {
+            state: controller::State::Booting,
+            status: None,
+            child: None,
+            health: controller::Health::Absent,
+            holder: controller::Holder::Unknown,
+            holder_since: Instant::now(),
+            helper: controller::Helper::None,
+            status_health: controller::StatusHealth::Ok,
+            // Far enough in the past that the first tick is a fresh one.
+            last_probe: Instant::now() - Duration::from_secs(3600),
+            last_spawn: None,
+            last_restatus: None,
+            raised: false,
+            started: Instant::now(),
+        }
+    }
+
+    /// The probe cadence.
+    ///
+    /// Ten seconds (the document's `tick_seconds`, decision Q4) everywhere
+    /// except while a start is in flight, where it is the document's own
+    /// `health_check_interval_seconds` instead -- floored at the paint tick,
+    /// because a probe cannot usefully be more frequent than the loop that
+    /// makes it.
+    ///
+    /// The distinction matters and it is not a second policy. Ten seconds is
+    /// how often the window *decides whether to start a server*; a server it
+    /// has just started deserves to be noticed the moment it answers, and
+    /// making the user look at "Starting..." for eight seconds after the
+    /// dashboard was ready would be a new way to look stuck. Nothing about the
+    /// start rate changes: `start_backoff_seconds` governs that, and it is ten
+    /// seconds whatever this returns.
+    fn tick(&self) -> Duration {
+        let facts = self.facts();
+        let starting = matches!(
+            self.state,
+            controller::State::Starting { .. }
+                | controller::State::RestartPending { .. }
+                | controller::State::Draining { .. }
+        );
+        if starting {
+            let interval = self
+                .status
+                .as_ref()
+                .map_or(controller::PAINT_TICK_SECONDS, |status| {
+                    status.health_check_interval_seconds
+                });
+            return Duration::from_secs_f64(interval.max(controller::PAINT_TICK_SECONDS));
+        }
+        Duration::from_secs_f64(facts.tick_seconds.max(1.0))
+    }
+
+    /// One health probe's timeout, from the document (C9) or this build's
+    /// default while the key is still only tolerated.
+    fn probe_timeout(&self) -> Duration {
+        self.status
+            .as_ref()
+            .and_then(|status| status.health_probe_timeout_seconds)
+            .filter(|value| *value > 0.0)
+            .map_or(health::DEFAULT_PROBE_TIMEOUT, Duration::from_secs_f64)
+    }
+
+    /// How long `mcc-desktop --print-status` may take. Out of the binary since
+    /// 6.61.0 (audit §5.4): it decides whether a slow machine gets a window.
+    fn status_wall(&self) -> Duration {
+        self.status
+            .as_ref()
+            .and_then(|status| status.status_wall_seconds)
+            .filter(|value| *value > 0.0)
+            .map_or(process::DEFAULT_STATUS_WALL, Duration::from_secs_f64)
+    }
+
+    /// The numbers and strings an observation carries, from the last document
+    /// that could be read. Every one of them is Python's answer (C1).
+    fn facts(&self) -> controller::Facts {
+        let Some(status) = self.status.as_ref() else {
+            return controller::Facts::default();
+        };
+        let holder = status.holder.as_ref();
+        controller::Facts {
+            admin_url: status.admin_url.clone(),
+            health_url: status.health_url.clone(),
+            server_log: status.server_log.clone(),
+            port: status.port,
+            server_mode: status.server_mode.clone(),
+            tick_seconds: status
+                .tick_seconds
+                .filter(|value| *value > 0.0)
+                .unwrap_or(controller::DEFAULT_TICK_SECONDS),
+            start_backoff_seconds: status
+                .start_backoff_seconds
+                .filter(|value| *value > 0.0)
+                .unwrap_or(controller::DEFAULT_START_BACKOFF_SECONDS),
+            foreign_grace_seconds: status
+                .foreign_grace_seconds
+                .filter(|value| *value >= 0.0)
+                .unwrap_or(controller::DEFAULT_FOREIGN_GRACE_SECONDS),
+            holder_image: holder.and_then(|holder| holder.image.clone()),
+            holder_pid: holder.and_then(|holder| holder.pid),
+        }
+    }
+
+    /// Take one health probe. The whole of the tick's cost on the happy path.
+    fn probe(&mut self) {
+        self.last_probe = Instant::now();
+        let Some(url) = self
+            .status
+            .as_ref()
+            .map(|status| status.health_url.clone())
+            .filter(|url| !url.is_empty())
+        else {
+            self.health = controller::Health::Absent;
             return;
+        };
+        self.health = match health::probe_outcome_within(&url, self.probe_timeout()) {
+            health::ProbeOutcome::Healthy => controller::Health::Healthy,
+            health::ProbeOutcome::StartingUp => controller::Health::Starting,
+            health::ProbeOutcome::ShuttingDown => controller::Health::Draining,
+            _ => controller::Health::Absent,
+        };
+        // A healthy answer settles who holds the port without a process
+        // lookup, which is what keeps an attached window off `--print-status`
+        // entirely (BUG-4).
+        if self.health == controller::Health::Healthy {
+            self.remember_holder(controller::Holder::OursHealthy);
         }
-        Err(process::StatusRunError::Failed { code, stderr }) => {
-            let code =
-                code.map_or_else(|| "an unknown status".to_owned(), |value| value.to_string());
-            show_page(
-                window,
-                &Page::Error {
-                    message: format!("mcc-desktop --print-status exited with {code}. {stderr}"),
-                    server_log: None,
-                },
-            );
-            wait_for_retry(app);
-            return;
-        }
-        Err(process::StatusRunError::Unrunnable(detail)) => {
-            show_page(
-                window,
-                &Page::Error {
-                    message: format!("mcc-desktop could not be run: {detail}"),
-                    server_log: None,
-                },
-            );
-            wait_for_retry(app);
-            return;
-        }
-    };
+    }
 
-    let status = match status::parse_status(&raw) {
-        Ok(status) => status,
-        Err(error) => {
-            show_page(
-                window,
-                &Page::Error {
-                    message: error.to_string(),
-                    server_log: None,
-                },
-            );
-            wait_for_retry(app);
-            return;
+    /// Re-read what the update helper is doing. Cheap, and on every tick.
+    ///
+    /// This is separate from [`Self::restatus`] on purpose, and the scratch
+    /// run of 2026-09-08 is why. The helper facts used to be refreshed only by
+    /// a `--print-status`, and `step` returns as soon as it sees a live helper
+    /// -- so the observation that said "a helper is installing" was also the
+    /// observation that stopped anything asking again, and the window sat on
+    /// *Updating My Claude Code (installer running, 6 s)* for as long as it
+    /// was open. A cache that suppresses its own refresh is a hang with a
+    /// spinner on it.
+    ///
+    /// It costs one small file read and one pid liveness check, which is why
+    /// it can be on the tick path when `--print-status` cannot (BUG-4).
+    fn refresh_helper(&mut self) {
+        let directory = self
+            .status
+            .as_ref()
+            .map(|status| status.config_dir.clone())
+            .or_else(last_config_dir);
+        if let Some(directory) = directory {
+            self.helper = helper_state(&directory);
         }
-    };
+    }
 
-    // A status document that could be read is proof the install took, so the
-    // next time MCC goes missing the window gets its attempts again.
-    INSTALLS_RUN.store(0, Ordering::SeqCst);
-    // And it is the only chance to learn where the configuration lives before
-    // the next time `mcc-desktop` cannot be run.
-    remember_config_dir(&status.config_dir);
-
-    ensure_tray(app, &status);
-    ensure_activation_watcher(app, &status);
-    apply_status(window, &status);
-    ensure_shell_if_stale(app, &status);
-
-    match ladder::decide(&status) {
-        Decision::Attach { admin_url } => {
-            set_tray_status("Server: running");
-            show_dashboard(window, &admin_url);
-            watch_health(app, window, &status);
-            wait_for_retry(app);
+    /// Record a holder classification, keeping the clock running while the
+    /// answer is unchanged. The grace window BUG-5 asked for is measured here.
+    fn remember_holder(&mut self, holder: controller::Holder) {
+        if self.holder != holder {
+            self.holder = holder;
+            self.holder_since = Instant::now();
         }
-        Decision::Start {
-            admin_url,
-            health_url,
-        } => {
-            // The document says how many attempts a start gets (C9). Each one
-            // is a full `start_timeout_seconds` of probing; only the first
-            // necessarily spawns, because a child that is still running is a
-            // server that is still coming up and a second one would only lose
-            // the bind race.
-            let attempts = ladder::start_attempts(&status);
-            let mut child: Option<std::process::Child> = None;
-            let mut spawn_error: Option<String> = None;
-            let mut healthy = false;
-            for attempt in 1..=attempts {
-                if QUITTING.load(Ordering::SeqCst) {
-                    return;
+    }
+
+    /// Read the status document and everything derived from it.
+    ///
+    /// Never on the tick path: it runs only when [`controller::step`] asks for
+    /// it, which it does on the first tick and on a tick where the server is
+    /// not answering. That is BUG-4's fix -- the old ladder paid for this
+    /// process on every decision it made.
+    fn restatus(&mut self, app: &AppHandle, window: &WebviewWindow) {
+        self.last_restatus = Some(Instant::now());
+        let wall = self.status_wall();
+        match process::print_status_within(wall) {
+            Ok(raw) => match status::parse_status(&raw) {
+                Ok(status) => {
+                    INSTALLS_RUN.store(0, Ordering::SeqCst);
+                    remember_config_dir(&status.config_dir);
+                    ensure_tray(app, &status);
+                    ensure_activation_watcher(app, &status);
+                    apply_status(window, &status);
+                    self.remember_holder(holder_from(&status));
+                    self.helper = helper_state(&status.config_dir);
+                    self.status = Some(status);
+                    self.status_health = controller::StatusHealth::Ok;
                 }
-                let running = child.as_mut().is_some_and(process::still_running);
-                if ladder::start_attempt_action(attempt, running) == StartAttempt::Spawn {
-                    set_tray_status("Server: starting");
-                    show_page(
-                        window,
-                        &Page::Starting {
-                            message: ladder::start_progress_text(&status, 0.0, attempt),
-                        },
-                    );
-                    match process::spawn_server() {
-                        Ok(started) => {
-                            child = Some(started);
-                            spawn_error = None;
-                        }
-                        // Not fatal any more, and not the end of the attempts:
-                        // during an update the server shim is renamed aside
-                        // for a few seconds, and the old code turned those few
-                        // seconds into a Retry wall.
-                        Err(error) => spawn_error = Some(error),
+                Err(error) => {
+                    self.status_health = controller::StatusHealth::Unreadable {
+                        detail: error.to_string(),
+                    };
+                }
+            },
+            Err(process::StatusRunError::NotInstalled) => {
+                self.status_health = controller::StatusHealth::NotInstalled;
+                // The one thing still readable when `mcc-desktop` is not: the
+                // helper's own progress file, under the directory the last
+                // document named. An update mid-flight is exactly when the
+                // shims are renamed aside, and installing over it is how one
+                // update came to race itself.
+                self.helper =
+                    last_config_dir().map_or(controller::Helper::None, |dir| helper_state(&dir));
+            }
+            Err(process::StatusRunError::Failed { code, stderr }) => {
+                let code =
+                    code.map_or_else(|| "an unknown status".to_owned(), |value| value.to_string());
+                self.status_health = controller::StatusHealth::Unreadable {
+                    detail: format!("mcc-desktop --print-status exited with {code}. {stderr}"),
+                };
+            }
+            Err(process::StatusRunError::Unrunnable(detail)) => {
+                self.status_health = controller::StatusHealth::Unreadable {
+                    detail: format!("mcc-desktop could not be run: {detail}"),
+                };
+            }
+        }
+    }
+
+    /// Assemble this tick's observation. Pure sampling: nothing here decides.
+    fn observe(&mut self, fresh: bool) -> controller::Observation {
+        let child_alive = self.child.as_mut().is_some_and(process::still_running);
+        if !child_alive {
+            self.child = None;
+        }
+        controller::Observation {
+            fresh,
+            health: self.health,
+            holder: self.holder,
+            holder_age: self.holder_since.elapsed().as_secs_f64(),
+            helper: self.helper.clone(),
+            status: self.status_health.clone(),
+            child_alive,
+            since_last_start: self.last_spawn.map(|at| at.elapsed().as_secs_f64()),
+            since_probe: self.last_probe.elapsed().as_secs_f64(),
+            shell_stale: self.status.as_ref().is_some_and(|status| {
+                shell_is_stale(RELEASE_TAG, status.shell_release_tag.as_deref())
+                    && !SHELL_PIN_CHECKED.load(Ordering::SeqCst)
+            }),
+            facts: self.facts(),
+        }
+    }
+}
+
+/// Python's answer about the port holder, in the shell's vocabulary.
+///
+/// The `holder` object is 6.61.0's; `server_presence` is the fallback for the
+/// one release in which the shell only tolerates the new key, so a 6.61.0
+/// window under a 6.60.2 wheel still classifies by the presence Python already
+/// decided by process (`port_is_held_by_mcc`, 6.59.0).
+fn holder_from(status: &Status) -> controller::Holder {
+    if let Some(holder) = status.holder.as_ref() {
+        return match holder.kind.as_str() {
+            "absent" => controller::Holder::Absent,
+            "ours_healthy" => controller::Holder::OursHealthy,
+            "ours_starting" => controller::Holder::OursStarting,
+            "ours_draining" => controller::Holder::OursDraining,
+            "ours_stale" => controller::Holder::OursStale,
+            "foreign" => controller::Holder::Foreign,
+            _ => controller::Holder::Unknown,
+        };
+    }
+    match status.server_presence.as_str() {
+        "free" => controller::Holder::Absent,
+        "healthy" => controller::Holder::OursHealthy,
+        "starting" => controller::Holder::OursStarting,
+        "draining" => controller::Holder::OursDraining,
+        "mcc-stale" => controller::Holder::OursStale,
+        "foreign" => controller::Holder::Foreign,
+        _ => controller::Holder::Unknown,
+    }
+}
+
+/// What the update helper is doing, from `progress.json` alone.
+fn helper_state(config_dir: &str) -> controller::Helper {
+    if let Some(helper) = update_progress::active_helper(config_dir) {
+        return controller::Helper::Alive {
+            stage: Some(helper.describe()),
+        };
+    }
+    match update_progress::read_stage(config_dir) {
+        Some(stage) if update_progress::stage_is_terminal(&stage) => controller::Helper::Finished {
+            stage: Some(stage.describe()),
+        },
+        _ => controller::Helper::None,
+    }
+}
+
+/// Apply one step's effects. At most one of them acts; the rest paint.
+fn apply(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    life: &mut Lifecycle,
+    effects: Vec<Effect>,
+    observation: &controller::Observation,
+) {
+    for effect in effects {
+        match effect {
+            Effect::Show(page) => {
+                set_tray_status(tray_line(&life.state));
+                show_page(window, &page);
+            }
+            Effect::Attach { admin_url } => {
+                set_tray_status("Server: running");
+                remember_page(None);
+                show_dashboard(window, &admin_url);
+            }
+            Effect::Spawn => {
+                life.last_spawn = Some(Instant::now());
+                set_tray_status("Server: starting");
+                match process::spawn_server() {
+                    Ok(child) => life.child = Some(child),
+                    Err(error) => {
+                        // Not a page and not the end of anything: the next
+                        // tick tries again, ten seconds from now, forever.
+                        // The commonest reason a spawn fails is the one where
+                        // retrying matters most -- an update helper has
+                        // renamed `mcc-server.exe` aside and will put it back.
+                        eprintln!("the server could not be started: {error}");
+                        append_output(window, &error);
                     }
                 }
-                if wait_for_start(window, &status, &health_url, attempt) {
-                    healthy = true;
-                    break;
+            }
+            Effect::Restatus => life.restatus(app, window),
+            Effect::Install => {
+                let attempt = INSTALLS_RUN.load(Ordering::SeqCst).saturating_add(1);
+                INSTALLS_RUN.store(attempt, Ordering::SeqCst);
+                let last = run_install(window, attempt);
+                if let Ok(mut line) = LAST_INSTALL_LINE.lock() {
+                    *line = last;
                 }
             }
-            if healthy {
-                set_tray_status("Server: running");
-                show_dashboard(window, &admin_url);
-                watch_health(app, window, &status);
-                wait_for_retry(app);
-                return;
+            Effect::RaiseOnce => {
+                // Decision Q3, and the "once" is here rather than in `step`
+                // so the pure function stays a function of its inputs.
+                if !life.raised && life.started.elapsed() >= Duration::from_secs(2) {
+                    life.raised = true;
+                    raise(app);
+                }
             }
-            set_tray_status("Server: did not start");
-            let message = spawn_error.unwrap_or_else(|| ladder::start_timeout_message(&status));
-            // And the page is not the end: the loop behind it keeps probing,
-            // so a server that binds late is picked up without the user
-            // touching anything.
-            wait_for_retry_or_health(app, window, &status, &health_url, &message);
+            Effect::EnsureShell => {
+                if let Some(status) = life.status.as_ref() {
+                    ensure_shell_if_stale(app, status);
+                }
+            }
         }
-        Decision::NotOurServer { server_mode } => {
-            set_tray_status("Server: not running");
-            show_page(
-                window,
-                &Page::NotOurServer {
-                    message: ladder::not_our_server_message(&server_mode),
-                },
-            );
-            wait_for_retry(app);
+    }
+    let _ = observation;
+}
+
+/// The tray's status line, derived from the state like everything else.
+fn tray_line(state: &controller::State) -> &'static str {
+    match state {
+        controller::State::Booting => "Checking the server...",
+        controller::State::Attached => "Server: running",
+        controller::State::Starting { .. } | controller::State::RestartPending { .. } => {
+            "Server: starting"
         }
-        Decision::PortConflict { message } => {
-            set_tray_status("Server: port conflict");
-            show_page(window, &Page::PortConflict { message });
-            wait_for_retry(app);
+        controller::State::Reconnecting { .. } => "Server: reconnecting",
+        controller::State::Draining { .. } => "Server: shutting down",
+        controller::State::Updating { .. } => "Updating My Claude Code...",
+        controller::State::Installing { .. } => "Installing My Claude Code...",
+        controller::State::Blocked { .. } => "Server: needs attention",
+    }
+}
+
+/// The loop. One thread, one state, one tick -- and it never returns except to
+/// end the process.
+///
+/// Two clocks, for one reason: the countdown on the page has to move every
+/// second to be believable, and the server must be probed exactly as often as
+/// decision Q4 says (ten seconds) and no oftener. `fresh` says which kind of
+/// tick this is, and only a fresh tick may spawn.
+fn run_controller(app: &AppHandle, window: &WebviewWindow) {
+    let mut life = Lifecycle::new();
+    let paint = Duration::from_secs_f64(controller::PAINT_TICK_SECONDS);
+    show_page(window, &Page::Checking);
+    remember_page(Some(Page::Checking));
+
+    loop {
+        if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
+            return;
         }
-        Decision::Starting { .. } => {
-            // MCC's own server, mid-start. Not a free port and not a conflict:
-            // it already holds the socket, and a spawn here would start a
-            // second server into a bind race the first one is about to win.
-            // Returning rather than blocking on Retry is what makes this
-            // self-healing -- the ladder thread loops, and the next pass sees
-            // `healthy`.
-            set_tray_status("Server: starting");
-            show_page(
-                window,
-                &Page::Reconnecting {
-                    message: ladder::starting_message(&status),
-                },
-            );
-            wait_for_drain(app, &status);
+        // Retry is an accelerator, never a way out: it brings the next probe
+        // forward and changes nothing else. The same is true of "Take port",
+        // which additionally forgets the backoff so the spawn -- and with it
+        // the server's own port takeover -- happens on this tick.
+        let asked = RETRY_REQUESTED.swap(false, Ordering::SeqCst);
+        if TAKE_PORT_REQUESTED.swap(false, Ordering::SeqCst) {
+            life.last_spawn = None;
+            life.remember_holder(controller::Holder::OursStale);
         }
-        Decision::Stale => {
-            // Ours, holding the port, silent. Waiting is right and the port
-            // conflict page is wrong: the server's own takeover reclaims the
-            // port on the next start, and this window must not send the user
-            // off to stop "another program" that is My Claude Code.
-            set_tray_status("Server: not answering");
-            show_page(
-                window,
-                &Page::Reconnecting {
-                    message: ladder::stale_message(&status),
-                },
-            );
-            wait_for_drain(app, &status);
+        let fresh = asked || life.last_probe.elapsed() >= life.tick();
+        if life.status.is_none()
+            && life.status_health == controller::StatusHealth::Ok
+            && !matches!(life.helper, controller::Helper::Alive { .. })
+        {
+            // The one status read that is not optional: nothing -- not even the
+            // health URL -- is known before it.
+            life.restatus(app, window);
         }
-        Decision::Draining => {
-            // MCC's own server, mid-stop. Not a conflict and not a free port:
-            // wait for it to finish and let the next pass of the ladder pick
-            // it up. Returning rather than blocking on Retry is what makes
-            // this self-healing -- the ladder thread loops.
-            set_tray_status("Server: shutting down");
-            show_page(
-                window,
-                &Page::Reconnecting {
-                    message: ladder::draining_message(&status),
-                },
-            );
-            wait_for_drain(app, &status);
+        if fresh {
+            // The helper first, and always: it is the one fact that stops a
+            // start, and the observation that carries it must never be the
+            // stale one. See `refresh_helper`.
+            life.refresh_helper();
+            life.probe();
         }
-        Decision::UnknownPresence { presence } => {
-            show_page(
-                window,
-                &Page::Error {
-                    message: format!(
-                        "mcc-desktop reported a server state this window does \
-                         not know: {presence}. Update the desktop window."
-                    ),
-                    server_log: Some(status.server_log.clone()),
-                },
-            );
-            wait_for_retry(app);
-        }
+
+        let observation = life.observe(fresh);
+        let now = life.started.elapsed().as_secs_f64();
+        let (next, effects) = controller::step(&life.state, &observation, now);
+        life.state = next;
+        apply(app, window, &mut life, effects, &observation);
+
+        std::thread::sleep(paint);
     }
 }
 
@@ -1520,7 +1414,12 @@ pub fn run() {
         }));
     }
     builder
-        .invoke_handler(tauri::generate_handler![shell_retry, shell_ready])
+        .invoke_handler(tauri::generate_handler![
+            shell_retry,
+            shell_ready,
+            shell_page,
+            shell_take_port
+        ])
         // The first page this window ever finishes loading is the shell's own,
         // and its URL is whatever the platform's asset protocol actually is --
         // `tauri://` on some, `http://tauri.localhost/` on Windows. Reading it
@@ -1530,6 +1429,19 @@ pub fn run() {
             if payload.event() == PageLoadEvent::Finished {
                 let _ = LOCAL_URL.set(payload.url().to_string());
                 let _ = webview.window().set_title("My Claude Code");
+                // BUG-2: a reload used to leave the window showing the
+                // splash's "Checking the server..." over a loop that was
+                // working perfectly, and the only recovery anybody found was
+                // to close the app. The page is re-pushed here and pulled by
+                // the document itself on load; either one alone would still
+                // lose a race.
+                if let Some(main) = webview
+                    .window()
+                    .app_handle()
+                    .get_webview_window(MAIN_WINDOW)
+                {
+                    repush_current_page(&main);
+                }
             }
         })
         .on_window_event(|window, event| match event {
@@ -1566,6 +1478,15 @@ pub fn run() {
                         f64::from(window_state::MIN_WIDTH),
                         f64::from(window_state::MIN_HEIGHT),
                     )
+                    // One flag, on every page this window loads, including the
+                    // dashboard. It says only "a process with a lifecycle tick
+                    // is watching this server", and the dashboard's Update
+                    // button reads it to ask the helper NOT to restart -- this
+                    // window owns the restart from 6.61.0 (GAP-3). It is not a
+                    // capability and it grants nothing: the same page in a
+                    // browser tab simply does not see it and the helper
+                    // restarts as it always has.
+                    .initialization_script(SHELL_MARKER_SCRIPT)
                     .inner_size(FIRST_PAINT_WIDTH, FIRST_PAINT_HEIGHT)
                     .center()
                     .build()?;
@@ -1598,14 +1519,12 @@ pub fn run() {
                      configured size instead"
                 );
             }
-            let ladder_handle = handle.clone();
+            let loop_handle = handle.clone();
             std::thread::spawn(move || {
-                while !QUITTING.load(Ordering::SeqCst) {
-                    let Some(window) = ladder_handle.get_webview_window(MAIN_WINDOW) else {
-                        return;
-                    };
-                    ladder_pass(&ladder_handle, &window);
-                }
+                let Some(window) = loop_handle.get_webview_window(MAIN_WINDOW) else {
+                    return;
+                };
+                run_controller(&loop_handle, &window);
             });
             Ok(())
         })
@@ -1748,6 +1667,54 @@ mod tests {
         if let Ok(mut guard) = LAST_CONFIG_DIR.lock() {
             *guard = None;
         }
-        assert!(helper_installing_now().is_none());
+        assert_eq!(
+            last_config_dir().map_or(controller::Helper::None, |dir| helper_state(&dir)),
+            controller::Helper::None
+        );
+    }
+
+    #[test]
+    fn a_reload_is_answered_with_the_page_the_controller_is_on() {
+        // BUG-2, as a unit test. Every page was *pushed* with `eval`, so F5
+        // threw the state away and left "Checking the server..." over a loop
+        // that was working. The page now pulls the state as it loads, and
+        // `shell_page` is what it pulls.
+        remember_page(Some(Page::Reconnecting {
+            message: "still trying".to_owned(),
+        }));
+        assert_eq!(
+            shell_page(),
+            Some(Page::Reconnecting {
+                message: "still trying".to_owned()
+            })
+        );
+        // And the dashboard is deliberately not one of this shell's pages to
+        // restore: a reload there reloads the dashboard.
+        remember_page(None);
+        assert_eq!(shell_page(), None);
+    }
+
+    #[test]
+    fn every_lifecycle_state_has_a_tray_line() {
+        // A tray whose status line stopped changing is the same defect as a
+        // page that stopped repainting, in a smaller box.
+        for state in [
+            controller::State::Booting,
+            controller::State::Attached,
+            controller::State::Starting {
+                since: 0.0,
+                attempts: 1,
+            },
+            controller::State::Reconnecting { since: 0.0 },
+            controller::State::Draining { since: 0.0 },
+            controller::State::Updating { since: 0.0 },
+            controller::State::RestartPending { since: 0.0 },
+            controller::State::Installing { attempts: 1 },
+            controller::State::Blocked {
+                reason: controller::Blocked::ForeignPort,
+            },
+        ] {
+            assert!(!tray_line(&state).is_empty(), "{}", state.name());
+        }
     }
 }

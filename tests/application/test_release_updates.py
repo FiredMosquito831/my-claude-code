@@ -373,7 +373,7 @@ async def test_perform_upgrade_runs_off_the_event_loop(monkeypatch) -> None:
     monkeypatch.setattr(release_updates, "_fetch_latest_release", _fetch)
     threads: list[str] = []
 
-    def _upgrade(_payload):
+    def _upgrade(_payload, **_kwargs):
         import threading
 
         threads.append(threading.current_thread().name)

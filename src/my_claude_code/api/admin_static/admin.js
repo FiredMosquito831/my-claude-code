@@ -8085,9 +8085,16 @@ async function runVersionUpgrade(button) {
     logEl.textContent = "";
   }
   try {
+    // The desktop app injects `window.__mccShellWatching` into every dashboard
+    // it loads. It says one thing: a process with a ten-second lifecycle tick
+    // is watching this server and will start the new one itself. The update
+    // helper therefore installs and exits instead of starting a server nobody
+    // supervises -- two owners of "restart the server" is how one update came
+    // to start two of them. A dashboard in an ordinary browser tab sends
+    // false, and the helper restarts exactly as it always has.
     const result = await api("/admin/api/version/upgrade", {
       method: "POST",
-      body: "{}",
+      body: JSON.stringify({ no_restart: !!window.__mccShellWatching }),
     });
     if (logEl && Array.isArray(result.log) && result.log.length) {
       logEl.textContent = result.log.join("\n");

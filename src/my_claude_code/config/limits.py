@@ -250,6 +250,33 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "image_jpeg_quality": LimitRange(0, 100, "0 never re-encodes"),
     "desktop_window_width": LimitRange(640, 7680),
     "desktop_window_height": LimitRange(480, 4320),
+    # The desktop app's lifecycle tick: how often it checks the server and,
+    # when the server is dead, how often it starts one (decision Q4). The 1s
+    # floor is not a policy, it is a guard against turning the loop into a
+    # process storm; the ceiling is an hour, past which a window that "never
+    # gives up" would be indistinguishable from one that has.
+    "desktop_tick_seconds": LimitRange(
+        1.0, HOUR, "1s floor keeps the lifecycle loop from becoming a storm"
+    ),
+    # The shortest gap between two starts. Equal to the tick by default;
+    # raising it is how an operator whose server fails on start slows the
+    # retries without slowing the health check.
+    "desktop_start_backoff_seconds": LimitRange(1.0, HOUR),
+    # How long one /health probe may take before it counts as no answer. The
+    # floor is a tenth of a second because a loopback probe that has not
+    # answered in that time is answering something else; the ceiling is a
+    # minute, past which the probe outlives the tick it is inside.
+    "desktop_health_probe_timeout": LimitRange(0.1, 60.0),
+    # How long an unidentified holder may keep the port before the window
+    # calls it a conflict. 0 means "report it at once", which is the right
+    # setting on a machine where the port is never anyone else's.
+    "desktop_foreign_grace_seconds": LimitRange(
+        0.0, HOUR, "0 reports a conflict on the first unidentified holder"
+    ),
+    # How long the desktop app waits for one --print-status before painting
+    # something anyway. Out of the shell's binary in 6.61.0: it decides whether
+    # a slow machine gets a window at all.
+    "desktop_status_wall_seconds": LimitRange(1.0, 600.0),
 }
 
 

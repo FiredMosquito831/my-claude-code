@@ -859,6 +859,71 @@ Ordering and safety are unchanged: the desktop artefacts are removed only **afte
 
 <a id="closing-the-window-and-the-reconnect-banner"></a>
 
+**The desktop app starts the server itself, every ten seconds, on every path.**
+Since 6.61.0 everything the window does about the server is decided by one
+controller on one ten-second tick, and the rule is decision Q4, in the user's own
+words: *probe every ten seconds forever; if the server is dead, force start it on
+that tick.* There is no attempt cap, no exponential backoff, and no page that
+waits for you to press something. Every page carries the same two numbers —
+
+> Starting the My Claude Code server… (last checked 3 s ago, next start attempt
+> in 7 s)
+
+— and **Retry now** only brings the next check forward. What it replaced was seven
+separate waiting loops, six of which could reach a page with nothing running
+behind it.
+
+The concrete failure this fixes, reported on 2026-09-08: *after Update-and-restart
+the app stops the server, then only watches; pressing F5 fixes it.* F5 fixed it
+because reloading the page re-ran the one code path that could start a server.
+Now the tick starts it, so no path depends on a reload — and reloading the window
+during a wait shows you the same page you were on rather than resetting it to
+*Checking the server…*, which is the other half of the same defect.
+
+**A reload no longer loses the window's state.** Every page used to be *pushed*
+into the document, so F5 threw it away. The page now asks the controller what
+state it is in as it loads.
+
+**The port-conflict page can now take the port back — but only from My Claude
+Code.** The window classifies the holder by *process* (its pid, image and command
+line) rather than by whether a socket can be bound, so MCC's own server during its
+twenty-second startup is never called a stranger. When the holder is one of ours
+and it is wedged, the page offers **Take port**; when it is genuinely somebody
+else's, it names the program and the pid, offers nothing, and keeps re-checking —
+and it waits `DESKTOP_FOREIGN_GRACE_SECONDS` (default 45) before saying so at all,
+because an unidentifiable holder during our own start is overwhelmingly us.
+
+**The update helper no longer starts the server when a window is watching.** The
+dashboard's **Update** button, pressed *inside the desktop app*, tells the
+installer to install and exit; the window's next tick starts the new server. In an
+ordinary browser tab nothing is watching, so the helper restarts exactly as it
+always has. Two owners of "restart the server" is how one update came to start two
+of them.
+
+**Updating the server now updates the desktop app too.** Just after it becomes
+ready — on a thread, once per start, never on a request — the server compares the
+desktop app installed on this machine with the release this build pins, and brings
+it up to date through the same code `mcc-desktop --ensure-shell` runs: replaced in
+place when nothing is running it, staged beside it as `MyClaudeCode.exe.new` when
+something is, which the app's own next start renames in. One log line either way
+(`desktop app updated to vX` / `desktop app vX staged; it will be used at the next
+app start`), and the dashboard's version card says the same thing. Turn it off with
+**Update the desktop app automatically** on the Desktop card
+(`DESKTOP_SHELL_AUTO_UPDATE=false`), or with `DESKTOP_SHELL=off`, which turns the
+app off altogether. Nothing is downloaded on a machine that has no desktop app
+installed. Before this, the pin reached a machine only if somebody *ran* something,
+and one user consequently ran a fifteen-release-old window while their wheel moved
+through fifteen releases of fixes to that window.
+
+**On Windows the desktop app now owns the tray icon.** There used to be two: the
+app's and the Python tray's, offering different menus and two different answers to
+"restart the server" from two processes that did not know about each other. The
+app's is the one that stays, because it is the process that survives an update and
+the process that owns the server lifecycle. Closing the **window** hides it to that
+icon and leaves the server running; the tray's **Open dashboard** brings it back;
+the tray's **Quit** is the only thing that ends the app. The Python tray remains
+the fallback wherever there is no desktop app installed, and on macOS.
+
 ### Closing the window, and the reconnect banner
 
 **Closing the window puts the app in the tray. It does not quit it.** Before 6.50.0
@@ -954,7 +1019,7 @@ refusal and the window reads it as "shutting down", waits, and reconnects.
 
 > **These settings apply on the next `mcc-desktop` launch, not to a tray already running.** `mcc-desktop` is a separate process from `mcc-server` and reads them once at start — changing one in the dashboard or in `~/.mcc/.env` does nothing to a tray you already have open. Quit and relaunch `mcc-desktop` to pick it up.
 
-Eleven settings live under **Admin → Providers → Desktop**, beside the live desktop panel. They sat on the Limits page until 6.2.0; if you are following an older note, that is where they went.
+Seventeen settings live under **Admin → Providers → Desktop**, beside the live desktop panel. They sat on the Limits page until 6.2.0; if you are following an older note, that is where they went.
 
 | Setting | Default | Range |
 | --- | --- | --- |
@@ -969,6 +1034,27 @@ Eleven settings live under **Admin → Providers → Desktop**, beside the live 
 | `DESKTOP_WINDOW_WIDTH` | 1400 | 640–7680 |
 | `DESKTOP_WINDOW_HEIGHT` | 900 | 480–4320 |
 | `DESKTOP_BROWSER_PATH` | (empty) | any path |
+| `DESKTOP_TICK_SECONDS` | 10 | 1–3600 |
+| `DESKTOP_START_BACKOFF_SECONDS` | 10 | 1–3600 |
+| `DESKTOP_HEALTH_PROBE_TIMEOUT` | 1.5 | 0.1–60 |
+| `DESKTOP_FOREIGN_GRACE_SECONDS` | 45 | 0–3600 |
+| `DESKTOP_STATUS_WALL_SECONDS` | 15 | 1–600 |
+| `DESKTOP_SHELL_AUTO_UPDATE` | true | true / false |
+
+The five new in 6.61.0 are the desktop app's lifecycle: `DESKTOP_TICK_SECONDS` is
+how often it checks the server *and* how often it starts one that is not running;
+`DESKTOP_START_BACKOFF_SECONDS` is the shortest gap between two starts, equal to
+the tick by default, and raising it is how you slow the retries on a server that
+fails on start without slowing the health check;
+`DESKTOP_HEALTH_PROBE_TIMEOUT` is one check's socket timeout, in every process
+that makes one, replacing two constants that were meant to be the same number and
+were not; `DESKTOP_FOREIGN_GRACE_SECONDS` is how long an unrecognised program may
+hold the port before the window calls it a conflict rather than assuming the
+holder is My Claude Code still starting; and `DESKTOP_STATUS_WALL_SECONDS` is how
+long the app waits for one status read before painting something anyway — raise it
+on a machine where antivirus scanning makes a cold start take longer than that.
+`DESKTOP_SHELL_AUTO_UPDATE` is the server's one-shot desktop-app update described
+above.
 
 `DESKTOP_BROWSER_PATH` points at a browser binary in a nonstandard location; if the path no longer exists, `mcc-desktop` warns and falls back to the built-in search instead of failing to start. `DESKTOP_WINDOW_WIDTH`/`HEIGHT` are only the window's *initial* size — once it has opened, its size and position are remembered across launches, so changing these later applies on first run or when you actually change the setting, not every launch.
 

@@ -76,8 +76,10 @@ from typing import Any
 
 from my_claude_code.cli.desktop import (
     autostart_reconcile_enabled,
+    classify_port_holder,
     port_conflict_message,
     probe_server_state,
+    server_pid_of,
 )
 from my_claude_code.cli.desktop_window import SHELL_TRAY_ENV
 from my_claude_code.config.constants import (
@@ -135,6 +137,13 @@ STATUS_KEYS: tuple[str, ...] = (
     "activation_poll_seconds",
     "reconnect_timeout_seconds",
     "reconnect_restatus_seconds",
+    "health_probe_timeout_seconds",
+    "tick_seconds",
+    "start_backoff_seconds",
+    "foreign_grace_seconds",
+    "status_wall_seconds",
+    "holder",
+    "server_pid",
     "shell_tray",
     "shell_binary",
     "shell_release_tag",
@@ -187,6 +196,7 @@ def desktop_status(*, presence_v2: bool = False) -> dict[str, Any]:
     state = load_desktop_state()
     server = probe_server_state(settings, presence_v2=presence_v2)
     presence = server.presence
+    holder = classify_port_holder(settings, server)
     root_url = local_proxy_root_url(settings)
     shell_tray = shell_tray_enabled(state)
 
@@ -254,6 +264,35 @@ def desktop_status(*, presence_v2: bool = False) -> dict[str, Any]:
         "reconnect_restatus_seconds": float(
             settings.desktop_reconnect_restatus_seconds
         ),
+        # One health probe, one timeout, and it lives here rather than in the
+        # two constants that were meant to be the same number and were not
+        # (``launchers/common.py`` and the shell's ``health.rs``). Audit C9.
+        "health_probe_timeout_seconds": float(settings.desktop_health_probe_timeout),
+        # The lifecycle tick: how often the desktop app probes, and how often it
+        # starts a server that is not there. Decision Q4 (2026-09-08) fixed it
+        # at ten seconds, forever, with no attempt cap and no page that parks.
+        "tick_seconds": float(settings.desktop_tick_seconds),
+        # The shortest gap between two starts. Equal to the tick by default,
+        # because Q4 asks for no backoff beyond it; an operator whose server
+        # crash-loops can raise it without touching the probe cadence.
+        "start_backoff_seconds": float(settings.desktop_start_backoff_seconds),
+        # How long an unidentifiable port holder is given before the window
+        # calls it foreign and stops starting servers into it. An unknown
+        # holder during our own startup is overwhelmingly us (BUG-5).
+        "foreign_grace_seconds": float(settings.desktop_foreign_grace_seconds),
+        # How long the window may wait for THIS command. Out of the shell's
+        # binary in 6.61.0 (audit §5.4): it decides whether a slow machine gets
+        # a window at all, which is not a property of the binary.
+        "status_wall_seconds": float(settings.desktop_status_wall_seconds),
+        # Who holds the port, decided by process and never by a bind test.
+        # This is the key BUG-5 needed: the old answer could not tell MCC's own
+        # starting python.exe from a stranger, and told the user to go and stop
+        # My Claude Code because it was not My Claude Code.
+        "holder": holder.as_dict(),
+        # The pid of MCC's own server, when the holder is one. ``null`` for a
+        # foreign holder: reporting somebody else's pid under this name would
+        # be worse than reporting nothing.
+        "server_pid": server_pid_of(holder),
         "shell_tray": shell_tray,
         **desktop_shell_report(),
         # ``null`` unless a deferred update helper is running RIGHT NOW, which

@@ -21,16 +21,30 @@ use std::time::Duration;
 
 use url::Url;
 
-/// How long a single probe may take. This is a socket timeout, not a policy:
-/// the policies -- how often to poll, how long to keep trying -- are all read
-/// from the status document (C9).
-const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+/// How long a single probe may take when the status document does not say.
+///
+/// It is a socket timeout, not a policy -- the policies (how often to poll,
+/// how long to keep trying) are all read from the document (C9). From 6.61.0
+/// the timeout itself is in the document too, as
+/// `health_probe_timeout_seconds`, because two constants that were meant to be
+/// the same number (`launchers/common.py:18` and this one) are two numbers.
+/// This value stays as the one 6.61.0 ships with, for the one release in which
+/// the shell only tolerates the key.
+pub const DEFAULT_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// The header MCC's shutdown gate stamps on the 503 it refuses with, spelled
 /// exactly as `core/stop_deadline.py` spells it. It is the difference between
 /// "MCC is going away on purpose" and "something on this port is unwell", and
 /// it is the only thing in this file that names a name Python owns.
 pub const SHUTDOWN_MARKER_HEADER: &str = "x-mcc-shutdown";
+
+/// The header MCC's *startup* gate stamps on its 503, spelled exactly as
+/// `core/startup_state.py` spells it. Shipped server-side in 6.59.0: the
+/// listener moved in front of the twenty seconds of startup work, so a server
+/// that is coming up now answers rather than refusing the connection. Reading
+/// it is the difference between waiting for a server that is nearly ready and
+/// spawning a second one into the bind race it is about to win.
+pub const STARTING_MARKER_HEADER: &str = "x-mcc-starting";
 
 /// How much of the response head to read. Enough for the status line and the
 /// handful of headers the gate sends; never the body, because a server stuck
@@ -46,6 +60,9 @@ pub enum ProbeOutcome {
     /// MCC's own shutdown gate: a 503 carrying the marker header. This is a
     /// server that is leaving on purpose and will be back.
     ShuttingDown,
+    /// MCC's own startup gate: a 503 carrying `x-mcc-starting`. The server has
+    /// the port and is working through its lifespan.
+    StartingUp,
     /// Answered HTTP, but not with a 2xx and not as a drain.
     Http(u16),
     /// Nothing accepted the connection, or it timed out.
@@ -67,6 +84,7 @@ impl ProbeOutcome {
         match self {
             Self::Healthy => "answering".to_owned(),
             Self::ShuttingDown => "shutting down".to_owned(),
+            Self::StartingUp => "starting".to_owned(),
             Self::Http(code) => format!("HTTP {code}"),
             Self::Refused(detail) => detail.clone(),
             Self::Unreadable(detail) => detail.clone(),
@@ -84,15 +102,24 @@ pub fn is_healthy(url: &str) -> bool {
     probe_outcome(url).is_healthy()
 }
 
-/// Probe `url` and keep the reason.
+/// Probe `url` and keep the reason, with this build's default timeout.
 pub fn probe_outcome(raw: &str) -> ProbeOutcome {
-    match probe(raw) {
+    probe_outcome_within(raw, DEFAULT_PROBE_TIMEOUT)
+}
+
+/// Probe `url` with the timeout the status document asked for.
+///
+/// One implementation, one timeout, one vocabulary -- audit §5.1. Every caller
+/// in this binary goes through here, so there is no second place a probe can
+/// disagree about what a 503 means.
+pub fn probe_outcome_within(raw: &str, timeout: Duration) -> ProbeOutcome {
+    match probe(raw, timeout) {
         Ok(outcome) => outcome,
         Err(detail) => detail,
     }
 }
 
-fn probe(raw: &str) -> Result<ProbeOutcome, ProbeOutcome> {
+fn probe(raw: &str, timeout: Duration) -> Result<ProbeOutcome, ProbeOutcome> {
     let unreadable = |detail: &str| ProbeOutcome::Unreadable(detail.to_owned());
     let url = Url::parse(raw).map_err(|error| unreadable(&error.to_string()))?;
     let host = url
@@ -114,13 +141,13 @@ fn probe(raw: &str) -> Result<ProbeOutcome, ProbeOutcome> {
         .ok_or_else(|| {
             ProbeOutcome::Refused("the health address resolved to nothing".to_owned())
         })?;
-    let mut stream = TcpStream::connect_timeout(&address, PROBE_TIMEOUT)
+    let mut stream = TcpStream::connect_timeout(&address, timeout)
         .map_err(|error| ProbeOutcome::Refused(connection_phrase(&error)))?;
     stream
-        .set_read_timeout(Some(PROBE_TIMEOUT))
+        .set_read_timeout(Some(timeout))
         .map_err(|error| ProbeOutcome::Refused(error.to_string()))?;
     stream
-        .set_write_timeout(Some(PROBE_TIMEOUT))
+        .set_write_timeout(Some(timeout))
         .map_err(|error| ProbeOutcome::Refused(error.to_string()))?;
 
     let request = format!(
@@ -194,19 +221,27 @@ pub fn outcome_from_head(head: &str) -> ProbeOutcome {
     if (200..300).contains(&code) {
         return ProbeOutcome::Healthy;
     }
-    if code == 503 && head_carries_shutdown_marker(head) {
+    if code == 503 && head_carries_marker(head, SHUTDOWN_MARKER_HEADER) {
         return ProbeOutcome::ShuttingDown;
+    }
+    // Deliberately after the shutdown marker: a server asked to stop during a
+    // slow start answers with both gates' behaviour, and a caller told
+    // "starting" about a server that is on its way out would wait for
+    // something that is never coming back. `cli/desktop.py` orders it the same
+    // way, and a contract test pins the two orderings together.
+    if code == 503 && head_carries_marker(head, STARTING_MARKER_HEADER) {
+        return ProbeOutcome::StartingUp;
     }
     ProbeOutcome::Http(code)
 }
 
-/// Whether the head carries MCC's shutdown marker.
-fn head_carries_shutdown_marker(head: &str) -> bool {
+/// Whether the head carries one of MCC's own gate markers, set to `1`.
+fn head_carries_marker(head: &str, marker: &str) -> bool {
     head.lines().skip(1).any(|line| {
         let Some((name, value)) = line.split_once(':') else {
             return false;
         };
-        name.trim().eq_ignore_ascii_case(SHUTDOWN_MARKER_HEADER) && value.trim() == "1"
+        name.trim().eq_ignore_ascii_case(marker) && value.trim() == "1"
     })
 }
 
@@ -230,6 +265,30 @@ pub fn status_line_is_2xx(head: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Response heads, spelled with real CRLF escapes because that is what a
+    /// socket delivers.
+    const HEAD_STARTING: &str = "HTTP/1.1 503 Service Unavailable\r\nx-mcc-starting: 1\r\n";
+    const HEAD_SHUTDOWN: &str = "HTTP/1.1 503 Service Unavailable\r\nx-mcc-shutdown: 1\r\n";
+    const HEAD_BOTH: &str =
+        "HTTP/1.1 503 Service Unavailable\r\nx-mcc-starting: 1\r\nx-mcc-shutdown: 1\r\n";
+    const HEAD_PLAIN: &str = "HTTP/1.1 503 Service Unavailable\r\nretry-after: 5\r\n";
+
+    #[test]
+    fn a_starting_server_is_told_apart_from_a_draining_one() {
+        // 6.59.0's startup gate. Before it existed a starting server refused
+        // the connection outright, and the window read that as a free port --
+        // which is how a second server came to be spawned into the bind race
+        // the first one was about to win.
+        assert_eq!(outcome_from_head(HEAD_STARTING), ProbeOutcome::StartingUp);
+        assert_eq!(outcome_from_head(HEAD_SHUTDOWN), ProbeOutcome::ShuttingDown);
+        // Both markers means going away: a server asked to stop mid-start is
+        // not coming back, and Python's `probe_server_state` orders the two
+        // the same way.
+        assert_eq!(outcome_from_head(HEAD_BOTH), ProbeOutcome::ShuttingDown);
+        // And a plain 503 from something that is not MCC stays a plain 503.
+        assert_eq!(outcome_from_head(HEAD_PLAIN), ProbeOutcome::Http(503));
+    }
 
     #[test]
     fn a_200_is_healthy() {

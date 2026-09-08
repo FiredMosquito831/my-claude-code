@@ -442,6 +442,34 @@ DESKTOP_HEALTH_FAILURE_THRESHOLD_DEFAULT = 3
 # is noticed in well under a minute, rare enough that a 17-minute reconnect
 # costs about 34 short-lived child processes rather than 200.
 DESKTOP_RECONNECT_RESTATUS_SECONDS_DEFAULT = 30.0
+# The desktop app's lifecycle tick: how often it probes the server, and -- when
+# the server is dead -- how often it starts one. Decision Q4 (2026-09-08), and
+# the number is the user's: "probe every 10 seconds forever; if the server is
+# dead, FORCE start it on that tick." There is no attempt cap above it and no
+# exponential backoff beyond it, which is why the page can honestly say "next
+# start attempt in M s" instead of parking on a Retry button.
+DESKTOP_TICK_SECONDS_DEFAULT = 10.0
+# The shortest gap between two starts. Equal to the tick on purpose: Q4 asks
+# for one attempt per tick. An operator whose server crash-loops on start can
+# raise this without slowing the probe -- the two used to be the same knob and
+# could not be separated.
+DESKTOP_START_BACKOFF_SECONDS_DEFAULT = 10.0
+# How long one /health probe may take. One number, in one place, replacing the
+# two constants that were meant to be equal and were not: the launchers used
+# 1.5 s and the desktop shell compiled in its own 1.5 s, so changing one moved
+# only half the behaviour.
+DESKTOP_HEALTH_PROBE_TIMEOUT_DEFAULT = 1.5
+# How long an unidentifiable process may hold the port before the desktop app
+# calls it foreign and stops starting servers into it (audit BUG-5). Longer
+# than a normal start, because an unidentifiable holder during our own startup
+# is overwhelmingly us -- which is the mistake this window used to make, on
+# this user's machine, about this user's own python.exe.
+DESKTOP_FOREIGN_GRACE_SECONDS_DEFAULT = 45.0
+# How long the desktop app may wait for one `mcc-desktop --print-status` before
+# it gives up on that read and paints something. Out of the shell's binary in
+# 6.61.0 (audit S5.4): it decides whether a slow machine gets a window at all,
+# which is a property of the machine and not of the binary.
+DESKTOP_STATUS_WALL_SECONDS_DEFAULT = 15.0
 DESKTOP_WINDOW_WIDTH_DEFAULT = 1400
 DESKTOP_WINDOW_HEIGHT_DEFAULT = 900
 

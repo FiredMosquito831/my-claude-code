@@ -2058,6 +2058,94 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "DESKTOP_TICK_SECONDS",
+        "Lifecycle tick",
+        "desktop",
+        "number",
+        settings_attr="desktop_tick_seconds",
+        default="10",
+        advanced=True,
+        description=(
+            "How often the desktop app checks the server -- and, when the "
+            "server is not running, how often it starts one. It never gives "
+            "up and never parks on a button: the page says when it last "
+            "checked and when it will try again. Applies the next time the "
+            "desktop app starts, not to a window already open."
+        ),
+    ),
+    ConfigFieldSpec(
+        "DESKTOP_START_BACKOFF_SECONDS",
+        "Start backoff",
+        "desktop",
+        "number",
+        settings_attr="desktop_start_backoff_seconds",
+        default="10",
+        advanced=True,
+        description=(
+            "The shortest gap between two server starts by the desktop app. "
+            "Equal to the tick by default. Raise it if a server that fails on "
+            "start should be retried less often; the health check keeps its "
+            "own cadence either way."
+        ),
+    ),
+    ConfigFieldSpec(
+        "DESKTOP_HEALTH_PROBE_TIMEOUT",
+        "Health probe timeout",
+        "desktop",
+        "number",
+        settings_attr="desktop_health_probe_timeout",
+        default="1.5",
+        advanced=True,
+        description=(
+            "How long one check of the server's health URL may take before it "
+            "counts as no answer. One number for every process that makes the "
+            "check, including the desktop app."
+        ),
+    ),
+    ConfigFieldSpec(
+        "DESKTOP_FOREIGN_GRACE_SECONDS",
+        "Port conflict grace",
+        "desktop",
+        "number",
+        settings_attr="desktop_foreign_grace_seconds",
+        default="45",
+        advanced=True,
+        description=(
+            "How long an unrecognised program may hold the port before the "
+            "desktop app reports a conflict instead of assuming the holder is "
+            "My Claude Code still starting. Shorter means faster conflict "
+            "reporting; longer means fewer false alarms during a slow start."
+        ),
+    ),
+    ConfigFieldSpec(
+        "DESKTOP_STATUS_WALL_SECONDS",
+        "Status read timeout",
+        "desktop",
+        "number",
+        settings_attr="desktop_status_wall_seconds",
+        default="15",
+        advanced=True,
+        description=(
+            "How long the desktop app waits for one status read before it "
+            "paints something anyway. Raise it on a slow machine where "
+            "antivirus scanning makes a cold start take longer than this."
+        ),
+    ),
+    ConfigFieldSpec(
+        "DESKTOP_SHELL_AUTO_UPDATE",
+        "Update the desktop app automatically",
+        "desktop",
+        "boolean",
+        settings_attr="desktop_shell_auto_update",
+        default="true",
+        description=(
+            "Whether the server brings an out-of-date desktop app up to the "
+            "release it pins, once, just after it starts. On means updating "
+            "the server updates the app too, with nothing to run by hand; the "
+            "new app is used the next time you start it."
+        ),
+    ),
+    ConfigFieldSpec(
         "DESKTOP_WINDOW_WIDTH",
         "Window width",
         "desktop",

@@ -40,7 +40,12 @@ pub enum Page {
     /// The port is free but starting the server is not this windows job.
     NotOurServer { message: String },
     /// Someone else holds the port. The message is Pythons, verbatim.
-    PortConflict { message: String },
+    ///
+    /// `take_port` is decision Q1: the button is offered only when the holder
+    /// was identified, by process, as one of MCC's own. A genuinely foreign
+    /// process is never killed without being asked, so the page says so and
+    /// keeps re-checking instead.
+    PortConflict { message: String, take_port: bool },
     /// The server was healthy and stopped answering; still inside the budget.
     Reconnecting { message: String },
     /// The end of the line. `server_log` is shown when there is one to name.
@@ -94,6 +99,7 @@ mod tests {
     fn the_port_conflict_message_reaches_the_page_intact() {
         let script = render_script(&Page::PortConflict {
             message: "nginx (pid 42) holds it".to_owned(),
+            take_port: false,
         });
         assert!(script.contains("nginx (pid 42) holds it"));
         assert!(script.contains("\"kind\":\"port-conflict\""));
@@ -157,6 +163,7 @@ mod tests {
             },
             Page::PortConflict {
                 message: String::new(),
+                take_port: false,
             },
             Page::Reconnecting {
                 message: String::new(),
@@ -197,6 +204,7 @@ mod tests {
             },
             Page::PortConflict {
                 message: String::new(),
+                take_port: false,
             },
             Page::Reconnecting {
                 message: String::new(),
