@@ -1,0 +1,186 @@
+[
+  {
+    "name": "groq_text_stream",
+    "provider": "groq",
+    "request": {
+      "thinking": {
+        "enabled": false
+      }
+    },
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\", w\\u00f6rld\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" \\u2014 done.\\nSecond line.\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[],\"usage\":{\"prompt_tokens\":31,\"completion_tokens\":12,\"total_tokens\":43,\"prompt_tokens_details\":{\"cached_tokens\":8},\"completion_tokens_details\":{\"reasoning_tokens\":5}}}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "groq_reasoning_content",
+    "provider": "groq",
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Let me think\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" about it.\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Answer.\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[],\"usage\":{\"prompt_tokens\":31,\"completion_tokens\":12,\"total_tokens\":43,\"prompt_tokens_details\":{\"cached_tokens\":8},\"completion_tokens_details\":{\"reasoning_tokens\":5}}}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "groq_think_tags",
+    "provider": "groq",
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"<think>hidden \"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"reasoning</think>visible\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" text\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "groq_tool_calls_interleaved",
+    "provider": "groq",
+    "request": {
+      "tools": [
+        {
+          "name": "Read",
+          "description": "Read a file",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file_path"
+            ]
+          }
+        },
+        {
+          "name": "Write",
+          "description": "Write a file",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file_path"
+            ]
+          }
+        }
+      ],
+      "thinking": {
+        "enabled": false
+      }
+    },
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"I will read two files.\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"Read\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"file_\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_b\",\"type\":\"function\",\"function\":{\"name\":\"Write\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"path\\\": \\\"a.txt\\\"}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"{\\\"file_path\\\": \\\"b.txt\\\"}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[],\"usage\":{\"prompt_tokens\":31,\"completion_tokens\":12,\"total_tokens\":43,\"prompt_tokens_details\":{\"cached_tokens\":8},\"completion_tokens_details\":{\"reasoning_tokens\":5}}}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "cerebras_reasoning_field",
+    "provider": "cerebras",
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning\":\"step one\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\" step two\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"final\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "zenmux_reasoning_details",
+    "provider": "zenmux",
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning\":\"visible thought\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"visible thought\",\"format\":\"unknown\"}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"data\":\"OPAQUE-BLOB-1\",\"format\":\"anthropic-claude-v1\"}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "open_router_reasoning_details",
+    "provider": "open_router",
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"gateway thought\"}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"data\":\"OPAQUE-BLOB-2\"}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"gateway answer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3,\"total_tokens\":13,\"cost\":0.00042,\"cost_details\":{\"upstream_inference_cost\":0.0002},\"is_byok\":true}}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "cloudflare_extra_reasoning",
+    "provider": "cloudflare",
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning\":\"cf thought\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"cf answer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "deepseek_cache_usage",
+    "provider": "deepseek",
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"ds thought\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ds answer\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":7,\"total_tokens\":107,\"prompt_cache_hit_tokens\":64,\"prompt_cache_miss_tokens\":36}}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "mistral_thinking_content_chunks",
+    "provider": "mistral",
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"m thought\"}]},{\"type\":\"text\",\"text\":\"m answer\"}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":[{\"type\":\"text\",\"text\":\" more\"}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "google_openai_tool_extra_content",
+    "provider": "google_openai",
+    "request": {
+      "tools": [
+        {
+          "name": "Read",
+          "description": "Read a file",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file_path"
+            ]
+          }
+        },
+        {
+          "name": "Write",
+          "description": "Write a file",
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file_path"
+            ]
+          }
+        }
+      ],
+      "thinking": {
+        "enabled": false
+      }
+    },
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_g\",\"type\":\"function\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"file_path\\\": \\\"g.txt\\\"}\"},\"extra_content\":{\"google\":{\"thought_signature\":\"SIGNATURE-1\"}}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "groq_keepalive_and_empty_choices",
+    "provider": "groq",
+    "request": {
+      "thinking": {
+        "enabled": false
+      }
+    },
+    "sse": ": ping\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"a\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"b\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "groq_usage_frame_without_choices_key",
+    "provider": "groq",
+    "request": {
+      "thinking": {
+        "enabled": false
+      }
+    },
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"x\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"usage\":{\"prompt_tokens\":31,\"completion_tokens\":12,\"total_tokens\":43,\"prompt_tokens_details\":{\"cached_tokens\":8},\"completion_tokens_details\":{\"reasoning_tokens\":5}}}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "groq_malformed_json_frame",
+    "provider": "groq",
+    "request": {
+      "thinking": {
+        "enabled": false
+      }
+    },
+    "sse": "data: {\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion.chunk\", \"created\": 1757000000, \"model\": \"fixture-model\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"partial\"}, \"finish_reason\": null}]}\n\ndata: {\"choices\": [{\"delta\": {\"content\": \"broke\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "groq_truncated_without_finish_reason",
+    "provider": "groq",
+    "request": {
+      "thinking": {
+        "enabled": false
+      }
+    },
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"half an answer\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n"
+  },
+  {
+    "name": "groq_error_frame_midstream",
+    "provider": "groq",
+    "request": {
+      "thinking": {
+        "enabled": false
+      }
+    },
+    "sse": "data: {\"id\":\"chatcmpl-fixture\",\"object\":\"chat.completion.chunk\",\"created\":1757000000,\"model\":\"fixture-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"before the error\"},\"finish_reason\":null}]}\n\ndata: {\"error\":{\"message\":\"upstream exploded\",\"type\":\"server_error\"}}\n\ndata: [DONE]\n\n"
+  }
+]
