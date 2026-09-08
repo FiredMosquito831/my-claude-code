@@ -1573,7 +1573,12 @@
                 </p>
                 <ol>
                   <li>
-                    <strong>Install.</strong> In PowerShell,
+                    <strong>Install.</strong> In the Windows Command Prompt,
+                    <code>curl -fsSL -o "%TEMP%\install-mcc.cmd"
+                    https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.cmd
+                    &amp;&amp; "%TEMP%\install-mcc.cmd"</code> &mdash; it fetches the
+                    same installer and runs it with the execution policy bypassed, so
+                    PowerShell can never refuse it. In PowerShell,
                     <code>&amp; ([scriptblock]::Create((irm
                     "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.ps1")))</code>;
                     in WSL, Linux or macOS,

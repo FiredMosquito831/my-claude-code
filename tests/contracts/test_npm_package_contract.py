@@ -97,14 +97,122 @@ def test_the_npm_version_equals_the_python_version() -> None:
     )
 
 
-def test_both_command_names_are_published() -> None:
-    """`mcc` is the short one people actually type; `my-claude-code` is the name."""
+def test_the_published_bin_is_the_one_npx_runs() -> None:
+    """One bin, `mcc`, and it is a file that exists in the package.
+
+    This used to publish `my-claude-code` as well -- and that is a console
+    script of the WHEEL (`[project.scripts]`). On Windows npm's global bin
+    directory precedes the uv tool bin directory on PATH, so `npm install -g`
+    put a shim in front of the real launcher, and `install.ps1` (which verified
+    its launchers by asking PATH) decided a complete install had put its files
+    somewhere illegal and threw -- for good, on every later run of the
+    one-liner too.
+
+    With a single bin, `npx @firedmosquito831/my-claude-code <args>` still runs
+    it: npm runs the sole binary whatever it is called. Proved against npm
+    11.14.1 with a fixture package whose only bin was named `mcc`.
+    """
     binaries = _mapping(_manifest()["bin"], "bin")
-    assert set(binaries) == {"my-claude-code", "mcc"}
+    assert set(binaries) == {"mcc"}
     for target in binaries.values():
         assert (PACKAGE_DIR / str(target)).is_file(), (
             f"package.json points `bin` at {target}, which is not in the package"
         )
+
+
+def test_no_npm_bin_name_is_a_python_console_script() -> None:
+    """The standing guard: the two packages must never claim the same name.
+
+    Both directions. A name in `[project.scripts]` or `[project.gui-scripts]`
+    is installed into the uv tool bin directory by the wheel; a name in
+    package.json's `bin` is installed into npm's global bin by npm. When one
+    name is in both, PATH order decides which one wins, and on Windows npm
+    wins -- which is how a correct install came to report itself broken.
+    """
+    manifest = tomllib.loads(_read(REPO_ROOT / "pyproject.toml"))
+    project = _mapping(manifest["project"], "project")
+    console_scripts = set(_mapping(project.get("scripts", {}), "scripts"))
+    gui_scripts = set(_mapping(project.get("gui-scripts", {}), "gui-scripts"))
+    wheel_commands = console_scripts | gui_scripts
+    npm_commands = set(_mapping(_manifest()["bin"], "bin"))
+
+    collisions = sorted(wheel_commands & npm_commands)
+    assert collisions == [], (
+        "these names are published by BOTH the wheel and the npm package: "
+        f"{', '.join(collisions)}. Whichever directory comes first on PATH "
+        "decides which one a user gets, and install.ps1 verifies the wheel's "
+        "launchers -- so a collision breaks the installer on Windows. Rename "
+        "the npm bin."
+    )
+
+
+@requires_node
+def test_the_postinstall_removes_a_stale_my_claude_code_shim_it_used_to_own(
+    tmp_path: Path,
+) -> None:
+    """A machine that ran 6.53.1-6.63.0 carries the shim that broke it.
+
+    npm does not reliably reap a bin its package has stopped declaring, and the
+    machines that need it reaped are exactly the broken ones, so the hook does
+    it itself -- but only for a file whose text names THIS package. A
+    `my-claude-code` belonging to somebody else is left alone.
+    """
+    prefix = tmp_path / "npm-prefix"
+    prefix.mkdir()
+    ours = prefix / "my-claude-code.cmd"
+    ours.write_text(
+        '@ECHO off\r\n"%~dp0\\node_modules\\@firedmosquito831\\my-claude-code\\bin\\my-claude-code.js" %*\r\n',
+        encoding="utf-8",
+    )
+    theirs = prefix / "my-claude-code.ps1"
+    theirs.write_text("# somebody else's program entirely\n", encoding="utf-8")
+
+    status, output, _ = _run_postinstall(
+        tmp_path,
+        {
+            "npm_config_global": "true",
+            "npm_config_prefix": str(prefix),
+            "MCC_TEST_PLATFORM": "win32",
+            "MCC_NPM_INSTALL": "none",
+        },
+    )
+    assert status == 0, output
+    assert not ours.exists(), f"the stale shim was left behind:\n{output}"
+    assert theirs.exists(), "a file this package never wrote was deleted"
+    assert "removed the old my-claude-code command" in output, output
+
+
+@requires_node
+def test_the_stale_shim_goes_even_when_the_install_is_opted_out_of(
+    tmp_path: Path,
+) -> None:
+    """The migration is not an install, so the install opt-outs do not skip it.
+
+    Somebody who sets `MCC_NPM_SKIP_INSTALL=1` is asking for the launcher and
+    nothing else -- they are not asking to keep a shim that shadows a command
+    the wheel owns and breaks `install.ps1` on Windows.
+    """
+    prefix = tmp_path / "npm-prefix"
+    prefix.mkdir()
+    ours = prefix / "my-claude-code.cmd"
+    ours.write_text(
+        '@ECHO off\r\n"%~dp0\\node_modules\\@firedmosquito831\\my-claude-code'
+        '\\bin\\my-claude-code.js" %*\r\n',
+        encoding="utf-8",
+    )
+
+    status, output, spawns = _run_postinstall(
+        tmp_path,
+        {
+            "npm_config_global": "true",
+            "npm_config_prefix": str(prefix),
+            "MCC_TEST_PLATFORM": "win32",
+            "MCC_NPM_SKIP_INSTALL": "1",
+        },
+    )
+    assert status == 0, output
+    assert _spawns(spawns) == [], "the opt-out must still install nothing"
+    assert not ours.exists(), f"the stale shim survived the opt-out:\n{output}"
 
 
 def test_the_tarball_carries_only_the_launcher_the_readme_and_the_licence() -> None:
@@ -177,6 +285,25 @@ for (const key of ['platform', 'arch']) {
 function log(entry) {
   fs.appendFileSync(record, JSON.stringify(entry) + '\\n');
 }
+
+// The installer is run through `spawn` (not spawnSync) since 6.64.0: the hook
+// tees its output into a log file rather than letting `npm install -g` swallow
+// it and replay the whole stream under an `npm error` prefix. The fake has to
+// learn every shape the hook uses, or the tests reach the real powershell.
+const { EventEmitter } = require('node:events');
+childProcess.spawn = function (command, args) {
+  log({ command, args });
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  const status = Number(process.env.MCC_TEST_SPAWN_STATUS || '0');
+  const text = process.env.MCC_TEST_SPAWN_OUTPUT || '';
+  setImmediate(function () {
+    if (text) child.stdout.emit('data', Buffer.from(text, 'utf8'));
+    child.emit('close', status);
+  });
+  return child;
+};
 
 childProcess.spawnSync = function (command, args) {
   log({ command, args });
@@ -618,6 +745,36 @@ def test_a_failed_desktop_half_still_leaves_the_server_installed(
     assert any("install.ps1" in _invocation(call) for call in _spawns(calls))
     assert "the desktop app is not" in output
     assert "--desktop-only" in output, "it must say how to retry just the desktop half"
+
+
+@requires_node
+def test_a_failed_server_half_reports_what_actually_landed(tmp_path: Path) -> None:
+    """It must never claim "nothing was left half-installed" -- it cannot know.
+
+    That sentence was printed unconditionally, and on the machine that prompted
+    this change the server WAS installed (41 executables) and only the
+    verification threw. Say which half was attempted, how to check, where the
+    full output is, and how to retry each half on its own.
+    """
+    status, output, _ = _run_postinstall(
+        tmp_path,
+        {
+            "npm_config_global": "true",
+            "MCC_NPM_INSTALL": "server",
+            "MCC_TEST_SPAWN_STATUS": "1",
+        },
+    )
+    assert status == 1, output
+    assert "Nothing was left half-installed" not in output, (
+        "the hook still claims to know something it cannot know:\n" + output
+    )
+    assert "the server installer exited 1" in output, output
+    assert "mcc-server --version" in output, "it must say how to check the server"
+    assert "--server-only" in output and "--desktop-only" in output, output
+    assert "--foreground-scripts" in output, (
+        "it must name the flag that shows the installer live"
+    )
+    assert "the full output is in" in output, "it must name the log file"
 
 
 @requires_node

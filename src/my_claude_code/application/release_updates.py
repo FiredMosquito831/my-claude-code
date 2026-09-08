@@ -875,18 +875,35 @@ $output = ''
 # full backoff: the point is not to pay 65 seconds of sleeps on the way to a
 # path that handles the lock properly.
 $fastDelays = if ($refused.Count -eq 0) {{ $delays }} else {{ @(0) }}
+# The same table scripts/install.ps1 keeps, for the same reason: uv reports a
+# full disk and a locked file identically -- a non-zero exit code and a
+# sentence -- so the code alone cannot tell them apart. Every retry below
+# writes more files, and the staged fallback writes a whole second copy of
+# them, so on a volume with no room left the ladder turns one honest failure
+# into ten and 130 seconds of sleeps.
+$diskFullSignatures = @('os error 112', 'not enough space on the disk', 'no space left on device', 'enospc')
+function Test-UvDiskFull($text) {{
+    if (-not $text) {{ return $false }}
+    $haystack = ([string] $text).ToLowerInvariant()
+    foreach ($signature in $diskFullSignatures) {{
+        if ($haystack.Contains($signature)) {{ return $true }}
+    }}
+    return $false
+}}
+$diskFull = $false
 foreach ($wait in $fastDelays) {{
     if ($wait -gt 0) {{ Start-Sleep -Seconds $wait }}
     $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 | Out-String
     $code = $LASTEXITCODE
     $attempts = $attempts + 1
     if ($code -eq 0) {{ break }}
+    if (Test-UvDiskFull $output) {{ $diskFull = $true; break }}
 }}
 # Staged fallback: uv writes every shim and a complete receipt into a directory
 # nothing can be holding, and the shims are placed one at a time afterwards, so
 # one stuck file costs exactly that one file instead of the whole install.
 $kept = @()
-if (($code -ne 0) -and $binDir) {{
+if (($code -ne 0) -and $binDir -and (-not $diskFull)) {{
     $stageBin = Join-Path ([IO.Path]::GetTempPath()) ('mcc-stage-bin-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stageBin | Out-Null
     $hadBin = Test-Path Env:\\UV_TOOL_BIN_DIR
@@ -1005,10 +1022,11 @@ $result = @{{
     ok = $ok
     exit_code = $code
     attempts = $attempts
+    disk_full = $diskFull
     missing_commands = $missing
     kept_shims = $kept
     restored_shims = $restoredShims
-    message = if ($ok) {{ 'Deferred install completed.' + $keptNote }} elseif ($missing.Count -gt 0) {{ 'Installed, but these commands are missing: ' + ($missing -join ', ') + '. Close the mcc-claude window(s) and re-run the install command.' }} else {{ 'Deferred install failed after ' + $attempts + ' attempt(s).' }}
+    message = if ($ok) {{ 'Deferred install completed.' + $keptNote }} elseif ($diskFull) {{ 'The update stopped because the disk is full. Free space and update again. uv tool install --force removes the previous environment before it writes the new one, so this machine has no mcc-server until that re-run finishes.' }} elseif ($missing.Count -gt 0) {{ 'Installed, but these commands are missing: ' + ($missing -join ', ') + '. Close the mcc-claude window(s) and re-run the install command.' }} else {{ 'Deferred install failed after ' + $attempts + ' attempt(s).' }}
     output = $output
 }}
 $result['restarted'] = $false

@@ -1,24 +1,39 @@
 name: install smoke
 
-# The Linux proof for scripts/install.sh: a bare ubuntu-latest runner with uv
+# Two legs.
+#
+# Linux: the proof for scripts/install.sh -- a bare ubuntu-latest runner with uv
 # and every Python removed from PATH, so the script has to provision uv, an
 # interpreter and the tool environment itself. Everything it creates goes to
 # scratch directories under the workspace -- nothing lands in the runner's real
 # home -- and the job passes only if `mcc-server --version` answers afterwards.
 #
-# It installs the LATEST PUBLISHED release, not this branch's code: the thing
-# under test is the script, and the wheel it fetches is whatever GitHub says is
-# current. A release that has not happened yet cannot break this job.
+# Windows: the proof for scripts/install.cmd, added with the CMD route in
+# 6.64.0. It runs the batch file from cmd.exe -- the shape the README now leads
+# with -- and checks the three things only a real run can show: that
+# `-ExecutionPolicy Bypass -File` gets past the default policy, that every
+# launcher lands in the scratch bin directory, and that %ERRORLEVEL% reaches
+# the caller on both a success and a failure. The cross-platform contract tests
+# in tests/scripts/test_installers.py do not depend on this job (WORKING-NOTES
+# section 20: guard tests over runtime tests for cross-platform scripts).
+#
+# Both legs install the LATEST PUBLISHED release, not this branch's code: the
+# thing under test is the script, and the wheel it fetches is whatever GitHub
+# says is current. A release that has not happened yet cannot break this job.
 
 on:
   push:
     branches: [main]
     paths:
       - "scripts/install.sh"
+      - "scripts/install.cmd"
+      - "scripts/install.ps1"
       - ".github/workflows/install-smoke.yml"
   pull_request:
     paths:
       - "scripts/install.sh"
+      - "scripts/install.cmd"
+      - "scripts/install.ps1"
       - ".github/workflows/install-smoke.yml"
   workflow_dispatch:
 
@@ -187,3 +202,98 @@ jobs:
             *"apt-get install -y curl"*) ;;
             *) echo "::error::the Debian install command was not named"; exit 1 ;;
           esac
+
+  windows-cmd:
+    name: install.cmd on Windows, from cmd.exe
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - uses: actions/checkout@v4
+
+      # Everything the install creates goes to scratch directories under the
+      # workspace, so the runner's real profile is never written to -- the same
+      # rule the Linux leg follows, and the same rule the implementer's
+      # fresh-machine runs on a real machine follow.
+      - name: Stage a scratch profile
+        run: |
+          mkdir "%RUNNER_TEMP%\cmd-smoke\uv-tools"
+          mkdir "%RUNNER_TEMP%\cmd-smoke\uv-tool-bin"
+          mkdir "%RUNNER_TEMP%\cmd-smoke\uv-python"
+          mkdir "%RUNNER_TEMP%\cmd-smoke\uv-cache"
+          mkdir "%RUNNER_TEMP%\cmd-smoke\config"
+          echo UV_TOOL_DIR=%RUNNER_TEMP%\cmd-smoke\uv-tools>>"%GITHUB_ENV%"
+          echo UV_TOOL_BIN_DIR=%RUNNER_TEMP%\cmd-smoke\uv-tool-bin>>"%GITHUB_ENV%"
+          echo UV_PYTHON_INSTALL_DIR=%RUNNER_TEMP%\cmd-smoke\uv-python>>"%GITHUB_ENV%"
+          echo UV_CACHE_DIR=%RUNNER_TEMP%\cmd-smoke\uv-cache>>"%GITHUB_ENV%"
+          echo MCC_CONFIG_DIR=%RUNNER_TEMP%\cmd-smoke\config>>"%GITHUB_ENV%"
+          echo UV_TOOL_UPDATE_SHELL=0>>"%GITHUB_ENV%"
+
+      # The route under test is the published one: a batch file fetched with
+      # curl.exe and run from cmd.exe. It is run from the checkout rather than
+      # from the raw URL, because the point is to test THIS branch's file --
+      # but it is byte-for-byte the file the URL serves after a merge.
+      - name: Run scripts\install.cmd
+        run: scripts\install.cmd
+
+      - name: The batch file returned the installer's own exit code
+        run: |
+          if not "%ERRORLEVEL%"=="0" exit /b 1
+          exit /b 0
+
+      - name: mcc-server --version, through the shim in the scratch bin dir
+        run: |
+          "%RUNNER_TEMP%\cmd-smoke\uv-tool-bin\mcc-server.exe" --version
+          if errorlevel 1 exit /b 1
+
+      - name: Every launcher landed in the scratch tool bin
+        shell: pwsh
+        run: |
+          $binDir = Join-Path $env:RUNNER_TEMP "cmd-smoke\uv-tool-bin"
+          $shims = @(Get-ChildItem -LiteralPath $binDir -Filter "*.exe")
+          Write-Host "$($shims.Count) launchers in $binDir"
+          foreach ($name in @("mcc-server", "mcc-claude", "mcc-desktop", "my-claude-code")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $binDir "$name.exe") -PathType Leaf)) {
+              Write-Host "::error::$name.exe is not in the scratch tool bin"
+              exit 1
+            }
+          }
+
+      - name: The real profile was never written to
+        shell: pwsh
+        run: |
+          foreach ($untouched in @("$env:USERPROFILE\.mcc", "$env:USERPROFILE\.fcc")) {
+            if (Test-Path -LiteralPath $untouched) {
+              Write-Host "::error::$untouched was created outside the scratch profile"
+              exit 1
+            }
+          }
+          Write-Host "no config directory was created in the real profile"
+
+      # A run that fails must return a non-zero code to cmd.exe and keep the
+      # script it downloaded, naming it. `--version 0.0.0` has no release, so
+      # the installer stops after the download.
+      - name: A failed run propagates ERRORLEVEL and keeps the script
+        run: |
+          scripts\install.cmd --version 0.0.0
+          if "%ERRORLEVEL%"=="0" (
+            echo ::error::a failed install returned 0
+            exit /b 1
+          )
+          if not exist "%TEMP%\install-mcc.ps1" (
+            echo ::error::the downloaded installer was not kept for inspection
+            exit /b 1
+          )
+          echo the failure returned %ERRORLEVEL% and kept %TEMP%\install-mcc.ps1
+          exit /b 0
+
+      - name: An unknown flag is refused before anything is downloaded
+        run: |
+          scripts\install.cmd --not-a-flag
+          if not "%ERRORLEVEL%"=="2" (
+            echo ::error::expected exit 2 for an unknown flag, got %ERRORLEVEL%
+            exit /b 1
+          )
+          exit /b 0

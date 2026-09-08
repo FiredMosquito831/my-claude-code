@@ -133,6 +133,96 @@ run() {
     fail "Command failed with exit code $status: $1"
 }
 
+# How a uv failure is classified from the text uv printed. The same two tables
+# exist in scripts/install.ps1, and a contract test compares them, because the
+# two installers must reach the same verdict about the same machine.
+#
+#   disk-full  the volume is out of space. Retrying cannot help, and the
+#              Windows installer's locked-file ladder writes MORE files, so it
+#              makes a full disk worse. Stop, and say how much room to make.
+#   locked     a file is held by another process. That is what Windows'
+#              rename-then-reinstall ladder is for, and all it is for.
+#   unknown    everything else keeps the historical behaviour.
+uv_disk_full_signatures='os error 112|not enough space on the disk|no space left on device|enospc'
+uv_locked_signatures='os error 32|access is denied|being used by another process'
+
+# What a complete install costs on disk, so a full-disk failure can say how
+# much room to make. Measured on 2026-09-09 in scratch uv directories: the tool
+# environment, the launcher shims, managed CPython and the uv cache the install
+# fills come to about this much. Ask for more than that: uv unpacks through its
+# cache before it hardlinks into place, so the peak is above the resting size.
+install_footprint_mb=340
+install_recommended_mb=1024
+
+classify_uv_failure() {
+    lowered=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    # Disk-full is tested first on purpose: when a message somehow carries both
+    # shapes, the one no retry can fix has to win.
+    if printf '%s\n' "$lowered" | grep -Eq "$uv_disk_full_signatures"; then
+        printf 'disk-full'
+        return 0
+    fi
+    if printf '%s\n' "$lowered" | grep -Eq "$uv_locked_signatures"; then
+        printf 'locked'
+        return 0
+    fi
+    printf 'unknown'
+}
+
+report_disk_full() {
+    disk_target=$("$uv_bin" tool dir 2>/dev/null) || disk_target=""
+    [ -n "$disk_target" ] || disk_target="${UV_TOOL_DIR:-$HOME/.local/share/uv/tools}"
+    disk_free_mb=$(df -Pk "$disk_target" 2>/dev/null | awk 'NR==2 {printf "%d", $4 / 1024}')
+    [ -n "$disk_free_mb" ] || disk_free_mb="unknown"
+    disk_filesystem=$(df -Pk "$disk_target" 2>/dev/null | awk 'NR==2 {print $1}')
+    [ -n "$disk_filesystem" ] || disk_filesystem="the install filesystem"
+    printf '\n' >&2
+    printf 'The install stopped because %s has no space left.\n' "$disk_filesystem" >&2
+    printf '  free on %s: %s MB\n' "$disk_filesystem" "$disk_free_mb" >&2
+    printf '  this install needs: about %s MB (Python %s, the tool environment and the uv cache it unpacks through); leave %s MB free\n' \
+        "$install_footprint_mb" "$PYTHON_VERSION" "$install_recommended_mb" >&2
+    printf '  it writes to: %s\n' "$disk_target" >&2
+    printf 'A full disk is not a locked file. Retrying writes more files, so the installer stops here instead.\n' >&2
+    printf 'Free space on %s and run the install command again.\n' "$disk_filesystem" >&2
+    printf 'uv tool install --force removes the previous environment before it writes the new one, so this machine has no mcc-server until that re-run finishes.\n' >&2
+    exit 1
+}
+
+# Run uv and keep what it said.
+#
+# uv reports every failure the same way -- a non-zero exit status and a
+# sentence on stderr -- so the status alone cannot tell a full disk from a
+# locked file. `run` above throws that text away. This keeps it, still shows it
+# while the install happens, and reads it before deciding what the failure was.
+run_uv_capturing() {
+    print_command "$@"
+    if [ "$dry_run" -eq 1 ]; then
+        return 0
+    fi
+
+    uv_capture_file=$(mktemp "${TMPDIR:-/tmp}/mcc-uv.XXXXXX") || fail "Could not create a temporary file."
+    uv_status_file=$(mktemp "${TMPDIR:-/tmp}/mcc-uv-status.XXXXXX") || fail "Could not create a temporary file."
+    # A pipeline's $? is the LAST command's, so the exit status travels through
+    # a file rather than through the pipe. PIPESTATUS is bash-only and this
+    # script runs under /bin/sh.
+    { "$@" 2>&1; printf '%s' "$?" >"$uv_status_file"; } | tee "$uv_capture_file"
+    status=$(cat "$uv_status_file" 2>/dev/null)
+    [ -n "$status" ] || status=1
+    rm -f "$uv_status_file"
+
+    if [ "$status" -eq 0 ]; then
+        rm -f "$uv_capture_file"
+        return 0
+    fi
+
+    uv_category=$(classify_uv_failure "$(cat "$uv_capture_file" 2>/dev/null)")
+    rm -f "$uv_capture_file"
+    if [ "$uv_category" = "disk-full" ]; then
+        report_disk_full
+    fi
+    fail "Command failed with exit code $status: $1"
+}
+
 cleanup() {
     if [ -n "$temporary_script" ] && [ -e "$temporary_script" ]; then
         rm -f "$temporary_script"
@@ -609,9 +699,9 @@ install_my_claude_code() {
     spec=$(package_spec "$package_url")
 
     if [ -n "$torch_backend" ]; then
-        run "$uv_bin" tool install --managed-python --force --refresh-package my-claude-code --python "$PYTHON_VERSION" --torch-backend "$torch_backend" "$spec"
+        run_uv_capturing "$uv_bin" tool install --managed-python --force --refresh-package my-claude-code --python "$PYTHON_VERSION" --torch-backend "$torch_backend" "$spec"
     else
-        run "$uv_bin" tool install --managed-python --force --refresh-package my-claude-code --python "$PYTHON_VERSION" "$spec"
+        run_uv_capturing "$uv_bin" tool install --managed-python --force --refresh-package my-claude-code --python "$PYTHON_VERSION" "$spec"
     fi
 }
 
@@ -844,7 +934,15 @@ configure_and_verify_my_claude_code() {
     # altogether in one branch) and so reported "verified" for commands that did
     # not exist. Same honest accounting here keeps the two installers saying the
     # same thing.
+    # A different program earlier on PATH answering to one of these names is a
+    # fact about PATH order on this machine, not a failed install: the file is
+    # where it belongs and every command works when called by its path. Windows
+    # used to THROW here (it asked PATH instead of the directory), so a
+    # leftover `my-claude-code` shim from an old npm package broke every later
+    # install on a machine where nothing was wrong. Warn on both platforms,
+    # fail on neither.
     missing_commands=""
+    shadowed_commands=""
     for command_name in mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi \
         mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi \
         mcc-qwen mcc-crush \
@@ -858,12 +956,19 @@ configure_and_verify_my_claude_code() {
             else
                 missing_commands="$missing_commands, $command_name"
             fi
+            continue
+        fi
+        resolved=$(command -v "$command_name" 2>/dev/null) || resolved=""
+        if [ -n "$resolved" ] && [ "$resolved" != "$tool_bin/$command_name" ]; then
+            shadowed_commands="$shadowed_commands$command_name -> $resolved
+"
         fi
     done
     if [ -n "$missing_commands" ]; then
         printf 'Installed, but these commands are missing: %s\n' "$missing_commands" >&2
         fail "Re-run the install command."
     fi
+    warn_about_shadowing_programs "$tool_bin" "$shadowed_commands"
 
     print_command "$tool_bin/mcc-server" --version
     if installed_version=$("$tool_bin/mcc-server" --version); then
@@ -874,6 +979,35 @@ configure_and_verify_my_claude_code() {
     fi
     [ "$installed_version" = "my-claude-code $FCC_VERSION" ] ||
         fail "Expected my-claude-code $FCC_VERSION; found: $installed_version"
+}
+
+warn_about_shadowing_programs() {
+    shadow_tool_bin="$1"
+    shadow_list="$2"
+    [ -n "$shadow_list" ] || return 0
+
+    shadow_npm_prefix=""
+    if command -v npm >/dev/null 2>&1; then
+        shadow_npm_prefix=$(npm prefix -g 2>/dev/null) || shadow_npm_prefix=""
+    fi
+
+    printf '\n' >&2
+    shadow_from_npm=0
+    printf '%s' "$shadow_list" | while IFS= read -r shadow_line; do
+        [ -n "$shadow_line" ] || continue
+        printf 'WARNING: Another program earlier on PATH answers to this name: %s\n' "$shadow_line" >&2
+    done
+    if [ -n "$shadow_npm_prefix" ]; then
+        case "$shadow_list" in
+            *"$shadow_npm_prefix/bin/"*) shadow_from_npm=1 ;;
+        esac
+    fi
+    printf 'The install itself is fine: every command was verified in %s.\n' "$shadow_tool_bin" >&2
+    printf 'Until that other program is removed, or %s comes first on PATH, typing the name above runs it instead.\n' "$shadow_tool_bin" >&2
+    if [ "$shadow_from_npm" -eq 1 ]; then
+        printf 'That path belongs to npm. An older version of the npm package published this name; remove it with:\n' >&2
+        printf '  npm uninstall -g @firedmosquito831/my-claude-code\n' >&2
+    fi
 }
 
 precompile_bytecode() {

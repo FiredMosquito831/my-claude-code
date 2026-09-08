@@ -269,6 +269,23 @@ one; that is `uninstall.sh`'s job.
 >
 > Already develop inside WSL? Install in WSL. Otherwise use PowerShell.
 
+### Windows (Command Prompt)
+
+The shortest route, and the one with no PowerShell question in it. No admin
+rights needed:
+
+```bat
+curl -fsSL -o "%TEMP%\install-mcc.cmd" https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.cmd && "%TEMP%\install-mcc.cmd"
+```
+
+`scripts/install.cmd` downloads `scripts/install.ps1` — the same digest-verified
+installer the PowerShell route runs — into `%TEMP%` and starts it with
+`-NoProfile -ExecutionPolicy Bypass -File`, so an execution policy can never
+refuse it. Add `--desktop` for the Start Menu shortcut, `--dry-run` to see what
+it would do, or `--version 6.63.0` to pin a release; it returns the installer's
+own exit code, and keeps the downloaded script (naming the path) when a run
+fails. It needs `curl.exe`, which ships with Windows 10 1803 and later.
+
 ### Windows (PowerShell)
 
 No admin rights needed:
