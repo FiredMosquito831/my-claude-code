@@ -110,6 +110,19 @@ static TRAY_BUILT: AtomicBool = AtomicBool::new(false);
 static ACTIVATION_STARTED: AtomicBool = AtomicBool::new(false);
 static QUITTING: AtomicBool = AtomicBool::new(false);
 
+/// The configuration directory Python last reported, and the file it is
+/// remembered in.
+///
+/// The shell resolves nothing (C1), so this is not a resolution: it is the
+/// last answer `mcc-desktop --print-status` gave. It has to be remembered
+/// because the one moment the shell most needs it is the moment it cannot ask
+/// -- `mcc-desktop` is not runnable, which is exactly when an update helper
+/// may be rewriting the shims, and reading its receipt is the difference
+/// between waiting for that helper and racing it. Kept in the shell's own data
+/// directory, never under the configuration directory (C4).
+static LAST_CONFIG_DIR: Mutex<Option<String>> = Mutex::new(None);
+const LAST_CONFIG_DIR_FILE: &str = "last-config-dir.txt";
+
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static LOCAL_URL: OnceLock<String> = OnceLock::new();
 static TRAY_STATUS_ITEM: Mutex<Option<MenuItem<Wry>>> = Mutex::new(None);
@@ -407,6 +420,93 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         *guard = Some(status);
     }
     Ok(())
+}
+
+/// Remember the configuration directory a status document named.
+fn remember_config_dir(config_dir: &str) {
+    if config_dir.trim().is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = LAST_CONFIG_DIR.lock() {
+        if guard.as_deref() == Some(config_dir) {
+            return;
+        }
+        *guard = Some(config_dir.to_owned());
+    }
+    if let Some(directory) = DATA_DIR.get() {
+        let _ = std::fs::create_dir_all(directory);
+        let _ = std::fs::write(directory.join(LAST_CONFIG_DIR_FILE), config_dir);
+    }
+}
+
+/// The configuration directory Python last named, from this session or the
+/// previous one. `None` before the shell has ever read a status document.
+fn last_config_dir() -> Option<String> {
+    if let Ok(guard) = LAST_CONFIG_DIR.lock() {
+        if let Some(directory) = guard.as_deref() {
+            return Some(directory.to_owned());
+        }
+    }
+    let directory = DATA_DIR.get()?;
+    let remembered = std::fs::read_to_string(directory.join(LAST_CONFIG_DIR_FILE)).ok()?;
+    let remembered = remembered.trim();
+    if remembered.is_empty() {
+        return None;
+    }
+    if let Ok(mut guard) = LAST_CONFIG_DIR.lock() {
+        *guard = Some(remembered.to_owned());
+    }
+    Some(remembered.to_owned())
+}
+
+/// An update helper that is installing right now, if one is.
+fn helper_installing_now() -> Option<update_progress::ActiveHelper> {
+    update_progress::active_helper(&last_config_dir()?)
+}
+
+/// Watch an update helper finish instead of installing over the top of it.
+///
+/// The 2026-09-07 failure in one function: the helper renamed `mcc-desktop`
+/// aside, the ladder read `NotInstalled`, and the window started its own
+/// `uv tool install` into the tool directory the helper was mid-way through
+/// writing. The helper lost all five of its attempts and never reached the
+/// step that starts a server. So while a helper is alive the window says what
+/// it is waiting for and does nothing else -- and it repaints every pass,
+/// because a page that never changes is the thing that gets reported as a
+/// hang.
+///
+/// Returns when the helper is gone. Whether MCC is installed by then is the
+/// caller's question, asked the way it always is: by running the status
+/// command again.
+fn wait_for_update_helper(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    first: update_progress::ActiveHelper,
+) {
+    set_tray_status("Updating My Claude Code...");
+    let mut helper = first;
+    loop {
+        show_page(
+            window,
+            &Page::Updating {
+                message: format!(
+                    "{} This window is waiting for it rather than starting a second \
+                     installer, and picks the dashboard up again by itself.",
+                    helper.describe()
+                ),
+            },
+        );
+        for _ in 0..(INSTALL_RECHECK.as_millis() / RETRY_POLL.as_millis()).max(1) {
+            if QUITTING.load(Ordering::SeqCst) || app.get_webview_window(MAIN_WINDOW).is_none() {
+                return;
+            }
+            std::thread::sleep(RETRY_POLL);
+        }
+        match helper_installing_now() {
+            Some(next) => helper = next,
+            None => return,
+        }
+    }
 }
 
 // -- the ladder -------------------------------------------------------------
@@ -727,6 +827,16 @@ fn ladder_pass(app: &AppHandle, window: &WebviewWindow) {
             // spinner, with no way out but quitting. That is the first-launch
             // hang, and it is the same shape as the start one: a wait with no
             // end and no explanation.
+            // An update helper rewriting the shims makes `mcc-desktop`
+            // briefly unrunnable, and that is not a machine without MCC on it
+            // -- it is a machine mid-update. Installing here is how one update
+            // came to race itself (R3). The helper starts a server itself when
+            // it is done, on both branches, so there is nothing to do but
+            // watch.
+            if let Some(helper) = helper_installing_now() {
+                wait_for_update_helper(app, window, helper);
+                return;
+            }
             let used = INSTALLS_RUN.load(Ordering::SeqCst);
             if used >= INSTALL_ATTEMPTS {
                 set_tray_status("My Claude Code is not installed");
@@ -795,6 +905,9 @@ fn ladder_pass(app: &AppHandle, window: &WebviewWindow) {
     // A status document that could be read is proof the install took, so the
     // next time MCC goes missing the window gets its attempts again.
     INSTALLS_RUN.store(0, Ordering::SeqCst);
+    // And it is the only chance to learn where the configuration lives before
+    // the next time `mcc-desktop` cannot be run.
+    remember_config_dir(&status.config_dir);
 
     ensure_tray(app, &status);
     ensure_activation_watcher(app, &status);
@@ -1024,5 +1137,44 @@ mod tests {
         // hides it is an app that cannot be quit.
         assert!(!should_hide_on_close(true, true));
         assert!(!should_hide_on_close(false, true));
+    }
+
+    #[test]
+    fn the_config_directory_is_remembered_so_it_survives_mcc_desktop_going_missing() {
+        // The one moment the shell most needs the configuration directory is
+        // the moment it cannot ask for it: `mcc-desktop` is not runnable,
+        // which is exactly when an update helper may be rewriting the shims.
+        // Nothing is resolved here (C1) -- this is the last answer Python
+        // gave, kept so the receipt can be read without asking again.
+        if let Ok(mut guard) = LAST_CONFIG_DIR.lock() {
+            *guard = None;
+        }
+        assert_eq!(last_config_dir(), None);
+        remember_config_dir("C:\\Users\\somebody\\config-dir");
+        assert_eq!(
+            last_config_dir().as_deref(),
+            Some("C:\\Users\\somebody\\config-dir")
+        );
+        // A blank answer is not an answer and must not erase a good one.
+        remember_config_dir("   ");
+        assert_eq!(
+            last_config_dir().as_deref(),
+            Some("C:\\Users\\somebody\\config-dir")
+        );
+        if let Ok(mut guard) = LAST_CONFIG_DIR.lock() {
+            *guard = None;
+        }
+    }
+
+    #[test]
+    fn nothing_is_believed_to_be_installing_before_a_status_has_ever_been_read() {
+        // The first launch on a machine with no MCC at all: there is no
+        // remembered configuration directory, so there is no receipt to read,
+        // and the window must be free to install. A gate that blocked here
+        // would be a shell that can never install anything.
+        if let Ok(mut guard) = LAST_CONFIG_DIR.lock() {
+            *guard = None;
+        }
+        assert!(helper_installing_now().is_none());
     }
 }

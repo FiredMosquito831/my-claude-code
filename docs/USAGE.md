@@ -3381,6 +3381,58 @@ Stop `mcc-server`, the update applies itself, start it again on the new version.
 
 WSL, Linux and macOS install in place, because they can replace files that are still open.
 
+#### An update can no longer race itself (6.58.3)
+
+The helper used to move every launcher aside before installing, `mcc-desktop`
+included. That is the launcher the desktop window asks for its status on every
+pass, so for the length of the install the window believed My Claude Code was
+not installed — and by design it answers that by running the official installer
+itself. Two installers, one tool directory. On 2026-09-07 the helper lost all
+five of its attempts to the window's installer and never reached the step that
+starts the server again.
+
+Two independent guards, both shipped:
+
+- **The helper never moves the window's own launcher aside.** `uv` replaces it
+  in place, and if it happens to be locked at that moment it is kept, exactly
+  like any other launcher.
+- **The window never installs while a helper is alive.** Every line the helper
+  writes to `<config>/updates/progress.json` now carries its process id, when it
+  started, and whether it has finished, so anyone can ask the one question that
+  matters: *is an installer running right now?* While one is, the window says
+  **Updating to X… (installer running, N s)** and waits. It never guesses from
+  the stage name — a helper killed mid-install would leave `installing` behind
+  forever.
+
+`mcc-desktop --print-status` publishes the same answer as an `update` key, `null`
+whenever no helper is running.
+
+#### An open `mcc-claude` window no longer costs the install its fast path (6.58.3)
+
+Windows will not let a running launcher's `.exe` be renamed, and one `mcc-claude`
+session left open for the afternoon is enough to refuse one rename. That refusal
+used to skip the whole fast install path, forcing every update through the slow
+staged fallback (the fingerprint was `attempts = 5` rather than 10). The fast
+path now always runs, and a launcher that genuinely could not be replaced is
+**kept** and named:
+
+> kept: mcc-claude.exe (in use) — restart it to pick up 6.58.3
+
+That is not a failure. The launcher is a version-agnostic stub that runs the
+interpreter in the tool directory the update just replaced, so the command
+already runs the new code; only a command *added* by the release would be
+missing, and that is reported separately.
+
+#### A failed update brings the previous version back (6.58.3)
+
+`Start-Process` used to sit on the success branch alone, so an install that
+failed left a perfectly good previous version on disk with nothing running it.
+The helper now starts the server on both branches, records `restarted` in its
+receipt, and ends on a `recovered` stage. The dashboard's banner says so:
+
+> The update failed — the previous version was restarted
+
+
 ### Stopping and restarting, and how long it takes
 
 Every stop is the same operation underneath — Ctrl+C, the reload that follows

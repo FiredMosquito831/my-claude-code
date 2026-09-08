@@ -165,6 +165,28 @@ mod tests {
     }
 
     #[test]
+    fn a_document_carrying_a_key_this_build_has_never_heard_of_still_parses() {
+        // C9's two-release rule, from the tolerating side. 6.58.3 emits
+        // `update` -- null unless an update helper is installing right now --
+        // and this shell reads its own fields by name rather than
+        // deserializing the whole document, so an unknown key costs nothing.
+        // That is what lets a wheel ship a key one release before a shell is
+        // allowed to require it.
+        let mut document = sample_json();
+        document["update"] = serde_json::json!({
+            "stage": "installing",
+            "message": "Installing the new version.",
+            "version": "6.58.3",
+            "helper_pid": 4242,
+            "elapsed_seconds": 12.0,
+        });
+        document["a_key_from_some_later_release"] = serde_json::json!(["anything"]);
+        let status = parse_status(&document.to_string()).expect("unknown keys are fine");
+        assert_eq!(status.schema, 1);
+        assert_eq!(status.server_presence, "healthy");
+    }
+
+    #[test]
     fn close_to_tray_is_read_and_is_not_recomputed_from_tray_enabled() {
         // The defect: on Windows and macOS `tray_enabled` is false in this
         // document *because* a tray exists and belongs to Python. A window

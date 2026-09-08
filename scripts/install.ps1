@@ -800,20 +800,25 @@ function Invoke-RenameThenReinstall {
     # the staged run as the one that cannot collide.
     $installed = $false
     $installError = ""
-    if (($refusedShims.Count -eq 0) -or (-not $canStage)) {
-        try {
-            Invoke-NativeCommand -FilePath $UvPath -Arguments $Arguments
-            $installed = $true
-        }
-        catch {
-            $installError = $_.Exception.Message
-        }
+    # The direct install ALWAYS runs. It used to be skipped the moment a single
+    # rename was refused -- and one `mcc-claude` window left open for the
+    # afternoon is enough to refuse one, which on a real machine is the normal
+    # case rather than the edge one. A refusal is the reason the staged install
+    # sits BEHIND this one; it is not a reason to skip the cheap path, which
+    # often succeeds anyway because the refusal was an antivirus scan or the
+    # shell reading an icon and is gone by the time uv gets there.
+    foreach ($move in $refusedShims) {
+        Write-Host "Could not move $(Split-Path -Leaf $move.Original) aside: $($move.Error)"
     }
-    else {
-        foreach ($move in $refusedShims) {
-            Write-Host "Could not move $(Split-Path -Leaf $move.Original) aside: $($move.Error)"
+    try {
+        Invoke-NativeCommand -FilePath $UvPath -Arguments $Arguments
+        $installed = $true
+    }
+    catch {
+        $installError = $_.Exception.Message
+        if ($refusedShims.Count -gt 0) {
+            $installError = "$installError ($($refusedShims.Count) launcher shim(s) could not be moved aside)"
         }
-        $installError = "$($refusedShims.Count) launcher shim(s) could not be moved aside"
     }
 
     if ((-not $installed) -and $canStage) {

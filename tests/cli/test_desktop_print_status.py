@@ -71,6 +71,10 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     "shell_binary": (str, type(None)),
     "shell_release_tag": str,
     "shell_ready": bool,
+    # ``null`` unless an update helper is installing right now. A document,
+    # not a flag, because the window renders it: which stage, which version,
+    # how long. See ``config.update_progress``.
+    "update": (dict, type(None)),
 }
 
 

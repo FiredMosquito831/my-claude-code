@@ -189,6 +189,7 @@
           checking: "My Claude Code",
           starting: "Starting the server",
           installing: "Installing My Claude Code",
+          updating: "Updating My Claude Code",
           "not-our-server": "The server is not running",
           "port-conflict": "Something else is on the port",
           reconnecting: "Reconnecting",
@@ -212,14 +213,19 @@
             kind === "checking" ||
             kind === "starting" ||
             kind === "installing" ||
+            kind === "updating" ||
             kind === "reconnecting"
           );
 
-          var installing = kind === "installing";
+          // The command and its output belong to an installer THIS window is
+          // running. An installing page with no command is a window watching
+          // somebody else's installer, and two empty boxes under the sentence
+          // read as a UI that failed to load rather than one that is waiting.
+          var installing = kind === "installing" && !!state.command;
           command.hidden = !installing;
           output.hidden = !installing;
           if (installing) {
-            command.textContent = state.command || "";
+            command.textContent = state.command;
           }
 
           var hasLog = !!state.server_log;

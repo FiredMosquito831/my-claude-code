@@ -4194,6 +4194,35 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   &mdash; the newest ten survive, older ones are swept on the next
                   start.
                 </p>
+                <p class="guide-note">
+                  <strong>An update can no longer race itself.</strong> Until 6.58.3
+                  the helper moved every launcher aside before installing,
+                  <code>mcc-desktop</code> included &mdash; the one the desktop window
+                  asks for its status on every pass. The window therefore believed My
+                  Claude Code was gone and, by design, ran the installer itself: two
+                  installers, one tool directory. Now the helper never moves that
+                  launcher, and every line it writes carries its own process id, so the
+                  window can ask whether an installer is running rather than guess from a
+                  stage name. While one is, it says <em>Updating to X&hellip; (installer
+                  running, N&nbsp;s)</em> and waits.
+                </p>
+                <p class="guide-note">
+                  <strong>An open <code>mcc-claude</code> window no longer costs the
+                  install its fast path.</strong> Windows refuses to rename a running
+                  launcher's <code>.exe</code>, and one refusal used to send the whole
+                  update down the slow staged path. The fast path now always runs, and a
+                  launcher that truly could not be replaced is kept and named &mdash;
+                  <em>kept: mcc-claude.exe (in use) &mdash; restart it to pick up
+                  X</em>. It keeps working either way: the launcher is a stub that runs
+                  the interpreter in the tool directory the update just replaced.
+                </p>
+                <p class="guide-note">
+                  <strong>A failed update brings the previous version back.</strong>
+                  Starting the server used to happen only on the success branch, so a
+                  failed install left a good previous version on disk with nothing
+                  running it. The helper now starts one on both branches and the banner
+                  says which happened.
+                </p>
                 <h3 id="guide-security">Lock it down</h3>
                 <table class="guide-table">
                   <thead><tr><th>Surface</th><th>Default bind</th><th>Access control</th></tr></thead>

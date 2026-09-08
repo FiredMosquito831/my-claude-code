@@ -7846,9 +7846,17 @@ function renderVersionBanners() {
     body.className = "version-banner-body";
     const title = document.createElement("div");
     title.className = "version-banner-title";
+    // `restarted` is the helper's answer to "is there a server?", and it is the
+    // half of a failure the user actually needs: until 6.58.3 a failed update
+    // left no server running at all, so "the update did not install" was read
+    // as "and nothing is coming back". The helper now starts the previously
+    // installed server on both branches and says which happened.
+    const restartedOld = info.pending_upgrade.restarted === true;
     title.textContent = info.pending_upgrade.ok
       ? `Updated and restarted on v${info.current}`
-      : "The staged update did not install";
+      : restartedOld
+        ? "The update failed — the previous version was restarted"
+        : "The staged update did not install";
     const detail = document.createElement("div");
     detail.className = "version-banner-detail";
     detail.textContent = info.pending_upgrade.ok
