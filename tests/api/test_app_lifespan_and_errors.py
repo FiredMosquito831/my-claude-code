@@ -30,6 +30,21 @@ from my_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.api.support import create_test_app
 
 
+@pytest.fixture(autouse=True)
+def _fresh_startup_state():
+    """Reset the process-wide startup state around every test in this module.
+
+    ``startup_state()`` is one object per process, exactly like
+    ``stop_deadline()``: a test that drives a lifespan to readiness leaves it
+    ready for whatever runs next in the same xdist worker, and an assertion
+    about "not ready yet" then depends on test order.
+    """
+
+    startup_state().begin()
+    yield
+    startup_state().begin()
+
+
 def _settings(**updates: object) -> Settings:
     return Settings().model_copy(update=updates)
 
