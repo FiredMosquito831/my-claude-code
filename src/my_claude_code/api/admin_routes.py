@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import suppress
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -3149,9 +3150,22 @@ async def upgrade_version(
     The response is committed before the background restart request runs, so
     the dashboard can enter its reconnect state instead of losing the request
     which initiated the update.
+
+    ``no_restart`` in the body says the caller owns the restart. Only the
+    desktop app sends it, and only because it is the process watching: it has a
+    ten-second tick, a health probe and a spawn, and it starts the new server
+    itself on the first tick after the installer finishes. Without it the
+    update helper restarts, which is what a dashboard in a browser tab still
+    needs. Read defensively -- an absent, null or non-boolean value means the
+    old behaviour, because a body that cannot be understood must not silently
+    leave a machine with no server.
     """
     require_loopback_admin(request)
-    result = await perform_upgrade()
+    body: Any = {}
+    with suppress(ValueError, UnicodeDecodeError):
+        body = await request.json()
+    no_restart = bool(body.get("no_restart")) if isinstance(body, dict) else False
+    result = await perform_upgrade(no_restart=no_restart)
     payload = result.as_dict()
     payload["restart_required"] = result.ok
     payload["automatic_restart"] = result.ok

@@ -26,6 +26,9 @@ pub struct Status {
     pub schema: u64,
     pub version: String,
     pub config_dir: String,
+    /// The port Python resolved. Named on the port-conflict page, and never
+    /// recomputed here from a host and a URL (C1).
+    pub port: u32,
     pub admin_url: String,
     pub health_url: String,
     pub server_presence: String,
@@ -88,6 +91,56 @@ pub struct Status {
     /// here, not required, per the two-release rule in `desktop_status.py`.
     #[serde(default)]
     pub shell_installed_tag: Option<String>,
+    /// How long one `/health` probe may take. One implementation, one timeout,
+    /// and it comes from the document rather than from the two constants that
+    /// used to disagree (`launchers/common.py` and `health.rs`).
+    ///
+    /// Optional this release, per the two-release rule: 6.61.0 emits it, the
+    /// shell tolerates it, and the pin moves in 6.61.1. `None` means "use the
+    /// value this release shipped with", which is the same 1.5 s as before --
+    /// so a 6.61.0 window under a 6.60.2 wheel behaves exactly as it did.
+    #[serde(default)]
+    pub health_probe_timeout_seconds: Option<f64>,
+    /// The lifecycle tick: how often the controller probes and, when the
+    /// server is dead, starts one. Decision Q4 fixed it at ten seconds,
+    /// forever, with no attempt cap.
+    #[serde(default)]
+    pub tick_seconds: Option<f64>,
+    /// The shortest gap between two spawns. Equal to the tick by default,
+    /// because Q4 asks for no backoff beyond it; an operator who wants a
+    /// crash-looping server started less often can raise it.
+    #[serde(default)]
+    pub start_backoff_seconds: Option<f64>,
+    /// How long an unidentifiable port holder is given before the window calls
+    /// it foreign and stops starting servers into it (BUG-5's grace window).
+    #[serde(default)]
+    pub foreign_grace_seconds: Option<f64>,
+    /// How long `mcc-desktop --print-status` may take before this window stops
+    /// waiting on it. Moved out of the binary because it decides whether a slow
+    /// machine gets a window at all (audit §5.4).
+    #[serde(default)]
+    pub status_wall_seconds: Option<f64>,
+    /// The pid of MCC's own server, when one could be identified.
+    #[serde(default)]
+    pub server_pid: Option<i64>,
+    /// Who holds the port, decided by process. The whole of BUG-5's fix: the
+    /// old answer came from a bind test, which cannot tell MCC's own starting
+    /// python.exe from a stranger.
+    #[serde(default)]
+    pub holder: Option<Holder>,
+}
+
+/// The port holder, as Python's `classify_port_holder` reports it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Holder {
+    /// One of `absent`, `ours_healthy`, `ours_starting`, `ours_draining`,
+    /// `ours_stale`, `foreign`. An unknown value is treated as unknown rather
+    /// than mapped onto the nearest neighbour.
+    pub kind: String,
+    #[serde(default)]
+    pub pid: Option<i64>,
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 /// Why a status document could not be used.
@@ -174,7 +227,14 @@ pub(crate) fn sample_json() -> serde_json::Value {
         "health_failure_threshold": 3,
         "activation_poll_seconds": 1.0,
         "reconnect_timeout_seconds": 1320.0,
-        "reconnect_restatus_seconds": 30.0
+        "reconnect_restatus_seconds": 30.0,
+        "health_probe_timeout_seconds": 1.5,
+        "tick_seconds": 10.0,
+        "start_backoff_seconds": 10.0,
+        "foreign_grace_seconds": 45.0,
+        "status_wall_seconds": 15.0,
+        "server_pid": serde_json::Value::Null,
+        "holder": {"kind": "ours_healthy", "pid": 4242, "image": "python.exe"}
     })
 }
 
@@ -304,6 +364,43 @@ mod tests {
             .remove("server_start_retries");
         let error = parse_status(&document.to_string()).expect_err("refused");
         assert!(matches!(error, StatusError::Malformed(_)));
+    }
+
+    #[test]
+    fn the_new_lifecycle_keys_are_read_when_present() {
+        let status = parse_status(&sample_json().to_string()).expect("sample parses");
+        assert_eq!(status.tick_seconds, Some(10.0));
+        assert_eq!(status.health_probe_timeout_seconds, Some(1.5));
+        assert_eq!(status.start_backoff_seconds, Some(10.0));
+        assert_eq!(status.foreign_grace_seconds, Some(45.0));
+        assert_eq!(status.status_wall_seconds, Some(15.0));
+        let holder = status.holder.expect("a holder");
+        assert_eq!(holder.kind, "ours_healthy");
+        assert_eq!(holder.pid, Some(4242));
+        assert_eq!(holder.image.as_deref(), Some("python.exe"));
+    }
+
+    #[test]
+    fn a_document_without_the_new_lifecycle_keys_still_parses() {
+        // The two-release rule from the tolerating side, and it is the whole
+        // reason 6.61.0 can ship these keys at all: this window has to keep
+        // working under the 6.60.2 wheel that is on the machine right now.
+        let mut document = sample_json();
+        let object = document.as_object_mut().expect("an object");
+        for key in [
+            "health_probe_timeout_seconds",
+            "tick_seconds",
+            "start_backoff_seconds",
+            "foreign_grace_seconds",
+            "status_wall_seconds",
+            "server_pid",
+            "holder",
+        ] {
+            object.remove(key);
+        }
+        let status = parse_status(&document.to_string()).expect("an older wheel is fine");
+        assert_eq!(status.tick_seconds, None);
+        assert!(status.holder.is_none());
     }
 
     #[test]

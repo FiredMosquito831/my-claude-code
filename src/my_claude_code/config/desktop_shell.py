@@ -29,8 +29,13 @@ Three things differ from ``rtk.py``, and each one is a decision:
   next to the binary and names the tag and digest that produced it, so an
   unchanged pin never downloads anything again, and a moved pin always does.
 
-Nothing here is on the server's startup path: ``mcc-server`` never imports this
-module, and a contract test pins that. The only caller is ``mcc-desktop``.
+Nothing here is on the server's *cold start* path: building the ASGI app must
+not import this module, and a contract test pins that. From 6.61.0 there is one
+more caller than ``mcc-desktop`` -- :func:`auto_update_desktop_shells`, run on a
+thread after the server is ready and importing this module lazily at that point
+-- so a stale desktop app is brought up to the pin without anybody running a
+command. It is the same code path (:func:`stage_desktop_shell`), one more
+caller, and it is still nowhere near the bind.
 """
 
 import hashlib
@@ -47,6 +52,7 @@ import time
 import urllib.request
 import zipfile
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 #: The release whose shell assets this build wants. Bumping it is a step in
@@ -786,6 +792,156 @@ def ensure_desktop_shell(
             f"The desktop app for {DESKTOP_SHELL_RELEASE_TAG} is not installed."
         )
     return fetch_desktop_shell(timeout=timeout)
+
+
+def desktop_shell_install_locations() -> tuple[Path, ...]:
+    """Every place a desktop app this wheel manages can be installed.
+
+    Two delivery paths, and both are real on this user's machine:
+
+    * **A** -- ``~/.local/bin`` (or :data:`DESKTOP_SHELL_DIR_ENV`), where this
+      module puts the binary it downloads;
+    * **B** -- the native installer's directory:
+      ``%LOCALAPPDATA%/Programs/My Claude Code`` on Windows, ``/usr/bin`` and
+      ``/usr/local/bin`` on Linux, ``/Applications`` on macOS.
+
+    Only paths that *exist and carry a receipt we wrote* are returned. That is
+    the whole guard against this touching somebody else's file: a receipt is
+    proof this code installed the binary beside it, and without one there is
+    nothing here to keep up to date.
+    """
+
+    candidates: list[Path] = [desktop_shell_path()]
+    name = desktop_shell_binary_name()
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", "").strip()
+        if local:
+            candidates.append(Path(local) / "Programs" / "My Claude Code" / name)
+    elif sys.platform == "darwin":
+        candidates.append(
+            Path("/Applications")
+            / f"{DESKTOP_SHELL_BINARY_STEM}.app"
+            / "Contents"
+            / "MacOS"
+            / name
+        )
+    else:
+        candidates.append(Path("/usr/local/bin") / name)
+        candidates.append(Path("/usr/bin") / name)
+
+    seen: dict[Path, None] = {}
+    for candidate in candidates:
+        resolved = candidate.expanduser()
+        if resolved in seen:
+            continue
+        if not resolved.is_file():
+            continue
+        if read_receipt_at(receipt_path_for(resolved)) is None:
+            continue
+        seen[resolved] = None
+    return tuple(seen)
+
+
+@dataclass(frozen=True, slots=True)
+class ShellAutoUpdate:
+    """What one pass of :func:`auto_update_desktop_shells` did."""
+
+    #: Binaries that were replaced outright, because nothing was running them.
+    updated: tuple[Path, ...] = ()
+    #: Binaries a replacement is staged beside, waiting for the next start.
+    staged: tuple[Path, ...] = ()
+    #: Why nothing was done, when nothing was.
+    skipped: str | None = None
+    #: The one sentence to log. Empty when there is nothing worth saying.
+    message: str = ""
+
+
+def auto_update_desktop_shells(
+    *,
+    enabled: bool = True,
+    helper_is_installing: bool = False,
+    timeout: float = DESKTOP_SHELL_DOWNLOAD_TIMEOUT_SECONDS,
+) -> ShellAutoUpdate:
+    """Bring every installed desktop app up to the pinned release.
+
+    This is the answer to "shouldn't we want good behaviour by default?" --
+    and to BUG-0's last mile. Until 6.61.0 the pin reached a machine only if
+    somebody *ran* something: the tray's window factory, or the window itself
+    noticing it was stale. A user who launches ``MyClaudeCode.exe`` from the
+    Start Menu and never opens a terminal was left on whatever build they first
+    received, which is how one of them ran a fifteen-release-old window while
+    their wheel moved on. Updating the server now updates the app too, with
+    nothing to run.
+
+    It is deliberately **the same code path** as ``mcc-desktop --ensure-shell``
+    (:func:`stage_desktop_shell`), one more caller and not a second mechanism:
+    a binary nothing is running is replaced in place, a binary that *is*
+    running gets a verified ``.new`` beside it that its own next start renames
+    in. Nothing is ever written over a running image.
+
+    Guards, all of them the caller's to supply except the last:
+
+    * ``enabled`` -- ``DESKTOP_SHELL_AUTO_UPDATE``, default on;
+    * ``helper_is_installing`` -- never while an update helper is mid-install,
+      because that is exactly when the shims and the tool directory are being
+      rewritten;
+    * ``DESKTOP_SHELL=off`` -- honoured here, not only by the caller;
+    * and it does nothing at all when no receipt names a stale binary, which is
+      the overwhelmingly common case and costs one JSON read per location.
+
+    Never raises. A machine that is offline, behind a proxy or out of disk gets
+    one line and the same attempt on the next server start -- there is no loop
+    and no retry, because the next start is the retry.
+    """
+
+    if not enabled:
+        return ShellAutoUpdate(skipped="disabled")
+    if not desktop_shell_enabled():
+        return ShellAutoUpdate(skipped=f"{DESKTOP_SHELL_ENABLED_ENV}=off")
+    if helper_is_installing:
+        return ShellAutoUpdate(skipped="an update helper is installing")
+
+    stale = [
+        binary
+        for binary in desktop_shell_install_locations()
+        if installed_release_tag_at(binary) != DESKTOP_SHELL_RELEASE_TAG
+    ]
+    if not stale:
+        return ShellAutoUpdate(skipped="already at the pin")
+
+    updated: list[Path] = []
+    staged: list[Path] = []
+    for binary in stale:
+        try:
+            report = stage_desktop_shell(binary, timeout=timeout)
+        except (DesktopShellError, OSError) as exc:
+            return ShellAutoUpdate(
+                updated=tuple(updated),
+                staged=tuple(staged),
+                skipped=str(exc),
+                message=(
+                    f"The desktop app could not be updated to "
+                    f"{DESKTOP_SHELL_RELEASE_TAG}: {exc} It is tried again the "
+                    f"next time the server starts."
+                ),
+            )
+        if not report.get("updated"):
+            continue
+        if report.get("restart_required"):
+            staged.append(binary)
+        else:
+            updated.append(binary)
+
+    tag = DESKTOP_SHELL_RELEASE_TAG
+    if staged:
+        message = f"desktop app {tag} staged; it will be used at the next app start"
+    elif updated:
+        message = f"desktop app updated to {tag}"
+    else:
+        message = ""
+    return ShellAutoUpdate(
+        updated=tuple(updated), staged=tuple(staged), message=message
+    )
 
 
 def desktop_shell_update_report() -> dict[str, object]:

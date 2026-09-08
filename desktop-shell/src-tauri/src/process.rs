@@ -58,7 +58,13 @@ const PRESENCE_V2_FLAG: &str = "--presence-v2";
 /// take and far shorter than a person will sit in front of a frozen window.
 /// It is not a policy the operator tunes: it is the difference between a
 /// window that reports a problem and a window that hangs.
-const STATUS_WALL: Duration = Duration::from_secs(15);
+///
+/// From 6.61.0 it is only the *default*: `status_wall_seconds` in the status
+/// document overrides it (audit S5.4 -- this decides whether a slow machine
+/// gets a window at all, which is a property of the machine and not of this
+/// binary). The constant stays as what 6.61.0 ships with, for the one release
+/// in which the shell only tolerates the key.
+pub const DEFAULT_STATUS_WALL: Duration = Duration::from_secs(15);
 
 /// Why `mcc-desktop --print-status` did not produce a document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,7 +104,7 @@ fn hide_console(_command: &mut Command) {}
 
 /// Run `mcc-desktop --print-status` and return its stdout verbatim.
 pub fn print_status() -> Result<String, StatusRunError> {
-    print_status_within(STATUS_WALL)
+    print_status_within(DEFAULT_STATUS_WALL)
 }
 
 /// The same, with the wall spelled out. Split for the test, which cannot wait

@@ -76,6 +76,20 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     "activation_poll_seconds": float,
     "reconnect_timeout_seconds": float,
     "reconnect_restatus_seconds": float,
+    # The lifecycle keys, added in 6.61.0 for the desktop app's single
+    # controller. Adding a key does not bump ``schema`` (C3); the shell
+    # tolerates all of them in 6.61.0 and its pin moves in 6.61.1.
+    "health_probe_timeout_seconds": float,
+    "tick_seconds": float,
+    "start_backoff_seconds": float,
+    "foreign_grace_seconds": float,
+    "status_wall_seconds": float,
+    # Who holds the port, decided by PROCESS. The whole of BUG-5: the old
+    # answer came from a bind test, which cannot tell MCC's own starting
+    # python.exe from a stranger -- and told one user to go and stop My
+    # Claude Code because it was not My Claude Code.
+    "holder": dict,
+    "server_pid": (int, type(None)),
     "shell_tray": bool,
     "shell_binary": (str, type(None)),
     "shell_release_tag": str,

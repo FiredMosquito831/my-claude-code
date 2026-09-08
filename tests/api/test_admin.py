@@ -26,13 +26,47 @@ from tests.api.support import create_test_app, provider_manager_for_app
 
 
 @pytest.mark.asyncio
+async def test_the_desktop_app_may_claim_the_restart(monkeypatch) -> None:
+    """GAP-3, at the route: the caller can say it owns the restart.
+
+    The desktop app injects ``window.__mccShellWatching`` into every dashboard
+    it loads, and the Update button sends ``no_restart`` when it is there. It
+    means one thing: a process with a ten-second lifecycle tick is watching
+    this server and will start the new one itself, so ``apply-upgrade.ps1``
+    should install and exit rather than start a server nobody supervises.
+
+    A dashboard in an ordinary browser tab sends false or nothing, and the
+    helper restarts exactly as it always has -- which is why the default here
+    is the old behaviour and why a body that cannot be read is treated as the
+    default rather than as an error.
+    """
+
+    app = create_test_app(process_restart_callback=AsyncMock())
+    seen: list[bool] = []
+
+    async def record(**kwargs) -> UpgradeResult:
+        seen.append(bool(kwargs.get("no_restart")))
+        return UpgradeResult(ok=True, message="staged")
+
+    monkeypatch.setattr("my_claude_code.api.admin_routes.perform_upgrade", record)
+
+    with _local_client(app) as client:
+        client.post("/admin/api/version/upgrade", json={"no_restart": True})
+        client.post("/admin/api/version/upgrade", json={})
+        client.post("/admin/api/version/upgrade", content=b"not json")
+        client.post("/admin/api/version/upgrade", json=["not an object"])
+
+    assert seen == [True, False, False, False]
+
+
+@pytest.mark.asyncio
 async def test_successful_upgrade_schedules_process_restart_after_response(
     monkeypatch,
 ) -> None:
     process_restart = AsyncMock()
     app = create_test_app(process_restart_callback=process_restart)
 
-    async def successful_upgrade() -> UpgradeResult:
+    async def successful_upgrade(**_kwargs) -> UpgradeResult:
         return UpgradeResult(
             ok=True,
             message="Installed 9.9.9; restarting.",
@@ -57,7 +91,7 @@ async def test_failed_upgrade_does_not_restart(monkeypatch) -> None:
     process_restart = AsyncMock()
     app = create_test_app(process_restart_callback=process_restart)
 
-    async def failed_upgrade() -> UpgradeResult:
+    async def failed_upgrade(**_kwargs) -> UpgradeResult:
         return UpgradeResult(ok=False, message="checksum mismatch")
 
     monkeypatch.setattr(

@@ -166,7 +166,8 @@
       <p id="log-label" hidden>The server log is at:</p>
       <code class="path" id="log" hidden></code>
 
-      <button id="retry" hidden>Retry</button>
+      <button id="retry" hidden>Retry now</button>
+      <button id="take-port" hidden>Take port</button>
       <p id="ipc">
         This window cannot reach its own controls. Quit it from the tray icon
         and start it again.
@@ -184,6 +185,7 @@
         var logLabel = document.getElementById("log-label");
         var log = document.getElementById("log");
         var retry = document.getElementById("retry");
+        var takePort = document.getElementById("take-port");
 
         var TITLES = {
           checking: "My Claude Code",
@@ -235,12 +237,14 @@
             log.textContent = state.server_log;
           }
 
-          // Retry is offered wherever waiting again could change the answer.
-          retry.hidden = !(
-            kind === "error" ||
-            kind === "port-conflict" ||
-            kind === "not-our-server"
-          );
+          // "Retry now" is on every page, because from 6.61.0 every page has
+          // a live loop behind it: the button only brings the next check
+          // forward. It is never the way out of anything, which is the whole
+          // difference from the six pages that used to end in one.
+          retry.hidden = false;
+          // "Take port" is decision Q1, and Rust decides whether to offer it:
+          // only a holder identified, by process, as My Claude Code's own.
+          takePort.hidden = !(kind === "port-conflict" && state.take_port);
         }
 
         function append(line) {
@@ -272,7 +276,22 @@
           spinner.hidden = false;
           invoke("shell_retry").catch(function () {
             document.body.dataset.ipc = "broken";
+          });
+          // Re-enabled unconditionally: the loop repaints within a second, and
+          // a button that stayed disabled after a failed call would be the
+          // dead end this release exists to remove.
+          window.setTimeout(function () {
             retry.disabled = false;
+          }, 1000);
+        });
+
+        takePort.addEventListener("click", function () {
+          takePort.disabled = true;
+          message.textContent = "Taking the port...";
+          spinner.hidden = false;
+          invoke("shell_take_port").catch(function () {
+            document.body.dataset.ipc = "broken";
+            takePort.disabled = false;
           });
         });
 
@@ -281,6 +300,22 @@
         invoke("shell_ready").catch(function () {
           document.body.dataset.ipc = "broken";
         });
+
+        // And one more, which is BUG-2's fix from this side: ASK the shell
+        // what state it is in rather than waiting to be told. A pushed state
+        // is lost by a reload -- F5, Ctrl+R, or a webview that reloaded itself
+        // -- and the window then sat on "Checking the server..." over a loop
+        // that was working perfectly. Nothing here decides anything; it
+        // renders the same page Rust would have pushed.
+        invoke("shell_page")
+          .then(function (page) {
+            if (page) {
+              render(page);
+            }
+          })
+          .catch(function () {
+            document.body.dataset.ipc = "broken";
+          });
       })();
     </script>
   </body>

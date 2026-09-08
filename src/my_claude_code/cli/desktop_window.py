@@ -365,16 +365,50 @@ class ShellWindow:
         return process is not None and process.poll() is None
 
 
+#: Platforms on which the desktop app owns the status-area icon.
+#:
+#: Decision Q2 (2026-09-08): "retire the Python tray on Windows; the desktop
+#: app owns the tray icon." The reason is not tidiness. The desktop app is the
+#: process that *survives an update* -- the Python tray is inside the
+#: environment uv replaces -- and it is the process that now owns the whole
+#: server lifecycle, so a second tray beside it offered a second, different
+#: answer to "restart the server" from a process that had no idea what the
+#: first one was doing. Linux never had a Python tray at all.
+#:
+#: macOS is deliberately not here yet: pystray's macOS backend must own the
+#: main thread, and rearranging that is a change of its own with none of this
+#: release's evidence behind it.
+SHELL_OWNS_TRAY_PLATFORMS = ("win32", "linux")
+
+
+def shell_owns_tray() -> bool:
+    """Whether the desktop app draws the status-area icon on this machine.
+
+    True only when there is a desktop app to draw one: an install where the
+    shell is switched off, unavailable for this architecture, or simply not
+    there yet keeps the Python tray, which is the fallback and stays the
+    fallback. That is what makes this a change of *owner* rather than a
+    platform losing its tray.
+    """
+
+    if sys.platform not in SHELL_OWNS_TRAY_PLATFORMS:
+        return False
+    if not desktop_shell_enabled():
+        return False
+    return is_desktop_shell_installed()
+
+
 def python_tray_is_running() -> bool:
     """Whether the pystray tray is the one drawing the status-area icon.
 
-    One icon, and only one (the "two tray icons" risk in the spec). In 6.44.0
-    the Python tray keeps it wherever it exists, because it is the tray that
-    has been in front of users for releases and it carries menu items the
-    shell's does not. That is Windows and macOS: ``pystray`` is declared
-    ``sys_platform == 'win32' or sys_platform == 'darwin'`` in
-    ``pyproject.toml``, so on Linux there is no Python tray and the shell's is
-    the only one there has ever been.
+    One icon, and only one (the "two tray icons" risk in the spec). Until
+    6.61.0 the Python tray kept it wherever it existed, because it was the tray
+    that had been in front of users for releases and it carried menu items the
+    shell's did not. It no longer does: the shell's menu carries Open
+    dashboard, Reset window position, the staged-update line and Quit, and the
+    shell is the process that survives an update. So on the platforms in
+    :data:`SHELL_OWNS_TRAY_PLATFORMS` the answer is now False whenever a
+    desktop app is actually installed -- see :func:`shell_owns_tray`.
 
     Availability is probed rather than assumed from ``sys.platform``, because
     an incomplete install is a real state and a machine with no tray at all
@@ -382,6 +416,8 @@ def python_tray_is_running() -> bool:
     """
 
     if not load_desktop_state().tray_enabled:
+        return False
+    if shell_owns_tray():
         return False
     try:
         import pystray  # noqa: F401

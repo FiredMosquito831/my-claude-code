@@ -19,12 +19,17 @@ from .constants import (
     CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT,
     DESKTOP_ACTIVATION_POLL_SECONDS_DEFAULT,
     DESKTOP_ADMIN_REQUEST_TIMEOUT_DEFAULT,
+    DESKTOP_FOREIGN_GRACE_SECONDS_DEFAULT,
     DESKTOP_HEALTH_CHECK_INTERVAL_DEFAULT,
     DESKTOP_HEALTH_FAILURE_THRESHOLD_DEFAULT,
     DESKTOP_HEALTH_POLL_SECONDS_DEFAULT,
+    DESKTOP_HEALTH_PROBE_TIMEOUT_DEFAULT,
     DESKTOP_RECONNECT_RESTATUS_SECONDS_DEFAULT,
     DESKTOP_SERVER_START_RETRIES_DEFAULT,
     DESKTOP_SERVER_START_TIMEOUT_DEFAULT,
+    DESKTOP_START_BACKOFF_SECONDS_DEFAULT,
+    DESKTOP_STATUS_WALL_SECONDS_DEFAULT,
+    DESKTOP_TICK_SECONDS_DEFAULT,
     DESKTOP_WINDOW_HEIGHT_DEFAULT,
     DESKTOP_WINDOW_WIDTH_DEFAULT,
     FAILURE_KIND_NAMES,
@@ -1494,6 +1499,43 @@ class Settings(BaseSettings):
     desktop_reconnect_restatus_seconds: float = Field(
         default=DESKTOP_RECONNECT_RESTATUS_SECONDS_DEFAULT,
         validation_alias="DESKTOP_RECONNECT_RESTATUS_SECONDS",
+    )
+    # The desktop app's lifecycle tick: how often it probes the server and,
+    # when the server is dead, how often it starts one. Decision Q4: ten
+    # seconds, forever, with no attempt cap -- so the window never parks on a
+    # page that needs clicking.
+    desktop_tick_seconds: float = Field(
+        default=DESKTOP_TICK_SECONDS_DEFAULT,
+        validation_alias="DESKTOP_TICK_SECONDS",
+    )
+    # The shortest gap between two starts. Equal to the tick by default.
+    desktop_start_backoff_seconds: float = Field(
+        default=DESKTOP_START_BACKOFF_SECONDS_DEFAULT,
+        validation_alias="DESKTOP_START_BACKOFF_SECONDS",
+    )
+    # How long one /health probe may take, in every process that makes one.
+    desktop_health_probe_timeout: float = Field(
+        default=DESKTOP_HEALTH_PROBE_TIMEOUT_DEFAULT,
+        validation_alias="DESKTOP_HEALTH_PROBE_TIMEOUT",
+    )
+    # How long an unidentifiable port holder is given before it is treated as
+    # a genuine conflict rather than as our own server starting.
+    desktop_foreign_grace_seconds: float = Field(
+        default=DESKTOP_FOREIGN_GRACE_SECONDS_DEFAULT,
+        validation_alias="DESKTOP_FOREIGN_GRACE_SECONDS",
+    )
+    # How long the desktop app may wait for one --print-status.
+    desktop_status_wall_seconds: float = Field(
+        default=DESKTOP_STATUS_WALL_SECONDS_DEFAULT,
+        validation_alias="DESKTOP_STATUS_WALL_SECONDS",
+    )
+    # Whether the server brings a stale desktop app up to the pinned release
+    # after it becomes ready. Default on: the app updating itself is the only
+    # way the pin reaches a machine whose owner never runs an install command,
+    # and that is exactly how one user ran a fifteen-release-old window.
+    desktop_shell_auto_update: bool = Field(
+        default=True,
+        validation_alias="DESKTOP_SHELL_AUTO_UPDATE",
     )
     # Desktop window size, in CSS pixels, for the app-mode/embedded window.
     desktop_window_width: int = Field(

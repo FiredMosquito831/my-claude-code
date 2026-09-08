@@ -112,6 +112,22 @@ reads its fields by name), so a new wheel is always safe under an old shell; a
 new shell under an old wheel is not. Move the shell pin after the release that
 starts emitting, never before.
 
+### The lifecycle keys added in 6.61.0
+
+Seven at once -- `health_probe_timeout_seconds`, `tick_seconds`,
+`start_backoff_seconds`, `foreign_grace_seconds`, `status_wall_seconds`,
+`holder` and `server_pid` -- and every one of them is `Option` in `status.rs`
+with a compiled-in default that equals what 6.61.0 ships. That is the two-release
+rule applied to a whole set: the 6.61.0 window has to keep working under the
+6.60.2 wheel that is on the user's machine right now, so it *tolerates* all seven
+and falls back to `server_presence` for the holder. The pin moves in 6.61.1, and
+only then may the shell require them.
+
+The three that are budgets came out of the binary on purpose (audit s5.4):
+`STATUS_WALL` decided whether a slow machine got a window at all, and the health
+probe timeout existed twice -- once in `launchers/common.py` and once in
+`health.rs` -- as two constants that were meant to be one number.
+
 ### Adding a key the *shell* writes back
 
 `shell_installed_tag` was added in 6.60.0 and is the first key that exists so

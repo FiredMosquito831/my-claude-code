@@ -646,12 +646,23 @@ def _deferred_helper_script(
     commands: list[str] | None = None,
     wait_seconds: float | None = None,
     version: str | None = None,
+    no_restart: bool = False,
 ) -> str:
     """PowerShell that waits for this process to exit, then installs.
 
     Written as PowerShell rather than Python because the only interpreter we
     can rely on is the one inside the environment being replaced -- using it
     would hold the very directory uv needs to delete.
+
+    ``no_restart`` is decision GAP-3, and it is the whole of "the helper stops
+    restarting". The helper's restart is a single un-retried ``Start-Process``
+    whose failure is recorded and then acted on by nothing, and it starts a
+    server no supervisor owns. When a desktop window asked for this update, the
+    window is already sitting there with a ten-second tick, a health probe and
+    a spawn -- so the helper installs and exits, and the window's very next tick
+    starts the server. When nothing is watching (the dashboard in a browser tab,
+    a headless machine) the helper still restarts, because otherwise the update
+    would leave the machine with no server at all. A flag, not a second owner.
 
     Receipts go through ``[System.IO.File]::WriteAllText`` with a BOM-less
     ``UTF8Encoding($false)``: Windows PowerShell 5.1's ``Set-Content
@@ -1003,7 +1014,11 @@ $result = @{{
 $result['restarted'] = $false
 [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
 if ($ok) {{
-    Write-Stage 'starting' 'Starting the updated server.'
+    if ($noRestart) {{
+        Write-Stage 'installing' 'Installed. Handing the restart to the desktop app.'
+    }} else {{
+        Write-Stage 'starting' 'Starting the updated server.'
+    }}
 }} else {{
     Write-Stage 'failed' $result.message
 }}
@@ -1015,25 +1030,32 @@ if ($ok) {{
 # nothing ever started it. A half-installed environment is not a reason to
 # withhold the old one -- uv either replaced the environment or it did not.
 $restarted = $false
-try {{
-    Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}
-    $restarted = $true
-}}
-catch {{
-    $restarted = $false
+$noRestart = {"$true" if no_restart else "$false"}
+if (-not $noRestart) {{
+    try {{
+        Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}
+        $restarted = $true
+    }}
+    catch {{
+        $restarted = $false
+    }}
 }}
 $result['restarted'] = $restarted
 if (-not $ok) {{
     # Say what went wrong AND what was done about it, in the one sentence the
     # dashboard's update banner shows. "It failed" on its own sent the user
     # looking for a server that nobody was going to start.
-    $result['message'] = $result.message + $(if ($restarted) {{ ' The previous version was restarted.' }} else {{ ' The previous version could not be restarted either.' }})
+    $result['message'] = $result.message + $(if ($restarted) {{ ' The previous version was restarted.' }} elseif ($noRestart) {{ ' The desktop app starts the previous version again within ten seconds.' }} else {{ ' The previous version could not be restarted either.' }})
 }}
 [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
 $script:HelperDone = $true
 if ($ok) {{
     Remove-Item -Path {_powershell_literal(str(stage_dir / "wheel"))} -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Stage 'done' 'The updated server was started.'
+    if ($noRestart) {{
+        Write-Stage 'done' 'The new version is installed. The desktop app starts it.'
+    }} else {{
+        Write-Stage 'done' 'The updated server was started.'
+    }}
 }} else {{
     Write-Stage 'recovered' $result.message
 }}
@@ -1046,6 +1068,7 @@ def _spawn_deferred_upgrade(
     command: list[str],
     tag: str,
     log: list[str],
+    no_restart: bool = False,
 ) -> UpgradeResult:
     """Hand the install to a detached helper that runs after we exit."""
 
@@ -1097,6 +1120,9 @@ def _spawn_deferred_upgrade(
                 # being installed while it waits, and so the kept-shim note can
                 # tell the user which version a restart of that window buys.
                 version=tag or None,
+                # GAP-3: the desktop window asked for this update and owns the
+                # restart. See `_deferred_helper_script`.
+                no_restart=no_restart,
             ),
             encoding="utf-8",
         )
@@ -1136,27 +1162,43 @@ def _spawn_deferred_upgrade(
             ok=False, message=f"Could not start the update helper: {exc!s}", log=log
         )
 
-    log.append("staged for install and automatic restart after shutdown (Windows)")
+    log.append(
+        "staged for install after shutdown (Windows); the desktop app starts the server"
+        if no_restart
+        else "staged for install and automatic restart after shutdown (Windows)"
+    )
     _CACHE.restart_required = True
     _CACHE.staged_install = True
     set_external_upgrade_helper_pending(True)
+    started_by = (
+        "the desktop app starts the updated server within ten seconds"
+        if no_restart
+        else "start the updated server automatically"
+    )
     return UpgradeResult(
         ok=True,
         message=(
             f"{tag or 'The latest release'} is verified and staged. The server "
-            "will close, install it after Windows releases the environment, then "
-            "start the updated server automatically."
+            f"will close, install it after Windows releases the environment, then "
+            f"{started_by}."
         ),
         installed_version=tag or None,
         log=log,
     )
 
 
-def upgrade_to_latest(payload: dict[str, Any]) -> UpgradeResult:
+def upgrade_to_latest(
+    payload: dict[str, Any], *, no_restart: bool = False
+) -> UpgradeResult:
     """Download, verify, and install the wheel from ``payload``.
 
     Synchronous and slow (a full dependency resolve): callers must run this in
     a worker thread so it never blocks the event loop.
+
+    ``no_restart`` says that whoever asked for this update owns the restart --
+    the desktop app, which has a ten-second tick and a spawn of its own. It
+    only reaches the Windows deferred-helper path, because that is the only
+    path on which anything here starts a server at all.
     """
     log: list[str] = []
     uv_executable = shutil.which("uv")
@@ -1251,6 +1293,7 @@ def upgrade_to_latest(payload: dict[str, Any]) -> UpgradeResult:
                 command=command,
                 tag=tag,
                 log=log,
+                no_restart=no_restart,
             )
         try:
             # Fixed argv, never a shell string, so the release metadata cannot
@@ -1288,14 +1331,21 @@ def upgrade_to_latest(payload: dict[str, Any]) -> UpgradeResult:
     )
 
 
-async def perform_upgrade() -> UpgradeResult:
-    """Fetch the latest release and install it off the event loop."""
+async def perform_upgrade(*, no_restart: bool = False) -> UpgradeResult:
+    """Fetch the latest release and install it off the event loop.
+
+    ``no_restart`` is passed by the dashboard when it is being shown inside the
+    desktop app: that window owns the restart from 6.61.0, and two owners is
+    how one update came to start two servers. A dashboard in a browser tab
+    sends nothing and the helper restarts, exactly as before.
+    """
+
     payload, _checked_at, error = await _CACHE.get(force=True)
     if payload is None:
         return UpgradeResult(ok=False, message=error or "No release information.")
     if not is_newer(str(payload.get("tag_name") or ""), current_version()):
         return UpgradeResult(ok=False, message="Already on the latest release.")
-    return await asyncio.to_thread(upgrade_to_latest, payload)
+    return await asyncio.to_thread(upgrade_to_latest, payload, no_restart=no_restart)
 
 
 def reset_cache_for_tests() -> None:

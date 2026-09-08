@@ -292,6 +292,119 @@ def probe_server_state(settings: Any, *, presence_v2: bool = False) -> ServerSta
     return ServerState("foreign")
 
 
+#: Every value :func:`classify_port_holder` can return. Unlike
+#: ``SERVER_PRESENCES`` this is decided by the *process* holding the socket,
+#: never by whether a bind succeeds -- which is BUG-5: a bind test cannot tell
+#: MCC's own starting ``python.exe`` from a stranger, and the desktop window
+#: consequently told one user that MCC "is not the MCC server" and sent them off
+#: to stop it.
+type HolderKind = Literal[
+    "absent",
+    "ours_healthy",
+    "ours_starting",
+    "ours_draining",
+    "ours_stale",
+    "foreign",
+]
+
+HOLDER_KINDS: tuple[HolderKind, ...] = (
+    "absent",
+    "ours_healthy",
+    "ours_starting",
+    "ours_draining",
+    "ours_stale",
+    "foreign",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PortHolder:
+    """Who holds the configured port, decided by process identity.
+
+    ``pid`` and ``image`` are the operating system's answer, passed through
+    verbatim so the window can name the holder without guessing at it.
+    """
+
+    kind: HolderKind
+    pid: int | None = None
+    image: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """The shape ``--print-status`` emits."""
+
+        return {"kind": self.kind, "pid": self.pid, "image": self.image}
+
+
+def classify_port_holder(settings: Any, state: ServerState) -> PortHolder:
+    """Say who holds the port, by process, given a probe that already ran.
+
+    Takes the :class:`ServerState` rather than probing again, because the two
+    questions share one answer: a server that replied is the holder, and no
+    process lookup can say anything the reply did not already say. The lookup
+    -- one ``netstat``/``ss`` and one ``tasklist``/``ps`` -- is paid for only
+    when something is on the port and it is *not* talking, which is precisely
+    the case the old bind test got wrong.
+
+    The order is the audit's (§5.1): the pid we can see, then the image, then
+    the reply. A holder that cannot be identified is **not** called foreign
+    here -- it is called foreign, and the shell then holds that answer against
+    a grace window (``foreign_grace_seconds``) before acting on it, because an
+    unidentifiable holder during our own startup is overwhelmingly us.
+    """
+
+    host = (settings.host or "127.0.0.1").strip()
+    port = int(settings.port)
+    if state.presence == "healthy":
+        return _identified(host, port, "ours_healthy")
+    if state.presence == "starting":
+        return _identified(host, port, "ours_starting")
+    if state.presence == "draining":
+        return _identified(host, port, "ours_draining")
+    if state.presence == "free" or probe_port_available(host, port):
+        return PortHolder("absent")
+
+    from my_claude_code.cli.port_takeover import identity_for_owner
+
+    owner = diagnose_port_owner(host, port)
+    identity = identity_for_owner(owner)
+    if identity is None:
+        return PortHolder(
+            "foreign",
+            pid=owner.pid if owner else None,
+            image=owner.name if owner else None,
+        )
+    kind: HolderKind = "ours_stale" if identity.is_mcc else "foreign"
+    return PortHolder(kind, pid=identity.pid, image=identity.image)
+
+
+def _identified(host: str, port: int, kind: HolderKind) -> PortHolder:
+    """Name the process behind an answer we have already had.
+
+    A server that replied is ours by definition -- the reply carried our own
+    gate's marker header -- so the lookup here is only ever about the *pid*,
+    which is what ``server_pid`` reports. A lookup that fails costs the pid and
+    nothing else: the kind is already known.
+    """
+
+    owner = diagnose_port_owner(host, port)
+    if owner is None:
+        return PortHolder(kind)
+    return PortHolder(kind, pid=owner.pid, image=owner.name)
+
+
+def server_pid_of(holder: PortHolder) -> int | None:
+    """The pid of MCC's own server, when the holder is one.
+
+    ``None`` for a foreign holder and for an empty port: reporting somebody
+    else's pid under a key called ``server_pid`` is worse than reporting
+    nothing.
+    """
+
+    if holder.kind.startswith("ours_"):
+        return holder.pid
+    return None
+
+
 def port_is_held_by_mcc(host: str, port: int) -> bool:
     """Whether the process holding ``host:port`` is one of MCC's own.
 

@@ -52,6 +52,23 @@ pub struct Stage {
 }
 
 impl Stage {
+    /// Whether this is a stage the helper writes on its way *out*.
+    ///
+    /// The list is the helper's own vocabulary (`release_updates.py`'s
+    /// `Write-Stage` calls), and it is the fact the controller's
+    /// `RestartPending` waits for: the installer is finished, one way or
+    /// another, so whatever is watching may start a server. `starting` is
+    /// deliberately absent -- the helper writes it just before its own
+    /// `Start-Process`, which the window now suppresses with `--no-restart`,
+    /// so treating it as terminal would race the very last thing the helper
+    /// does with its own file.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.stage.trim(),
+            "done" | "failed" | "recovered" | "install-failed" | "installed"
+        )
+    }
+
     /// What to show in the banner: the helper's own sentence when it has one,
     /// and the bare stage name when it does not.
     pub fn describe(&self) -> String {
@@ -255,6 +272,11 @@ pub fn active_helper(config_dir: &str) -> Option<ActiveHelper> {
 /// paint because one could not be read.
 pub fn read_stage(config_dir: &str) -> Option<Stage> {
     latest_stage(&read_receipt(config_dir)?)
+}
+
+/// Whether the last stage in this configuration directory is a terminal one.
+pub fn stage_is_terminal(stage: &Stage) -> bool {
+    stage.is_terminal()
 }
 
 /// The receipt's text, or `None` for every failure there can be -- no file, no

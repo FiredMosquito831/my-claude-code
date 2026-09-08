@@ -3415,6 +3415,40 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 </p>
 
                 <h3 id="guide-deploy">Desktop &amp; RTK</h3>
+                <p class="guide-note">
+                  <strong>The desktop app starts the server itself, every ten seconds,
+                  on every path.</strong> Since 6.61.0 one controller on one ten-second
+                  tick decides everything the window does about the server: it checks,
+                  and if the server is not running it starts one &mdash; on that tick,
+                  with no attempt cap and no page that waits for you to press anything.
+                  Every page carries the same two numbers (<em>last checked 3 s ago,
+                  next start attempt in 7 s</em>), <em>Retry now</em> only brings the
+                  next check forward, and reloading the window shows you the page you
+                  were on rather than resetting it. It replaced seven separate waiting
+                  loops, six of which could reach a page with nothing running behind it.
+                </p>
+                <p class="guide-note">
+                  <strong>A port conflict is now decided by the process, not by a bind
+                  test.</strong> My Claude Code's own server binds its port about twenty
+                  seconds before it answers anything, and a bind test cannot tell that
+                  from a stranger &mdash; which is how the window came to tell one user
+                  that My Claude Code was not My Claude Code. The holder is identified
+                  by its pid, image and command line: ours and wedged gets a <em>Take
+                  port</em> button, genuinely somebody else's is named and left alone,
+                  and an unidentified holder is given
+                  <code>DESKTOP_FOREIGN_GRACE_SECONDS</code> (45 s) before it is called
+                  a conflict at all.
+                </p>
+                <p class="guide-note">
+                  <strong>On Windows the desktop app owns the tray icon.</strong> There
+                  used to be two &mdash; the app's and the Python tray's &mdash; with
+                  different menus and two different answers to &ldquo;restart the
+                  server&rdquo;. The app's is the one that stays: it is the process that
+                  survives an update. Closing the window hides it to that icon and
+                  leaves the server running, <em>Open dashboard</em> brings it back, and
+                  <em>Quit</em> is the only thing that ends the app. The Python tray is
+                  still the fallback wherever no desktop app is installed, and on macOS.
+                </p>
                 <p>
                   The optional <code>mcc-desktop</code> tray app changes how the
                   server is owned, and its <strong>Server mode</strong> is set
@@ -4217,6 +4251,26 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   and run <code>mcc-desktop --ensure-shell</code> once (with
                   <code>--target</code> if the copy you launch is not the one in
                   <code>~/.local/bin</code>). Every update after that is automatic.
+                </p>
+                <p class="guide-note">
+                  <strong>Since 6.61.0 you do not take that step, and neither does
+                  anyone else.</strong> Just after the server becomes ready it compares
+                  the desktop app installed on this machine with the release this build
+                  pins, and brings it up to date itself &mdash; replaced in place when
+                  nothing is running it, staged beside it as
+                  <code>MyClaudeCode.exe.new</code> when something is, which the app's
+                  own next start renames in. One line in the server log either way, and
+                  the panel above says the same thing. Turn it off with <em>Update the
+                  desktop app automatically</em> on the Desktop card. Nothing is
+                  downloaded on a machine that has no desktop app installed.
+                </p>
+                <p class="guide-note">
+                  <strong>Pressing Update inside the desktop app hands it the
+                  restart.</strong> The installer then installs and exits, and the app's
+                  ten-second lifecycle tick starts the new server. In an ordinary
+                  browser tab nothing is watching, so the installer restarts the server
+                  itself, exactly as it always has. Two owners of &ldquo;restart the
+                  server&rdquo; is how one update came to start two of them.
                 </p>
                 <p class="guide-note">
                   <strong>On Windows the install is deferred.</strong> Windows holds the

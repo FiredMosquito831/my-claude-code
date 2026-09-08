@@ -200,21 +200,33 @@ def _ensure_shell(target: str | None) -> None:
 
 
 def _launch_host() -> None:
-    """Run the desktop host with a tray if this platform has one.
+    """Run the desktop host, with a Python tray only when it owns the icon.
+
+    Two reasons this is not simply "import pystray and use it".
 
     ``pystray`` is declared ``sys_platform == 'win32' or sys_platform ==
     'darwin'`` in ``pyproject.toml``, so on Linux there is no tray adapter to
-    import and there never will be. Linux reaches this function only when
-    ``headless_refusal_reason()`` found a display *and* the desktop shell, and
-    the shell draws its own tray -- so the host runs with a stand-in that owns
-    nothing but the thread the process blocks on.
+    import and there never will be.
+
+    And since 6.61.0 (decision Q2) the desktop app owns the icon on Windows
+    too, wherever one is installed: it is the process that survives an update
+    and the process that owns the server lifecycle, and a second tray beside it
+    offered a second answer to "restart the server" from a process that did not
+    know what the first one was doing. So this host runs with a stand-in that
+    owns nothing but the thread the process blocks on -- the window's own tray
+    is the tray, and its Quit is what ends the app.
     """
 
-    try:
-        from my_claude_code.cli.desktop_tray import launch as launch_tray
-    except ImportError:
-        from my_claude_code.cli.desktop import WindowOnlyHost, launch_desktop
+    from my_claude_code.cli.desktop_window import shell_owns_tray
 
-        launch_desktop(WindowOnlyHost)
-        return
-    launch_tray()
+    if not shell_owns_tray():
+        try:
+            from my_claude_code.cli.desktop_tray import launch as launch_tray
+        except ImportError:
+            pass
+        else:
+            launch_tray()
+            return
+    from my_claude_code.cli.desktop import WindowOnlyHost, launch_desktop
+
+    launch_desktop(WindowOnlyHost)

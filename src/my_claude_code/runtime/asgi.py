@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
@@ -108,6 +109,72 @@ async def _refuse_while_starting(send: Send) -> None:
 #: How long ``_wait_until_serving`` waits for the supervisor to report an
 #: accepting listener before giving up and starting the application regardless.
 SERVING_WAIT_SECONDS = 10.0
+
+#: Whether this process has already run the desktop-app update. Once per server
+#: start, and the guard is a module flag rather than a lock because the only
+#: caller is the single readiness transition.
+_SHELL_AUTO_UPDATE_RUN = False
+
+
+def _desktop_shell_auto_update() -> None:
+    """Bring a stale desktop app up to the release this wheel pins.
+
+    Runs on a thread, after the server is ready, never on a request path, and
+    at most once per server start. It exists because until 6.61.0 the pin
+    reached a machine only if somebody *ran* something -- so a user who
+    launches the app from the Start Menu and never opens a terminal stayed on
+    whatever build they first received. Updating the server now updates the app
+    too.
+
+    Everything real happens in ``config.desktop_shell``: the same
+    ``stage_desktop_shell`` that ``mcc-desktop --ensure-shell`` calls, which
+    replaces a binary nothing is running and stages a ``.new`` beside one that
+    is. One more caller, not a second mechanism.
+
+    Imported here rather than at module scope on purpose. The fetcher pulls in
+    ``tarfile``, ``zipfile``, ``hashlib`` and ``urllib.request``, and a contract
+    test asserts that building the ASGI app imports none of them; a lazy import
+    on a post-readiness thread keeps that true.
+    """
+
+    try:
+        from my_claude_code.config.desktop_shell import auto_update_desktop_shells
+        from my_claude_code.config.settings import get_settings
+        from my_claude_code.config.update_progress import active_update
+
+        result = auto_update_desktop_shells(
+            enabled=bool(get_settings().desktop_shell_auto_update),
+            helper_is_installing=active_update() is not None,
+        )
+    except Exception:
+        # One line, and the next server start is the retry. A desktop app that
+        # could not be updated is never a reason for a server not to serve.
+        logger.debug("The desktop app update could not be attempted.")
+        return
+    if result.message:
+        logger.info(result.message)
+
+
+def start_desktop_shell_auto_update() -> None:
+    """Schedule :func:`_desktop_shell_auto_update`, once per server start."""
+
+    global _SHELL_AUTO_UPDATE_RUN
+    if _SHELL_AUTO_UPDATE_RUN:
+        return
+    _SHELL_AUTO_UPDATE_RUN = True
+    threading.Thread(
+        target=_desktop_shell_auto_update,
+        name="mcc-desktop-shell-auto-update",
+        daemon=True,
+    ).start()
+
+
+def reset_desktop_shell_auto_update_for_tests() -> None:
+    """Forget that the update has run. Tests only."""
+
+    global _SHELL_AUTO_UPDATE_RUN
+    _SHELL_AUTO_UPDATE_RUN = False
+
 
 #: How often it asks. Small: this is the delay added to every start.
 SERVING_POLL_SECONDS = 0.01
@@ -234,6 +301,7 @@ class RuntimeASGIApp:
                 self._startup_failed_callback()
             return
         state.mark_ready()
+        start_desktop_shell_auto_update()
 
     async def _wait_until_serving(self) -> None:
         """Hold the heavy startup until uvicorn is accepting connections.
