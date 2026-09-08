@@ -7,7 +7,8 @@ still wins over it, and the stage table is emitted.
 """
 
 import json
-from typing import cast
+from collections.abc import MutableMapping
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -35,7 +36,7 @@ class _Recorder:
         self.headers: dict[str, str] = {}
         self.body = b""
 
-    async def __call__(self, message: dict) -> None:
+    async def __call__(self, message: MutableMapping[str, Any]) -> None:
         if message["type"] == "http.response.start":
             self.status = message["status"]
             self.headers = {
