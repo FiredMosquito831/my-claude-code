@@ -472,10 +472,48 @@ class TestStage:
         assert binary.read_bytes() == _PAYLOAD
         assert desktop_shell.is_desktop_shell_installed()
 
-    def test_a_stale_binary_is_staged_beside_itself_and_never_written_over(
+    def test_a_stale_binary_nothing_is_running_is_simply_updated(
         self, release, shell_dir
     ) -> None:
-        """The whole contract: the running window's file is not touched."""
+        """The transition case, and the common one.
+
+        Staging unconditionally would make upgrading *into* this mechanism
+        impossible: the window a pre-6.60.0 user runs has no swap step in it,
+        so a ``.new`` left beside it would sit there forever. Nothing is
+        running this file, so it is updated.
+        """
+
+        binary = desktop_shell.desktop_shell_path()
+        shell_dir.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(b"the window nobody has open")
+        desktop_shell.receipt_path_for(binary).write_text(
+            json.dumps({"tag": "v6.43.0", "sha256": "0" * 64}), encoding="utf-8"
+        )
+
+        report = desktop_shell.stage_desktop_shell()
+
+        assert report["updated"] is True
+        assert report["from_tag"] == "v6.43.0"
+        assert report["to_tag"] == DESKTOP_SHELL_RELEASE_TAG
+        assert report["restart_required"] is False
+        assert report["staged_path"] == str(binary)
+        assert binary.read_bytes() == _PAYLOAD
+        assert (
+            desktop_shell.installed_release_tag_at(binary) == DESKTOP_SHELL_RELEASE_TAG
+        )
+        # Nothing is left behind for a swap that is not going to happen.
+        assert not desktop_shell.staged_binary_path(binary).exists()
+        assert not desktop_shell.staged_receipt_path(binary).exists()
+
+    def test_a_binary_something_is_running_is_staged_and_never_written_over(
+        self, release, shell_dir, monkeypatch
+    ) -> None:
+        """The whole contract: the running window's file is not touched.
+
+        The refusal is the operating system's -- Windows will not replace a
+        running image -- so the test is of what this module does *with* that
+        refusal, which is the part this repository owns.
+        """
 
         binary = desktop_shell.desktop_shell_path()
         shell_dir.mkdir(parents=True, exist_ok=True)
@@ -483,13 +521,22 @@ class TestStage:
         desktop_shell.receipt_path_for(binary).write_text(
             json.dumps({"tag": "v6.43.0", "sha256": "0" * 64}), encoding="utf-8"
         )
+        real_replace = os.replace
+
+        def _refuse(source, destination):
+            if str(destination) == str(binary):
+                raise PermissionError(
+                    32, "The process cannot access the file because it is being used"
+                )
+            return real_replace(source, destination)
+
+        monkeypatch.setattr(desktop_shell.os, "replace", _refuse)
 
         report = desktop_shell.stage_desktop_shell()
 
         staged = desktop_shell.staged_binary_path(binary)
         assert report["updated"] is True
         assert report["from_tag"] == "v6.43.0"
-        assert report["to_tag"] == DESKTOP_SHELL_RELEASE_TAG
         assert report["restart_required"] is True
         assert report["staged_path"] == str(staged)
         assert binary.read_bytes() == b"the window the user is looking at"
@@ -521,10 +568,11 @@ class TestStage:
         report = desktop_shell.stage_desktop_shell(binary)
 
         assert report["from_tag"] == "v6.58.3"
-        assert report["restart_required"] is True
-        assert report["staged_path"] == str(desktop_shell.staged_binary_path(binary))
-        assert desktop_shell.staged_binary_path(binary).read_bytes() == _PAYLOAD
-        assert desktop_shell.staged_receipt_path(binary).is_file()
+        assert report["staged_path"] == str(binary)
+        assert binary.read_bytes() == _PAYLOAD
+        assert (
+            desktop_shell.installed_release_tag_at(binary) == DESKTOP_SHELL_RELEASE_TAG
+        )
         # The default install is somewhere else entirely and was not touched.
         assert not desktop_shell.desktop_shell_path().exists()
 

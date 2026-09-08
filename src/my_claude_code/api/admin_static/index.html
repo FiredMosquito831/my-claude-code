@@ -3459,9 +3459,14 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>shell_release_tag</code> the wheel reports and, when they
                   disagree, runs <code>mcc-desktop --ensure-shell</code> in the
                   background: one command that downloads the pinned build, checks both
-                  digests, and stages it <em>beside</em> the running executable as
-                  <code>MyClaudeCode.exe.new</code>. It never writes over the file you
-                  are running. The tray then offers
+                  digests, and puts it where it belongs &mdash; replacing the file
+                  outright when nothing has the app open, and otherwise leaving it
+                  <em>beside</em> the running executable as
+                  <code>MyClaudeCode.exe.new</code>. It never writes over a window you
+                  are running, and the operating system is what decides whether you
+                  are: Windows refuses to replace a running image, and on Linux and
+                  macOS a running process keeps the file it started from. The tray
+                  then offers
                   <em>Desktop app update ready &mdash; restart the app to use vX</em>
                   with a <em>Restart now</em>; ignore it and the swap happens the next
                   time you start the app anyway. The previous build is kept for one run
@@ -4207,9 +4212,11 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   <a href="#guide-deploy">Desktop &amp; RTK</a> for the mechanism.
                   <strong>Coming from a version before 6.60.0 takes one manual
                   step</strong>, because the thing that fetches the app is part of what
-                  is being fixed: run <code>mcc-desktop --ensure-shell</code> once, or
-                  start the app from the tray once. Every update after that is
-                  automatic.
+                  is being fixed &mdash; the window you are running has no swap step
+                  in it, so nothing staged beside it would be picked up. Close the app
+                  and run <code>mcc-desktop --ensure-shell</code> once (with
+                  <code>--target</code> if the copy you launch is not the one in
+                  <code>~/.local/bin</code>). Every update after that is automatic.
                 </p>
                 <p class="guide-note">
                   <strong>On Windows the install is deferred.</strong> Windows holds the

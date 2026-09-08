@@ -613,10 +613,18 @@ $ mcc-desktop --ensure-shell
 It reads the receipt beside the binary, and if it names another release it
 downloads that release's archive, checks its SHA-256 **twice** — against the
 digest pinned in the wheel and against the `SHA256SUMS-desktop-shell.txt` the
-release publishes, which must agree — and puts the verified executable *beside*
-the old one as `MyClaudeCode.exe.new`. It never writes over the file you are
-running. The next start of the app does the rename itself, which is the one
-moment nothing holds either file open.
+release publishes, which must agree — and then puts the verified executable
+where it belongs.
+
+**It never writes over a window you are running, and the operating system is
+what decides whether you are.** The new executable is written beside the target
+and then moved onto it: Windows refuses that for a file that is a running
+image, and on Linux and macOS it is safe by construction, because a running
+process keeps the file it started from. So if nothing has the app open it is
+simply updated (`restart_required: false`); if something does, the file stays
+exactly where it is and the replacement waits as `MyClaudeCode.exe.new` for the
+next start of the app, which does the rename itself — the one moment nothing
+holds either file open.
 
 `--target` names the binary to update; without it the default install
 (`~/.local/bin`) is meant. The window passes its own executable, so the copy
@@ -3487,9 +3495,19 @@ Now:
 question that had no answer before.
 
 **Upgrading from a version before 6.60.0 takes one manual step**, because the
-mechanism that fetches the app is itself part of what is being fixed: run
-`mcc-desktop --ensure-shell` once (or start the app from the tray once), and
-every update after that is automatic.
+mechanism that fetches the app is itself part of what is being fixed — the
+window you are running has no swap step in it, so nothing staged beside it
+would ever be picked up. Close the app and run
+
+```bash
+mcc-desktop --ensure-shell
+```
+
+once (add `--target` if the copy you launch is not the one in `~/.local/bin` —
+on Windows the installer's is
+`%LOCALAPPDATA%\Programs\My Claude Code\MyClaudeCode.exe`). With nothing
+running it, the file is replaced outright. Every update after that is
+automatic.
 
 **A restart no longer destroys the log that would explain it.** Until 6.58.1
 every server start emptied `logs/server.log`, so the one file anyone would open

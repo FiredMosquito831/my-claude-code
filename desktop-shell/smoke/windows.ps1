@@ -201,15 +201,34 @@ $shell = Start-Process -FilePath $Binary -PassThru `
     -RedirectStandardOutput $outPath -RedirectStandardError $errPath
 Ok "launched, pid $($shell.Id)"
 
-$deadline = (Get-Date).AddSeconds(60)
+# What the window is doing when it is doing nothing. A bare "it never ran the
+# stub" says only that something is wrong; these three say *what*, which is the
+# difference between a rerun and a diagnosis.
+function Show-ShellState([string] $why) {
+    Write-Host "-- $why --"
+    Write-Host "   process: exited=$($shell.HasExited)"
+    foreach ($pair in @(@('stdout', $outPath), @('stderr', $errPath))) {
+        $text = (Get-Content -LiteralPath $pair[1] -Raw -ErrorAction SilentlyContinue)
+        if ($text) { Write-Host "   $($pair[0]): $($text.Trim())" }
+        else { Write-Host "   $($pair[0]): (empty)" }
+    }
+    Get-ChildItem -LiteralPath $Scratch -Recurse -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Write-Host "   file: $($_.FullName.Substring($Scratch.Length))  $($_.Length)b" }
+}
+
+# Two minutes, not one. The window's first act is to run a short-lived process,
+# and on a cold runner that is a cold WebView2 runtime, a cold interpreter and
+# an antivirus pass ahead of it. A minute has been enough every time it was
+# measured and is not enough to be sure.
+$deadline = (Get-Date).AddSeconds(120)
 while (-not (Test-Path -LiteralPath $callsPath)) {
     if ($shell.HasExited) {
-        Get-Content -LiteralPath $errPath -ErrorAction SilentlyContinue | Write-Host
+        Show-ShellState 'the shell exited early'
         Fail "the shell exited (code $($shell.ExitCode)) before reading a status document"
     }
     if ((Get-Date) -gt $deadline) {
-        Get-Content -LiteralPath $errPath -ErrorAction SilentlyContinue | Write-Host
-        Fail 'the shell never ran mcc-desktop --print-status (60s)'
+        Show-ShellState 'the shell never asked for a status'
+        Fail 'the shell never ran mcc-desktop --print-status (120s)'
     }
     Start-Sleep -Seconds 1
 }
