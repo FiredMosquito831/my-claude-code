@@ -20,19 +20,25 @@ import pytest
 from my_claude_code.application import release_updates
 
 
-def _script(**overrides) -> str:
-    defaults = {
-        "uv_executable": "uv.exe",
-        "command": ["uv.exe", "tool", "install", "my-claude-code"],
-        "result_path": Path("C:/stage/result.json"),
-        "stage_dir": Path("C:/stage"),
-        "server_launcher": Path("C:/bin/fcc-server.exe"),
-        "working_directory": Path("C:/work"),
-        "commands": ["mcc-server.exe"],
-        "version": "v9.9.9",
-    }
-    defaults.update(overrides)
-    return release_updates._deferred_helper_script(**defaults)
+def _script(*, no_restart: bool = False) -> str:
+    """Render the helper for a Windows install, with every path spelled out.
+
+    Named arguments rather than a dict of them: the generator's signature is
+    the contract this test is about, and a `**kwargs` splat hides a renamed
+    parameter behind a runtime failure instead of a type error.
+    """
+
+    return release_updates._deferred_helper_script(
+        uv_executable="uv.exe",
+        command=["uv.exe", "tool", "install", "my-claude-code"],
+        result_path=Path("C:/stage/result.json"),
+        stage_dir=Path("C:/stage"),
+        server_launcher=Path("C:/bin/fcc-server.exe"),
+        working_directory=Path("C:/work"),
+        commands=["mcc-server.exe"],
+        version="v9.9.9",
+        no_restart=no_restart,
+    )
 
 
 def test_by_default_the_helper_still_starts_the_server():

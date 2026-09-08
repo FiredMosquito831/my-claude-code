@@ -146,7 +146,8 @@ def test_the_setting_and_the_env_switch_and_a_live_helper_all_stop_it(
         == "an update helper is installing"
     )
     monkeypatch.setenv(desktop_shell.DESKTOP_SHELL_ENABLED_ENV, "off")
-    assert desktop_shell.auto_update_desktop_shells().skipped.endswith("=off")
+    skipped = desktop_shell.auto_update_desktop_shells().skipped
+    assert skipped is not None and skipped.endswith("=off")
 
 
 def test_a_download_that_fails_is_one_line_and_no_loop(shell_dir, monkeypatch):
