@@ -740,6 +740,14 @@ Eight things are worth knowing about it:
 - **`reconnect_restatus_seconds` is how often a reconnecting window should re-read this
   document** rather than only re-pinging `health_url`. It is what lets a window notice that
   the port has gone free and start a server itself.
+- **`start_timeout_seconds` and `server_start_retries` are the desktop app's start
+  budget.** From 6.66.0 the app multiplies them (`start_timeout_seconds x
+  (server_start_retries + 1)`, 45 s on the shipped values) and, once that has passed or
+  three servers have been started with no answer, replaces its "Starting the server..."
+  spinner with a page naming the child's exit code, its last lines of output, and the two
+  log files: the server's own `server_log`, and the app's `logs/desktop-server-start.log`.
+  It keeps starting the server every tick regardless — the budget decides what the window
+  *says*, never whether it tries again.
 - **`schema` is the compatibility handle.** It is bumped when a documented key is removed
   or changes type. New keys can appear without a bump, so a reader must ignore keys it
   does not recognise, and should refuse loudly on a `schema` it does not know. The four

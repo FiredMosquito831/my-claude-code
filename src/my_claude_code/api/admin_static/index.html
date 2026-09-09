@@ -4421,13 +4421,25 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                     install, set it back to 20 on
                     <a href="#guide-limits">Limits &amp; Resilience</a> &mdash; that is
                     now how long every restart waits.</li>
-                  <li><strong>My data is still in a legacy directory</strong> &mdash; an
-                    install from before 6.40.0 keeps using <code>~/.fcc</code>, which is
-                    fully supported with no deadline. To move it: stop the server and
-                    quit the tray, run <code>mcc-migrate</code>, start the server again.
-                    It is one atomic rename, it refuses while a server or tray is live,
-                    and it leaves a rollback note. There is deliberately no button for
-                    it here.</li>
+                  <li><strong>My data is still in a legacy directory</strong> &mdash; from
+                    6.65.0 the server moves it for you, once, on its first start:
+                    <code>~/.fcc</code> becomes <code>~/.mcc</code> by a single atomic
+                    rename, nothing is copied, merged or deleted, and a
+                    <code>~/.fcc-migrated.txt</code> note says how to move it back.
+                    It refuses &mdash; changing nothing &mdash; while anything still holds
+                    the directory, so quit the desktop app before updating: it holds
+                    <code>desktop.lock</code> for its whole lifetime.
+                    <code>mcc-migrate</code> still runs the same move by hand.</li>
+                  <li><strong>The desktop app sits on &ldquo;Starting the server&hellip;&rdquo;</strong>
+                    &mdash; from 6.66.0 it does not. After three attempts, or
+                    <code>DESKTOP_SERVER_START_TIMEOUT</code> &times;
+                    (<code>DESKTOP_SERVER_START_RETRIES</code> + 1) seconds, the window
+                    replaces the spinner with the server's exit code, its last lines of
+                    output, and two paths: <code>logs/server.log</code> and the app's own
+                    <code>logs/desktop-server-start.log</code>. It keeps starting the
+                    server every ten seconds regardless, and the page goes away by itself
+                    the moment one answers. Installer transcripts land beside them as
+                    <code>logs/desktop-install-&lt;timestamp&gt;.log</code>.</li>
                   <li><strong>macOS refuses to open the downloaded app</strong> &mdash;
                     the <code>.dmg</code> is unsigned, so Gatekeeper blocks it. Drag the
                     app into Applications, run

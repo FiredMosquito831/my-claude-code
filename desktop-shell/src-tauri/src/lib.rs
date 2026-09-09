@@ -173,6 +173,8 @@ static INSTALLS_RUN: AtomicU32 = AtomicU32::new(0);
 /// The installer's last word, kept so the page that gives up can quote it
 /// rather than showing a spinner over nothing.
 static LAST_INSTALL_LINE: Mutex<String> = Mutex::new(String::new());
+/// Where the last install's transcript went, so the page can name it.
+static LAST_INSTALL_LOG: Mutex<Option<String>> = Mutex::new(None);
 /// Whether closing the window hides it instead of ending the app. Read from
 /// the status document on every status read; `false` until one has been read,
 /// so a window that has learned nothing yet still closes when told to.
@@ -383,6 +385,7 @@ fn show_dashboard(window: &WebviewWindow, admin_url: &str) {
             &Page::Error {
                 message: format!("The dashboard address {admin_url} could not be read: {error}"),
                 server_log: None,
+                shell_log: None,
             },
         ),
     }
@@ -554,6 +557,55 @@ fn last_config_dir() -> Option<String> {
     Some(remembered.to_owned())
 }
 
+/// The one file every server this window starts writes its output into.
+const SERVER_START_LOG: &str = "desktop-server-start.log";
+
+/// The directory this window writes its own transcripts into.
+///
+/// Derived from `config_dir`, which Python supplies (C1 -- the one path this
+/// shell composes, and it composes it from an answer rather than inventing a
+/// root). `None` before any status document has named a directory, in which
+/// case the temporary directory is used instead: the very first install on a
+/// machine happens before any document can be read, and that is exactly the
+/// install whose output somebody will want afterwards.
+fn shell_log_dir(config_dir: &str) -> Option<PathBuf> {
+    let trimmed = config_dir.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(trimmed).join("logs"))
+}
+
+/// The server-start transcript: every line a server child printed, appended.
+fn shell_log_path(config_dir: &str) -> Option<PathBuf> {
+    shell_log_dir(config_dir).map(|dir| dir.join(SERVER_START_LOG))
+}
+
+/// The same, from whichever directory is known -- this session's status
+/// document, the one remembered from a previous session, or `%TEMP%`.
+fn shell_log_path_now(life: &Lifecycle) -> PathBuf {
+    life.status
+        .as_ref()
+        .and_then(|status| shell_log_path(&status.config_dir))
+        .or_else(|| last_config_dir().and_then(|dir| shell_log_path(&dir)))
+        .unwrap_or_else(|| std::env::temp_dir().join(SERVER_START_LOG))
+}
+
+/// A fresh installer transcript, stamped so two installs never share a file.
+fn install_log_path(life: &Lifecycle) -> PathBuf {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default();
+    let name = format!("desktop-install-{stamp}.log");
+    life.status
+        .as_ref()
+        .and_then(|status| shell_log_dir(&status.config_dir))
+        .or_else(|| last_config_dir().and_then(|dir| shell_log_dir(&dir)))
+        .unwrap_or_else(std::env::temp_dir)
+        .join(name)
+}
+
 // -- installing MCC ---------------------------------------------------------
 
 /// Run the install script, streaming its output into the window.
@@ -561,23 +613,44 @@ fn last_config_dir() -> Option<String> {
 /// Returns the installer's last meaningful line, which is what the page that
 /// gives up quotes. A first install is minutes long and the only thing the
 /// user has to go on is what the installer itself said.
-fn run_install(window: &WebviewWindow, attempt: u32) -> String {
+fn run_install(
+    window: &WebviewWindow,
+    attempt: u32,
+    log_path: PathBuf,
+    broken: Option<&str>,
+) -> String {
     let command = install::install_command_for_this_machine();
+    // D6-Q9: when the launcher is present and unrunnable the page has to say
+    // both things -- what is broken, and that it is being reinstalled --
+    // because "not installed here yet" is not true of that machine and the
+    // user can see that it is not.
+    let lead = match broken {
+        Some(detail) => format!(
+            "{detail} This window is reinstalling it (attempt {attempt} of {}). \
+             This takes a few minutes.",
+            controller::INSTALL_ATTEMPTS
+        ),
+        None => format!(
+            "My Claude Code is not installed here yet, so this window is \
+             installing it (attempt {attempt} of {}). This takes a few \
+             minutes the first time.",
+            controller::INSTALL_ATTEMPTS
+        ),
+    };
     show_page(
         window,
         &Page::Installing {
             command: command.display.clone(),
-            message: format!(
-                "My Claude Code is not installed here yet, so this window is \
-                 installing it (attempt {attempt} of {}). This takes a few \
-                 minutes the first time.",
-                controller::INSTALL_ATTEMPTS
-            ),
+            message: lead,
         },
     );
     set_tray_status("Installing My Claude Code...");
+    append_output(
+        window,
+        &format!("-- writing this transcript to {} --", log_path.display()),
+    );
     let mut last = String::new();
-    let outcome = process::run_install(&command, |line| {
+    let outcome = process::run_install(&command, Some(log_path), |line| {
         append_output(window, line);
         if !line.trim().is_empty() && !line.starts_with("-- still installing") {
             last = line.to_owned();
@@ -865,7 +938,17 @@ struct Lifecycle {
     /// The child this window started, if it is still ours to ask about. The
     /// one signal that separates "still coming up" from "gone" while the port
     /// is still free.
-    child: Option<std::process::Child>,
+    child: Option<process::ServerChild>,
+    /// How the last child ended, kept after the child itself is gone.
+    last_child_exit: Option<controller::ChildExit>,
+    /// Why a present-but-unrunnable mcc-desktop was classified not-installed,
+    /// so the page can say both things: what is broken, and that it is being
+    /// reinstalled.
+    broken_detail: Option<String>,
+    /// Servers started since this window last saw a healthy one, and when
+    /// the first of them was started. Reset by health, never by a repaint.
+    start_attempts: u32,
+    first_spawn: Option<Instant>,
     health: controller::Health,
     holder: controller::Holder,
     holder_since: Instant,
@@ -886,6 +969,10 @@ impl Lifecycle {
             state: controller::State::Booting,
             status: None,
             child: None,
+            last_child_exit: None,
+            broken_detail: None,
+            start_attempts: 0,
+            first_spawn: None,
             health: controller::Health::Absent,
             holder: controller::Holder::Unknown,
             holder_since: Instant::now(),
@@ -966,6 +1053,9 @@ impl Lifecycle {
             admin_url: status.admin_url.clone(),
             health_url: status.health_url.clone(),
             server_log: status.server_log.clone(),
+            shell_log: shell_log_path(&status.config_dir)
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             port: status.port,
             server_mode: status.server_mode.clone(),
             tick_seconds: status
@@ -980,6 +1070,15 @@ impl Lifecycle {
                 .foreign_grace_seconds
                 .filter(|value| *value >= 0.0)
                 .unwrap_or(controller::DEFAULT_FOREIGN_GRACE_SECONDS),
+            // Required by the parser since 6.61.0 and read by nothing until
+            // now (D6-Q8). No new status key was needed for the whole of
+            // the start budget, which is what keeps C9 to one repin.
+            start_timeout_seconds: if status.start_timeout_seconds > 0.0 {
+                status.start_timeout_seconds
+            } else {
+                controller::DEFAULT_START_TIMEOUT_SECONDS
+            },
+            server_start_retries: status.server_start_retries,
             holder_image: holder.and_then(|holder| holder.image.clone()),
             holder_pid: holder.and_then(|holder| holder.pid),
         }
@@ -1057,6 +1156,7 @@ impl Lifecycle {
             Ok(raw) => match status::parse_status(&raw) {
                 Ok(status) => {
                     INSTALLS_RUN.store(0, Ordering::SeqCst);
+                    self.broken_detail = None;
                     remember_config_dir(&status.config_dir);
                     ensure_tray(app, &status);
                     ensure_activation_watcher(app, &status);
@@ -1082,6 +1182,16 @@ impl Lifecycle {
                 self.helper =
                     last_config_dir().map_or(controller::Helper::None, |dir| helper_state(&dir));
             }
+            Err(process::StatusRunError::Broken { detail }) => {
+                // D6-Q9: the file is there and it will not run. To a user that
+                // machine is "not installed", the remedy is the installer, and
+                // parking on an error page for ever -- which is what 6.63.0 did,
+                // measured -- is the one thing that cannot fix it.
+                self.status_health = controller::StatusHealth::NotInstalled;
+                self.broken_detail = Some(detail);
+                self.helper =
+                    last_config_dir().map_or(controller::Helper::None, |dir| helper_state(&dir));
+            }
             Err(process::StatusRunError::Failed { code, stderr }) => {
                 let code =
                     code.map_or_else(|| "an unknown status".to_owned(), |value| value.to_string());
@@ -1099,9 +1209,29 @@ impl Lifecycle {
 
     /// Assemble this tick's observation. Pure sampling: nothing here decides.
     fn observe(&mut self, fresh: bool) -> controller::Observation {
-        let child_alive = self.child.as_mut().is_some_and(process::still_running);
+        let child_alive = self
+            .child
+            .as_mut()
+            .is_some_and(process::ServerChild::still_running);
         if !child_alive {
+            // Reap the *reason* before dropping the child. Until 6.66.0 the
+            // child was `Stdio::null()` on both streams and its exit code
+            // was never read, so a server that refused to start in 1.1
+            // seconds was indistinguishable from one that was merely slow.
+            if let Some(exit) = self.child.as_ref().and_then(process::ServerChild::exit) {
+                self.last_child_exit = Some(controller::ChildExit {
+                    code: exit.code,
+                    last_lines: exit.last_lines,
+                });
+            }
             self.child = None;
+        }
+        if self.health == controller::Health::Healthy {
+            // A healthy server ends the episode: the budget counts attempts
+            // since the last time this window saw one answer.
+            self.start_attempts = 0;
+            self.first_spawn = None;
+            self.last_child_exit = None;
         }
         controller::Observation {
             fresh,
@@ -1113,6 +1243,18 @@ impl Lifecycle {
             child_alive,
             since_last_start: self.last_spawn.map(|at| at.elapsed().as_secs_f64()),
             since_probe: self.last_probe.elapsed().as_secs_f64(),
+            last_child_exit: self.last_child_exit.clone(),
+            start_attempts: self.start_attempts,
+            since_first_start: self.first_spawn.map(|at| at.elapsed().as_secs_f64()),
+            last_install_line: LAST_INSTALL_LINE
+                .lock()
+                .map(|line| line.clone())
+                .unwrap_or_default(),
+            install_log: LAST_INSTALL_LOG
+                .lock()
+                .ok()
+                .and_then(|path| path.clone())
+                .unwrap_or_default(),
             shell_stale: self.status.as_ref().is_some_and(|status| {
                 shell_is_stale(RELEASE_TAG, status.shell_release_tag.as_deref())
                     && !SHELL_PIN_CHECKED.load(Ordering::SeqCst)
@@ -1187,8 +1329,20 @@ fn apply(
             }
             Effect::Spawn => {
                 life.last_spawn = Some(Instant::now());
+                if life.first_spawn.is_none() {
+                    life.first_spawn = life.last_spawn;
+                }
+                life.start_attempts = life.start_attempts.saturating_add(1);
                 set_tray_status("Server: starting");
-                match process::spawn_server() {
+                let log = shell_log_path_now(life);
+                process::append_line(
+                    &log,
+                    &format!(
+                        "-- starting mcc-server (attempt {}) --",
+                        life.start_attempts
+                    ),
+                );
+                match process::spawn_server(Some(log)) {
                     Ok(child) => life.child = Some(child),
                     Err(error) => {
                         // Not a page and not the end of anything: the next
@@ -1196,7 +1350,14 @@ fn apply(
                         // The commonest reason a spawn fails is the one where
                         // retrying matters most -- an update helper has
                         // renamed `mcc-server.exe` aside and will put it back.
-                        eprintln!("the server could not be started: {error}");
+                        // It IS remembered, though: a spawn that never
+                        // happened is the sort of thing the failed-to-start
+                        // page exists to quote.
+                        life.last_child_exit = Some(controller::ChildExit {
+                            code: None,
+                            last_lines: error.clone(),
+                        });
+                        process::append_line(&shell_log_path_now(life), &error);
                         append_output(window, &error);
                     }
                 }
@@ -1205,7 +1366,12 @@ fn apply(
             Effect::Install => {
                 let attempt = INSTALLS_RUN.load(Ordering::SeqCst).saturating_add(1);
                 INSTALLS_RUN.store(attempt, Ordering::SeqCst);
-                let last = run_install(window, attempt);
+                let log = install_log_path(life);
+                if let Ok(mut path) = LAST_INSTALL_LOG.lock() {
+                    *path = Some(log.to_string_lossy().into_owned());
+                }
+                let broken = life.broken_detail.clone();
+                let last = run_install(window, attempt, log, broken.as_deref());
                 if let Ok(mut line) = LAST_INSTALL_LINE.lock() {
                     *line = last;
                 }
@@ -1240,6 +1406,7 @@ fn tray_line(state: &controller::State) -> &'static str {
         controller::State::Draining { .. } => "Server: shutting down",
         controller::State::Updating { .. } => "Updating My Claude Code...",
         controller::State::Installing { .. } => "Installing My Claude Code...",
+        controller::State::Verifying { .. } => "Checking the install...",
         controller::State::Blocked { .. } => "Server: needs attention",
     }
 }
@@ -1279,6 +1446,12 @@ fn run_controller(app: &AppHandle, window: &WebviewWindow) {
             // health URL -- is known before it.
             life.restatus(app, window);
         }
+        // D6-Q2: after an install, ask again. This gate used to require
+        // `status_health == Ok`, which is precisely the state an install is
+        // trying to reach -- so nothing ever re-checked whether the install
+        // had worked, and the controller installed again on the next tick.
+        // The `Verifying` state now asks for the restatus explicitly; this
+        // only makes sure a fresh tick is available to carry it.
         if fresh {
             // The helper first, and always: it is the one fact that stops a
             // start, and the observation that carries it must never be the
@@ -1710,6 +1883,7 @@ mod tests {
             controller::State::Updating { since: 0.0 },
             controller::State::RestartPending { since: 0.0 },
             controller::State::Installing { attempts: 1 },
+            controller::State::Verifying { attempts: 1 },
             controller::State::Blocked {
                 reason: controller::Blocked::ForeignPort,
             },

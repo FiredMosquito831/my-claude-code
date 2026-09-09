@@ -36,6 +36,7 @@
 //! and the effects the caller must apply. C1 still holds too: every number and
 //! URL in an observation came from Python's status document.
 
+use crate::install;
 use crate::ui::Page;
 
 /// How often the loop repaints. Compiled in, deliberately: this is the refresh
@@ -61,6 +62,35 @@ pub const DEFAULT_FOREIGN_GRACE_SECONDS: f64 = 45.0;
 /// and says so. A property of the binary: there is no status document to read
 /// when `mcc-desktop` cannot be run at all.
 pub const INSTALL_ATTEMPTS: u32 = 3;
+
+/// How many start attempts the window makes before it stops calling itself
+/// "starting" and says what actually happened.
+///
+/// NOT a cap on starting. Decision Q4 of 2026-09-08 stands in full: the tick
+/// force-starts a dead server for ever, with no backoff beyond the tick and
+/// no state that parks on a button. This is the threshold at which the page
+/// stops being a spinner -- the user's rule of 2026-09-09 00:03, "three
+/// attempts, twenty seconds each, and the page must say what happened".
+/// The two are answers to different questions and both are kept.
+pub const START_ATTEMPTS_BEFORE_THE_TRUTH: u32 = 3;
+
+/// The per-attempt budget used when the document does not carry
+/// `start_timeout_seconds`. Python's own default; the shell never invents a
+/// number (C9).
+pub const DEFAULT_START_TIMEOUT_SECONDS: f64 = 15.0;
+
+/// Further attempts after the first, when the document does not say.
+pub const DEFAULT_SERVER_START_RETRIES: u32 = 2;
+
+/// How a server this window started ended.
+///
+/// Mirrors `process::ChildExit` rather than importing it, so `step` stays a
+/// pure function of plain data and the module keeps its no-I/O rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildExit {
+    pub code: Option<i32>,
+    pub last_lines: String,
+}
 
 /// What the health probe said. One probe, one vocabulary, in both languages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,7 +191,14 @@ pub enum Blocked {
     /// not know.
     Status { detail: String },
     /// Installing MCC has been tried its three times and did not take.
-    Install { detail: String },
+    ///
+    /// It carries its own `attempts`. Until 6.66.0 the count lived only in
+    /// `State::Installing`, and `attempts_of` answered `0` for every other
+    /// state -- so the very next PAINT tick rewrote `Blocked` back to
+    /// `Installing { attempts: 0 }` and the installer ran again, for ever.
+    /// Measured on the real 6.63.0 binary: ten installs in ninety-four
+    /// seconds, under a page that said "attempt 10 of 3".
+    Install { detail: String, attempts: u32 },
 }
 
 /// The lifecycle state. Eight from the audit (§5.1), plus `RestartPending` --
@@ -196,6 +233,17 @@ pub enum State {
     RestartPending { since: f64 },
     /// MCC itself is missing and this window is installing it.
     Installing { attempts: u32 },
+    /// An install has finished and this window is asking, again, whether MCC
+    /// is there now.
+    ///
+    /// A state rather than a flag because it is the edge that was missing:
+    /// the `NotInstalled` arm returned `vec![Effect::Install]` and never a
+    /// `Restatus`, and the loop's own opportunistic re-read was gated on
+    /// `status_health == Ok`, so after an install nothing ever asked whether
+    /// the install had worked. A non-zero installer exit is evidence for the
+    /// page, never the verdict -- `install.ps1` threw *after* a complete and
+    /// correct install for two releases (6.64.0 fixed that half).
+    Verifying { attempts: u32 },
     /// Something a person has to resolve. Still re-checked every tick.
     Blocked { reason: Blocked },
 }
@@ -212,6 +260,7 @@ impl State {
             Self::Updating { .. } => "updating",
             Self::RestartPending { .. } => "restart-pending",
             Self::Installing { .. } => "installing",
+            Self::Verifying { .. } => "verifying",
             Self::Blocked { .. } => "blocked",
         }
     }
@@ -224,11 +273,23 @@ pub struct Facts {
     pub admin_url: String,
     pub health_url: String,
     pub server_log: String,
+    /// Where this window writes its own installer and server-start
+    /// transcripts. The one path derived here rather than read verbatim, and
+    /// it is still derived from `config_dir`, which Python supplies (C1).
+    /// Empty until a status document has named a directory.
+    pub shell_log: String,
     pub port: u32,
     pub server_mode: String,
     pub tick_seconds: f64,
     pub start_backoff_seconds: f64,
     pub foreign_grace_seconds: f64,
+    /// How long one start attempt is given. `DESKTOP_SERVER_START_TIMEOUT`,
+    /// required by the parser since 6.61.0 and read by nothing until now.
+    pub start_timeout_seconds: f64,
+    /// Further attempts after the first: `DESKTOP_SERVER_START_RETRIES`.
+    /// One plus this is the user's "three attempts", and it comes from the
+    /// document rather than from a new setting nobody asked for (C9).
+    pub server_start_retries: u32,
     /// The holder's image name and pid, for the port-conflict page. Python's
     /// words, not a guess assembled here.
     pub holder_image: Option<String>,
@@ -241,11 +302,14 @@ impl Default for Facts {
             admin_url: String::new(),
             health_url: String::new(),
             server_log: String::new(),
+            shell_log: String::new(),
             port: 0,
             server_mode: "spawn".to_owned(),
             tick_seconds: DEFAULT_TICK_SECONDS,
             start_backoff_seconds: DEFAULT_START_BACKOFF_SECONDS,
             foreign_grace_seconds: DEFAULT_FOREIGN_GRACE_SECONDS,
+            start_timeout_seconds: DEFAULT_START_TIMEOUT_SECONDS,
+            server_start_retries: DEFAULT_SERVER_START_RETRIES,
             holder_image: None,
             holder_pid: None,
         }
@@ -278,6 +342,23 @@ pub struct Observation {
     /// Whether a replacement for this binary is staged and this launch has not
     /// asked for it yet.
     pub shell_stale: bool,
+    /// How the last server this window started ended, and its last words.
+    /// `None` while one is running, or before any has been started. This is
+    /// the fact the window did not have: a child that exited is a different
+    /// observation from a port that is merely quiet.
+    pub last_child_exit: Option<ChildExit>,
+    /// How many servers this window has started since it last saw a healthy
+    /// one. Reset by health, never by a repaint.
+    pub start_attempts: u32,
+    /// Seconds since the first of those, or `None` before the first.
+    pub since_first_start: Option<f64>,
+    /// The installer's last meaningful line, for the page that gives up.
+    pub last_install_line: String,
+    /// Where this session's last installer transcript went. Separate from
+    /// `facts.shell_log` because it is known in exactly the state where no
+    /// status document has ever been read and `facts` is therefore empty --
+    /// which is the state the page that gives up is shown in.
+    pub install_log: String,
     pub facts: Facts,
 }
 
@@ -407,33 +488,61 @@ pub fn step(state: &State, observation: &Observation, now: f64) -> (State, Vec<E
                 vec![Effect::Show(updating_page(stage.as_deref(), observation))],
             );
         }
-        let attempts = match state {
-            State::Installing { attempts } => *attempts,
-            _ => 0,
-        };
+        let attempts = install_attempts_of(state);
+        // A paint tick must not rewrite the state it was given. This one
+        // line is the whole of the 6.63.0 install loop: `attempts_of`
+        // answered 0 for `Blocked`, the paint tick one second after the
+        // bound was reached wrote `Installing { attempts: 0 }` back, and the
+        // next fresh tick installed again.
+        if !observation.fresh {
+            return (state.clone(), effects);
+        }
+        if matches!(
+            state,
+            State::Blocked {
+                reason: Blocked::Install { .. }
+            }
+        ) {
+            // Already given up. Still re-checked every tick -- the page goes
+            // away by itself if MCC appears -- but never installed again.
+            return (
+                state.clone(),
+                vec![
+                    Effect::Restatus,
+                    Effect::Show(install_did_not_take_page(observation, attempts)),
+                ],
+            );
+        }
+        // An install ran and has not been re-verified yet. Ask the
+        // filesystem, on this tick, before spending another attempt.
+        if let State::Installing { attempts } = state {
+            return (
+                State::Verifying {
+                    attempts: *attempts,
+                },
+                vec![
+                    Effect::Restatus,
+                    Effect::Show(installing_page(observation, *attempts)),
+                ],
+            );
+        }
         if attempts >= INSTALL_ATTEMPTS {
             return (
                 State::Blocked {
                     reason: Blocked::Install {
-                        detail: format!(
-                            "My Claude Code was installed {attempts} times from this \
-                             window and mcc-desktop still cannot be run."
+                        detail: install::install_did_not_take_message(
+                            attempts,
+                            &observation.last_install_line,
+                            named(&observation.install_log).as_deref(),
                         ),
+                        attempts,
                     },
                 },
-                vec![Effect::Show(Page::Error {
-                    message: format!(
-                        "My Claude Code was installed {attempts} times from this window \
-                         and mcc-desktop still cannot be run. This window keeps checking \
-                         every {:.0} seconds; Retry checks again now.",
-                        observation.facts.tick_seconds
-                    ),
-                    server_log: None,
-                })],
+                vec![Effect::Show(install_did_not_take_page(
+                    observation,
+                    attempts,
+                ))],
             );
-        }
-        if !observation.fresh {
-            return (State::Installing { attempts }, effects);
         }
         return (
             State::Installing {
@@ -502,7 +611,11 @@ pub fn step(state: &State, observation: &Observation, now: f64) -> (State, Vec<E
                      dashboard up by itself when the server answers.",
                     observation.facts.tick_seconds
                 ),
-                server_log: None,
+                // D6-Q10: every error page names the two paths it has. The
+                // field has existed since 6.61.0 and every construction site
+                // passed `None`.
+                server_log: named(&observation.facts.server_log),
+                shell_log: named(&observation.facts.shell_log),
             })],
         );
     }
@@ -590,14 +703,23 @@ fn step_absent(
     if may_start(observation) {
         effects.retain(|effect| !effect.acts());
         effects.push(Effect::Spawn);
-        effects.push(Effect::Show(starting_page(
-            observation,
-            if post_update {
-                "The update finished, so this window is starting the server"
-            } else {
-                "Starting the My Claude Code server"
-            },
-        )));
+        // The budget changes what the page SAYS and nothing else: the spawn
+        // above is unconditional, exactly as decision Q4 of 2026-09-08
+        // requires. A window that has spent its budget is still starting a
+        // server every tick, for ever -- it has merely stopped pretending
+        // that nothing has gone wrong.
+        effects.push(Effect::Show(if start_budget_spent(observation) {
+            server_failed_page(observation)
+        } else {
+            starting_page(
+                observation,
+                if post_update {
+                    "The update finished, so this window is starting the server"
+                } else {
+                    "Starting the My Claude Code server"
+                },
+            )
+        }));
         return (
             State::Starting {
                 since: now,
@@ -624,7 +746,7 @@ fn step_absent(
     }
 
     let was_attached = matches!(state, State::Attached | State::Reconnecting { .. });
-    if was_attached {
+    if was_attached && !start_budget_spent(observation) {
         effects.push(Effect::Show(reconnecting_page(observation)));
         return (
             State::Reconnecting {
@@ -634,10 +756,11 @@ fn step_absent(
         );
     }
 
-    effects.push(Effect::Show(starting_page(
-        observation,
-        "Starting the My Claude Code server",
-    )));
+    effects.push(Effect::Show(if start_budget_spent(observation) {
+        server_failed_page(observation)
+    } else {
+        starting_page(observation, "Starting the My Claude Code server")
+    }));
     (
         State::Starting {
             since: since(state, now),
@@ -663,6 +786,124 @@ fn attempts_of(state: &State) -> u32 {
     match state {
         State::Starting { attempts, .. } => *attempts,
         _ => 0,
+    }
+}
+
+/// How many installs this window has run, from whichever state holds it.
+///
+/// The counterpart of `attempts_of`, and the reason it is a function of its
+/// own: the install count has to survive `Blocked`, or the bound does not
+/// bound. See `Blocked::Install`.
+fn install_attempts_of(state: &State) -> u32 {
+    match state {
+        State::Installing { attempts } | State::Verifying { attempts } => *attempts,
+        State::Blocked {
+            reason: Blocked::Install { attempts, .. },
+        } => *attempts,
+        _ => 0,
+    }
+}
+
+/// A path, when there is one to name.
+fn named(path: &str) -> Option<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+/// The page shown while an install is being re-verified.
+fn installing_page(observation: &Observation, attempts: u32) -> Page {
+    Page::Installing {
+        command: install::install_command_for_this_machine().display,
+        message: format!(
+            "My Claude Code was installed from this window (attempt {attempts} of \
+             {INSTALL_ATTEMPTS}); checking whether it took ({}).",
+            cadence_tail(observation)
+        ),
+    }
+}
+
+/// The page that says the installs did not take, and why.
+///
+/// D6-Q4: `install::install_did_not_take_message` has been written,
+/// unit-tested and called by nothing since 6.58.1, and `LAST_INSTALL_LINE` has
+/// been written and read by nothing since 6.61.0. What did show was a
+/// two-second flash before the next install overwrote it.
+fn install_did_not_take_page(observation: &Observation, attempts: u32) -> Page {
+    let mut message = install::install_did_not_take_message(
+        attempts,
+        &observation.last_install_line,
+        named(&observation.install_log).as_deref(),
+    );
+    message.push_str(&format!(
+        " This window re-checks every {:.0} seconds and picks MCC up by itself \
+         if it appears; Retry checks again now.",
+        observation.facts.tick_seconds
+    ));
+    Page::Error {
+        message,
+        server_log: named(&observation.facts.server_log),
+        shell_log: named(&observation.install_log).or_else(|| named(&observation.facts.shell_log)),
+    }
+}
+
+/// The whole start budget, in one place: three attempts, or the document's own
+/// `start_timeout_seconds * (server_start_retries + 1)`.
+///
+/// Both halves, because they fail differently: a server that exits in one
+/// second spends three attempts in thirty, and a server that hangs spends none
+/// at all. `false` while nothing has been started yet.
+pub fn start_budget_spent(observation: &Observation) -> bool {
+    if observation.start_attempts >= START_ATTEMPTS_BEFORE_THE_TRUTH {
+        return true;
+    }
+    let per_attempt = observation.facts.start_timeout_seconds.max(1.0);
+    let budget = per_attempt * f64::from(observation.facts.server_start_retries + 1);
+    observation
+        .since_first_start
+        .is_some_and(|elapsed| elapsed >= budget)
+}
+
+/// The page that stops being a spinner.
+///
+/// Everything the window knew and never said: how many servers it has started,
+/// how the last one ended, its last words, and the two log paths. Plus the same
+/// countdown every other page carries, because Q4 is not weakened -- the next
+/// tick still starts another one.
+fn server_failed_page(observation: &Observation) -> Page {
+    let attempts = observation.start_attempts;
+    let mut detail = String::new();
+    match observation.last_child_exit.as_ref() {
+        Some(exit) => {
+            let code = exit
+                .code
+                .map_or_else(|| "an unknown status".to_owned(), |value| value.to_string());
+            detail.push_str(&format!("mcc-server exited with {code}."));
+            let words = exit.last_lines.trim();
+            if !words.is_empty() {
+                detail.push_str("\n\n");
+                detail.push_str(words);
+            }
+        }
+        None => detail.push_str(
+            "mcc-server was started and has not answered. It did not exit, so it \
+             is still coming up or it is stuck.",
+        ),
+    }
+    Page::ServerFailed {
+        message: format!(
+            "The server has been started {attempts} time{} from this window and has \
+             not answered on port {}. This window keeps trying ({}).",
+            if attempts == 1 { "" } else { "s" },
+            observation.facts.port,
+            cadence_tail(observation),
+        ),
+        detail,
+        server_log: named(&observation.facts.server_log),
+        shell_log: named(&observation.facts.shell_log),
     }
 }
 
@@ -752,6 +993,11 @@ mod tests {
 
     fn observation(health: Health) -> Observation {
         Observation {
+            last_child_exit: None,
+            start_attempts: 0,
+            since_first_start: None,
+            last_install_line: String::new(),
+            install_log: String::new(),
             fresh: true,
             health,
             holder: Holder::Absent,
@@ -802,6 +1048,7 @@ mod tests {
             State::Blocked {
                 reason: Blocked::Install {
                     detail: "boom".to_owned(),
+                    attempts: INSTALL_ATTEMPTS,
                 },
             },
         ]
@@ -1233,12 +1480,30 @@ mod tests {
         let mut missing = observation(Health::Absent);
         missing.status = StatusHealth::NotInstalled;
         let mut state = State::Booting;
+        let mut installs = 0;
+        // Install, re-verify, install, re-verify... The re-verification is
+        // D6-Q2: a non-zero installer exit is evidence for the page and never
+        // the verdict, so the only thing that decides whether an install took
+        // is asking again (`install.ps1` threw *after* a complete install for
+        // two releases).
         for expected in 1..=INSTALL_ATTEMPTS {
-            let (next, effects) = step(&state, &missing, f64::from(expected));
-            assert!(effects.contains(&Effect::Install));
+            let (next, effects) = step(&state, &missing, f64::from(expected) * 10.0);
+            assert!(effects.contains(&Effect::Install), "{effects:?}");
             assert_eq!(next, State::Installing { attempts: expected });
+            installs += 1;
+            state = next;
+
+            let (next, effects) = step(&state, &missing, f64::from(expected) * 10.0 + 1.0);
+            assert!(
+                effects.contains(&Effect::Restatus),
+                "an install must be re-verified before another is spent: {effects:?}"
+            );
+            assert!(!effects.contains(&Effect::Install), "{effects:?}");
+            assert_eq!(next, State::Verifying { attempts: expected });
             state = next;
         }
+        assert_eq!(installs, INSTALL_ATTEMPTS);
+
         let (next, effects) = step(&state, &missing, 99.0);
         assert!(!effects.contains(&Effect::Install));
         assert!(matches!(
@@ -1247,10 +1512,218 @@ mod tests {
                 reason: Blocked::Install { .. }
             }
         ));
+        // The page that stays: it quotes the installer and names the logs.
+        let page = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Show(page) => Some(page.clone()),
+                _ => None,
+            })
+            .expect("a page");
+        let json = serde_json::to_string(&page).expect("a page serializes");
+        assert!(json.contains("The installer ran 3 times"), "{json}");
+
         // And it still heals: MCC arrives, the next tick starts a server.
         let (healed, effects) = step(&next, &observation(Health::Absent), 109.0);
         assert!(effects.contains(&Effect::Spawn));
         assert!(matches!(healed, State::Starting { .. }));
+    }
+
+    #[test]
+    fn a_fourth_install_is_never_asked_for_however_the_ticks_fall() {
+        // The property the 6.61.0 bound failed. Measured on the real 6.63.0
+        // binary: ten installs in ninety-four seconds under a page that said
+        // "attempt 10 of 3". The mechanism was one line -- the `!fresh` branch
+        // returned `State::Installing { attempts }` where `attempts` came from
+        // `attempts_of`, which answered 0 for every state that was not
+        // `Starting`, so the paint tick one second after `Blocked` rewrote it
+        // to `Installing { attempts: 0 }`.
+        let mut missing = observation(Health::Absent);
+        missing.status = StatusHealth::NotInstalled;
+        for pattern in 0u32..64 {
+            let mut state = State::Booting;
+            let mut installs = 0;
+            for tick in 0..24 {
+                // Every interleaving of fresh and paint ticks in six bits.
+                missing.fresh = pattern & (1 << (tick % 6)) != 0;
+                let (next, effects) = step(&state, &missing, f64::from(tick));
+                installs += effects
+                    .iter()
+                    .filter(|effect| **effect == Effect::Install)
+                    .count();
+                state = next;
+            }
+            assert!(
+                installs <= INSTALL_ATTEMPTS as usize,
+                "pattern {pattern:b} asked for {installs} installs"
+            );
+        }
+    }
+
+    #[test]
+    fn a_paint_tick_never_rewrites_the_state_it_was_given() {
+        // The general form of the same bug, over every state the machine has.
+        let mut missing = observation(Health::Absent);
+        missing.status = StatusHealth::NotInstalled;
+        missing.fresh = false;
+        for state in all_states() {
+            let (next, effects) = step(&state, &missing, 7.0);
+            assert_eq!(next, state, "a paint tick moved {}", state.name());
+            assert!(
+                !effects.iter().any(Effect::acts),
+                "a paint tick acted from {}: {effects:?}",
+                state.name()
+            );
+        }
+    }
+
+    #[test]
+    fn a_broken_shim_is_installed_over_rather_than_parked_on() {
+        // D6-Q9 / state 2 of the investigation: `--print-status` exits 1 having
+        // printed a uv trampoline error, and 6.63.0 parked on an error page for
+        // ever although the remedy was the installer it already knows how to
+        // run. `process::print_status_within` maps that to `NotInstalled`, so
+        // the arm below is the one that runs.
+        let mut broken = observation(Health::Absent);
+        broken.status = StatusHealth::NotInstalled;
+        let (next, effects) = step(&State::Booting, &broken, 1.0);
+        assert!(effects.contains(&Effect::Install), "{effects:?}");
+        assert_eq!(next, State::Installing { attempts: 1 });
+    }
+
+    #[test]
+    fn a_server_that_exited_is_reported_with_its_code_and_its_last_words() {
+        let mut spent = observation(Health::Absent);
+        spent.start_attempts = START_ATTEMPTS_BEFORE_THE_TRUTH;
+        spent.since_first_start = Some(90.0);
+        spent.since_last_start = Some(1.0);
+        spent.last_child_exit = Some(ChildExit {
+            code: Some(1),
+            last_lines: "Refusing to start: HOST is '0.0.0.0'".to_owned(),
+        });
+        let (_, effects) = step(
+            &State::Starting {
+                since: 0.0,
+                attempts: 3,
+            },
+            &spent,
+            90.0,
+        );
+        let json = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Show(page) => serde_json::to_string(page).ok(),
+                _ => None,
+            })
+            .expect("a page");
+        assert!(json.contains("server-failed"), "{json}");
+        assert!(json.contains("exited with 1"), "{json}");
+        assert!(json.contains("Refusing to start"), "{json}");
+    }
+
+    #[test]
+    fn the_start_budget_is_three_attempts_or_the_documents_own_timeout() {
+        // D6-Q8: the two keys the status document has always carried and
+        // nothing has ever read. No new setting.
+        let mut slow = observation(Health::Absent);
+        slow.facts.start_timeout_seconds = 20.0;
+        slow.facts.server_start_retries = 2;
+        slow.start_attempts = 1;
+        slow.since_first_start = Some(59.0);
+        assert!(!start_budget_spent(&slow));
+        slow.since_first_start = Some(60.0);
+        assert!(start_budget_spent(&slow));
+
+        // The 6.60.2-era defaults: 15 x 3 = 45.
+        let mut older = slow.clone();
+        older.facts.start_timeout_seconds = 15.0;
+        older.since_first_start = Some(44.0);
+        assert!(!start_budget_spent(&older));
+        older.since_first_start = Some(45.0);
+        assert!(start_budget_spent(&older));
+
+        // ...and three attempts is the other half, however fast they were.
+        let mut quick = observation(Health::Absent);
+        quick.start_attempts = START_ATTEMPTS_BEFORE_THE_TRUTH;
+        quick.since_first_start = Some(3.0);
+        assert!(start_budget_spent(&quick));
+
+        // Nothing started yet is never "spent".
+        assert!(!start_budget_spent(&observation(Health::Absent)));
+    }
+
+    #[test]
+    fn the_failed_page_still_counts_down_and_still_starts_the_server() {
+        // Decision Q4 of 2026-09-08 is not weakened by D6: the tick keeps
+        // force-starting for ever. The budget changes the sentence, not the
+        // spawn.
+        let mut spent = observation(Health::Absent);
+        spent.start_attempts = 9;
+        spent.since_first_start = Some(300.0);
+        spent.since_last_start = Some(30.0);
+        let (next, effects) = step(
+            &State::Starting {
+                since: 0.0,
+                attempts: 9,
+            },
+            &spent,
+            300.0,
+        );
+        assert!(effects.contains(&Effect::Spawn), "{effects:?}");
+        assert!(matches!(next, State::Starting { .. }));
+        let json = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Show(page) => serde_json::to_string(page).ok(),
+                _ => None,
+            })
+            .expect("a page");
+        assert!(json.contains("server-failed"), "{json}");
+        assert!(json.contains("next start attempt in"), "{json}");
+    }
+
+    #[test]
+    fn the_failed_page_goes_away_by_itself_when_health_answers() {
+        let mut spent = observation(Health::Healthy);
+        spent.start_attempts = 5;
+        spent.since_first_start = Some(300.0);
+        let (next, effects) = step(
+            &State::Starting {
+                since: 0.0,
+                attempts: 5,
+            },
+            &spent,
+            300.0,
+        );
+        assert_eq!(next, State::Attached);
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Attach { .. })),
+            "{effects:?}"
+        );
+    }
+
+    #[test]
+    fn every_error_page_names_the_logs_it_has() {
+        // D6-Q10. `Page::Error::server_log` has existed since 6.61.0 and every
+        // construction site passed `None`.
+        let mut unreadable = observation(Health::Absent);
+        unreadable.status = StatusHealth::Unreadable {
+            detail: "boom".to_owned(),
+        };
+        unreadable.facts.server_log = "/logs/server.log".to_owned();
+        unreadable.facts.shell_log = "/logs/desktop-server-start.log".to_owned();
+        let (_, effects) = step(&State::Booting, &unreadable, 1.0);
+        let json = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Show(page) => serde_json::to_string(page).ok(),
+                _ => None,
+            })
+            .expect("a page");
+        assert!(json.contains("/logs/server.log"), "{json}");
+        assert!(json.contains("/logs/desktop-server-start.log"), "{json}");
     }
 
     #[test]
