@@ -17,6 +17,7 @@ from types import FrameType
 import uvicorn
 from loguru import logger
 
+from my_claude_code.cli.first_start import ensure_config_home_or_exit
 from my_claude_code.cli.launchers.common import preflight_proxy
 from my_claude_code.cli.port_diagnostics import (
     diagnose_port_owner,
@@ -30,7 +31,8 @@ from my_claude_code.config.env_migrations import (
     explicit_env_file_migration_warning,
     migrate_owned_env_files,
 )
-from my_claude_code.config.env_template import load_env_template
+from my_claude_code.config.env_template import render_default_env
+from my_claude_code.config.logging_config import append_to_server_log
 from my_claude_code.config.paths import (
     config_dir_path,
     config_dir_resolution,
@@ -38,6 +40,7 @@ from my_claude_code.config.paths import (
     managed_env_path,
     new_config_dir_path,
     request_log_path,
+    server_log_path,
 )
 from my_claude_code.config.proxy_auth import open_proxy_without_auth_error
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
@@ -288,6 +291,12 @@ def _emit_config_dir_banner() -> None:
 
 def serve() -> None:
     """Start and supervise the FastAPI server."""
+    # First, and before anything resolves a path or reads a setting: make
+    # the config home exist, move a legacy one into place, and write a
+    # default .env with a token generated on this machine. Until 6.65.0 a
+    # machine that had never run mcc-init started here and died two lines
+    # later on the 6.30.0 refusal.
+    ensure_config_home_or_exit()
     _bootstrap_request_log_path()
     _emit_config_dir_banner()
     opened_admin_browser = False
@@ -388,6 +397,11 @@ def _run_supervised_server(
         # answered one request has already leaked whatever that request cost.
         logger.error(refusal)
         print(refusal, file=sys.stderr)
+        # ...and into the file the desktop app's error page names. This
+        # guard runs before the composition root configures logging, so
+        # until 6.65.0 the one start a user most needs an explanation for
+        # produced no server.log at all.
+        append_to_server_log(os.getenv("LOG_FILE", server_log_path()), "ERROR", refusal)
         raise SystemExit(1)
 
     requested = ServerExitAction.STOP
@@ -631,7 +645,7 @@ def init() -> None:
     if migrated_from is not None:
         print(f"Config migrated from {migrated_from} to {env_file}")
         print(
-            "Edit it to set your API keys and model preferences, then run: fcc-server"
+            "Edit it to set your API keys and model preferences, then run: mcc-server"
         )
         return
 
@@ -641,10 +655,16 @@ def init() -> None:
         return
 
     config_dir.mkdir(parents=True, exist_ok=True)
-    template = load_env_template()
-    env_file.write_text(template, encoding="utf-8")
+    # The same text a first start writes, with the same per-machine token
+    # generator: two ways of reaching a first configuration must not produce
+    # two different configurations.
+    env_file.write_text(render_default_env(), encoding="utf-8")
     print(f"Config created at {env_file}")
-    print("Edit it to set your API keys and model preferences, then run: fcc-server")
+    print(
+        "A proxy token was generated for this machine; read it on the "
+        "dashboard under Providers -> Runtime."
+    )
+    print("Edit it to set your API keys and model preferences, then run: mcc-server")
 
 
 def _migrate_legacy_env_if_missing() -> Path | None:

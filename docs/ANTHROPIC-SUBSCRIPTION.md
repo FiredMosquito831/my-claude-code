@@ -43,7 +43,7 @@ than legalistic:
 
 ```
 claude  ──►  127.0.0.1:8082  ──►  MCC  ──►  api.anthropic.com
-             (ANTHROPIC_AUTH_TOKEN=freecc)   ▲
+             (ANTHROPIC_AUTH_TOKEN=<yours>)   ▲
                                              └── MCC's HTTP client presents
                                                  YOUR subscription credential
 ```

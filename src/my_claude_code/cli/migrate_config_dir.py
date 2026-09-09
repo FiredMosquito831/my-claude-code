@@ -46,6 +46,7 @@ from my_claude_code.config.paths import (
     DESKTOP_LOCK_FILENAME,
     FCC_ENV_FILENAME,
     legacy_config_dir_path,
+    migrated_pointer_path,
     new_config_dir_path,
     retired_config_dir_path,
 )
@@ -92,7 +93,9 @@ def _now_iso() -> str:
     )
 
 
-def _restore_text(new_home: Path, legacy_home: Path) -> str:
+def _restore_text(
+    new_home: Path, legacy_home: Path, *, holder: str = "This directory holds"
+) -> str:
     """Return the rollback note left in ``~/.fcc-old``.
 
     The command in it must **fail** if the legacy home has come back, and it
@@ -122,7 +125,7 @@ def _restore_text(new_home: Path, legacy_home: Path) -> str:
 
             {legacy_home.name}  ->  {new_home.name}
 
-        Nothing was copied and nothing was deleted. This directory holds only this
+        Nothing was copied and nothing was deleted. {holder} only this
         note. To move the data back, close every MCC process (the tray, the server,
         and any coding agent) and run:
 
@@ -230,8 +233,21 @@ def _read_env_setting(env_path: Path, name: str) -> str | None:
 
 
 def _configured_port(legacy_home: Path) -> int | None:
-    """The port a server started from ``legacy_home`` would be listening on."""
+    """The port a server started from ``legacy_home`` would be listening on.
 
+    ``PORT`` in the process environment outranks the file, because that is
+    what pydantic-settings does and therefore what the server about to
+    start will actually bind. Reading only the file made this probe knock
+    on the port some *other* MCC server owns -- for a user running a second
+    instance on a different port, a permanent and wrong refusal.
+    """
+
+    override = os.environ.get("PORT", "").strip()
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            logger.debug("Ignoring unparseable PORT={} in the environment", override)
     raw = _read_env_setting(legacy_home / FCC_ENV_FILENAME, "PORT")
     if raw is not None:
         try:
@@ -306,6 +322,29 @@ def _describe_holders() -> str:
         f"{listed}\n"
         "Close them and re-run mcc-migrate."
     )
+
+
+def _write_migrated_pointer(new_home: Path, legacy_home: Path) -> Path | None:
+    """Leave a note where ``~/.fcc`` used to be, naming where it went.
+
+    The rollback note in ``~/.fcc-old/RESTORE.txt`` is a directory a user
+    has to think to open. This is a file called ``.fcc-migrated.txt``,
+    sorted next to the name they will look for and readable in one glance:
+    what moved, when, and the command that moves it back. Failing to write
+    it never fails the migration -- the move already happened, and a
+    missing note is not worth undoing it for.
+    """
+
+    pointer = migrated_pointer_path()
+    try:
+        pointer.write_text(
+            _restore_text(new_home, legacy_home, holder="This file holds"),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("Could not write the migration pointer {}: {}", pointer, exc)
+        return None
+    return pointer
 
 
 def migrate_config_dir() -> str:
@@ -396,6 +435,8 @@ def migrate_config_dir() -> str:
             f"Nothing was moved. Close every MCC process and re-run mcc-migrate."
         )
 
+    _write_migrated_pointer(new_home, legacy_home)
+
     if retired_home.exists():
         logger.info(
             "{} already exists; leaving it as-is and writing RESTORE.txt "
@@ -415,7 +456,9 @@ def migrate_config_dir() -> str:
 
     return (
         f"Moved {legacy_home} to {new_home}. Nothing was copied and nothing was "
-        f"deleted.\n\n{restore_note}\n\nRestart the server yourself afterwards: "
+        f"deleted.\n\n{restore_note}\n"
+        f"Pointer written to {migrated_pointer_path()}.\n\n"
+        f"Restart the server yourself afterwards: "
         f"the running server is still using the old directory until you do."
     )
 

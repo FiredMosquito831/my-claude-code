@@ -108,9 +108,11 @@ from my_claude_code.config.onboarding import (
     save_persisted as save_onboarding_persisted,
 )
 from my_claude_code.config.paths import (
+    ConfigDirResolution,
     claude_settings_path,
     config_dir_path,
     config_dir_resolution,
+    first_start_notice,
     legacy_config_dir_path,
     new_config_dir_path,
     retired_config_dir_path,
@@ -1082,32 +1084,45 @@ class ConfigDirStatusPayload(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
-def _config_dir_status_payload() -> ConfigDirStatusPayload:
-    resolution = config_dir_resolution()
-    current_dir = config_dir_path()
-    new_home = new_config_dir_path()
-    banner = ""
+def _standing_config_dir_banner(
+    resolution: ConfigDirResolution, current_dir: Path, new_home: Path
+) -> str:
+    """The banner that describes where files live, as a standing fact."""
+
     if resolution.uses_legacy_home:
-        banner = (
-            f"Your configuration lives in {current_dir} (the legacy directory). "
-            f"Nothing needs to change -- it stays fully supported. To move it to "
-            f"{new_home}: stop the server and the tray, run mcc-migrate in a "
-            f"terminal, then start the server again."
-        )
         if resolution.legacy_unhealthy:
             health = resolution.legacy_health
             check = health.failed_check if health else "unknown"
             detail = health.detail if health else ""
-            banner = (
+            return (
                 f"{current_dir} failed the '{check}' check ({detail}). It is "
                 f"still the directory in use and nothing was moved, renamed or "
                 f"created. Fix the problem in place; {new_home} is created only "
                 f"by running mcc-migrate."
             )
-    elif resolution.warning:
-        # The dual-directory case: both homes exist, ~/.mcc wins, neither is
-        # merged. The resolution already phrases that precisely.
-        banner = resolution.warning
+        return (
+            f"Your configuration lives in {current_dir} (the legacy directory). "
+            f"Nothing needs to change -- it stays fully supported. To move it to "
+            f"{new_home}: stop the server and the tray, run mcc-migrate in a "
+            f"terminal, then start the server again."
+        )
+    # The dual-directory case: both homes exist, ~/.mcc wins, neither is
+    # merged. The resolution already phrases that precisely.
+    return resolution.warning
+
+
+def _config_dir_status_payload() -> ConfigDirStatusPayload:
+    resolution = config_dir_resolution()
+    current_dir = config_dir_path()
+    new_home = new_config_dir_path()
+    # What this server's own first start did, if anything: the one-time
+    # ~/.fcc -> ~/.mcc move, or a config home written from the shipped
+    # template. It outranks the standing sentence below, because it is the
+    # only one describing something that happened minutes ago rather than a
+    # fact about where files have lived all along.
+    banner = first_start_notice() or _standing_config_dir_banner(
+        resolution, current_dir, new_home
+    )
     health = resolution.legacy_health
     return ConfigDirStatusPayload(
         currentDir=str(current_dir),

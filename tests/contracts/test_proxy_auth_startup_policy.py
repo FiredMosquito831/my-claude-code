@@ -62,18 +62,36 @@ def test_whitespace_is_not_a_token() -> None:
 def test_the_shipped_defaults_start_without_a_refusal() -> None:
     """The default install is not the one this refusal is aimed at.
 
-    ``mcc-init`` writes ``.env.example``, whose ``ANTHROPIC_AUTH_TOKEN`` is
-    populated, and the admin manifest offers the same default. A first run
-    therefore never meets the refusal; only an install that deliberately
-    emptied the token while listening to the network does.
+    This used to read the *manifest* default (``'freecc'``) and was green
+    while a genuinely fresh machine refused to start: the code default for
+    ``anthropic_auth_token`` was ``''``, ``host`` was ``0.0.0.0``, and
+    nothing on any install path ever wrote a ``.env``. So it asserts the
+    path a fresh machine actually takes -- the ``Settings`` defaults, with
+    no file and no environment -- which since 6.65.0 is loopback and
+    therefore safe with no token at all.
     """
-    token_default = next(
-        field.default for field in FIELDS if field.key == "ANTHROPIC_AUTH_TOKEN"
-    )
-    assert token_default
+    defaults = Settings.model_fields
+    assert defaults["host"].default == "127.0.0.1"
+    assert defaults["anthropic_auth_token"].default == ""
     assert (
-        open_proxy_without_auth_error(host=Settings().host, auth_token=token_default)
+        open_proxy_without_auth_error(
+            host=defaults["host"].default,
+            auth_token=defaults["anthropic_auth_token"].default,
+        )
         is None
+    )
+
+
+def test_the_manifest_and_the_code_agree_about_both_halves() -> None:
+    """The manifest is what the dashboard offers; it must not disagree.
+
+    The 6.30.0 guard test read the manifest and the server read the code,
+    and for four releases they said different things. Pin them together.
+    """
+    manifest = {field.key: field.default for field in FIELDS}
+    assert manifest["HOST"] == Settings.model_fields["host"].default
+    assert manifest["ANTHROPIC_AUTH_TOKEN"] == (
+        Settings.model_fields["anthropic_auth_token"].default
     )
 
 

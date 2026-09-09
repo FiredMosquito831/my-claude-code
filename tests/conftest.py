@@ -95,6 +95,38 @@ def _isolate_learned_facts():
 
 
 @pytest.fixture(autouse=True)
+def _no_first_start_side_effects(monkeypatch):
+    """``serve()`` initialises the config home; no unit test may really do it.
+
+    Since 6.65.0 the first thing ``cli.commands.serve`` does is create the
+    config directory, move a legacy ``~/.fcc`` into place and write a
+    ``.env``. Every ``serve()`` unit test would therefore migrate its
+    hermetic home -- and the liveness probe inside the migration knocks on
+    the port the ``Settings`` default names, which on a developer machine
+    is their own running server. ``tests/cli/test_first_start.py`` exercises
+    the real function directly, against a home of its own.
+    """
+
+    from my_claude_code.cli import commands
+
+    monkeypatch.setattr(commands, "ensure_config_home_or_exit", lambda: "")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_server_log(monkeypatch, tmp_path):
+    """Keep ``logs/server.log`` out of any config directory a test resolves.
+
+    Since 6.65.0 the 6.30.0 refusal appends itself to the server log before
+    the composition root exists, so a unit test of the startup guard writes
+    a file where previously it wrote none. ``LOG_FILE`` is the same override
+    the composition root already honours, and pointing it at ``tmp_path``
+    keeps every such write inside the test that made it.
+    """
+
+    monkeypatch.setenv("LOG_FILE", str(tmp_path / "server.log"))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_request_log(monkeypatch, tmp_path):
     """Keep request-log writes out of the real ~/.fcc directory during tests."""
     from my_claude_code.core import request_log
