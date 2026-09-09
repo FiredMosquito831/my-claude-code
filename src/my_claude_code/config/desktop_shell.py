@@ -63,7 +63,7 @@ from pathlib import Path, PurePosixPath
 #: ``test_desktop_shell_pin.py`` can compare the two offline. A pin that drifts
 #: from the published sums file is the one failure this table cannot survive,
 #: and it is not something a reviewer can see by eye.
-DESKTOP_SHELL_RELEASE_TAG = "v6.61.0"
+DESKTOP_SHELL_RELEASE_TAG = "v6.66.0"
 
 #: The repository the shell is released from. The same one
 #: ``application/release_updates.py`` polls for the wheel -- one release stream
@@ -137,19 +137,19 @@ DESKTOP_SHELL_DOWNLOAD_TIMEOUT_SECONDS = 60.0
 _RELEASES: dict[tuple[str, str], tuple[str, str]] = {
     ("linux", "x86_64"): (
         "MyClaudeCode-linux-x86_64.tar.gz",
-        "68a1a78403d7d3a7ed44fc3ecd079d9d29fcf3fe7b98f3987af2f5966dd428ff",
+        "c5d6a65d0553bae30b041fdfc5abfc5f17b9d5e903d32912bdf30d4ae9dc6254",
     ),
     ("darwin", "x86_64"): (
         "MyClaudeCode-macos-x86_64.tar.gz",
-        "a669fa648ca3aab21bf5729efe4d0a677086d9527df6f8283d3172abbe96b0f4",
+        "cd00b06a40a0bfd1edd13333962a9c3c7c9546c935aae9f71897b7cf8297d20e",
     ),
     ("darwin", "aarch64"): (
         "MyClaudeCode-macos-aarch64.tar.gz",
-        "e64d696fed17d76fed90d09d23fce5fd110402ea9986a779ec96b1472dc5f424",
+        "32cab32be649870c392029ab26e1cdb0c37e8b24bc5453caf2049d434a9d6a70",
     ),
     ("win32", "x86_64"): (
         "MyClaudeCode-windows-x86_64.zip",
-        "b9eea0a910614fc28b173179d1a68376c01575cf40566a12ba843e4ac21b52e5",
+        "4708d426a7b583841e3b8e0cade8648fe2f191ba3339d4645c082596be80ba35",
     ),
 }
 
