@@ -49,9 +49,29 @@ pub enum Page {
     /// The server was healthy and stopped answering; still inside the budget.
     Reconnecting { message: String },
     /// The end of the line. `server_log` is shown when there is one to name.
+    ///
+    /// `shell_log` is this window's own transcript -- the installer's two
+    /// streams, and every line a server child printed. It exists because
+    /// `server_log` is the file the *server* writes, and the states that
+    /// most need explaining are the ones where no server ever got far
+    /// enough to write one.
     Error {
         message: String,
         server_log: Option<String>,
+        shell_log: Option<String>,
+    },
+    /// The server has been started its budget of times and has not answered.
+    ///
+    /// Deliberately not `Error`: nothing has ended. The tick is still
+    /// starting a server every ten seconds and the page still counts down to
+    /// the next attempt -- it has simply stopped being a spinner and says
+    /// the exit code, the child's last words and where the logs are.
+    /// `detail` is the server's own output and is inserted as text.
+    ServerFailed {
+        message: String,
+        detail: String,
+        server_log: Option<String>,
+        shell_log: Option<String>,
     },
 }
 
@@ -110,11 +130,13 @@ mod tests {
         let with_log = render_script(&Page::Error {
             message: "no answer".to_owned(),
             server_log: Some("/var/log/mcc.log".to_owned()),
+            shell_log: Some("/tmp/shell.log".to_owned()),
         });
         assert!(with_log.contains("/var/log/mcc.log"));
         let without = render_script(&Page::Error {
             message: "no answer".to_owned(),
             server_log: None,
+            shell_log: None,
         });
         assert!(without.contains("\"server_log\":null"));
     }
@@ -145,6 +167,36 @@ mod tests {
     }
 
     #[test]
+    fn the_failed_page_escapes_the_servers_own_words() {
+        // A server's stderr is untrusted text exactly as installer output is:
+        // it can contain a provider's response, a filename a user chose, or a
+        // traceback quoting either.
+        let script = render_script(&Page::ServerFailed {
+            message: "not answering".to_owned(),
+            detail: "boom\");alert('x');//".to_owned(),
+            server_log: None,
+            shell_log: None,
+        });
+        assert!(script.contains("\"boom\\\");alert('x');//\""), "{script}");
+        assert!(script.contains("\"kind\":\"server-failed\""), "{script}");
+    }
+
+    #[test]
+    fn the_failed_page_names_both_logs_when_it_has_them() {
+        let script = render_script(&Page::ServerFailed {
+            message: "not answering".to_owned(),
+            detail: "mcc-server exited with 1.".to_owned(),
+            server_log: Some("/logs/server.log".to_owned()),
+            shell_log: Some("/logs/desktop-server-start.log".to_owned()),
+        });
+        assert!(script.contains("/logs/server.log"), "{script}");
+        assert!(
+            script.contains("/logs/desktop-server-start.log"),
+            "{script}"
+        );
+    }
+
+    #[test]
     fn every_page_carries_a_kind_the_document_can_switch_on() {
         let pages = [
             Page::Checking,
@@ -171,6 +223,13 @@ mod tests {
             Page::Error {
                 message: String::new(),
                 server_log: None,
+                shell_log: None,
+            },
+            Page::ServerFailed {
+                message: String::new(),
+                detail: String::new(),
+                server_log: None,
+                shell_log: None,
             },
         ];
         for page in pages {
@@ -212,6 +271,13 @@ mod tests {
             Page::Error {
                 message: String::new(),
                 server_log: None,
+                shell_log: None,
+            },
+            Page::ServerFailed {
+                message: String::new(),
+                detail: String::new(),
+                server_log: None,
+                shell_log: None,
             },
         ] {
             let json = serde_json::to_string(&page).expect("a page serializes");

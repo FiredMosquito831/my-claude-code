@@ -349,6 +349,32 @@ def test_server_start_retries_defaults_to_two_further_attempts(
     )
 
 
+def test_the_start_budget_keys_are_still_the_two_the_shell_reads(
+    config_dir, monkeypatch
+) -> None:
+    """D6-Q8: the shell computes its whole start budget from these two.
+
+    From 6.66.0 the desktop shell reads start_timeout_seconds and
+    server_start_retries -- required by its parser since 6.61.0 and read by
+    nothing until now -- and shows a page naming the exit code and the child's
+    last words once start_timeout_seconds x (server_start_retries + 1) has
+    passed or three servers have been started. That is the whole reason D6
+    needed no new status key, and therefore only one repin (contract C9). If
+    either key is ever dropped or renamed, the budget silently becomes the
+    shell's compiled-in fallback.
+    """
+
+    assert "start_timeout_seconds" in STATUS_KEYS
+    assert "server_start_retries" in STATUS_KEYS
+    _settings(monkeypatch)
+    _presence(monkeypatch, "free")
+
+    payload = desktop_status()
+    assert isinstance(payload["start_timeout_seconds"], float)
+    assert isinstance(payload["server_start_retries"], int)
+    assert payload["start_timeout_seconds"] > 0
+
+
 def test_carries_the_port_conflict_message_when_foreign(
     config_dir, monkeypatch
 ) -> None:

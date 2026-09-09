@@ -100,7 +100,8 @@
         border: 1px solid var(--line);
         border-radius: 8px;
       }
-      pre#output {
+      pre#output,
+      pre#detail {
         max-height: 320px;
         overflow: auto;
         margin: 0;
@@ -163,8 +164,12 @@
       <code class="command" id="command" hidden></code>
       <pre id="output" hidden></pre>
 
+      <pre id="detail" hidden></pre>
+
       <p id="log-label" hidden>The server log is at:</p>
       <code class="path" id="log" hidden></code>
+      <p id="shell-log-label" hidden>This window's own log is at:</p>
+      <code class="path" id="shell-log" hidden></code>
 
       <button id="retry" hidden>Retry now</button>
       <button id="take-port" hidden>Take port</button>
@@ -182,8 +187,11 @@
         var message = document.getElementById("message");
         var command = document.getElementById("command");
         var output = document.getElementById("output");
+        var detail = document.getElementById("detail");
         var logLabel = document.getElementById("log-label");
         var log = document.getElementById("log");
+        var shellLogLabel = document.getElementById("shell-log-label");
+        var shellLog = document.getElementById("shell-log");
         var retry = document.getElementById("retry");
         var takePort = document.getElementById("take-port");
 
@@ -196,6 +204,7 @@
           "port-conflict": "Something else is on the port",
           reconnecting: "Reconnecting",
           error: "My Claude Code could not start",
+          "server-failed": "The server is not answering",
         };
 
         function render(state) {
@@ -208,7 +217,11 @@
           card.className = "";
           if (kind === "not-our-server" || kind === "reconnecting") {
             card.className = "warn";
-          } else if (kind === "port-conflict" || kind === "error") {
+          } else if (
+            kind === "port-conflict" ||
+            kind === "error" ||
+            kind === "server-failed"
+          ) {
             card.className = "bad";
           }
           spinner.hidden = !(
@@ -230,11 +243,27 @@
             command.textContent = state.command;
           }
 
+          // The server's own words, as TEXT. `textContent`, never
+          // `innerHTML`: a traceback from a provider is untrusted input
+          // exactly as installer output is.
+          var hasDetail = !!state.detail;
+          detail.hidden = !hasDetail;
+          if (hasDetail) {
+            detail.textContent = state.detail;
+          }
+
           var hasLog = !!state.server_log;
           logLabel.hidden = !hasLog;
           log.hidden = !hasLog;
           if (hasLog) {
             log.textContent = state.server_log;
+          }
+
+          var hasShellLog = !!state.shell_log;
+          shellLogLabel.hidden = !hasShellLog;
+          shellLog.hidden = !hasShellLog;
+          if (hasShellLog) {
+            shellLog.textContent = state.shell_log;
           }
 
           // "Retry now" is on every page, because from 6.61.0 every page has

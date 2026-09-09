@@ -70,21 +70,32 @@ pub fn install_command_for_this_machine() -> InstallCommand {
 /// install every couple of minutes, forever, under a spinner. Bounding the
 /// attempts is half the fix; saying the true reason is the other half, because
 /// the true reason has a one-line remedy the user can act on.
-pub fn install_did_not_take_message(attempts: u32, last_line: &str) -> String {
+pub fn install_did_not_take_message(
+    attempts: u32,
+    last_line: &str,
+    install_log: Option<&str>,
+) -> String {
     let ran = if attempts == 1 {
         "The installer ran".to_owned()
     } else {
         format!("The installer ran {attempts} times")
     };
+    // Reworded for 6.66.0. "Not on this window's PATH" stopped being the
+    // reason the moment the window began testing the file in
+    // `uv tool dir --bin` instead of asking its own frozen PATH (D6-Q1):
+    // an install that landed anywhere uv knows about is now found without
+    // restarting anything, so reaching this page means the launcher is
+    // genuinely not there.
     let mut text = format!(
-        "{ran} and mcc-desktop still is not on this window's PATH. The \
-         commonest reason is that the installer added a directory to PATH that \
-         only a newly started process can see: quit this window and start it \
-         again, and it will be found. "
+        "{ran} and mcc-desktop is still not in uv's tool directory or on \
+         PATH, so the install did not land. "
     );
-    let last = last_line.trim();
+    let last = last_line.trim().trim_end_matches('.');
     if !last.is_empty() {
         text.push_str(&format!("The installer's last line was: {last}. "));
+    }
+    if let Some(log) = install_log.map(str::trim).filter(|log| !log.is_empty()) {
+        text.push_str(&format!("Its whole output is in {log}. "));
     }
     text.push_str(
         "This window keeps checking either way, so if mcc-desktop does appear \
@@ -145,26 +156,35 @@ mod tests {
     }
 
     #[test]
-    fn the_install_that_did_not_take_names_the_reason_and_the_last_line() {
-        let message = install_did_not_take_message(3, "  Installed 12 executables  ");
+    fn the_install_that_did_not_take_names_the_uv_bin_directory_and_the_log() {
+        let message = install_did_not_take_message(
+            3,
+            "  Installed 12 executables  ",
+            Some("C:/x/config/logs/desktop-install-1.log"),
+        );
         assert!(message.contains("ran 3 times"), "{message}");
-        // The remedy, not merely the complaint.
-        assert!(message.contains("newly started process"), "{message}");
+        // Reworded for 6.66.0: the window tests the file in uv's bin directory
+        // now, so "a PATH only a new process can see" has stopped being the
+        // reason and saying it would send the reader to restart for nothing.
+        assert!(message.contains("uv's tool directory"), "{message}");
+        assert!(!message.contains("newly started process"), "{message}");
+        // The installer's own last word, trimmed, so the page is never a bare
+        // spinner over nothing...
+        assert!(message.contains("Installed 12 executables."), "{message}");
+        // ...and the whole of it, in a file that outlives the page.
         assert!(
-            message.contains("quit this window and start it again"),
+            message.contains("C:/x/config/logs/desktop-install-1.log"),
             "{message}"
         );
-        // The installer's own last word, trimmed, so the page is never a bare
-        // spinner over nothing.
-        assert!(message.contains("Installed 12 executables."), "{message}");
         assert!(message.contains("keeps checking"), "{message}");
     }
 
     #[test]
     fn an_install_with_nothing_to_quote_still_reads_as_a_sentence() {
-        let message = install_did_not_take_message(1, "   ");
+        let message = install_did_not_take_message(1, "   ", None);
         assert!(message.starts_with("The installer ran and"), "{message}");
         assert!(!message.contains("last line"), "{message}");
+        assert!(!message.contains("whole output"), "{message}");
     }
 
     #[test]
