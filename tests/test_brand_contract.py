@@ -7,7 +7,7 @@ still intact:
 Kept contracts (must not change):
   - FCC_* environment variables (e.g. FCC_OPEN_BROWSER)
   - Release repository FiredMosquito831/my-claude-code (RELEASE_REPO)
-  - Proxy token "freecc", config dir ".fcc"
+  - Config dir ".fcc" (still read, and migrated once on a first start)
   - Legacy fcc-* command family (preserved as aliases)
   - LEGACY_DISPLAY_NAME = "Free Claude Code"
 
@@ -60,9 +60,25 @@ def test_kept_fcc_env_vars():
     assert "FCC_OPEN_BROWSER" in env  # FCC_* env var must stay
 
 
-def test_kept_proxy_token_and_config_dir():
+def test_the_shipped_template_never_carries_a_published_password():
+    """``freecc`` was a password printed in a public repository.
+
+    It shipped as the value of ``ANTHROPIC_AUTH_TOKEN`` in ``.env.example``
+    beside a ``HOST=0.0.0.0`` default, which made every MCC install on a
+    LAN accept the same token. 6.65.0 ships the line empty and generates a
+    per-machine token when a first start writes the file. The model ids
+    ``claude-3-freecc-*`` are a different, published contract and stay.
+    """
     env = _read(".env.example")
-    assert "freecc" in env  # proxy auth token
+    token_lines = [
+        line for line in env.splitlines() if line.startswith("ANTHROPIC_AUTH_TOKEN=")
+    ]
+    assert token_lines == ["ANTHROPIC_AUTH_TOKEN="], token_lines
+    assert "HOST=127.0.0.1" in env
+    assert "PORT=8082" in env
+
+
+def test_kept_config_dir():
     readme = _read("README.md")
     assert ".fcc" in readme  # config directory
 

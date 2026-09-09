@@ -79,13 +79,29 @@ def test_init_creates_env_file(tmp_path: Path) -> None:
 
 
 def test_init_copies_template_content(tmp_path: Path) -> None:
-    """init() writes the canonical root env.example content, not an empty file."""
+    """init() writes the canonical template, with one line filled in.
+
+    Since 6.65.0 the shipped ``ANTHROPIC_AUTH_TOKEN=`` line is empty on
+    purpose -- a value printed in a public repository is not a secret -- and
+    both ``mcc-init`` and a first ``mcc-server`` replace it with a token
+    generated on this machine. Everything else is byte-identical.
+    """
     template = (Path(__file__).resolve().parents[2] / ".env.example").read_text(
         encoding="utf-8"
     )
     _, env_file = _run_init(tmp_path)
 
-    assert env_file.read_text("utf-8") == template
+    written = env_file.read_text("utf-8")
+    token_lines = [
+        line
+        for line in written.splitlines()
+        if line.startswith("ANTHROPIC_AUTH_TOKEN=")
+    ]
+    assert len(token_lines) == 1
+    token = token_lines[0].split("=", 1)[1].strip('"')
+    assert len(token) >= 40
+    assert token != "freecc"
+    assert written.replace(token_lines[0], "ANTHROPIC_AUTH_TOKEN=") == template
 
 
 def test_init_migrates_home_checkout_env_before_template(tmp_path: Path) -> None:
@@ -168,10 +184,15 @@ def test_init_skips_if_env_already_exists(tmp_path: Path) -> None:
 
 
 def test_init_prints_next_step_hint(tmp_path: Path) -> None:
-    """init() tells the user to run fcc-server after editing .env."""
+    """init() names the command it wants run next, and the current name.
+
+    It said ``fcc-server`` for eight releases after the rename.
+    """
     output, _ = _run_init(tmp_path)
 
-    assert "fcc-server" in output
+    assert "mcc-server" in output
+    assert "fcc-server" not in output
+    assert "Providers -> Runtime" in output
 
 
 def test_cli_scripts_are_registered() -> None:

@@ -28,6 +28,9 @@ RUNTIME_SECTION_ID = "runtime"
 
 _SECTION_LABELS = {section.section_id: section.label for section in SECTIONS}
 
+#: The card's own label, read from the manifest rather than spelled twice.
+RUNTIME_SECTION_LABEL = _SECTION_LABELS[RUNTIME_SECTION_ID]
+
 
 def proxy_auth_token(auth_token: str) -> str:
     """Return the configured proxy token or the no-auth client marker."""

@@ -1408,7 +1408,11 @@ class Settings(BaseSettings):
     )
 
     # ==================== Server ====================
-    host: str = "0.0.0.0"
+    # Loopback by default since 6.65.0: the shipped configuration must be
+    # safe on a network the machine did not choose. Exposing the proxy is
+    # HOST=0.0.0.0 plus an ANTHROPIC_AUTH_TOKEN, and the startup guard in
+    # ``config.proxy_auth`` refuses the first half without the second.
+    host: str = "127.0.0.1"
     port: int = 8082
     open_admin_browser: bool = Field(
         default=True,

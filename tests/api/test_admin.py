@@ -12,7 +12,6 @@ from my_claude_code.application.model_metadata import (
     ProviderModelRefreshResult,
 )
 from my_claude_code.application.release_updates import UpgradeResult
-from my_claude_code.config.admin.values import MASKED_SECRET
 from my_claude_code.config.limits import LIMIT_RANGES, describe_range
 from my_claude_code.config.server_urls import local_admin_url
 from my_claude_code.config.settings import Settings
@@ -597,7 +596,9 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
         field for field in body["fields"] if field["key"] == "ANTHROPIC_AUTH_TOKEN"
     )
     assert auth_field["secret"] is True
-    assert auth_field["value"] == MASKED_SECRET
+    # Nothing is configured here, and since 6.65.0 nothing is shipped either:
+    # the field is genuinely empty rather than masking a published password.
+    assert auth_field["value"] == ""
     assert auth_field["source"] == "template"
     telegram_proxy_field = next(
         field for field in body["fields"] if field["key"] == "TELEGRAM_PROXY_URL"

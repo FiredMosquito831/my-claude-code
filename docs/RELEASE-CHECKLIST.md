@@ -16,7 +16,8 @@
 | **GitHub repo slug** | **UNCHANGED** â€” `free-claude-code` (do not rename) |
 | **Release repo** | **UNCHANGED** â€” `FiredMosquito831/my-claude-code` (`RELEASE_REPO`) |
 | **FCC_* env vars** | **UNCHANGED** (`FCC_ENV_FILE`, `FCC_OPEN_BROWSER`, `FCC_SMOKE_TARGETS`â€¦) |
-| **Proxy port / token** | **UNCHANGED** â€” `:8082`, token `freecc` |
+| **Proxy port** | **UNCHANGED** â€” `:8082` |
+| **Proxy token** | **CHANGED in 6.65.0** - no shipped value; generated per machine on the first start (`freecc` was a password printed in a public repository). Existing `.env` files are never rewritten. |
 | **Model ids / provider ids** | **UNCHANGED** â€” `claude-3-freecc-*`, Codex id `fcc`, Pi scope `free-claude-code/**` |
 | **Config dir** | **UNCHANGED** â€” `.fcc` |
 | **Display name constant** | **UNCHANGED** â€” `LEGACY_DISPLAY_NAME = "Free Claude Code"` |
@@ -51,8 +52,10 @@ Cutover steps (run at release time, NOT now):
    published wheel there is what end users receive â€” repo URL needs no change.
 
 > Do **not** rename the repo or migrate issues/PRs. The `FCC_*` env vars,
-> `:8082`, `freecc` token, and `fcc-*` aliases are published contracts; renaming
+> `:8082` and the `fcc-*` aliases are published contracts; renaming
 > the repo would force a breaking change for every existing install.
+> (The `freecc` proxy token was retired in 6.65.0 - a shared password in a
+> public repository is not a contract worth keeping.)
 
 ## 3. Building both wheels (release helper note)
 

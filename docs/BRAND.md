@@ -156,7 +156,7 @@ compatibility, even though the product is now My Claude Code:
   `FCC_SMOKE_TARGETS`).
 - Release repository `FiredMosquito831/my-claude-code` (RELEASE_REPO).
 - Local proxy port `:8082`.
-- Proxy auth token `freecc`.
+- Proxy auth token: generated per machine on first start (the literal `freecc` was retired in 6.65.0; it was a password printed in a public repository).
 - Model ids `claude-3-freecc-*`.
 - Codex provider id `fcc`.
 - Pi scope `free-claude-code/**`.

@@ -2381,13 +2381,15 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   </p>
                   <pre><code>{
   "env": {
-    "ANTHROPIC_AUTH_TOKEN": "freecc",
+    "ANTHROPIC_AUTH_TOKEN": "&lt;your token&gt;",
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8082"
   }
 }</code></pre>
                   <p>
-                    The token must match this server's <code>ANTHROPIC_AUTH_TOKEN</code>
-                    (shipped as <code>freecc</code>). It authenticates your agent to the
+                    The token must match this server's <code>ANTHROPIC_AUTH_TOKEN</code>,
+                    generated for this machine on the first start and shown on the
+                    <strong>Providers</strong> page under <strong>Runtime</strong>. It
+                    authenticates your agent to the
                     proxy and is not a provider key. To also populate the native model
                     picker, add <code>"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1"</code>
                     to the same <code>env</code> block.
@@ -2418,7 +2420,7 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <tbody>
                     <tr><td>Connection</td><td><code>Gateway</code></td></tr>
                     <tr><td>Gateway base URL</td><td><code>http://127.0.0.1:8082</code></td></tr>
-                    <tr><td>Gateway API key</td><td><code>freecc</code></td></tr>
+                    <tr><td>Gateway API key</td><td>your <code>ANTHROPIC_AUTH_TOKEN</code> (Providers &rarr; Runtime)</td></tr>
                     <tr><td>Gateway auth scheme</td><td><code>bearer</code></td></tr>
                     <tr><td>Credential kind</td><td><code>Static API key</code></td></tr>
                     <tr><td>Model discovery</td><td>on</td></tr>
@@ -4379,17 +4381,20 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                 <table class="guide-table">
                   <thead><tr><th>Surface</th><th>Default bind</th><th>Access control</th></tr></thead>
                   <tbody>
-                    <tr><td>Proxy API</td><td><code>0.0.0.0:8082</code></td><td>bearer token, if set</td></tr>
+                    <tr><td>Proxy API</td><td><code>127.0.0.1:8082</code></td><td>bearer token, if set</td></tr>
                     <tr><td>Admin UI</td><td>same port</td><td>loopback callers only</td></tr>
                   </tbody>
                 </table>
                 <p class="guide-note">
-                  The proxy binds to <strong>all interfaces</strong> by default, so other
-                  machines on your network can reach it. Clearing
-                  <code>ANTHROPIC_AUTH_TOKEN</code> disables authentication entirely, which
-                  lets anyone who can reach the port spend your provider credits. Set
-                  <code>HOST=127.0.0.1</code> to keep it local, and change the token from
-                  its default if the machine is not solely yours.
+                  The proxy binds <strong>this machine only</strong> by default
+                  (<code>HOST=127.0.0.1</code>), and the token in a freshly written
+                  <code>.env</code> is generated on this machine rather than shipped.
+                  To reach the server from another machine, set
+                  <code>HOST=0.0.0.0</code> <em>and</em> give
+                  <code>ANTHROPIC_AUTH_TOKEN</code> a secret: <code>mcc-server</code>
+                  refuses to start on a non-loopback host with an empty token, because
+                  that combination lets anyone who can reach the port spend your
+                  provider credits.
                 </p>
 
                 <h3 id="guide-trouble">Troubleshooting</h3>

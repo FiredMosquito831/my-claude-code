@@ -12,6 +12,7 @@ caps those together with loguru's own rotations under
 log to explain, and until 6.58.1 a restart was what destroyed it.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -157,6 +158,48 @@ def _add_file_sink(log_file: str | Path, level: str, retain_files: int) -> int:
         retention=retention,
         enqueue=True,
     )
+
+
+def append_to_server_log(log_file: str | Path, level: str, message: str) -> bool:
+    """Write one line into the server log without reconfiguring logging.
+
+    For the handful of things a server has to say *before* it is a server.
+    The 6.30.0 refusal is the one that matters: it ends the process before
+    the composition root exists, so until 6.65.0 it was written nowhere at
+    all -- a refused start left an empty config directory, and the desktop
+    app's error page named a ``server_log`` that did not exist.
+
+    Deliberately NOT ``configure_logging``. That function owns the process's
+    logging: it removes every existing sink, replaces ``logging.root``'s
+    handlers and rotates the previous log. Calling it from a guard that may
+    run inside somebody else's process -- a test, an embedded runner -- takes
+    their handlers away from them. This adds one sink, writes one line and
+    removes it again, in the same format the real sink uses so the line is
+    readable by whatever reads the rest of the file.
+
+    Returns whether the line was written; a log that cannot be opened is
+    never a reason to fail differently.
+    """
+
+    try:
+        log_path = Path(log_file).expanduser()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        sink_id = logger.add(
+            log_path,
+            level=level,
+            format=_serialize_with_context,
+            encoding="utf-8",
+            mode="a",
+            enqueue=False,
+        )
+    except OSError, ValueError:
+        return False
+    try:
+        logger.log(level, message)
+    finally:
+        with contextlib.suppress(ValueError):
+            logger.remove(sink_id)
+    return True
 
 
 def _rotate_current_log(log_path: Path) -> Path | None:

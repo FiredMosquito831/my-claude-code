@@ -164,7 +164,7 @@ Longer versions of all of these, per platform: [Usage Guide → Install](docs/US
 | Token optimizer | What never reached a provider: tokens saved, rule fire counts, prompt-cache effectiveness, plus the opt-in RTK binary via `mcc-rtk` | **Token Optimizer** page | [Guide](docs/USAGE.md#the-rtk-token-optimizer) |
 | Messaging | Claude Code sessions over Discord or Telegram, with voice-note transcription | **Messaging** page | [Messaging](docs/MESSAGING.md) |
 | Security | Token auth on the proxy; with `HOST` open to other machines and `ANTHROPIC_AUTH_TOKEN` empty, `mcc-server` refuses to start | `.env` | [Guide](docs/USAGE.md#15-security-and-networking) |
-| Config home | One `.env` and one directory for everything, relocatable with `MCC_CONFIG_DIR`, migrated by `mcc-migrate` | `~/.mcc` | [Guide](docs/USAGE.md#3-first-run) |
+| Config home | One `.env` and one directory for everything, written on the first start with a token generated for this machine, relocatable with `MCC_CONFIG_DIR`; a legacy `~/.fcc` moves itself once | `~/.mcc` | [Guide](docs/USAGE.md#3-first-run) |
 
 ## How it works
 
@@ -300,7 +300,7 @@ Every setting lives in [.env.example](.env.example) with inline comments and cos
 
 | Key | What it does |
 | --- | --- |
-| `ANTHROPIC_AUTH_TOKEN` | The token clients present to this proxy. Required once `HOST` is not loopback. |
+| `ANTHROPIC_AUTH_TOKEN` | The token clients present to this proxy, generated for this machine on the first start. Required once `HOST` is not loopback. |
 | `HOST` / `PORT` | Where the server listens. Defaults are loopback and `8082`. |
 | `MODEL` | The model used when nothing more specific matches. |
 | `MODEL_FABLE` | The model Fable-tier traffic routes to. |

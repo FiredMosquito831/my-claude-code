@@ -18,6 +18,11 @@ MCC_CONFIG_DIRNAME = ".mcc"
 LEGACY_CONFIG_DIRNAME = ".fcc"
 # Created empty by ``mcc-migrate`` to hold the rollback note. Never data.
 RETIRED_CONFIG_DIRNAME = ".fcc-old"
+# Written beside the home that moved, by the one-time migration a first
+# start performs: what moved, when, and the command that moves it back.
+# A file rather than a directory, so a user who lists their home sees the
+# sentence next to the name they were looking for.
+MIGRATED_POINTER_FILENAME = ".fcc-migrated.txt"
 # Absolute override. There was never an ``FCC_CONFIG_DIR``, so there is no
 # legacy alias to honour here.
 CONFIG_DIR_ENV = "MCC_CONFIG_DIR"
@@ -433,8 +438,31 @@ def config_dir_resolution() -> ConfigDirResolution:
 def reset_config_dir_cache() -> None:
     """Forget the cached decision so the next call resolves again (tests)."""
 
-    global _resolution
+    global _resolution, _first_start_notice
     _resolution = None
+    _first_start_notice = ""
+
+
+#: What this process's first start did to the config home, if anything: the
+#: one-time ``~/.fcc`` -> ``~/.mcc`` move, or the creation of a fresh home
+#: and its ``.env``. Set by ``cli.first_start`` and read by the dashboard's
+#: config-dir banner (``api`` may not import ``cli``, and this fact has to
+#: cross that boundary). Empty means an ordinary start with nothing to say.
+#: Cleared by ``reset_config_dir_cache`` so a test never inherits it.
+_first_start_notice: str = ""
+
+
+def set_first_start_notice(notice: str) -> None:
+    """Record what the first start did to the config home, for the banner."""
+
+    global _first_start_notice
+    _first_start_notice = notice
+
+
+def first_start_notice() -> str:
+    """Return what this process's first start did, or an empty string."""
+
+    return _first_start_notice
 
 
 def config_dir_path() -> Path:
@@ -471,6 +499,12 @@ def retired_config_dir_path() -> Path:
     """Return the ``~/.fcc-old`` rollback-note directory ``mcc-migrate`` writes."""
 
     return Path.home() / RETIRED_CONFIG_DIRNAME
+
+
+def migrated_pointer_path() -> Path:
+    """Return ``~/.fcc-migrated.txt``, the note left where ``~/.fcc`` was."""
+
+    return Path.home() / MIGRATED_POINTER_FILENAME
 
 
 def request_log_path() -> Path:

@@ -1119,7 +1119,7 @@ would override the one you configure here.
 ```json
 {
   "env": {
-    "ANTHROPIC_AUTH_TOKEN": "freecc",
+    "ANTHROPIC_AUTH_TOKEN": "<your token from Providers -> Runtime>",
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8082"
   }
 }
@@ -1128,7 +1128,7 @@ would override the one you configure here.
 **Keep any other keys you already have** — merge these two entries into the existing `env` object rather than replacing the file.
 
 - `ANTHROPIC_BASE_URL` points Claude Code at your local server.
-- `ANTHROPIC_AUTH_TOKEN` is sent as a bearer token. It must match the proxy's own `ANTHROPIC_AUTH_TOKEN`, which ships as `freecc` in `.env.example`. If you changed it in the Admin UI, use your value here.
+- `ANTHROPIC_AUTH_TOKEN` is sent as a bearer token. It must match the proxy's own `ANTHROPIC_AUTH_TOKEN`. Since 6.65.0 that value is generated on your machine the first time `mcc-server` starts without a `.env`, so there is no shipped value to copy: read yours on the dashboard under **Providers -> Runtime**. On a loopback server (`HOST=127.0.0.1`, the default) the token may also be empty, in which case any value works.
 
 > **On the token:** it authenticates your agent *to the proxy*, nothing more. It is not a provider key. If you clear `ANTHROPIC_AUTH_TOKEN` on the server, the proxy stops requiring authentication altogether — convenient on a single-user machine, but read [Security and networking](#14-security-and-networking) first.
 
@@ -1219,7 +1219,7 @@ The app restarts and gains a **Developer** menu.
 | --- | --- |
 | **Connection** | `Gateway` |
 | **Gateway base URL** | `http://127.0.0.1:8082` |
-| **Gateway API key** | `freecc` |
+| **Gateway API key** | your `ANTHROPIC_AUTH_TOKEN` (dashboard: Providers -> Runtime) |
 | **Gateway auth scheme** | `bearer` |
 | **Credential kind** | `Static API key` |
 | **Model discovery** | on |
@@ -1230,7 +1230,7 @@ The app restarts and gains a **Developer** menu.
 
 Then click **Apply Changes**.
 
-Use the port from your server's startup log if it isn't `8082`, and match the API key to your `ANTHROPIC_AUTH_TOKEN` if you changed it from `freecc`.
+Use the port from your server's startup log if it isn't `8082`, and match the API key to your `ANTHROPIC_AUTH_TOKEN`, which the dashboard shows under Providers -> Runtime.
 
 ### Step 4 — test before restarting
 
@@ -3736,18 +3736,20 @@ Worth understanding before you expose anything.
 
 | Surface | Default bind | Access control |
 | --- | --- | --- |
-| **Proxy API** (`/v1/...`) | `0.0.0.0:8082` | Bearer token, if `ANTHROPIC_AUTH_TOKEN` is set |
+| **Proxy API** (`/v1/...`) | `127.0.0.1:8082` by default | Bearer token, if `ANTHROPIC_AUTH_TOKEN` is set |
 | **Admin UI** (`/admin`) | same port | **Loopback callers only**, always |
 
-The proxy binds to **all interfaces** by default, so another machine on your network can reach it. The Admin UI is separately restricted to loopback and cannot be reached remotely regardless of bind address.
+The proxy binds **this machine only** by default (`HOST=127.0.0.1`). The Admin UI is separately restricted to loopback and cannot be reached remotely regardless of bind address.
+
+**To reach the server from another machine** (a LAN, WSL, a phone, a second laptop): set `HOST=0.0.0.0` *and* give `ANTHROPIC_AUTH_TOKEN` a secret. `mcc-server` refuses to start on a non-loopback `HOST` with an empty token, because that combination is an open proxy spending your provider credits for anybody who can route to the port.
 
 ### The auth token
 
-`ANTHROPIC_AUTH_TOKEN` ships as `freecc` in `.env.example`. It is compared in constant time against the bearer token your agent sends.
+`ANTHROPIC_AUTH_TOKEN` is generated on your machine the first time `mcc-server` starts without a `.env` (43 URL-safe characters from `secrets.token_urlsafe`) and written into that `.env`; read it on the dashboard under Providers -> Runtime. It is compared in constant time against the bearer token your agent sends. Before 6.65.0 the template shipped the literal `freecc`, which meant every install shared one password -- existing `.env` files are never rewritten, so change yours if it still says that.
 
 **If you clear it, authentication is disabled entirely** — any caller that can reach the port can spend your provider credits. That is fine on a single-user laptop behind a firewall; it is not fine on a shared or exposed network. Change it from the default if anything other than you can route to the machine.
 
-To bind loopback-only instead, set `HOST=127.0.0.1`.
+Loopback-only (`HOST=127.0.0.1`) is the shipped default.
 
 ### What never leaves the machine
 

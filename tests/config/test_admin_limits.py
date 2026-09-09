@@ -599,10 +599,6 @@ DEFAULTS_THAT_DIFFER_FROM_THE_CODE = {
     "VOICE_NOTE_ENABLED": _SHIPPED_TEMPLATE_VALUE,
     "WHISPER_DEVICE": _SHIPPED_TEMPLATE_VALUE,
     "WHISPER_MODEL": _SHIPPED_TEMPLATE_VALUE,
-    "ANTHROPIC_AUTH_TOKEN": (
-        "the code default is the shared local proxy password; a credential "
-        "field ships showing nothing rather than pre-filling it"
-    ),
 }
 
 
