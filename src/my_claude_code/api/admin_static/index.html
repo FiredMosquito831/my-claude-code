@@ -3163,9 +3163,19 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 <p class="guide-note">
                   A hit rate of <strong>&mdash;</strong> means that provider never reported
                   caching, which is different from a measured <strong>0.0%</strong>.
-                  OpenRouter, OpenAI (prefixes of 1,024+ tokens) and DeepSeek report it.
+                  OpenRouter, OpenAI (prefixes of 1,024+ tokens), DeepSeek and
+                  &mdash; since 6.68.2 &mdash; ChatGPT OAuth report it.
                   NVIDIA NIM's hosted endpoint does not do real prefix caching, so a
                   near-zero rate there is accurate rather than a fault.
+                </p>
+                <p class="guide-note">
+                  <strong>ChatGPT OAuth rows logged before 6.68.2 read &mdash;, and
+                  stay that way.</strong> The endpoint was reporting the figure all
+                  along and MCC was not reading it, so those requests were never
+                  measured; nothing is backfilled, because a guess in that column would
+                  be worse than a dash. Their input counts were also cache-inclusive
+                  and so ran high &mdash; from 6.68.2 the cached part is reported
+                  separately, the way every other provider's already was.
                 </p>
                 <p>
                   Every row has a <em>View</em> dialog with the full exchange, the resolved
