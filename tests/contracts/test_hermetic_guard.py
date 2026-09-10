@@ -21,6 +21,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # The child reads the stand-in profile from here: inside the child, ``HOME`` has
@@ -38,13 +40,20 @@ PROFILE = Path(os.environ["HERMETIC_SELFTEST_PROFILE"])
 """
 
 
-def _run_child(tmp_path: Path, body: str) -> subprocess.CompletedProcess[str]:
-    """Run ``body`` as a one-file test session under the guard, and report."""
+def _run_child(
+    tmp_path: Path, body: str, temp_directory: Path | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run ``body`` as a one-file test session under the guard, and report.
+
+    ``temp_directory`` overrides what the child sees as ``TEMP``/``TMP``/
+    ``TMPDIR``; the base-temp case below points it at a second name for a
+    directory inside the stand-in profile.
+    """
 
     profile = tmp_path / "profile"
     for relative in (".fcc", "AppData/Roaming", "AppData/Local"):
         (profile / relative).mkdir(parents=True, exist_ok=True)
-    scratch = tmp_path / "scratch"
+    scratch = temp_directory if temp_directory is not None else tmp_path / "scratch"
     scratch.mkdir(exist_ok=True)
     case = tmp_path / "test_leaking_case.py"
     case.write_text(_PREAMBLE + textwrap.dedent(body), encoding="utf-8")
@@ -112,6 +121,108 @@ def _assert_green(completed: subprocess.CompletedProcess[str]) -> None:
     assert completed.returncode == 0, (
         "the guard refused a legitimate case:\n" + completed.stdout + completed.stderr
     )
+
+
+# ------------------------------------------------------------------ base temp
+
+
+def _second_name_for(target: Path, link: Path) -> bool:
+    r"""Make ``link`` a second name for ``target``; report whether it worked.
+
+    A symlink on POSIX, a junction on Windows where an unprivileged process may
+    not make symlinks. Either way the point is one directory reachable by two
+    paths, which is the shape of the GitHub Windows runner's ``TEMP``: the 8.3
+    spelling ``C:\Users\RUNNER~1\AppData\Local\Temp`` of the directory
+    ``LOCALAPPDATA`` spells ``C:\Users\runneradmin\AppData\Local\Temp``.
+    8.3 name creation cannot be turned on for a test, a link can.
+    """
+
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except OSError, NotImplementedError:
+        if sys.platform != "win32":
+            return False
+        junction = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if junction.returncode != 0:
+            return False
+    return os.path.realpath(link) == os.path.realpath(target)
+
+
+def test_pytest_still_gets_its_base_temp_when_temp_has_a_second_name(
+    tmp_path: Path,
+) -> None:
+    """The guard may never refuse pytest the directory it keeps tmp_path in.
+
+    ``_ALLOWED_ROOTS`` was seeded from ``TEMP`` as the environment spells it,
+    but ``TempPathFactory.getbasetemp`` resolves that root before creating
+    ``pytest-of-<user>`` inside it. Where the two spellings differ -- the 8.3
+    ``TEMP`` on a GitHub Windows runner against a long ``LOCALAPPDATA`` -- the
+    resolved base temp was inside a protected root and nothing exempted it, so
+    pytest-xdist's ``pytest_sessionstart`` hit the guard and the whole session
+    died with an INTERNALERROR before its first test (Wheel E2E run
+    34324414216). The second half of the child proves the exemption stayed
+    narrow: the stand-in profile's config directory is still refused.
+    """
+
+    profile = tmp_path / "profile"
+    real_temp = profile / "AppData" / "Local" / "Temp"
+    real_temp.mkdir(parents=True, exist_ok=True)
+    alias = tmp_path / "temp-by-another-name"
+    if not _second_name_for(real_temp, alias):
+        pytest.skip("this machine cannot create a directory link")
+
+    completed = _run_child(
+        tmp_path,
+        """
+        def test_pytest_may_make_its_own_scratch_space(tmp_path):
+            (tmp_path / "scratch.txt").write_text("ok", encoding="utf-8")
+
+        def test_the_config_directory_is_still_refused():
+            with pytest.raises(BaseException) as refusal:
+                (PROFILE / ".fcc" / "leaked.json").write_text("{}", encoding="utf-8")
+            assert "HERMETICITY VIOLATION" in str(refusal.value)
+        """,
+        temp_directory=alias,
+    )
+    _assert_green(completed)
+
+
+def test_a_marked_launch_from_a_module_scoped_fixture_is_allowed_through(
+    tmp_path: Path,
+) -> None:
+    """The opt-in gate has to be open before a fixture of *any* scope is built.
+
+    ``hermetic_marker_gates`` is function-scoped and pytest builds
+    higher-scoped fixtures first, so a module-scoped fixture that launches a
+    denied executable met a shut gate however its tests were marked. That is
+    what refused the gated wheel tests -- ``tests/api/test_docs_bundle_wheel``
+    builds a real wheel with ``uv`` from a module-scoped fixture -- on the
+    Windows runner, immediately behind the base-temp defect above.
+    """
+
+    completed = _run_child(
+        tmp_path,
+        """
+        @pytest.fixture(scope="module")
+        def launched_from_a_module_fixture():
+            # A denied name at a path that does not exist: once past the gate
+            # the launch fails with FileNotFoundError, which is proof that the
+            # guard let it through without anything actually running.
+            with pytest.raises(FileNotFoundError):
+                subprocess.Popen([str(PROFILE / "nowhere" / "uv"), "--version"])
+            return True
+
+        @pytest.mark.spawns_process
+        def test_the_marker_reached_the_fixture(launched_from_a_module_fixture):
+            assert launched_from_a_module_fixture
+        """,
+    )
+    _assert_green(completed)
 
 
 # ------------------------------------------------------------------ registry

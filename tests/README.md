@@ -27,7 +27,14 @@ directories: My Claude Code's subject matter *is* other tools' configuration
 stale the next time a harness is added. Two carve-outs make that workable and
 they are the only ones: the temporary directories (`tmp_path` lives under
 `%LOCALAPPDATA%\Temp` on Windows) and the checkout itself (which lives under
-`$HOME` on a Linux CI runner). Both are captured before any redirect.
+`$HOME` on a Linux CI runner). Both are captured before any redirect, in every
+spelling: one directory reachable by two names -- a symlink, or the 8.3 short
+name a GitHub Windows runner puts in `TEMP` -- normalises to two strings, and
+pytest resolves the temp root before creating its base temp in it. On top of
+that, `pytest_configure` registers whatever pytest itself settled on, so the
+guard can never refuse pytest the directory it keeps `tmp_path` in. Widening a
+carve-out over a protected root is refused, so a carve-out stays as narrow as
+it reads.
 
 ## Opting out
 
@@ -45,6 +52,12 @@ where that is impossible:
 * `@pytest.mark.binds_reserved_port` -- the test must bind port 8082. Almost
   certainly it must not: ask the OS for a free port by binding 0 and reading
   `getsockname()` back, as `tests/cli/test_port_diagnostics.py` does.
+
+A marker goes on the *test*, never on a fixture, and it is in force before any
+fixture of any scope is built for that test -- so a module- or session-scoped
+fixture that does the denied thing works as long as every test that asks for it
+is marked. `tests/api/test_docs_bundle_wheel.py`, whose module-scoped fixture
+builds a real wheel with `uv`, is the example.
 
 There is no marker for writing into the real home. There is no correct reason
 to do it.

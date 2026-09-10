@@ -23,8 +23,9 @@ from tests.support.fake_winreg import fake_winreg  # noqa: F401  (shared fixture
 # what installs them for the whole suite: ``isolate_the_machine`` gives every
 # test its own HOME/APPDATA, ``hermetic_marker_gates`` projects the opt-in
 # markers into the process-wide interceptors, ``pytest_configure`` installs
-# those interceptors, and ``pytest_runtest_teardown`` fails a test that resolved
-# the developer's real config directory. ``isolate_the_machine`` is bound before
+# those interceptors, ``pytest_runtest_setup`` opens the opt-in gates before any
+# fixture of any scope is built, and ``pytest_runtest_teardown`` fails a test
+# that resolved the developer's real config directory. ``isolate_the_machine`` is bound before
 # any fixture defined below, on purpose: autouse fixtures run in collection
 # order and every one of those resolves a path that must already be redirected.
 # See ``tests/support/hermetic.py`` and ``tests/README.md``.
@@ -32,6 +33,7 @@ from tests.support.hermetic import (  # noqa: F401  (re-exported fixtures/hooks)
     hermetic_marker_gates,
     isolate_the_machine,
     pytest_configure,
+    pytest_runtest_setup,
     pytest_runtest_teardown,
 )
 from tests.support.hermetic import under_real_config_dir as _under_real_home

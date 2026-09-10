@@ -30,6 +30,11 @@ from my_claude_code.api.docs_content import DOCUMENT_BY_SLUG, DOCUMENTS
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUNDLE_PREFIX = "my_claude_code/docs_bundle/"
 
+# The fixture below launches ``uv build``, which the hermeticity guard denies
+# unless the test asks for it, so every test that takes ``built_wheel`` carries
+# ``@pytest.mark.spawns_process``. Building a wheel really is the thing under
+# test here; the nine manifest tests below launch nothing and stay unmarked.
+
 
 @pytest.fixture(scope="module")
 def built_wheel(tmp_path_factory) -> zipfile.ZipFile:
@@ -45,6 +50,9 @@ def built_wheel(tmp_path_factory) -> zipfile.ZipFile:
     ``pyproject.toml`` and does not need a build to see, so the tests below
     check the manifest and always run. This fixture stays for the stronger
     end-to-end check and runs when ``MCC_WHEEL_TESTS=1`` asks for it.
+
+    Every test that asks for it must be marked ``spawns_process``: the guard
+    reads that marker off the *test*, and refuses ``uv`` without it.
     """
 
     if os.environ.get("MCC_WHEEL_TESTS") != "1":
@@ -72,6 +80,7 @@ def built_wheel(tmp_path_factory) -> zipfile.ZipFile:
     return zipfile.ZipFile(wheels[0])
 
 
+@pytest.mark.spawns_process
 def test_the_wheel_contains_a_docs_bundle(built_wheel) -> None:
     """A silent naming change would make the assertion below vacuous."""
 
@@ -84,6 +93,7 @@ def test_the_wheel_contains_a_docs_bundle(built_wheel) -> None:
     )
 
 
+@pytest.mark.spawns_process
 def test_every_curated_document_is_inside_the_built_wheel(built_wheel) -> None:
     names = set(built_wheel.namelist())
 
@@ -99,6 +109,7 @@ def test_every_curated_document_is_inside_the_built_wheel(built_wheel) -> None:
     )
 
 
+@pytest.mark.spawns_process
 def test_the_bundled_documents_are_not_empty(built_wheel) -> None:
     """A zero-byte entry satisfies a name check and renders to nothing."""
 
@@ -107,6 +118,7 @@ def test_the_bundled_documents_are_not_empty(built_wheel) -> None:
         assert info.file_size > 0, document.repo_path
 
 
+@pytest.mark.spawns_process
 def test_the_bundled_names_are_unique(built_wheel) -> None:
     """The bundle is flat: two documents with the same basename would
     silently overwrite each other and one page would show the other's text.
@@ -116,6 +128,7 @@ def test_the_bundled_names_are_unique(built_wheel) -> None:
     assert len(names) == len(set(names)), sorted(names)
 
 
+@pytest.mark.spawns_process
 def test_developer_only_documents_are_not_shipped(built_wheel) -> None:
     """The list is curated to what someone *running* MCC needs. Agent specs,
     the release checklist and the ADRs are written for whoever builds it.
