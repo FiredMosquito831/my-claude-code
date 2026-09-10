@@ -2,6 +2,11 @@
 
 from typing import Any
 
+from my_claude_code.config.admin.spec import ConfigOptionSpec
+from my_claude_code.config.constants import (
+    OPENCODE_CLIENT_IDENTITY_DEFAULT,
+    OPENCODE_CLIENT_VERSION_DEFAULT,
+)
 from my_claude_code.config.provider_catalog import (
     AZURE_OPENAI_BASE_URL_EXAMPLE,
     PROVIDER_CATALOG,
@@ -427,6 +432,7 @@ def provider_field_specs() -> tuple[dict[str, Any], ...]:
     return (
         *_credential_field_specs(),
         *_rotation_field_specs(),
+        *_opencode_identity_field_specs(),
         *_chatgpt_oauth_login_field_specs(),
         *_chatgpt_oauth_account_field_specs(),
         *_anthropic_oauth_login_field_specs(),
@@ -434,6 +440,56 @@ def provider_field_specs() -> tuple[dict[str, Any], ...]:
         *_vertex_field_specs(),
         *_base_url_field_specs(),
         *_proxy_field_specs(),
+    )
+
+
+def _opencode_identity_field_specs() -> tuple[dict[str, Any], ...]:
+    """Which client MCC presents itself as to the two OpenCode hosts.
+
+    On the OpenCode Zen card because that is where the shared credential
+    and the rotation policy already live, and because the setting covers
+    both hosts -- one key, one identity, one place to change it.
+    """
+    return (
+        {
+            "key": "OPENCODE_CLIENT_IDENTITY",
+            "label": "OpenCode Client Identity",
+            "section_id": "providers",
+            "provider": "opencode",
+            "settings_attr": "opencode_client_identity",
+            "field_type": "select",
+            "default": OPENCODE_CLIENT_IDENTITY_DEFAULT,
+            "options": (
+                ConfigOptionSpec(
+                    "opencode", "Identify as the OpenCode client (default)"
+                ),
+                ConfigOptionSpec("mcc", "Identify as My Claude Code"),
+            ),
+            "restart_required": True,
+            "description": (
+                "What MCC puts in the identity headers OpenCode Zen and Go read off every request. "
+                "Both are sent either way -- without the conversation header the Zen free tier answers "
+                "400 MissingSessionID, which is what every release before 6.69.0 got. This chooses the "
+                "claim: opencode sends the official client's user-agent and client id, mcc sends "
+                "my-claude-code and this version instead. A deliberately invalid client id was answered "
+                "200 on 2026-09-10, so the truthful value is not known to cost anything."
+            ),
+        },
+        {
+            "key": "OPENCODE_CLIENT_VERSION",
+            "label": "OpenCode Client Version",
+            "section_id": "providers",
+            "provider": "opencode",
+            "settings_attr": "opencode_client_version",
+            "default": OPENCODE_CLIENT_VERSION_DEFAULT,
+            "advanced": True,
+            "restart_required": True,
+            "description": (
+                "Which OpenCode release the user-agent names. Empty -- the default -- reads it from the "
+                "opencode-ai package installed on this machine, and falls back to the release this "
+                "version of MCC was built against. Only used when OpenCode Client Identity is opencode."
+            ),
+        },
     )
 
 

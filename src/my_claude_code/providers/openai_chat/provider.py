@@ -28,6 +28,7 @@ from my_claude_code.core.anthropic.streaming import (
     parse_complete_tool_input,
     tool_schemas_by_name,
 )
+from my_claude_code.core.client_fingerprint import current_fingerprint
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
@@ -81,6 +82,9 @@ from my_claude_code.providers.stream_recovery import (
 )
 
 from .chunks import adopt_chat_stream
+from .client_identity import identity_headers_for_body
+from .identity_enforcement import observe_identity_enforcement
+from .opencode_identity import identity_wire_record
 from .profiles import OpenAIChatProfile
 from .request_policy import build_openai_chat_request_body
 from .tool_calls import (
@@ -458,13 +462,32 @@ class OpenAIChatProvider(BaseProvider):
                 # retry rewrites all run before it -- and nothing downstream
                 # can. ``stream`` is passed as a keyword, so it is recorded
                 # alongside rather than read back out of the dict.
-                record_wire_request(create_body, stream=True)
+                # Who this proxy says it is, for hosts that read it. Empty
+                # for every profile that declares no identity, and an empty
+                # mapping adds no kwarg at all, so their call is the call
+                # they have always made.
+                identity = identity_headers_for_body(
+                    self._profile.client_identity,
+                    body,
+                    current_fingerprint().session_id,
+                )
+                extra = {"extra_headers": identity} if identity else {}
+                record_wire_request(
+                    create_body,
+                    stream=True,
+                    **(
+                        {"client_identity": identity_wire_record(identity)}
+                        if identity
+                        else {}
+                    ),
+                )
                 stream = adopt_chat_stream(
                     await self._rate_limiter.execute_with_retry(
                         self._client.chat.completions.create,
                         provider_failure_override=self._provider_failure_override,
                         **create_body,
                         stream=True,
+                        **extra,
                     )
                 )
                 if stripped_reasoning is not None:
@@ -479,6 +502,14 @@ class OpenAIChatProvider(BaseProvider):
                     )
                 return stream, body
             except Exception as error:
+                # A refusal is the only evidence this proxy will ever get
+                # about whether the host is checking who is calling, so it
+                # is read here, before the ladder decides what to do about
+                # it. Observation only: nothing about the classification,
+                # the ladder or the credential's health changes.
+                observe_identity_enforcement(
+                    self._provider_id, self._profile.client_identity, error
+                )
                 decision = self._recovery_ladder.next_body(
                     error, body, used_retry_kinds
                 )

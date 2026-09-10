@@ -33,6 +33,15 @@ def _settings(**overrides) -> Settings:
     return Settings(**overrides)
 
 
+def _fixed(settings: Settings):
+    """A stand-in for the cached accessor the provider layer calls."""
+
+    def read() -> Settings:
+        return settings
+
+    return read
+
+
 def test_the_tier_alias_switch_reaches_the_catalogue_builder() -> None:
     """HARNESS_TIER_ALIASES is the one new field, and it has one consumer.
 
@@ -431,3 +440,43 @@ def test_a_lifted_ceiling_leaves_the_floor_alone(caplog) -> None:
         )
     assert resolved.max_output_tokens_ceiling is None
     assert "inert" not in caplog.text
+
+
+def test_the_opencode_client_identity_reaches_the_outbound_header_set() -> None:
+    """The switch on the OpenCode card must change what leaves the process.
+
+    Asserted through the settings accessor the provider layer actually calls,
+    not by reading the field back: a field that validates and is never read is
+    the failure mode this file exists to catch.
+    """
+    from my_claude_code.config import settings as settings_module
+    from my_claude_code.providers.openai_chat.opencode_identity import (
+        opencode_constant_headers,
+    )
+
+    for choice, expected in (("opencode", "opencode/"), ("mcc", "my-claude-code/")):
+        chosen = _settings(OPENCODE_CLIENT_IDENTITY=choice)
+        original = settings_module.get_settings
+        settings_module.get_settings = _fixed(chosen)
+        try:
+            headers = opencode_constant_headers()
+        finally:
+            settings_module.get_settings = original
+            settings_module.get_settings.cache_clear()
+        assert headers["User-Agent"].startswith(expected)
+
+
+def test_the_opencode_client_version_pin_reaches_the_user_agent() -> None:
+    from my_claude_code.config import settings as settings_module
+    from my_claude_code.providers.openai_chat.opencode_identity import (
+        opencode_client_version,
+    )
+
+    chosen = _settings(OPENCODE_CLIENT_VERSION="9.9.9")
+    original = settings_module.get_settings
+    settings_module.get_settings = _fixed(chosen)
+    try:
+        assert opencode_client_version() == ("9.9.9", "operator")
+    finally:
+        settings_module.get_settings = original
+        settings_module.get_settings.cache_clear()

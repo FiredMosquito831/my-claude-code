@@ -1713,6 +1713,25 @@
                   provider's catalog. Choose the model itself on
                   <a href="#guide-models">Model Config</a>.
                 </p>
+                <p>
+                  <strong>OpenCode Zen and OpenCode Go read who is calling.</strong> Both
+                  gateways take a set of identity headers off every request &mdash; which
+                  program, which version, which project, which conversation, which call.
+                  Before 6.69.0 My Claude Code sent none of them, and on 2026-09-10 the Zen
+                  free tier was measured answering such a request
+                  <code>400 MissingSessionID</code>, <em>&ldquo;OpenCode's free tier can
+                  only be used in OpenCode&rdquo;</em>. The same request carrying the five
+                  headers was answered <code>200</code>. So 6.69.0 sends them, and by
+                  default it sends the values the official OpenCode client sends. It is not
+                  the OpenCode client, so that is a claim made on your account's behalf: the
+                  <em>OpenCode Client Identity</em> field on the OpenCode Zen card switches
+                  it to <code>mcc</code>, which sends <code>my-claude-code</code> and this
+                  version instead. The conversation header &mdash; the one the host was
+                  measured acting on &mdash; goes either way, and the header naming your
+                  coding agent never leaves this machine. If the host later benches you on
+                  its daily free quota, the 429 that resets at midnight UTC is recorded
+                  against the provider and shown on <a href="#guide-learned">Models</a>.
+                </p>
                 <table class="guide-table">
                   <thead><tr><th>Result</th><th>Almost always means</th></tr></thead>
                   <tbody>

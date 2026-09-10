@@ -517,6 +517,12 @@ def test_no_code_span_was_broken_by_a_mechanical_rename(doc_name: str) -> None:
 #: release gives a user a new thing to type, it goes here.
 _MUST_BE_DOCUMENTED: tuple[tuple[str, str], ...] = (
     (
+        "OPENCODE_CLIENT_IDENTITY",
+        "it decides whether MCC identifies itself to OpenCode as the "
+        "official client; a claim on the user's behalf must be findable "
+        "and reversible",
+    ),
+    (
         "MCC_CONFIG_DIR",
         "the only way to pin the config directory; it is an environment "
         "variable, so it cannot be discovered from the dashboard at all",

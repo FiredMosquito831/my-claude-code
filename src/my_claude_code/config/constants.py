@@ -608,3 +608,36 @@ NOUS_PORTAL_USER_TAG_DEFAULT = "user=my-claude-code"
 # first run of a busy install buys nothing; a launch that waits a few seconds
 # once and then never again costs nothing worth naming.
 CATALOGUE_FETCH_TIMEOUT_SECONDS = 20.0
+
+
+# Which client MCC presents itself as to OpenCode Zen and OpenCode Go.
+#
+# Those two hosts are the first this proxy has met that read identity headers
+# off the request and act on them. Measured 2026-09-10: the Zen free tier
+# answers a request carrying only a bearer token with 400 MissingSessionID,
+# and the same request carrying the identity with 200. So this is not a
+# preference -- without it the free tier does not answer at all.
+#
+# The header the host was measured acting on is the conversation id, which
+# both settings below send. What this one chooses is the *claim*: `opencode`
+# presents the official client's user-agent and client id, `mcc` presents this
+# proxy's own name and version. A deliberately invalid client id was answered
+# 200, so the truthful answer is not known to cost anything -- but the vendor
+# documents no rule either way, so the choice is written down here rather
+# than assumed, and the default is the one that reproduces a working client.
+OPENCODE_CLIENT_IDENTITY_DEFAULT = "opencode"
+OPENCODE_CLIENT_IDENTITY_CHOICES = ("opencode", "mcc")
+
+# The OpenCode release MCC names when it cannot read one off this machine.
+#
+# A version string in a user-agent is only worth sending if it is a version
+# that exists: an invented one is both a false claim and a fingerprint. So the
+# value is read from the installed `opencode-ai` package when there is one, and
+# this pinned constant -- the release verified on 2026-09-10, whose own binary
+# emits `opencode/1.18.30` -- is what a machine without OpenCode installed
+# sends. `OPENCODE_CLIENT_VERSION` overrides both.
+OPENCODE_CLIENT_VERSION_FALLBACK = "1.18.30"
+
+# An operator's pin for the version above. Empty -- the default -- means "read
+# it from this machine, and fall back to the pinned release".
+OPENCODE_CLIENT_VERSION_DEFAULT = ""

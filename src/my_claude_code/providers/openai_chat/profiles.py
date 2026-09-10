@@ -17,7 +17,9 @@ from my_claude_code.core.reasoning import (
 from my_claude_code.providers.model_listing import RequiredPathValues
 
 from .base_url import openai_v1_base_url
+from .client_identity import ClientIdentity
 from .extra_body import validate_extra_body_does_not_override_canonical_fields
+from .opencode_identity import OPENCODE_CLIENT_IDENTITY
 from .reasoning import (
     LLAMACPP_REASONING,
     SPLIT_REASONING_OUTPUT,
@@ -149,6 +151,13 @@ class OpenAIChatProfile:
         None
     )
     structured_reasoning_details: bool = False
+    # What this host is told about the client calling it. ``None`` --
+    # every profile but the two OpenCode ones -- means MCC sends nothing
+    # beyond the SDK's own headers, which is what every release before
+    # 6.69.0 sent to every host. A host that reads an identity off the
+    # request declares one here; nothing in the construction path names a
+    # provider or a model, which is the whole point of it being a field.
+    client_identity: ClientIdentity | None = None
 
     @property
     def provider_name(self) -> str:
@@ -292,6 +301,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         # it, and the reason this profile must not gain a value it would send
         # unconditionally.
         NamedEffortReasoning(_ALL_EFFORTS, disabled_value="none"),
+        client_identity=OPENCODE_CLIENT_IDENTITY,
     ),
     "opencode_go": OpenAIChatProfile(
         _policy(
@@ -301,6 +311,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         OPENAI_STANDARD_REASONING,
+        client_identity=OPENCODE_CLIENT_IDENTITY,
     ),
     "vercel": OpenAIChatProfile(
         _policy(

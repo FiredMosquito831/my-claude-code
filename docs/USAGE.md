@@ -37,6 +37,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
 - [7. Tutorial: connect another CLI](#7-tutorial-connect-another-cli)
 - [8. Providers and API keys](#8-providers-and-api-keys)
   - [Using Claude models](#using-claude-models)
+  - [OpenCode Zen and OpenCode Go: what MCC sends about itself](#opencode-zen-and-opencode-go-what-mcc-sends-about-itself)
   - [Custom providers](#custom-providers)
 - [9. Model tiers and routing](#9-model-tiers-and-routing)
   - [Tiers for every other coding agent](#tiers-for-every-other-coding-agent)
@@ -2255,6 +2256,85 @@ OPEN_ROUTER_API_KEY="sk-or-..."
 
 Restart `mcc-server` afterwards.
 
+### OpenCode Zen and OpenCode Go: what MCC sends about itself
+
+Both OpenCode gateways read a small set of identity headers off every request:
+which program is calling, which version, which project, which conversation and
+which single call. Their own client sends all five. Before 6.69.0 MCC sent
+none of them.
+
+**That is why the OpenCode Zen free models stopped working.** Measured on
+2026-09-10, with four requests on a real key:
+
+| Request | Answer |
+| --- | --- |
+| bearer token only — what every release before 6.69.0 sent | **`400 MissingSessionID`** — *"OpenCode's free tier can only be used in OpenCode"* |
+| the same request carrying the five headers | `200` |
+| the same, with a deliberately **invalid** client id | `200` |
+| the same, plus a header the host has never heard of | `200` |
+
+So the check is a refusal, not a smaller allowance, and the header it acts on
+is the conversation id. Since 6.69.0 MCC sends all five, to both providers, on
+every request:
+
+| Header | What MCC puts in it |
+| --- | --- |
+| `User-Agent` | `opencode/<version>` — the OpenCode release installed on this machine, else the one this build was pinned against |
+| `x-opencode-client` | `cli` |
+| `x-opencode-project` | `global` |
+| `x-opencode-session` | one stable id per conversation — the id your coding agent supplied, or one derived from how the conversation opened |
+| `x-opencode-request` | a fresh id for this one call |
+
+**Say this plainly, because it is your account and your choice.** The default
+identifies MCC's requests as the official OpenCode client's. MCC is not the
+OpenCode client. The vendor's Zen page says the service is meant to be usable
+"with any other coding agent" and documents no required header anywhere, so
+there is no published rule either way — but the user-agent is still a claim
+about which program made the request, and the free tier's identity check is
+the vendor's, not MCC's. The row above showing an invalid client id answered
+`200` is the useful part here: the header the host acts on is the conversation
+id, which MCC sends under either setting, so the truthful identity is not
+known to cost anything.
+
+The truthful opt-out is one setting:
+
+```bash
+OPENCODE_CLIENT_IDENTITY="mcc"
+```
+
+which sends `User-Agent: my-claude-code/<version>` and
+`x-opencode-client: mcc` instead. The conversation, request and project
+headers are unchanged — they are the ones the vendor actually asked for, and
+the ones that buy prompt-cache stickiness. Not measured, and said rather than
+implied: nobody tried a truthful user-agent against the live free tier inside
+this release's request budget, so if `mcc` ever stops working, that is the
+first thing to suspect. `OPENCODE_CLIENT_VERSION` pins the
+release named in the user-agent; empty, the default, reads it from the
+`opencode-ai` package installed on this machine.
+
+**OpenCode Go is unverified.** The vendor said on 2026-09-03 that Go requests
+must carry the conversation header and began enforcing it on 2026-09-06. MCC
+sends it, under the same rule as Zen. Both live Go probes were answered
+`401 CreditsError` — the subscription behind the key had run out — so nothing
+here claims to have watched the Go requirement be satisfied.
+
+Two things MCC deliberately does **not** send: `x-parent-session-id`, because
+MCC never forks a session and would be inventing a relationship, and
+`x-mcc-harness` — which coding agent sent the request is between you and MCC,
+and never travels upstream.
+
+The conversation id is derived, never forwarded: whatever your agent called
+its session is hashed into an opaque id, and the original is not written to
+the request log.
+
+**If the vendor turns the check back on**, MCC says so rather than quietly
+halving its own quota. A 429 that names the free daily quota and resets at
+00:00 UTC is recorded as a learned fact against the provider and shown on
+**Models**; **Probe capabilities** on the OpenCode card also spends two
+requests asking the host directly, and records *"checked <date>, no difference
+observed"* when it cannot tell — which is the honest answer, not a clean bill
+of health.
+
 ### Local providers
 
 LM Studio, llama.cpp and Ollama need a base URL rather than a key:
@@ -3853,6 +3933,8 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `FALLBACK_RESUME_AFTER_COMMIT` | `true` | **New in 6.18.0.** Rather than only ending a half-written answer, hand the text already sent to the next model on the route and splice its continuation into the same message. Falls back to the row above whenever the continuation is unusable, so it can only lengthen an answer, never break one. `false` stops at the short message. |
 | `STREAM_COMMIT_HOLDBACK_CHARS` | `0` | **New in 6.18.0.** Visible characters that must arrive before output is released, on top of `STREAM_COMMIT_HOLDBACK_SECONDS`. Raising it means a model that writes a word and dies has shown you nothing, so the route restarts on the next model invisibly; the cost is that much time-to-first-visible-word on every request. `0` uses the clock alone. |
 | `HARNESS_TIER_ALIASES` | `true` | **New in 6.38.0.** Lists `mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` at the top of every coding agent's generated picker, each a name for one of MCC's own routes rather than a model of its own. Off keeps those pickers to concrete refs; the router still resolves an alias a client sends anyway, so an agent already configured on one keeps working. Per-agent chains live in `~/.mcc/harness_tiers.json`, written by the **Coding agents** page. See [Tiers for every other coding agent](#tiers-for-every-other-coding-agent). |
+| `OPENCODE_CLIENT_IDENTITY` | `opencode` | **New in 6.69.0.** Which client MCC identifies as to OpenCode Zen and OpenCode Go, both of which read identity headers off every request. `opencode` sends the official client's user-agent and client id, which is what the free tier's limiter recognises; `mcc` sends `my-claude-code` and this version instead. The conversation, request and project headers go either way. See [OpenCode Zen and OpenCode Go: what MCC sends about itself](#opencode-zen-and-opencode-go-what-mcc-sends-about-itself). |
+| `OPENCODE_CLIENT_VERSION` | *(empty)* | **New in 6.69.0.** Pins the OpenCode release named in that user-agent. Empty reads it from the `opencode-ai` package installed on this machine, and falls back to the release this build was verified against. Only used when `OPENCODE_CLIENT_IDENTITY` is `opencode`. |
 | `SERVER_PORT_TAKEOVER` | `always` | **New in 6.59.0.** What happens when the server starts and its port is already held. `always` stops the holder and takes the port; a holder that is not MCC is named in one `WARNING` line first. Setting it to mcc-only stops only processes this install can identify as its own; never is the pre-6.59.0 behaviour — name the holder and refuse to start. Identification is by process, never by the HTTP answer. |
 | `SERVER_GRACEFUL_SHUTDOWN_SECONDS` | `20` | **Changed in 6.41.0** — was `300`, and it used to bound only uvicorn's connection wait while the response cleanup, the provider drain and the ASGI lifespan had no bound at all (a request against a silent upstream meant a server that never exited). It is now one deadline for the whole stop, new requests are refused with `503` for its duration, and the process exits a few seconds past it. Lower an inherited `300` unless you would rather wait five minutes for a restart than cut a long request. |
 | `CREDENTIAL_CIRCUIT_THRESHOLD` | **removed at 6.0.0** | The circuit breaker it configured no longer exists for provider pools. A stale line is ignored, not fatal — delete it. |
