@@ -3047,7 +3047,9 @@ Input is reported in two parts, because cached and uncached prompt tokens bill d
 
 > **A hit rate of `—` means that provider never reported caching at all** — which is different from a measured `0.0%`.
 >
-> Prompt caching is provider-dependent. OpenAI reports it for prefixes of 1,024+ tokens; DeepSeek reports it with its own fields. **NVIDIA NIM's hosted endpoint does not do real prefix caching** — it returns a small constant regardless of repetition — so a near-zero rate there is accurate rather than a fault. NVIDIA exposes prefix caching as a self-hosted deployment toggle (`NIM_ENABLE_KV_CACHE_REUSE`), not on the shared API.
+> Prompt caching is provider-dependent. OpenAI reports it for prefixes of 1,024+ tokens; DeepSeek reports it with its own fields; **ChatGPT OAuth reports it from 6.68.2**. **NVIDIA NIM's hosted endpoint does not do real prefix caching** — it returns a small constant regardless of repetition — so a near-zero rate there is accurate rather than a fault. NVIDIA exposes prefix caching as a self-hosted deployment toggle (`NIM_ENABLE_KV_CACHE_REUSE`), not on the shared API.
+>
+> **ChatGPT OAuth requests logged before 6.68.2 show `—` and keep showing it.** The endpoint was reporting the figure the whole time and MCC was not reading it, so those requests were never measured; nothing is backfilled, because a guess in that column would be worse than a dash. Their **Input (uncached)** counts were also cache-inclusive and so ran high — from 6.68.2 the cached part is reported separately, as it already was for every other provider.
 
 #### Finding a request again
 

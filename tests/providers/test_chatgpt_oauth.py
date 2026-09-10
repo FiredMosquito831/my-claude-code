@@ -1216,3 +1216,169 @@ def test_text_only_tool_result_output_is_still_a_bare_string():
             "output": "plain text",
         }
     ]
+
+
+# ------------------------------------------------- prompt-cache usage (6.68.2)
+
+
+def _completed_frame(usage: dict[str, object]) -> dict[str, object]:
+    """One terminal Responses frame carrying a usage block."""
+    return {"type": "response.completed", "response": {"usage": usage}}
+
+
+def _message_delta_usage(usage: dict[str, object]) -> dict[str, int]:
+    """Run one completed frame through the converter and read the SSE usage."""
+    from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
+
+    ledger = AnthropicStreamLedger("msg_1", "gpt-5.6-sol", input_tokens=0)
+    converter = ChatGPTOAuthStreamConverter(ledger)
+    events = list(converter.feed(_completed_frame(usage)))
+    events += list(converter.finish())
+
+    for event in events:
+        if '"type": "message_delta"' not in event:
+            continue
+        payload = event.split("data: ", 1)[1].strip()
+        return json.loads(payload)["usage"]
+    raise AssertionError("the converter emitted no message_delta")
+
+
+#: The shape the endpoint actually sends, as Codex CLI 0.153.4 deserialises it.
+_REAL_USAGE: dict[str, object] = {
+    "input_tokens": 1000,
+    "input_tokens_details": {"cached_tokens": 900},
+    "output_tokens": 50,
+    "output_tokens_details": {"reasoning_tokens": 20},
+    "total_tokens": 1050,
+}
+
+
+def test_response_completed_reports_cache_read_tokens():
+    """The first inch of a pipe that was complete everywhere else.
+
+    Before 6.68.2 the converter read ``input_tokens``/``output_tokens`` and
+    stopped, so 11,132 consecutive chatgpt_oauth rows recorded a NULL cache
+    column while the endpoint was reporting the number all along.
+    """
+
+    assert _message_delta_usage(dict(_REAL_USAGE)) == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_read_input_tokens": 900,
+    }
+
+
+def test_input_plus_cache_read_equals_the_upstream_prompt_count():
+    """The anti-double-count invariant, as arithmetic.
+
+    A Responses ``input_tokens`` includes what the cache served; Anthropic's
+    excludes it. Renaming one to the other inflates every warm prompt -- the
+    4.22.1 defect. This is the test that would have caught it.
+    """
+
+    usage = _message_delta_usage(dict(_REAL_USAGE))
+
+    assert usage["input_tokens"] + usage["cache_read_input_tokens"] == 1000
+
+
+def test_a_usage_block_with_no_details_reports_nothing_rather_than_zero():
+    """NULL must stay NULL: no details block means the hit was never measured."""
+
+    usage = _message_delta_usage(
+        {"input_tokens": 1000, "output_tokens": 50, "total_tokens": 1050}
+    )
+
+    assert "cache_read_input_tokens" not in usage
+    assert "cache_creation_input_tokens" not in usage
+    assert usage["input_tokens"] == 1000
+
+
+def test_a_reported_zero_cache_read_is_recorded_as_zero():
+    """And 0 must stay 0: the upstream measured, and found no hit.
+
+    The other half of the pair. A provider that reports zero produces zeros in
+    the column, the way open_router does; one that is never read produces
+    nothing at all, the way this provider did for 11,132 requests.
+    """
+
+    usage = _message_delta_usage(
+        {
+            "input_tokens": 1000,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 50,
+        }
+    )
+
+    assert usage["cache_read_input_tokens"] == 0
+    assert usage["input_tokens"] == 1000
+
+
+def test_a_reported_cache_write_reaches_the_anthropic_name():
+    """``cache_write_tokens`` is the write side, under Anthropic's spelling.
+
+    It is not subtracted from the prompt count: only the read side is double
+    counted by a straight rename, which is what ``openai_chat`` established.
+    """
+
+    usage = _message_delta_usage(
+        {
+            "input_tokens": 1000,
+            "input_tokens_details": {"cached_tokens": 900, "cache_write_tokens": 40},
+            "output_tokens": 50,
+        }
+    )
+
+    assert usage["cache_creation_input_tokens"] == 40
+    assert usage["input_tokens"] == 100
+
+
+@pytest.mark.asyncio
+async def test_cache_read_reaches_the_request_log_row(tmp_path):
+    """End to end: a real-shaped frame becomes a row with the column filled.
+
+    The converter's own SSE output is driven through the ordinary capture
+    wrapper and the row is read back, so this proves the dashboard changes --
+    not merely that the converter emits a key.
+    """
+    from collections.abc import AsyncIterator
+
+    from my_claude_code.api.request_capture import RequestCapture
+    from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
+    from my_claude_code.core.request_log import RequestLogStore
+
+    store = RequestLogStore(tmp_path / "requests.db")
+    ledger = AnthropicStreamLedger("msg_1", "gpt-5.6-sol", input_tokens=0)
+    converter = ChatGPTOAuthStreamConverter(ledger)
+
+    frames = [ledger.message_start()]
+    frames += list(
+        converter.feed({"type": "response.output_text.delta", "delta": "hi"})
+    )
+    frames += list(converter.feed(_completed_frame(dict(_REAL_USAGE))))
+    frames += list(converter.finish())
+
+    capture = RequestCapture(
+        store,
+        request_id="req_cache",
+        endpoint="/v1/messages",
+        protocol="anthropic",
+        stream=True,
+        requested_model="gpt-5.6-sol",
+        input_text="hello",
+        params=None,
+    )
+
+    async def body() -> AsyncIterator[str]:
+        for frame in frames:
+            yield frame
+
+    async for _ in capture.wrap(body()):
+        pass
+    store.close()
+
+    row = store.get_request("req_cache")
+    assert row is not None
+    assert row["cache_read_tokens"] == 900
+    assert row["tokens_in"] == 100
+    # The prompt really was 1,000 tokens; 900 of them came from the cache.
+    assert row["tokens_in"] + row["cache_read_tokens"] == 1000
