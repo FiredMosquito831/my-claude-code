@@ -65,6 +65,9 @@ from .constants import (
     MODEL_PROBE_NEW_MODELS_DEFAULT,
     MODEL_VISIBILITY_ALLOW_DEFAULT,
     MODEL_VISIBILITY_DENY_DEFAULT,
+    OPENCODE_CLIENT_IDENTITY_CHOICES,
+    OPENCODE_CLIENT_IDENTITY_DEFAULT,
+    OPENCODE_CLIENT_VERSION_DEFAULT,
     PROVIDER_RATE_LIMIT_DEFAULT,
     PROVIDER_RATE_WINDOW_DEFAULT,
     PROVIDER_RETRY_ATTEMPTS_DEFAULT,
@@ -303,6 +306,17 @@ class Settings(BaseSettings):
     # ==================== OpenCode Zen / OpenCode Go ====================
     # Same key from opencode.ai/auth; zen uses prefix ``opencode/``, Go uses ``opencode_go/``.
     opencode_api_key: str = Field(default="", validation_alias="OPENCODE_API_KEY")
+    # Which client MCC presents itself as to both OpenCode hosts, and which
+    # OpenCode release its user-agent names. See
+    # ``providers/openai_chat/opencode_identity.py`` for what is on the wire.
+    opencode_client_identity: str = Field(
+        default=OPENCODE_CLIENT_IDENTITY_DEFAULT,
+        validation_alias="OPENCODE_CLIENT_IDENTITY",
+    )
+    opencode_client_version: str = Field(
+        default=OPENCODE_CLIENT_VERSION_DEFAULT,
+        validation_alias="OPENCODE_CLIENT_VERSION",
+    )
 
     # ==================== Vercel AI Gateway ====================
     vercel_ai_gateway_api_key: str = Field(
@@ -1741,6 +1755,25 @@ class Settings(BaseSettings):
             )
         return mode
 
+    @field_validator("opencode_client_identity")
+    @classmethod
+    def validate_opencode_client_identity(cls, v: str) -> str:
+        """Reject an unknown identity rather than quietly pick one.
+
+        Blank is not a typo -- the admin form writes ``KEY=`` for a cleared
+        field -- so it falls back to the shipped default, the same way the
+        other choice fields in this file do.
+        """
+        mode = str(v).strip().lower()
+        if not mode:
+            return OPENCODE_CLIENT_IDENTITY_DEFAULT
+        if mode not in OPENCODE_CLIENT_IDENTITY_CHOICES:
+            raise ValueError(
+                "OPENCODE_CLIENT_IDENTITY must be one of "
+                f"{', '.join(OPENCODE_CLIENT_IDENTITY_CHOICES)}, got {v!r}"
+            )
+        return mode
+
     @field_validator("tool_result_image_delivery")
     @classmethod
     def validate_tool_result_image_delivery(cls, v: str) -> str:
@@ -2125,6 +2158,31 @@ def configured_image_detail() -> str:
     """
     settings = get_settings()
     return str(getattr(settings, "image_detail", IMAGE_DETAIL_DEFAULT) or "auto")
+
+
+def configured_opencode_client_identity() -> str:
+    """Which client identity the operator asked MCC to present to OpenCode.
+
+    Read here, in the settings layer, and per request rather than captured
+    when the profile table is built: ``providers/openai_chat/profiles.py``
+    is a module-level dict literal, so a value baked in at import could not
+    follow a dashboard save.
+    """
+    settings = get_settings()
+    return str(
+        getattr(settings, "opencode_client_identity", OPENCODE_CLIENT_IDENTITY_DEFAULT)
+        or OPENCODE_CLIENT_IDENTITY_DEFAULT
+    )
+
+
+def configured_opencode_client_version() -> str:
+    """The OpenCode release the operator pinned, or ``""`` for auto.
+
+    Empty is the default and means "read it off this machine"; the provider
+    layer owns that lookup, because it is the layer allowed to touch disk.
+    """
+    settings = get_settings()
+    return str(getattr(settings, "opencode_client_version", "") or "")
 
 
 def configured_default_max_output_tokens() -> int | None:

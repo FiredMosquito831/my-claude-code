@@ -64,6 +64,9 @@ from my_claude_code.providers.runtime.capability_probes import (
 )
 from my_claude_code.providers.runtime.config import provider_credential
 from my_claude_code.providers.runtime.discovery import cache_enriched_model_infos
+from my_claude_code.providers.runtime.identity_probe import (
+    probe_client_identity,
+)
 from my_claude_code.providers.runtime.reasoning_probe import (
     ReasoningProbeOutcome,
     probe_reasoning_dialect,
@@ -572,6 +575,18 @@ class ApplicationRuntime:
                 # Every further model would get the same non-answer from the
                 # same credential and cost another request to find out.
                 break
+        # Whether this host acts on who is calling. Two requests, and only
+        # for a provider whose profile declares an identity -- which is
+        # what keeps the press the same size for the other nineteen.
+        identity = (
+            None
+            if unprobeable or not chosen
+            else await probe_client_identity(
+                provider_id, base_url, api_key, chosen[0], proxy=proxy
+            )
+        )
+        if identity is not None:
+            results.append(identity.as_payload())
         self._learned_facts.flush()
         return {
             "provider_id": provider_id,

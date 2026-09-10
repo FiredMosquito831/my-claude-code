@@ -100,6 +100,7 @@ FACT_KIND_LABELS: dict[str, str] = {
     "vision_unsupported": "no vision",
     "tool_calls_unsupported": "no tool calls",
     "models_etag": "catalogue validator",
+    "client_identity_required": "client identity checked",
 }
 
 # Which capability field a fact narrows, so the chip can be drawn beside the

@@ -16,6 +16,7 @@ from my_claude_code.core.client_fingerprint import (
     HARNESS_SOURCE_HEADER,
     HARNESS_SOURCE_NONE,
     HARNESS_SOURCE_USER_AGENT,
+    MAX_MIRRORED_CHARS,
     NON_REGISTRY_HARNESS_IDS,
     NON_REGISTRY_HARNESS_LABELS,
     UNKNOWN_HARNESS,
@@ -220,3 +221,63 @@ def test_the_oauth_mirroring_record_is_untouched_by_the_classifier() -> None:
     assert fingerprint.user_agent == "claude-cli/2.1.258 (external, cli)"
     assert fingerprint.x_app == "cli"
     assert not hasattr(fingerprint, "harness")
+
+
+# --------------------------------------------------- the conversation id
+
+
+def test_the_fingerprint_reads_the_conversation_id_opencode_sends() -> None:
+    """MCC publishes itself to OpenCode as ``mcc``, so OpenCode sends these.
+
+    Its own header block branches on a provider id starting ``opencode``;
+    MCC's does not, so a real OpenCode CLI pointed at this proxy takes the
+    other branch and names its conversation in ``x-session-affinity`` and
+    ``X-Session-Id``. That is a conversation identity arriving for free.
+    """
+    fingerprint = fingerprint_from_headers(
+        {"x-session-affinity": "ses_abc", "X-Session-Id": "ses_abc"}
+    )
+
+    assert fingerprint.session_id == "ses_abc"
+
+
+def test_the_fingerprint_reads_the_claude_spellings_too() -> None:
+    for name in (
+        "anthropic-session-id",
+        "x-anthropic-session-id",
+        "claude-session-id",
+        "x-claude-session-id",
+    ):
+        assert fingerprint_from_headers({name: "conv-9"}).session_id == "conv-9"
+
+
+def test_a_client_that_named_no_conversation_leaves_it_unset() -> None:
+    assert fingerprint_from_headers({"user-agent": "curl/8"}).session_id is None
+    assert fingerprint_from_headers({}).session_id is None
+
+
+def test_a_conversation_id_alone_is_still_a_fingerprint() -> None:
+    """It arrives without any of the four mirrored headers all the time."""
+    fingerprint = fingerprint_from_headers({"x-session-id": "only-this"})
+
+    assert not fingerprint.is_empty
+    assert fingerprint.user_agent is None
+
+
+def test_the_conversation_id_is_bounded_like_every_other_mirrored_value() -> None:
+    fingerprint = fingerprint_from_headers({"x-session-id": "s" * 5_000})
+
+    assert fingerprint.session_id is not None
+    assert len(fingerprint.session_id) == MAX_MIRRORED_CHARS
+
+
+def test_the_conversation_id_is_never_stored_in_the_request_log() -> None:
+    """Read, reduced to an opaque derived id, and never written down.
+
+    The same objection ``core/client_fingerprint`` already records against
+    mirroring a client's own correlation id: MCC is not the session it names.
+    """
+    from my_claude_code.core.client_fingerprint import _SESSION_HEADERS
+    from my_claude_code.core.request_headers import ALLOWED_HEADERS
+
+    assert set(_SESSION_HEADERS).isdisjoint(ALLOWED_HEADERS)

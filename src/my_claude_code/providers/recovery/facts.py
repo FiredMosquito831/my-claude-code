@@ -54,6 +54,13 @@ FACT_TOOL_CALLS_UNSUPPORTED = "tool_calls_unsupported"
 #: The validator a provider's ``/models`` last sent, replayed on the next
 #: sweep. Provider-wide, ``source=observation``. Value: ``dict[str, str]``.
 FACT_MODELS_ETAG = "models_etag"
+#: This host acts on who is calling: it either refused a request naming a
+#: client header, or it benched the credential on a free daily quota that
+#: only requests carrying the right identity are counted generously
+#: against. Provider-wide. Value: ``True`` when the host was seen doing
+#: it, ``False`` when a probe looked and found no difference -- which is a
+#: real answer with a date on it, not an absence.
+FACT_CLIENT_IDENTITY_REQUIRED = "client_identity_required"
 
 #: The allow-list. Whatever lands in this document is read back into live
 #: request-shaping state, so an unknown kind is dropped with one log line
@@ -69,6 +76,7 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_VISION_UNSUPPORTED,
         FACT_TOOL_CALLS_UNSUPPORTED,
         FACT_MODELS_ETAG,
+        FACT_CLIENT_IDENTITY_REQUIRED,
     }
 )
 
@@ -102,6 +110,10 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     FACT_OUTPUT_CAP: STATED_FACT_TTL_SECONDS,
     FACT_EFFORT_ENUM: STATED_FACT_TTL_SECONDS,
     FACT_MODELS_ETAG: STATED_FACT_TTL_SECONDS,
+    # A published property of the deployment, not an inference: the host
+    # either did the thing or a probe watched it not do the thing, and
+    # both answers are worth a month before they are asked again.
+    FACT_CLIENT_IDENTITY_REQUIRED: STATED_FACT_TTL_SECONDS,
     FACT_REASONING_FIELD_REJECTED: INFERRED_FACT_TTL_SECONDS,
     FACT_STREAM_USAGE_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
     FACT_VISION_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,

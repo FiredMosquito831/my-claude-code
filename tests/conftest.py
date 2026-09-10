@@ -74,6 +74,21 @@ def _reset_stop_deadline():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_opencode_client_version():
+    """No test may inherit another test's reading of the machine.
+
+    The OpenCode version behind the outbound user-agent is cached process-wide
+    for an hour, because it is read off disk and does not change between two
+    requests. A test that pins it would otherwise pin it for whatever ran next.
+    """
+    from my_claude_code.providers.openai_chat import opencode_identity
+
+    opencode_identity.reset_version_cache()
+    yield
+    opencode_identity.reset_version_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_learned_facts():
     """No test may inherit another test's learned facts.
 

@@ -48,6 +48,28 @@ _MIRRORED = (
     "anthropic-beta",
 )
 
+# The spellings a client uses to say which conversation a request belongs
+# to. Six, because four different programs answer the same question in four
+# different words: OpenCode's own client sends the first two (MCC publishes
+# itself to it under the provider id ``mcc``, which does not start with
+# ``opencode``, so it takes the branch that sends these), and Claude Code
+# and the Agent SDK send one of the four that follow -- the same four
+# ``core/trace.py`` already reads for the log context.
+#
+# The value is read and immediately reduced to an opaque derived id; it is
+# deliberately NOT added to ``core/request_headers.ALLOWED_HEADERS``, so it
+# never reaches durable storage. That is the same privacy objection this
+# module already records against mirroring ``x-claude-code-session-id``:
+# MCC is not the session it identifies.
+_SESSION_HEADERS = (
+    "x-session-affinity",
+    "x-session-id",
+    "anthropic-session-id",
+    "x-anthropic-session-id",
+    "claude-session-id",
+    "x-claude-session-id",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ClientFingerprint:
@@ -57,6 +79,10 @@ class ClientFingerprint:
     x_app: str | None = None
     anthropic_version: str | None = None
     anthropic_beta: str | None = None
+    #: What the client called this conversation, when it named one. Never
+    #: mirrored upstream verbatim and never stored -- a provider that needs
+    #: a conversation identity derives an opaque one from it.
+    session_id: str | None = None
 
     @property
     def ua_entrypoint(self) -> str | None:
@@ -87,6 +113,7 @@ class ClientFingerprint:
                 self.x_app,
                 self.anthropic_version,
                 self.anthropic_beta,
+                self.session_id,
             )
         )
 
@@ -105,17 +132,23 @@ def fingerprint_from_headers(
     if not headers:
         return EMPTY_FINGERPRINT
     seen: dict[str, str] = {}
+    session: str | None = None
     for raw_name, raw_value in headers.items():
         name = str(raw_name).strip().lower()
-        if name in _MIRRORED and isinstance(raw_value, str) and raw_value.strip():
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            continue
+        if name in _MIRRORED:
             seen[name] = raw_value.strip()[:MAX_MIRRORED_CHARS]
-    if not seen:
+        elif session is None and name in _SESSION_HEADERS:
+            session = raw_value.strip()[:MAX_MIRRORED_CHARS]
+    if not seen and session is None:
         return EMPTY_FINGERPRINT
     return ClientFingerprint(
         user_agent=seen.get("user-agent"),
         x_app=seen.get("x-app"),
         anthropic_version=seen.get("anthropic-version"),
         anthropic_beta=seen.get("anthropic-beta"),
+        session_id=session,
     )
 
 
