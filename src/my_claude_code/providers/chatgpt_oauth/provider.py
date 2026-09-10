@@ -329,6 +329,13 @@ block rather than spelling a disable, so the endpoint has no OFF at
 all. It also has no bare ON -- a policy naming no effort falls back to
 the endpoint's long-standing ``medium`` -- so the toggle channel is
 real and its on-value is a default rung.
+
+``effort_values=frozenset(ReasoningEffort)`` is the whole ladder, and
+since 6.68.1 the encoder honours it: OpenAI's own client (Codex CLI
+0.153.4) spells ``none|minimal|low|medium|high|xhigh|max|ultra|
+persistent``, so every rung MCC has is host vocabulary here. Narrowing
+is the *model's* job -- ``supported_efforts`` from the ladder, clamped
+and recorded by ``adapt_reasoning_policy`` -- never the encoder's.
 """
 
 

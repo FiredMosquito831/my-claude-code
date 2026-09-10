@@ -18,13 +18,18 @@ import pytest
 
 from my_claude_code.application.model_metadata import ModelReasoningCapability
 from my_claude_code.application.reasoning_gating import adapt_reasoning_policy
+from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.reasoning import (
+    ReasoningAdaptationKind,
     ReasoningDialect,
     ReasoningEffort,
     ReasoningPolicy,
 )
 from my_claude_code.providers.anthropic_messages.provider import (
     ANTHROPIC_REASONING_DIALECT,
+)
+from my_claude_code.providers.chatgpt_oauth.conversion import (
+    build_chatgpt_oauth_request_body,
 )
 from my_claude_code.providers.chatgpt_oauth.provider import (
     CHATGPT_OAUTH_REASONING_DIALECT,
@@ -485,6 +490,84 @@ def test_mistrals_single_rung_clamps_up_and_is_recorded() -> None:
 
     assert adapted.effort is ReasoningEffort.HIGH
     assert adaptation.kind.value == "clamped"
+
+
+def test_a_max_capable_model_on_chatgpt_oauth_sends_max() -> None:
+    """The end-to-end row this provider never had, and the 6.68.1 fix.
+
+    models.dev publishes ``low, medium, high, xhigh, max`` for ``gpt-5.6-sol``
+    (and luna, terra, gpt-6-astra) in the ``openai`` bucket the
+    ``chatgpt_oauth`` alias reads, so ``max`` is a supported rung and gating
+    changes nothing. Between 5.61.1 and 6.68.0 a private table in
+    ``providers/chatgpt_oauth/conversion.py`` rewrote it to ``high`` *after*
+    gating -- so 4,635 logged requests recorded ``effort=max`` with no
+    adaptation and put ``high`` on the wire. This provider has no
+    profile-shaped encoder, so it is absent from ``WIRE_TABLE``; that is
+    precisely how the collapse hid, and this row closes the hole.
+    """
+
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+        effort_model(
+            ReasoningEffort.LOW,
+            ReasoningEffort.MEDIUM,
+            ReasoningEffort.HIGH,
+            ReasoningEffort.XHIGH,
+            ReasoningEffort.MAX,
+        ),
+        dialect=CHATGPT_DIALECT,
+        max_tokens=4096,
+        output_limit=32768,
+        model_ref="chatgpt_oauth/gpt-5.6-sol",
+    )
+
+    assert adapted.effort is ReasoningEffort.MAX
+    assert adaptation.kind is ReasoningAdaptationKind.UNCHANGED
+
+    body = build_chatgpt_oauth_request_body(
+        MessagesRequest(
+            model="gpt-5.6-sol", messages=[Message(role="user", content="hi")]
+        ),
+        reasoning=adapted,
+    )
+
+    assert body["reasoning"] == {"effort": "max", "summary": "auto"}
+    assert body["include"] == ["reasoning.encrypted_content"]
+
+
+def test_an_xhigh_capped_model_on_chatgpt_oauth_clamps_and_records() -> None:
+    """A rung the model does not publish is still never a silent downgrade.
+
+    ``gpt-5.5``'s published vocabulary stops at ``xhigh``. Asking for ``max``
+    lands on ``xhigh`` -- the nearest rung at or below -- and the clamp is
+    recorded, which is the whole difference between this and the table 6.68.1
+    deleted.
+    """
+
+    adapted, adaptation = adapt_reasoning_policy(
+        ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+        effort_model(
+            ReasoningEffort.LOW,
+            ReasoningEffort.MEDIUM,
+            ReasoningEffort.HIGH,
+            ReasoningEffort.XHIGH,
+        ),
+        dialect=CHATGPT_DIALECT,
+        max_tokens=4096,
+        output_limit=32768,
+        model_ref="chatgpt_oauth/gpt-5.5",
+    )
+
+    assert adapted.effort is ReasoningEffort.XHIGH
+    assert adaptation.kind.value == "clamped"
+    assert adaptation.message
+
+    body = build_chatgpt_oauth_request_body(
+        MessagesRequest(model="gpt-5.5", messages=[Message(role="user", content="hi")]),
+        reasoning=adapted,
+    )
+
+    assert body["reasoning"] == {"effort": "xhigh", "summary": "auto"}
 
 
 def test_chatgpt_oauth_has_no_off_spelling_and_a_default_rung() -> None:

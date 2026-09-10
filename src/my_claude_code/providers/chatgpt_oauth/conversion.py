@@ -12,27 +12,34 @@ from my_claude_code.core.anthropic.conversion import (
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import (
     ReasoningControl,
-    ReasoningEffort,
     ReasoningPolicy,
 )
 
 CHATGPT_DEFAULT_REASONING_EFFORT = "medium"
 CHATGPT_DEFAULT_REASONING_SUMMARY = "auto"
 
-# The ChatGPT/Codex Responses endpoint documents four named efforts. FCC's own
-# vocabulary has two more, so ``xhigh`` and ``max`` are mapped down to the
-# strongest value this endpoint is documented to accept rather than being sent
-# verbatim and risking a 400. This mirrors ``_LOW_MEDIUM_HIGH`` in
-# ``providers/openai_chat/profiles.py``, which solves the same problem for
-# chat-completions providers with a narrower vocabulary.
-_RESPONSES_EFFORTS: dict[ReasoningEffort, str] = {
-    ReasoningEffort.MINIMAL: "minimal",
-    ReasoningEffort.LOW: "low",
-    ReasoningEffort.MEDIUM: "medium",
-    ReasoningEffort.HIGH: "high",
-    ReasoningEffort.XHIGH: "high",
-    ReasoningEffort.MAX: "high",
-}
+# There is deliberately no per-effort lookup table in this module. Between
+# 5.61.1 and 6.68.0 a ``_RESPONSES_EFFORTS`` dict here rewrote ``xhigh`` and
+# ``max`` to ``"high"`` on the premise that "the Responses endpoint documents
+# four named efforts". That premise is false, and the rewrite was the last step
+# before the body was built -- so gating recorded no adaptation and the request
+# log honestly reported an effort that never left. 4,635 logged requests claimed
+# ``max`` and sent ``high``; 5,743 claimed ``xhigh`` and sent ``high``.
+#
+# OpenAI's own client publishes the enum. Codex CLI 0.153.4 interns its
+# ``ReasoningEffortConfig`` serde variants as
+# ``none|minimal|low|medium|high|xhigh|max|ultra|persistent`` and embeds the
+# prompt line "GPT-5.6 supports `none`, `low`, `medium`, `high`, `xhigh`, and
+# `max`. If omitted, GPT-5.6 defaults to `medium`."; its bundled ``models.json``
+# lists ``max`` in ``supported_reasoning_levels`` for gpt-5.6-sol/terra/luna and
+# gpt-6-astra. models.dev publishes the same values, which is what the ladder
+# already resolves into ``supported_efforts`` and what the Models page shows.
+#
+# So capability belongs to the ladder and the rung is sent verbatim. A model
+# whose published vocabulary lacks a rung is clamped by ``_adapt_effort``
+# (``application/reasoning_gating.py``) to the nearest rung it does publish, and
+# that clamp is recorded as a CLAMPED adaptation and shown -- exactly as it is
+# for every other provider. Do not reintroduce a table here.
 
 
 def _strip_openai_system_message(
@@ -214,12 +221,20 @@ def _reasoning_block(policy: ReasoningPolicy) -> dict[str, Any] | None:
     serves, whereas the sentinel value is not documented for all of them.
     A policy that names no effort keeps the endpoint's long-standing
     ``medium`` so nobody's default silently changes.
+
+    The rung itself is written out verbatim -- ``policy.effort.value``, no
+    lookup, no narrowing. The two-fact rule has already constrained it: the
+    model's published ``supported_efforts`` intersected with this host's
+    declared ``effort_values`` (all six rungs, ``provider.py``), with any
+    unlisted rung clamped to the nearest published one and *recorded*. The
+    private table that used to sit here flattened ``xhigh`` and ``max`` to
+    ``"high"`` after that machinery had finished, which is how the collapse
+    escaped both the adaptation record and the request log from 5.61.1 until
+    6.68.1.
     """
     if policy.control is ReasoningControl.OFF:
         return None
-    effort = (
-        _RESPONSES_EFFORTS.get(policy.effort) if policy.effort is not None else None
-    )
+    effort = policy.effort.value if policy.effort is not None else None
     return {
         "effort": effort or CHATGPT_DEFAULT_REASONING_EFFORT,
         "summary": CHATGPT_DEFAULT_REASONING_SUMMARY,
