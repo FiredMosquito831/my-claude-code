@@ -53,7 +53,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from my_claude_code.config.document_codecs import DocumentFormat
-from my_claude_code.config.harnesses import HarnessProtocol
+from my_claude_code.config.harnesses import COMMANDCODE_API_KEY_ENV, HarnessProtocol
 
 
 class DesktopAppStatus(StrEnum):
@@ -91,6 +91,23 @@ class TokenForm(StrEnum):
     #: card says which variable to export. Goose (whose config keys are
     #: *ignored* in favour of its keyring) and Antigravity (GEMINI_API_KEY).
     ENV_ONLY = "env_only"
+    #: The literal credential goes into the app's *own* configuration document,
+    #: tightened to 0600 where the OS allows it.
+    #:
+    #: This form exists because the older reading of "never a literal where the
+    #: app takes a reference" cost a release. Codex, OpenCode and Crush all
+    #: publish a reference syntax, so MCC wrote one -- naming
+    #: ``MCC_AUTH_TOKEN``, a variable **nothing in MCC has ever set**. A
+    #: desktop application started from Explorer inherits the user environment,
+    #: which does not have it either, so OpenCode and Crush sent the literal
+    #: string ``{env:MCC_AUTH_TOKEN}`` / ``$MCC_AUTH_TOKEN`` as their bearer
+    #: token (measured: HTTP 401) and Codex refused to load its config file at
+    #: all (``Missing environment variable``). A reference to a variable that
+    #: is never set is not protection; it is a guaranteed failure. So the test
+    #: is not "does this app have a syntax for references" but "can this app
+    #: *resolve* the reference as MCC ships it", and where it cannot, the
+    #: literal goes in the file the app reads.
+    LITERAL_IN_APP_FILE = "literal_in_app_file"
     #: The app resolves no reference and MCC owns a whole file of its own,
     #: written 0600, so the token never reaches a document the user edits.
     #: The Kimi precedent.
@@ -197,6 +214,22 @@ class DesktopDocument:
     backup_suffix: str = ".mcc-backup"
     #: Whether Configure may create the file when it is absent.
     create_if_missing: bool = True
+    #: Copy the whole *directory* this document lives in, timestamped, into
+    #: MCC's own configuration directory before the first edit -- in addition
+    #: to the single-file backup.
+    #:
+    #: Claude Desktop is the reason, and the reason is a real incident. Its
+    #: configuration library is a directory of documents plus an index, and
+    #: what MCC edits (``_meta.json``) is only the index: a per-file backup of
+    #: the index cannot restore a library. On 2026-09-08 Configure moved
+    #: ``appliedId`` onto an id the app rejects at boot and the user's own
+    #: gateway configuration stopped being applied; ``_meta.json.mcc-backup``
+    #: was the only copy of anything, and it covered the one file that was
+    #: easiest to reconstruct. The copy goes under MCC's directory rather than
+    #: beside the original on purpose: the app globs ``*.json`` out of that
+    #: library, so a backup left inside it is a document the app may try to
+    #: read.
+    backup_directory: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +262,49 @@ class DesktopSidecar:
     fields: Mapping[str, object] = field(default_factory=dict)
     #: Where the attribution header map goes inside :attr:`fields`, or empty.
     headers_key: str = ""
+    #: The serialiser producing the model *list* substituted for ``{models}``
+    #: in :attr:`fields`, looked up in
+    #: ``application/catalogues.SIDECAR_SERIALISERS``. Empty for a file whose
+    #: settings are all fixed. Claude Desktop is the case: its picker is filled
+    #: from an ``inferenceModels`` array, and the array is a serialised model
+    #: list like any other, so it comes from the package that owns those rather
+    #: than from a shape spelled out in the writer.
+    models_format_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopLegacyEntry:
+    """An identity MCC used to write here, and now has to repair on sight.
+
+    Declared rather than branched on, for the same reason everything else in
+    this module is: a repair that lives as an ``if spec.id == "claude_desktop"``
+    in the writer is a repair the next app cannot reuse and the registry tests
+    cannot see.
+
+    The case that produced it: MCC named its Claude Desktop configuration
+    ``mcc-9c2f4b18-…``, and the app validates that id against
+    ``/^[a-f0-9-]{36}$/`` **at boot, before reading the file**. MCC's id is 40
+    characters and contains an ``m``, so the check failed, the loader returned
+    ``undefined``, and the app discarded its entire local configuration tier --
+    including the gateway configuration the user had authored by hand. Fixing
+    the constant alone would leave every existing user in that state forever,
+    because nothing would ever remove the entry already on disk. So the probe
+    repairs it once, and a library that has already been repaired -- by MCC or
+    by a user who did it themselves -- has to come out of that repair
+    untouched, which is why every step below is conditioned on finding the
+    legacy value rather than on asserting the new one.
+    """
+
+    #: The value ``DesktopDocument.match_field`` used to carry. An element
+    #: holding it is MCC's, and is removed; an overwritten scalar holding it is
+    #: MCC's, and is re-pointed at the current ``match_value``.
+    match_value: str
+    #: Files MCC used to own outright under the old identity. Each is copied to
+    #: the current sidecar path when that path is absent -- so a repaired
+    #: install keeps working without a second Configure -- and then deleted.
+    sidecar_paths: tuple[DesktopPath, ...] = ()
+    #: One line, shown on the card, saying what was repaired and why.
+    reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,6 +399,8 @@ class DesktopAppSpec:
     #: Sources that outrank the file MCC writes. Empty for every app whose
     #: config file is the only place its settings can come from.
     managed_sources: tuple[DesktopManagedSource, ...] = ()
+    #: Identities MCC wrote in an earlier release and now repairs on sight.
+    legacy_entries: tuple[DesktopLegacyEntry, ...] = ()
     protocol: HarnessProtocol = HarnessProtocol.OPENAI_CHAT_COMPLETIONS
     base_url_shape: BaseUrlShape = BaseUrlShape.V1
     token_form: TokenForm = TokenForm.ENV_REFERENCE
@@ -377,9 +455,20 @@ DESKTOP_PROVIDER_ID = "mcc"
 #: a human, and the value ownership is matched on in VS Code's keyless array.
 DESKTOP_PROVIDER_LABEL = "My Claude Code"
 
-#: The environment variable every v1 app is told to read its token from. One
-#: name rather than one per app: the user exports it once, and a card that
-#: verifies "is it exported?" is checking a single fact.
+#: The environment variable an app that reads its credential *only* from the
+#: environment is told to export. One name rather than one per app: the user
+#: exports it once, and a card that verifies "is it exported?" is checking a
+#: single fact.
+#:
+#: **Nothing in MCC sets it**, which is exactly why it may no longer be written
+#: into a document as a reference. Until 6.67.0 it was, for Codex, OpenCode,
+#: Crush and Command Code, and every one of them failed: the apps sent the
+#: unexpanded reference as a bearer token (HTTP 401, measured) or refused to
+#: start. It now names only what a card *asks a human to export* for an app
+#: whose credential cannot reach it any other way -- Goose, which ignores keys
+#: written to its configuration in favour of its keyring, and Antigravity,
+#: whose base URL and key are environment-only. See
+#: :attr:`TokenForm.LITERAL_IN_APP_FILE` for what replaced the references.
 DESKTOP_TOKEN_ENV_VAR = "MCC_AUTH_TOKEN"
 
 #: The id of the configuration document MCC owns inside Claude Desktop's local
@@ -392,7 +481,30 @@ DESKTOP_TOKEN_ENV_VAR = "MCC_AUTH_TOKEN"
 #: Undo has to find the same file a year later, and a second Configure must
 #: replace MCC's document rather than litter the user's picker with a new entry
 #: on every run.
-CLAUDE_DESKTOP_CONFIG_ID = "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"
+#: **The id must be a bare 36-character lowercase UUID and nothing else.**
+#: Claude Desktop 1.46388.4.0 validates ``_meta.json``'s ``appliedId`` against
+#: ``/^[a-f0-9-]{36}$/`` at boot, *before* it reads the document -- main-process
+#: bundle ``.vite/build/index.chunk--WuAOADe.js``, regex at line 35967, loader
+#: ``$je`` at 36626, extracted from
+#: ``C:\Program Files\WindowsApps\Claude_1.46388.4.0_x64__pzs8sxrjxfjjc\app\
+#: resources\app.asar``. A failing id makes the loader return ``undefined``,
+#: ``nMe`` (36642) substitutes ``{}``, and the app discards its **entire** local
+#: configuration tier and starts in ordinary first-party mode with no message
+#: anywhere naming the id.
+#:
+#: Until 6.67.0 MCC prefixed the UUID with ``mcc-``, which made it 40
+#: characters and put an ``m`` in it, so the check failed. Because Configure
+#: also moves ``appliedId``, pressing the button did not merely fail to
+#: configure Claude Desktop -- it **un**configured a gateway the user had set
+#: up by hand. The prefix is gone; the UUID underneath is deliberately the same
+#: one, so a library configured by either release is recognisably MCC's.
+#: :data:`CLAUDE_DESKTOP_LEGACY_CONFIG_ID` is what the repair looks for.
+CLAUDE_DESKTOP_CONFIG_ID = "9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"
+
+#: The id MCC wrote before 6.67.0. Kept so the one-time repair can find what
+#: is already on disk; never written again.
+CLAUDE_DESKTOP_LEGACY_CONFIG_ID = "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"
+
 CLAUDE_DESKTOP_CONFIG_NAME = "My Claude Code (MCC)"
 
 #: The registry key Claude Desktop reads managed configuration from, under both
@@ -422,13 +534,16 @@ CLAUDE_DESKTOP_APP_BEHAVIOR_KEYS: tuple[str, ...] = (
     "egressProxyPacUrl",
 )
 
+#: ``inferenceCustomHeaders`` is a real key of the app's and is deliberately
+#: **not** here: MCC no longer writes it (see the ``claude_desktop`` sidecar).
+#: ``inferenceModels`` is here because MCC now does.
 CLAUDE_DESKTOP_GATEWAY_KEYS: tuple[str, ...] = (
     "inferenceProvider",
     "inferenceGatewayBaseUrl",
     "inferenceGatewayApiKey",
     "inferenceCredentialKind",
     "modelDiscoveryEnabled",
-    "inferenceCustomHeaders",
+    "inferenceModels",
 )
 
 
@@ -510,6 +625,40 @@ def _windows_program_files(*parts: str) -> DesktopPath:
     )
 
 
+def _claude_library_file(filename: str) -> tuple[DesktopPath, ...]:
+    """Return one file of Claude Desktop's configuration library, per platform.
+
+    Spelled once because it is spelled three times over: the index MCC merges,
+    the document MCC owns, and the document MCC owned under its old id and now
+    repairs. Three copies of the same three paths is three places for them to
+    drift apart.
+    """
+
+    return (
+        DesktopPath(
+            env_vars=("LOCALAPPDATA",),
+            relative_parts=("Claude-3p", "configLibrary", filename),
+            platforms=("win32",),
+        ),
+        DesktopPath(
+            env_vars=("HOME", "USERPROFILE"),
+            relative_parts=(
+                "Library",
+                "Application Support",
+                "Claude-3p",
+                "configLibrary",
+                filename,
+            ),
+            platforms=("darwin",),
+        ),
+        DesktopPath(
+            env_vars=("HOME", "USERPROFILE"),
+            relative_parts=(".config", "Claude-3p", "configLibrary", filename),
+            platforms=("linux",),
+        ),
+    )
+
+
 def _home(
     *parts: str,
     env_vars: tuple[str, ...] = ("HOME", "USERPROFILE"),
@@ -549,20 +698,45 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         base_url_shape=BaseUrlShape.V1,
-        token_form=TokenForm.ENV_NAME_FIELD,
-        token_env_var=DESKTOP_TOKEN_ENV_VAR,
+        # Codex resolves ``env_key`` from the process environment and **hard
+        # errors** when the variable is unset -- ``ERROR: Missing environment
+        # variable: '…'``, with no fallback to the ChatGPT OAuth in
+        # ``auth.json`` -- so the reference form it publishes is unusable for
+        # an app started from the Start Menu. ``experimental_bearer_token``
+        # takes the literal and works; it is the field CLIProxyAPI's own
+        # Codex-App recipe uses, for exactly this reason.
+        token_form=TokenForm.LITERAL_IN_APP_FILE,
+        token_env_var="",
         attribution_header_field="http_headers",
         catalogue_format_id="codex",
-        # Codex's ``model_providers.<id>`` entry, from its own config.md:
-        # ``name``, ``base_url``, ``env_key`` (the *name* of the variable
-        # holding the key -- so no token reaches the file), ``wire_api`` and
-        # ``http_headers``.
+        # Codex's ``model_providers.<id>`` entry. The field list is not from
+        # prose: it was recovered from the shipped binary's own serde table
+        # (``codex.strings.txt:1405750``, 17 fields) and each value below was
+        # exercised against ``codex 0.153.4`` under a scratch ``CODEX_HOME``.
+        #
+        # ``wire_api`` is the value that made this a bug report rather than a
+        # misconfiguration. MCC wrote ``"chat"``; 0.153.4 answers
+        #
+        #     Error loading config.toml: `wire_api = "chat"` is no longer
+        #     supported. How to fix: set `wire_api = "responses"` in your
+        #     provider config.
+        #
+        # and exits 1. That is not a provider that fails to answer -- it is a
+        # ``config.toml`` that will not parse, so every unrelated Codex setting
+        # in the user's file stops working too, in the CLI *and* in the desktop
+        # app (the ChatGPT app embeds the same engine and reads the same file).
+        # ``"responses"`` is the only accepted value and the default when the
+        # key is omitted.
+        #
+        # ``base_url`` must carry ``/v1``: Codex appends ``/responses``.
+        # Unknown keys are ignored (no ``deny_unknown_fields``); *retired
+        # known* keys are the exception, and ``wire_api = "chat"`` was one.
         provider=DesktopProvider(
             base_url_key="base_url",
-            env_name_key="env_key",
+            api_key_key="experimental_bearer_token",
             headers_key="http_headers",
             models_key="",
-            constants={"name": DESKTOP_PROVIDER_LABEL, "wire_api": "chat"},
+            constants={"name": DESKTOP_PROVIDER_LABEL, "wire_api": "responses"},
         ),
         sets_default_model=True,
         open_command="codex",
@@ -571,6 +745,18 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             'is set, so Configure also writes model = "mcc/best". That is the '
             "one value here MCC overwrites by necessity, and the reason the "
             "restore mode of Undo exists.",
+            "MCC's proxy token is written into ~/.codex/config.toml as "
+            "experimental_bearer_token, and the file is tightened to 0600 "
+            "where the OS allows it. Codex's env_key form hard-errors when the "
+            "variable is unset, and an app started from the Start Menu has no "
+            "variable MCC could have set -- so the literal in the file is the "
+            "only form that works. Undo removes it.",
+            "The Codex desktop app (the ChatGPT app, MSIX OpenAI.Codex) "
+            "embeds the same engine as the CLI and reads the same file, so "
+            "this card configures both. Its model picker is reported to "
+            "degrade with any custom provider (openai/codex#29156): the "
+            "session runs on MCC, but switching models from the picker may "
+            "not work. Not measured here.",
         ),
     ),
     DesktopAppSpec(
@@ -644,8 +830,8 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         id="opencode_desktop",
         display_name="OpenCode desktop",
         summary=(
-            "OpenCode's desktop build reads the same provider map as its CLI "
-            "and expands {env:...} references, so no token reaches the file."
+            "OpenCode's desktop build reads the same provider map as its CLI, "
+            "and takes the key as a plain string in that file."
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://opencode.ai/docs/config",
@@ -678,9 +864,16 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         base_url_shape=BaseUrlShape.V1,
-        token_form=TokenForm.ENV_REFERENCE,
-        token_template="{env:{name}}",
-        token_env_var=DESKTOP_TOKEN_ENV_VAR,
+        # ``{env:MCC_AUTH_TOKEN}`` until 6.67.0. OpenCode does expand
+        # ``{env:…}``, but nothing sets that variable and a desktop app
+        # inherits only the user environment -- so what actually went on the
+        # wire was ``Authorization: Bearer {env:MCC_AUTH_TOKEN}``, which MCC
+        # answers with 401 (measured against a scratch server). OpenCode's own
+        # ``ProviderConfig`` takes ``options.apiKey`` as a plain string, and
+        # ``createOpenAICompatible`` sends it as the bearer verbatim.
+        token_form=TokenForm.LITERAL_IN_APP_FILE,
+        token_template="",
+        token_env_var="",
         attribution_header_field="headers",
         catalogue_format_id="opencode",
         # OpenCode's ``provider.<id>`` entry. ``options.baseURL`` and
@@ -697,7 +890,12 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             },
         ),
         open_command="opencode",
-        notes=("OpenCode's sidecar restarts on its own; the desktop shell does not.",),
+        notes=(
+            "OpenCode's sidecar restarts on its own; the desktop shell does not.",
+            "MCC's proxy token is written into opencode.json as "
+            "options.apiKey, and the file is tightened to 0600 where the OS "
+            "allows it. Undo removes it.",
+        ),
     ),
     DesktopAppSpec(
         id="vscode_copilot",
@@ -739,7 +937,12 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         base_url_shape=BaseUrlShape.ROOT,
         token_form=TokenForm.ENV_REFERENCE,
         token_template="${input:mcc_token}",
-        token_env_var=DESKTOP_TOKEN_ENV_VAR,
+        # No variable. ``${input:…}`` is not an environment reference: VS Code
+        # resolves it itself by prompting once and keeping the answer in its
+        # own SecretStorage. The card used to name MCC_AUTH_TOKEN here and tell
+        # the reader to export it, which was an instruction to do something
+        # that has no effect on this app.
+        token_env_var="",
         attribution_header_field="requestHeaders",
         catalogue_format_id="vscode",
         # One element of ``chatLanguageModels.json``. ``name`` is both the
@@ -766,7 +969,8 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         display_name="Crush",
         summary=(
             "Charm's Crush -- also the official client for Hyper/HyperCharm, "
-            "which ships no client of its own -- expands $VAR in its config."
+            "which ships no client of its own -- takes an OpenAI-compatible "
+            "provider block in its own JSON config."
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://github.com/charmbracelet/crush",
@@ -789,9 +993,12 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         base_url_shape=BaseUrlShape.V1,
-        token_form=TokenForm.ENV_REFERENCE,
-        token_template="${name}",
-        token_env_var=DESKTOP_TOKEN_ENV_VAR,
+        # ``$MCC_AUTH_TOKEN`` until 6.67.0, and nothing sets that variable, so
+        # Crush sent ``Authorization: Bearer $MCC_AUTH_TOKEN`` -- 401,
+        # measured. ``api_key`` takes a plain string.
+        token_form=TokenForm.LITERAL_IN_APP_FILE,
+        token_template="",
+        token_env_var="",
         attribution_header_field="extra_headers",
         catalogue_format_id="crush",
         # Crush's ``providers.<id>`` entry, from ``crush schema``. ``type`` is
@@ -813,6 +1020,8 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         open_command="crush",
         notes=(
             "Crush's provider type for an OpenAI-compatible endpoint is openai-compat.",
+            "MCC's proxy token is written into crush.json as api_key, and the "
+            "file is tightened to 0600 where the OS allows it. Undo removes it.",
         ),
     ),
     DesktopAppSpec(
@@ -932,9 +1141,18 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         base_url_shape=BaseUrlShape.V1,
+        # Command Code is the one app here that *refuses* a literal: its
+        # ``parseProvider`` rejects a raw key with "raw secrets don't belong in
+        # providers.json" and then leaves the provider with no key at all. So
+        # it keeps a reference -- but the one the CLI half already uses.
+        # ``MCC_COMMANDCODE_API_KEY`` is set by ``mcc-commandcode`` in the
+        # child process it launches, so it is a variable MCC really does set;
+        # ``MCC_AUTH_TOKEN``, which this row named until 6.67.0, is not set by
+        # anything, and writing it here also disagreed with what the launcher
+        # had written into the very same file.
         token_form=TokenForm.ENV_REFERENCE,
-        token_template="{env:{name}}",
-        token_env_var=DESKTOP_TOKEN_ENV_VAR,
+        token_template="${name}",
+        token_env_var=COMMANDCODE_API_KEY_ENV,
         attribution_header_field="headers",
         catalogue_format_id="commandcode",
         # Unchanged from the shipped 6.27.0 merge, and asserted byte-identical
@@ -1000,24 +1218,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         # user authored in the app's own window. Everything else MCC writes
         # goes in the sidecar, which is a file of its own.
         document=DesktopDocument(
-            paths=(
-                _windows_localappdata("Claude-3p", "configLibrary", "_meta.json"),
-                _home(
-                    "Library",
-                    "Application Support",
-                    "Claude-3p",
-                    "configLibrary",
-                    "_meta.json",
-                    platforms=("darwin",),
-                ),
-                _home(
-                    ".config",
-                    "Claude-3p",
-                    "configLibrary",
-                    "_meta.json",
-                    platforms=("linux",),
-                ),
-            ),
+            paths=_claude_library_file("_meta.json"),
             display_path="%LOCALAPPDATA%\\Claude-3p\\configLibrary\\_meta.json",
             document_format=DocumentFormat.JSON,
             owned_key_path=(),
@@ -1025,53 +1226,75 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             match_field="id",
             match_value=CLAUDE_DESKTOP_CONFIG_ID,
             overwritten_keys=(("appliedId",),),
+            # The library is a directory, and what MCC edits here is only its
+            # index. A per-file backup of the index cannot restore a library,
+            # which is what the 2026-09-08 incident proved.
+            backup_directory=True,
         ),
-        sidecar=DesktopSidecar(
-            paths=(
-                _windows_localappdata(
-                    "Claude-3p",
-                    "configLibrary",
-                    f"{CLAUDE_DESKTOP_CONFIG_ID}.json",
+        legacy_entries=(
+            DesktopLegacyEntry(
+                match_value=CLAUDE_DESKTOP_LEGACY_CONFIG_ID,
+                sidecar_paths=_claude_library_file(
+                    f"{CLAUDE_DESKTOP_LEGACY_CONFIG_ID}.json"
                 ),
-                _home(
-                    "Library",
-                    "Application Support",
-                    "Claude-3p",
-                    "configLibrary",
-                    f"{CLAUDE_DESKTOP_CONFIG_ID}.json",
-                    platforms=("darwin",),
-                ),
-                _home(
-                    ".config",
-                    "Claude-3p",
-                    "configLibrary",
-                    f"{CLAUDE_DESKTOP_CONFIG_ID}.json",
-                    platforms=("linux",),
+                reason=(
+                    "MCC's configuration was stored under the id "
+                    f"{CLAUDE_DESKTOP_LEGACY_CONFIG_ID}, which Claude Desktop "
+                    "rejects at startup because it is not a 36-character "
+                    "UUID -- and while it was the applied id the app ignored "
+                    "its whole local configuration library. It has been moved "
+                    f"to {CLAUDE_DESKTOP_CONFIG_ID}. Relaunch Claude Desktop."
                 ),
             ),
+        ),
+        sidecar=DesktopSidecar(
+            paths=_claude_library_file(f"{CLAUDE_DESKTOP_CONFIG_ID}.json"),
             display_path=(
                 "%LOCALAPPDATA%\\Claude-3p\\configLibrary\\"
                 f"{CLAUDE_DESKTOP_CONFIG_ID}.json"
             ),
             document_format=DocumentFormat.JSON,
             holds_credential=True,
-            # The six keys, spelled exactly as
-            # https://claude.com/docs/third-party/claude-desktop/configuration
-            # spells them. ``static`` and ``gateway`` are that page's own
-            # enum members, not a guess: inferenceCredentialKind is one of
-            # static / helper-script / interactive / vendor-profile /
-            # workforce, and inferenceProvider one of gateway / anthropic /
-            # bedrock / mantle / vertex / foundry. ``inferenceGatewayAuthScheme``
-            # is not written because the documented default is already
-            # ``bearer``, which is what MCC accepts.
+            # Six keys, and every one of them is now a key the *working*
+            # configuration on a real machine carries. The list used to come
+            # from https://claude.com/docs/third-party/claude-desktop/configuration
+            # alone; it is now reconciled key-for-key against the entry the user
+            # built by hand and confirmed working on 2026-09-09, read from a
+            # backup on 2026-09-10 (specs/CLAUDE-DESKTOP-CONFIG-REFERENCE.md).
+            # Three differences came out of that reconciliation:
+            #
+            # * ``inferenceModels`` was **missing entirely**. It is what fills
+            #   the app's model picker when discovery is off, and MCC listed
+            #   nothing.
+            # * ``modelDiscoveryEnabled`` was hard-coded ``True``. It is now
+            #   ``False``, with the models named explicitly: a picker that
+            #   depends on a network call finishing -- and on
+            #   ``settings.harness_tier_aliases`` being on, which is what puts
+            #   the ``mcc/*`` refs in ``/v1/models`` at all -- is a picker that
+            #   can silently come up empty.
+            # * ``inferenceCustomHeaders`` is **gone**. The key is real and
+            #   current (``index.chunk--WuAOADe.js:30126``), but the working
+            #   entry does not carry it, no run of the app has been watched
+            #   accepting MCC's value, and the only thing it bought was
+            #   attribution that the user-agent fingerprint already provides.
+            #   A key nobody has watched an app read is what produced this bug
+            #   report; it does not get written on documentation alone.
+            #
+            # ``static`` and ``gateway`` are the documentation's own enum
+            # members and match the working entry exactly.
+            # ``inferenceGatewayAuthScheme`` is still not written: the
+            # documented default is ``bearer``, the app applies it at
+            # ``:83456``, and the working entry omits it too.
             fields={
                 "inferenceProvider": "gateway",
                 "inferenceGatewayBaseUrl": "{base_url}",
                 "inferenceGatewayApiKey": "{token}",
                 "inferenceCredentialKind": "static",
-                "modelDiscoveryEnabled": True,
+                "modelDiscoveryEnabled": False,
+                "inferenceModels": "{models}",
             },
-            headers_key="inferenceCustomHeaders",
+            headers_key="",
+            models_format_id="claude_desktop",
         ),
         managed_sources=(
             DesktopManagedSource(
@@ -1127,7 +1350,12 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         # never into a document the user edits.
         token_form=TokenForm.MCC_OWNED_FILE,
         token_env_var="",
-        attribution_header_field="inferenceCustomHeaders",
+        # Empty since 6.67.0. ``inferenceCustomHeaders`` exists and is current,
+        # but the configuration proven to work on a real machine does not carry
+        # it and no run of the app has been watched accepting MCC's value, so
+        # this card is attributed by user-agent like Goose rather than by a key
+        # written on the strength of documentation.
+        attribution_header_field="",
         catalogue_format_id="",
         # MCC's element of ``_meta.json.entries``. ``id`` is written by the
         # merge engine from ``match_value``, so only the label belongs here --
@@ -1152,6 +1380,20 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             "The desktop app does not honour ANTHROPIC_BASE_URL. Its Code tab "
             "reads ~/.claude/settings.json, which Configure Claude Code "
             "already covers.",
+            "The model picker is filled from the five routes MCC names in the "
+            "configuration (Best, Good, Medium, Cheap, Vision) rather than "
+            "from a discovery call: model discovery is written off, so the "
+            "picker cannot come up empty because a request was slow.",
+            "Before its first edit MCC copies the whole configuration library "
+            "into a timestamped folder under MCC's own configuration "
+            "directory. The library is a directory of documents and the file "
+            "MCC merges is only its index, so a per-file backup could not "
+            "have restored it.",
+            "If an earlier release of MCC configured this app, the next status "
+            "poll repairs it: the configuration MCC stored under an id Claude "
+            "Desktop rejects at startup is moved to a valid one, appliedId is "
+            "corrected, and the old file is deleted. A library that has "
+            "already been repaired -- including by hand -- is left untouched.",
         ),
         # Kept for the two cases where no button can help: the configuration
         # library is absent because the app has never run in third-party mode,
@@ -1167,7 +1409,11 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
                 "MCC's own .env, which Configure Claude Code writes for you",
             ),
             ("Credential kind", "Static API key"),
-            ("Custom headers", "x-mcc-harness: claude_desktop"),
+            (
+                "Model discovery",
+                "Off, and name mcc/best, mcc/good, mcc/medium, "
+                "mcc/cheap and mcc/vision as the models",
+            ),
         ),
     ),
     DesktopAppSpec(

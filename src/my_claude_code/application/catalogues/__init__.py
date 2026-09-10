@@ -17,6 +17,9 @@ from my_claude_code.application.catalogues.aider import (
     build_aider_model_settings,
 )
 from my_claude_code.application.catalogues.base import DEFAULTED_KEY, DefaultedFields
+from my_claude_code.application.catalogues.claude_desktop import (
+    build_claude_desktop_models,
+)
 from my_claude_code.application.catalogues.cline import build_cline_catalogue
 from my_claude_code.application.catalogues.codex import build_codex_catalogue
 from my_claude_code.application.catalogues.commandcode import (
@@ -108,6 +111,14 @@ type CatalogueSidecarSerialiser = Callable[[Iterable[CatalogueModel]], list[Any]
 
 SIDECAR_SERIALISERS: dict[str, CatalogueSidecarSerialiser] = {
     "aider": build_aider_model_settings,
+    # A desktop app rather than a harness, and it has no primary document of
+    # its own here at all: Claude Desktop's whole configuration is one file MCC
+    # owns, and the only serialised part of it is the model array. It is
+    # registered here because this is already the table for "a list of models,
+    # in one application's shape, looked up by name" -- which is exactly what
+    # ``DesktopSidecar.models_format_id`` needs and what keeps
+    # ``application/desktop_documents.py`` free of any per-app import.
+    "claude_desktop": build_claude_desktop_models,
 }
 
 

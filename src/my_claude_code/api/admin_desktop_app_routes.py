@@ -41,6 +41,7 @@ from my_claude_code.application.desktop_documents import (
     owned_block,
     sidecar_document,
     token_reference,
+    writes_literal_credential,
 )
 from my_claude_code.config.desktop_apply import (
     DesktopApplyError,
@@ -140,19 +141,27 @@ def _documents(
         harness_tiers=harness_tiers,
     )
     proxy_root_url = local_proxy_root_url(settings)
+    # The literal credential, resolved once and handed only to the two
+    # functions that may write it: the sidecar builder, for a file MCC owns
+    # outright, and the block builder, for an app that resolves no usable
+    # reference and takes it in its own document. It is the same token
+    # Configure Claude Code writes, so a user who runs both is not handed two
+    # different answers to "what is MCC's key".
+    token = proxy_auth_token(settings.anthropic_auth_token)
     return (
-        owned_block(spec, models, proxy_root_url=proxy_root_url),
+        owned_block(
+            spec,
+            models,
+            proxy_root_url=proxy_root_url,
+            auth_token=token if writes_literal_credential(spec) else "",
+        ),
         overwritten_scalars(spec, set_default_model=set_default_model),
         sidecar_document(
             spec,
             models,
             proxy_root_url=proxy_root_url,
-            # The literal credential, and only for a sidecar that declares it
-            # holds one. It is the same token Configure Claude Code writes, so
-            # a user who runs both is not handed two different answers to "what
-            # is MCC's key".
             auth_token=(
-                proxy_auth_token(settings.anthropic_auth_token)
+                token
                 if spec.sidecar is not None and spec.sidecar.holds_credential
                 else ""
             ),
@@ -170,6 +179,7 @@ def _probe_payload(probe: DesktopProbe) -> dict[str, Any]:
         "restorable": probe.restorable,
         "managed_by": probe.managed_by,
         "managed_keys": list(probe.managed_keys),
+        "repaired": list(probe.repaired),
     }
 
 
@@ -287,14 +297,20 @@ def _list_payload(settings: Settings, services: ApiServices) -> dict[str, Any]:
                 if harness_tiers.for_harness(spec.id)
                 else shared
             )
-            expected_block = owned_block(spec, models, proxy_root_url=proxy_root_url)
+            token = proxy_auth_token(settings.anthropic_auth_token)
+            expected_block = owned_block(
+                spec,
+                models,
+                proxy_root_url=proxy_root_url,
+                auth_token=token if writes_literal_credential(spec) else "",
+            )
             expected_scalars = overwritten_scalars(spec)
             expected_sidecar = sidecar_document(
                 spec,
                 models,
                 proxy_root_url=proxy_root_url,
                 auth_token=(
-                    proxy_auth_token(settings.anthropic_auth_token)
+                    token
                     if spec.sidecar is not None and spec.sidecar.holds_credential
                     else ""
                 ),

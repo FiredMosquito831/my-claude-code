@@ -75,13 +75,22 @@ def test_list_names_every_app_and_its_state(scratch, capsys):
     assert "not routable" in out
 
 
-def test_status_reports_the_file_the_owned_key_and_the_export(scratch, capsys):
+def test_status_reports_the_file_and_the_owned_key(scratch, capsys):
     module.apps_command(["status", "codex_desktop"])
     out = capsys.readouterr().out
 
     assert "config.toml" in out
     assert "model_providers.mcc" in out
     assert "model_provider, model" in out
+    # And no export line: Codex names no variable since 6.67.0, because the
+    # one it named was never set by anything and made the file fail to load.
+    assert "MCC_AUTH_TOKEN" not in out
+
+
+def test_status_reports_the_export_for_an_app_that_really_reads_one(scratch, capsys):
+    module.apps_command(["status", "goose_desktop"])
+    out = capsys.readouterr().out
+
     assert "MCC_AUTH_TOKEN" in out
     assert "NOT exported" in out
 
@@ -115,15 +124,19 @@ def test_configure_preview_prints_the_diff_and_writes_nothing(scratch, capsys):
     assert scratch.read_bytes() == before
 
 
-def test_configure_writes_and_names_the_export_and_the_restart(scratch, capsys):
+def test_configure_writes_and_names_the_restart(scratch, capsys):
     module.apps_command(["configure", "codex_desktop"])
     out = capsys.readouterr().out
 
     assert "Wrote " in out
     assert "Backed up your original to" in out
-    assert "MCC_AUTH_TOKEN" in out
     assert "Restart" in out
-    assert "model_providers.mcc" in scratch.read_text(encoding="utf-8", newline=None)
+    written = scratch.read_text(encoding="utf-8", newline=None)
+    assert "model_providers.mcc" in written
+    # The value that made this a bug report. "chat" is a retired known key in
+    # Codex 0.153.4 and makes the whole config.toml refuse to load, exit 1.
+    assert 'wire_api = "responses"' in written
+    assert '"chat"' not in written
 
 
 def test_configure_twice_reports_no_change(scratch, capsys):

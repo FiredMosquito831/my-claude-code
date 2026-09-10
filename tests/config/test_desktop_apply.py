@@ -15,21 +15,33 @@ undo modes that are new in 6.55.0:
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from my_claude_code.config import desktop_apply
 from my_claude_code.config.desktop_apps import (
+    CLAUDE_DESKTOP_CONFIG_ID,
+    CLAUDE_DESKTOP_LEGACY_CONFIG_ID,
     DesktopAppState,
     desktop_app,
 )
 from my_claude_code.config.restore_record import UndoMode
 
+#: Claude Desktop 1.46388.4.0's own validator for a configuration-library id,
+#: extracted from ``app.asar`` -> ``.vite/build/index.chunk--WuAOADe.js`` line
+#: 35967 (``var vAe = /^[a-f0-9-]{36}$/;``) and applied at boot, in ``$je``
+#: (:36626), *before* the document is read. This regex is the reason this file
+#: no longer asserts a value MCC chose: for three releases it asserted exactly
+#: the string that fails it.
+CLAUDE_DESKTOP_ID_RULE = re.compile(r"^[a-f0-9-]{36}$")
+
 BLOCK: dict[str, object] = {
     "name": "My Claude Code",
     "base_url": "http://127.0.0.1:8082/v1",
-    "env_key": "MCC_AUTH_TOKEN",
+    "experimental_bearer_token": "scratch-token",
+    "wire_api": "responses",
     "http_headers": {"x-mcc-harness": "codex_desktop"},
 }
 
@@ -505,10 +517,17 @@ def test_probe_reports_not_routable_without_looking_at_the_disk(tmp_path):
 
 
 def test_probe_reports_whether_the_token_variable_is_exported(tmp_path):
-    """MCC never sets it, so the card has to be able to say whether it took."""
+    """MCC never sets it, so the card has to be able to say whether it took.
 
-    spec = desktop_app("codex_desktop")
-    prepare(tmp_path, spec, CODEX_DOCUMENT)
+    Asked of Goose, which is the kind of app the question is still *for*: one
+    that reads its credential from the environment or a keyring and has no
+    field MCC could write. Codex used to be the subject here, and is no longer
+    -- it names no variable at all since 6.67.0, because the variable it named
+    was one nothing ever set.
+    """
+
+    spec = desktop_app("goose_desktop")
+    make_marker(tmp_path, spec)
     env = env_for(tmp_path)
     assert not desktop_apply.probe(
         spec, env=env, record_path=tmp_path / "r.json"
@@ -554,12 +573,25 @@ def test_plan_masks_a_credential_in_the_rendered_diff(tmp_path):
     assert desktop_apply.MASK in plan.diff
 
 
-def test_plan_names_the_export_and_the_restart_without_performing_either(tmp_path):
+def test_plan_names_the_restart_without_performing_it(tmp_path):
     spec = desktop_app("codex_desktop")
     prepare(tmp_path, spec, CODEX_DOCUMENT)
     plan = desktop_apply.plan(
         spec, env=env_for(tmp_path), block=BLOCK, scalars={"model_provider": "mcc"}
     )
+    joined = " ".join(plan.actions)
+    assert "Restart" in joined
+    # And *not* an export. Codex takes the literal now, so telling the reader
+    # to export a variable would be an instruction to do something with no
+    # effect -- which is the whole of the bug this release fixes, restated as
+    # advice.
+    assert "Export" not in joined
+
+
+def test_plan_names_the_export_for_an_app_that_really_reads_one(tmp_path):
+    spec = desktop_app("goose_desktop")
+    make_marker(tmp_path, spec)
+    plan = desktop_apply.plan(spec, env=env_for(tmp_path), block=None, scalars={})
     joined = " ".join(plan.actions)
     assert "MCC_AUTH_TOKEN" in joined
     assert "Restart" in joined
@@ -666,9 +698,166 @@ CLAUDE_SIDECAR: dict[str, object] = {
     "inferenceGatewayBaseUrl": "http://127.0.0.1:8082",
     "inferenceGatewayApiKey": "scratch-token",
     "inferenceCredentialKind": "static",
-    "modelDiscoveryEnabled": True,
-    "inferenceCustomHeaders": {"x-mcc-harness": "claude_desktop"},
+    "modelDiscoveryEnabled": False,
+    "inferenceModels": [
+        {
+            "name": "mcc/best",
+            "labelOverride": "Best",
+            "supports1m": False,
+            "prefer1m": False,
+            "anthropicFamilyTier": "opus",
+            "isFamilyDefault": True,
+        }
+    ],
 }
+
+
+def test_the_claude_desktop_entry_id_satisfies_the_apps_own_boot_regex():
+    """The one assertion that would have prevented the bug report.
+
+    Not "MCC writes the id MCC declares" -- that was asserted for three
+    releases and was true the whole time. This asserts the rule the
+    *application* applies, taken from its own shipped bundle: a configuration
+    library id that fails it makes Claude Desktop discard its entire local
+    configuration tier at boot, silently, including whatever the user set up by
+    hand. The filename MCC owns has to satisfy it too, since the loader builds
+    the path from the id.
+    """
+
+    assert CLAUDE_DESKTOP_ID_RULE.match(CLAUDE_DESKTOP_CONFIG_ID)
+    spec = desktop_app("claude_desktop")
+    assert spec.document is not None
+    assert spec.document.match_value == CLAUDE_DESKTOP_CONFIG_ID
+    assert spec.sidecar is not None
+    for path in spec.sidecar.paths:
+        stem = Path(path.relative_parts[-1]).stem
+        assert CLAUDE_DESKTOP_ID_RULE.match(stem)
+
+    # And the value that broke it does not, so the rule is doing work.
+    assert not CLAUDE_DESKTOP_ID_RULE.match(CLAUDE_DESKTOP_LEGACY_CONFIG_ID)
+
+
+def _legacy_library(tmp_path):
+    """Return a library in the state 6.56.0-6.66.1 left on a real machine."""
+
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+    path = document_path(spec, env)
+    meta = json.loads(path.read_text(encoding="utf-8"))
+    meta["appliedId"] = CLAUDE_DESKTOP_LEGACY_CONFIG_ID
+    meta["entries"].append(
+        {"id": CLAUDE_DESKTOP_LEGACY_CONFIG_ID, "name": "My Claude Code (MCC)"}
+    )
+    path.write_text(json.dumps(meta, indent=2), encoding="utf-8", newline="")
+    legacy_file = path.parent / f"{CLAUDE_DESKTOP_LEGACY_CONFIG_ID}.json"
+    legacy_file.write_text(
+        json.dumps(CLAUDE_SIDECAR, indent=2), encoding="utf-8", newline=""
+    )
+    return spec, env, path, legacy_file
+
+
+def test_a_legacy_claude_desktop_entry_is_repaired_on_probe(tmp_path):
+    """Existing users are all in the broken state, and none of them will press
+    Configure again -- their card told them it was already configured."""
+
+    spec, env, path, legacy_file = _legacy_library(tmp_path)
+
+    probe = desktop_apply.probe(spec, env=env, record_path=tmp_path / "r.json")
+
+    assert probe.repaired
+    assert not legacy_file.exists()
+    meta = json.loads(path.read_text(encoding="utf-8"))
+    assert meta["appliedId"] == CLAUDE_DESKTOP_CONFIG_ID
+    assert CLAUDE_DESKTOP_ID_RULE.match(meta["appliedId"])
+    ids = [entry["id"] for entry in meta["entries"]]
+    assert CLAUDE_DESKTOP_LEGACY_CONFIG_ID not in ids
+    # The user's own entry is untouched, which is the thing the original bug
+    # took away from them.
+    assert "3fd258a0-0379-416e-b3b5-0b72a6ac5392" in ids
+    # And MCC's is renamed rather than dropped: ``entries`` is the app's
+    # configuration picker, and an applied configuration missing from it is one
+    # the user can neither see nor switch away from.
+    renamed = next(
+        entry for entry in meta["entries"] if entry["id"] == CLAUDE_DESKTOP_CONFIG_ID
+    )
+    assert renamed["name"] == "My Claude Code (MCC)"
+
+    # MCC's configuration is not lost, only renamed: the content moved to the
+    # id the app accepts, so the next launch works without pressing anything.
+    moved = desktop_apply.sidecar_path_for(spec, env)
+    assert moved is not None
+    assert json.loads(moved.read_text(encoding="utf-8")) == CLAUDE_SIDECAR
+
+
+def test_the_claude_desktop_repair_happens_once(tmp_path):
+    spec, env, path, _legacy = _legacy_library(tmp_path)
+
+    assert desktop_apply.probe(spec, env=env, record_path=tmp_path / "r.json").repaired
+    after_first = path.read_bytes()
+    second = desktop_apply.probe(spec, env=env, record_path=tmp_path / "r.json")
+
+    assert second.repaired == ()
+    assert path.read_bytes() == after_first
+
+
+def test_an_already_repaired_claude_desktop_library_is_left_alone(tmp_path):
+    """The state on the machine this was written for.
+
+    The user repaired it by hand on 2026-09-09: they deleted MCC's file and put
+    ``appliedId`` back on their own entry. A repair that "helped" here would be
+    a second incident, so nothing may move unless MCC's own legacy id is
+    actually found.
+    """
+
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+    path = document_path(spec, env)
+    before = path.read_bytes()
+
+    probe = desktop_apply.probe(spec, env=env, record_path=tmp_path / "r.json")
+
+    assert probe.repaired == ()
+    assert path.read_bytes() == before
+    sidecar = desktop_apply.sidecar_path_for(spec, env)
+    assert sidecar is not None
+    assert not sidecar.exists()
+
+
+def test_the_whole_library_is_backed_up_before_the_first_edit(tmp_path, monkeypatch):
+    """A per-file backup of an index cannot restore a directory of documents."""
+
+    monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path / "mcc"))
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
+        sidecar_document=CLAUDE_SIDECAR,
+        record_path=tmp_path / "record.json",
+    )
+
+    backups = sorted((tmp_path / "mcc" / "backups").glob("claude_desktop-*"))
+    assert len(backups) == 1
+    copied = json.loads((backups[0] / "_meta.json").read_text(encoding="utf-8"))
+    assert copied["appliedId"] == "3fd258a0-0379-416e-b3b5-0b72a6ac5392"
+
+    # And a second Configure does not overwrite the copy taken before the
+    # first, which is the same promise the per-file backup makes.
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
+        sidecar_document=dict(CLAUDE_SIDECAR) | {"modelDiscoveryEnabled": True},
+        record_path=tmp_path / "record.json",
+    )
+    assert sorted((tmp_path / "mcc" / "backups").glob("claude_desktop-*")) == backups
 
 
 def test_claude_desktop_owns_a_file_and_merges_exactly_one_foreign_key(tmp_path):
@@ -688,13 +877,13 @@ def test_claude_desktop_owns_a_file_and_merges_exactly_one_foreign_key(tmp_path)
         spec,
         env=env,
         block=CLAUDE_BLOCK,
-        scalars={"appliedId": "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"},
+        scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
         sidecar_document=CLAUDE_SIDECAR,
         record_path=record,
     )
 
     meta = json.loads(document_path(spec, env).read_text(encoding="utf-8"))
-    assert meta["appliedId"] == "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"
+    assert meta["appliedId"] == CLAUDE_DESKTOP_CONFIG_ID
     names = [entry["name"] for entry in meta["entries"]]
     assert "My own gateway" in names
     assert "My Claude Code (MCC)" in names
@@ -718,7 +907,7 @@ def test_claude_desktop_undo_puts_the_users_own_configuration_back(tmp_path):
         spec,
         env=env,
         block=CLAUDE_BLOCK,
-        scalars={"appliedId": "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"},
+        scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
         sidecar_document=CLAUDE_SIDECAR,
         record_path=record,
     )
@@ -745,7 +934,7 @@ def test_claude_desktop_keys_only_undo_also_restores_the_applied_id(tmp_path):
         spec,
         env=env,
         block=CLAUDE_BLOCK,
-        scalars={"appliedId": "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"},
+        scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
         sidecar_document=CLAUDE_SIDECAR,
         record_path=record,
     )
@@ -836,7 +1025,7 @@ def test_a_json_document_written_without_a_trailing_newline_keeps_none(tmp_path)
         spec,
         env=env,
         block=CLAUDE_BLOCK,
-        scalars={"appliedId": "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"},
+        scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
         sidecar_document=CLAUDE_SIDECAR,
         record_path=record,
     )
@@ -864,7 +1053,7 @@ def test_an_untouched_configuration_library_reads_as_installed_not_drifted(tmp_p
         spec,
         env=env,
         expected_block=CLAUDE_BLOCK,
-        expected_scalars={"appliedId": "mcc-9c2f4b18-0f4a-4a1e-9a3e-5b1d0c7e6a20"},
+        expected_scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
         expected_sidecar=CLAUDE_SIDECAR,
     )
 

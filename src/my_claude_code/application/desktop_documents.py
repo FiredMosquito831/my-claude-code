@@ -36,7 +36,11 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from my_claude_code.application.catalogue_model import CatalogueModel
-from my_claude_code.application.catalogues import MODEL_ENTRY_PATHS, serialise
+from my_claude_code.application.catalogues import (
+    MODEL_ENTRY_PATHS,
+    serialise,
+    serialise_sidecar,
+)
 from my_claude_code.application.catalogues.base import DEFAULTED_KEY
 from my_claude_code.config.desktop_apps import (
     CLAUDE_DESKTOP_CONFIG_ID,
@@ -57,6 +61,12 @@ from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 #: opt-in, because the default model is a preference MCC has no business
 #: overwriting and is the value most likely to already hold something.
 DEFAULT_MODEL_ID = "mcc/best"
+
+#: The placeholder a ``DesktopSidecar.fields`` value uses to say "the model
+#: list goes here". Unlike ``{base_url}`` and ``{token}`` it is never
+#: interpolated into a longer string: what replaces it is a list, so the whole
+#: value has to be the token and nothing else.
+MODELS_TOKEN = "{models}"
 
 
 def base_url_for(spec: DesktopAppSpec, proxy_root_url: str) -> str:
@@ -80,13 +90,20 @@ def base_url_for(spec: DesktopAppSpec, proxy_root_url: str) -> str:
 
 
 def token_reference(spec: DesktopAppSpec) -> str:
-    """Return what MCC writes where the app asks for a credential.
+    """Return the *reference* MCC writes where the app asks for a credential.
 
-    Never a literal. Where the app resolves a reference form, that form is
-    written with the variable's name substituted; where it takes only the name
-    of a variable, the name goes in its own field and nothing goes here; and
-    where it resolves nothing at all, the credential lives in a file MCC owns
-    at mode 0600 and this returns nothing.
+    A reference only, and never a literal: this string is rendered on the card
+    and printed by ``mcc-apps``. Where the app resolves a reference form to a
+    variable MCC really sets, that form is written with the name substituted.
+    Every other form -- the name-of-a-variable field, the literal in the app's
+    own document, the file MCC owns outright -- returns nothing here, because
+    what goes into the document in those cases is either handled elsewhere or
+    is a secret.
+
+    Note what is no longer produced: a reference to
+    :data:`~my_claude_code.config.desktop_apps.DESKTOP_TOKEN_ENV_VAR` for an
+    app that writes one into its file. Four rows did that until 6.67.0, naming
+    a variable nothing has ever set, and every one of them failed on the wire.
     """
 
     if spec.token_form is TokenForm.ENV_REFERENCE and spec.token_template:
@@ -94,11 +111,24 @@ def token_reference(spec: DesktopAppSpec) -> str:
     return ""
 
 
+def writes_literal_credential(spec: DesktopAppSpec) -> bool:
+    """Return whether MCC puts the literal token in the app's own document.
+
+    True for exactly the apps that resolve no usable reference, and the flag
+    the writer reads to tighten that document's mode. It is deliberately a
+    property of the declared token form rather than a scan of the block for
+    something token-shaped: a scan cannot tell a credential from a model id.
+    """
+
+    return spec.token_form is TokenForm.LITERAL_IN_APP_FILE
+
+
 def owned_block(
     spec: DesktopAppSpec,
     models: Iterable[CatalogueModel],
     *,
     proxy_root_url: str,
+    auth_token: str = "",
 ) -> dict[str, Any] | None:
     """Return the subtree MCC writes into the app's document, or None.
 
@@ -139,6 +169,13 @@ def owned_block(
     reference = token_reference(spec)
     if provider.api_key_key and reference:
         _set_dotted(block, provider.api_key_key, reference)
+    elif provider.api_key_key and writes_literal_credential(spec) and auth_token:
+        # The literal, for an app that cannot resolve a reference as MCC ships
+        # it. ``config/desktop_apply`` tightens the document to 0600 where the
+        # OS allows it, and the plan diff masks the field before rendering.
+        # The credential reaches this function only from the admin route, and
+        # only for a spec that declares this token form.
+        _set_dotted(block, provider.api_key_key, auth_token)
 
     if provider.headers_key and spec.attribution_header_field:
         _set_dotted(
@@ -218,9 +255,18 @@ def sidecar_document(
 
     if spec.sidecar.fields:
         base_url = base_url_for(spec, proxy_root_url)
+        entries = (
+            serialise_sidecar(spec.sidecar.models_format_id, models)
+            if spec.sidecar.models_format_id
+            else None
+        )
         document: dict[str, Any] = {}
         for key, value in spec.sidecar.fields.items():
-            if isinstance(value, str):
+            if value == MODELS_TOKEN:
+                # The whole value is the token, so it is replaced rather than
+                # interpolated: what goes here is a list, not a string.
+                document[key] = entries if entries is not None else []
+            elif isinstance(value, str):
                 document[key] = value.replace("{base_url}", base_url).replace(
                     "{token}", auth_token
                 )

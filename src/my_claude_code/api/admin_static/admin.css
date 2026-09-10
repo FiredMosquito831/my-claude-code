@@ -7461,6 +7461,15 @@ details.turn-pane > summary:focus-visible {
   color: var(--warning-strong, #f2c94c);
 }
 
+/* A repair MCC performed on its own, without being asked. Deliberately not
+   styled as a warning: nothing is wrong now -- something was, and has been
+   put right -- and the one thing the reader has to act on is the relaunch. */
+.desktop-repair-note {
+  margin: 0.75rem 0 0;
+  font-size: 0.85rem;
+  color: var(--ok, #10b981);
+}
+
 .desktop-app-actions {
   margin-top: 0.75rem;
 }
