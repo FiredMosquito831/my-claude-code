@@ -7,6 +7,7 @@ safe: the document carries every documented key (C3), it is a *pure read* (C2),
 and the answers come from the existing single sources rather than from copies.
 """
 
+import inspect
 import io
 import json
 import sys
@@ -103,6 +104,11 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     # ``null`` unless an update helper is installing right now. A document,
     # not a flag, because the window renders it: which stage, which version,
     # how long. See ``config.update_progress``.
+    #
+    # FROZEN AS INFORMATIONAL (decision Q7, 2026-09-10): the only documented
+    # key C9's "tolerated this release, requirable the next" must never be
+    # applied to. See
+    # ``test_the_update_key_is_informational_and_is_never_required``.
     "update": (dict, type(None)),
 }
 
@@ -313,6 +319,41 @@ def test_reconnect_restatus_seconds_is_in_the_golden_key_set(
     _presence(monkeypatch, "healthy")
 
     assert desktop_status()["reconnect_restatus_seconds"] == 12.5
+
+
+def test_the_update_key_is_informational_and_is_never_required(
+    config_dir, monkeypatch
+) -> None:
+    """C9's two-release promotion must never be exercised on ``update``.
+
+    Decision Q7 of 2026-09-10, and the reason is the key's own subject matter.
+    Every other key here describes the machine, and ``mcc-desktop
+    --print-status`` is expected to work; ``update`` describes an installer in
+    the act of replacing the environment that command runs from. ``uv tool
+    install --force`` empties the tool directory in place before it resolves a
+    byte, so for the whole of an install the shim exits 1 with
+    ``ModuleNotFoundError`` -- the one circumstance in which this key carries a
+    value is the circumstance in which it cannot be delivered.
+
+    So it stays emitted (useful to a human, and to a reader with no access to
+    the configuration directory) and stays optional. The reader that needs the
+    fact -- the desktop shell -- reads ``updates/progress.json`` itself.
+    """
+
+    assert "update" in STATUS_KEYS
+    _presence(monkeypatch, "healthy")
+
+    payload = desktop_status()
+
+    # It is present, and null when no helper is running: a document, not a
+    # flag, and never an absence a reader could mistake for "no key here".
+    assert "update" in payload
+    assert payload["update"] is None
+
+    # And the freeze is written down where the next person adding a key will
+    # read it, rather than only in a spec file.
+    source = inspect.getsource(desktop_status_module)
+    assert "informational, never required" in source.lower()
 
 
 def test_server_start_retries_is_in_the_golden_key_set(config_dir, monkeypatch) -> None:
