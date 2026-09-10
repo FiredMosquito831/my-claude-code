@@ -199,10 +199,16 @@ def test_build_request_body_omits_reasoning_and_include_when_off():
         (ReasoningEffort.LOW, "low"),
         (ReasoningEffort.MEDIUM, "medium"),
         (ReasoningEffort.HIGH, "high"),
-        # The Responses endpoint documents no effort above "high", so FCC's two
-        # extra levels map down rather than being sent verbatim.
-        (ReasoningEffort.XHIGH, "high"),
-        (ReasoningEffort.MAX, "high"),
+        # 5.61.1 mapped these two down to "high" because "the Responses
+        # endpoint documents no effort above high". OpenAI's own client says
+        # otherwise: Codex CLI 0.153.4 interns its effort enum as
+        # none|minimal|low|medium|high|xhigh|max|ultra|persistent and embeds
+        # "GPT-5.6 supports `none`, `low`, `medium`, `high`, `xhigh`, and
+        # `max`."  Both rungs are host vocabulary and go out verbatim; a model
+        # that does not publish one is clamped by gating and the clamp is
+        # recorded (see test_reasoning_wire_table.py).
+        (ReasoningEffort.XHIGH, "xhigh"),
+        (ReasoningEffort.MAX, "max"),
     ],
 )
 def test_build_request_body_encodes_each_named_effort(effort, expected):
@@ -212,6 +218,37 @@ def test_build_request_body_encodes_each_named_effort(effort, expected):
 
     assert body["reasoning"] == {"effort": expected, "summary": "auto"}
     assert body["include"] == ["reasoning.encrypted_content"]
+
+
+def test_build_request_body_sends_xhigh_and_max_verbatim():
+    """Every rung the ladder has reaches the body under its own name."""
+
+    for effort in ReasoningEffort:
+        body = build_chatgpt_oauth_request_body(
+            _reasoning_request(), reasoning=ReasoningPolicy.on(effort=effort)
+        )
+
+        assert body["reasoning"]["effort"] == effort.value
+
+
+def test_no_effort_is_rewritten_between_the_policy_and_the_body():
+    """The encoder is the identity on the effort word.
+
+    The anti-regression for 5.61.1: a private lookup table reintroduced in
+    ``conversion.py`` cannot pass this without also renaming a rung, and
+    renaming a rung is what the ladder exists to prevent.
+    """
+
+    encoded = {
+        effort: build_chatgpt_oauth_request_body(
+            _reasoning_request(), reasoning=ReasoningPolicy.on(effort=effort)
+        )["reasoning"]["effort"]
+        for effort in ReasoningEffort
+    }
+
+    assert encoded == {effort: effort.value for effort in ReasoningEffort}
+    # No two rungs collapse onto the same wire word.
+    assert len(set(encoded.values())) == len(list(ReasoningEffort))
 
 
 def test_build_request_body_keeps_encrypted_content_whenever_reasoning_is_sent():

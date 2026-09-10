@@ -729,3 +729,53 @@ def test_every_seed_id_is_still_in_the_installed_codex_catalogue():
         f"Codex {catalogue.version} no longer publishes {missing}. "
         "Update CHATGPT_OAUTH_SEED_MODELS to the ids it lists."
     )
+
+
+def test_the_endpoints_own_client_publishes_xhigh_and_max():
+    """6.68.1's evidence, re-read from the installed client on every run.
+
+    ``conversion.py`` sends ``xhigh`` and ``max`` verbatim because OpenAI's own
+    client says the endpoint takes them. This is that claim as a test: at least
+    one listed model in the bundled catalogue publishes ``max`` among its
+    ``supported_reasoning_levels``, and ``xhigh`` is published more widely
+    still. Skipped where Codex is not installed -- every CI runner -- because
+    the point is that a developer who *has* it cannot let the premise rot the
+    way 5.61.1's did.
+
+    ``supported_reasoning_levels`` is deliberately *not* read by
+    :mod:`codex_catalogue` itself (that rung publishes existence facts only),
+    so this reads the raw document rather than the parsed entries.
+    """
+    codex_catalogue.clear_codex_catalogue_cache()
+    catalogue = load_codex_catalogue()
+    if catalogue is None:
+        pytest.skip("Codex CLI is not installed on this machine")
+    document = embedded_json_document(Path(catalogue.source_path))
+    assert document is not None
+
+    published: dict[str, set[str]] = {}
+    for payload in document.get("models", []):
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("visibility") != "list":
+            continue
+        levels = payload.get("supported_reasoning_levels")
+        if not isinstance(levels, list):
+            continue
+        published[str(payload.get("slug"))] = {
+            str(level.get("effort"))
+            for level in levels
+            if isinstance(level, dict) and level.get("effort")
+        }
+
+    assert published, f"{catalogue.label} listed no model with a reasoning vocabulary"
+    with_max = sorted(slug for slug, efforts in published.items() if "max" in efforts)
+    with_xhigh = sorted(
+        slug for slug, efforts in published.items() if "xhigh" in efforts
+    )
+    assert with_max, (
+        f"{catalogue.label} no longer publishes 'max' for any listed model "
+        f"(vocabularies: {published}). The verbatim encoding in "
+        "providers/chatgpt_oauth/conversion.py rests on this."
+    )
+    assert with_xhigh
