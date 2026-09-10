@@ -49,6 +49,7 @@ production code can catch is not a guard.
 """
 
 import builtins
+import contextlib
 import io
 import os
 import shutil
@@ -69,6 +70,7 @@ __all__ = [
     "isolate_the_machine",
     "protected_root_for",
     "pytest_configure",
+    "pytest_runtest_setup",
     "pytest_runtest_teardown",
     "under_real_config_dir",
 ]
@@ -107,6 +109,30 @@ def _norm(value: Any) -> str | None:
         return os.path.normcase(os.path.abspath(raw))
     except OSError, ValueError:
         return None
+
+
+def _norm_all(value: Any) -> tuple[str, ...]:
+    r"""Every spelling of ``value``: as written, and with the links resolved.
+
+    ``os.path.abspath`` tidies separators and ``..`` and stops there, so one
+    directory reachable by two names normalises to two different strings -- a
+    symlink or bind mount on POSIX, a Windows 8.3 short name on a GitHub
+    runner (``C:\Users\RUNNER~1\...`` for ``C:\Users\runneradmin\...``).
+    The guard has to hold both spellings, because the code it watches resolves
+    paths -- pytest's ``TempPathFactory`` calls ``Path(...).resolve()`` on the
+    temp root -- while the environment variable the path came from does not.
+    """
+
+    written = _norm(value)
+    if written is None:
+        return ()
+    try:
+        resolved = _norm(os.path.realpath(written))
+    except OSError, ValueError:
+        resolved = None
+    if resolved is None or resolved == written:
+        return (written,)
+    return (written, resolved)
 
 
 REAL_HOME = Path.home().resolve()
@@ -153,9 +179,9 @@ _PROTECTED_CANDIDATES: tuple[Any, ...] = (
 
 _PROTECTED_ROOTS: tuple[str, ...] = tuple(
     dict.fromkeys(
-        normalised
-        for normalised in (_norm(candidate) for candidate in _PROTECTED_CANDIDATES)
-        if normalised is not None
+        spelling
+        for candidate in _PROTECTED_CANDIDATES
+        for spelling in _norm_all(candidate)
     )
 )
 
@@ -163,25 +189,48 @@ _PROTECTED_ROOTS: tuple[str, ...] = tuple(
 # the checkout itself lives under ``$HOME`` on a Linux CI runner. Both are
 # inside a protected root, so the allowed roots win over the protected ones;
 # without that every test that writes a file at all would be a violation.
-# ``TMPDIR``/``TEMP``/``TMP`` are read once here, before any redirect.
-_ALLOWED_ROOTS: tuple[str, ...] = tuple(
-    dict.fromkeys(
-        normalised
-        for normalised in (
-            _norm(candidate)
-            for candidate in (
-                tempfile.gettempdir(),
-                os.environ.get("TMPDIR"),
-                os.environ.get("TEMP"),
-                os.environ.get("TMP"),
-                # The checkout itself, so a test may write into the repository
-                # tree it was launched from (build artefacts, .pytest_cache).
-                Path(__file__).resolve().parents[2],
-            )
-        )
-        if normalised is not None
-    )
-)
+# ``TMPDIR``/``TEMP``/``TMP`` are read once here, before any redirect, in both
+# spellings (see ``_norm_all``), and ``pytest_configure`` adds whatever pytest
+# itself settled on for its base temp -- an allowed root that only covers the
+# environment's spelling of the temp directory is the defect that killed the
+# Wheel E2E run on Windows before its first test.
+_ALLOWED_ROOTS: list[str] = []
+
+
+def _allow_root(candidate: Any) -> None:
+    """Exempt ``candidate`` from the guard, unless it would open a real root.
+
+    An allowed root that *contains* a protected one would switch the guard off
+    for it -- ``TEMP`` pointing at the profile itself would exempt ``~/.mcc``
+    -- so a candidate is accepted only when no protected root sits underneath
+    it. Adding a temp directory therefore stays exactly as narrow as it reads.
+    """
+
+    for spelling in _norm_all(candidate):
+        if spelling in _ALLOWED_ROOTS:
+            continue
+        if any(
+            root == spelling or root.startswith(spelling + os.sep)
+            for root in _PROTECTED_ROOTS
+        ):
+            continue
+        _ALLOWED_ROOTS.append(spelling)
+
+
+def _seed_allowed_roots() -> None:
+    for candidate in (
+        tempfile.gettempdir(),
+        os.environ.get("TMPDIR"),
+        os.environ.get("TEMP"),
+        os.environ.get("TMP"),
+        # The checkout itself, so a test may write into the repository
+        # tree it was launched from (build artefacts, .pytest_cache).
+        Path(__file__).resolve().parents[2],
+    ):
+        _allow_root(candidate)
+
+
+_seed_allowed_roots()
 
 # ``open("NUL", "w")`` is how pytest's own logging plugin discards output during
 # ``pytest_configure``; refusing it aborts the session with an INTERNALERROR.
@@ -254,6 +303,14 @@ def _refuse(operation: str, target: Any, root: str) -> None:
 # interceptors are process-wide and cannot take a fixture argument.
 
 _gates = {"registry": False, "subprocess": False, "port": False}
+
+
+def _open_gates_for(node: Any) -> None:
+    """Project the opt-in markers on ``node`` into the process-wide state."""
+
+    _gates["registry"] = node.get_closest_marker("touches_registry") is not None
+    _gates["subprocess"] = node.get_closest_marker("spawns_process") is not None
+    _gates["port"] = node.get_closest_marker("binds_reserved_port") is not None
 
 
 # ---------------------------------------------------------------- winreg fake
@@ -724,7 +781,43 @@ def _install_interceptors() -> None:
 # ------------------------------------------------------------------- plugin
 
 
+def _allow_pytest_basetemp(config: pytest.Config) -> None:
+    r"""Register the directory pytest will keep ``tmp_path`` in.
+
+    ``_ALLOWED_ROOTS`` is seeded from ``TMPDIR``/``TEMP``/``TMP`` as the
+    environment spells them, but ``TempPathFactory.getbasetemp`` *resolves*
+    that root before creating ``pytest-of-<user>`` inside it. On a GitHub
+    Windows runner ``TEMP`` is the 8.3 spelling
+    ``C:\Users\RUNNER~1\AppData\Local\Temp`` while ``LOCALAPPDATA`` is the
+    long one, so the resolved base temp landed inside a protected root that no
+    allowed root covered: pytest-xdist asked for the base temp from
+    ``pytest_sessionstart`` and the session died with an INTERNALERROR before
+    the first test (Wheel E2E run 34324414216, 2026-09-09).
+
+    So the base temp is registered here, from the same inputs pytest uses and
+    before any test runs. It never widens the exemption beyond a temp
+    directory: ``_allow_root`` refuses a candidate that would contain one of
+    the real machine's roots.
+    """
+
+    # ``--basetemp``, when the run gave one (xdist gives its workers one).
+    _allow_root(getattr(config.option, "basetemp", None))
+    _allow_root(os.environ.get("PYTEST_DEBUG_TEMPROOT"))
+    _allow_root(tempfile.gettempdir())
+    # Where GitHub's own actions keep their scratch files; ``RUNNER_TEMP`` is
+    # not on the list ``tempfile`` consults, and a job that points the suite at
+    # it should not have to know about this file.
+    _allow_root(os.environ.get("RUNNER_TEMP"))
+    # And, if the temp-path plugin has already been configured, the answer
+    # itself rather than the ingredients.
+    factory = getattr(config, "_tmp_path_factory", None)
+    if factory is not None:
+        with contextlib.suppress(Exception):
+            _allow_root(factory.getbasetemp())
+
+
 def pytest_configure(config: pytest.Config) -> None:
+    _allow_pytest_basetemp(config)
     config.addinivalue_line(
         "markers",
         "touches_registry: the test writes to the (in-memory, faked) registry",
@@ -776,23 +869,40 @@ def isolate_the_machine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 @pytest.fixture(autouse=True)
 def hermetic_marker_gates(request: pytest.FixtureRequest):
-    """Open the opt-in gates the process-wide interceptors read.
+    """Reset the faked registry, and close the opt-in gates afterwards.
 
     The interceptors are installed once for the session and cannot take a
-    fixture argument, so the markers are projected into module state here and
-    closed again afterwards -- a test that forgets its marker must fail, and a
-    test that has one must not leave the gate open for the next one.
+    fixture argument, so the markers are projected into module state -- by
+    ``pytest_runtest_setup``, which is early enough for a fixture of any scope,
+    and again here for anything that reaches the gates through this fixture --
+    and closed again afterwards: a test that forgets its marker must fail, and
+    a test that has one must not leave the gate open for the next one.
     """
 
-    _gates["registry"] = request.node.get_closest_marker("touches_registry") is not None
-    _gates["subprocess"] = request.node.get_closest_marker("spawns_process") is not None
-    _gates["port"] = request.node.get_closest_marker("binds_reserved_port") is not None
+    _open_gates_for(request.node)
     SESSION_WINREG.values.clear()
     SESSION_WINREG.writes.clear()
     yield SESSION_WINREG
     _gates["registry"] = False
     _gates["subprocess"] = False
     _gates["port"] = False
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Open the opt-in gates before any fixture -- of any scope -- is built.
+
+    ``hermetic_marker_gates`` is function-scoped and pytest builds
+    higher-scoped fixtures first, so a module- or session-scoped fixture that
+    launches a denied executable ran while the gate its test had asked for was
+    still shut: ``tests/api/test_docs_bundle_wheel.py`` builds a real wheel
+    with ``uv`` from a module-scoped fixture and was refused however it was
+    marked. Setting the gates from the item, before setup, closes that hole;
+    the fixture still resets them at teardown so a marked test cannot leave a
+    gate open for the next one.
+    """
+
+    _open_gates_for(item)
 
 
 @pytest.hookimpl(tryfirst=True)
