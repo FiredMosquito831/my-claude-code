@@ -100,7 +100,7 @@ Search results are rendered as a richer digest than a plain title/URL list: an o
 
 ```bash
 WEBSEARCH_DIGEST_CHARS=600           # per-result snippet cap
-WEBSEARCH_DIGEST_CONTENT_CHARS=2000  # per-result cap for extracted page text
+WEBSEARCH_DIGEST_CONTENT_CHARS=4000  # per-result cap for extracted page text
 WEBSEARCH_DIGEST_ANSWER=true         # include the provider answer lead
 ```
 
@@ -198,7 +198,7 @@ The Admin UI keeps the two levels explicit: top cards and the main trend chart r
 
 ```bash
 WEBSEARCH_LOG_ENABLED=true
-WEBSEARCH_LOG_MAX_ROWS=50000    # retention cap; oldest rows pruned
+WEBSEARCH_LOG_MAX_ROWS=500000   # retention cap; oldest rows pruned
 WEBSEARCH_LOG_CAPTURE_CONTENT=true      # false keeps lengths + SHA-256 only
 WEBSEARCH_LOG_CONTENT_MAX_CHARS=2000000 # cap per input/output JSON payload
 ```

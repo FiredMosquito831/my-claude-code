@@ -129,8 +129,11 @@ def test_the_attempt_share_floor_reaches_the_route_policy() -> None:
     policy = route_execution_policy(_settings(FALLBACK_ATTEMPT_SHARE_FLOOR=210.0))
     assert policy.attempt_share_floor == 210.0
 
-    # Ships 0 since 6.16.0: no shipped deadline, so nothing to floor.
-    assert route_execution_policy(_settings()).attempt_share_floor == 0.0
+    # Ships 3600 since 6.68.0. Still nothing to floor out of the box --
+    # FALLBACK_TOTAL_TIMEOUT ships at 0, so there is no budget to divide --
+    # but the number an operator inherits when they do set a budget is an
+    # hour-wide floor rather than an equal split.
+    assert route_execution_policy(_settings()).attempt_share_floor == 3600.0
     assert (
         route_execution_policy(
             _settings(FALLBACK_ATTEMPT_SHARE_FLOOR=0.0)

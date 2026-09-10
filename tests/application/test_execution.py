@@ -2161,7 +2161,7 @@ def test_the_thinking_allowance_has_a_shipped_default() -> None:
 
 
 def test_the_shipped_deadlines_are_the_numbers_operators_read() -> None:
-    """The five deadline defaults, pinned as the literals they ship as.
+    """The four deadline defaults, pinned as the literals they ship as.
 
     All zero since 6.16.0. They were 120/120/300 through 6.9.x and
     180/180/450 with a 600s budget through 6.15.0, chosen off measured
@@ -2178,10 +2178,14 @@ def test_the_shipped_deadlines_are_the_numbers_operators_read() -> None:
     policy = RouteExecutionPolicy()
 
     assert policy.first_token_timeout == 0.0
-    assert policy.attempt_share_floor == 0.0
     assert policy.stall_timeout == 0.0
     assert policy.reasoning_answer_timeout == 0.0
     assert policy.total_timeout == 0.0
+    # Not a deadline and not zero since 6.68.0: the share floor never ends
+    # anything, it only bounds how small a slice of ``total_timeout`` one
+    # attempt may be cut to -- and with the budget at 0 there is no slice
+    # to cut, so the paragraph above still holds exactly.
+    assert policy.attempt_share_floor == 3600.0
 
 
 def _share(*, total: float, attempts_remaining: int, floor: float) -> float:

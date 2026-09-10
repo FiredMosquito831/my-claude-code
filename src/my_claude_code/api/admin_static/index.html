@@ -4005,8 +4005,10 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                     (<code>FALLBACK_ATTEMPT_SHARE_FLOOR</code>) — the smallest
                     slice of the total budget the chain-side division may hand
                     one model. It bounds each model's first-token allowance,
-                    never a retry of the same model. Moot while the total budget
-                    is 0.
+                    never a retry of the same model. Ships at 3600 &mdash; an
+                    hour, wider than any interactive request &mdash; and is moot
+                    either way while the total budget is 0, because there is no
+                    budget to divide.
                   </li>
                   <li>
                     <strong>Retries before the chain</strong> — attempts against
@@ -4112,16 +4114,20 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   <strong>Provider rate limit</strong>
                   (<code>PROVIDER_RATE_LIMIT</code>, on
                   <strong>Retries &amp; throughput</strong>) ships at
-                  <strong>0</strong> since 6.62.0, which means MCC paces nothing
-                  of its own: requests go upstream as fast as your client sends
-                  them. It used to ship at 40 requests per 60 seconds, per
-                  provider, against limits no provider had published &mdash; and
-                  because every routing attempt spends a slot, a route averaging
-                  three attempts began throttling after about thirteen client
-                  requests a minute. On one measured machine, 24 concurrent
-                  requests took a median of 938&nbsp;ms and a 95th percentile of
+                  <strong>300</strong> per <code>PROVIDER_RATE_WINDOW</code> of
+                  2 seconds since 6.68.0 &mdash; 150 requests a second, per
+                  provider. That is far above anything a person at a keyboard
+                  generates, so requests go upstream as fast as your client
+                  sends them, while a runaway loop still meets a ceiling. It
+                  used to ship at 40 requests per 60 seconds, per provider,
+                  against limits no provider had published &mdash; and because
+                  every routing attempt spends a slot, a route averaging three
+                  attempts began throttling after about thirteen client requests
+                  a minute. On one measured machine, 24 concurrent requests took
+                  a median of 938&nbsp;ms and a 95th percentile of
                   <strong>54 seconds</strong>, all of it MCC waiting for its own
-                  window.
+                  window. 6.62.0 answered that by shipping 0; 6.68.0 puts a
+                  number back, at a pace that cannot be what holds you up.
                 </p>
                 <p>
                   Nothing about a real limit changed. A provider that is over
@@ -4131,8 +4137,10 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   &mdash; and when you do, the queue is fair: waiters are
                   admitted in the order they arrived, so a paced request waits
                   its turn instead of losing a lottery.
-                  <code>PROVIDER_MAX_CONCURRENCY</code> (default 5) is unchanged
-                  and was never the problem.
+                  <code>PROVIDER_MAX_CONCURRENCY</code> (default 300 since
+                  6.68.0, was 5) was never the problem &mdash; it is an ordinary
+                  semaphore and it was always fair. Lower it if your machine or
+                  your link is the bottleneck rather than the provider.
                 </p>
                 <h4>What a key is judged on</h4>
                 <p>

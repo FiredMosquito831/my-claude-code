@@ -242,19 +242,19 @@ def test_no_optimizer_field_is_orphaned() -> None:
     assert declared == set(OPTIMIZER_KEYS)
 
 
-# Fields moved in from `runtime`, where the manifest deliberately mirrors
-# what `.env.example` ships rather than the code default. That divergence is
-# recorded, with reasons, in DEFAULTS_THAT_DIFFER_FROM_THE_CODE below, and
-# checked by test_every_manifest_default_matches_the_settings_default -- which
-# generalises this check and has the escape hatch this one does not.
-# PROVIDER_RATE_LIMIT left this list in 6.62.0: the template and the code now
-# agree on 0, so the ordinary check covers it.
-DEFAULTS_OWNED_BY_THE_SHIPPED_TEMPLATE = (
-    "PROVIDER_RATE_WINDOW",
-    "HTTP_READ_TIMEOUT",
-    "HTTP_WRITE_TIMEOUT",
-    "HTTP_CONNECT_TIMEOUT",
-)
+# Fields where the manifest deliberately mirrors what `.env.example` ships
+# rather than the code default. That divergence was recorded, with reasons, in
+# DEFAULTS_THAT_DIFFER_FROM_THE_CODE below, and checked by
+# test_every_manifest_default_matches_the_settings_default -- which generalises
+# this check and has the escape hatch this one does not.
+#
+# The list is EMPTY since 6.68.0 and is kept, empty, as the place a future
+# divergence would have to be declared: PROVIDER_RATE_LIMIT left it in 6.62.0,
+# and PROVIDER_RATE_WINDOW and the three HTTP_*_TIMEOUTs left it in 6.68.0,
+# when the code defaults were reconciled to the values the template had been
+# recommending all along. Adding a name back here means shipping a form that
+# shows a number the server does not use; do not.
+DEFAULTS_OWNED_BY_THE_SHIPPED_TEMPLATE: tuple[str, ...] = ()
 
 
 @pytest.mark.parametrize(
@@ -574,10 +574,14 @@ def test_a_value_equal_to_the_default_is_still_recorded(isolated_config) -> None
 # set, so X has to be true. These are the fields where the manifest default is
 # deliberately NOT the bare code default, each with the reason. The test fails
 # if a listed field starts matching, so the list cannot rot.
-_SHIPPED_TEMPLATE_VALUE = (
-    "the manifest shows the value shipped in .env.example -- the configuration "
-    "this project recommends -- rather than the barer library default"
-)
+# 6.68.0 emptied the "the template knows better than the code" half of this
+# list: PROVIDER_RATE_WINDOW, the three HTTP_*_TIMEOUTs, VOICE_NOTE_ENABLED and
+# the two WHISPER_* fields all left it when the code defaults were reconciled
+# to the values .env.example had been recommending. What is left is one shape
+# only -- a field whose code default is empty because empty means "use the
+# built-in endpoint", where the manifest names that endpoint so the form is not
+# an unexplained empty box -- plus VERTEX_LOCATION, which is the mirror image.
+# The list may shrink. It may not grow without a reason of that kind.
 _BUILT_IN_ENDPOINT = (
     "the code default is empty, meaning 'use the provider's own endpoint'; the "
     "manifest names that endpoint so the field is not an unexplained empty box"
@@ -591,14 +595,7 @@ DEFAULTS_THAT_DIFFER_FROM_THE_CODE = {
     "ALIBABA_CN_BASE_URL": _BUILT_IN_ENDPOINT,
     "ALIBABA_CODING_BASE_URL": _BUILT_IN_ENDPOINT,
     "ALIBABA_CODING_CN_BASE_URL": _BUILT_IN_ENDPOINT,
-    "VERTEX_BASE_URL": _SHIPPED_TEMPLATE_VALUE,
-    "PROVIDER_RATE_WINDOW": _SHIPPED_TEMPLATE_VALUE,
-    "HTTP_READ_TIMEOUT": _SHIPPED_TEMPLATE_VALUE,
-    "HTTP_WRITE_TIMEOUT": _SHIPPED_TEMPLATE_VALUE,
-    "HTTP_CONNECT_TIMEOUT": _SHIPPED_TEMPLATE_VALUE,
-    "VOICE_NOTE_ENABLED": _SHIPPED_TEMPLATE_VALUE,
-    "WHISPER_DEVICE": _SHIPPED_TEMPLATE_VALUE,
-    "WHISPER_MODEL": _SHIPPED_TEMPLATE_VALUE,
+    "VERTEX_BASE_URL": _BUILT_IN_ENDPOINT,
 }
 
 

@@ -1231,11 +1231,14 @@ def test_admin_apply_writes_huggingface_key_and_masks_preview(monkeypatch, tmp_p
     body = response.json()
     assert body["applied"] is True
     # Nothing sets VOICE_NOTE_ENABLED, so the prospective Settings snapshot
-    # uses the code default (on) exactly as the server will when it reloads
-    # this file -- which makes the Hugging Face key the live voice credential
-    # and its change a restart. The admin used to predict otherwise, because
-    # it wrote every manifest default into the file first.
-    assert body["pending_fields"] == ["HUGGINGFACE_API_KEY"]
+    # uses the code default exactly as the server will when it reloads this
+    # file. Since 6.68.0 that default is OFF, so no voice backend is live,
+    # the Hugging Face key is not a running credential, and nothing here
+    # needs a restart. The value still lands in the file, masked in the
+    # preview -- which is what the rest of this test checks. When voice
+    # notes ARE on, the restart prediction is covered by
+    # test_admin_key_change_requires_restart_for_active_voice_backend.
+    assert body["pending_fields"] == []
     assert "HUGGINGFACE_API_KEY=********" in body["env_preview"]
     env_file = tmp_path / ".mcc" / ".env"
     text = env_file.read_text(encoding="utf-8")

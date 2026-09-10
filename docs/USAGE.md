@@ -684,10 +684,10 @@ $ mcc-desktop --print-status
   "tray_enabled": true,
   "minimize_to_tray": true,
   "close_to_tray": true,
-  "start_at_login": false,
+  "start_at_login": true,
   "autostart_reconcile": true,
   "server_log": "C:\\Users\\me\\.mcc\\logs\\server.log",
-  "start_timeout_seconds": 15.0,
+  "start_timeout_seconds": 20.0,
   "health_check_interval_seconds": 0.25,
   "health_poll_seconds": 5.0,
   "health_failure_threshold": 3,
@@ -981,7 +981,7 @@ line, by the helper that performs the update. Read it if a restart goes wrong; t
 last line is where it stopped.
 
 **A slow start is no longer a failed one.** The window gives the server it
-starts `DESKTOP_SERVER_START_TIMEOUT` (default 15 s) to answer, and since 6.58.1
+starts `DESKTOP_SERVER_START_TIMEOUT` (default 20 s) to answer, and since 6.58.1
 it does that **three times** — `DESKTOP_SERVER_START_RETRIES` (default 2) more
 attempts, 45 s in all — before it says anything went wrong. A real configuration
 here takes **22–25 s** to bind, because everything MCC loads at startup happens
@@ -1052,7 +1052,7 @@ Seventeen settings live under **Admin → Providers → Desktop**, beside the li
 | `DESKTOP_HEALTH_FAILURE_THRESHOLD` | 3 | 1–1000 |
 | `DESKTOP_ACTIVATION_POLL_SECONDS` | 1 | 0.1–3600 |
 | `DESKTOP_RECONNECT_RESTATUS_SECONDS` | 30 | 5–3600 |
-| `DESKTOP_SERVER_START_TIMEOUT` | 15 | 1–300 |
+| `DESKTOP_SERVER_START_TIMEOUT` | 20 | 1–300 |
 | `DESKTOP_SERVER_START_RETRIES` | 2 | 0–20 |
 | `DESKTOP_ADMIN_REQUEST_TIMEOUT` | 5 | 0.5–60 |
 | `DESKTOP_HEALTH_CHECK_INTERVAL` | 0.25 | 0.05–5 |
@@ -2382,9 +2382,9 @@ A chain rescues the failures that happen before the first word, not the ones tha
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| First-token deadline | `120s` | How long a model may stay silent before the next one takes over. Nothing has streamed yet, so you never see the switch. |
-| Total request budget | `600s` | The whole request, across every attempt and retry. A stream that already started cannot be replaced, but it can be stopped. |
-| Eject mode | `rate_based` | How a failing **model** is benched. `rate_based` (default) skips a model when its failure rate over the last `FALLBACK_EJECT_WINDOW` requests (default 10) crosses `FALLBACK_EJECT_FAILURE_RATE` (default 50%), with at least `FALLBACK_EJECT_MIN_SAMPLES` (default 8) requests observed, for `FALLBACK_EJECT_SECONDS` (default **30 s** — until 6.0.0 a clamp inside route health silently cut that to 1 s for timeout and 5xx ejections, so a model you thought was benched for half a minute was back at the front of the chain a second later). A single blip never benches a working model; sustained failures do. `legacy` preserves the old consecutive-count behaviour keyed on `FALLBACK_EJECT_AFTER_FAILURES` / `FALLBACK_EJECT_SECONDS`. This is about models. It never touches a key — see [Multi-key rotation](#11-multi-key-rotation). |
+| First-token deadline | `0` (no limit) | How long a model may stay silent before the next one takes over. Nothing has streamed yet, so you never see the switch. Ships off with the other deadlines, so nothing hands over on silence until you set it. |
+| Total request budget | `0` (no limit) | The whole request, across every attempt and retry. A stream that already started cannot be replaced, but it can be stopped. |
+| Eject mode | `rate_based` | How a failing **model** is benched. `rate_based` (default) skips a model when its failure rate over the last `FALLBACK_EJECT_WINDOW` requests (default 10) crosses `FALLBACK_EJECT_FAILURE_RATE` (default 50%), with at least `FALLBACK_EJECT_MIN_SAMPLES` (default 8) requests observed, for `FALLBACK_EJECT_SECONDS` (default **10 s** since 6.68.0 — until 6.0.0 a clamp inside route health silently cut that to 1 s for timeout and 5xx ejections, so a model you thought was benched for half a minute was back at the front of the chain a second later). A single blip never benches a working model; sustained failures do. `legacy` preserves the old consecutive-count behaviour keyed on `FALLBACK_EJECT_AFTER_FAILURES` / `FALLBACK_EJECT_SECONDS`. This is about models. It never touches a key — see [Multi-key rotation](#11-multi-key-rotation). |
 | Retry primary once | `skip` | What happens when the primary model fails. `skip` (default) moves straight to the next fallback. `retry_once` gives the primary one more chance for transient errors (timeout, 5xx, 429) before falling through. Auth and invalid-request errors are never retried. |
 
 If every model on a route is benched, MCC tries them in order anyway — skipping a bad model is an optimisation, refusing to try anything is an outage.
@@ -3119,10 +3119,10 @@ Roughly **6× more retention for the same disk**. A body costs ~24 µs to read b
 
 ```bash
 REQUEST_LOG_ENABLED=true
-REQUEST_LOG_MAX_ROWS=50000         # oldest rows pruned beyond this
+REQUEST_LOG_MAX_ROWS=700000        # oldest rows pruned beyond this
 REQUEST_LOG_COMPRESS_BODIES=true   # false stores text inline, as before
 REQUEST_LOG_CAPTURE_BODIES=true    # false drops text entirely, ~77x more rows/GB
-REQUEST_LOG_TEXT_MAX_CHARS=50000   # longer text is truncated before storage
+REQUEST_LOG_TEXT_MAX_CHARS=10000000 # longer text is truncated before storage
 REQUEST_LOG_WIRE_BODY_MAX_CHARS=8000  # bounds stored message/tool structure only
 REQUEST_LOG_COMPRESSION_LEVEL=9    # 1-22; 19 measured 4.9% smaller at 9x the time
 ```
@@ -3356,7 +3356,7 @@ The two are shown in separate tables so the numbers reconcile.
 
 ```bash
 WEBSEARCH_LOG_ENABLED=true
-WEBSEARCH_LOG_MAX_ROWS=50000
+WEBSEARCH_LOG_MAX_ROWS=500000
 WEBSEARCH_LOG_CAPTURE_CONTENT=true      # false = lengths and hashes only
 WEBSEARCH_LOG_CONTENT_MAX_CHARS=2000000 # cap per input/output JSON payload
 ```
@@ -3431,7 +3431,7 @@ The rule behind the table is "judge a key only on signals about the key". The sa
 
 - **`LOCKED_OUT`, one key, others healthy** — that key is wrong, expired or revoked. Remove it from the pool; the ladder is not going to heal a dead key, and by the third rejection it is out for a day.
 - **`LOCKED_OUT`, every key** — it is not the keys. Check that the provider is the one the key belongs to, and that your account still has API access.
-- **`COOLDOWN` constantly, on every key** — you are over the provider's rate limit, not short of keys. Set `PROVIDER_RATE_LIMIT` (off since 6.62.0) and lower `PROVIDER_MAX_CONCURRENCY` on **Limits & Resilience → Retries & throughput** rather than adding a fourth key that will cool down alongside the other three.
+- **`COOLDOWN` constantly, on every key** — you are over the provider's rate limit, not short of keys. Lower `PROVIDER_RATE_LIMIT` and `PROVIDER_MAX_CONCURRENCY` on **Limits & Resilience → Retries & throughput** rather than adding a fourth key that will cool down alongside the other three.
 - **All keys `HEALTHY`, requests still failing** — nothing is wrong with your credentials. Read the chain panel's error kind: this is a model, deadline or benching question, and it lives on [Limits and resilience](#12-limits-and-resilience).
 
 > **The deliberate gap.** A key that fails with a 5xx or a transport fault on *every single request* is never benched — rotation tries it once per request and the chain absorbs the cost. That is the trade MCC made knowingly: the failure classes that could identify such a key were the same ones emptying healthy pools by the thousand. A 401 or 403 still locks it out, which is how a genuinely dead key gets caught.
@@ -3480,7 +3480,7 @@ How large one answer may be. MCC sizes `max_tokens` from the routed model's own 
 
 When to stop waiting. The first-token deadline, the whole-request budget, the stall deadline for a stream that started and then went quiet, how long a model may think before the chain moves on, whether reasoning is held back so a thinking model can still be replaced, the commit holdback that keeps a recovery invisible, the three transport timeouts underneath all of it, and how long a closing process gives in-flight requests to drain.
 
-**All five deadlines ship at `0` — no limit — since 6.16.0, and that has one consequence worth stating plainly: with the shipped zeros MCC never ends a silent or stalled upstream on its own. The fallback chain moves only on an error the provider actually returns.** A model that thinks for forty minutes is left to think. A stream that produces two sentences and then goes silent forever stays open until the transport read timeout ends it (`HTTP_READ_TIMEOUT`, 300 s, applied per read rather than per request) or the client disconnects. Nothing in MCC will step in first.
+**All four deadlines ship at `0` — no limit — since 6.16.0, and that has one consequence worth stating plainly: with the shipped zeros MCC never ends a silent or stalled upstream on its own. The fallback chain moves only on an error the provider actually returns.** A model that thinks for forty minutes is left to think. A stream that produces two sentences and then goes silent forever stays open until the transport read timeout ends it (`HTTP_READ_TIMEOUT`, 300 s, applied per read rather than per request) or the client disconnects. Nothing in MCC will step in first.
 
 That is a deliberate reversal. Through 6.15.0 these shipped as measured numbers (180 s first token, 600 s budget, 180 s floor, 180 s stall, 450 s thinking) and the failure they produced was the worse one: a reasoning model doing real work was killed mid-thought, the client got `Provider 'x' produced only reasoning for 450s without answering`, and nothing in that sentence said which knob had done it or where it lived. MCC is a system for the operator who runs it, so the shipped value is the one that decides nothing.
 
@@ -3505,7 +3505,7 @@ The **Deadlines calculator** on this page turns whatever you set into the number
 
 Without the floor the share alone decides: with 600s total and a 120s deadline, a ten-model route gives the first model `min(120, 600 ÷ 10)` = **60s**, and the 120 in the box never applies to that route at all. That is what produced log lines like `produced no first token after 74.9494s` on an eight-model chain — a number that appeared nowhere in the configuration. Set 600s total, 180s first token and a 180s floor and the same route gives every silent model the full **180s**: `min(180, max(600 ÷ 10, 180))`.
 
-The floor is **chain-side**: it bounds each model's first-token allowance, never a retry of the same model. And it buys its honesty with the models behind it — ten models at a 180s floor is 1,800s of demand against a 600s budget, so only the first three silent models can use the whole floor and the ones after them get whatever is left, then nothing. That is the operator's trade to make. `FALLBACK_ATTEMPT_SHARE_FLOOR=0` (the shipped value) is the pure equal-share, and while `FALLBACK_TOTAL_TIMEOUT` is `0` the whole division is moot: there is no budget to divide, so nothing can undercut the first-token deadline. The Deadlines calculator on this page computes both numbers for your own chains and warns when the floor cannot fit.
+The floor is **chain-side**: it bounds each model's first-token allowance, never a retry of the same model. And it buys its honesty with the models behind it — ten models at a 180s floor is 1,800s of demand against a 600s budget, so only the first three silent models can use the whole floor and the ones after them get whatever is left, then nothing. That is the operator's trade to make. `FALLBACK_ATTEMPT_SHARE_FLOOR=0` is the pure equal-share; the shipped value is `3600`, a floor wider than any interactive request. Either way, while `FALLBACK_TOTAL_TIMEOUT` is `0` the whole division is moot: there is no budget to divide, so nothing can undercut the first-token deadline. The Deadlines calculator on this page computes both numbers for your own chains and warns when the floor cannot fit.
 
 **A dead stream is now continued on the next model (6.18.0).** With `FALLBACK_RESUME_AFTER_COMMIT` on (the default), a model that dies part-way through an answer no longer only *ends* the message: the next model on the route is given the words already on your screen, asked to carry on from them, and its output is spliced into the same message. One `message_start`, one text block, one ending — there is no visible seam, on purpose. The model change is recorded in the request detail instead: the stalled attempt keeps its own failure row, and the attempt that finished says *continued here after `<model>` stalled at N chars*. It uses the same chain as any other fallback — benched models skipped, `FALLBACK_SKIP_KINDS` still ending a route, the same request budget, no new retry layer. Continuation is not reliable on every model: many answer nothing at all, and a model that starts the answer over is detected and thrown away rather than printed twice. Every one of those outcomes falls through to the truncated message below, never to an error, which is why it ships on. A half-written tool call is never continued. The first characters of a continuation are held back until it has proved it is continuing rather than restarting, so the rescue costs a short pause before the answer resumes.
 
@@ -3537,9 +3537,9 @@ Benching never empties a chain: if every model on a route is benched they are tr
 
 How hard one model is tried before the chain is used at all: the retries on a 5xx or a dropped connection (a 429 is routed around instead — see **Credential health**), the attempts a provider makes on its own before routing ever sees the failure, the recovery attempts after output has started and the connection dropped, and the exponential backoff between them — first wait, ceiling, and the random jitter that stops several clients retrying in lockstep. The same card carries the client-side pace: requests per window, the window, and how many streams one provider may have open at once.
 
-**The client-side pace ships off.** `PROVIDER_RATE_LIMIT` is `0` since 6.62.0, meaning MCC paces nothing of its own: requests go upstream as fast as your client sends them. It used to ship at 40 requests per 60 seconds, per provider, against limits no provider had published — and because every routing attempt spends one slot, a route that averaged three attempts began throttling after about thirteen client requests a minute. Measured on one machine, 24 concurrent requests took a median of 938 ms and a 95th percentile of **54 seconds**, all of it MCC waiting for its own window. A provider that really is over its quota answers `429` with a `Retry-After`, and **Credential health** obeys that either way.
+**The client-side pace cannot throttle interactive traffic.** `PROVIDER_RATE_LIMIT` ships at `300` per `PROVIDER_RATE_WINDOW=2` seconds since 6.68.0 — 150 requests a second, per provider. That is far above anything a person at a keyboard generates, so requests go upstream as fast as your client sends them while a runaway loop still meets a ceiling. (6.62.0 shipped `0`, no pace at all; the number is back, at a value that cannot be the thing holding a request up.) It used to ship at 40 requests per 60 seconds, per provider, against limits no provider had published — and because every routing attempt spends one slot, a route that averaged three attempts began throttling after about thirteen client requests a minute. Measured on one machine, 24 concurrent requests took a median of 938 ms and a 95th percentile of **54 seconds**, all of it MCC waiting for its own window. A provider that really is over its quota answers `429` with a `Retry-After`, and **Credential health** obeys that either way.
 
-Set a positive number only to hold a metered key back on purpose. When you do, the queue is fair: since 6.62.0 waiters are admitted in the order they arrived, so a paced request waits its turn rather than losing a lottery. `PROVIDER_MAX_CONCURRENCY` (default 5) is unchanged and was never the problem — it is an ordinary semaphore and it was always fair.
+Set a positive number only to hold a metered key back on purpose. When you do, the queue is fair: since 6.62.0 waiters are admitted in the order they arrived, so a paced request waits its turn rather than losing a lottery. `PROVIDER_MAX_CONCURRENCY` (default `300` since 6.68.0, was `5`) was never the problem — it is an ordinary semaphore and it was always fair. Lower it if your machine or your link is the bottleneck rather than the provider.
 
 ### Credential health
 
@@ -3830,23 +3830,23 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `RATE_LIMIT_COOLDOWN_SECONDS` | `60` | Used when a 429 arrives with no `Retry-After` and no equivalent header, and — since 6.34.0 — as the whole-key bench for an account the provider says is out of credits. When a header does arrive, the provider's own number wins. Capped at one hour either way. Named in the `All API keys for this provider are in cooldown` error since 6.16.0, alongside the **Credential health** card that edits it. |
 | `CREDENTIAL_MODEL_BENCH_ESCALATION` | `2` | New in 6.19.0. A 429 benches the (key, model) pair, not the key; this is how many different models must be limited on one key at once before the key itself is benched. `1` restores the 6.18.0 whole-key bench, `0` never escalates. |
 | `FALLBACK_FIRST_TOKEN_TIMEOUT` | `0` (no limit) | **Changed in 6.16.0** — was `180`. Silence before any output. The only deadline that produces a failover. |
-| `FALLBACK_ATTEMPT_SHARE_FLOOR` | `0` (equal share) | **Changed in 6.16.0** — was `180`. Chain-side floor on one model's slice of the total budget. Moot while the budget is `0`. |
+| `FALLBACK_ATTEMPT_SHARE_FLOOR` | `3600` (one hour) | **Changed in 6.68.0** — was `0`, and `180` before 6.16.0. Chain-side floor on one model's slice of the total budget. Moot while the budget is `0`, which is what it ships as. |
 | `FALLBACK_TOTAL_TIMEOUT` | `0` (no limit) | **Changed in 6.16.0** — was `600`. The whole request, across every attempt and retry. |
 | `FALLBACK_STALL_TIMEOUT` | `0` (no limit) | **Changed in 6.16.0** — was `180`. Silence after output started. Ends the request; no failover is possible past the first token. |
 | `FALLBACK_REASONING_ANSWER_TIMEOUT` | `0` (no limit) | **Changed in 6.16.0** — was `450`. Thinking that never becomes an answer. |
 | `FALLBACK_COOLDOWN_STEP_OVER_FLOOR` | `5.0` | The shortest remaining rate-limit cooldown that makes stepping over a model worth the chain slot it costs. |
 | `PROVIDER_RETRY_BACKOFF_BASE_SECONDS` | `2` | First wait between retries of one model. |
-| `PROVIDER_RETRY_BACKOFF_MAX_SECONDS` | `10` | The longest single wait. The chain is not tried until the ladder is spent, and since 6.20.0 only a 5xx or a dropped connection walks it. |
-| `PROVIDER_RETRY_ATTEMPTS` | `3` | **Changed in 6.20.0** — was `5`. Tries one model gets on the same key after a 5xx or a dropped connection. A 429 uses none of them. |
+| `PROVIDER_RETRY_BACKOFF_MAX_SECONDS` | `5` | **Changed in 6.68.0** — was `10`. The longest single wait. The chain is not tried until the ladder is spent, and since 6.20.0 only a 5xx or a dropped connection walks it. |
+| `PROVIDER_RETRY_ATTEMPTS` | `2` | **Changed in 6.68.0** — was `3`, and `5` before 6.20.0. Tries one model gets on the same key after a 5xx or a dropped connection. A 429 uses none of them. |
 | `RATE_LIMIT_ROUTES_AROUND_MODEL` | `true` | **New in 6.20.0.** A 429 benches the (key, model) pair and the request moves to the next model on the same provider instead of retrying and then spending the rest of the key pool. `false` restores retry-then-rotate. |
-| `PROVIDER_RETRY_BACKOFF_JITTER_SECONDS` | `1` | Random spread added to it, so several clients do not retry in lockstep. |
+| `PROVIDER_RETRY_BACKOFF_JITTER_SECONDS` | `0.5` | **Changed in 6.68.0** — was `1`. Random spread added to it, so several clients do not retry in lockstep, kept below the ceiling above. |
 | `REQUEST_LOG_WIRE_BODY_MAX_CHARS` | `8000` | Bounds the stored **message and tool structure** only. Parameters are stored whole at any size. |
 | `MAX_OUTPUT_TOKENS_CEILING` | **`131072`** | The hard ceiling on `max_tokens`. **`0` means no ceiling**; a blank field means "use the default", not "off". Range `0`–`1048576`. |
 | `MAX_OUTPUT_TOKENS_FLOOR` | **`8192`** | **New in 6.47.0 — this changes behaviour on update.** The smallest allowance any request is sent with, and the only bound here that raises rather than lowers. Never above the routed model's published limit, applied before the context headroom, and it stands down on an explicit `max_tokens: 0`. **`0` turns it off** and restores 6.46.0. Range `0`–`1048576`. |
 | `ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS` | `81920` | **Settable since 6.47.0.** The last-resort `max_tokens` for a request that reached a provider with none of its own and no published limit to take one from. `0` sends none at all. |
 | `REASONING_EFFORT_BUDGET_RATIOS` | `0.10,0.20,0.50,0.80,0.95,0.95` | **New in 6.47.0.** Six shares of the output allowance, one per reasoning effort in order (minimal → max), each strictly between 0 and 1 and never decreasing. |
 | `FALLBACK_BENCH_ENABLED` | `false` | Master switch for model benching. Off (the default since 6.14.0) tries every model in the chain every time; on makes the rest of the Chain benching card live, and only upstream 5xx / overloaded / 401 / 403 count towards a bench. Reachable from **Model Config** as well as this card — one setting, two places. Worth checking if your `.env` predates 6.1.0. |
-| `FALLBACK_EJECT_SECONDS` | `30` | How long a benched model stays out. Honoured exactly since 6.0.0; a clamp used to cut it to 1 s for timeout and 5xx ejections. |
+| `FALLBACK_EJECT_SECONDS` | `10` | **Changed in 6.68.0** — was `30`. How long a benched model stays out. Honoured exactly since 6.0.0; a clamp used to cut it to 1 s for timeout and 5xx ejections. |
 | `FALLBACK_END_CLEANLY_AFTER_COMMIT` | `true` | **New in 6.15.0.** A model that fails *after* it started answering ends the message cleanly (`stop_reason: max_tokens`) instead of returning an API error under a partial answer. `false` restores the error. |
 | `FALLBACK_RESUME_AFTER_COMMIT` | `true` | **New in 6.18.0.** Rather than only ending a half-written answer, hand the text already sent to the next model on the route and splice its continuation into the same message. Falls back to the row above whenever the continuation is unusable, so it can only lengthen an answer, never break one. `false` stops at the short message. |
 | `STREAM_COMMIT_HOLDBACK_CHARS` | `0` | **New in 6.18.0.** Visible characters that must arrive before output is released, on top of `STREAM_COMMIT_HOLDBACK_SECONDS`. Raising it means a model that writes a word and dies has shown you nothing, so the route restarts on the next model invisibly; the cost is that much time-to-first-visible-word on every request. `0` uses the clock alone. |

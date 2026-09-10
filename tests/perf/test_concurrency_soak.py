@@ -78,13 +78,29 @@ async def test_p95_within_budget_at_conc_8() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_shipped_default_applies_no_proactive_limit() -> None:
-    """The soak above is only meaningful if the defaults are really the ones."""
+async def test_the_shipped_pace_is_far_above_interactive_volume() -> None:
+    """The soak above is only meaningful if the defaults are really the ones.
+
+    6.62.0 answered the 54-second tail by shipping ``PROVIDER_RATE_LIMIT=0``
+    -- no proactive pace at all. 6.68.0 ships 300 per 2 s instead, which is
+    150 requests a second per provider: still far above anything a person
+    at a keyboard can generate, so the soak above measures the same thing,
+    while a runaway loop now meets a ceiling. What matters is not that the
+    limiter is switched off but that the shipped pace cannot be the thing
+    that holds an interactive request back, so that is what is asserted.
+    """
 
     settings = Settings()
 
-    assert settings.provider_rate_limit == 0
-    assert _limiter_from_shipped_defaults()._proactive_limiter.unlimited is True
+    per_second = settings.provider_rate_limit / settings.provider_rate_window
+    assert per_second >= 100.0, (
+        f"the shipped pace is {per_second:.1f} req/s per provider, which is "
+        "low enough to throttle real traffic"
+    )
+    # The whole soak batch fits inside a single window, so not one of its
+    # requests can be waiting on the pace rather than on the upstream.
+    assert settings.provider_rate_limit > REQUESTS
+    assert settings.provider_max_concurrency >= CONCURRENCY
 
 
 @pytest.mark.asyncio

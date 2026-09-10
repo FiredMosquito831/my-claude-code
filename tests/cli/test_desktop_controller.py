@@ -809,10 +809,26 @@ class TestLaunchReconciliation:
     def test_an_off_flag_removes_any_stale_registration(self, launched):
         applied, removed, holder = launched
 
-        holder["run"](DesktopState())
+        holder["run"](DesktopState(start_at_login=False))
 
         assert applied == []
         assert removed == [True]
+
+    def test_the_shipped_default_registers_start_at_login(self, launched):
+        """``DesktopState()`` means start_at_login=True since 6.68.0.
+
+        Stated as its own test because the reconciler is machine-global:
+        the release that flipped this default flipped what a launch against
+        a scratch config directory does to a real HKCU ``Run`` value, from
+        deleting it to pointing it at the scratch install. Both are why
+        ``MCC_DESKTOP_SKIP_AUTOSTART=1`` exists.
+        """
+        applied, removed, holder = launched
+
+        holder["run"](DesktopState())
+
+        assert applied == [True]
+        assert removed == []
 
 
 class TestWindowCloseWatcher:

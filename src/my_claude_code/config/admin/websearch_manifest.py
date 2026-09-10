@@ -86,7 +86,7 @@ def _analytics_field_specs() -> tuple[dict[str, Any], ...]:
             "section_id": "websearch",
             "field_type": "number",
             "settings_attr": "websearch_log_max_rows",
-            "default": "50000",
+            "default": "500000",
             "restart_required": True,
             "description": "Maximum retained provider-attempt and route rows.",
         },
@@ -110,7 +110,7 @@ def _analytics_field_specs() -> tuple[dict[str, Any], ...]:
             "section_id": "websearch",
             "field_type": "number",
             "settings_attr": "websearch_digest_content_chars",
-            "default": "2000",
+            "default": "4000",
             "description": (
                 "Separate, larger cap for the full page text a provider "
                 "extracted, which only arrives when you opted into it "

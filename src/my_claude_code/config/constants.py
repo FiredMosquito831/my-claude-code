@@ -1,7 +1,10 @@
 """Shared defaults used by config models and provider adapters."""
 
 # HTTP client connect timeout (seconds). Keep aligned with README.md and .env.example.
-HTTP_CONNECT_TIMEOUT_DEFAULT = 10.0
+# 60s, not 10s: a cold TLS handshake to a provider that has not been called for
+# a while regularly needs more than ten seconds, and a connect that times out
+# spends a chain slot on a provider that was merely asleep.
+HTTP_CONNECT_TIMEOUT_DEFAULT = 60.0
 
 # Anthropic Messages API default when the client omits max_tokens, and nothing
 # published a real per-model limit for the routed model. It is the last-resort
@@ -158,7 +161,10 @@ FALLBACK_TOTAL_TIMEOUT_DEFAULT = 0.0
 # RouteExecutionPolicy._attempt_deadline and on the Limits & Resilience page:
 # N silent models can spend up to N x this before the total budget clamps
 # them, leaving later models less than the floor.
-FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT = 0.0
+# 3600 is a floor no interactive attempt reaches, which is the point: it is
+# inert while FALLBACK_TOTAL_TIMEOUT is 0 (there is no budget to divide) and
+# becomes a real floor only for an operator who sets a total budget.
+FALLBACK_ATTEMPT_SHARE_FLOOR_DEFAULT = 3600.0
 # Consecutive failures before routing skips a provider/model, and for how long.
 # Failure kinds that end a route instead of moving to the next model.
 #
@@ -234,7 +240,10 @@ FAILURE_KIND_NAMES: frozenset[str] = frozenset(
 FALLBACK_BENCH_ENABLED_DEFAULT = False
 
 FALLBACK_EJECT_AFTER_FAILURES_DEFAULT = 3
-FALLBACK_EJECT_SECONDS_DEFAULT = 30.0
+# 10s, not 30s: a provider benched for half a minute outlives most of the
+# sessions that benched it, so the chain keeps stepping over a model that
+# recovered seconds after its one bad answer.
+FALLBACK_EJECT_SECONDS_DEFAULT = 10.0
 # Rate-based ejection policy: skip a model when at least this fraction of the
 # last `FALLBACK_EJECT_WINDOW` requests have failed (with at least
 # `FALLBACK_EJECT_MIN_SAMPLES` requests seen so the rate is meaningful).
@@ -254,7 +263,9 @@ FALLBACK_EJECT_MIN_SAMPLES_DEFAULT = 8
 # answered by routing to another model, not by waiting, so it consumes none of
 # these. 3 at 2s/4s covers a transient gateway blip; the 5 this shipped as
 # spent ~24s per key on failures the chain could have stepped over.
-PROVIDER_RETRY_ATTEMPTS_DEFAULT = 3
+# 2, not 3: the third try lands ~6s after the first on a provider that has
+# already failed twice, and the chain behind it can answer sooner than that.
+PROVIDER_RETRY_ATTEMPTS_DEFAULT = 2
 STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT = 5
 STREAM_MIDSTREAM_RECOVERY_ATTEMPTS_DEFAULT = 5
 # Output is held this long before it commits. While held, a failure can still
@@ -354,13 +365,18 @@ FALLBACK_COOLDOWN_STEP_OVER_FLOOR_DEFAULT = 5.0
 # of it MCC waiting for its own window. Providers answer 429 with a Retry-After
 # when they mean it, and the reactive block obeys that. A positive value is
 # still honoured exactly as before, for a metered key an operator wants paced.
-PROVIDER_RATE_LIMIT_DEFAULT = 0
+# 300 per 2s (150/s per provider) is far above any interactive volume, so it
+# throttles nothing a person can generate while still capping a runaway loop.
+PROVIDER_RATE_LIMIT_DEFAULT = 300
 # The window a positive limit is counted over. Meaningless while the limit
 # is 0, and 0 is not a window, so this one has no off value.
-PROVIDER_RATE_WINDOW_DEFAULT = 60
+PROVIDER_RATE_WINDOW_DEFAULT = 2
 PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT = 2.0
-PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT = 10.0
-PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT = 1.0
+# A 10s backoff inside an interactive request is indistinguishable from a
+# hang; 5s is the longest wait that still reads as "retrying". The jitter is
+# kept below the backoff so spreading clients cannot outlast the wait itself.
+PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT = 5.0
+PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT = 0.5
 
 # Graceful shutdown budget (seconds). Since 6.41.0 this bounds the WHOLE stop,
 # not one wait inside it: at the instant a stop is requested it becomes a single
@@ -410,8 +426,11 @@ COST_ESTIMATION_MODE_DEFAULT = "auto"
 COST_ESTIMATION_MODES = ("auto", "reported_only", "computed_only")
 
 # Request log storage.
-REQUEST_LOG_MAX_ROWS_DEFAULT = 50_000
-REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT = 50_000
+# Sized for a log worth reading months later rather than for the smallest
+# possible file: the rows are zstd-compressed and 700k of them cost a few
+# hundred megabytes, which is the right trade for a local proxy on a laptop.
+REQUEST_LOG_MAX_ROWS_DEFAULT = 700_000
+REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT = 10_000_000
 # How much of each outbound request body the log stores. The cap bounds the
 # stored *message and tool structure* only: sampling and reasoning parameters
 # are always stored whole, because a cut knob is unrecoverable and a cut turn
@@ -435,12 +454,12 @@ REQUEST_LOG_IMAGE_MAX_PIXELS_DEFAULT = 512
 # made in the dashboard applies to the next mcc-desktop start, not to a tray
 # already running. See config/limits.py for the bounds and their reasons.
 DESKTOP_HEALTH_CHECK_INTERVAL_DEFAULT = 0.25
-DESKTOP_SERVER_START_TIMEOUT_DEFAULT = 15.0
+DESKTOP_SERVER_START_TIMEOUT_DEFAULT = 20.0
 # How many *extra* start attempts follow the first one when a spawned server
 # has not answered inside ``DESKTOP_SERVER_START_TIMEOUT_DEFAULT``. Two, so a
-# start gets 3 x 15 s = 45 s of probing before anything that looks like a
+# start gets 3 x 20 s = 60 s of probing before anything that looks like a
 # failure is shown -- a real configuration here takes 22-25 s to bind, which a
-# single 15 s budget cannot fit, and the window used to park on a Retry button
+# single 20 s budget cannot fit, and the window used to park on a Retry button
 # the moment that budget expired. Retries never mean "spawn again": a child
 # that is still running is still coming up, and a second server would only
 # lose the bind race. Zero restores the pre-6.58.1 single attempt.

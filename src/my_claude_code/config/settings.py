@@ -78,6 +78,7 @@ from .constants import (
     REQUEST_LOG_COMPRESSION_LEVEL_DEFAULT,
     REQUEST_LOG_IMAGE_MAX_PIXELS_DEFAULT,
     REQUEST_LOG_LADDER_BODY_MAX_CHARS_DEFAULT,
+    REQUEST_LOG_MAX_ROWS_DEFAULT,
     REQUEST_LOG_QUEUE_MAX_SIZE_DEFAULT,
     REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT,
     REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT,
@@ -1032,7 +1033,7 @@ class Settings(BaseSettings):
         default=PROVIDER_RATE_WINDOW_DEFAULT, validation_alias="PROVIDER_RATE_WINDOW"
     )
     provider_max_concurrency: int = Field(
-        default=5, validation_alias="PROVIDER_MAX_CONCURRENCY"
+        default=300, validation_alias="PROVIDER_MAX_CONCURRENCY"
     )
     reasoning_policy: ReasoningPreference = Field(
         default=ReasoningPreference.CLIENT,
@@ -1057,10 +1058,10 @@ class Settings(BaseSettings):
 
     # ==================== HTTP Client Timeouts ====================
     http_read_timeout: float = Field(
-        default=120.0, validation_alias="HTTP_READ_TIMEOUT"
+        default=300.0, validation_alias="HTTP_READ_TIMEOUT"
     )
     http_write_timeout: float = Field(
-        default=10.0, validation_alias="HTTP_WRITE_TIMEOUT"
+        default=60.0, validation_alias="HTTP_WRITE_TIMEOUT"
     )
     http_connect_timeout: float = Field(
         default=HTTP_CONNECT_TIMEOUT_DEFAULT,
@@ -1183,7 +1184,7 @@ class Settings(BaseSettings):
     )
     # When true, skip private/loopback/link-local IP blocking for web_fetch (lab only).
     web_fetch_allow_private_networks: bool = Field(
-        default=False, validation_alias="WEB_FETCH_ALLOW_PRIVATE_NETWORKS"
+        default=True, validation_alias="WEB_FETCH_ALLOW_PRIVATE_NETWORKS"
     )
 
     # ==================== Web Search Providers ====================
@@ -1234,7 +1235,7 @@ class Settings(BaseSettings):
         default=True, validation_alias="WEBSEARCH_LOG_ENABLED"
     )
     websearch_log_max_rows: int = Field(
-        default=50000, validation_alias="WEBSEARCH_LOG_MAX_ROWS"
+        default=500000, validation_alias="WEBSEARCH_LOG_MAX_ROWS"
     )
     # Persist complete normalized provider inputs/outputs for Admin drill-down.
     # Disable for hashes/lengths only when searches may contain sensitive content.
@@ -1256,7 +1257,7 @@ class Settings(BaseSettings):
     # TAVILY_INCLUDE_RAW_CONTENT, FIRECRAWL_SCRAPE_FORMAT, ...). Separate from
     # the snippet cap so turning content on is not trimmed back to snippet size.
     websearch_digest_content_chars: int = Field(
-        default=2000, ge=0, validation_alias="WEBSEARCH_DIGEST_CONTENT_CHARS"
+        default=4000, ge=0, validation_alias="WEBSEARCH_DIGEST_CONTENT_CHARS"
     )
     websearch_digest_answer: bool = Field(
         default=True, validation_alias="WEBSEARCH_DIGEST_ANSWER"
@@ -1319,7 +1320,8 @@ class Settings(BaseSettings):
     )
     # Retention cap; oldest rows are pruned periodically past this many rows.
     request_log_max_rows: int = Field(
-        default=50_000, validation_alias="REQUEST_LOG_MAX_ROWS"
+        default=REQUEST_LOG_MAX_ROWS_DEFAULT,
+        validation_alias="REQUEST_LOG_MAX_ROWS",
     )
     # Store request/response text zstd-compressed in a side table instead of
     # inline. Bodies are ~99% of the bytes, so this is roughly 9x less disk for
@@ -1382,16 +1384,18 @@ class Settings(BaseSettings):
 
     # ==================== Voice Note Transcription ====================
     voice_note_enabled: bool = Field(
-        default=True, validation_alias="VOICE_NOTE_ENABLED"
+        default=False, validation_alias="VOICE_NOTE_ENABLED"
     )
     # Device: "cpu" | "cuda" | "nvidia_nim"
     # - "cpu"/"cuda": local Whisper (requires voice_local extra: uv sync --extra voice_local)
     # - "nvidia_nim": NVIDIA NIM Whisper API (requires voice extra: uv sync --extra voice)
-    whisper_device: str = Field(default="cpu", validation_alias="WHISPER_DEVICE")
+    whisper_device: str = Field(default="nvidia_nim", validation_alias="WHISPER_DEVICE")
     # Whisper model ID or short name (for local Whisper) or NVIDIA NIM model (for nvidia_nim)
     # Local Whisper: "tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"
     # NVIDIA NIM: "nvidia/parakeet-ctc-1.1b-asr", "openai/whisper-large-v3", etc.
-    whisper_model: str = Field(default="base", validation_alias="WHISPER_MODEL")
+    whisper_model: str = Field(
+        default="openai/whisper-large-v3", validation_alias="WHISPER_MODEL"
+    )
     # ==================== Bot Wrapper Config ====================
     telegram_bot_token: str | None = None
     allowed_telegram_user_id: str | None = None
