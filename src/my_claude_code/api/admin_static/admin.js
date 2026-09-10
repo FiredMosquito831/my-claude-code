@@ -7423,7 +7423,9 @@ async function probeProviderCapabilities(provider, button) {
     !window.confirm(
       `Probe ${models || "up to 25"} model(s) on ${provider.display_name || provider.provider_id}? ` +
         "That is one small upstream request per model per probe (2 probes), " +
-        "each capped at 16 output tokens. Nothing runs on the request path.",
+        "each capped at 16 output tokens, plus two more for the whole run if " +
+        "this host reads a client identity off the request. " +
+        "Nothing runs on the request path.",
     )
   ) {
     return;
