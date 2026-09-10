@@ -58,6 +58,23 @@ pub const DEFAULT_START_BACKOFF_SECONDS: f64 = 10.0;
 /// A holder nobody can name during our own startup is overwhelmingly us.
 pub const DEFAULT_FOREIGN_GRACE_SECONDS: f64 = 45.0;
 
+/// How long after an update helper stops the environment is still treated as
+/// mid-replacement (decision Q3 of 2026-09-10: "yes, and 30 s").
+///
+/// The window this exists for is measured, not guessed. `uv tool install
+/// --force` empties the live tool environment **in place** before it resolves
+/// a single new byte, so for the whole install `mcc-desktop --print-status`
+/// exits 1 -- with `ModuleNotFoundError`, then with a missing file, then
+/// normally again. On 2026-09-09 at 04:03 the helper finished at 04:01:58 and
+/// the window went on showing *My Claude Code could not start --
+/// `mcc-desktop --print-status` exited with 1 ... No module named
+/// 'my_claude_code'* for five minutes, because the stale verdict from a probe
+/// taken mid-install had become permanent.
+///
+/// Thirty seconds is the user's answer to the trade-off: shorter risks the
+/// tail end of a slow disk, longer delays a genuine failure report.
+pub const HELPER_SETTLE_SECONDS: f64 = 30.0;
+
 /// How many times MCC may be installed from this window before it stops trying
 /// and says so. A property of the binary: there is no status document to read
 /// when `mcc-desktop` cannot be run at all.
@@ -154,7 +171,10 @@ impl Holder {
 /// What the update helper is doing. Read from `progress.json`'s `helper_pid`
 /// and stage (6.58.3), never from a stage name alone -- a helper killed
 /// mid-install leaves `installing` behind forever.
-#[derive(Debug, Clone, PartialEq, Eq)]
+// `Eq` is gone from 6.70.0: `Finished` carries an age in seconds, and an age
+// is a measurement. Nothing compares two helpers for equality outside the
+// tests, which compare structurally.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Helper {
     /// No helper has run, or the last one's record is old news.
     None,
@@ -163,7 +183,16 @@ pub enum Helper {
     /// The helper wrote a terminal stage (`done`, `failed`, `recovered`,
     /// `install-failed`) and is gone. This is the fact `RestartPending` waits
     /// for, and the whole of the reported bug: nothing acted on it before.
-    Finished { stage: Option<String> },
+    ///
+    /// `seconds_ago` is how long ago that record was written, and `None` means
+    /// *unknown*. Unknown must never be read as "just now": a receipt is
+    /// truncated only when the next episode starts, so the `done` line from
+    /// the last update is still the last line in the file on every machine
+    /// that has ever updated. See [`HELPER_SETTLE_SECONDS`].
+    Finished {
+        stage: Option<String>,
+        seconds_ago: Option<f64>,
+    },
 }
 
 /// Whether `mcc-desktop --print-status` could be run at all.
@@ -438,6 +467,32 @@ pub fn may_start(observation: &Observation) -> bool {
     }
 }
 
+/// Whether the environment behind `mcc-desktop` may be being replaced right
+/// now -- an installer is alive, or one stopped less than
+/// [`HELPER_SETTLE_SECONDS`] ago.
+///
+/// This is the observation U1 adds, and everything about the fix follows from
+/// it: inside this window a status-run failure, a broken shim and a missing
+/// shim are all *expected*, so none of them is an error, none of them starts
+/// an installer of this window's own, and the window keeps asking on every
+/// tick until the answer changes.
+///
+/// A `Finished` helper whose age cannot be told is deliberately **not**
+/// settling. The receipt is truncated only when a new episode begins, so the
+/// terminal record of the last update outlives it indefinitely; reading an
+/// unknown age as "just now" would suppress the genuine "could not start"
+/// page for the rest of the machine's life, which is a worse bug than the one
+/// being fixed.
+pub fn environment_may_be_replaced(observation: &Observation) -> bool {
+    match &observation.helper {
+        Helper::Alive { .. } => true,
+        Helper::Finished { seconds_ago, .. } => {
+            seconds_ago.is_some_and(|age| age < HELPER_SETTLE_SECONDS)
+        }
+        Helper::None => false,
+    }
+}
+
 /// Whether a genuinely foreign holder has been there long enough to say so.
 fn foreign_confirmed(observation: &Observation) -> bool {
     observation.holder == Holder::Foreign
@@ -450,13 +505,22 @@ fn foreign_confirmed(observation: &Observation) -> bool {
 /// probe per tick and nothing else, which is BUG-4's fix. The document is
 /// re-read when the shell needs holder or helper facts it does not have -- on
 /// the first tick, and on any fresh tick where the server is not answering.
+///
+/// `Attached` is the one state that used to answer "never". It now answers
+/// "when nothing is answering at all", because the tick on which an attached
+/// window's server vanishes is exactly the tick on which it needs holder facts
+/// it does not have -- and if that tick cannot also spawn (a live child, a
+/// foreign holder, the backoff) it would otherwise paint a page about a
+/// problem while asking nothing about it. It costs nothing on the healthy
+/// path, which is the path BUG-4 was about, and nothing in the common absent
+/// case either: a tick that spawns drops the `Restatus` for it.
 fn needs_restatus(state: &State, observation: &Observation) -> bool {
     if !observation.fresh {
         return false;
     }
     match state {
         State::Booting => true,
-        State::Attached => false,
+        State::Attached => observation.health == Health::Absent,
         _ => observation.health != Health::Healthy,
     }
 }
@@ -480,12 +544,19 @@ pub fn step(state: &State, observation: &Observation, now: f64) -> (State, Vec<E
     // 1. MCC itself is missing. Nothing about the server can be decided until
     //    there is something to ask.
     if observation.status == StatusHealth::NotInstalled {
-        if let Helper::Alive { stage } = &observation.helper {
+        // ...unless an installer is replacing it right now, or stopped a
+        // moment ago. `uv tool install --force` deletes the environment before
+        // it downloads anything, so "MCC is not installed" is the *expected*
+        // reading for the whole of an update -- and installing over it is how
+        // the 2026-09-07 update lost all five of its attempts. Decision Q3:
+        // this is shown as an update in progress, and this window starts
+        // nothing.
+        if environment_may_be_replaced(observation) {
             return (
                 State::Updating {
                     since: since(state, now),
                 },
-                vec![Effect::Show(updating_page(stage.as_deref(), observation))],
+                keep_asking(observation, environment_replaced_page(observation)),
             );
         }
         let attempts = install_attempts_of(state);
@@ -538,10 +609,14 @@ pub fn step(state: &State, observation: &Observation, now: f64) -> (State, Vec<E
                         attempts,
                     },
                 },
-                vec![Effect::Show(install_did_not_take_page(
+                // U1: the tick that gives up asks again too. Every page that
+                // tells the user something is wrong is accompanied by a fresh
+                // question -- see `no_page_that_reports_a_problem_is_painted_
+                // without_asking_again`.
+                keep_asking(
                     observation,
-                    attempts,
-                ))],
+                    install_did_not_take_page(observation, attempts),
+                ),
             );
         }
         return (
@@ -565,7 +640,26 @@ pub fn step(state: &State, observation: &Observation, now: f64) -> (State, Vec<E
             State::Updating {
                 since: since(state, now),
             },
-            vec![Effect::Show(updating_page(stage.as_deref(), observation))],
+            // U1 / decision Q3: "the window keeps asking every tick". The
+            // `Restatus` is what lets the window notice that the environment
+            // is back *before* the helper's own last record lands -- and it is
+            // safe on this arm precisely because `may_start` refuses to spawn
+            // while a helper is alive, so nothing this asks for can start a
+            // second installer.
+            //
+            // Which sentence depends on whether the window can still read a
+            // status document. While it can, the installer is merely running
+            // somewhere; the moment it cannot, the reason is worth saying out
+            // loud, because that failure is the one a user would otherwise
+            // see reported as "My Claude Code could not start".
+            keep_asking(
+                observation,
+                if observation.status == StatusHealth::Ok {
+                    updating_page(stage.as_deref(), observation)
+                } else {
+                    environment_replaced_page(observation)
+                },
+            ),
         );
     }
 
@@ -599,24 +693,52 @@ pub fn step(state: &State, observation: &Observation, now: f64) -> (State, Vec<E
     //    probe still runs every tick, and the moment the server answers the
     //    branch above takes over.
     if let StatusHealth::Unreadable { detail } = &observation.status {
+        // The five-minute park of 2026-09-09 04:03, and its fix, are both
+        // here.
+        //
+        // An installer replacing the environment makes `mcc-desktop
+        // --print-status` fail *by design*: uv empties the tool directory in
+        // place before it resolves anything, and the shim behind it exits 1
+        // with `ModuleNotFoundError`. Reporting that as "My Claude Code could
+        // not start" is reporting a normal step of an update as a failure.
+        if environment_may_be_replaced(observation) {
+            return (
+                State::Updating {
+                    since: since(state, now),
+                },
+                keep_asking(observation, environment_replaced_page(observation)),
+            );
+        }
         return (
             State::Blocked {
                 reason: Blocked::Status {
                     detail: detail.clone(),
                 },
             },
-            vec![Effect::Show(Page::Error {
-                message: format!(
-                    "{detail} This window re-checks every {:.0} seconds and picks the \
-                     dashboard up by itself when the server answers.",
-                    observation.facts.tick_seconds
-                ),
-                // D6-Q10: every error page names the two paths it has. The
-                // field has existed since 6.61.0 and every construction site
-                // passed `None`.
-                server_log: named(&observation.facts.server_log),
-                shell_log: named(&observation.facts.shell_log),
-            })],
+            // ...and outside an update this page is still not a verdict. Until
+            // 6.69.0 this arm returned `Show(Page::Error)` and NOTHING else:
+            // no `Restatus`, and `needs_restatus` below is evaluated after the
+            // return, so nothing ever re-ran `--print-status`. The loop's own
+            // opportunistic re-read was gated on never having read a document
+            // at all, which stops being true the first time one parses. The
+            // only exit left was a healthy server, and no path could start
+            // one. Every subsequent tick repainted the same sentence about a
+            // subprocess that had failed once, minutes ago.
+            keep_asking(
+                observation,
+                Page::Error {
+                    message: format!(
+                        "{detail} This window re-checks every {:.0} seconds and picks the \
+                         dashboard up by itself when the server answers.",
+                        observation.facts.tick_seconds
+                    ),
+                    // D6-Q10: every error page names the two paths it has. The
+                    // field has existed since 6.61.0 and every construction site
+                    // passed `None`.
+                    server_log: named(&observation.facts.server_log),
+                    shell_log: named(&observation.facts.shell_log),
+                },
+            ),
         );
     }
 
@@ -801,6 +923,67 @@ fn install_attempts_of(state: &State) -> u32 {
             reason: Blocked::Install { attempts, .. },
         } => *attempts,
         _ => 0,
+    }
+}
+
+/// Paint `page`, and on a fresh tick ask the question behind it again.
+///
+/// The one rule U1 adds, in one function: **no page that reports a problem is
+/// ever the last word.** Every arm that shows an error, or an update in
+/// progress, goes through here, so the state it leaves behind is one the very
+/// next fresh tick re-evaluates against a freshly-read status document rather
+/// than against a verdict recorded minutes ago.
+///
+/// A paint tick asks nothing -- repainting a countdown must not spend a
+/// subprocess, and `a_paint_tick_never_rewrites_the_state_it_was_given`
+/// asserts it.
+fn keep_asking(observation: &Observation, page: Page) -> Vec<Effect> {
+    if observation.fresh {
+        vec![Effect::Restatus, Effect::Show(page)]
+    } else {
+        vec![Effect::Show(page)]
+    }
+}
+
+/// The page shown while an installer is replacing the environment.
+///
+/// Decision Q3's sentence: the window says what is *actually* happening rather
+/// than reporting the symptom. The failure it is covering for --
+/// `--print-status` exiting 1, or a shim with no interpreter behind it -- is a
+/// normal step of an update, so the page names the step and the elapsed time
+/// and promises to keep looking, and it never mentions starting anything.
+fn environment_replaced_page(observation: &Observation) -> Page {
+    let detail = match &observation.helper {
+        // A live helper's stage already carries its own elapsed count
+        // (`ActiveHelper::describe`), so it is quoted whole.
+        Helper::Alive { stage } => stage
+            .as_deref()
+            .map(str::trim)
+            .filter(|stage| !stage.is_empty())
+            .map_or_else(String::new, |stage| format!(" ({stage})")),
+        Helper::Finished { stage, seconds_ago } => {
+            let stage = stage
+                .as_deref()
+                .map(str::trim)
+                .filter(|stage| !stage.is_empty())
+                .unwrap_or("finishing");
+            match seconds_ago {
+                Some(age) => format!(" ({stage}, {} ago)", seconds(*age)),
+                None => format!(" ({stage})"),
+            }
+        }
+        Helper::None => String::new(),
+    };
+    Page::Updating {
+        message: format!(
+            "Installing My Claude Code{detail}: the environment is being replaced. \
+             The installer empties it before it writes the new version, so \
+             mcc-desktop cannot answer for a few seconds -- that is this step \
+             working, not a failure. This window keeps asking every {:.0} \
+             seconds, starts no installer of its own, and opens the dashboard \
+             by itself the moment the new version answers.",
+            observation.facts.tick_seconds
+        ),
     }
 }
 
@@ -1087,6 +1270,10 @@ mod tests {
         let mut done = observation(Health::Absent);
         done.helper = Helper::Finished {
             stage: Some("done".to_owned()),
+            // Two seconds ago: inside the settle window, so this class also
+            // proves that settling never stops the post-update SPAWN. Only a
+            // status document that cannot be read is diverted by it.
+            seconds_ago: Some(2.0),
         };
         cases.push(("helper-finished", done));
 
@@ -1116,6 +1303,41 @@ mod tests {
         paint.fresh = false;
         paint.since_probe = 3.0;
         cases.push(("paint-tick", paint));
+
+        // -- U1's classes: an installer is replacing the environment -------
+
+        // The user's own machine at 04:00:20 on 2026-09-09: uv has emptied the
+        // tool directory, the shim exits 1 with `ModuleNotFoundError`, and
+        // `process::print_status_within` now calls that a broken shim, which
+        // reads as `NotInstalled`.
+        let mut replacing = observation(Health::Absent);
+        replacing.status = StatusHealth::NotInstalled;
+        replacing.helper = Helper::Alive {
+            stage: Some("Updating to 6.65.0... (installer running, 46 s)".to_owned()),
+        };
+        cases.push(("environment-being-replaced", replacing));
+
+        // ...and at 04:02:00, two seconds after the helper wrote `done`, with
+        // uv still putting the shims back.
+        let mut settling = observation(Health::Absent);
+        settling.status = StatusHealth::Unreadable {
+            detail: "mcc-desktop --print-status exited with 1. ModuleNotFoundError".to_owned(),
+        };
+        settling.helper = Helper::Finished {
+            stage: Some("done".to_owned()),
+            seconds_ago: Some(2.0),
+        };
+        cases.push(("status-unreadable-while-settling", settling));
+
+        // The same file an hour later. A `done` record is the last line in
+        // `progress.json` on every machine that has ever updated, so this is
+        // the ordinary state of the world and must NOT be settling.
+        let mut stale_receipt = observation(Health::Absent);
+        stale_receipt.helper = Helper::Finished {
+            stage: Some("done".to_owned()),
+            seconds_ago: Some(3_600.0),
+        };
+        cases.push(("helper-finished-long-ago", stale_receipt));
 
         cases
     }
@@ -1193,6 +1415,7 @@ mod tests {
         let mut helper_done = observation(Health::Absent);
         helper_done.helper = Helper::Finished {
             stage: Some("done".to_owned()),
+            seconds_ago: Some(0.5),
         };
         let (next, effects) = step(&updating, &helper_done, 10.0);
         assert!(
@@ -1210,6 +1433,7 @@ mod tests {
         let mut recovered = observation(Health::Healthy);
         recovered.helper = Helper::Finished {
             stage: Some("recovered".to_owned()),
+            seconds_ago: Some(0.5),
         };
         let (next, effects) = step(&State::Updating { since: 0.0 }, &recovered, 10.0);
         assert_eq!(next, State::Attached);
@@ -1446,6 +1670,7 @@ mod tests {
         let mut finished = observation(Health::Absent);
         finished.helper = Helper::Finished {
             stage: Some("done".to_owned()),
+            seconds_ago: Some(1.0),
         };
         let (next, effects) = step(&State::Updating { since: 0.0 }, &finished, 30.0);
         assert!(effects.contains(&Effect::Spawn), "{effects:?}");
@@ -1773,5 +1998,420 @@ mod tests {
             });
             assert!(painted, "{} did not say when it last checked", state.name());
         }
+    }
+
+    // -- U1: never park during an update (2026-09-10) ----------------------
+
+    /// Every page whose job is to tell the user that something is wrong.
+    fn reports_a_problem(page: &Page) -> bool {
+        matches!(
+            page,
+            Page::Error { .. }
+                | Page::ServerFailed { .. }
+                | Page::PortConflict { .. }
+                | Page::NotOurServer { .. }
+        )
+    }
+
+    #[test]
+    fn no_page_that_reports_a_problem_is_painted_without_asking_again() {
+        // THE property U1 exists for, and the one 6.66.1 did not have.
+        //
+        // On 2026-09-09 at 04:03 the window painted *My Claude Code could not
+        // start -- mcc-desktop --print-status exited with 1 ... No module
+        // named 'my_claude_code'* and then asked nothing, ever again: the
+        // `Blocked::Status` arm returned `Show(Page::Error)` alone,
+        // `needs_restatus` is evaluated after that early return, and the
+        // loop's own re-read was gated on never having read a document. The
+        // user watched it for five minutes with a healthy machine underneath.
+        //
+        // So: a page that reports a problem is a report, never a verdict. On
+        // every fresh tick it is accompanied by a question -- `Restatus` -- or
+        // by the act that would answer it, `Spawn` or `Install`.
+        for state in all_states() {
+            for (name, observation) in all_observations() {
+                if !observation.fresh {
+                    continue;
+                }
+                let (_, effects) = step(&state, &observation, 5.0);
+                let painted = effects.iter().any(|effect| match effect {
+                    Effect::Show(page) => reports_a_problem(page),
+                    _ => false,
+                });
+                if !painted {
+                    continue;
+                }
+                assert!(
+                    effects.iter().any(|effect| matches!(
+                        effect,
+                        Effect::Restatus | Effect::Spawn | Effect::Install
+                    )),
+                    "{} + {name} reported a problem and asked nothing: {effects:?}",
+                    state.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_state_asks_or_acts_on_a_fresh_tick_where_nothing_answers() {
+        // The generalisation of the same rule. If no server is answering at
+        // all, then whatever the window is showing, that tick must reach
+        // outside itself: re-read the document, start the server, or install
+        // the thing that is missing. A tick that only repaints is a window
+        // waiting for something that will not arrive.
+        for state in all_states() {
+            for (name, observation) in all_observations() {
+                if !observation.fresh || observation.health != Health::Absent {
+                    continue;
+                }
+                let (_, effects) = step(&state, &observation, 5.0);
+                assert!(
+                    effects.iter().any(Effect::acts),
+                    "{} + {name} did nothing on a fresh tick with a dead server: {effects:?}",
+                    state.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_unreadable_status_asks_again_on_every_fresh_tick() {
+        // C2, at file:line. `Blocked::Install` has pushed a `Restatus` since
+        // 6.66.0 (controller.rs:508); `Blocked::Status` did not, and that
+        // asymmetry was the bug.
+        let mut unreadable = observation(Health::Absent);
+        unreadable.status = StatusHealth::Unreadable {
+            detail: "mcc-desktop --print-status exited with 1.".to_owned(),
+        };
+        // A child is alive, so nothing on this tick can spawn its way out --
+        // the only edge left is the question.
+        unreadable.child_alive = true;
+
+        let mut state = State::Booting;
+        for tick in 0..5 {
+            let (next, effects) = step(&state, &unreadable, f64::from(tick) * 10.0);
+            assert!(
+                effects.contains(&Effect::Restatus),
+                "tick {tick} from {} asked nothing: {effects:?}",
+                state.name()
+            );
+            assert!(matches!(
+                next,
+                State::Blocked {
+                    reason: Blocked::Status { .. }
+                }
+            ));
+            state = next;
+        }
+
+        // ...and a paint tick in between neither asks nor moves.
+        let mut paint = unreadable.clone();
+        paint.fresh = false;
+        let (next, effects) = step(&state, &paint, 60.0);
+        assert_eq!(next, state);
+        assert!(!effects.iter().any(Effect::acts), "{effects:?}");
+
+        // The document becomes readable again: one tick, and the window is
+        // back in the ordinary world.
+        let mut readable = observation(Health::Healthy);
+        readable.status = StatusHealth::Ok;
+        let (next, effects) = step(&state, &readable, 70.0);
+        assert_eq!(next, State::Attached);
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Attach { .. }))
+        );
+    }
+
+    #[test]
+    fn a_probe_failure_while_the_helper_is_settling_is_an_updating_page_not_an_error() {
+        // C3 / decision Q3. Both spellings the replacement window produces:
+        // a status run that failed outright, and a shim with no environment
+        // behind it (which `process.rs` now calls `NotInstalled`).
+        for status in [
+            StatusHealth::Unreadable {
+                detail: "mcc-desktop --print-status exited with 1. \
+                         ModuleNotFoundError: No module named 'my_claude_code'"
+                    .to_owned(),
+            },
+            StatusHealth::NotInstalled,
+        ] {
+            for helper in [
+                Helper::Alive {
+                    stage: Some("Updating to 6.70.0... (installer running, 46 s)".to_owned()),
+                },
+                Helper::Finished {
+                    stage: Some("done".to_owned()),
+                    seconds_ago: Some(29.0),
+                },
+            ] {
+                let mut mid_update = observation(Health::Absent);
+                mid_update.status = status.clone();
+                mid_update.helper = helper.clone();
+                let (next, effects) = step(&State::Attached, &mid_update, 5.0);
+
+                assert!(
+                    matches!(next, State::Updating { .. }),
+                    "{status:?} + {helper:?} -> {next:?}"
+                );
+                let page = effects
+                    .iter()
+                    .find_map(|effect| match effect {
+                        Effect::Show(page) => Some(page.clone()),
+                        _ => None,
+                    })
+                    .expect("a page");
+                assert!(
+                    matches!(page, Page::Updating { .. }),
+                    "{status:?} + {helper:?} painted {page:?}"
+                );
+                let json = serde_json::to_string(&page).expect("a page serializes");
+                assert!(json.contains("the environment is being replaced"), "{json}");
+                assert!(!json.contains("could not start"), "{json}");
+                // ...and it keeps asking.
+                assert!(effects.contains(&Effect::Restatus), "{effects:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_settling_window_never_starts_an_installer_of_its_own() {
+        // The other half of Q3, and the 2026-09-07 incident it prevents: the
+        // shell's own bounded install (6.66.0) fired into the tool directory
+        // uv was in the middle of rewriting, and the helper lost all five of
+        // its attempts. Ten ticks, from every state, and not one install.
+        for helper in [
+            Helper::Alive {
+                stage: Some("installing".to_owned()),
+            },
+            Helper::Finished {
+                stage: Some("done".to_owned()),
+                seconds_ago: Some(1.0),
+            },
+            Helper::Finished {
+                stage: Some("installed".to_owned()),
+                seconds_ago: Some(HELPER_SETTLE_SECONDS - 0.1),
+            },
+        ] {
+            let mut replacing = observation(Health::Absent);
+            replacing.status = StatusHealth::NotInstalled;
+            replacing.helper = helper.clone();
+            for start in all_states() {
+                let mut state = start.clone();
+                for tick in 0..10 {
+                    let (next, effects) = step(&state, &replacing, f64::from(tick) * 10.0);
+                    assert!(
+                        !effects.contains(&Effect::Install),
+                        "{} installed over a live update ({helper:?})",
+                        start.name()
+                    );
+                    assert!(
+                        !effects.contains(&Effect::Spawn),
+                        "{} spawned during a replacement ({helper:?})",
+                        start.name()
+                    );
+                    state = next;
+                }
+                assert!(matches!(state, State::Updating { .. }), "{state:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_helper_that_finished_long_ago_is_not_a_settling_window() {
+        // The receipt is truncated only when a NEW episode starts, so the
+        // `done` record from the last update is the last line in the file for
+        // ever. If an old record counted as settling, the genuine "could not
+        // start" page would never be shown again on any machine that had ever
+        // updated -- a worse bug than the one being fixed.
+        let mut old = observation(Health::Absent);
+        old.status = StatusHealth::NotInstalled;
+        old.helper = Helper::Finished {
+            stage: Some("done".to_owned()),
+            seconds_ago: Some(HELPER_SETTLE_SECONDS + 0.1),
+        };
+        assert!(!environment_may_be_replaced(&old));
+        let (next, effects) = step(&State::Booting, &old, 1.0);
+        assert!(effects.contains(&Effect::Install), "{effects:?}");
+        assert_eq!(next, State::Installing { attempts: 1 });
+
+        // ...and so is a record whose age cannot be told at all (a receipt
+        // from 6.58.2, which carried no `at`, on a filesystem whose mtime is
+        // also unavailable).
+        let mut undated = old.clone();
+        undated.helper = Helper::Finished {
+            stage: Some("done".to_owned()),
+            seconds_ago: None,
+        };
+        assert!(!environment_may_be_replaced(&undated));
+        let (_, effects) = step(&State::Booting, &undated, 1.0);
+        assert!(effects.contains(&Effect::Install), "{effects:?}");
+    }
+
+    #[test]
+    fn the_park_of_2026_09_09_at_04_03_replayed_tick_by_tick() {
+        // The user's own episode, as the sequence of observations the window
+        // actually saw, at the times it saw them. Live 6.60.2 -> 6.65.0:
+        //
+        //   03:59:54  Update pressed; helper writes `waiting-for-parent`
+        //   04:00:16  helper writes `installing`; uv empties the environment
+        //   04:01:58  helper writes `done`; the server is up
+        //   04:02:00+ the window showed "My Claude Code could not start --
+        //             mcc-desktop --print-status exited with 1 ...
+        //             ModuleNotFoundError: No module named 'my_claude_code'"
+        //             for five minutes and never attached.
+        //
+        // Every assertion below is about what the window SHOWS, because that
+        // is what the user reported.
+        let mut state = State::Attached;
+        let mut painted: Vec<(&str, Page)> = Vec::new();
+        let mut installs = 0_usize;
+        let mut spawns = 0_usize;
+
+        let tick = |state: &mut State,
+                    label: &'static str,
+                    observation: &Observation,
+                    now: f64,
+                    painted: &mut Vec<(&'static str, Page)>,
+                    installs: &mut usize,
+                    spawns: &mut usize| {
+            let (next, effects) = step(state, observation, now);
+            *state = next;
+            for effect in &effects {
+                match effect {
+                    Effect::Show(page) => painted.push((label, page.clone())),
+                    Effect::Install => *installs += 1,
+                    Effect::Spawn => *spawns += 1,
+                    _ => {}
+                }
+            }
+        };
+
+        // 03:59:54 -- the helper is alive and the old server still answers.
+        let mut waiting = observation(Health::Healthy);
+        waiting.helper = Helper::Alive {
+            stage: Some("Updating to 6.65.0... (installer running, 3 s)".to_owned()),
+        };
+        tick(
+            &mut state,
+            "03:59:54 waiting-for-parent",
+            &waiting,
+            0.0,
+            &mut painted,
+            &mut installs,
+            &mut spawns,
+        );
+
+        // 04:00:16 -> 04:01:58 -- the server is gone and so is the
+        // environment. This is the whole of the outage: 102 seconds of
+        // `ModuleNotFoundError`, ten ticks of it.
+        let mut replacing = observation(Health::Absent);
+        replacing.status = StatusHealth::NotInstalled;
+        replacing.helper = Helper::Alive {
+            stage: Some("Updating to 6.65.0... (installer running, 46 s)".to_owned()),
+        };
+        for step_number in 0..10 {
+            tick(
+                &mut state,
+                "04:00:16 installing",
+                &replacing,
+                30.0 + f64::from(step_number) * 10.0,
+                &mut painted,
+                &mut installs,
+                &mut spawns,
+            );
+        }
+
+        // 04:01:58 -- the helper is done, and uv is still putting the shims
+        // back, so `--print-status` fails for a few seconds more. THIS is the
+        // tick 6.66.1 turned into a permanent verdict.
+        let mut settling = observation(Health::Absent);
+        settling.status = StatusHealth::Unreadable {
+            detail: "mcc-desktop --print-status exited with 1. ModuleNotFoundError: \
+                     No module named 'my_claude_code'"
+                .to_owned(),
+        };
+        settling.helper = Helper::Finished {
+            stage: Some("done".to_owned()),
+            seconds_ago: Some(2.0),
+        };
+        tick(
+            &mut state,
+            "04:01:58 done, settling",
+            &settling,
+            130.0,
+            &mut painted,
+            &mut installs,
+            &mut spawns,
+        );
+
+        // 04:02:04 -- the environment is back, the server is not running yet
+        // (the helper ran with --no-restart because the window was watching).
+        let mut back = observation(Health::Absent);
+        back.helper = Helper::Finished {
+            stage: Some("done".to_owned()),
+            seconds_ago: Some(8.0),
+        };
+        tick(
+            &mut state,
+            "04:02:04 environment back",
+            &back,
+            136.0,
+            &mut painted,
+            &mut installs,
+            &mut spawns,
+        );
+        assert_eq!(spawns, 1, "the window must start the server, exactly once");
+        assert!(matches!(state, State::Starting { .. }), "{state:?}");
+
+        // 04:02:07 -- the server answers.
+        tick(
+            &mut state,
+            "04:02:07 healthy",
+            &observation(Health::Healthy),
+            139.0,
+            &mut painted,
+            &mut installs,
+            &mut spawns,
+        );
+        assert_eq!(state, State::Attached);
+
+        // Now the assertions the user's report is made of.
+        assert_eq!(installs, 0, "the window must not install during an update");
+        for (label, page) in &painted {
+            assert!(
+                !reports_a_problem(page),
+                "at {label} the window said something was wrong: {page:?}"
+            );
+            let json = serde_json::to_string(page).expect("a page serializes");
+            assert!(
+                !json.contains("could not start") && !json.contains("ModuleNotFoundError"),
+                "at {label}: {json}"
+            );
+        }
+        // ...and it did say what was happening, all the way through.
+        assert!(
+            painted
+                .iter()
+                .filter(|(_, page)| matches!(page, Page::Updating { .. }))
+                .count()
+                >= 11,
+            "{painted:?}"
+        );
+    }
+
+    #[test]
+    fn without_a_helper_a_broken_environment_is_still_installed_over() {
+        // The regression guard for 6.66.0's bounded install: the settle window
+        // narrows the not-installed path, it does not remove it. Same
+        // observation as the update case, with nothing running.
+        let mut broken = observation(Health::Absent);
+        broken.status = StatusHealth::NotInstalled;
+        broken.helper = Helper::None;
+        let (next, effects) = step(&State::Attached, &broken, 1.0);
+        assert!(effects.contains(&Effect::Install), "{effects:?}");
+        assert_eq!(next, State::Installing { attempts: 1 });
     }
 }

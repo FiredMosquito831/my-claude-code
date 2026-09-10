@@ -43,6 +43,15 @@ document that is missing a budget it needs (C9: no compiled-in default), so a
 new shell is not safe under an old wheel -- which is why the shell pin moves in
 a release *after* the one that starts emitting the key, never before.
 
+**One key is exempt from that promotion, permanently: ``update``.** Decision Q7
+of 2026-09-10 freezes it as *informational, never required*. Every other key
+here describes the machine, and the command that prints them is expected to
+work; ``update`` describes an installer that is in the act of replacing the
+environment this very command runs from, so the one circumstance in which it
+carries a value is the circumstance in which it cannot be delivered. A reader
+that needs the fact reads ``<config dir>/updates/progress.json`` itself, which
+is what the desktop shell does. See the comment beside the key below.
+
 **Why ``draining`` is behind a flag, and why it still did not bump the schema.**
 6.50.0 gave ``server_presence`` a fourth value: MCC's own server, answering the
 port but refusing everything with its shutdown 503. Adding a *value* to a
@@ -295,13 +304,25 @@ def desktop_status(*, presence_v2: bool = False) -> dict[str, Any]:
         "server_pid": server_pid_of(holder),
         "shell_tray": shell_tray,
         **desktop_shell_report(),
-        # ``null`` unless a deferred update helper is running RIGHT NOW, which
-        # is the whole of the key: a reader that finds a document here must not
-        # start an install of its own, because one is already in flight. See
+        # ``null`` unless a deferred update helper is running RIGHT NOW. See
         # ``config.update_progress`` for how "running" is decided (the helper's
-        # own pid, not a stage name). 6.58.3 emits it and the shell tolerates
-        # it; the shell may require it from 6.58.4 on, per the two-release rule
-        # in this module's docstring.
+        # own pid, not a stage name).
+        #
+        # FROZEN AS INFORMATIONAL, NEVER REQUIRED (decision Q7, 2026-09-10).
+        # This is the one documented key the two-release rule in this module's
+        # docstring must NOT be exercised on, and the reason is the key's own
+        # subject matter: it can only be delivered by ``mcc-desktop
+        # --print-status``, and that is precisely the command that stops
+        # working while an update is in flight. ``uv tool install --force``
+        # empties the tool environment in place before it resolves anything,
+        # so for the whole of an install the shim exits 1 with
+        # ``ModuleNotFoundError`` -- and a reader that *required* this key
+        # would refuse the document exactly when the key would have had
+        # something to say. The desktop shell therefore reads the underlying
+        # file directly (``update_progress.rs``, ``lib.rs``'s
+        # ``refresh_helper``) and only tolerates this key. Keep emitting it: it
+        # is useful to a human running ``--print-status`` by hand, and to any
+        # reader that has no access to the configuration directory.
         "update": update_report(),
     }
 

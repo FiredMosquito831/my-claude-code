@@ -1294,16 +1294,25 @@ fn holder_from(status: &Status) -> controller::Holder {
 }
 
 /// What the update helper is doing, from `progress.json` alone.
+///
+/// A finished helper carries how long ago it finished, which is the fact
+/// `controller::environment_may_be_replaced` needs: the seconds either side of
+/// the helper's last record are exactly the seconds in which `mcc-desktop`
+/// cannot answer, and a window that cannot date the record has to treat a
+/// finished update from last month like one that ended a moment ago.
 fn helper_state(config_dir: &str) -> controller::Helper {
     if let Some(helper) = update_progress::active_helper(config_dir) {
         return controller::Helper::Alive {
             stage: Some(helper.describe()),
         };
     }
-    match update_progress::read_stage(config_dir) {
-        Some(stage) if update_progress::stage_is_terminal(&stage) => controller::Helper::Finished {
-            stage: Some(stage.describe()),
-        },
+    match update_progress::read_stage_with_age(config_dir) {
+        Some((stage, seconds_ago)) if update_progress::stage_is_terminal(&stage) => {
+            controller::Helper::Finished {
+                stage: Some(stage.describe()),
+                seconds_ago,
+            }
+        }
         _ => controller::Helper::None,
     }
 }
@@ -1438,12 +1447,23 @@ fn run_controller(app: &AppHandle, window: &WebviewWindow) {
             life.remember_holder(controller::Holder::OursStale);
         }
         let fresh = asked || life.last_probe.elapsed() >= life.tick();
+        // The bootstrap read: nothing -- not even the health URL -- is known
+        // before the first document parses, so it happens immediately, and
+        // then once per fresh tick until one does.
+        //
+        // Until 6.69.0 this also carried `status_health == Ok`, and that
+        // conjunct was half of the five-minute park (2026-09-09 04:03). The
+        // moment a `--print-status` failed, `status_health` became
+        // `Unreadable` and this re-read switched itself off -- while
+        // `controller::step`'s own `Blocked::Status` arm asked for no
+        // `Restatus` either. Between them, nothing on the machine ever ran
+        // `mcc-desktop --print-status` again. The controller now asks on every
+        // fresh tick (see `keep_asking`), and this gate no longer looks at the
+        // health of the thing it is trying to repair.
         if life.status.is_none()
-            && life.status_health == controller::StatusHealth::Ok
+            && (life.last_restatus.is_none() || fresh)
             && !matches!(life.helper, controller::Helper::Alive { .. })
         {
-            // The one status read that is not optional: nothing -- not even the
-            // health URL -- is known before it.
             life.restatus(app, window);
         }
         // D6-Q2: after an install, ask again. This gate used to require

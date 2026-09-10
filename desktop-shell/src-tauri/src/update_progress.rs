@@ -279,6 +279,156 @@ pub fn stage_is_terminal(stage: &Stage) -> bool {
     stage.is_terminal()
 }
 
+/// The most recent stage in `config_dir`, and how many seconds ago it was
+/// written.
+///
+/// The age is the fact U1 needs and 6.66.1 did not have. `uv tool install
+/// --force` empties the environment *before* it resolves anything, so the
+/// seconds either side of the helper's own last record are exactly the seconds
+/// in which `mcc-desktop --print-status` cannot answer -- and a window that
+/// cannot tell "the helper stopped a moment ago" from "the helper stopped last
+/// Tuesday" has to treat both as a failure, which is the five-minute error page
+/// the user was shown on 2026-09-09.
+///
+/// `None` for the age means *unknown*, and every caller must read that as
+/// **not** settling. The receipt is truncated only when a new episode starts,
+/// so a `done` record from a month ago is still the last line in the file on
+/// every machine that has ever updated; treating an unknown age as "just
+/// finished" would suppress the genuine error page for ever.
+pub fn read_stage_with_age(config_dir: &str) -> Option<(Stage, Option<f64>)> {
+    let contents = read_receipt(config_dir)?;
+    let stage = latest_stage(&contents)?;
+    let age = seconds_since_last_record(&contents).or_else(|| receipt_age_seconds(config_dir));
+    Some((stage, age))
+}
+
+/// Seconds since the last record in `contents` was written, from the `at`
+/// stamp the helper puts in every record (`release_updates.py`'s `Write-Stage`
+/// writes `(Get-Date).ToUniversalTime().ToString('o')`).
+///
+/// `None` when there is no record, no stamp, or a stamp this cannot read --
+/// and never a negative number: a clock that has moved backwards would
+/// otherwise read as a helper that finishes in the future.
+pub fn seconds_since_last_record(contents: &str) -> Option<f64> {
+    let stamp = latest_record(contents)?
+        .get("at")
+        .and_then(serde_json::Value::as_str)
+        .and_then(parse_iso8601_utc)?;
+    let now = unix_now()?;
+    Some((now - stamp).max(0.0))
+}
+
+/// The receipt file's own modification time, as an age in seconds.
+///
+/// The fallback for a receipt written by 6.58.2 or earlier, which carried no
+/// `at`. Weaker than the stamp -- a copy or a restore moves it -- but the
+/// question it answers ("was this file touched in the last thirty seconds")
+/// is the same one, and a wrong answer here only ever costs one extra
+/// re-check.
+fn receipt_age_seconds(config_dir: &str) -> Option<f64> {
+    let modified = std::fs::metadata(progress_path(config_dir))
+        .ok()?
+        .modified()
+        .ok()?;
+    Some(modified.elapsed().ok()?.as_secs_f64())
+}
+
+/// Now, as seconds since the Unix epoch.
+fn unix_now() -> Option<f64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|since| since.as_secs_f64())
+}
+
+/// Parse the one timestamp shape the helper writes: round-trip ISO 8601 in
+/// UTC, `2026-09-09T04:01:58.1234567Z`.
+///
+/// Hand-written rather than pulled in with a date crate, because this is the
+/// only date the shell ever reads and a dependency is a supply chain. A
+/// trailing `+HH:MM`/`-HH:MM` offset is accepted too, so a helper on a build
+/// that stopped calling `ToUniversalTime` would still be read correctly rather
+/// than silently mis-read.
+fn parse_iso8601_utc(text: &str) -> Option<f64> {
+    let text = text.trim();
+    let (date, rest) = text.split_once('T').or_else(|| text.split_once(' '))?;
+    let mut date = date.split('-');
+    let year: i32 = date.next()?.parse().ok()?;
+    let month: i32 = date.next()?.parse().ok()?;
+    let day: i32 = date.next()?.parse().ok()?;
+    if date.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    // Split the offset off the time before anything else is read: the sign
+    // characters cannot appear inside a time, so this is unambiguous.
+    let (time, offset_minutes) = match rest.strip_suffix(['Z', 'z']) {
+        Some(time) => (time, 0_i32),
+        None => match rest.rfind(['+', '-']) {
+            Some(index) => {
+                let (time, offset) = rest.split_at(index);
+                (time, parse_offset(offset)?)
+            }
+            None => (rest, 0),
+        },
+    };
+
+    let mut time = time.split(':');
+    let hour: i32 = time.next()?.parse().ok()?;
+    let minute: i32 = time.next()?.parse().ok()?;
+    let seconds: f64 = time.next()?.parse().ok()?;
+    if time.next().is_some() || hour > 23 || minute > 59 || !(0.0..60.0).contains(&seconds) {
+        return None;
+    }
+
+    // Every part is converted to f64 through `i32`, which is lossless, and the
+    // multiplications are done in f64 -- so there is no year-2038 edge here
+    // even though each individual field is small. A day count fits `i32` until
+    // long after this program is of any interest.
+    let days = f64::from(days_from_civil(year, month, day));
+    Some(
+        days * 86_400.0 + f64::from(hour) * 3_600.0 + f64::from(minute) * 60.0
+            - f64::from(offset_minutes) * 60.0
+            + seconds,
+    )
+}
+
+/// `+HH:MM` or `-HHMM`, in minutes east of UTC.
+fn parse_offset(offset: &str) -> Option<i32> {
+    let sign = match offset.as_bytes().first()? {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    let digits: String = offset
+        .chars()
+        .skip(1)
+        .filter(char::is_ascii_digit)
+        .collect();
+    if digits.len() != 4 {
+        return None;
+    }
+    let hours: i32 = digits[..2].parse().ok()?;
+    let minutes: i32 = digits[2..].parse().ok()?;
+    if hours > 23 || minutes > 59 {
+        return None;
+    }
+    Some(sign * (hours * 60 + minutes))
+}
+
+/// Days from 1970-01-01 to a proleptic-Gregorian civil date.
+///
+/// Howard Hinnant's `days_from_civil`, which is the standard answer and is
+/// exact for every year this program can be handed.
+fn days_from_civil(year: i32, month: i32, day: i32) -> i32 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 /// The receipt's text, or `None` for every failure there can be -- no file, no
 /// directory, unreadable, too large.
 fn read_receipt(config_dir: &str) -> Option<String> {
@@ -473,6 +623,83 @@ mod tests {
                 .describe()
                 .starts_with("Updating... (installer running)")
         );
+    }
+
+    #[test]
+    fn the_round_trip_stamp_the_helper_writes_is_read_back_exactly() {
+        // `Write-Stage` writes `(Get-Date).ToUniversalTime().ToString('o')`.
+        // The two records below are the real ones from the live 6.66.1 update
+        // of 2026-09-10, read off the helper's own receipt.
+        let installing = parse_iso8601_utc("2026-09-10T08:21:37.7250000Z").expect("a stamp");
+        let done = parse_iso8601_utc("2026-09-10T08:22:35.3990000Z").expect("a stamp");
+        assert!((done - installing - 57.674).abs() < 0.001, "{done}");
+        // The epoch value itself, against an independently computed instant:
+        // 2026-09-10T00:00:00Z is 1_788_998_400 seconds after the epoch.
+        let midnight = parse_iso8601_utc("2026-09-10T00:00:00Z").expect("a stamp");
+        assert!((midnight - 1_788_998_400.0).abs() < 0.001, "{midnight}");
+        // ...and the epoch itself, which is the one value a sign error moves.
+        assert!(
+            parse_iso8601_utc("1970-01-01T00:00:00Z")
+                .expect("a stamp")
+                .abs()
+                < 0.001
+        );
+    }
+
+    #[test]
+    fn an_offset_stamp_is_read_as_the_instant_it_names() {
+        // Not written by any helper today, but a build that stopped calling
+        // `ToUniversalTime` must be mis-read loudly or not at all -- never
+        // silently by three hours, which is longer than the settle window.
+        let utc = parse_iso8601_utc("2026-09-10T00:00:00Z").expect("a stamp");
+        let east = parse_iso8601_utc("2026-09-10T03:00:00+03:00").expect("a stamp");
+        assert!((utc - east).abs() < 0.001, "{utc} vs {east}");
+        let west = parse_iso8601_utc("2026-09-09T19:00:00-0500").expect("a stamp");
+        assert!((utc - west).abs() < 0.001, "{utc} vs {west}");
+    }
+
+    #[test]
+    fn a_stamp_this_cannot_read_is_unknown_rather_than_a_guess() {
+        assert_eq!(parse_iso8601_utc(""), None);
+        assert_eq!(parse_iso8601_utc("2026-09-10"), None);
+        assert_eq!(parse_iso8601_utc("yesterday"), None);
+        assert_eq!(parse_iso8601_utc("2026-13-10T00:00:00Z"), None);
+        assert_eq!(parse_iso8601_utc("2026-09-10T25:00:00Z"), None);
+        // A record with no stamp at all: 6.58.2 and earlier.
+        assert_eq!(
+            seconds_since_last_record("{\"stage\":\"done\",\"helper_done\":true}"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_age_of_the_last_record_is_measured_from_its_own_stamp() {
+        // A record from an update that ran in 2020 is not a settling helper,
+        // whatever the file says -- and this is the case every machine that
+        // has ever updated is in, because the receipt is truncated only when
+        // the NEXT episode starts.
+        let old = seconds_since_last_record("{\"stage\":\"done\",\"at\":\"2020-01-01T00:00:00Z\"}")
+            .expect("an age");
+        assert!(old > 150_000_000.0, "{old}");
+
+        // A stamp from the future -- a clock that moved backwards, or a
+        // helper on a machine whose timezone handling differs -- reads as
+        // "just now" rather than as a negative age, so the settle window
+        // errs towards waiting exactly once and then expires.
+        let ahead =
+            seconds_since_last_record("{\"stage\":\"done\",\"at\":\"2999-01-01T00:00:00Z\"}")
+                .expect("an age");
+        assert!(ahead.abs() < f64::EPSILON, "{ahead}");
+
+        // And the age tracks the stamp: two records a minute apart give ages
+        // a minute apart, whichever day the suite runs on.
+        let earlier =
+            seconds_since_last_record("{\"stage\":\"done\",\"at\":\"2026-09-10T08:21:35Z\"}")
+                .expect("an age");
+        let later =
+            seconds_since_last_record("{\"stage\":\"done\",\"at\":\"2026-09-10T08:22:35Z\"}")
+                .expect("an age");
+        assert!((earlier - later - 60.0).abs() < 1.0, "{earlier} {later}");
     }
 
     #[test]

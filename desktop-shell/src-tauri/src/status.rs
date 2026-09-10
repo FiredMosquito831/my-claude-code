@@ -274,6 +274,42 @@ mod tests {
     }
 
     #[test]
+    fn the_update_key_is_informational_and_is_never_required() {
+        // C9, from the other side, and frozen there permanently by decision
+        // Q7 of 2026-09-10. `update` is the one documented key whose
+        // two-release promotion must never happen: it can only be delivered by
+        // `mcc-desktop --print-status`, and that is exactly the command that
+        // stops working while an installer is replacing the environment it
+        // runs from -- so a shell that required it would refuse the document
+        // precisely when the key would have had something to say.
+        //
+        // A document with no `update` key at all parses, and this shell reads
+        // the helper's own file instead (`update_progress.rs`).
+        let mut document = sample_json();
+        // Put it in and take it out again, so the test fails if some later
+        // release makes the parser reach for it.
+        document["update"] = serde_json::json!({"stage": "installing"});
+        let object = document.as_object_mut().expect("an object");
+        assert!(object.remove("update").is_some());
+        assert!(!document.to_string().contains("\"update\""));
+        let status = parse_status(&document.to_string()).expect("the key is not required");
+        assert_eq!(status.schema, 1);
+        assert_eq!(status.server_presence, "healthy");
+
+        // ...and a document carrying it, in either shape, parses too and
+        // changes nothing about the parse.
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!({"stage": "installing", "helper_pid": 4242}),
+        ] {
+            let mut carried = sample_json();
+            carried["update"] = value;
+            let status = parse_status(&carried.to_string()).expect("the key is tolerated");
+            assert_eq!(status.server_presence, "healthy");
+        }
+    }
+
+    #[test]
     fn close_to_tray_is_read_and_is_not_recomputed_from_tray_enabled() {
         // The defect: on Windows and macOS `tray_enabled` is false in this
         // document *because* a tray exists and belongs to Python. A window

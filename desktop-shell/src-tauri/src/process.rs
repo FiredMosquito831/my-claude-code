@@ -90,15 +90,40 @@ pub enum StatusRunError {
 
 /// The signatures of a uv shim whose environment is gone.
 ///
-/// Measured, not guessed: with `<UV_TOOL_DIR>/my-claude-code` deleted the
-/// shim exits 1 having printed exactly this on stderr, and `uv tool list`
-/// says `No tools installed` -- the receipt lives inside the directory that
-/// was removed. To a user that machine is indistinguishable from one where
-/// MCC was never installed.
+/// Measured, not guessed. Two different machines produce two different
+/// spellings of the same fact, and until 6.70.0 only the first was listed:
+///
+/// * with `<UV_TOOL_DIR>/my-claude-code` **deleted**, the shim exits 1 having
+///   printed `failed to canonicalize script path`, and `uv tool list` says
+///   `No tools installed` -- the receipt lives inside the directory that was
+///   removed;
+/// * while `uv tool install --force` is **replacing** that directory, the
+///   launcher survives (on Windows uv copies shims rather than symlinking
+///   them) and the interpreter behind it does not. It exits 1 with
+///   `ModuleNotFoundError: No module named 'my_claude_code'` -- and, for the
+///   first second of the window, with a *dependency's* name instead, because
+///   uv tears the dependencies down first. Measured 2026-09-10 with a scratch
+///   `UV_TOOL_DIR`, polling every 250 ms:
+///   `+7.17 s No module named 'annotated_types'`,
+///   `+7.99 s No module named 'my_claude_code'`, `+9.36 s` the shim file
+///   itself gone, `+14.5 s` installed and answering again.
+///
+/// That second spelling is the whole of the user's 2026-09-09 04:03 report: it
+/// matched nothing here, so a probe during the replacement window became
+/// `StatusHealth::Unreadable` rather than "the install is incomplete", and the
+/// window sat on *My Claude Code could not start* for five minutes. To a user
+/// both machines look the same, and the remedy for both is the same installer
+/// -- unless an update helper is alive, in which case the remedy is to wait,
+/// which is `controller::environment_may_be_replaced`.
 const BROKEN_SHIM_MARKERS: &[&str] = &[
-    "failed to canonicalize script path",
+    // Broadened from `failed to canonicalize script path`: newer uv
+    // trampolines canonicalize the interpreter and the base too, and the
+    // sentence continues differently in each case.
+    "failed to canonicalize",
     "trampoline",
     "no tools installed",
+    "modulenotfounderror",
+    "no module named",
 ];
 
 /// Whether this stderr is a broken shim rather than a program complaining.
@@ -793,6 +818,28 @@ mod tests {
             "Traceback (most recent call last)"
         ));
         assert!(!looks_like_a_broken_shim(""));
+    }
+
+    #[test]
+    fn a_module_not_found_is_a_broken_shim() {
+        // The user's exact stderr, 2026-09-09 04:03, for five minutes. `uv
+        // tool install --force` empties the environment in place before it
+        // resolves a byte, so for the whole install the launcher is there and
+        // the interpreter behind it is not.
+        assert!(looks_like_a_broken_shim(
+            "Traceback (most recent call last):\n  File \"<frozen runpy>\", \
+             line 198, in _run_module_as_main\nModuleNotFoundError: No module \
+             named 'my_claude_code'"
+        ));
+        // ...and the first second of the same window, where uv has taken the
+        // dependencies down and not yet the package itself.
+        assert!(looks_like_a_broken_shim(
+            "ModuleNotFoundError: No module named 'annotated_types'"
+        ));
+        // The newer uv trampoline spelling, which continues past `script path`.
+        assert!(looks_like_a_broken_shim(
+            "error: failed to canonicalize base path"
+        ));
     }
 
     #[test]
