@@ -1386,7 +1386,7 @@ Codex desktop, start to finish. Every other card works the same way.
 
 **3. Press *Configure*.** Three things happen in order: your file is copied to `~/.codex/config.toml.mcc-backup` (once, before the first edit ever), the plan is recomputed server-side rather than trusted from the browser, and the edit is applied to the parsed document — so comments, key order and every setting MCC does not own survive byte for byte.
 
-**4. Export the token.** The card says `MCC_AUTH_TOKEN — not exported yet`. MCC never sets an environment variable for you, so export it in the shell you start Codex from and press *Reload*; the next status poll reports whether it took.
+**4. There is nothing to export.** Codex takes MCC's proxy token as `experimental_bearer_token` inside `config.toml`, and the file is tightened to 0600 where the OS allows it. Until 6.67.0 MCC wrote `env_key = "MCC_AUTH_TOKEN"` and told you to export that variable instead — which nothing in MCC has ever set, and which Codex treats as a fatal error rather than a missing credential (`ERROR: Missing environment variable`). An app you start from the Start Menu inherits no shell export anyway. Undo removes the token with the rest of the block.
 
 **5. Check the badge.** It should now read *configured by MCC*. If you later hand-edit one of the owned keys it becomes *configured but drifted* — a statement, not an error. Nothing is corrected behind your back; press *Configure* again to take MCC's values back.
 

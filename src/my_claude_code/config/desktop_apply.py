@@ -56,6 +56,7 @@ import stat
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from difflib import unified_diff
 from pathlib import Path
 
@@ -68,6 +69,7 @@ from my_claude_code.config.desktop_apps import (
     DesktopManagedSource,
     DesktopPath,
     DesktopSidecar,
+    TokenForm,
 )
 from my_claude_code.config.document_codecs import (
     DeleteKey,
@@ -116,6 +118,10 @@ class DesktopProbe:
     managed_by: str = ""
     #: The keys that source sets, so the card can say what is being enforced.
     managed_keys: tuple[str, ...] = ()
+    #: One line per legacy identity this probe repaired, for the card to show.
+    #: Empty on every probe after the first, and on every machine that never
+    #: had the broken configuration -- including one a user repaired by hand.
+    repaired: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -175,6 +181,11 @@ _SECRET_KEYS: frozenset[str] = frozenset(
         # contain "api_key" as a whole-key match, and a missed mask is a
         # leaked key -- this is the field MCC writes a literal into.
         "inferencegatewayapikey",
+        # Codex's field for a literal bearer token. Same reasoning: it is not
+        # spelled "api_key", and since 6.67.0 it is where MCC's proxy token
+        # goes in ~/.codex/config.toml -- a TOML document, so it is the
+        # line-based masker in ``_mask_text`` that has to catch it too.
+        "experimental_bearer_token",
     }
 )
 
@@ -479,6 +490,147 @@ def owned_value(document: object, document_spec: DesktopDocument) -> object | No
     return node
 
 
+def repair_legacy(spec: DesktopAppSpec, env: Mapping[str, str]) -> tuple[str, ...]:
+    """Move what an earlier MCC wrote under a rejected identity onto the current one.
+
+    Returns one line per repair performed, and an **empty tuple whenever there
+    is nothing MCC recognises as its own old work** -- which is the property
+    that matters most here. Every step below is conditioned on *finding* the
+    legacy value, never on asserting the new one, so three states come out
+    identical and untouched: a machine that never pressed Configure, a machine
+    already repaired by an earlier poll, and a machine whose user repaired it
+    by hand (the case on the machine this was written for -- the user deleted
+    MCC's file and put ``appliedId`` back on their own entry themselves on
+    2026-09-09; a repair that "fixed" that would be a second incident).
+
+    Three things happen, in this order, and only for a legacy value actually
+    present:
+
+    1. A file MCC owned under the old identity is copied to the current path
+       when nothing is there yet, then deleted. Copying rather than waiting for
+       the next Configure is what makes the app work again on the next launch:
+       the content is MCC's own, it was correct, and only the *name* of the
+       file was wrong.
+    2. An element of the owned list carrying the old id is removed; Configure
+       will add the current one, and until it does the index simply does not
+       mention a document that no longer exists.
+    3. An overwritten scalar still *pointing at* the old id -- Claude Desktop's
+       ``appliedId`` -- is moved to the current one. A scalar pointing anywhere
+       else is somebody's own choice and is left alone.
+    """
+
+    if not spec.legacy_entries or spec.document is None:
+        return ()
+
+    path = document_path_for(spec, env)
+    if path is None:
+        return ()
+
+    current_sidecar = sidecar_path_for(spec, env)
+    repairs: list[str] = []
+    moved_files = False
+
+    for legacy in spec.legacy_entries:
+        legacy_path = (
+            resolve_path(legacy.sidecar_paths, env) if legacy.sidecar_paths else None
+        )
+        if legacy_path is not None and legacy_path.is_file():
+            if current_sidecar is not None and not current_sidecar.exists():
+                try:
+                    current_sidecar.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(legacy_path, current_sidecar)
+                    shutil.copymode(legacy_path, current_sidecar)
+                except OSError:
+                    continue
+            try:
+                legacy_path.unlink()
+            except OSError:
+                continue
+            moved_files = True
+
+    before_text = _read_text(path) or ""
+    document, error = _load(path, spec.document.document_format)
+    changed = False
+    if document is not None and not error:
+        result = _as_object_map(document)
+        if result is not None:
+            for legacy in spec.legacy_entries:
+                if _rename_legacy_element(result, spec.document, legacy.match_value):
+                    changed = True
+                if _repoint_legacy_scalar(result, spec.document, legacy.match_value):
+                    changed = True
+            if changed:
+                _backup_library_once(path, spec)
+                _write_text(path, _json_text(result, before_text))
+
+    if changed or moved_files:
+        repairs.extend(legacy.reason for legacy in spec.legacy_entries if legacy.reason)
+    return tuple(repairs)
+
+
+def _rename_legacy_element(
+    document: dict[str, object], document_spec: DesktopDocument, legacy_value: str
+) -> bool:
+    """Move the owned-list element off a legacy match value onto the current one.
+
+    Renamed in place rather than removed, and that is not cosmetic. Claude
+    Desktop's loader builds the path from ``appliedId`` alone, so a repaired
+    library would *load* either way -- but ``entries`` is what its
+    configuration picker lists, and an applied configuration missing from the
+    picker is a user who cannot see, name or switch away from what their
+    machine is using. The element keeps its position and its label; only the id
+    changes. Where an element already carries the current value the legacy one
+    is dropped instead, because two elements with one id is a worse index than
+    none.
+    """
+
+    if not document_spec.owned_element_path:
+        return False
+    elements = _element_list(document, document_spec.owned_element_path)
+    current_present = any(
+        (mapping := _as_object_map(element)) is not None
+        and mapping.get(document_spec.match_field) == document_spec.match_value
+        for element in elements
+    )
+    changed = False
+    rebuilt: list[object] = []
+    for element in elements:
+        mapping = _as_object_map(element)
+        if mapping is None or mapping.get(document_spec.match_field) != legacy_value:
+            rebuilt.append(element)
+            continue
+        changed = True
+        if current_present:
+            continue
+        mapping[document_spec.match_field] = document_spec.match_value
+        rebuilt.append(mapping)
+        current_present = True
+    if not changed:
+        return False
+    _set_in(document, document_spec.owned_element_path, rebuilt)
+    return True
+
+
+def _repoint_legacy_scalar(
+    document: dict[str, object], document_spec: DesktopDocument, legacy_value: str
+) -> bool:
+    """Move an overwritten scalar off a legacy match value onto the current one."""
+
+    changed = False
+    for key_path in document_spec.overwritten_keys:
+        node: object = document
+        for key in key_path:
+            mapping = _as_object_map(node)
+            if mapping is None or key not in mapping:
+                node = None
+                break
+            node = mapping[key]
+        if node == legacy_value:
+            _set_in(document, key_path, document_spec.match_value)
+            changed = True
+    return changed
+
+
 def probe(
     spec: DesktopAppSpec,
     *,
@@ -509,6 +661,16 @@ def probe(
     restorable = read_entry(spec.id, path=record_path) is not None
     managed_by, managed_keys = managed_override(spec, env)
 
+    # The one place this function writes, and it writes only what an earlier
+    # MCC wrote wrongly. It runs on probe rather than on Configure because a
+    # user whose Claude Desktop was silently un-configured has no reason to
+    # press Configure again -- they were told it was already configured -- so a
+    # repair that waited for the button would never run on the machines that
+    # need it. It is skipped where a managed source outranks the file, since
+    # nothing MCC does there has any effect. See :func:`repair_legacy` for why
+    # an already-repaired library comes out untouched.
+    repaired = () if managed_by else repair_legacy(spec, env)
+
     if managed_by:
         # Checked before the document is read, and before "installed" matters:
         # what a managed source makes true is that the file MCC would write is
@@ -520,6 +682,7 @@ def probe(
             document_exists=False,
             token_env_present=token_env_present,
             restorable=restorable,
+            repaired=repaired,
             managed_by=managed_by,
             managed_keys=managed_keys,
         )
@@ -550,6 +713,7 @@ def probe(
             document_exists=exists,
             token_env_present=token_env_present,
             restorable=restorable,
+            repaired=repaired,
         )
 
     document, error = _load(path, spec.document.document_format)
@@ -562,6 +726,7 @@ def probe(
             error=error,
             token_env_present=token_env_present,
             restorable=restorable,
+            repaired=repaired,
         )
 
     present = owned_value(document, spec.document)
@@ -592,6 +757,7 @@ def probe(
             document_exists=exists,
             token_env_present=token_env_present,
             restorable=restorable,
+            repaired=repaired,
         )
 
     expected = dict(expected_block) if expected_block is not None else None
@@ -623,6 +789,7 @@ def probe(
         document_exists=exists,
         token_env_present=token_env_present,
         restorable=restorable,
+        repaired=repaired,
     )
 
 
@@ -1047,6 +1214,51 @@ def _actions_for(spec: DesktopAppSpec, env: Mapping[str, str]) -> tuple[str, ...
     return tuple(actions)
 
 
+#: Where whole-directory backups go: MCC's own configuration directory, never
+#: beside the original. Claude Desktop globs ``*.json`` out of its
+#: configuration library, so a copy of the library left *inside* the library is
+#: a set of documents the app may try to read.
+LIBRARY_BACKUP_DIR = "backups"
+
+
+def _backup_library_once(path: Path, spec: DesktopAppSpec) -> Path | None:
+    """Copy the whole directory a document lives in, once, before any edit.
+
+    For an app whose configuration is a *directory* -- Claude Desktop's library
+    is a set of documents plus an index, and what MCC merges is only the index
+    -- the per-file ``.mcc-backup`` cannot restore what was there. On
+    2026-09-08 that was not theoretical: Configure moved the applied id onto an
+    id the app rejects at boot, and the only copy of anything was of the one
+    file that was easiest to reconstruct.
+
+    Once, and dated: a second Configure must not overwrite the copy taken
+    before the first, which is the same promise :func:`_backup_once` makes one
+    level down. The check is for any existing backup of this app rather than
+    for one exact name, so the guarantee survives the clock.
+    """
+
+    if spec.document is None or not spec.document.backup_directory:
+        return None
+    source = path.parent
+    if not source.is_dir():
+        return None
+    root = config_dir_path() / LIBRARY_BACKUP_DIR
+    try:
+        existing = sorted(root.glob(f"{spec.id}-*"))
+    except OSError:
+        existing = []
+    if existing:
+        return existing[0]
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    destination = root / f"{spec.id}-{source.name}-{stamp}"
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, destination)
+    except OSError:
+        return None
+    return destination
+
+
 def _backup_once(path: Path, suffix: str) -> Path | None:
     """Copy the document to its backup, once, inheriting its mode.
 
@@ -1066,10 +1278,21 @@ def _backup_once(path: Path, suffix: str) -> Path | None:
     return backup_path
 
 
-def _write_text(path: Path, text: str) -> None:
+def _write_text(path: Path, text: str, *, owner_only: bool = False) -> None:
+    """Write a document atomically, optionally restricting it to its owner.
+
+    ``owner_only`` is set for a document MCC has just put a literal credential
+    into -- the apps that resolve no usable reference form. It is a *tightening*
+    of a file the user owns, applied where the OS makes it mean something; on
+    Windows the mode bits do not, and inheritance from the user's profile ACL
+    is the control, exactly as in :func:`_write_owned_file`.
+    """
+
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".mcc-tmp")
     temporary.write_text(text, encoding="utf-8", newline="")
+    if owner_only and sys.platform != "win32":
+        os.chmod(temporary, stat.S_IRUSR | stat.S_IWUSR)
     os.replace(temporary, path)
 
 
@@ -1126,6 +1349,10 @@ def apply(
 
     scalars = dict(scalars or {})
     document_format = spec.document.document_format
+    # Read from the spec rather than taken as an argument: whether this app's
+    # own document ends up holding MCC's token is a property of the app, and
+    # ``config`` may not import the module that builds the block.
+    holds_literal_credential = spec.token_form is TokenForm.LITERAL_IN_APP_FILE
     before_text = _read_text(path) or ""
     document, error = _load(path, document_format)
     if document is None:
@@ -1160,11 +1387,15 @@ def apply(
             sidecar_path=sidecar_display,
         )
 
+    # The whole directory first, for an app whose configuration is one, then
+    # the single file. Both are once-only and neither overwrites what an
+    # earlier Configure took.
+    _backup_library_once(path, spec)
     backup_path = (
         _backup_once(path, spec.document.backup_suffix) if before_text else None
     )
     if after_text != before_text:
-        _write_text(path, after_text)
+        _write_text(path, after_text, owner_only=holds_literal_credential)
 
     write_entry(
         RestoreEntry(
@@ -1288,9 +1519,25 @@ def undo(
                 removed_sidecar = True
             except OSError:
                 removed_sidecar = False
+    # And anything MCC owned under an identity it has since stopped using. Undo
+    # promises to remove what MCC left behind, and a file written by an earlier
+    # release is still what MCC left behind -- a user who reaches for Undo
+    # because the app is misbehaving should not have to know which version
+    # wrote which filename.
+    for legacy in spec.legacy_entries:
+        legacy_path = (
+            resolve_path(legacy.sidecar_paths, env) if legacy.sidecar_paths else None
+        )
+        if legacy_path is not None and legacy_path.is_file():
+            try:
+                legacy_path.unlink()
+                removed_sidecar = True
+            except OSError:
+                pass
 
     changed = after_text != before_text
     if changed:
+        _backup_library_once(path, spec)
         _backup_once(path, spec.document.backup_suffix)
         _write_text(path, after_text)
 
@@ -1339,6 +1586,7 @@ __all__ = [
     "is_installed",
     "plan",
     "probe",
+    "repair_legacy",
     "sidecar_path_for",
     "undo",
 ]

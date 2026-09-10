@@ -24,7 +24,10 @@ from my_claude_code.config.desktop_apps import (
     TokenForm,
 )
 from my_claude_code.config.document_codecs import DocumentFormat
-from my_claude_code.config.harnesses import HARNESSES_WITHOUT_ATTRIBUTION_HEADER
+from my_claude_code.config.harnesses import (
+    COMMANDCODE_API_KEY_ENV,
+    HARNESSES_WITHOUT_ATTRIBUTION_HEADER,
+)
 
 SERVABLE = [spec for spec in DESKTOP_APPS if spec.status is DesktopAppStatus.SERVABLE]
 
@@ -77,24 +80,52 @@ def test_a_servable_spec_declares_a_document_and_a_detector(spec: DesktopAppSpec
     assert spec.detect is not None and spec.detect.markers, spec.id
 
 
-@pytest.mark.parametrize("spec", SERVABLE, ids=ids(SERVABLE))
-def test_no_spec_writes_a_literal_token(spec: DesktopAppSpec):
-    """Never a literal where the app takes a reference; a 0600 file otherwise.
+#: Variables MCC itself sets somewhere a client can see them. There are
+#: exactly two, and neither is set at *user* scope -- MCC has never written
+#: ``HKCU\Environment`` and does not start doing so here. They are set in the
+#: environment of a child process MCC launches, which is why the only rows
+#: allowed to reference them are rows whose app MCC launches.
+VARIABLES_MCC_SETS = frozenset({COMMANDCODE_API_KEY_ENV})
 
-    The reference forms are checked by shape rather than by name: a value that
-    is neither an app's own reference syntax nor an environment-variable name
-    is a credential in a user's document, which is the one thing this whole
-    feature is not allowed to do.
+
+@pytest.mark.parametrize("spec", SERVABLE, ids=ids(SERVABLE))
+def test_no_servable_app_references_a_variable_nobody_sets(spec: DesktopAppSpec):
+    """The invariant 6.67.0 exists to add, and the one the old wording missed.
+
+    "Never a literal where the app takes a reference" was the rule until
+    6.67.0, and four rows kept it perfectly while failing completely: they
+    wrote a reference to ``MCC_AUTH_TOKEN``, a variable nothing in MCC has ever
+    set. A desktop app started from Explorer inherits only the user
+    environment, so what actually went on the wire was the unexpanded reference
+    as a bearer token -- HTTP 401, measured -- or, for Codex, a refusal to load
+    the configuration file at all.
+
+    So the test is no longer "is it a reference" but "can the app resolve it as
+    MCC ships it": a reference may name only a variable MCC really sets, or a
+    placeholder the app resolves *itself* (VS Code's ``${input:}`` prompts and
+    keeps the answer in its own SecretStorage). Anything else must be a literal
+    in a file, and then it is the writer's job to restrict that file.
     """
 
     reference = token_reference(spec)
     match spec.token_form:
         case TokenForm.ENV_REFERENCE:
             assert reference, spec.id
-            assert spec.token_env_var in reference or "${input:" in reference, spec.id
+            if "${input:" in reference:
+                assert not spec.token_env_var, spec.id
+            else:
+                assert spec.token_env_var in VARIABLES_MCC_SETS, spec.id
+                assert spec.token_env_var in reference, spec.id
+        case TokenForm.LITERAL_IN_APP_FILE:
+            # No reference at all, and a field to put the literal in.
+            assert not reference, spec.id
+            assert not spec.token_env_var, spec.id
+            assert spec.provider.api_key_key, spec.id
+            assert not spec.provider.env_name_key, spec.id
         case TokenForm.ENV_NAME_FIELD:
             assert not reference, spec.id
             assert spec.provider.env_name_key, spec.id
+            assert spec.token_env_var in VARIABLES_MCC_SETS, spec.id
         case TokenForm.ENV_ONLY:
             # Nothing is written anywhere: the app reads its own environment
             # or keyring. The card names the variable and the next status poll
@@ -220,10 +251,34 @@ def test_claude_desktop_writes_the_file_anthropic_documents():
     assert not any("does not guess a persistence path" in n for n in claude.notes)
 
 
-def test_claude_desktop_writes_exactly_the_six_documented_gateway_keys():
+def test_claude_desktop_writes_the_keys_the_working_configuration_carries():
+    """Reconciled against a configuration proven to work, not against prose.
+
+    Every expectation below is a key-for-key comparison with the entry the user
+    built by hand and confirmed working on 2026-09-09, read from a backup on
+    2026-09-10 (``specs/CLAUDE-DESKTOP-CONFIG-REFERENCE.md``). That comparison
+    is what turned up the three defects this release fixes on this card:
+    ``inferenceModels`` missing entirely, ``modelDiscoveryEnabled`` hard-coded
+    the other way, and an ``inferenceCustomHeaders`` value no run of the app
+    has ever been watched accepting.
+    """
+
     claude = DESKTOP_APPS_BY_ID["claude_desktop"]
+    # The tier aliases, which is what ``build_catalogue_models`` appends to
+    # every catalogue and what Claude Desktop's picker is filled from. A
+    # ``provider/model`` ref is deliberately in the list too and deliberately
+    # not in the output.
+    models = (
+        *MODELS,
+        CatalogueModel(
+            gateway_id="anthropic/mcc/best",
+            provider_model_ref="mcc/best",
+            display_name="Best (openrouter/anthropic/claude-sonnet-4-5)",
+            context_length=1_000_000,
+        ),
+    )
     document = sidecar_document(
-        claude, MODELS, proxy_root_url="http://127.0.0.1:8082", auth_token="scratch"
+        claude, models, proxy_root_url="http://127.0.0.1:8082", auth_token="scratch"
     )
     assert document is not None
     assert set(document) == set(CLAUDE_DESKTOP_GATEWAY_KEYS)
@@ -232,9 +287,25 @@ def test_claude_desktop_writes_exactly_the_six_documented_gateway_keys():
     # appends itself.
     assert document["inferenceGatewayBaseUrl"] == "http://127.0.0.1:8082"
     assert document["inferenceCredentialKind"] == "static"
-    assert document["modelDiscoveryEnabled"] is True
-    assert document["inferenceCustomHeaders"] == {"x-mcc-harness": "claude_desktop"}
     assert document["inferenceGatewayApiKey"] == "scratch"
+    # Off, with the models named. On, with nothing named, made the picker's
+    # contents depend on a network call finishing and on
+    # ``settings.harness_tier_aliases`` being set.
+    assert document["modelDiscoveryEnabled"] is False
+    assert "inferenceCustomHeaders" not in document
+    models = document["inferenceModels"]
+    assert isinstance(models, list) and models
+    for entry in models:
+        assert set(entry) == {
+            "name",
+            "labelOverride",
+            "supports1m",
+            "prefer1m",
+            "anthropicFamilyTier",
+            "isFamilyDefault",
+        }
+        # The wire ids MCC really routes, not a display name MCC invented.
+        assert entry["name"].startswith("mcc/")
 
 
 def test_claude_desktops_instruction_fallback_uses_the_dialogs_own_labels():

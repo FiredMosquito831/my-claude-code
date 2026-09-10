@@ -98,13 +98,16 @@ def test_the_claude_desktop_card_carries_the_gateway_values(monkeypatch, tmp_pat
     card = next(entry for entry in body["apps"] if entry["id"] == "claude_desktop")
     assert card["status"] == "servable"
     assert card["display_path"].endswith(r"configLibrary\_meta.json")
+    # Reconciled with the entry proven to work on a real machine: model
+    # discovery off with the models named, and no custom-headers key -- see
+    # specs/CLAUDE-DESKTOP-CONFIG-REFERENCE.md.
     assert card["sidecar_keys"] == [
         "inferenceProvider",
         "inferenceGatewayBaseUrl",
         "inferenceGatewayApiKey",
         "inferenceCredentialKind",
         "modelDiscoveryEnabled",
-        "inferenceCustomHeaders",
+        "inferenceModels",
     ]
     # The proxy ROOT: Claude Desktop appends /v1/messages itself.
     assert card["base_url"].startswith("http://")

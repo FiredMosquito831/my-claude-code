@@ -8642,6 +8642,18 @@ function desktopAppCard(app) {
 
   card.append(desktopAppMeta(app));
 
+  // What the last status poll repaired, if anything. An earlier MCC could
+  // write a configuration this app rejects at startup, and the repair happens
+  // on probe rather than on Configure -- so the card is the only place a user
+  // ever finds out it happened, and the only place that can tell them the app
+  // has to be relaunched for it to take.
+  (probe.repaired || []).forEach((line) => {
+    const repaired = document.createElement("p");
+    repaired.className = "desktop-repair-note";
+    repaired.textContent = line;
+    card.append(repaired);
+  });
+
   if (stateId === "managed") {
     // The file MCC would write is the lowest-precedence source this app
     // reads, and a managed profile replaces it wholesale. A Configure button
