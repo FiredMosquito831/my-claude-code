@@ -203,6 +203,9 @@ def test_start_at_login_toggle_reads_disk_not_the_stale_cache(
     """
 
     tray = _real_state_tray(monkeypatch, tmp_path)
+    # Set explicitly: the shipped default is True since 6.68.0, and this
+    # test is about the direction of a toggle, not about the default.
+    set_start_at_login(False)
     assert load_desktop_state().start_at_login is False
 
     # The dashboard (another process) turns it on after the tray started.

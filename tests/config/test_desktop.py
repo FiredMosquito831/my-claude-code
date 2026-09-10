@@ -41,8 +41,10 @@ class TestLoadDesktopState:
         state = load_desktop_state()
 
         assert state.tray_enabled is True
-        assert state.start_at_login is False
-        assert state.minimize_to_tray is False
+        # Both ship True since 6.68.0: the product is a background proxy,
+        # so a fresh install registers itself at login and hides to the tray.
+        assert state.start_at_login is True
+        assert state.minimize_to_tray is True
         assert state.server_mode == "spawn"
 
     def test_corrupt_file_returns_defaults(self, monkeypatch, tmp_path):
@@ -54,7 +56,7 @@ class TestLoadDesktopState:
         state = load_desktop_state()
 
         assert state.tray_enabled is True
-        assert state.start_at_login is False
+        assert state.start_at_login is True
         assert state.server_mode == "spawn"
 
     def test_non_dict_json_returns_defaults(self, monkeypatch, tmp_path):
@@ -79,7 +81,7 @@ class TestLoadDesktopState:
         state = load_desktop_state()
 
         assert state.tray_enabled is False
-        assert state.start_at_login is False
+        assert state.start_at_login is True
 
     def test_non_boolean_value_falls_back_to_default(self, monkeypatch, tmp_path):
         _set_home(monkeypatch, tmp_path)
@@ -93,7 +95,7 @@ class TestLoadDesktopState:
         state = load_desktop_state()
 
         assert state.tray_enabled is True
-        assert state.start_at_login is False
+        assert state.start_at_login is True
 
     def test_server_mode_round_trips(self, monkeypatch, tmp_path):
         _set_home(monkeypatch, tmp_path)
@@ -616,8 +618,8 @@ class TestAdminDesktopEndpoints:
         assert response.status_code == 200
         body = response.json()
         assert body["tray_enabled"] is True
-        assert body["start_at_login"] is False
-        assert body["minimize_to_tray"] is False
+        assert body["start_at_login"] is True
+        assert body["minimize_to_tray"] is True
         assert body["server_mode"] == "spawn"
         assert "server_auto_start" not in body
 
@@ -808,7 +810,10 @@ def test_apply_tray_registration_persists_only_the_flag(monkeypatch, tmp_path):
 
     state = load_desktop_state()
     assert state.tray_enabled is False
-    assert state.start_at_login is False
+    # Untouched by apply_tray_registration, so it is still the shipped
+    # default -- True since 6.68.0. That is the point of the test: the call
+    # persists one flag and leaves every other field where it found it.
+    assert state.start_at_login is True
     assert state.server_mode == "spawn"
 
 
@@ -831,8 +836,9 @@ def test_set_start_at_login_persists_flag_and_reconciles_os(
 class TestClosingTheAppDoesNotSuppressTheNextWindow:
     """A close that ends the app must not persist "no window".
 
-    minimize_to_tray is off by default, so closing the window quits. If that
-    path recorded window_open=False, the ordinary act of closing the app would
+    Each test below sets minimize_to_tray explicitly rather than leaning on
+    the shipped default, which became True in 6.68.0. If a close that quits
+    recorded window_open=False, the ordinary act of closing the app would
     stop it ever opening a window again on the next launch.
     """
 

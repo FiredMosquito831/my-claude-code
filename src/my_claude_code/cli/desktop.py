@@ -88,10 +88,12 @@ WINDOW_CLOSE_POLL_SECONDS = 1.0
 #: lives in ``desktop.json`` *inside whichever config directory is in force*.
 #: Those two facts do not compose: running ``mcc-desktop`` against a scratch
 #: ``MCC_CONFIG_DIR`` loads a fresh ``desktop.json`` whose ``start_at_login``
-#: is the default ``False``, and the reconciliation below then deletes the
-#: registration belonging to the user's *real* install. That is not
-#: theoretical; it happened during the S5 installer work, to a real HKCU
-#: ``Run`` value.
+#: is whatever this release ships as the default, and the reconciliation below
+#: then rewrites the registration belonging to the user's *real* install. Both
+#: directions have bitten: with the pre-6.68.0 default of ``False`` it DELETED
+#: a real HKCU ``Run`` value during the S5 installer work; since 6.68.0 the
+#: default is ``True``, so the same run would instead point that value at the
+#: scratch install.
 #:
 #: So: any test, smoke or installer run that starts a real ``mcc-desktop``
 #: against a config directory that is not the user's own must set this. It is

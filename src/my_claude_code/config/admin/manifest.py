@@ -125,11 +125,14 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
         "deadlines",
         "Deadlines",
         "How long one model may hold a request before the chain moves on. "
-        "Every one of these ships at 0, meaning no limit: out of the box MCC "
-        "never ends a silent or stalled upstream itself, and the fallback "
-        "chain moves only on an error the provider returns. Set the ones you "
-        "want and the readout below this grid computes what each model on "
-        "your own routes actually gets.",
+        "Every deadline here ships at 0, meaning no limit: out of the box "
+        "MCC never ends a silent or stalled upstream itself, and the "
+        "fallback chain moves only on an error the provider returns. The "
+        "silent-attempt floor is the exception, and is not a deadline: it "
+        "ends nothing, it only bounds how small a slice of the total budget "
+        "one model may be cut to, and with the budget at 0 it does nothing "
+        "either. Set the ones you want and the readout below this grid "
+        "computes what each model on your own routes actually gets.",
     ),
     ConfigSectionSpec(
         "benching",
@@ -870,7 +873,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "web_tools",
         "boolean",
         settings_attr="web_fetch_allow_private_networks",
-        default="false",
+        default="true",
     ),
     ConfigFieldSpec(
         "LOG_LEVEL",
@@ -1143,7 +1146,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "deadlines",
         "number",
         settings_attr="fallback_attempt_share_floor",
-        default="0",
+        default="3600",
         description=(
             "Smallest slice of the total budget one attempt may be cut to. "
             "The budget is divided between the models still to try -- this is "
@@ -1523,7 +1526,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "benching",
         "number",
         settings_attr="fallback_eject_seconds",
-        default="30",
+        default="10",
         description="Seconds a benched model stays out of routing.",
     ),
     ConfigFieldSpec(
@@ -1560,15 +1563,15 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "provider_retries",
         "number",
         settings_attr="provider_retry_attempts",
-        default="3",
+        default="2",
         restart_required=True,
         description=(
             "How many times one model is retried on the same key after an "
             "upstream 5xx or a dropped connection, before the next model is "
             "tried. A 429 uses none of these: it routes around the model "
             'instead, unless "Route around a rate-limited model" is off. '
-            "Each retry waits longer than the last, so 3 attempts spend "
-            "about 6s before a healthy fallback is used."
+            "Each retry waits longer than the last, so the two shipped "
+            "attempts spend about 2s before a healthy fallback is used."
         ),
     ),
     ConfigFieldSpec(
@@ -1619,7 +1622,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "provider_retries",
         "number",
         settings_attr="provider_retry_backoff_max_seconds",
-        default="10",
+        default="5",
         restart_required=True,
         advanced=True,
         description=(
@@ -1637,7 +1640,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "provider_retries",
         "number",
         settings_attr="provider_retry_backoff_jitter_seconds",
-        default="1",
+        default="0.5",
         restart_required=True,
         advanced=True,
         description=(
@@ -1651,14 +1654,16 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "provider_retries",
         "number",
         settings_attr="provider_rate_limit",
-        default="0",
+        default="300",
         description=(
             "Requests one provider may start inside the window below. This is a "
-            "client-side pace, not the provider's own limit. 0, the default, "
-            "paces nothing: a provider that is really over quota answers 429 "
-            "with a Retry-After, which is obeyed either way. Set a positive "
-            "number only to hold a metered key back on purpose -- it is counted "
-            "per provider, and every routing attempt spends one."
+            "client-side pace, not the provider's own limit. The shipped 300 "
+            "per 2s is 150 a second per provider -- far above any interactive "
+            "volume, so it throttles nothing you can type while still capping a "
+            "runaway loop. 0 paces nothing at all. A provider that is really "
+            "over quota answers 429 with a Retry-After, which is obeyed either "
+            "way. Lower it to hold a metered key back on purpose -- it is "
+            "counted per provider, and every routing attempt spends one."
         ),
     ),
     ConfigFieldSpec(
@@ -1667,7 +1672,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "provider_retries",
         "number",
         settings_attr="provider_rate_window",
-        default="3",
+        default="2",
         description="Length of the window the request count above is measured over.",
     ),
     ConfigFieldSpec(
@@ -1676,7 +1681,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "provider_retries",
         "number",
         settings_attr="provider_max_concurrency",
-        default="5",
+        default="300",
         description=(
             "Streams one provider may have open at once. A further request waits "
             "for a slot rather than being refused."
@@ -1814,7 +1819,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "request_log",
         "number",
         settings_attr="request_log_max_rows",
-        default="50000",
+        default="700000",
         restart_required=True,
         description=(
             "The newest N requests are kept and older ones are deleted as new "
@@ -1911,7 +1916,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "request_log",
         "number",
         settings_attr="request_log_text_max_chars",
-        default="50000",
+        default="10000000",
         restart_required=True,
         description=(
             "Text longer than this is truncated before it is stored, which "
@@ -1966,7 +1971,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "desktop",
         "number",
         settings_attr="desktop_server_start_timeout",
-        default="15",
+        default="20",
         description=(
             "How long mcc-desktop waits for a spawned mcc-server to become "
             "healthy before reporting a start failure. Applies the next time "

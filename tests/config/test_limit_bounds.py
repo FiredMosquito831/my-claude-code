@@ -249,39 +249,63 @@ def test_blank_cooldown_falls_back_to_the_shipped_default() -> None:
     assert resolved.rate_limit_cooldown_seconds == 60.0
 
 
-def test_the_longest_retry_wait_ships_at_ten_seconds() -> None:
+def test_the_longest_retry_wait_ships_at_five_seconds() -> None:
     """Pinned by name because it is a latency budget, not a tuning knob.
 
     Every wait on the doubling ladder is spent against the same model before
     the fallback chain is consulted at all, so the ceiling bounds how long a
     request sits on one credential. At 60 the ladder ran 2/4/8/16 per key --
     ~32 s each, ~100 s across a three-key pool -- while the first-token
-    deadline kept ticking. At 10 it runs 2/4/8/10.
+    deadline kept ticking. At 10 it ran 2/4/8/10; 6.68.0 took it to 5, where
+    the two shipped attempts run 2/4 and a chain with a healthy member answers
+    sooner than the third try would have.
     """
-    assert Settings.model_fields["provider_retry_backoff_max_seconds"].default == 10.0
+    assert Settings.model_fields["provider_retry_backoff_max_seconds"].default == 5.0
     assert (
         _with(
             "provider_retry_backoff_max_seconds", ""
         ).provider_retry_backoff_max_seconds
-        == 10.0
+        == 5.0
     )
 
 
 # --- the shipped deadlines ------------------------------------------------
 #
-# All five ship at 0 -- no limit -- since 6.16.0. Pinned by name because they
+# All four ship at 0 -- no limit -- since 6.16.0. Pinned by name because they
 # are the numbers an operator reads out of the docs, and because zero is the
 # whole point: with these values MCC never ends a silent or stalled upstream
 # on its own, and the fallback chain moves only on an error the provider
 # actually returns. Changing one of these is a user-visible product decision,
 # not a tuning tweak, so it should have to change a test that says so.
+#
+# ``fallback_attempt_share_floor`` was the fifth member and left in 6.68.0. It
+# is not a deadline: it never ends anything, it only says how small a share of
+# ``fallback_total_timeout`` one attempt may be cut to. While the total budget
+# is 0 there is no budget to divide and the floor cannot fire at all, which is
+# why it can carry a real number without weakening the invariant above -- and
+# 3600 is the number it carries, so that an operator who later sets a budget
+# gets an hour-wide floor rather than an equal split by surprise. Its own
+# shipped value is pinned by test_the_attempt_share_floor_ships_at_an_hour.
 SHIPPED_DEADLINE_DEFAULTS = (
     "fallback_first_token_timeout",
     "fallback_total_timeout",
-    "fallback_attempt_share_floor",
     "fallback_stall_timeout",
     "fallback_reasoning_answer_timeout",
 )
+
+
+def test_the_attempt_share_floor_ships_at_an_hour() -> None:
+    """The floor left SHIPPED_DEADLINE_DEFAULTS in 6.68.0; it is pinned here.
+
+    Inert out of the box -- ``fallback_total_timeout`` ships at 0, so there is
+    no budget to divide and no floor to apply -- and a real floor the moment
+    an operator sets a budget. 0 restores the pure equal share.
+    """
+    assert Settings.model_fields["fallback_attempt_share_floor"].default == 3600.0
+    assert LIMIT_RANGES["fallback_attempt_share_floor"].contains(3600.0)
+    assert _with("fallback_attempt_share_floor", "").fallback_attempt_share_floor == (
+        3600.0
+    )
 
 
 @pytest.mark.parametrize("attr", SHIPPED_DEADLINE_DEFAULTS)

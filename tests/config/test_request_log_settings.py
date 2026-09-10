@@ -7,7 +7,7 @@ def test_request_log_defaults() -> None:
     settings = Settings()
     assert settings.request_log_enabled is True
     assert settings.request_log_capture_bodies is True
-    assert settings.request_log_max_rows == 50_000
+    assert settings.request_log_max_rows == 700_000
 
 
 def test_request_log_env_overrides(monkeypatch) -> None:

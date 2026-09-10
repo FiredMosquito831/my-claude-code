@@ -34,8 +34,12 @@ LINUX_AUTOSTART_ID = "mcc-server"
 
 _BOOLEAN_DEFAULTS: dict[str, bool] = {
     "tray_enabled": True,
-    "start_at_login": False,
-    "minimize_to_tray": False,
+    # A background proxy that only runs while somebody remembers to start it is
+    # not a background proxy. Since 6.68.0 a fresh install registers itself at
+    # login and hides to the tray, which is what every install this project has
+    # ever been asked about was configured to do by hand.
+    "start_at_login": True,
+    "minimize_to_tray": True,
     # Default ON, unlike every other new preference here, and deliberately so.
     # An app that lives in the tray and whose window close ENDS it is not two
     # defensible designs, it is one design with a bug: the close button is the
@@ -56,12 +60,12 @@ class DesktopState:
     """Immutable snapshot of desktop deployment preferences."""
 
     tray_enabled: bool = True
-    start_at_login: bool = False
+    start_at_login: bool = True
     #: The old spelling of ``close_to_tray``, kept so a state file written by a
     #: build before 6.50.0 still says what its owner meant, and so a downgrade
     #: reads something sane. It is no longer edited anywhere: every writer sets
     #: ``close_to_tray`` and this follows it (see ``load_desktop_state``).
-    minimize_to_tray: bool = False
+    minimize_to_tray: bool = True
     #: Whether closing the window hides it instead of ending the app.
     close_to_tray: bool = True
     server_mode: ServerMode = "spawn"

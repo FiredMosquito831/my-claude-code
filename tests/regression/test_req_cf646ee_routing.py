@@ -410,8 +410,11 @@ def test_the_shipped_defaults_no_longer_buy_that_ladder() -> None:
     """What an operator who changes nothing now gets.
 
     The install that produced the incident had already lowered the ladder to
-    two tries and a five second ceiling; the shipped defaults would have been
-    worse. Both numbers move, and the 429 stops walking the ladder at all.
+    two tries and a five second ceiling; the shipped defaults were worse.
+    6.68.0 adopted that install's numbers as the shipped ones, so an
+    operator who changes nothing now gets the ladder the incident report
+    recommended -- 2 tries, 5 s ceiling -- and the 429 does not walk it at
+    all.
     """
     from my_claude_code.config.constants import (
         PROVIDER_RETRY_ATTEMPTS_DEFAULT,
@@ -419,8 +422,8 @@ def test_the_shipped_defaults_no_longer_buy_that_ladder() -> None:
         RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
     )
 
-    assert PROVIDER_RETRY_ATTEMPTS_DEFAULT == 3
-    assert PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT == 10.0
+    assert PROVIDER_RETRY_ATTEMPTS_DEFAULT == 2
+    assert PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT == 5.0
     assert RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT is True
     # And the limiter's own fallback is untouched: the factory always passes
     # ``max_retries`` explicitly, so this is not the number that moved.

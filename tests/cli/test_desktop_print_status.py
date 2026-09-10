@@ -335,8 +335,10 @@ def test_server_start_retries_defaults_to_two_further_attempts(
 ) -> None:
     """Three attempts of the start timeout, which is the user's decision.
 
-    15 s x 3 = 45 s of probing before anything that looks like a failure is
-    shown, against a measured 22-25 s startup on a real configuration.
+    20 s x 3 = 60 s of probing before anything that looks like a failure is
+    shown, against a measured 22-25 s startup on a real configuration --
+    which a single 15 s budget could not fit at all, and which 20 s now
+    clears on the first attempt rather than the second.
     """
 
     _settings(monkeypatch)
@@ -345,7 +347,7 @@ def test_server_start_retries_defaults_to_two_further_attempts(
     payload = desktop_status()
     assert payload["server_start_retries"] == 2
     assert (
-        payload["start_timeout_seconds"] * (payload["server_start_retries"] + 1) == 45.0
+        payload["start_timeout_seconds"] * (payload["server_start_retries"] + 1) == 60.0
     )
 
 

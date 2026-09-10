@@ -52,7 +52,7 @@ class TestSettings:
         assert settings.nim.top_p is None
         assert isinstance(settings.enable_title_generation_skip, bool)
         assert settings.reasoning_policy is ReasoningPreference.CLIENT
-        assert settings.http_read_timeout == 120.0
+        assert settings.http_read_timeout == 300.0
         assert settings.http_connect_timeout == HTTP_CONNECT_TIMEOUT_DEFAULT
         assert settings.enable_web_server_tools is True
         assert settings.log_raw_api_payloads is False
@@ -289,7 +289,7 @@ class TestSettings:
         monkeypatch.setitem(Settings.model_config, "env_file", ())
         settings = Settings()
         assert settings.http_connect_timeout == HTTP_CONNECT_TIMEOUT_DEFAULT
-        assert HTTP_CONNECT_TIMEOUT_DEFAULT == 10.0
+        assert HTTP_CONNECT_TIMEOUT_DEFAULT == 60.0
 
     def test_reasoning_policy_from_env(self, monkeypatch):
         """REASONING_POLICY is loaded as a typed preference."""

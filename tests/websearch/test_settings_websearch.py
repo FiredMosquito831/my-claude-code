@@ -24,7 +24,7 @@ class TestWebSearchSettings:
         assert settings.exa_api_key is None
         assert settings.searxng_base_url is None
         assert settings.websearch_log_enabled is True
-        assert settings.websearch_log_max_rows == 50000
+        assert settings.websearch_log_max_rows == 500000
         assert settings.websearch_log_capture_content is True
         assert settings.websearch_log_content_max_chars == 2_000_000
 
