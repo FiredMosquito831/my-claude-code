@@ -32,7 +32,7 @@ from my_claude_code.application.model_metadata import (
     ResponseSurfaceSource,
 )
 from my_claude_code.config import model_overrides as overrides_module
-from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.openai_chat import (
@@ -331,7 +331,7 @@ def _request(model: str) -> MessagesRequest:
     return MessagesRequest(
         model=model,
         max_tokens=16,
-        messages=[{"role": "user", "content": "hi"}],
+        messages=[Message(role="user", content="hi")],
     )
 
 

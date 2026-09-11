@@ -44,7 +44,7 @@ from typing import Any
 import pytest
 
 from my_claude_code.application.model_metadata import ResponseSurface
-from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.openai_chat import (
@@ -79,7 +79,7 @@ def _request(model: str) -> MessagesRequest:
     return MessagesRequest(
         model=model,
         max_tokens=16,
-        messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+        messages=[Message(role="user", content="Reply with exactly: ok")],
     )
 
 
