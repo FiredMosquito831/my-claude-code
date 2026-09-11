@@ -364,7 +364,9 @@ CREATE TABLE IF NOT EXISTS server_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at REAL NOT NULL,
     last_seen_at REAL NOT NULL,
-    pid INTEGER
+    pid INTEGER,
+    host TEXT,
+    port INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_server_sessions_started
     ON server_sessions(started_at);
@@ -860,6 +862,124 @@ _SESSION_HEARTBEAT_SECONDS = 30.0
 # Bounds ``server_sessions`` growth; one row per server start, so this is years
 # of restarts on any normal machine.
 _SESSION_HISTORY_LIMIT = 1_000
+
+# Columns added to ``server_sessions`` in 6.72.2. Until then a session row said
+# a server had been running and said nothing about *where*, so "this pid's port
+# now belongs to somebody else" -- the only safe evidence that a server has
+# been superseded -- was not a question the log could answer. Same guarded
+# ALTER rule as every other post-release column.
+_SESSION_ADDED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("host", "ALTER TABLE server_sessions ADD COLUMN host TEXT"),
+    ("port", "ALTER TABLE server_sessions ADD COLUMN port INTEGER"),
+)
+
+# The address the server in THIS process is bound to, published by the
+# supervisor once it knows. A module-level fact rather than a constructor
+# argument because the request log is built (and its session row opened) before
+# the listener exists, and because ``set_request_log_path`` beside it already
+# establishes that shape for process-wide facts the store needs.
+_bind_lock = threading.Lock()
+_bind_address: tuple[str, int] | None = None
+
+
+def set_server_bind_address(host: str | None, port: int | None) -> None:
+    """Record where this process's server is listening, for its session row.
+
+    Called by the supervisor immediately after a successful bind, and with
+    ``None`` when the listener closes: a session that is no longer serving
+    must stop claiming a port, or the next server to take that port would read
+    the stale claim as a rival.
+    """
+
+    global _bind_address
+    with _bind_lock:
+        _bind_address = None if host is None or port is None else (host, int(port))
+
+
+def server_bind_address() -> tuple[str, int] | None:
+    """Where this process's server is listening, or ``None`` if it is not."""
+
+    with _bind_lock:
+        return _bind_address
+
+
+@dataclass(frozen=True, slots=True)
+class ServerSession:
+    """One recorded server run, as the log remembers it."""
+
+    id: int
+    pid: int | None
+    started_at: float
+    last_seen_at: float
+    host: str | None = None
+    port: int | None = None
+
+    def heartbeat_age(self, now: float | None = None) -> float:
+        return max(0.0, (time.time() if now is None else now) - self.last_seen_at)
+
+
+def read_server_sessions(
+    db_path: Path | str, *, limit: int = _SESSION_HISTORY_LIMIT
+) -> list[ServerSession]:
+    """Read recorded sessions from ``db_path`` without opening it for writing.
+
+    ``mode=ro`` deliberately: every caller of this is asking a question about
+    somebody *else's* server, frequently while an install is in flight, and a
+    read-only handle cannot create a journal, cannot upgrade a schema and
+    cannot be the reason another process's write fails.
+    """
+
+    path = Path(db_path)
+    if not path.exists():
+        return []
+    uri = f"file:{path.as_posix()}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True, timeout=5)
+    except sqlite3.Error:
+        return []
+    try:
+        conn.row_factory = sqlite3.Row
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(server_sessions)")
+        }
+        if not columns:
+            return []
+        # Two literal statements rather than one interpolated column list: a
+        # database written before 6.72.2 has no address columns, and a log
+        # this old is exactly the one a migration must not be required to
+        # touch before it can be read.
+        if {"host", "port"} <= columns:
+            query = (
+                "SELECT id, pid, started_at, last_seen_at, host, port"
+                " FROM server_sessions ORDER BY started_at DESC LIMIT ?"
+            )
+        else:
+            query = (
+                "SELECT id, pid, started_at, last_seen_at"
+                " FROM server_sessions ORDER BY started_at DESC LIMIT ?"
+            )
+        rows = conn.execute(query, (int(limit),)).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    sessions: list[ServerSession] = []
+    for row in rows:
+        keys = row.keys()
+        sessions.append(
+            ServerSession(
+                id=int(row["id"]),
+                pid=int(row["pid"]) if row["pid"] is not None else None,
+                started_at=float(row["started_at"]),
+                last_seen_at=float(row["last_seen_at"]),
+                host=row["host"] if "host" in keys else None,
+                port=int(row["port"])
+                if "port" in keys and row["port"] is not None
+                else None,
+            )
+        )
+    return sessions
+
 
 # Columns added after the initial release. ``CREATE TABLE IF NOT EXISTS`` is a
 # no-op on an existing database, so each one needs an explicit ALTER TABLE.
@@ -1790,6 +1910,7 @@ class RequestLogStore:
                 self._ensure_input_sha_column(conn)
                 self._ensure_attempt_columns(conn)
                 self._ensure_image_blob_columns(conn)
+                self._ensure_session_columns(conn)
                 self._ensure_rollup_counter_columns(conn)
                 # After the ALTERs: the index does not reference the new
                 # columns, but the table must exist before it is created.
@@ -2627,15 +2748,50 @@ class RequestLogStore:
         except zstd.ZstdError, ValueError:
             return None
 
+    @staticmethod
+    def _ensure_session_columns(conn: sqlite3.Connection) -> None:
+        """Add the bind-address columns to a session table created before them.
+
+        A row written before 6.72.2 keeps both NULL, which reads as "this
+        session never said where it was listening" -- and that is the honest
+        answer, so nothing infers a port for it and nothing acts on it.
+        """
+        for column, ddl in _SESSION_ADDED_COLUMNS:
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(server_sessions)")
+            }
+            if column in columns:
+                continue
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                # Another process may have won the migration race; only a
+                # genuinely missing column is an error.
+                columns = {
+                    str(row[1])
+                    for row in conn.execute("PRAGMA table_info(server_sessions)")
+                }
+                if column not in columns:
+                    raise
+
     def _open_session(self, conn: sqlite3.Connection) -> int | None:
         """Record that a server is running, so quiet periods stay explainable."""
         now = time.time()
+        address = server_bind_address()
         try:
             with conn:
                 cursor = conn.execute(
-                    "INSERT INTO server_sessions (started_at, last_seen_at, pid)"
-                    " VALUES (?, ?, ?)",
-                    (now, now, os.getpid()),
+                    "INSERT INTO server_sessions"
+                    " (started_at, last_seen_at, pid, host, port)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (
+                        now,
+                        now,
+                        os.getpid(),
+                        address[0] if address else None,
+                        address[1] if address else None,
+                    ),
                 )
                 conn.execute(
                     "DELETE FROM server_sessions WHERE id NOT IN ("
@@ -2654,10 +2810,21 @@ class RequestLogStore:
     ) -> None:
         if session_id is None:
             return
+        # The address rides on every heartbeat rather than only on the insert:
+        # the session row is opened while the process is still starting, which
+        # on this code path is *before* the listener binds, so a row that only
+        # ever recorded what was known at open would record nothing at all.
+        address = server_bind_address()
         with contextlib.suppress(sqlite3.Error), conn:
             conn.execute(
-                "UPDATE server_sessions SET last_seen_at = ? WHERE id = ?",
-                (now, session_id),
+                "UPDATE server_sessions"
+                " SET last_seen_at = ?, host = ?, port = ? WHERE id = ?",
+                (
+                    now,
+                    address[0] if address else None,
+                    address[1] if address else None,
+                    session_id,
+                ),
             )
 
     # ------------------------------------------------------------------ writes

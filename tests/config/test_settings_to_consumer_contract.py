@@ -480,3 +480,70 @@ def test_the_opencode_client_version_pin_reaches_the_user_agent() -> None:
     finally:
         settings_module.get_settings = original
         settings_module.get_settings.cache_clear()
+
+
+def _run_survey(action: str) -> tuple[list[float], list[object]]:
+    """Run the supervisor's start-time survey under one action, capturing it.
+
+    A function rather than a loop body so each closure binds its own lists;
+    ruff's B023 is right that a closure over a loop variable is a trap.
+    """
+
+    from my_claude_code.cli import commands
+
+    settings = _settings(
+        SERVER_STALE_SERVER_ACTION=action,
+        SERVER_STALE_SESSION_SECONDS=1234.0,
+    )
+    budgets: list[float] = []
+    stopped: list[object] = []
+
+    def fake_observe(**kwargs):
+        budgets.append(kwargs["stale_after_seconds"])
+        return []
+
+    def fake_stop(observations, **_kwargs):
+        stopped.append(observations)
+        return []
+
+    with (
+        patch.object(commands, "observe_servers", fake_observe),
+        patch.object(commands, "stop_stale_servers", fake_stop),
+        patch.object(commands, "report_servers", lambda *a, **k: None),
+        patch.object(commands, "write_survey", lambda *a, **k: None),
+        patch.object(commands, "threading") as threads,
+    ):
+        commands._survey_other_servers(settings)
+        # The survey runs on a daemon thread; call the target directly so the
+        # assertion is about the work, not about thread scheduling.
+        threads.Thread.assert_called_once()
+        assert threads.Thread.call_args.kwargs["daemon"] is True
+        threads.Thread.call_args.kwargs["target"]()
+    return budgets, stopped
+
+
+def test_the_stale_session_budget_reaches_the_start_time_survey() -> None:
+    """The dashboard number has to be the number the classifier is handed."""
+
+    budgets, _ = _run_survey("report")
+    assert budgets == [1234.0]
+
+
+def test_report_is_the_default_and_stops_nothing() -> None:
+    """The binding rule of 2026-09-11: MCC does not stop somebody's server.
+
+    The consumer is a background thread in the supervisor, so nothing about a
+    running server proves the field arrives -- and the cost of it not arriving
+    is a server stopped when the operator never asked for one to be.
+    """
+
+    from my_claude_code.config.constants import SERVER_STALE_SERVER_ACTION_DEFAULT
+
+    assert SERVER_STALE_SERVER_ACTION_DEFAULT == "report"
+    _, stopped = _run_survey("report")
+    assert stopped == []
+
+
+def test_stop_is_what_turns_the_sweep_on() -> None:
+    _, stopped = _run_survey("stop")
+    assert len(stopped) == 1

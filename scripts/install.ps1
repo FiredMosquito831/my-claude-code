@@ -1085,6 +1085,13 @@ function Invoke-RenameThenReinstall {
     foreach ($move in $refusedShims) {
         Write-Host "Could not move $(Split-Path -Leaf $move.Original) aside: $($move.Error)"
     }
+    if ($refusedShims.Count -gt 0) {
+        # Say WHO. A refusal always has a holder, and naming it is the
+        # difference between "the install retried for no reason" and "a server
+        # from yesterday has never been stopped". Reporting only -- see
+        # Write-McmHolderReport, which stops nothing.
+        Write-McmHolderReport -Roots @($binDir, $ToolDir) -ToolRoot $ToolDir
+    }
     $capturePath = New-CapturePath
     $diskFull = $false
     try {
@@ -1981,6 +1988,99 @@ function Get-LauncherCommands {
         "mcc-apps", "mcc-desktop", "my-claude-code",
         "fcc-migrate"
     )
+}
+
+function Get-McmHolders {
+    # Name the My Claude Code processes running out of one of $Roots -- the
+    # launcher shims and the tool environment interpreter this install is
+    # about to replace.
+    #
+    # A locked launcher or a locked tool environment on Windows always has a
+    # holder, and until 6.72.2 the install told the user only that something
+    # was "in use". On the machine this was written for, the holders were two
+    # mcc-server launches from the previous day that were still serving work --
+    # and the install printed nothing about them, so the retries looked like
+    # bad luck rather than a consequence with a name.
+    #
+    # This NEVER stops anything. The server it names may be one the user is
+    # actively using; the install's answer to a locked file stays what 6.33.1
+    # made it, which is to stage the new shims beside and place what it can.
+    #
+    # Matched on the resolved ExecutablePath being under one of the roots we
+    # are about to write to -- never on an image name, because every MCC
+    # command on Windows is called python.exe and two of them belong to the
+    # user's own coding agents.
+    param([string[]]$Roots, [string]$ToolRoot = "")
+
+    $normalised = @()
+    foreach ($root in $Roots) {
+        if ($root) { $normalised += ($root.TrimEnd('\', '/') + '\') }
+    }
+    if ($normalised.Count -eq 0) { return }
+    # NOT $toolRoot: PowerShell variable names are case-insensitive, so a local
+    # $toolRoot IS the $ToolRoot parameter and assigning "" to it here silently
+    # emptied the argument the caller passed. An empty prefix then made
+    # StartsWith("") true for every path, and the report named the user's own
+    # claude.exe as a holder of files this install does not touch.
+    $toolRootPrefix = ""
+    if ($ToolRoot) { $toolRootPrefix = $ToolRoot.TrimEnd('\', '/') + '\' }
+
+    $processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    foreach ($process in $processes) {
+        $exe = $process.ExecutablePath
+        if (-not $exe) { continue }
+        $underRoot = $false
+        foreach ($root in $normalised) {
+            if ($exe.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+                $underRoot = $true
+                break
+            }
+        }
+        if (-not $underRoot) { continue }
+        # Under a root is not enough. The bin directory holds other programs'
+        # shims too -- Claude Code's own claude.exe sits right beside
+        # mcc-claude.exe -- and this install replaces none of them, so naming
+        # them would be a false accusation in the one message a user reads
+        # while an install is retrying. Keep only executables that are ours:
+        # the uv tool environment's interpreter, or a launcher from the
+        # mcc-/fcc- command family.
+        $leaf = [IO.Path]::GetFileNameWithoutExtension($exe).ToLowerInvariant()
+        $isOurs = $false
+        foreach ($prefix in @('mcc-', 'fcc-', 'my-claude-code', 'free-claude-code')) {
+            if ($leaf.StartsWith($prefix)) { $isOurs = $true; break }
+        }
+        if (-not $isOurs -and $toolRootPrefix -and $exe.StartsWith($toolRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            $isOurs = $true
+        }
+        if (-not $isOurs) { continue }
+        $started = ''
+        if ($process.CreationDate) {
+            $started = $process.CreationDate.ToString('yyyy-MM-dd HH:mm:ss')
+        }
+        [pscustomobject]@{
+            ProcessId = $process.ProcessId
+            Name      = $process.Name
+            Path      = $exe
+            Started   = $started
+        }
+    }
+}
+
+function Write-McmHolderReport {
+    # One block naming who is holding the files this install wants to replace,
+    # and one sentence saying that nothing will be stopped.
+    param([string[]]$Roots, [string]$ToolRoot = "")
+
+    $holders = @(Get-McmHolders -Roots $Roots -ToolRoot $ToolRoot)
+    if ($holders.Count -eq 0) {
+        Write-Host "No running My Claude Code process is using those files; the lock is something else (an antivirus scan, or Explorer reading an icon)."
+        return
+    }
+    Write-Host "These My Claude Code processes are running from the files being replaced:"
+    foreach ($holder in $holders) {
+        Write-Host "  pid $($holder.ProcessId)  $($holder.Name)  started $($holder.Started)  $($holder.Path)"
+    }
+    Write-Host "Nothing above will be stopped: one of them may be a server you are using right now. The new version is being placed beside them instead, and they keep running the version they started with."
 }
 
 function Get-RunningLaunchers {

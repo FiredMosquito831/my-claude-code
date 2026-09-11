@@ -110,6 +110,10 @@ EXPECTED_TYPES: dict[str, type | tuple[type, ...]] = {
     # applied to. See
     # ``test_the_update_key_is_informational_and_is_never_required``.
     "update": (dict, type(None)),
+    # Tolerated this release, never required (C9). A list, possibly empty; an
+    # empty list means "no server has surveyed recently", NOT "nothing else is
+    # running", and a reader must not read it as an all-clear.
+    "other_servers": (list,),
 }
 
 

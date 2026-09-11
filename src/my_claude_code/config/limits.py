@@ -188,6 +188,17 @@ LIMIT_RANGES: dict[str, LimitRange] = {
         600.0,
         "1s minimum drain before connections are force-closed; uvicorn treats 0 as immediate shutdown, not infinite",
     ),
+    # How long another server's heartbeat must have been silent before this
+    # install will call it stale. The floor is 60s -- the request log touches a
+    # session row every 30 seconds, so anything below two missed beats would
+    # call a healthy server stale on a slow disk. The ceiling is a day, past
+    # which the answer is always "leave it alone", which is what ``report``
+    # already does.
+    "server_stale_session_seconds": LimitRange(
+        60.0,
+        86400.0,
+        "60s minimum: the session heartbeat is every 30s, so less than two missed beats proves nothing",
+    ),
     # A launcher's one cold-start fetch of a harness catalogue document. The
     # floor is 1s because ``urlopen(timeout=0)`` fails before the connection is
     # made rather than waiting indefinitely, so 0 here would mean "never build a

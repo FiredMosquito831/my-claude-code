@@ -97,7 +97,11 @@ from my_claude_code.config.constants import (
 )
 from my_claude_code.config.desktop import load_desktop_state
 from my_claude_code.config.desktop_shell import desktop_shell_report
-from my_claude_code.config.paths import config_dir_resolution, server_log_path
+from my_claude_code.config.paths import (
+    config_dir_resolution,
+    other_servers_path,
+    server_log_path,
+)
 from my_claude_code.config.server_urls import (
     local_admin_url,
     local_browser_host,
@@ -105,6 +109,7 @@ from my_claude_code.config.server_urls import (
 )
 from my_claude_code.config.settings import get_settings
 from my_claude_code.config.update_progress import update_report
+from my_claude_code.core.server_inventory import read_survey
 from my_claude_code.core.version import package_version
 
 #: Bumped only when a key below is removed or retyped. See the module docstring.
@@ -159,6 +164,7 @@ STATUS_KEYS: tuple[str, ...] = (
     "shell_installed_tag",
     "shell_ready",
     "update",
+    "other_servers",
 )
 
 
@@ -324,6 +330,23 @@ def desktop_status(*, presence_v2: bool = False) -> dict[str, Any]:
         # is useful to a human running ``--print-status`` by hand, and to any
         # reader that has no access to the configuration directory.
         "update": update_report(),
+        # Other My Claude Code servers this machine was running when a server
+        # last surveyed it, so a window can say "another server from yesterday
+        # is holding the launcher open" instead of showing an install that
+        # mysteriously retried.
+        #
+        # TOLERATED THIS RELEASE, NEVER REQUIRED (contract C9). Empty whenever
+        # no server has surveyed recently, which is the honest answer and not
+        # the same statement as "nothing else is running" -- so a reader must
+        # treat an empty list as "no information", never as an all-clear.
+        # Read from the file a server writes rather than scanned here on
+        # purpose: enumerating every process costs about two seconds on
+        # Windows and the desktop shell asks for this document every ten.
+        #
+        # Every entry carries ``status``. Only ``stale`` has been proven
+        # finished; ``live`` and ``serving`` are running servers and a reader
+        # must never offer to stop one of those.
+        "other_servers": read_survey(other_servers_path()),
     }
 
 
