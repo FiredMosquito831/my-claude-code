@@ -18,6 +18,9 @@ rem
 rem   install.cmd                     server only
 rem   install.cmd --desktop           server plus the Start Menu shortcut
 rem   install.cmd --version 6.63.0    pin a release
+rem   install.cmd --restart           install, then restart the server on the
+rem                                   port this configuration directory is for
+rem   install.cmd --no-start          install and start nothing
 rem   install.cmd --dry-run           print what it would do, change nothing
 rem
 rem Notes for anyone editing this file:
@@ -42,6 +45,8 @@ set "MCC_PSARGS="
 if "%~1"=="" goto parsed
 if /i "%~1"=="--desktop" goto arg_desktop
 if /i "%~1"=="--rtk" goto arg_rtk
+if /i "%~1"=="--restart" goto arg_restart
+if /i "%~1"=="--no-start" goto arg_nostart
 if /i "%~1"=="--dry-run" goto arg_dryrun
 if /i "%~1"=="--help" goto arg_help
 if /i "%~1"=="-h" goto arg_help
@@ -66,6 +71,20 @@ goto parse
 
 :arg_dryrun
 set "MCC_PSARGS=%MCC_PSARGS% -DryRun"
+shift
+goto parse
+
+rem D5 shape kept: this file decides nothing about the install. --restart and
+rem --no-start are passed straight through to install.ps1, which owns what a
+rem restart means -- one server, the one on the port of the configuration
+rem directory this install is for.
+:arg_restart
+set "MCC_PSARGS=%MCC_PSARGS% -Restart"
+shift
+goto parse
+
+:arg_nostart
+set "MCC_PSARGS=%MCC_PSARGS% -NoStart"
 shift
 goto parse
 

@@ -70,3 +70,10 @@ NO_PROXY
 YOUR_API_KEY
 YOUR_USERNAME
 PROVIDER_API_KEY
+
+# --- Read by the install SCRIPTS, not by the server. -----------------------
+# The environment form of install.ps1's -NoStart / install.sh's --no-start,
+# for a caller that passes arguments through a layer with its own opinions
+# about quoting (install.cmd, the npm wrapper). It never reaches Settings:
+# nothing in the server reads it, and the scripts exit before one exists.
+MCC_INSTALL_NO_START

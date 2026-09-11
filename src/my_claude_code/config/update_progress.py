@@ -59,7 +59,16 @@ UPDATE_PROGRESS_FILENAME = "progress.json"
 #: then exchanges the two directories (``swapping``). ``rolling-back`` is the
 #: stage between a cutover whose ``/health`` never answered and the
 #: ``recovered`` that follows it.
+#:
+#: 6.73.0 added ``episode``. It is not a stage of the work: it is the marker
+#: record every writer appends FIRST, naming itself and its pid, because from
+#: 6.73.0 nobody truncates this file. Until then every writer opened it with a
+#: truncate, so at 15:04 on 2026-09-11 a hand-run ``install.ps1`` erased the
+#: entire record of the update helper that had finished two minutes earlier --
+#: while a window was supposed to be reading it. The marker is what lets a
+#: reader that arrives a minute late tell where the current episode begins.
 UPDATE_PROGRESS_STAGES: tuple[str, ...] = (
+    "episode",
     "waiting-for-parent",
     "staging",
     "stopping",
@@ -80,6 +89,11 @@ UPDATE_PROGRESS_STAGES: tuple[str, ...] = (
 #: without guessing. Terminal stages share the last rank, because an episode
 #: ends exactly once and ``failed`` may be followed by ``recovered``.
 UPDATE_PROGRESS_STAGE_ORDER: dict[str, int] = {
+    # Rank 0 on purpose: the marker is written before any work, and a writer's
+    # monotonic guard treats rank 0 as "keep the rank you had", so a marker
+    # never blocks the stage that follows it and never moves an episode
+    # backwards.
+    "episode": 0,
     "waiting-for-parent": 1,
     "staging": 2,
     "stopping": 3,
@@ -192,6 +206,23 @@ def install_log_path(stamp: str) -> Path:
 #: was free to start an install of its own into the tool directory the
 #: one-liner was writing. A contract test pins these strings against all three
 #: scripts.
+#: The marker record that opens an episode (6.73.0). Every writer appends one
+#: before it does anything else, and no writer truncates the receipt any more.
+EPISODE_MARKER_STAGE = "episode"
+EPISODE_MARKER_MESSAGE = "An update started."
+
+#: The one lock both update paths take before they write the receipt or the
+#: tool environment. ``<config dir>/updates/update.lock``, holding the owner's
+#: pid, the second it started and which script it is, so a dead owner's lock is
+#: reclaimed rather than waited on until the end of the day.
+#:
+#: Until 6.73.0 there was none. The hand-run installer and the dashboard's
+#: helper wrote the same two files and installed into the same uv tool
+#: directory with no coordination beyond an advisory pid check, which is how
+#: two installs wrote over each other's environment on 2026-09-09 and how the
+#: helper's whole record was erased on 2026-09-11.
+UPDATE_LOCK_FILENAME = "update.lock"
+
 INSTALLING_MESSAGE = "Installing the new version."
 INSTALL_DONE_MESSAGE = "The new version is installed."
 INSTALL_FAILED_MESSAGE = "The install failed."
@@ -208,6 +239,111 @@ def update_progress_path() -> Path:
     """Where the deferred helper appends its stage receipts."""
 
     return config_dir_path() / UPDATE_STAGE_DIRNAME / UPDATE_PROGRESS_FILENAME
+
+
+def update_lock_path() -> Path:
+    """Where both update paths take the one exclusive lock."""
+
+    return config_dir_path() / UPDATE_STAGE_DIRNAME / UPDATE_LOCK_FILENAME
+
+
+def read_update_lock(path: Path | None = None) -> dict[str, Any] | None:
+    """The lock owner's record, or ``None`` when the lock is not held.
+
+    A lock file that cannot be parsed is reported as held by an unknown owner
+    rather than as absent: "I could not read it" must never be the reading that
+    licenses a second installer.
+    """
+
+    target = update_lock_path() if path is None else path
+    try:
+        raw = target.read_text(encoding="utf-8-sig")
+    except OSError:
+        return None
+    try:
+        parsed = json.loads(raw.strip() or "{}")
+    except ValueError:
+        return {"pid": 0, "source": "an earlier installer", "started_display": ""}
+    return parsed if isinstance(parsed, dict) else None
+
+
+def lock_owner_is_alive(record: dict[str, Any] | None) -> bool:
+    """Whether the lock's owner is still running.
+
+    ``None`` from :func:`_pid_is_running` -- the pid could not be checked at all
+    -- counts as alive, for the same reason it does for the helper gate: an
+    unknown pid read as "gone" is what starts a second installer.
+    """
+
+    if not record:
+        return False
+    pid = record.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        # No usable pid. Judge by age, exactly as a receipt from an older
+        # build is judged, so a lock left by a crashed writer is reclaimable.
+        started = record.get("started_at")
+        if isinstance(started, int | float):
+            return (time.time() - float(started)) < STALE_HELPER_SECONDS
+        return False
+    return _pid_is_running(pid) is not False
+
+
+def describe_lock_owner(record: dict[str, Any] | None) -> str:
+    """The sentence a second installer prints when it finds the lock held."""
+
+    if not record:
+        return "an update is already running"
+    pid = record.get("pid")
+    started = record.get("started_display") or ""
+    source = record.get("source") or "an update"
+    if isinstance(pid, int) and pid > 0 and started:
+        return f"an update is already running (pid {pid}, started {started})"
+    if isinstance(pid, int) and pid > 0:
+        return f"an update is already running (pid {pid})"
+    return f"an update is already running ({source})"
+
+
+def read_update_records(path: Path | None = None) -> list[dict[str, Any]]:
+    """Every parseable record in the receipt, oldest first.
+
+    Torn lines are skipped rather than ending the read: the file is appended to
+    by a detached process while this runs.
+    """
+
+    target = update_progress_path() if path is None else path
+    try:
+        raw = target.read_text(encoding="utf-8-sig")
+    except OSError:
+        return []
+    records: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            records.append(parsed)
+    return records
+
+
+def last_episode_records(path: Path | None = None) -> list[dict[str, Any]]:
+    """The records of the MOST RECENT episode only.
+
+    From 6.73.0 the receipt is appended to and never truncated, so it holds
+    every episode this machine has run. A reader that wants "what is happening
+    now" wants the records after the last ``episode`` marker; a receipt written
+    by an older build has no marker at all, and then the whole file is the one
+    episode it recorded, which is exactly what that build meant.
+    """
+
+    records = read_update_records(path)
+    for index in range(len(records) - 1, -1, -1):
+        if str(records[index].get("stage") or "") == EPISODE_MARKER_STAGE:
+            return records[index:]
+    return records
 
 
 def read_update_progress() -> dict[str, Any] | None:

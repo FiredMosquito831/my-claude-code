@@ -71,6 +71,7 @@ from my_claude_code.config.update_progress import (
     STAGING_ENV_DIRNAME,
     UPDATE_HEALTH_GATE_SECONDS,
     UPDATE_HEALTH_POLL_SECONDS,
+    UPDATE_LOCK_FILENAME,
     UPDATE_PROGRESS_FILENAME,
     UPDATE_PROGRESS_STAGE_ORDER,
     UPDATE_PROGRESS_STAGES,
@@ -948,6 +949,10 @@ def _deferred_helper_script(
         f"    {_powershell_literal(stage)} = {rank}"
         for stage, rank in UPDATE_PROGRESS_STAGE_ORDER.items()
     )
+    # The one lock both update paths take. Beside the receipt, in the same
+    # directory, so a config dir is self-describing: what happened, and who is
+    # doing something right now.
+    lock_path_literal = _powershell_literal(str(stage_dir / UPDATE_LOCK_FILENAME))
     health_gate_seconds = UPDATE_HEALTH_GATE_SECONDS
     health_poll_ms = int(UPDATE_HEALTH_POLL_SECONDS * 1000)
     previous_kept = PREVIOUS_ENVS_KEPT
@@ -1022,6 +1027,10 @@ $stageOrder = @{{
 {stage_order_literal}
 }}
 $script:StageRank = 0
+# 6.73.0's two extra receipt fields. `$null` means "this episode has not
+# decided yet"; a window renders nothing for it rather than "false".
+$script:Restarted = $null
+$script:Holder = ''
 function Write-Stage($stage, $message) {{
     try {{
         $rank = $stageOrder[$stage]
@@ -1041,6 +1050,13 @@ function Write-Stage($stage, $message) {{
             helper_done = $script:HelperDone
             version = $targetVersion
             log = $installLog
+            # 6.73.0. Which writer this record came from, and what it did about
+            # the server, so a window showing one appended file can tell an
+            # episode the dashboard started from one the user started by hand,
+            # and can say whether anything is running at the end of it.
+            source = 'helper'
+            restarted = $script:Restarted
+            holder = $script:Holder
         }}
         $line = ($record | ConvertTo-Json -Compress) + [Environment]::NewLine
         [System.IO.File]::AppendAllText($progressPath, $line, $progressEncoding)
@@ -1048,6 +1064,10 @@ function Write-Stage($stage, $message) {{
     catch {{
         # A receipt nobody can write must never be the reason an update fails.
     }}
+    # The episode is over on any terminal stage, and this helper has a dozen
+    # ways of reaching one. Releasing the lock HERE rather than at each of them
+    # is the only shape in which no ending can forget.
+    if (@('done', 'failed', 'recovered') -contains $stage) {{ Exit-UpdateLock }}
 }}
 # Every path this script needs, named once, up here, because 6.72.0's staged
 # install needs them BEFORE the wait for the parent rather than after it.
@@ -1066,10 +1086,74 @@ $stagingDir = if ($stagingRoot) {{ Join-Path $stagingRoot $stamp }} else {{ '' }
 $stagingBin = if ($stagingDir) {{ Join-Path $stagingDir '.bin' }} else {{ '' }}
 $previousDir = if ($previousRoot) {{ Join-Path $previousRoot $stamp }} else {{ '' }}
 $commandNames = @({quoted_names})
-# A fresh episode starts a fresh file: a stale 'done' from the previous update
-# would otherwise be the first thing the window reads and believes.
-try {{ [System.IO.File]::WriteAllText($progressPath, '', $progressEncoding) }} catch {{ }}
+$lockPath = {lock_path_literal}
+# The transcript is this episode's own file, so opening it fresh is correct.
+# The RECEIPT is not: until 6.73.0 every writer truncated it here, and at 15:04
+# on 2026-09-11 a hand-run install.ps1 erased this helper's entire record two
+# minutes after it finished, while a window was supposed to be reading it. The
+# receipt is now append-only, and an episode is opened by a marker record
+# instead (decision Q5).
 try {{ [System.IO.File]::WriteAllText($installLog, '', $progressEncoding) }} catch {{ }}
+# ONE exclusive lock for both update paths. A second updater does not queue and
+# does not install: it says who is installing and watches the same transcript.
+$script:HoldsLock = $false
+function Get-LockOwner {{
+    try {{
+        if (-not (Test-Path -LiteralPath $lockPath)) {{ return $null }}
+        $raw = [System.IO.File]::ReadAllText($lockPath)
+        if (-not $raw.Trim()) {{ return $null }}
+        return ($raw | ConvertFrom-Json)
+    }}
+    catch {{ return $null }}
+}}
+function Test-LockOwnerAlive($owner) {{
+    if ($null -eq $owner) {{ return $false }}
+    $ownerPid = 0
+    try {{ $ownerPid = [int] $owner.pid }} catch {{ $ownerPid = 0 }}
+    if ($ownerPid -le 0) {{ return $false }}
+    if ($ownerPid -eq $PID) {{ return $false }}
+    return [bool] (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue)
+}}
+function Enter-UpdateLock {{
+    try {{
+        $stream = [System.IO.File]::Open($lockPath, 'CreateNew', 'Write', 'None')
+        $record = [ordered]@{{
+            pid = $PID
+            started_at = $helperStarted
+            started_display = (Get-Date).ToString('HH:mm:ss')
+            source = 'the dashboard update'
+        }}
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes(($record | ConvertTo-Json -Compress))
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Dispose()
+        $script:HoldsLock = $true
+        return $true
+    }}
+    catch {{
+        return $false
+    }}
+}}
+function Exit-UpdateLock {{
+    if (-not $script:HoldsLock) {{ return }}
+    $script:HoldsLock = $false
+    try {{ Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue }} catch {{ }}
+}}
+if (-not (Enter-UpdateLock)) {{
+    $owner = Get-LockOwner
+    if (Test-LockOwnerAlive $owner) {{
+        Write-InstallLog ('An update is already running (pid ' + $owner.pid + ', started ' + $owner.started_display + ') -- watching it instead.')
+        exit 0
+    }}
+    # A dead owner's lock is reclaimed rather than waited on until the end of
+    # the day: the pid decides, exactly as the helper-alive gate decides.
+    try {{ Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue }} catch {{ }}
+    if (-not (Enter-UpdateLock)) {{
+        Write-InstallLog 'The update lock could not be taken; another updater holds it.'
+        exit 0
+    }}
+    Write-InstallLog 'Reclaimed an update lock left behind by a process that is gone.'
+}}
+Write-Stage 'episode' 'An update started.'
 Write-InstallLog ('My Claude Code update helper, pid ' + $helperPid + ', target ' + $(if ($targetVersion) {{ $targetVersion }} else {{ 'the latest release' }}) + '.')
 Write-InstallLog ('Restart is owned by ' + $(if ($noRestart) {{ 'the desktop app' }} else {{ 'this helper' }}) + '.')
 Write-Stage 'waiting-for-parent' 'Waiting for the running server to stop.'
@@ -1300,6 +1384,7 @@ if ($stagedOk) {{
             catch {{ Write-InstallLog ('The installed server could not be started: ' + $_.Exception.Message) }}
         }}
         $result['restarted'] = $restarted
+        $script:Restarted = [bool] $restarted
         $result['message'] = $message + $(if ($restarted) {{ ' The installed version was restarted.' }} elseif ($noRestart) {{ ' The desktop app starts it again within ten seconds.' }} else {{ ' The installed version could not be restarted either.' }})
         [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
         $script:HelperDone = $true
@@ -1431,6 +1516,7 @@ if ($stagedOk) {{
                 catch {{ Write-InstallLog ('The updated server could not be started: ' + $_.Exception.Message) }}
             }}
             $result['restarted'] = $restarted
+            $script:Restarted = [bool] $restarted
 
             # ===============================================================
             # HEALTH GATE. Nothing is deleted until the new server answers.
@@ -1485,6 +1571,7 @@ if ($stagedOk) {{
             $result['ok'] = $false
             $result['rolled_back'] = $rolledBack
             $result['restarted'] = $restartedPrevious
+            $script:Restarted = [bool] $restartedPrevious
             $result['message'] = $(if ($rolledBack) {{ 'The new version was installed but never answered, so the previous version was put back' + $(if ($restartedPrevious) {{ ' and restarted.' }} elseif ($noRestart) {{ '. The desktop app starts it within ten seconds.' }} else {{ ', but it could not be restarted.' }}) }} else {{ 'The new version never answered and the previous version could not be put back. Re-run the install command.' }})
             [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
             $script:HelperDone = $true
@@ -1838,6 +1925,7 @@ $result = @{{
     output = $output
 }}
 $result['restarted'] = $false
+$script:Restarted = [bool] $false
 [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
 Write-InstallLog $result.message
 if ($ok) {{
@@ -1869,6 +1957,7 @@ if (-not $noRestart) {{
     }}
 }}
 $result['restarted'] = $restarted
+$script:Restarted = [bool] $restarted
 if (-not $ok) {{
     # Say what went wrong AND what was done about it, in the one sentence the
     # dashboard's update banner shows. "It failed" on its own sent the user

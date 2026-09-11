@@ -90,6 +90,37 @@ impl Stage {
     }
 }
 
+/// The stage name that OPENS an episode, as `config/update_progress.py` spells
+/// it (`EPISODE_MARKER_STAGE`).
+///
+/// Before 6.73.0 every writer truncated this file when it started, so the file
+/// *was* the episode. That is why, at 15:04 on 2026-09-11, a hand-run installer
+/// erased the whole record of the update that had finished two minutes earlier
+/// while this window was supposed to be reading it. Writers now append and open
+/// an episode with a marker record instead, so the file holds every update the
+/// machine has ever run and a reader has to say which one it means.
+const EPISODE_MARKER: &str = "episode";
+
+/// The slice of `contents` belonging to the MOST RECENT episode.
+///
+/// Everything from the last marker onwards. A receipt written by a build older
+/// than 6.73.0 has no marker at all, and then the whole file is the one episode
+/// it recorded -- which is exactly what that build meant by truncating it.
+fn last_episode_of(contents: &str) -> &str {
+    let mut start = 0;
+    let mut offset = 0;
+    for line in contents.split_inclusive('\n') {
+        let trimmed = line.trim().trim_start_matches('\u{feff}');
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if value.get("stage").and_then(serde_json::Value::as_str) == Some(EPISODE_MARKER) {
+                start = offset;
+            }
+        }
+        offset += line.len();
+    }
+    &contents[start..]
+}
+
 /// One record in the episode, with everything a timeline needs.
 ///
 /// 6.71.0's. Until then only the LAST record was ever read, so the window could
@@ -141,7 +172,7 @@ impl StageRecord {
 /// matters more than what it did first.
 pub fn timeline_in(contents: &str, max: usize) -> Vec<StageRecord> {
     let mut records: Vec<StageRecord> = Vec::new();
-    for line in contents.lines() {
+    for line in last_episode_of(contents).lines() {
         let line = line.trim().trim_start_matches('\u{feff}');
         if line.is_empty() {
             continue;
@@ -540,10 +571,12 @@ pub fn stage_is_terminal(stage: &Stage) -> bool {
 /// the user was shown on 2026-09-09.
 ///
 /// `None` for the age means *unknown*, and every caller must read that as
-/// **not** settling. The receipt is truncated only when a new episode starts,
-/// so a `done` record from a month ago is still the last line in the file on
-/// every machine that has ever updated; treating an unknown age as "just
-/// finished" would suppress the genuine error page for ever.
+/// **not** settling. Since 6.73.0 the receipt is appended to and never
+/// truncated, so a `done` record from a month ago is still the last line in the
+/// file on every machine that has ever updated -- as it was before, when the
+/// truncate only happened at the start of the *next* episode. Treating an
+/// unknown age as "just finished" would suppress the genuine error page for
+/// ever.
 pub fn read_stage_with_age(config_dir: &str) -> Option<(Stage, Option<f64>)> {
     let contents = read_receipt(config_dir)?;
     let stage = latest_stage(&contents)?;
@@ -679,14 +712,35 @@ fn days_from_civil(year: i32, month: i32, day: i32) -> i32 {
 }
 
 /// The receipt's text, or `None` for every failure there can be -- no file, no
-/// directory, unreadable, too large.
+/// directory, unreadable.
+///
+/// A file larger than [`MAX_BYTES`] used to be `None`, which was right while
+/// every writer truncated the receipt at the start of an episode: past that
+/// size it was not the file we thought it was. From 6.73.0 writers APPEND, so
+/// the receipt grows by about a dozen short lines per update for the life of
+/// the machine and "too large" is simply "has updated often enough". Reading
+/// the END of it keeps the cost bounded and keeps the answer correct, which is
+/// what the size cap was always for; the first line is dropped, because a read
+/// that started mid-file starts mid-line.
 fn read_receipt(config_dir: &str) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
     let path = progress_path(config_dir);
-    let metadata = std::fs::metadata(&path).ok()?;
-    if !metadata.is_file() || metadata.len() > MAX_BYTES {
+    let mut file = std::fs::File::open(&path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
         return None;
     }
-    std::fs::read_to_string(&path).ok()
+    if metadata.len() <= MAX_BYTES {
+        return std::fs::read_to_string(&path).ok();
+    }
+    file.seek(SeekFrom::Start(metadata.len() - MAX_BYTES))
+        .ok()?;
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES).read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let first_break = text.find('\n')?;
+    Some(text[first_break + 1..].to_owned())
 }
 
 #[cfg(test)]
@@ -708,6 +762,54 @@ mod tests {
         let stage = latest_stage(contents).expect("a stage");
         assert_eq!(stage.stage, "installing");
         assert_eq!(stage.describe(), "Installing the new version.");
+    }
+
+    #[test]
+    fn records_from_two_episodes_are_both_readable_and_the_timeline_is_the_last_one() {
+        // 6.73.0: nobody truncates the receipt any more, so the file holds
+        // every update this machine has run. The window must draw the CURRENT
+        // episode, not a timeline that starts with last week's install.
+        let contents = "{\"stage\":\"episode\",\"message\":\"An update started.\"}\n\
+                        {\"stage\":\"installing\",\"message\":\"Installing 6.72.2.\"}\n\
+                        {\"stage\":\"done\",\"message\":\"6.72.2 is installed.\"}\n\
+                        {\"stage\":\"episode\",\"message\":\"An update started.\"}\n\
+                        {\"stage\":\"installing\",\"message\":\"Installing 6.73.0.\"}\n";
+        let stages = timeline_in(contents, 20);
+        let names: Vec<&str> = stages.iter().map(|item| item.stage.as_str()).collect();
+        assert_eq!(names, vec!["episode", "installing"]);
+        assert_eq!(stages[1].message.as_deref(), Some("Installing 6.73.0."));
+        // ...and the earlier episode is still IN the file, which is the whole
+        // point: a watcher that arrives late has not lost what happened.
+        assert!(contents.contains("6.72.2 is installed."));
+        // The latest record is still the latest record.
+        assert_eq!(latest_stage(contents).expect("a stage").stage, "installing");
+    }
+
+    #[test]
+    fn a_receipt_from_before_episodes_is_read_whole() {
+        // No marker anywhere: the file IS the episode, because the build that
+        // wrote it truncated the file when the episode began.
+        let contents = "{\"stage\":\"installing\",\"message\":\"Installing.\"}\n\
+                        {\"stage\":\"done\",\"message\":\"Installed.\"}\n";
+        let names: Vec<String> = timeline_in(contents, 20)
+            .into_iter()
+            .map(|item| item.stage)
+            .collect();
+        assert_eq!(names, vec!["installing", "done"]);
+    }
+
+    #[test]
+    fn a_torn_marker_line_does_not_cut_the_episode_short() {
+        // The writer appends while this reads. A half-written line is not a
+        // marker and must not be mistaken for one.
+        let contents = "{\"stage\":\"episode\",\"message\":\"An update started.\"}\n\
+                        {\"stage\":\"installing\",\"message\":\"Installing.\"}\n\
+                        {\"stage\":\"epis";
+        let names: Vec<String> = timeline_in(contents, 20)
+            .into_iter()
+            .map(|item| item.stage)
+            .collect();
+        assert_eq!(names, vec!["episode", "installing"]);
     }
 
     #[test]

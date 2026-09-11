@@ -51,6 +51,30 @@ voice_all=0
 torch_backend=""
 enable_rtk=0
 enable_desktop=0
+# What the caller asked for about the server (6.73.0). MCC_INSTALL_NO_START is
+# the environment form of --no-start, for a caller that cannot add a flag.
+restart_requested=0
+no_start_requested=0
+# The first release whose mcc-server understands --report-holder and
+# --stop-holder. Older builds do not REFUSE those flags: they ignore every
+# argument but --version and start a server.
+RESTART_AWARE_VERSION="6.73.0"
+restart_report_available=0
+[ "${MCC_INSTALL_NO_START:-}" = "1" ] && no_start_requested=1
+# The exclusive update lock (decision Q5). Until 6.73.0 a hand-run install and
+# a dashboard-triggered one shared nothing: they wrote the same receipt, into
+# the same tool directory, with no coordination at all.
+holds_update_lock=0
+# 6.73.0's two extra receipt fields. `null` means "this episode has not decided
+# yet", which is what a reader shows nothing for.
+install_progress_restarted=null
+install_progress_holder=""
+# Set by restart_after_install; read by nothing else, but named here so the
+# script has no undeclared globals under `set -u`.
+server_port=8082
+server_bind_host=127.0.0.1
+server_reachable_host=127.0.0.1
+started_server_pid=0
 # Set by the launcher-creation helpers so the closing message reports what
 # actually happened instead of hedging with "(if the platform supports it)".
 desktop_launcher_created=""
@@ -83,6 +107,14 @@ Options:
                            package declares it in Depends) and WebView2 on
                            Windows (the Setup .exe bootstraps it); macOS needs
                            nothing.
+  --restart                After a successful install, restart the My Claude
+                           Code server on the port this configuration directory
+                           is for: stop that one server by its exact process
+                           id, start mcc-server again, and wait until it
+                           answers /health. Every other My Claude Code server
+                           is listed and left running.
+  --no-start               Never start a server, whatever else was asked. Same
+                           as setting MCC_INSTALL_NO_START=1.
   --dry-run                Print commands without running them.
   --help                   Show this help text.
 USAGE
@@ -232,6 +264,9 @@ run_uv_capturing() {
 }
 
 cleanup() {
+    # The lock first: every other path out of this script is an exit, and a
+    # lock that outlives its owner locks the machine out of updating.
+    exit_update_lock
     if [ -n "$temporary_script" ] && [ -e "$temporary_script" ]; then
         rm -f "$temporary_script"
     fi
@@ -516,6 +551,12 @@ parse_args() {
                 ;;
             --desktop)
                 enable_desktop=1
+                ;;
+            --restart)
+                restart_requested=1
+                ;;
+            --no-start)
+                no_start_requested=1
                 ;;
             --version)
                 shift
@@ -1075,6 +1116,493 @@ mcc_config_dir() {
     printf '%s' "$HOME/.mcc"
 }
 
+mcc_env_setting() {
+    # One setting, as this installation's server would read it: the process
+    # environment first -- which is what the server itself does, and what keeps
+    # a scratch install reading a scratch configuration -- then
+    # <config dir>/.env.
+    #
+    # The installer READS. It never creates the file, never migrates a legacy
+    # directory and never writes a default back: an installer that repaired
+    # configuration would be a second mcc-init, and the one thing a restart
+    # must not do is change what the machine is configured to be while it is
+    # installing.
+    setting_name=$1
+    setting_default=${2:-}
+    setting_value=$(printenv "$setting_name" 2>/dev/null || printf '')
+    if [ -n "$setting_value" ]; then
+        printf '%s' "$setting_value"
+        return 0
+    fi
+    setting_file="$(mcc_config_dir)/.env"
+    if [ -f "$setting_file" ]; then
+        setting_value=$(
+            sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}${setting_name}[[:space:]]*=[[:space:]]*//p" \
+                "$setting_file" 2>/dev/null | tail -n 1
+        )
+        # Strip one matched pair of surrounding quotes, and nothing else: a
+        # value is used as text, never evaluated.
+        setting_value=${setting_value%\"}
+        setting_value=${setting_value#\"}
+        setting_value=${setting_value%\'}
+        setting_value=${setting_value#\'}
+        setting_value=$(printf '%s' "$setting_value" | tr -d '\r')
+        if [ -n "$setting_value" ]; then
+            printf '%s' "$setting_value"
+            return 0
+        fi
+    fi
+    printf '%s' "$setting_default"
+}
+
+resolve_server_address() {
+    # The host and port of the ONE server this install is for. "Restart" means
+    # exactly one server: the one bound to the port of the configuration
+    # directory this install is for. Every other My Claude Code server -- other
+    # ports, other configuration directories, the user's agent-serving
+    # instances -- is listed and never stopped.
+    server_port=$(mcc_env_setting PORT 8082)
+    case "$server_port" in
+        ''|*[!0-9]*) server_port=8082 ;;
+    esac
+    server_bind_host=$(mcc_env_setting HOST 127.0.0.1)
+    # 0.0.0.0 and :: are what the server BINDS, not addresses a health probe
+    # can dial.
+    case "$server_bind_host" in
+        ''|0.0.0.0|::) server_reachable_host=127.0.0.1 ;;
+        *) server_reachable_host=$server_bind_host ;;
+    esac
+}
+
+server_start_budget_seconds() {
+    # The desktop shell's own start budget, because it is the same question
+    # asked by a different watcher: DESKTOP_SERVER_START_TIMEOUT once per
+    # attempt, DESKTOP_SERVER_START_RETRIES attempts. A cold first start was
+    # measured at eighteen seconds, so the floor is not decorative.
+    start_timeout=$(mcc_env_setting DESKTOP_SERVER_START_TIMEOUT 20)
+    case "$start_timeout" in
+        ''|*[!0-9]*) start_timeout=20 ;;
+    esac
+    start_retries=$(mcc_env_setting DESKTOP_SERVER_START_RETRIES 2)
+    case "$start_retries" in
+        ''|*[!0-9]*|0) start_retries=2 ;;
+    esac
+    start_budget=$((start_timeout * start_retries))
+    [ "$start_budget" -lt 30 ] && start_budget=30
+    printf '%s' "$start_budget"
+}
+
+update_lock_path() {
+    printf '%s' "$(mcc_config_dir)/updates/update.lock"
+}
+
+read_update_lock_field() {
+    # One field out of the lock record, by text. The lock is a single flat JSON
+    # object written by three programs (this script, install.ps1 and the
+    # dashboard's helper), so a field is a quoted key followed by its value --
+    # no nesting, nothing to parse, and nothing evaluated.
+    sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" \
+        "$(update_lock_path)" 2>/dev/null | head -n 1
+}
+
+enter_update_lock() {
+    # ONE update at a time, whichever path started it (decision Q5).
+    #
+    # `set -C` makes the redirect O_EXCL: the first writer to reach it wins and
+    # everyone else fails, atomically. A lock whose owner is GONE is reclaimed
+    # rather than waited on -- the pid decides, exactly as it decides for the
+    # helper-alive gate -- because the alternative is a crashed installer
+    # locking the machine out of updating for the rest of the day.
+    [ "$dry_run" -eq 1 ] && return 0
+    lock_file=$(update_lock_path)
+    mkdir -p "$(dirname "$lock_file")" 2>/dev/null || return 0
+    lock_attempt=0
+    while [ "$lock_attempt" -lt 2 ]; do
+        lock_attempt=$((lock_attempt + 1))
+        if (
+            set -C
+            printf '{"pid":%s,"started_at":%s,"started_display":"%s","source":"install.sh"}' \
+                "$$" \
+                "$(date -u +%s 2>/dev/null || printf '0')" \
+                "$(date +%H:%M:%S 2>/dev/null || printf '')" \
+                > "$lock_file"
+        ) 2>/dev/null; then
+            holds_update_lock=1
+            return 0
+        fi
+        lock_owner_pid=$(read_update_lock_field pid)
+        case "$lock_owner_pid" in
+            ''|*[!0-9]*) lock_owner_pid=0 ;;
+        esac
+        if [ "$lock_owner_pid" -gt 0 ] && [ "$lock_owner_pid" -ne "$$" ] \
+            && kill -0 "$lock_owner_pid" 2>/dev/null; then
+            return 1
+        fi
+        rm -f "$lock_file" 2>/dev/null || true
+    done
+    return 1
+}
+
+exit_update_lock() {
+    [ "${holds_update_lock:-0}" -eq 1 ] || return 0
+    holds_update_lock=0
+    rm -f "$(update_lock_path)" 2>/dev/null || true
+}
+
+write_watching_instead_notice() {
+    # A second installer does not queue and does not install: it names the
+    # owner, points at the transcript that owner is writing, and exits 0. Two
+    # installers in one tool directory is the collision this lock exists to
+    # stop, and "wait for it" is a worse answer than "here is where to look"
+    # for a process that can take a quarter of an hour.
+    notice_pid=$(read_update_lock_field pid)
+    notice_started=$(read_update_lock_field started_display)
+    printf '\n'
+    if [ -n "$notice_pid" ] && [ -n "$notice_started" ]; then
+        printf 'An update is already running (pid %s, started %s) -- watching it instead.\n' \
+            "$notice_pid" "$notice_started"
+    elif [ -n "$notice_pid" ]; then
+        printf 'An update is already running (pid %s) -- watching it instead.\n' "$notice_pid"
+    else
+        printf 'An update is already running -- watching it instead.\n'
+    fi
+    notice_progress="$(mcc_config_dir)/updates/progress.json"
+    if [ -f "$notice_progress" ]; then
+        notice_log=$(
+            sed -n 's/.*"log"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                "$notice_progress" 2>/dev/null | tail -n 1
+        )
+        [ -n "$notice_log" ] && printf 'It is writing: %s\n' "$notice_log"
+    fi
+    return 0
+}
+
+ask_the_product_about_the_port() {
+    # The installer does not decide which processes My Claude Code is allowed
+    # to stop. That rule is 6.59.0's and 6.72.2's, both of them Python, and a
+    # second opinion written in sh is exactly how a product comes to stop
+    # something it should not have: the uv tool environment is a directory
+    # literally named my-claude-code, so every launcher's command line contains
+    # the product's name.
+    #
+    # `--format shell` prints KEY=value lines that a `case` reads into named
+    # variables. Nothing is eval'd: a shell that evaluates text another process
+    # wrote is a shell that runs it.
+    ask_launcher=$1
+    ask_flag=$2
+    mcc_holder_pid=0
+    mcc_holder_is_server=0
+    mcc_holder_description=""
+    mcc_holder_reason=""
+    mcc_port_free=0
+    mcc_stopped=0
+    mcc_message=""
+    mcc_other_servers=0
+    mcc_other_server_lines=""
+    ask_output=$(
+        "$ask_launcher" "$ask_flag" "$server_port" --host "$server_reachable_host" \
+            --format shell 2>/dev/null
+    ) || return 1
+    [ -n "$ask_output" ] || return 1
+    # Read the lines in THIS shell, from a file. A pipeline would run the loop
+    # in a subshell and lose every assignment, which is the classic way a POSIX
+    # script silently reads nothing and carries on.
+    ask_temp=$(mktemp 2>/dev/null || printf '')
+    if [ -z "$ask_temp" ]; then
+        return 1
+    fi
+    printf '%s\n' "$ask_output" > "$ask_temp"
+    while IFS= read -r ask_line; do
+        case "$ask_line" in
+            MCC_HOLDER_PID=*) mcc_holder_pid=${ask_line#MCC_HOLDER_PID=} ;;
+            MCC_HOLDER_IS_SERVER=*) mcc_holder_is_server=${ask_line#MCC_HOLDER_IS_SERVER=} ;;
+            MCC_HOLDER_DESCRIPTION=*) mcc_holder_description=${ask_line#MCC_HOLDER_DESCRIPTION=} ;;
+            MCC_HOLDER_REASON=*) mcc_holder_reason=${ask_line#MCC_HOLDER_REASON=} ;;
+            MCC_PORT_FREE=*) mcc_port_free=${ask_line#MCC_PORT_FREE=} ;;
+            MCC_STOPPED=*) mcc_stopped=${ask_line#MCC_STOPPED=} ;;
+            MCC_MESSAGE=*) mcc_message=${ask_line#MCC_MESSAGE=} ;;
+            MCC_OTHER_SERVERS=*) mcc_other_servers=${ask_line#MCC_OTHER_SERVERS=} ;;
+            MCC_OTHER_SERVER_*=*)
+                mcc_other_server_lines="${mcc_other_server_lines}  ${ask_line#*=}
+"
+                ;;
+        esac
+    done < "$ask_temp"
+    rm -f "$ask_temp" 2>/dev/null || true
+    case "$mcc_holder_pid" in
+        ''|*[!0-9]*) mcc_holder_pid=0 ;;
+    esac
+    return 0
+}
+
+report_other_servers() {
+    # Every OTHER My Claude Code server, named. None of them is ever stopped:
+    # the user runs several on several ports with agents waiting on them.
+    [ "${mcc_other_servers:-0}" != "0" ] || return 0
+    [ -n "$mcc_other_server_lines" ] || return 0
+    printf '\nOther My Claude Code servers are running. None of them is touched:\n'
+    printf '%s' "$mcc_other_server_lines"
+    return 0
+}
+
+version_at_least() {
+    # Whether $1 is at least $2, compared field by field as numbers so 6.73.10
+    # sorts above 6.73.9. "Cannot read it" is NO: a version this cannot parse
+    # must never be treated as new enough to be asked a question that an older
+    # build answers by starting a server.
+    have=${1#v}
+    want=$2
+    [ -n "$have" ] || return 1
+    index=1
+    while [ "$index" -le 3 ]; do
+        have_part=$(printf '%s' "$have" | cut -d. -f"$index")
+        want_part=$(printf '%s' "$want" | cut -d. -f"$index")
+        case "$have_part" in ''|*[!0-9]*) have_part=-1 ;; esac
+        case "$want_part" in ''|*[!0-9]*) want_part=0 ;; esac
+        [ "$have_part" -lt 0 ] && return 1
+        [ "$have_part" -gt "$want_part" ] && return 0
+        [ "$have_part" -lt "$want_part" ] && return 1
+        index=$((index + 1))
+    done
+    return 0
+}
+
+port_is_occupied() {
+    # Whether anything is LISTENING on this address. It identifies nobody,
+    # signals nobody and names nobody -- it exists for one case: an installed
+    # mcc-server that predates --report-holder and so cannot classify a holder.
+    # A free port is safe to start into; an occupied one is reported and left.
+    #
+    # The socket table first, because it is the direct answer. A connect was the
+    # obvious test and is wrong on at least one real machine: a SYN to a closed
+    # loopback port there is DROPPED rather than refused, so every free port
+    # reads as "in use" and the installer refuses to start anything, anywhere.
+    # curl is only the last resort, for a machine with neither tool.
+    occupied_host=$1
+    occupied_port=$2
+    for probe in "ss -ltn" "netstat -ltn" "netstat -an"; do
+        # shellcheck disable=SC2086
+        command -v ${probe%% *} >/dev/null 2>&1 || continue
+        # shellcheck disable=SC2086
+        if $probe 2>/dev/null | grep -E "[:.]$occupied_port[[:space:]]" | grep -qi "listen"; then
+            return 0
+        fi
+        # The tool ran and saw no listener on that port. That is an answer.
+        # shellcheck disable=SC2086
+        $probe >/dev/null 2>&1 && return 1
+    done
+    # curl exit 7 is "failed to connect", which is a free port. Every other
+    # outcome -- an answer, a protocol error, a timeout -- is treated as
+    # occupied: "I could not tell" must never be the reading that starts a
+    # second server onto somebody else's socket.
+    curl -s -o /dev/null -m 2 "http://$occupied_host:$occupied_port/" 2>/dev/null
+    [ "$?" -eq 7 ] && return 1
+    return 0
+}
+
+wait_for_server_health() {
+    # THIS is the success condition of a restart. "The install exited 0" is
+    # not: on 2026-09-11 two installs exited 0 fifteen minutes apart and the
+    # server was down for both of them and after both of them.
+    health_url=$1
+    health_budget=$2
+    health_waited=0
+    while [ "$health_waited" -lt "$health_budget" ]; do
+        if curl -fsS -o /dev/null -m 5 "$health_url" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+        health_waited=$((health_waited + 1))
+    done
+    curl -fsS -o /dev/null -m 5 "$health_url" 2>/dev/null
+}
+
+start_server_detached() {
+    # Detached, so the server outlives this installer: an installer that held
+    # the server open would take it down with itself. Both streams go to this
+    # episode's own start log, so a server that dies on its first breath leaves
+    # the reason on disk instead of in a terminal that has moved on.
+    #
+    # MCC_OPEN_BROWSER is deliberately not touched: whatever the configuration
+    # says is what the started server does, exactly as if the user had typed
+    # mcc-server.
+    start_launcher=$1
+    start_log=$2
+    # All three streams, and </dev/null is not decoration: a child that keeps
+    # the installer's stdin -- or, on the Windows twin of this, its stdout pipe
+    # -- open holds its caller open too, and a GitHub run: step, a shell
+    # pipeline and the update helper all read this script through a pipe.
+    if command -v setsid >/dev/null 2>&1; then
+        setsid nohup "$start_launcher" < /dev/null > "$start_log" 2>&1 &
+    else
+        nohup "$start_launcher" < /dev/null > "$start_log" 2>&1 &
+    fi
+    started_server_pid=$!
+    return 0
+}
+
+restart_after_install() {
+    # Stop the one server this install is for, start the new one, prove it.
+    #
+    #   1. Read the port and host of the configuration directory this install
+    #      is for. Not "the default port" and not "every MCC port".
+    #   2. Ask the product what holds that port. An MCC server is ours to stop;
+    #      anything else is reported and left alone, and so is a port whose
+    #      holder could not be identified.
+    #   3. Stop it by exact pid, within its own configured budget, and wait for
+    #      the port to come free.
+    #   4. Start mcc-server detached.
+    #   5. Wait for /health. If it never answers, say so plainly -- V1 has no
+    #      staged swap in the installer, so the previous version is no longer
+    #      on disk and the honest instruction is to run the installer again.
+    resolve_server_address
+    restart_health_url="http://$server_reachable_host:$server_port/health"
+    step "Restarting the My Claude Code server on port $server_port"
+    write_install_log "Restart requested for the server on $server_reachable_host:$server_port."
+
+    restart_launcher=""
+    if [ -n "${tool_bin:-}" ] && [ -x "$tool_bin/mcc-server" ]; then
+        restart_launcher="$tool_bin/mcc-server"
+    elif [ -n "${tool_bin:-}" ] && [ -x "$tool_bin/mcc-server.exe" ]; then
+        restart_launcher="$tool_bin/mcc-server.exe"
+    elif command -v mcc-server >/dev/null 2>&1; then
+        restart_launcher=$(command -v mcc-server)
+    fi
+    if [ -z "$restart_launcher" ]; then
+        restart_message="The server was not restarted: mcc-server was not found after the install."
+        printf '%s\n' "$restart_message"
+        install_progress_restarted=false
+        write_install_progress failed "$restart_message"
+        return 1
+    fi
+
+    # ONLY of a build that has the question. cli.entrypoints.serve ignores every
+    # argument but --version, so an older mcc-server does not fail on
+    # --report-holder -- it STARTS A SERVER on the configured port, and the
+    # installer waiting for its answer blocks behind it for ever. Measured on
+    # the real installer at 20:12 on 2026-09-11.
+    if ! version_at_least "${FCC_VERSION:-}" "$RESTART_AWARE_VERSION"; then
+        write_install_log "Installed version ${FCC_VERSION:-unknown} predates --report-holder; not asking it."
+        mcc_holder_pid=0
+        mcc_holder_is_server=0
+        mcc_holder_description=""
+        mcc_holder_reason=""
+        mcc_other_servers=0
+        mcc_other_server_lines=""
+        restart_report_available=0
+    elif ask_the_product_about_the_port "$restart_launcher" --report-holder; then
+        restart_report_available=1
+    else
+        restart_report_available=0
+    fi
+    if [ "$restart_report_available" -ne 1 ]; then
+        # The installed mcc-server predates --report-holder (a pinned --version,
+        # or the first install of this release, whose wheel is the one BEFORE
+        # it). It cannot classify the port holder, and this script must not try.
+        #
+        # What it CAN do without classifying anything is ask whether the port
+        # is occupied at all -- the socket table, which stops nothing and
+        # identifies nothing. A free port is safe to start into; an occupied
+        # one is reported and left exactly as it is.
+        if port_is_occupied "$server_reachable_host" "$server_port"; then
+            restart_message="Port $server_port is in use and this build of mcc-server cannot say by what, so nothing was stopped and nothing was started. Run the installer again once this version is installed, or stop the server yourself and start it with: mcc-server"
+            printf '%s\n' "$restart_message"
+            write_install_log "$restart_message"
+            install_progress_restarted=false
+            write_install_progress done "$restart_message"
+            return 1
+        fi
+        printf 'Nothing is listening on port %s; starting the server.\n' "$server_port"
+        write_install_log "The installed build cannot classify a port holder, and nothing holds the port; starting."
+        start_and_prove_server "$restart_launcher" "$restart_health_url"
+        return $?
+    fi
+    report_other_servers
+    install_progress_holder=$mcc_holder_description
+
+    if [ "$mcc_holder_pid" -gt 0 ] && [ "$mcc_holder_is_server" != "1" ]; then
+        # A foreign holder of the port is never killed, by any path.
+        restart_message="Port $server_port is held by $mcc_holder_description, which is not a My Claude Code server. Nothing was stopped and nothing was started."
+        printf '\n%s\n' "$restart_message"
+        [ -n "$mcc_holder_reason" ] && printf '  (%s)\n' "$mcc_holder_reason"
+        write_install_log "$restart_message"
+        install_progress_restarted=false
+        write_install_progress done "$restart_message"
+        return 1
+    fi
+
+    if [ "$mcc_holder_pid" -gt 0 ]; then
+        write_install_progress stopping "Stopping the server on port $server_port."
+        printf 'Stopping %s.\n' "$mcc_holder_description"
+        if ! ask_the_product_about_the_port "$restart_launcher" --stop-holder; then
+            restart_message="The server on port $server_port could not be stopped, so nothing was started."
+            printf '%s\n' "$restart_message"
+            write_install_log "$restart_message"
+            install_progress_restarted=false
+            write_install_progress failed "$restart_message"
+            return 1
+        fi
+        [ -n "$mcc_message" ] && printf '%s\n' "$mcc_message" && write_install_log "$mcc_message"
+        if [ "$mcc_port_free" != "1" ]; then
+            restart_message="The server on port $server_port could not be stopped, so nothing was started. $mcc_message"
+            printf '%s\n' "$restart_message"
+            write_install_log "$restart_message"
+            install_progress_restarted=false
+            write_install_progress failed "$restart_message"
+            return 1
+        fi
+    else
+        printf 'Nothing was listening on port %s; starting the server.\n' "$server_port"
+        write_install_log "Nothing held the port; starting the server."
+    fi
+
+    start_and_prove_server "$restart_launcher" "$restart_health_url"
+    return $?
+}
+
+start_and_prove_server() {
+    # Start mcc-server detached and wait for /health. The second half of the
+    # restart, in a function of its own because two paths reach it -- the
+    # ordinary one and the fallback for an installed build that cannot classify
+    # a port holder -- and a second copy of "start it and prove it" is a second
+    # definition of success.
+    restart_launcher=$1
+    restart_health_url=$2
+    write_install_progress starting "Starting My Claude Code $FCC_VERSION."
+    restart_updates_dir="$(mcc_config_dir)/updates"
+    mkdir -p "$restart_updates_dir" 2>/dev/null || true
+    restart_start_log="$restart_updates_dir/server-start-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || printf 'unknown').log"
+    start_server_detached "$restart_launcher" "$restart_start_log"
+    printf 'Started mcc-server (pid %s). Waiting for it to answer %s.\n' \
+        "$started_server_pid" "$restart_health_url"
+    write_install_log "Started mcc-server, pid $started_server_pid; waiting for $restart_health_url."
+
+    if wait_for_server_health "$restart_health_url" "$(server_start_budget_seconds)"; then
+        install_progress_restarted=true
+        restart_message="My Claude Code $FCC_VERSION is installed and answering on port $server_port."
+        printf '%s\n' "$restart_message"
+        write_install_log "$restart_message"
+        write_install_progress done "$restart_message"
+        return 0
+    fi
+
+    restart_exit="the process did not exit"
+    if ! kill -0 "$started_server_pid" 2>/dev/null; then
+        wait "$started_server_pid" 2>/dev/null && restart_exit=0 || restart_exit=$?
+    fi
+    restart_message="The new server did not answer $restart_health_url. Exit code: $restart_exit. The previous version is no longer installed; run the installer again."
+    printf '\n%s\n' "$restart_message"
+    printf 'Its output is in: %s\n' "$restart_start_log"
+    if [ -f "$restart_start_log" ]; then
+        printf 'Last lines:\n'
+        tail -n 12 "$restart_start_log" 2>/dev/null || true
+    fi
+    write_install_log "$restart_message"
+    install_progress_restarted=false
+    write_install_progress failed "$restart_message"
+    return 1
+}
+
 install_progress_started=""
 install_progress_path=""
 install_progress_log=""
@@ -1085,6 +1613,10 @@ install_stage_rank() {
     # know. The same table as config/update_progress.py's
     # UPDATE_PROGRESS_STAGE_ORDER, and a contract test compares them.
     case "$1" in
+        # Rank 0: the marker that OPENS an episode, written before any work.
+        # The monotonic guard reads rank 0 as "keep the rank you had", so a
+        # marker never blocks the stage that follows it.
+        episode) printf '0' ;;
         waiting-for-parent) printf '1' ;;
         staging) printf '2' ;;
         stopping) printf '3' ;;
@@ -1115,8 +1647,19 @@ open_install_progress() {
         : > "$install_progress_log" 2>/dev/null || install_progress_log=""
     fi
     install_progress_path="$updates_dir/progress.json"
-    # A fresh episode starts a fresh file, exactly as the helper does.
-    : > "$install_progress_path" 2>/dev/null || { install_progress_path=""; return 1; }
+    # APPEND. Until 6.73.0 this line truncated the receipt, and at 15:04 on
+    # 2026-09-11 the Windows twin of it erased the whole record of the update
+    # helper that had finished two minutes earlier -- while a desktop window
+    # was supposed to be reading it. An episode is opened by a MARKER record
+    # instead, so a reader that arrives a minute late can still find where the
+    # current episode begins (decision Q5).
+    touch "$install_progress_path" 2>/dev/null || { install_progress_path=""; return 1; }
+    printf '{"stage":"episode","message":"An update started.","at":"%s","parent":0,"helper_pid":%s,"started_at":%s,"elapsed_seconds":0,"helper_done":false,"version":"","log":"%s","source":"install.sh","restarted":null,"holder":""}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '')" \
+        "$$" \
+        "${install_progress_started:-0}" \
+        "$install_progress_log" \
+        >> "$install_progress_path" 2>/dev/null || true
     return 0
 }
 
@@ -1162,14 +1705,22 @@ write_install_progress() {
     case "$stage" in
         done|failed|recovered) helper_done=true ;;
     esac
-    printf '{"stage":"%s","message":"%s","at":"%s","parent":0,"helper_pid":%s,"started_at":%s,"elapsed_seconds":%s,"helper_done":%s,"version":"%s","log":"%s","source":"install.sh"}
-'         "$stage"         "$message"         "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '')"         "$$"         "${install_progress_started:-0}"         "$elapsed"         "$helper_done"         "${FCC_VERSION:-}"         "$install_progress_log"         >> "$install_progress_path" 2>/dev/null || true
+    printf '{"stage":"%s","message":"%s","at":"%s","parent":0,"helper_pid":%s,"started_at":%s,"elapsed_seconds":%s,"helper_done":%s,"version":"%s","log":"%s","source":"install.sh","restarted":%s,"holder":"%s"}
+'         "$stage"         "$message"         "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '')"         "$$"         "${install_progress_started:-0}"         "$elapsed"         "$helper_done"         "${FCC_VERSION:-}"         "$install_progress_log"         "${install_progress_restarted:-null}"         "${install_progress_holder:-}"         >> "$install_progress_path" 2>/dev/null || true
     return 0
 }
 
 parse_args "$@"
 validate_args
 add_known_bin_directories
+
+# ONE update at a time, whichever path started it (decision Q5). A second
+# installer does not queue and does not install: it names the owner, points at
+# the transcript that owner is writing, and exits 0.
+if ! enter_update_lock; then
+    write_watching_instead_notice
+    exit 0
+fi
 
 step "Checking installation prerequisites"
 require_curl
@@ -1248,4 +1799,22 @@ fi
 
 # The terminal record. Whichever way the install went, the receipt stops
 # saying "installing" and the helper-alive gate reopens for everyone else.
-write_install_progress done "The new version is installed."
+#
+# With --restart the terminal record is the RESTART's: `done` with
+# `restarted: true` once a listener answers /health on the configured port, and
+# `failed` with the child's exit code and the last lines it wrote when it never
+# does. "The install exited 0" is not success -- on 2026-09-11 two installs
+# exited 0 fifteen minutes apart with the user's server down through both.
+if [ "$no_start_requested" -eq 1 ]; then
+    printf '\n'
+    if [ "$restart_requested" -eq 1 ]; then
+        printf 'No server was started: --no-start (or MCC_INSTALL_NO_START=1) overrides --restart.\n'
+    else
+        printf 'No server was started. Start one with: mcc-server\n'
+    fi
+    write_install_progress done "The new version is installed."
+elif [ "$restart_requested" -eq 1 ] && [ "$dry_run" -ne 1 ]; then
+    restart_after_install || true
+else
+    write_install_progress done "The new version is installed."
+fi

@@ -6,6 +6,8 @@ param(
     [string] $TorchBackend = "",
     [switch] $Rtk,
     [switch] $Desktop,
+    [switch] $Restart,
+    [switch] $NoStart,
     [switch] $DryRun,
     [switch] $Help,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -110,6 +112,31 @@ $script:InstallProgressVersion = ""
 # How far through an episode the last record was. Stages are monotonic, so an
 # episode never goes backwards and a window can draw them as a timeline.
 $script:InstallProgressRank = 0
+# 6.73.0's two extra receipt fields. `$null` means "this episode has not decided
+# yet", which is what a reader shows nothing for; `$true`/`$false` is the
+# answer to the only question that matters at the end of an update -- is a
+# server answering on the configured port?
+$script:InstallProgressRestarted = $null
+$script:InstallProgressHolder = ""
+# The exclusive update lock (decision Q5). Until 6.73.0 a hand-run install and
+# a dashboard-triggered one shared nothing: they wrote the same receipt, into
+# the same tool directory, with no coordination at all. At 15:04 on 2026-09-11
+# a hand run erased the record of the update that had finished two minutes
+# earlier, and on 2026-09-09 two installs wrote over each other's environment.
+$script:HoldsUpdateLock = $false
+$script:UpdateLockPath = ""
+$script:UpdateLockOwner = $null
+# What the caller asked for about the server. MCC_INSTALL_NO_START is the env
+# form of -NoStart, for a caller that cannot add a switch -- the npm wrapper
+# and install.cmd both pass arguments through a layer that has its own opinions
+# about quoting.
+$script:RestartRequested = $Restart.IsPresent
+$script:NoStartRequested = ($NoStart.IsPresent -or ($env:MCC_INSTALL_NO_START -eq "1"))
+# The first release whose `mcc-server` understands `--report-holder` and
+# `--stop-holder`. Older builds do not REFUSE those flags: they ignore every
+# argument but `--version` and start a server, which is why this gate exists at
+# all rather than a try/catch around the call.
+$RestartAwareVersion = "6.73.0"
 $script:EnableRtk = $Rtk.IsPresent
 $script:EnableDesktop = $Desktop.IsPresent
 # Set by New-DesktopShortcut so the closing message reports what actually
@@ -136,6 +163,14 @@ Options:
   -Desktop               Create a Start Menu shortcut for mcc-desktop.
                          The tray app needs the WebView2 runtime, which the
                          desktop Setup .exe bootstraps; Windows 11 ships it.
+  -Restart               After a successful install, restart the My Claude
+                         Code server on the port this configuration directory
+                         is for: stop that one server by its exact process id,
+                         start mcc-server again, and wait until it answers
+                         /health. Every other My Claude Code server is listed
+                         and left running.
+  -NoStart               Never start a server, whatever else was asked. Same as
+                         setting MCC_INSTALL_NO_START=1.
   -DryRun                Print commands without running them.
   -Help                  Show this help text.
 "@
@@ -1464,6 +1499,823 @@ function Get-MccConfigDir {
     return $modern
 }
 
+function Get-MccEnvSetting {
+    <#
+        .SYNOPSIS
+        One setting, as this installation's server would read it.
+
+        .DESCRIPTION
+        The process environment first -- which is what the server itself does,
+        and what keeps a scratch install reading a scratch configuration --
+        then `<config dir>/.env`.
+
+        The installer READS. It never creates the file, never migrates a legacy
+        directory and never writes a default back: an installer that repaired
+        configuration would be a second `mcc-init`, and the one thing a restart
+        must not do is change what the machine is configured to be while it is
+        installing.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Name,
+        [string] $Default = ""
+    )
+
+    try {
+        $fromEnvironment = [Environment]::GetEnvironmentVariable($Name)
+        if (-not [string]::IsNullOrWhiteSpace($fromEnvironment)) {
+            return $fromEnvironment.Trim()
+        }
+        $envFile = Join-Path (Get-MccConfigDir) ".env"
+        if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) {
+            return $Default
+        }
+        foreach ($line in [System.IO.File]::ReadAllLines($envFile)) {
+            $text = ([string] $line).Trim()
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+            if ($text.StartsWith("#")) { continue }
+            if ($text.StartsWith("export ")) { $text = $text.Substring(7).Trim() }
+            $split = $text.IndexOf("=")
+            if ($split -lt 1) { continue }
+            if ($text.Substring(0, $split).Trim() -ne $Name) { continue }
+            $value = $text.Substring($split + 1).Trim()
+            if ($value.Length -ge 2) {
+                $quote = $value[0]
+                if (($quote -eq '"' -or $quote -eq "'") -and $value[$value.Length - 1] -eq $quote) {
+                    $value = $value.Substring(1, $value.Length - 2)
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($value)) { return $Default }
+            return $value
+        }
+    }
+    catch {
+    }
+    return $Default
+}
+
+function Get-MccServerAddress {
+    <#
+        .SYNOPSIS
+        The host and port of the ONE server this install is for.
+
+        .DESCRIPTION
+        "Restart" means exactly one server: the one bound to the port of the
+        configuration directory this install is for. Every other My Claude Code
+        server -- another port, another configuration directory, the user's
+        agent-serving instances -- is listed and never stopped.
+
+        A HOST of 0.0.0.0 or :: is what the server BINDS, not an address a
+        health probe can dial, so the reachable address is loopback in that
+        case. That is also the address the server's own dashboard URL uses.
+    #>
+
+    $port = 8082
+    $rawPort = Get-MccEnvSetting -Name "PORT" -Default "8082"
+    $parsed = 0
+    if ([int]::TryParse($rawPort, [ref] $parsed) -and $parsed -gt 0 -and $parsed -lt 65536) {
+        $port = $parsed
+    }
+    $bindHost = Get-MccEnvSetting -Name "HOST" -Default "127.0.0.1"
+    $reachable = $bindHost
+    if ([string]::IsNullOrWhiteSpace($bindHost) -or $bindHost -eq "0.0.0.0" -or $bindHost -eq "::") {
+        $reachable = "127.0.0.1"
+    }
+    return [pscustomobject]@{
+        BindHost      = $bindHost
+        ReachableHost = $reachable
+        Port          = $port
+    }
+}
+
+function Get-UpdateLockPath {
+    <# .SYNOPSIS The one lock both update paths take, beside the receipt. #>
+
+    return Join-Path (Join-Path (Get-MccConfigDir) "updates") "update.lock"
+}
+
+function Read-UpdateLockOwner {
+    <#
+        .SYNOPSIS
+        Who holds the update lock, or $null when nobody does.
+
+        .DESCRIPTION
+        A lock file that exists but cannot be parsed is reported as held by an
+        unknown owner rather than as absent: "I could not read it" must never
+        be the reading that starts a second installer.
+    #>
+    param([string] $Path)
+
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            return $null
+        }
+        $raw = [System.IO.File]::ReadAllText($Path)
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            return [pscustomobject]@{ pid = 0; started_display = ""; source = "an earlier installer" }
+        }
+        return ($raw | ConvertFrom-Json)
+    }
+    catch {
+        return [pscustomobject]@{ pid = 0; started_display = ""; source = "an earlier installer" }
+    }
+}
+
+function Test-UpdateLockOwnerAlive {
+    <# .SYNOPSIS Whether the process that recorded the lock is alive. #>
+    param($Owner)
+
+    if ($null -eq $Owner) { return $false }
+    $ownerPid = 0
+    try { $ownerPid = [int] $Owner.pid } catch { $ownerPid = 0 }
+    if ($ownerPid -le 0) { return $false }
+    if ($ownerPid -eq $PID) { return $false }
+    return [bool] (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue)
+}
+
+function Enter-UpdateLock {
+    <#
+        .SYNOPSIS
+        Take the exclusive update lock, or say who has it. Returns $true/$false.
+
+        .DESCRIPTION
+        `CreateNew` with FileShare.None is the whole of the exclusion: the
+        first writer to reach it wins and everyone else fails, atomically, on
+        every Windows file system. A lock whose owner is GONE is reclaimed
+        rather than waited on -- the pid decides, exactly as it decides for the
+        helper-alive gate -- because the alternative is a crashed installer
+        locking the machine out of updating for the rest of the day.
+    #>
+
+    if ($DryRun) { return $true }
+    $path = Get-UpdateLockPath
+    $script:UpdateLockPath = $path
+    try {
+        $updatesDir = Split-Path -Parent $path
+        if (-not (Test-Path -LiteralPath $updatesDir)) {
+            New-Item -ItemType Directory -Path $updatesDir -Force | Out-Null
+        }
+    }
+    catch {
+        # No updates directory means no lock and no receipt. An install that
+        # cannot coordinate still installs; it just says so.
+        return $true
+    }
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        try {
+            $stream = [System.IO.File]::Open($path, 'CreateNew', 'Write', 'None')
+            try {
+                $record = [ordered]@{
+                    pid             = $PID
+                    started_at      = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+                    started_display = (Get-Date).ToString('HH:mm:ss')
+                    source          = 'install.ps1'
+                }
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes(($record | ConvertTo-Json -Compress))
+                $stream.Write($bytes, 0, $bytes.Length)
+            }
+            finally {
+                $stream.Dispose()
+            }
+            $script:HoldsUpdateLock = $true
+            return $true
+        }
+        catch {
+        }
+        $owner = Read-UpdateLockOwner -Path $path
+        if (Test-UpdateLockOwnerAlive -Owner $owner) {
+            $script:UpdateLockOwner = $owner
+            return $false
+        }
+        try { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    $script:UpdateLockOwner = (Read-UpdateLockOwner -Path $path)
+    return $false
+}
+
+function Exit-UpdateLock {
+    <# .SYNOPSIS Release the lock, if this process took it. Never throws. #>
+
+    if (-not $script:HoldsUpdateLock) { return }
+    $script:HoldsUpdateLock = $false
+    try { Remove-Item -LiteralPath $script:UpdateLockPath -Force -ErrorAction SilentlyContinue } catch { }
+}
+
+function Write-WatchingInsteadNotice {
+    <#
+        .SYNOPSIS
+        What a second installer prints instead of installing.
+
+        .DESCRIPTION
+        It does not queue and it does not install: it names the owner, points
+        at the transcript that owner is writing, and exits 0. Two installers in
+        one tool directory is the collision this lock exists to stop, and
+        "wait for it" is a worse answer than "here is where to look" for a
+        process that can take a quarter of an hour.
+    #>
+    param($Owner)
+
+    $ownerPid = 0
+    try { $ownerPid = [int] $Owner.pid } catch { $ownerPid = 0 }
+    $started = ""
+    try { $started = [string] $Owner.started_display } catch { $started = "" }
+    Write-Host ""
+    if ($ownerPid -gt 0 -and $started) {
+        Write-Host "An update is already running (pid $ownerPid, started $started) -- watching it instead."
+    }
+    elseif ($ownerPid -gt 0) {
+        Write-Host "An update is already running (pid $ownerPid) -- watching it instead."
+    }
+    else {
+        Write-Host "An update is already running -- watching it instead."
+    }
+    $transcript = ""
+    try {
+        $progress = Join-Path (Join-Path (Get-MccConfigDir) "updates") "progress.json"
+        if (Test-Path -LiteralPath $progress -PathType Leaf) {
+            foreach ($line in [System.IO.File]::ReadAllLines($progress)) {
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                try {
+                    $record = $line | ConvertFrom-Json
+                    if ($record.log) { $transcript = [string] $record.log }
+                }
+                catch { }
+            }
+        }
+    }
+    catch { }
+    if ($transcript) {
+        Write-Host "It is writing: $transcript"
+    }
+}
+
+function Get-PortHolderDocument {
+    <#
+        .SYNOPSIS
+        Ask the installed product what holds a port, and whether it is ours.
+
+        .DESCRIPTION
+        The installer does not decide this. Which processes My Claude Code is
+        allowed to stop is 6.59.0's and 6.72.2's rule, both of them Python, and
+        a second opinion written in PowerShell is exactly how a product comes
+        to stop something it should not have: the uv tool environment is a
+        directory literally named `my-claude-code`, so every launcher's command
+        line contains the product's name.
+
+        `mcc-server --report-holder <port>` prints one JSON document and stops
+        nothing. A build that predates the flag exits non-zero, and that is the
+        answer this function returns $null for -- which the caller reads as
+        "start nothing", never as "the port is free".
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Launcher,
+        [Parameter(Mandatory = $true)][string] $ReachableHost,
+        [Parameter(Mandatory = $true)][int] $Port
+    )
+
+    try {
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $output = & $Launcher "--report-holder" "$Port" "--host" $ReachableHost 2>$null
+        }
+        finally {
+            $ErrorActionPreference = $previous
+        }
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $text = (@($output) -join "`n").Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+        return ($text | ConvertFrom-Json)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Stop-PortHolderServer {
+    <#
+        .SYNOPSIS
+        Stop the ONE My Claude Code server holding this port, by its exact pid.
+
+        .DESCRIPTION
+        Same reasoning as Get-PortHolderDocument: the decision and the
+        escalation both live in Python (`cli/installer_support.py`), which
+        stops exactly the pids of that one launch, within the budget
+        SERVER_GRACEFUL_SHUTDOWN_SECONDS configures, and refuses outright for
+        anything that is not structurally one of our servers.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Launcher,
+        [Parameter(Mandatory = $true)][string] $ReachableHost,
+        [Parameter(Mandatory = $true)][int] $Port
+    )
+
+    try {
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $output = & $Launcher "--stop-holder" "$Port" "--host" $ReachableHost 2>$null
+        }
+        finally {
+            $ErrorActionPreference = $previous
+        }
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $text = (@($output) -join "`n").Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+        return ($text | ConvertFrom-Json)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Write-OtherServerReport {
+    <#
+        .SYNOPSIS
+        Name every OTHER My Claude Code server. None of them is ever stopped.
+
+        .DESCRIPTION
+        The user runs several servers on several ports with agents waiting on
+        them. The installer's restart is one server -- the one on the port of
+        the configuration directory this install is for -- and the rest exist
+        in the transcript so that a machine with six of them is legible rather
+        than mysterious.
+    #>
+    param($Document)
+
+    if ($null -eq $Document) { return }
+    $others = @()
+    try { $others = @($Document.other_servers) } catch { $others = @() }
+    if ($others.Count -eq 0) { return }
+    Write-Host ""
+    Write-Host "Other My Claude Code servers are running. None of them is touched:"
+    foreach ($item in $others) {
+        try { Write-Host ("  " + [string] $item.describe) } catch { }
+    }
+}
+
+function Get-ServerStartTimeoutSeconds {
+    <#
+        .SYNOPSIS
+        How long to wait for the restarted server to answer /health.
+
+        .DESCRIPTION
+        The desktop shell's own start budget, because it is the same question
+        asked by a different watcher: DESKTOP_SERVER_START_TIMEOUT once per
+        attempt, DESKTOP_SERVER_START_RETRIES attempts. A cold first start on
+        this machine was measured at eighteen seconds, so the floor is not
+        decorative.
+    #>
+
+    $timeout = 20.0
+    $parsedTimeout = 0.0
+    if ([double]::TryParse((Get-MccEnvSetting -Name "DESKTOP_SERVER_START_TIMEOUT" -Default "20"), [ref] $parsedTimeout)) {
+        if ($parsedTimeout -gt 0) { $timeout = $parsedTimeout }
+    }
+    $retries = 2
+    $parsedRetries = 0
+    if ([int]::TryParse((Get-MccEnvSetting -Name "DESKTOP_SERVER_START_RETRIES" -Default "2"), [ref] $parsedRetries)) {
+        if ($parsedRetries -gt 0) { $retries = $parsedRetries }
+    }
+    $budget = $timeout * $retries
+    if ($budget -lt 30.0) { $budget = 30.0 }
+    return $budget
+}
+
+function Test-VersionAtLeast {
+    <#
+        .SYNOPSIS
+        Whether ``Version`` is at least ``Minimum``, compared numerically.
+
+        .DESCRIPTION
+        Numerically, so 6.73.10 sorts above 6.73.9, and "cannot parse it" is
+        FALSE -- a version this cannot read must never be treated as new enough
+        to be asked a question that an older build answers by starting a server.
+    #>
+    param(
+        [string] $Version,
+        [string] $Minimum
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Version)) { return $false }
+    $left = $null
+    $right = $null
+    try {
+        $left = [System.Version]::Parse(($Version.Trim().TrimStart('v', 'V')))
+        $right = [System.Version]::Parse($Minimum)
+    }
+    catch {
+        return $false
+    }
+    return ($left -ge $right)
+}
+
+function Test-PortIsOccupied {
+    <#
+        .SYNOPSIS
+        Whether this address can still be bound. Identifies nobody, stops nobody.
+
+        .DESCRIPTION
+        It exists for exactly one case: an installed `mcc-server` that predates
+        `--report-holder` and so cannot classify a port holder. The only safe
+        thing to know then is whether the port is FREE -- a free port is safe to
+        start into; an occupied one is reported and left alone.
+
+        A BIND, not a connect. A connect looked like the obvious test and is
+        wrong on a real machine: measured here at 20:04, a TCP connect to a
+        closed loopback port neither completed nor was refused -- the SYN was
+        dropped -- so every port on the machine, including ones nothing was
+        holding, read as "in use" and the installer refused to start anything.
+        A bind asks the operating system the question directly, needs no round
+        trip, and is the same question the server itself is about to ask.
+        `ExclusiveAddressUse` matters for the same reason it matters in 6.59.0:
+        without it Windows will happily let a second socket onto a live one.
+
+        A bind that fails for ANY reason is "occupied". "I could not tell" must
+        never be the reading that starts a second server onto somebody else's
+        socket.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $ReachableHost,
+        [Parameter(Mandatory = $true)][int] $Port
+    )
+
+    $listener = $null
+    try {
+        $address = [System.Net.IPAddress]::Loopback
+        if ([string]::IsNullOrWhiteSpace($ReachableHost) -or $ReachableHost -eq '0.0.0.0') {
+            $address = [System.Net.IPAddress]::Any
+        }
+        elseif (-not [System.Net.IPAddress]::TryParse($ReachableHost, [ref] $address)) {
+            $address = [System.Net.IPAddress]::Loopback
+        }
+        $listener = New-Object System.Net.Sockets.TcpListener -ArgumentList $address, $Port
+        $listener.ExclusiveAddressUse = $true
+        $listener.Start()
+        return $false
+    }
+    catch {
+        return $true
+    }
+    finally {
+        if ($null -ne $listener) { try { $listener.Stop() } catch { } }
+    }
+}
+
+function Wait-ForServerHealth {
+    <#
+        .SYNOPSIS
+        Whether a listener on this address answers /health with 200, in budget.
+
+        .DESCRIPTION
+        THIS is the success condition of a restart. "The install exited 0" is
+        not: on 2026-09-11 two installs exited 0 fifteen minutes apart and the
+        user's server was down for both of them and after both of them.
+
+        A 503 is not a failure here -- a starting server answers 503 with
+        `x-mcc-starting: 1` while it binds (6.59.0) -- so anything that answers
+        at all keeps the wait alive until the budget is spent.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Url,
+        [Parameter(Mandatory = $true)][double] $BudgetSeconds
+    )
+
+    $deadline = (Get-Date).AddSeconds($BudgetSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+            if ([int] $response.StatusCode -eq 200) {
+                return $true
+            }
+        }
+        catch {
+        }
+        Start-Sleep -Milliseconds 750
+    }
+    return $false
+}
+
+function Start-MccServerDetached {
+    <#
+        .SYNOPSIS
+        Start mcc-server so that it outlives this installer, inherits this
+        installer's configuration, and inherits none of its handles.
+
+        .DESCRIPTION
+        Three requirements at once, and each of them was learned the hard way on
+        2026-09-11:
+
+        1. **The caller's environment.** The server that starts has to be the
+           server this install is for. The first attempt used
+           `Win32_Process.Create`, which has no environment parameter at all:
+           the process it creates gets the user's DEFAULT environment. With a
+           scratch `MCC_CONFIG_DIR` and `PORT` set, the started server came up
+           for the real configuration home on the real port -- and 6.59.0's
+           `SERVER_PORT_TAKEOVER` then stopped the server already there. An
+           installer must never be able to touch a server it was not asked
+           about, so the configuration directory is also passed EXPLICITLY
+           below rather than merely inherited.
+        2. **No inherited handles.** `Start-Process -RedirectStandardOutput`
+           asks .NET for `bInheritHandles=TRUE`, and on Windows that is
+           all-or-nothing: the child inherits every inheritable handle this
+           process holds, the STDOUT PIPE its own caller gave it included. The
+           server keeps that pipe open for as long as it runs, the caller's read
+           never reaches end-of-file, and the installer HANGS after a completely
+           successful restart -- server answering, receipt written, `done` on
+           disk. Every caller reads this script through a pipe: a GitHub `run:`
+           step, `install.cmd`, `install.ps1 | tee`, the update helper.
+        3. **No console window, and it outlives us.**
+
+        `Start-Process` with NO `-Redirect*` switch is all three: PowerShell
+        uses ShellExecute for it, which passes the caller's environment block
+        and creates the process with `bInheritHandles=FALSE`. The redirection
+        moves into a `cmd /c` instead -- and the outer pair of quotes around
+        that command is not a typo: `cmd /c` strips the first and last quote of
+        its argument when the argument starts with one.
+
+        MCC_OPEN_BROWSER is deliberately not touched (invariant 8): whatever the
+        configuration says is what the started server does, exactly as if the
+        user had typed `mcc-server`.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Launcher,
+        [Parameter(Mandatory = $true)][string] $StdOutPath,
+        [Parameter(Mandatory = $true)][string] $StdErrPath
+    )
+
+    # A one-line batch file rather than a quoted command line. `cmd /c` and
+    # `Start-Process` disagree about quoting in a way that cost two measured
+    # failures here on 2026-09-11 -- a stripped outer quote that ran nothing at
+    # all (19:53), and an argument mangled into an INTERACTIVE cmd that printed
+    # its banner into the start log and never started a server (19:57). A file
+    # has no quoting rules, and it can be read afterwards to see exactly what
+    # was run.
+    $configDir = Get-MccConfigDir
+    $runner = Join-Path (Split-Path -Parent $StdOutPath) ("start-server-" + [System.IO.Path]::GetFileNameWithoutExtension($StdOutPath) + ".cmd")
+    $lines = @(
+        "@echo off",
+        # The configuration directory EXPLICITLY, not merely inherited. The
+        # restart means the server of the directory this install is for, and on
+        # 2026-09-11 a start that lost it came up for a different configuration
+        # home -- and 6.59.0's port takeover then stopped the server that was
+        # already there.
+        ('set "MCC_CONFIG_DIR=' + $configDir + '"'),
+        ('"' + $Launcher + '" > "' + $StdOutPath + '" 2> "' + $StdErrPath + '"')
+    )
+    [System.IO.File]::WriteAllText($runner, ($lines -join "`r`n") + "`r`n", (New-Object System.Text.ASCIIEncoding))
+    # No -Redirect* switch, so PowerShell uses ShellExecute: the child gets this
+    # process's ENVIRONMENT and none of its HANDLES. Both halves matter. See the
+    # .DESCRIPTION above.
+    $process = Start-Process `
+        -FilePath $runner `
+        -WorkingDirectory ([System.IO.Path]::GetTempPath()) `
+        -WindowStyle Hidden `
+        -PassThru
+    return [pscustomobject]@{ Id = [int] $process.Id }
+}
+
+function Get-ChildFailureDetail {
+    <# .SYNOPSIS The last few lines a failed child wrote, for the receipt. #>
+    param([string] $Path, [int] $Lines = 12)
+
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
+        $all = @([System.IO.File]::ReadAllLines($Path) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($all.Count -eq 0) { return "" }
+        $tail = $all
+        if ($all.Count -gt $Lines) { $tail = $all[($all.Count - $Lines)..($all.Count - 1)] }
+        return ($tail -join [Environment]::NewLine)
+    }
+    catch {
+        return ""
+    }
+}
+
+function Invoke-RestartAfterInstall {
+    <#
+        .SYNOPSIS
+        Stop the one server this install is for, start the new one, prove it.
+
+        .DESCRIPTION
+        The order, and why each step is where it is:
+
+          1. Read the port and host of the configuration directory this install
+             is for. Not "the default port" and not "every MCC port".
+          2. Ask the product what holds that port. An MCC server is ours to
+             stop; anything else is reported and left alone, and so is a port
+             whose holder could not be identified.
+          3. Stop it by exact pid, within its own configured budget, and wait
+             for the port to come free.
+          4. Start `mcc-server` detached and hidden.
+          5. Wait for /health to answer 200. THIS is success. If it never
+             answers, say so plainly -- V1 has no staged swap in the installer,
+             so the previous version is no longer on disk and the honest
+             instruction is to run the installer again.
+
+        Returns $true when a listener is answering on the configured port.
+    #>
+    param([Parameter(Mandatory = $true)][string] $InstalledVersion)
+
+    $address = Get-MccServerAddress
+    $script:InstallProgressHolder = ""
+    $healthUrl = "http://$($address.ReachableHost):$($address.Port)/health"
+    Write-Step "Restarting the My Claude Code server on port $($address.Port)"
+    Write-InstallLog ("Restart requested for the server on " + $address.ReachableHost + ":" + $address.Port + ".")
+
+    $binDir = ""
+    try {
+        $binDir = Invoke-NativeCapture -FilePath (Resolve-UvPath "the restart") -Arguments @("tool", "dir", "--bin")
+    }
+    catch {
+        $binDir = ""
+    }
+    $launcher = $null
+    if (-not [string]::IsNullOrWhiteSpace($binDir)) {
+        $launcher = Get-LauncherInBinDirectory -BinDir $binDir -Name "mcc-server"
+    }
+    if (-not $launcher) {
+        $command = Get-ApplicationCommand "mcc-server"
+        if ($command) { $launcher = $command.Source }
+    }
+    if (-not $launcher) {
+        $message = "The server was not restarted: mcc-server was not found after the install."
+        Write-Host $message
+        Write-InstallProgress -Stage 'failed' -Message $message
+        return $false
+    }
+
+    # ---- who holds the port -------------------------------------------------
+    # ONLY of a build that has the question. `cli.entrypoints.serve` ignores
+    # every argument but `--version`, so a 6.72.2 or older `mcc-server
+    # --report-holder 8392` does not fail -- it STARTS A SERVER on the
+    # configured port, and the installer waiting for its answer blocks behind it
+    # for ever. Measured on the real installer at 20:12 on 2026-09-11. The
+    # version is the one thing every build has always answered.
+    $report = $null
+    if (Test-VersionAtLeast -Version $InstalledVersion -Minimum $RestartAwareVersion) {
+        $report = Get-PortHolderDocument -Launcher $launcher -ReachableHost $address.ReachableHost -Port $address.Port
+    }
+    else {
+        Write-InstallLog ("Installed version " + $InstalledVersion + " predates --report-holder; not asking it.")
+    }
+    if ($null -eq $report) {
+        # The installed mcc-server predates --report-holder (a pinned -Version,
+        # or the first install of this release, whose wheel is the one BEFORE
+        # it). It cannot classify the port holder, and this script must not try:
+        # deciding which processes My Claude Code may stop in PowerShell is the
+        # second opinion that has no business existing.
+        #
+        # What it CAN do without classifying anything is ask whether the port is
+        # occupied at all -- a TCP connect, which stops nothing and identifies
+        # nothing. A free port is safe to start into; an occupied one is
+        # reported and left exactly as it is.
+        if (Test-PortIsOccupied -ReachableHost $address.ReachableHost -Port $address.Port) {
+            $message = "Port $($address.Port) is in use and this build of mcc-server cannot say by what, so nothing was stopped and nothing was started. Run the installer again once this version is installed, or stop the server yourself and start it with: mcc-server"
+            Write-Host $message
+            Write-InstallLog $message
+            $script:InstallProgressRestarted = $false
+            Write-InstallProgress -Stage 'done' -Message $message
+            return $false
+        }
+        Write-Host "Nothing is listening on port $($address.Port); starting the server."
+        Write-InstallLog "The installed build cannot classify a port holder, and nothing holds the port; starting."
+        return (Start-AndProveServer -Launcher $launcher -InstalledVersion $InstalledVersion -HealthUrl $healthUrl -Port $address.Port)
+    }
+    Write-OtherServerReport -Document $report
+    $holderDescription = ""
+    try { $holderDescription = [string] $report.holder_description } catch { $holderDescription = "" }
+    $holderIsOurs = $false
+    try { $holderIsOurs = [bool] $report.holder.is_mcc_server } catch { $holderIsOurs = $false }
+    $holderPid = 0
+    try { if ($null -ne $report.holder.pid) { $holderPid = [int] $report.holder.pid } } catch { $holderPid = 0 }
+    $script:InstallProgressHolder = $holderDescription
+
+    if ($holderPid -gt 0 -and (-not $holderIsOurs)) {
+        # Invariant 1, in the one place it matters most: a foreign holder of
+        # the port is never killed, by any path.
+        $reason = ""
+        try { $reason = [string] $report.holder.reason } catch { $reason = "" }
+        $message = "Port $($address.Port) is held by $holderDescription, which is not a My Claude Code server. Nothing was stopped and nothing was started."
+        Write-Host ""
+        Write-Host $message
+        if ($reason) { Write-Host "  ($reason)" }
+        Write-InstallLog $message
+        $script:InstallProgressRestarted = $false
+        Write-InstallProgress -Stage 'done' -Message $message
+        return $false
+    }
+
+    # ---- stop exactly that one server --------------------------------------
+    if ($holderPid -gt 0) {
+        Write-InstallProgress -Stage 'stopping' -Message "Stopping the server on port $($address.Port)."
+        Write-Host "Stopping $holderDescription."
+        $stopped = Stop-PortHolderServer -Launcher $launcher -ReachableHost $address.ReachableHost -Port $address.Port
+        $stopMessage = ""
+        try { $stopMessage = [string] $stopped.message } catch { $stopMessage = "" }
+        if ($stopMessage) {
+            Write-Host $stopMessage
+            Write-InstallLog $stopMessage
+        }
+        $portFree = $false
+        try { $portFree = [bool] $stopped.port_free } catch { $portFree = $false }
+        if (-not $portFree) {
+            $message = "The server on port $($address.Port) could not be stopped, so nothing was started. $stopMessage"
+            Write-Host $message
+            Write-InstallLog $message
+            $script:InstallProgressRestarted = $false
+            Write-InstallProgress -Stage 'failed' -Message $message
+            return $false
+        }
+    }
+    else {
+        Write-Host "Nothing was listening on port $($address.Port); starting the server."
+        Write-InstallLog "Nothing held the port; starting the server."
+    }
+
+    # ---- start the new one --------------------------------------------------
+    return (Start-AndProveServer -Launcher $launcher -InstalledVersion $InstalledVersion -HealthUrl $healthUrl -Port $address.Port)
+}
+
+function Start-AndProveServer {
+    <#
+        .SYNOPSIS
+        Start mcc-server detached and wait for /health. Returns $true when a
+        listener answers.
+
+        .DESCRIPTION
+        The second half of the restart, in a function of its own because two
+        paths reach it -- the ordinary one and the fallback for an installed
+        build that cannot classify a port holder -- and a second copy of "start
+        it and prove it" is a second definition of success.
+
+        THIS is the success condition. "The install exited 0" is not: on
+        2026-09-11 two installs exited 0 fifteen minutes apart and the machine
+        had no server through either of them.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Launcher,
+        [Parameter(Mandatory = $true)][string] $InstalledVersion,
+        [Parameter(Mandatory = $true)][string] $HealthUrl,
+        [Parameter(Mandatory = $true)][int] $Port
+    )
+
+    Write-InstallProgress -Stage 'starting' -Message "Starting My Claude Code $InstalledVersion."
+    $updatesDir = Join-Path (Get-MccConfigDir) "updates"
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $startOut = Join-Path $updatesDir ("server-start-" + $stamp + ".log")
+    $startErr = Join-Path $updatesDir ("server-start-" + $stamp + ".err.log")
+    $child = $null
+    try {
+        $child = Start-MccServerDetached -Launcher $Launcher -StdOutPath $startOut -StdErrPath $startErr
+    }
+    catch {
+        $message = "The server could not be started: $($_.Exception.Message) The previous version is no longer installed; run the installer again."
+        Write-Host $message
+        Write-InstallLog $message
+        $script:InstallProgressRestarted = $false
+        Write-InstallProgress -Stage 'failed' -Message $message
+        return $false
+    }
+    Write-Host "Started mcc-server (pid $($child.Id)). Waiting for it to answer $HealthUrl."
+    Write-InstallLog ("Started mcc-server, pid " + $child.Id + "; waiting for " + $HealthUrl + ".")
+
+    # ---- prove it -----------------------------------------------------------
+    if (Wait-ForServerHealth -Url $HealthUrl -BudgetSeconds (Get-ServerStartTimeoutSeconds)) {
+        $script:InstallProgressRestarted = $true
+        $message = "My Claude Code $InstalledVersion is installed and answering on port $Port."
+        Write-Host $message
+        Write-InstallLog $message
+        Write-InstallProgress -Stage 'done' -Message $message
+        return $true
+    }
+
+    # The child is detached and this process is not its parent, so there is no
+    # exit code to read from a handle we do not hold. What there IS: whether the
+    # pid is still alive, and everything it wrote before it stopped.
+    $exitCode = "the process did not exit"
+    try {
+        if (-not (Get-Process -Id $child.Id -ErrorAction SilentlyContinue)) {
+            $exitCode = "the process exited (see its output below)"
+        }
+    }
+    catch { $exitCode = "unknown" }
+    $detail = Get-ChildFailureDetail -Path $startErr
+    if (-not $detail) { $detail = Get-ChildFailureDetail -Path $startOut }
+    $message = "The new server did not answer $HealthUrl. Exit code: $exitCode. The previous version is no longer installed; run the installer again."
+    Write-Host ""
+    Write-Host $message
+    Write-Host "Its output is in: $startErr"
+    if ($detail) {
+        Write-Host "Last lines:"
+        Write-Host $detail
+    }
+    Write-InstallLog $message
+    if ($detail) { Write-InstallLog $detail }
+    $script:InstallProgressRestarted = $false
+    Write-InstallProgress -Stage 'failed' -Message $message
+    return $false
+}
+
 function Write-InstallProgress {
     <#
         .SYNOPSIS
@@ -1526,6 +2378,11 @@ function Write-InstallProgress {
             version          = $script:InstallProgressVersion
             log              = $script:InstallProgressLog
             source           = 'install.ps1'
+            # What this episode did about the server. `restarted` is $null
+            # until a restart is attempted, so "we never tried" and "we tried
+            # and failed" are different answers rather than the same false.
+            restarted        = $script:InstallProgressRestarted
+            holder           = $script:InstallProgressHolder
         }
         $line = ($record | ConvertTo-Json -Compress) + [Environment]::NewLine
         [System.IO.File]::AppendAllText($script:InstallProgressPath, $line, $script:InstallProgressEncoding)
@@ -1544,6 +2401,10 @@ function Get-InstallStageRank {
     param([Parameter(Mandatory = $true)][string] $Stage)
 
     switch ($Stage) {
+        # Rank 0: the marker that OPENS an episode, written before any work.
+        # The monotonic guard reads rank 0 as "keep the rank you had", so a
+        # marker never blocks the stage that follows it.
+        'episode' { return 0 }
         'waiting-for-parent' { return 1 }
         'staging' { return 2 }
         'stopping' { return 3 }
@@ -1597,10 +2458,32 @@ function Initialize-InstallProgress {
             [System.IO.File]::WriteAllText($script:InstallProgressLog, '', $script:InstallProgressEncoding)
         }
         $script:InstallProgressPath = Join-Path $updatesDir "progress.json"
-        # A fresh episode starts a fresh file, exactly as the helper does: a
-        # stale 'done' left by the previous update would otherwise be the
-        # first thing a reader sees and believes.
-        [System.IO.File]::WriteAllText($script:InstallProgressPath, '', $script:InstallProgressEncoding)
+        # APPEND. Until 6.73.0 this line truncated the receipt, and at 15:04 on
+        # 2026-09-11 that erased the whole record of the update helper that had
+        # finished two minutes earlier -- while a desktop window was supposed
+        # to be reading it. An episode is opened by a MARKER record instead, so
+        # a reader that arrives a minute late can still find where the current
+        # episode begins (decision Q5).
+        #
+        # Written here rather than through Write-InstallProgress because that
+        # function's first act is to call this one.
+        $marker = [ordered]@{
+            stage           = 'episode'
+            message         = 'An update started.'
+            at              = (Get-Date).ToUniversalTime().ToString('o')
+            parent          = 0
+            helper_pid      = $PID
+            started_at      = $script:InstallProgressStarted
+            elapsed_seconds = 0
+            helper_done     = $false
+            version         = $script:InstallProgressVersion
+            log             = $script:InstallProgressLog
+            source          = 'install.ps1'
+            restarted       = $null
+            holder          = ''
+        }
+        $markerLine = ($marker | ConvertTo-Json -Compress) + [Environment]::NewLine
+        [System.IO.File]::AppendAllText($script:InstallProgressPath, $markerLine, $script:InstallProgressEncoding)
     }
     catch {
         $script:InstallProgressPath = ""
@@ -2286,6 +3169,21 @@ if ((-not [string]::IsNullOrWhiteSpace($TorchBackend)) -and (-not ($VoiceLocal -
 
 Add-KnownBinDirectories
 
+# ONE update at a time, whichever path started it (decision Q5). A second
+# installer does not queue and does not install: it names the owner, points at
+# the transcript that owner is writing, and exits 0.
+if (-not (Enter-UpdateLock)) {
+    Write-WatchingInsteadNotice -Owner $script:UpdateLockOwner
+    return
+}
+
+# Everything from here to the end runs under the lock. The body below keeps its
+# original indentation deliberately: this `try` exists only so the lock is
+# released on every path out, a throw from any step included, and reindenting
+# three hundred lines to say so would bury the change that matters under
+# whitespace.
+try {
+
 Write-Step "Ensuring uv $MinUvVersion or newer is installed"
 Ensure-Uv
 
@@ -2303,6 +3201,7 @@ try {
     $InstalledVersion = Install-FreeClaudeCode
 }
 catch {
+    $script:InstallProgressRestarted = $false
     Write-InstallProgress -Stage 'failed' -Message 'The install failed.'
     throw
 }
@@ -2375,4 +3274,30 @@ else {
 # The terminal record. Every branch above ends here, so whichever way the
 # install went, the receipt stops saying "installing" and the helper-alive gate
 # reopens for everyone else.
-Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'
+#
+# With -Restart the terminal record is the RESTART's: `done` with
+# `restarted: true` once a listener answers /health on the configured port, and
+# `failed` with the child's exit code and the last lines it wrote when it never
+# does. "The install exited 0" is not success -- on 2026-09-11 two installs
+# exited 0 fifteen minutes apart with the user's server down through both.
+if ($script:NoStartRequested) {
+    Write-Host ""
+    if ($script:RestartRequested) {
+        Write-Host "No server was started: -NoStart (or MCC_INSTALL_NO_START=1) overrides -Restart."
+    }
+    else {
+        Write-Host "No server was started. Start one with: mcc-server"
+    }
+    Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'
+}
+elseif ($script:RestartRequested -and (-not $DryRun) -and (-not $script:Deferred)) {
+    $null = Invoke-RestartAfterInstall -InstalledVersion $InstalledVersion
+}
+else {
+    Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'
+}
+
+}
+finally {
+    Exit-UpdateLock
+}
