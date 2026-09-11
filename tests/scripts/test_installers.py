@@ -2228,6 +2228,25 @@ def test_staged_install_keeps_a_locked_shim_and_repoints_the_receipt(
     script.write_text(
         "Set-StrictMode -Version Latest\n"
         "$ErrorActionPreference = 'Stop'\n"
+        # Since 6.71.0 every native command this installer runs is also teed
+        # into the episode's transcript, so the receipt family comes with
+        # `Invoke-NativeCommand` -- including its `$script:` initialisers,
+        # whose absence was itself the bug this release fixes.
+        + f'$env:MCC_CONFIG_DIR = "{tmp_path.as_posix()}/config"\n'
+        + '$script:InstallProgressPath = ""\n'
+        + '$script:InstallProgressLog = ""\n'
+        + "$script:InstallProgressEncoding = $null\n"
+        + "$script:InstallProgressStarted = 0\n"
+        + '$script:InstallProgressVersion = ""\n'
+        + "$script:InstallProgressRank = 0\n"
+        + _extract_function_definition(source, "Get-MccConfigDir")
+        + "\n"
+        + _extract_function_definition(source, "Get-InstallStageRank")
+        + "\n"
+        + _extract_function_definition(source, "Initialize-InstallProgress")
+        + "\n"
+        + _extract_function_definition(source, "Write-InstallLog")
+        + "\n"
         + _extract_function_definition(source, "Format-Argument")
         + "\n"
         + _extract_function_definition(source, "Format-Command")

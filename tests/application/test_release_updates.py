@@ -741,16 +741,27 @@ def test_deferred_helper_writes_the_receipt_without_a_bom(tmp_path) -> None:
     relaunch attempt.
     """
     script = _deferred_script(tmp_path)
-    # Five whole-file writes: the progress truncation, the "could not be
-    # stopped" result, and the outcome receipt TWICE -- once before the server
-    # is started and once after, so the receipt on disk is complete even if the
-    # helper dies during the relaunch, and so it can then say whether a server
-    # is running (6.58.3 starts one on the failure branch too).
-    assert script.count("[System.IO.File]::WriteAllText") == 5
-    assert script.count("[System.IO.File]::AppendAllText") == 1
-    # One shared encoder object for the progress receipt, plus one at each of
-    # the four whole-file writes that do not share it.
-    assert script.count("UTF8Encoding($false)") == 5
+    # Six whole-file writes: the progress truncation, the install transcript's
+    # truncation (6.71.0 -- a fresh episode starts a fresh transcript exactly as
+    # it starts a fresh receipt), the "could not be stopped" result, and the
+    # outcome receipt TWICE -- once before the server is started and once after,
+    # so the receipt on disk is complete even if the helper dies during the
+    # relaunch, and so it can then say whether a server is running (6.58.3
+    # starts one on the failure branch too).
+    assert script.count("[System.IO.File]::WriteAllText") == 6
+    # Two appenders: one per stage record, one per line of installer output.
+    # Both append a line at a time rather than holding a stream open, so a
+    # reader in another process sees each line the moment it exists and a
+    # killed helper never truncates what it already said.
+    assert script.count("[System.IO.File]::AppendAllText") == 2
+    # One shared encoder object for the progress receipt and the transcript,
+    # plus one at each of the four whole-file writes that do not share it, plus
+    # 6.71.0's console output encoding -- uv draws its diagnostics with
+    # box-drawing characters and PowerShell decodes a native command's output
+    # with the console code page, so without this the transcript carried
+    # mojibake where uv had drawn a tree.
+    assert script.count("UTF8Encoding($false)") == 6
+    assert "[Console]::OutputEncoding" in script
     assert "Set-Content" not in script
     first_write = script.index("[System.IO.File]::WriteAllText")
     launch = script.index("Start-Process -FilePath")
@@ -1220,3 +1231,154 @@ def test_a_receipt_that_cannot_be_read_still_renders_a_version(monkeypatch) -> N
     assert status.shell_installed_tag is None
     assert status.shell_pinned_tag is None
     assert status.shell_update_available is False
+
+
+# -- 6.71.0: see everything happening during an update -------------------------
+
+
+def test_the_helper_names_its_install_log_in_every_record(tmp_path) -> None:
+    """Decision Q2: one progress document, and it points at the transcript.
+
+    A window that had to guess the transcript's name would guess wrong exactly
+    when two updates happen close together, because the stamp belongs to the
+    episode. So the path is written into every record and read back off it.
+    """
+
+    log = tmp_path / "install-20260911-082114.log"
+    script = release_updates._deferred_helper_script(
+        uv_executable="uv",
+        command=["uv", "tool", "install", "--force", "pkg"],
+        result_path=tmp_path / "r.json",
+        stage_dir=tmp_path,
+        server_launcher=tmp_path / "bin" / "fcc-server.exe",
+        working_directory=tmp_path / "cwd",
+        install_log=log,
+    )
+
+    assert f"$installLog = '{log}'" in script
+    # One record shape, one place it is built, and `log` is part of it.
+    assert "log = $installLog" in script
+    assert "elapsed_seconds = $elapsed" in script
+
+
+def test_the_helper_tees_uv_output_while_it_happens(tmp_path) -> None:
+    """Not at the end. The end is two minutes too late.
+
+    Until 6.71.0 uv's two streams went into a PowerShell variable and were
+    written out once the episode was over, into ``pending-upgrade.json`` -- so
+    during the only part of an update anyone cares about there was nothing on
+    disk to look at at all (spec F7).
+    """
+
+    script = _deferred_script(tmp_path)
+
+    # Every uv invocation streams through a per-line append, and there are two
+    # of them: the fast path and the staged fallback.
+    assert (
+        script.count(
+            "ForEach-Object { $line = Convert-OutputLine $_; Write-InstallLog $line; $line }"
+        )
+        == 2
+    )
+    assert "$output = & 'uv'" in script
+    # A transcript nobody can write is never the reason an update fails.
+    assert "function Write-InstallLog($text)" in script
+
+
+def test_the_helper_reports_handing_off_not_starting_under_no_restart(
+    tmp_path,
+) -> None:
+    """Spec F6, seen in the live 6.66.1 receipt.
+
+    ``$noRestart`` was first READ at the branch that chooses a stage and first
+    ASSIGNED three hundred lines further down. PowerShell answers ``$null`` for
+    an unassigned variable and ``$null`` is falsey, so the helper wrote
+    ``starting`` -- "Starting the updated server." -- under the very flag that
+    tells it not to start one, twenty-two milliseconds before a ``done`` record
+    saying the desktop app starts it.
+    """
+
+    script = release_updates._deferred_helper_script(
+        uv_executable="uv",
+        command=["uv", "tool", "install", "--force", "pkg"],
+        result_path=tmp_path / "r.json",
+        stage_dir=tmp_path,
+        server_launcher=tmp_path / "bin" / "fcc-server.exe",
+        working_directory=tmp_path / "cwd",
+        no_restart=True,
+    )
+
+    # Assigned exactly once, and before every read of it.
+    assert script.count("$noRestart = $true") == 1
+    assert script.index("$noRestart = $true") < script.index("if ($noRestart)")
+    assert (
+        "Write-Stage 'handing-off' 'Installed. Handing the restart to the desktop app.'"
+        in script
+    )
+    # And the false stage is gone from that branch.
+    handing_off = script.index("Write-Stage 'handing-off'")
+    starting = script.index("Write-Stage 'starting'")
+    assert handing_off < starting, "the no-restart branch comes first"
+
+
+def test_the_helper_never_writes_an_earlier_stage_than_the_one_before(
+    tmp_path,
+) -> None:
+    """Monotonic stages, so a window can draw them as a timeline.
+
+    The guard lives in ``Write-Stage`` rather than at each call site: there are
+    eleven of them and a rule enforced eleven times is a rule that will be
+    broken once.
+    """
+
+    script = _deferred_script(tmp_path)
+
+    assert "$script:StageRank = 0" in script
+    assert "if ($rank -lt $script:StageRank) { return }" in script
+    for stage, rank in (
+        ("waiting-for-parent", 1),
+        ("stopping", 2),
+        ("installing", 3),
+        ("verifying", 4),
+        ("starting", 5),
+        ("handing-off", 5),
+        ("done", 6),
+    ):
+        assert f"'{stage}' = {rank}" in script, stage
+    # The PowerShell table and the Python one are the same table.
+    for stage, rank in update_progress.UPDATE_PROGRESS_STAGE_ORDER.items():
+        assert f"'{stage}' = {rank}" in script, stage
+
+
+def test_the_helper_writes_the_stages_in_the_order_they_happen(tmp_path) -> None:
+    script = _deferred_script(tmp_path)
+    order = [
+        script.index(f"Write-Stage '{stage}'")
+        for stage in ("waiting-for-parent", "stopping", "installing", "verifying")
+    ]
+    assert order == sorted(order), order
+
+
+def test_the_upgrade_response_names_both_files_before_the_server_stops() -> None:
+    """Spec F7: a browser tab loses its only channel the moment the server does.
+
+    So the response that TRIGGERS the update carries the two paths, while there
+    is still a server to carry them, and the dashboard shows them instead of
+    one frozen sentence.
+    """
+
+    result = release_updates.UpgradeResult(
+        ok=True,
+        message="staged",
+        log_path="C:/config/updates/install-20260911-082114.log",
+        progress_path="C:/config/updates/progress.json",
+    )
+    payload = result.as_dict()
+    assert payload["log_path"] == "C:/config/updates/install-20260911-082114.log"
+    assert payload["progress_path"] == "C:/config/updates/progress.json"
+
+    # And a result that has neither -- the POSIX path, where the install
+    # happens in this process -- says so rather than inventing one.
+    bare = release_updates.UpgradeResult(ok=False, message="no").as_dict()
+    assert bare["log_path"] is None
+    assert bare["progress_path"] is None

@@ -953,6 +953,9 @@ struct Lifecycle {
     holder: controller::Holder,
     holder_since: Instant,
     helper: controller::Helper,
+    /// What the update in flight is saying about itself, refreshed on every
+    /// tick beside `helper` and from the same file.
+    update: controller::UpdateNarration,
     status_health: controller::StatusHealth,
     last_probe: Instant,
     last_spawn: Option<Instant>,
@@ -977,6 +980,7 @@ impl Lifecycle {
             holder: controller::Holder::Unknown,
             holder_since: Instant::now(),
             helper: controller::Helper::None,
+            update: controller::UpdateNarration::default(),
             status_health: controller::StatusHealth::Ok,
             // Far enough in the past that the first tick is a fresh one.
             last_probe: Instant::now() - Duration::from_secs(3600),
@@ -1131,6 +1135,14 @@ impl Lifecycle {
             .or_else(last_config_dir);
         if let Some(directory) = directory {
             self.helper = helper_state(&directory);
+            // And everything the update is saying about itself, on the same
+            // tick and from the same file. 6.71.0: the window shows the stage
+            // timeline and the installer's own last lines rather than one
+            // frozen sentence, and it reads them HERE -- directly, off the one
+            // progress document -- rather than through `--print-status`, which
+            // is the command that cannot answer during the very minutes this
+            // exists to narrate (spec F9, decision Q7).
+            self.update = update_narration(&directory);
         }
     }
 
@@ -1239,6 +1251,7 @@ impl Lifecycle {
             holder: self.holder,
             holder_age: self.holder_since.elapsed().as_secs_f64(),
             helper: self.helper.clone(),
+            update: self.update.clone(),
             status: self.status_health.clone(),
             child_alive,
             since_last_start: self.last_spawn.map(|at| at.elapsed().as_secs_f64()),
@@ -1300,6 +1313,32 @@ fn holder_from(status: &Status) -> controller::Holder {
 /// the helper's last record are exactly the seconds in which `mcc-desktop`
 /// cannot answer, and a window that cannot date the record has to treat a
 /// finished update from last month like one that ended a moment ago.
+/// The narration of an update in flight: its stages, its elapsed time, and the
+/// tail of the transcript the installer is writing right now.
+///
+/// Mirrored into the controller's own plain types rather than handed over as
+/// the reader module's, for the same reason `ChildExit` is: `controller::step`
+/// is a pure function of plain data.
+fn update_narration(config_dir: &str) -> controller::UpdateNarration {
+    let narration: update_progress::Narration = update_progress::narration(config_dir);
+    controller::UpdateNarration {
+        stages: narration
+            .stages
+            .into_iter()
+            .map(|record| controller::UpdateStage {
+                stage: record.stage,
+                message: record.message,
+                at: record.at,
+                elapsed_seconds: record.elapsed_seconds,
+            })
+            .collect(),
+        log_path: narration.log_path,
+        log_tail: narration.log_tail,
+        helper_pid: narration.helper_pid,
+        elapsed_seconds: narration.elapsed_seconds,
+    }
+}
+
 fn helper_state(config_dir: &str) -> controller::Helper {
     if let Some(helper) = update_progress::active_helper(config_dir) {
         return controller::Helper::Alive {

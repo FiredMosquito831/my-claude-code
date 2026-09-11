@@ -85,6 +85,31 @@ $script:RenamedWhileRunning = $false
 # canonical tool-dir path, and that path now holds the NEW install -- so these
 # are reported as "refresh on the next install", never as failures.
 $script:ShimsKeptInPlace = @()
+# The update receipt this install shares with the deferred helper and with the
+# desktop shell (src/my_claude_code/config/update_progress.py). EVERY ONE OF
+# THESE FIVE MUST BE ASSIGNED HERE.
+#
+# `Set-StrictMode -Version Latest` above makes *retrieving* an unset variable a
+# terminating error, and Write-InstallProgress's first act was
+# `if (-not $script:InstallProgressPath)` against a variable nothing ever
+# assigned. Its own `catch` -- there so that a receipt nobody can write is
+# never the reason an install fails -- swallowed the error, so this script
+# wrote NO RECEIPT AT ALL on Windows, silently, for the whole of 6.59.0 to
+# 6.70.1. Measured on PowerShell 5.1 and pwsh 7 on 2026-09-10: the `updates`
+# directory was not even created. The 6.59.0 contract ("a hand-run installer is
+# visible to the helper-alive gate") was therefore inert, and on 2026-09-09 at
+# 11:22 this script and the dashboard's helper installed over each other on the
+# reporter's machine. The tests that "pinned" the receipt only grepped this
+# file's text; `test_the_powershell_receipt_function_actually_writes_a_record`
+# now RUNS it, under StrictMode, on both PowerShell editions.
+$script:InstallProgressPath = ""
+$script:InstallProgressLog = ""
+$script:InstallProgressEncoding = $null
+$script:InstallProgressStarted = 0
+$script:InstallProgressVersion = ""
+# How far through an episode the last record was. Stages are monotonic, so an
+# episode never goes backwards and a window can draw them as a timeline.
+$script:InstallProgressRank = 0
 $script:EnableRtk = $Rtk.IsPresent
 $script:EnableDesktop = $Desktop.IsPresent
 # Set by New-DesktopShortcut so the closing message reports what actually
@@ -156,6 +181,9 @@ function Invoke-NativeCommand {
         return
     }
 
+    # The transcript the desktop window tails. Every native command this
+    # installer runs goes through here, so naming it here covers all of them.
+    Write-InstallLog "+ $commandText"
     $global:LASTEXITCODE = 0
     if ([string]::IsNullOrWhiteSpace($CaptureTo)) {
         & $FilePath @Arguments
@@ -174,8 +202,13 @@ function Invoke-NativeCommand {
         # would end the install before uv had finished. Capturing is a read.
         $ErrorActionPreference = "Continue"
         try {
+            # The second tee is 6.71.0's, and it is deliberately an append per
+            # line rather than a second Tee-Object: Tee-Object holds its file
+            # open for the whole pipeline, which is fine for a capture nothing
+            # reads until the end, and useless for a transcript another process
+            # is tailing WHILE the install happens.
             & $FilePath @Arguments 2>&1 |
-                ForEach-Object { [string] $_ } |
+                ForEach-Object { $line = Convert-OutputLine $_; Write-InstallLog $line; $line } |
                 Tee-Object -FilePath $CaptureTo
         }
         finally {
@@ -183,6 +216,7 @@ function Invoke-NativeCommand {
         }
     }
     $exitCode = $LASTEXITCODE
+    Write-InstallLog "exit $exitCode"
     if ($exitCode -ne 0) {
         throw "Command failed with exit code ${exitCode}: $commandText"
     }
@@ -1435,32 +1469,171 @@ function Write-InstallProgress {
         return
     }
     try {
+        Initialize-InstallProgress
         if (-not $script:InstallProgressPath) {
-            $updatesDir = Join-Path (Get-MccConfigDir) "updates"
-            if (-not (Test-Path -LiteralPath $updatesDir)) {
-                New-Item -ItemType Directory -Path $updatesDir -Force | Out-Null
-            }
-            $script:InstallProgressPath = Join-Path $updatesDir "progress.json"
-            $script:InstallProgressEncoding = New-Object System.Text.UTF8Encoding($false)
-            $script:InstallProgressStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-            # A fresh episode starts a fresh file, exactly as the helper does: a
-            # stale 'done' left by the previous update would otherwise be the
-            # first thing a reader sees and believes.
-            [System.IO.File]::WriteAllText($script:InstallProgressPath, '', $script:InstallProgressEncoding)
+            return
+        }
+        # Monotonic, exactly as the deferred helper is: an episode only moves
+        # forward, so a window can draw the records as a timeline. A stage this
+        # table does not know is written rather than dropped.
+        $rank = Get-InstallStageRank $Stage
+        if ($rank -eq 0) {
+            $rank = $script:InstallProgressRank
+        }
+        if ($rank -lt $script:InstallProgressRank) {
+            return
+        }
+        $script:InstallProgressRank = $rank
+        $elapsed = [math]::Round(
+            [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() / 1000.0 - $script:InstallProgressStarted, 3)
+        if ($elapsed -lt 0) {
+            $elapsed = 0
         }
         $record = [ordered]@{
-            stage       = $Stage
-            message     = $Message
-            at          = (Get-Date).ToUniversalTime().ToString('o')
-            parent      = 0
-            helper_pid  = $PID
-            started_at  = $script:InstallProgressStarted
-            helper_done = ($Stage -in @('done', 'failed', 'recovered'))
-            version     = $script:InstallProgressVersion
-            source      = 'install.ps1'
+            stage            = $Stage
+            message          = $Message
+            at               = (Get-Date).ToUniversalTime().ToString('o')
+            parent           = 0
+            helper_pid       = $PID
+            started_at       = $script:InstallProgressStarted
+            elapsed_seconds  = $elapsed
+            helper_done      = ($Stage -in @('done', 'failed', 'recovered'))
+            version          = $script:InstallProgressVersion
+            log              = $script:InstallProgressLog
+            source           = 'install.ps1'
         }
         $line = ($record | ConvertTo-Json -Compress) + [Environment]::NewLine
         [System.IO.File]::AppendAllText($script:InstallProgressPath, $line, $script:InstallProgressEncoding)
+    }
+    catch {
+    }
+}
+
+function Get-InstallStageRank {
+    <#
+        .SYNOPSIS
+        How far through an episode a stage is; 0 for one this build does not
+        know. The same table as config/update_progress.py's
+        UPDATE_PROGRESS_STAGE_ORDER, and a contract test compares them.
+    #>
+    param([Parameter(Mandatory = $true)][string] $Stage)
+
+    switch ($Stage) {
+        'waiting-for-parent' { return 1 }
+        'stopping' { return 2 }
+        'installing' { return 3 }
+        'verifying' { return 4 }
+        'starting' { return 5 }
+        'handing-off' { return 5 }
+        'done' { return 6 }
+        'failed' { return 6 }
+        'recovered' { return 6 }
+        default { return 0 }
+    }
+}
+
+function Initialize-InstallProgress {
+    <#
+        .SYNOPSIS
+        Open this episode's receipt and transcript, once. Never throws.
+
+        .DESCRIPTION
+        MCC_INSTALL_LOG is how a caller that already owns a transcript -- the
+        deferred update helper, which starts this script for its own recovery
+        ladder -- gets ONE file for the whole episode instead of two half
+        stories. Unset, this install opens its own `install-<stamp>.log` beside
+        the receipt, which is what a hand-run `irm install.ps1 | iex` wants.
+    #>
+
+    if ($script:InstallProgressPath) {
+        return
+    }
+    try {
+        $updatesDir = Join-Path (Get-MccConfigDir) "updates"
+        if (-not (Test-Path -LiteralPath $updatesDir)) {
+            New-Item -ItemType Directory -Path $updatesDir -Force | Out-Null
+        }
+        $script:InstallProgressEncoding = New-Object System.Text.UTF8Encoding($false)
+        $script:InstallProgressStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $shared = ""
+        if (Test-Path Env:\MCC_INSTALL_LOG) {
+            $shared = [string] $env:MCC_INSTALL_LOG
+        }
+        if ($shared) {
+            # Someone else's episode. Append to it; do NOT truncate it.
+            $script:InstallProgressLog = $shared
+        }
+        else {
+            $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+            $script:InstallProgressLog = Join-Path $updatesDir ("install-" + $stamp + ".log")
+            [System.IO.File]::WriteAllText($script:InstallProgressLog, '', $script:InstallProgressEncoding)
+        }
+        $script:InstallProgressPath = Join-Path $updatesDir "progress.json"
+        # A fresh episode starts a fresh file, exactly as the helper does: a
+        # stale 'done' left by the previous update would otherwise be the
+        # first thing a reader sees and believes.
+        [System.IO.File]::WriteAllText($script:InstallProgressPath, '', $script:InstallProgressEncoding)
+    }
+    catch {
+        $script:InstallProgressPath = ""
+    }
+}
+
+function Convert-OutputLine {
+    <#
+        .SYNOPSIS
+        One line of a native command's merged output, as text.
+
+        .DESCRIPTION
+        `2>&1` turns every stderr line into an ErrorRecord, whose default
+        string form is sometimes the exception's TYPE NAME rather than what was
+        written -- "System.Management.Automation.RemoteException" appeared in
+        the middle of uv's own diagnostics on 2026-09-11. The message is the
+        line the command actually printed.
+    #>
+    param([object] $Value)
+
+    if ($null -eq $Value) {
+        return ""
+    }
+    if ($Value -is [System.Management.Automation.ErrorRecord]) {
+        return [string] $Value.Exception.Message
+    }
+    return [string] $Value
+}
+
+function Write-InstallLog {
+    <#
+        .SYNOPSIS
+        Append one line to this episode's installer transcript, as it happens.
+
+        .DESCRIPTION
+        One AppendAllText per line rather than a held stream, so a reader in
+        another process -- the desktop window, which tails this file every tick
+        -- sees the line the moment it exists, and so a killed install does not
+        truncate what it already said. Never throws.
+    #>
+    param([string] $Text)
+
+    if ($DryRun) {
+        return
+    }
+    try {
+        Initialize-InstallProgress
+        if (-not $script:InstallProgressLog) {
+            return
+        }
+        $stampNow = (Get-Date).ToUniversalTime().ToString('HH:mm:ss')
+        # An ErrorRecord is what `2>&1` makes of a stderr line, and its default
+        # string form is sometimes the exception's type name rather than what
+        # was written. The message is the line the command actually printed.
+        $body = if ($null -eq $Text) { "" }
+            elseif ($Text -is [System.Management.Automation.ErrorRecord]) { [string] $Text.Exception.Message }
+            else { [string] $Text }
+        [System.IO.File]::AppendAllText(
+            $script:InstallProgressLog,
+            ("[" + $stampNow + "] " + $body + [Environment]::NewLine),
+            $script:InstallProgressEncoding)
     }
     catch {
     }
@@ -2020,6 +2193,10 @@ if ($script:RenamedWhileRunning) {
     # is the same full check as any other install -- it is not relaxed because
     # something was running.
     Write-Step "Configuring PATH and verifying My Claude Code"
+    # The timeline's fourth stage. A hand-run install narrates itself in the
+    # same vocabulary the deferred helper uses, so a window watching this file
+    # shows the same sequence whichever installer is running.
+    Write-InstallProgress -Stage 'verifying' -Message 'Checking that every command is in place.'
     Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
 
     Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling")
@@ -2062,6 +2239,7 @@ elseif ($DryRun) {
 }
 else {
     Write-Step "Configuring PATH and verifying My Claude Code"
+    Write-InstallProgress -Stage 'verifying' -Message 'Checking that every command is in place.'
     Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
 
     Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling")

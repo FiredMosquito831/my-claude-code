@@ -199,13 +199,21 @@ run_uv_capturing() {
     if [ "$dry_run" -eq 1 ]; then
         return 0
     fi
+    write_install_log "+ $*"
 
     uv_capture_file=$(mktemp "${TMPDIR:-/tmp}/mcc-uv.XXXXXX") || fail "Could not create a temporary file."
     uv_status_file=$(mktemp "${TMPDIR:-/tmp}/mcc-uv-status.XXXXXX") || fail "Could not create a temporary file."
     # A pipeline's $? is the LAST command's, so the exit status travels through
     # a file rather than through the pipe. PIPESTATUS is bash-only and this
     # script runs under /bin/sh.
-    { "$@" 2>&1; printf '%s' "$?" >"$uv_status_file"; } | tee "$uv_capture_file"
+    # Two destinations: the capture file the failure classifier reads at the
+    # end, and this episode's transcript, appended a line at a time WHILE the
+    # install happens because the desktop window tails it every tick.
+    { "$@" 2>&1; printf '%s' "$?" >"$uv_status_file"; } | tee "$uv_capture_file" |
+        while IFS= read -r uv_line; do
+            write_install_log "$uv_line"
+            printf '%s\n' "$uv_line"
+        done
     status=$(cat "$uv_status_file" 2>/dev/null)
     [ -n "$status" ] || status=1
     rm -f "$uv_status_file"
@@ -1069,6 +1077,57 @@ mcc_config_dir() {
 
 install_progress_started=""
 install_progress_path=""
+install_progress_log=""
+install_progress_rank=0
+
+install_stage_rank() {
+    # How far through an episode a stage is; 0 for one this build does not
+    # know. The same table as config/update_progress.py's
+    # UPDATE_PROGRESS_STAGE_ORDER, and a contract test compares them.
+    case "$1" in
+        waiting-for-parent) printf '1' ;;
+        stopping) printf '2' ;;
+        installing) printf '3' ;;
+        verifying) printf '4' ;;
+        starting|handing-off) printf '5' ;;
+        done|failed|recovered) printf '6' ;;
+        *) printf '0' ;;
+    esac
+}
+
+open_install_progress() {
+    # Open this episode's receipt and transcript, once. Never fails the install.
+    #
+    # MCC_INSTALL_LOG is how a caller that already owns a transcript gets ONE
+    # file for the whole episode instead of two half stories; unset, this
+    # install opens its own install-<stamp>.log beside the receipt.
+    [ -n "$install_progress_path" ] && return 0
+    updates_dir="$(mcc_config_dir)/updates"
+    mkdir -p "$updates_dir" 2>/dev/null || return 1
+    install_progress_started="$(date -u +%s 2>/dev/null || printf '0')"
+    if [ -n "${MCC_INSTALL_LOG:-}" ]; then
+        install_progress_log="$MCC_INSTALL_LOG"
+    else
+        install_progress_log="$updates_dir/install-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || printf 'unknown').log"
+        : > "$install_progress_log" 2>/dev/null || install_progress_log=""
+    fi
+    install_progress_path="$updates_dir/progress.json"
+    # A fresh episode starts a fresh file, exactly as the helper does.
+    : > "$install_progress_path" 2>/dev/null || { install_progress_path=""; return 1; }
+    return 0
+}
+
+write_install_log() {
+    # Append one line to this episode's installer transcript, as it happens.
+    # One append per line, so a reader in another process sees it immediately
+    # and a killed install does not truncate what it already said.
+    [ "$dry_run" -eq 1 ] && return 0
+    open_install_progress || return 0
+    [ -n "$install_progress_log" ] || return 0
+    printf '[%s] %s\n' "$(date -u +%H:%M:%S 2>/dev/null || printf '')" "$1" \
+        >> "$install_progress_log" 2>/dev/null || true
+    return 0
+}
 
 write_install_progress() {
     # Append one liveness record to the update receipt this machine shares --
@@ -1085,20 +1144,23 @@ write_install_progress() {
     if [ "$dry_run" -eq 1 ]; then
         return 0
     fi
-    if [ -z "$install_progress_path" ]; then
-        updates_dir="$(mcc_config_dir)/updates"
-        mkdir -p "$updates_dir" 2>/dev/null || return 0
-        install_progress_path="$updates_dir/progress.json"
-        install_progress_started="$(date -u +%s 2>/dev/null || printf '0')"
-        # A fresh episode starts a fresh file, exactly as the helper does.
-        : > "$install_progress_path" 2>/dev/null || return 0
-    fi
+    open_install_progress || return 0
+    # Monotonic, exactly as the deferred helper is: an episode only moves
+    # forward, so a window can draw the records as a timeline. A stage this
+    # table does not know is written rather than dropped.
+    stage_rank="$(install_stage_rank "$stage")"
+    [ "$stage_rank" -eq 0 ] && stage_rank="$install_progress_rank"
+    [ "$stage_rank" -lt "$install_progress_rank" ] && return 0
+    install_progress_rank="$stage_rank"
+    now_seconds="$(date -u +%s 2>/dev/null || printf '0')"
+    elapsed=$((now_seconds - ${install_progress_started:-0}))
+    [ "$elapsed" -lt 0 ] && elapsed=0
     helper_done=false
     case "$stage" in
         done|failed|recovered) helper_done=true ;;
     esac
-    printf '{"stage":"%s","message":"%s","at":"%s","parent":0,"helper_pid":%s,"started_at":%s,"helper_done":%s,"version":"%s","source":"install.sh"}
-'         "$stage"         "$message"         "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '')"         "$$"         "${install_progress_started:-0}"         "$helper_done"         "${FCC_VERSION:-}"         >> "$install_progress_path" 2>/dev/null || true
+    printf '{"stage":"%s","message":"%s","at":"%s","parent":0,"helper_pid":%s,"started_at":%s,"elapsed_seconds":%s,"helper_done":%s,"version":"%s","log":"%s","source":"install.sh"}
+'         "$stage"         "$message"         "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '')"         "$$"         "${install_progress_started:-0}"         "$elapsed"         "$helper_done"         "${FCC_VERSION:-}"         "$install_progress_log"         >> "$install_progress_path" 2>/dev/null || true
     return 0
 }
 
@@ -1128,6 +1190,10 @@ if ! install_my_claude_code; then
 fi
 
 step "Configuring PATH and verifying My Claude Code"
+# The timeline's fourth stage. A hand-run install narrates itself in the same
+# vocabulary the deferred helper uses, so a window watching this file shows the
+# same sequence whichever installer is running.
+write_install_progress verifying "Checking that every command is in place."
 configure_and_verify_my_claude_code
 
 precompile_bytecode

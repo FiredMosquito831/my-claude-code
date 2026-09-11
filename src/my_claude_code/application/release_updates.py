@@ -42,6 +42,8 @@ from my_claude_code.config.constants import (
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.config.settings import get_settings
 from my_claude_code.config.update_progress import (
+    INSTALL_LOG_PREFIX,
+    INSTALL_LOG_SUFFIX,
     UPDATE_PROGRESS_FILENAME,
     UPDATE_PROGRESS_STAGES,
     UPDATE_STAGE_DIRNAME,
@@ -228,6 +230,17 @@ class UpgradeResult:
     message: str
     installed_version: str | None = None
     log: list[str] = field(default_factory=list)
+    #: Where the installer writes its transcript while it runs, and where the
+    #: stage receipt is appended. Both are named in the response because the
+    #: browser tab that asked for this update is about to lose the server that
+    #: served it (spec F7): once the port stops answering, a page in an
+    #: ordinary tab has no channel left -- it cannot read a file on the disk --
+    #: so the honest thing is to hand over the two paths BEFORE the outage and
+    #: say plainly that the desktop app is the thing that can narrate it.
+    #: ``None`` on the POSIX path, where the install happens in-process and
+    #: there is no deferred helper to tail.
+    log_path: str | None = None
+    progress_path: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -235,6 +248,8 @@ class UpgradeResult:
             "message": self.message,
             "installed_version": self.installed_version,
             "log": self.log,
+            "log_path": self.log_path,
+            "progress_path": self.progress_path,
         }
 
 
@@ -647,6 +662,7 @@ def _deferred_helper_script(
     wait_seconds: float | None = None,
     version: str | None = None,
     no_restart: bool = False,
+    install_log: Path | None = None,
 ) -> str:
     """PowerShell that waits for this process to exit, then installs.
 
@@ -668,10 +684,29 @@ def _deferred_helper_script(
     ``UTF8Encoding($false)``: Windows PowerShell 5.1's ``Set-Content
     -Encoding utf8`` prepends a UTF-8 BOM and the Python reader parses JSON,
     which refuses a leading U+FEFF.
+
+    ``install_log`` is 6.71.0's, and it is the difference between a window that
+    says an install is happening and a window that shows it happening. ``uv``'s
+    two streams used to be collected into a PowerShell ``$output`` variable and
+    written out at the very end, into a file nothing reads until the episode is
+    over -- so for the whole of the two minutes that matter there was literally
+    nothing on disk to look at. They are now appended a line at a time, as they
+    arrive, with an ``AppendAllText`` per line so the bytes are on disk (and
+    readable by another process) the instant they exist rather than whenever a
+    stream buffer happens to flush. Every progress record names the file.
     """
 
     quoted_args = ", ".join(_powershell_literal(arg) for arg in command[1:])
     progress_path = stage_dir / UPDATE_PROGRESS_FILENAME
+    # The caller names the transcript, because it has to hand the path to the
+    # dashboard in the very response that triggers the update -- before the
+    # server it answered with goes away. A caller that does not care gets one
+    # beside the receipt anyway: a helper with nowhere to tee is a helper that
+    # goes quiet for two minutes, which is the whole bug.
+    if install_log is None:
+        install_log = stage_dir / (
+            f"{INSTALL_LOG_PREFIX}{time.strftime('%Y%m%d-%H%M%S')}{INSTALL_LOG_SUFFIX}"
+        )
     wait_budget = (
         _helper_wait_seconds() if wait_seconds is None else float(wait_seconds)
     )
@@ -700,6 +735,44 @@ $parent = {os.getpid()}
 # The desktop window reads this file and says which stage it is in.
 $progressPath = {_powershell_literal(str(progress_path))}
 $progressEncoding = New-Object System.Text.UTF8Encoding($false)
+# uv's own two streams, teed here a line at a time WHILE the install happens.
+# Until 6.71.0 they went into a PowerShell variable and were written out once,
+# at the end, into a file nothing reads until the episode is over -- so during
+# the only part of an update a user cares about there was nothing to look at.
+# Every progress record below names this path so a reader never guesses it.
+$installLog = {_powershell_literal(str(install_log))}
+# One line of a native command's merged output, as text. `2>&1` turns every
+# stderr line into an ErrorRecord, whose default string form is sometimes the
+# exception's TYPE NAME rather than what was written --
+# "System.Management.Automation.RemoteException" appeared in the middle of uv's
+# own diagnostics on 2026-09-11. The message is the line uv actually printed.
+function Convert-OutputLine($value) {{
+    if ($null -eq $value) {{ return '' }}
+    if ($value -is [System.Management.Automation.ErrorRecord]) {{ return [string] $value.Exception.Message }}
+    return [string] $value
+}}
+function Write-InstallLog($text) {{
+    try {{
+        $stampNow = (Get-Date).ToUniversalTime().ToString('HH:mm:ss')
+        $body = Convert-OutputLine $text
+        # One append per line rather than a held stream: a reader in another
+        # process must see the line the moment it exists, and this helper can
+        # be killed at any point without truncating what it already said.
+        [System.IO.File]::AppendAllText($installLog, ('[' + $stampNow + '] ' + $body + [Environment]::NewLine), $progressEncoding)
+    }}
+    catch {{
+        # A transcript nobody can write must never be the reason an update fails.
+    }}
+}}
+# GAP-3, read HERE rather than three hundred lines further down. Until 6.71.0
+# the first read of $noRestart was above its own assignment: PowerShell (no
+# StrictMode in this generated script) answers $null, $null is falsey, and the
+# helper wrote stage 'starting' -- "Starting the updated server." -- under the
+# very flag that tells it not to start one. The live 6.66.1 receipt shows it:
+# a 'starting' record 22 ms before a 'done' record saying the desktop app
+# starts it. The Start-Process itself was always correctly skipped, because
+# that guard sat after the assignment.
+$noRestart = {"$true" if no_restart else "$false"}
 # Liveness, not just narration. Every record carries the helper's own process
 # id, when it started, and whether it has finished, so a reader can answer the
 # one question that stops an update racing itself: IS AN INSTALLER RUNNING
@@ -711,8 +784,33 @@ $helperPid = $PID
 $helperStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $targetVersion = {version_literal}
 $script:HelperDone = $false
+# Stages are MONOTONIC (decision Q2): an episode only ever moves forward, so a
+# window can draw them as a timeline and a reader can tell "still installing"
+# from "installed, starting" without guessing. The ranks are
+# config/update_progress.py's UPDATE_PROGRESS_STAGE_ORDER; the terminal stages
+# share the last rank because an episode ends once and 'failed' may be followed
+# by 'recovered'. A stage this table does not know is written rather than
+# dropped -- a guard that silently swallows records is worse than no guard.
+$stageOrder = @{{
+    'waiting-for-parent' = 1
+    'stopping' = 2
+    'installing' = 3
+    'verifying' = 4
+    'starting' = 5
+    'handing-off' = 5
+    'done' = 6
+    'failed' = 6
+    'recovered' = 6
+}}
+$script:StageRank = 0
 function Write-Stage($stage, $message) {{
     try {{
+        $rank = $stageOrder[$stage]
+        if ($null -eq $rank) {{ $rank = $script:StageRank }}
+        if ($rank -lt $script:StageRank) {{ return }}
+        $script:StageRank = $rank
+        $elapsed = [math]::Round(([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - ($helperStarted * 1000)) / 1000.0, 3)
+        if ($elapsed -lt 0) {{ $elapsed = 0 }}
         $record = [ordered]@{{
             stage = $stage
             message = $message
@@ -720,8 +818,10 @@ function Write-Stage($stage, $message) {{
             parent = $parent
             helper_pid = $helperPid
             started_at = $helperStarted
+            elapsed_seconds = $elapsed
             helper_done = $script:HelperDone
             version = $targetVersion
+            log = $installLog
         }}
         $line = ($record | ConvertTo-Json -Compress) + [Environment]::NewLine
         [System.IO.File]::AppendAllText($progressPath, $line, $progressEncoding)
@@ -733,6 +833,9 @@ function Write-Stage($stage, $message) {{
 # A fresh episode starts a fresh file: a stale 'done' from the previous update
 # would otherwise be the first thing the window reads and believes.
 try {{ [System.IO.File]::WriteAllText($progressPath, '', $progressEncoding) }} catch {{ }}
+try {{ [System.IO.File]::WriteAllText($installLog, '', $progressEncoding) }} catch {{ }}
+Write-InstallLog ('My Claude Code update helper, pid ' + $helperPid + ', target ' + $(if ($targetVersion) {{ $targetVersion }} else {{ 'the latest release' }}) + '.')
+Write-InstallLog ('Restart is owned by ' + $(if ($noRestart) {{ 'the desktop app' }} else {{ 'this helper' }}) + '.')
 Write-Stage 'waiting-for-parent' 'Waiting for the running server to stop.'
 # Windows recycles process ids quickly, so a bare Get-Process -Id would happily
 # match an unrelated process that inherited ours and wait out the full deadline
@@ -761,7 +864,13 @@ while ((Get-Date) -lt $deadline) {{
 # receipt and exit) left the user with neither a running new version nor an
 # installed one. Escalate to the EXACT pid we were given, whose identity is
 # still pinned by its creation time, then install.
+if (-not (Test-ParentAlive)) {{
+    Write-Stage 'stopping' 'The server has stopped. Preparing to install.'
+    Write-InstallLog 'The running server exited; the environment is free.'
+}}
 if (Test-ParentAlive) {{
+    Write-Stage 'stopping' 'The server did not stop in time, so it is being ended.'
+    Write-InstallLog ('The server (pid ' + $parent + ') outlived its stop budget; ending it.')
     Stop-Process -Id $parent -Force -ErrorAction SilentlyContinue
     $killDeadline = (Get-Date).AddSeconds(10)
     while ((Get-Date) -lt $killDeadline) {{
@@ -771,6 +880,7 @@ if (Test-ParentAlive) {{
 }}
 if (Test-ParentAlive) {{
     $script:HelperDone = $true
+    Write-InstallLog 'The server could not be stopped. Nothing was installed.'
     Write-Stage 'failed' 'The server could not be stopped, so the update was not applied.'
     $result = @{{ ok = $false; message = 'The server could not be stopped, so the update was not applied.' }}
     [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
@@ -784,6 +894,15 @@ Start-Sleep -Seconds 2
 # this script before it installs anything, so drop back to Continue for the
 # call itself and judge the result by exit code alone.
 $ErrorActionPreference = 'Continue'
+# uv draws its diagnostics with box-drawing characters and colours them when it
+# thinks it is talking to a terminal. PowerShell decodes a native command's
+# output with the CONSOLE code page, which on this machine is cp437 -- so every
+# box character reached the transcript as three mojibake bytes and the window
+# showed the user 'GoeGoeCGoe' where uv had drawn a tree. Ask uv for plain text
+# and read its bytes as the UTF-8 they are. Both are best-effort: a helper with
+# no console attached must not fail over the encoding of a log line.
+$env:NO_COLOR = '1'
+try {{ [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) }} catch {{ }}
 # Handle release is not instantaneous on Windows -- an antivirus scan, the
 # search indexer, or a slow shutdown can still hold the environment briefly.
 # A single attempt that loses that race leaves uv having deleted part of the
@@ -892,10 +1011,21 @@ function Test-UvDiskFull($text) {{
 }}
 $diskFull = $false
 foreach ($wait in $fastDelays) {{
-    if ($wait -gt 0) {{ Start-Sleep -Seconds $wait }}
-    $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 | Out-String
+    if ($wait -gt 0) {{
+        Write-InstallLog ('Waiting ' + $wait + ' s before the next attempt.')
+        Start-Sleep -Seconds $wait
+    }}
+    Write-InstallLog ('uv tool install, attempt ' + ($attempts + 1) + '.')
+    # The tee. `2>&1 |` streams uv's two channels through this pipeline one
+    # object at a time, so each line reaches the transcript as uv prints it --
+    # `| Out-String` at the end still yields the whole capture for the receipt,
+    # but it is no longer the FIRST time the output exists anywhere.
+    $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 |
+        ForEach-Object {{ $line = Convert-OutputLine $_; Write-InstallLog $line; $line }} |
+        Out-String
     $code = $LASTEXITCODE
     $attempts = $attempts + 1
+    Write-InstallLog ('uv exited with ' + $code + '.')
     if ($code -eq 0) {{ break }}
     if (Test-UvDiskFull $output) {{ $diskFull = $true; break }}
 }}
@@ -909,11 +1039,19 @@ if (($code -ne 0) -and $binDir -and (-not $diskFull)) {{
     $hadBin = Test-Path Env:\\UV_TOOL_BIN_DIR
     $previousBin = if ($hadBin) {{ $env:UV_TOOL_BIN_DIR }} else {{ '' }}
     $env:UV_TOOL_BIN_DIR = $stageBin
+    Write-InstallLog 'Retrying into a staging bin directory: a launcher is still locked.'
     foreach ($wait in $delays) {{
-        if ($wait -gt 0) {{ Start-Sleep -Seconds $wait }}
-        $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 | Out-String
+        if ($wait -gt 0) {{
+            Write-InstallLog ('Waiting ' + $wait + ' s before the next attempt.')
+            Start-Sleep -Seconds $wait
+        }}
+        Write-InstallLog ('uv tool install (staged), attempt ' + ($attempts + 1) + '.')
+        $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 |
+            ForEach-Object {{ $line = Convert-OutputLine $_; Write-InstallLog $line; $line }} |
+            Out-String
         $code = $LASTEXITCODE
         $attempts = $attempts + 1
+        Write-InstallLog ('uv exited with ' + $code + '.')
         if ($code -eq 0) {{ break }}
     }}
     if ($hadBin) {{ $env:UV_TOOL_BIN_DIR = $previousBin }} else {{ Remove-Item Env:\\UV_TOOL_BIN_DIR -ErrorAction SilentlyContinue }}
@@ -990,6 +1128,8 @@ if (($code -ne 0) -and $binDir) {{
 # Report every command that is not there, rather than trusting the exit code.
 # A version check cannot substitute: the shims are version-agnostic launchers,
 # so an OLD shim reports the NEW version and "verified" would be a lie.
+Write-Stage 'verifying' 'Checking that every command is in place.'
+Write-InstallLog 'Verifying the installed launchers.'
 $missing = @()
 if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
     foreach ($name in $commandNames) {{
@@ -1031,9 +1171,10 @@ $result = @{{
 }}
 $result['restarted'] = $false
 [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+Write-InstallLog $result.message
 if ($ok) {{
     if ($noRestart) {{
-        Write-Stage 'installing' 'Installed. Handing the restart to the desktop app.'
+        Write-Stage 'handing-off' 'Installed. Handing the restart to the desktop app.'
     }} else {{
         Write-Stage 'starting' 'Starting the updated server.'
     }}
@@ -1048,14 +1189,15 @@ if ($ok) {{
 # nothing ever started it. A half-installed environment is not a reason to
 # withhold the old one -- uv either replaced the environment or it did not.
 $restarted = $false
-$noRestart = {"$true" if no_restart else "$false"}
 if (-not $noRestart) {{
     try {{
         Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}
         $restarted = $true
+        Write-InstallLog 'Started the updated server.'
     }}
     catch {{
         $restarted = $false
+        Write-InstallLog ('The updated server could not be started: ' + $_.Exception.Message)
     }}
 }}
 $result['restarted'] = $restarted
@@ -1067,6 +1209,7 @@ if (-not $ok) {{
 }}
 [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
 $script:HelperDone = $true
+Write-InstallLog $result.message
 if ($ok) {{
     Remove-Item -Path {_powershell_literal(str(stage_dir / "wheel"))} -Recurse -Force -ErrorAction SilentlyContinue
     if ($noRestart) {{
@@ -1102,6 +1245,13 @@ def _spawn_deferred_upgrade(
         )
     stage_dir = _stage_dir()
     result_path = stage_dir / _PENDING_RESULT_FILENAME
+    # One episode, one transcript, named before the helper starts so the
+    # response that triggers the update can hand the path to a browser tab
+    # while there is still a server to hand it with.
+    install_log = stage_dir / (
+        f"{INSTALL_LOG_PREFIX}{time.strftime('%Y%m%d-%H%M%S')}{INSTALL_LOG_SUFFIX}"
+    )
+    progress_path = str(stage_dir / UPDATE_PROGRESS_FILENAME)
     server_launcher = _server_launcher(uv_executable)
     if server_launcher is None:
         return UpgradeResult(
@@ -1122,6 +1272,7 @@ def _spawn_deferred_upgrade(
                 command=command,
                 result_path=result_path,
                 stage_dir=stage_dir,
+                install_log=install_log,
                 server_launcher=server_launcher,
                 working_directory=Path.cwd(),
                 # The launcher lives in the uv tool bin directory, so its parent
@@ -1202,6 +1353,8 @@ def _spawn_deferred_upgrade(
         ),
         installed_version=tag or None,
         log=log,
+        log_path=str(install_log),
+        progress_path=progress_path,
     )
 
 

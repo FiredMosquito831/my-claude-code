@@ -37,7 +37,7 @@
 //! URL in an observation came from Python's status document.
 
 use crate::install;
-use crate::ui::Page;
+use crate::ui::{Page, StageLine};
 
 /// How often the loop repaints. Compiled in, deliberately: this is the refresh
 /// rate of a countdown, not a budget on the user's machine (C9 -- see
@@ -193,6 +193,60 @@ pub enum Helper {
         stage: Option<String>,
         seconds_ago: Option<f64>,
     },
+}
+
+/// One stage an installer recorded, mirrored from `update_progress::
+/// StageRecord` rather than imported, so `step` stays a pure function of plain
+/// data and this module keeps its no-I/O rule -- the same reason `ChildExit`
+/// is mirrored from `process`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpdateStage {
+    pub stage: String,
+    pub message: Option<String>,
+    /// The writer's own ISO 8601 stamp, verbatim.
+    pub at: Option<String>,
+    /// Seconds from the start of the episode to this record.
+    pub elapsed_seconds: Option<f64>,
+}
+
+impl UpdateStage {
+    /// `HH:MM:SS` out of the writer's stamp; `None` when there is not one.
+    fn clock(&self) -> Option<String> {
+        let at = self.at.as_deref()?.trim();
+        let time = at.split_once('T').or_else(|| at.split_once(' '))?.1;
+        let time = time.split(['Z', 'z', '+']).next()?;
+        let mut parts = time.split(':');
+        let hour = parts.next()?;
+        let minute = parts.next()?;
+        let second = parts.next()?.split('.').next()?;
+        if hour.len() != 2 || minute.len() != 2 || second.len() != 2 {
+            return None;
+        }
+        Some(format!("{hour}:{minute}:{second}"))
+    }
+}
+
+/// Everything an update in flight is saying about itself right now.
+///
+/// This is 6.71.0's answer to "we should see everything happening during an
+/// update": the stages with the installer's own timestamps, how long the
+/// episode has run, where the installer is writing, and the last lines it
+/// wrote. All of it is READ from the one progress document and the file that
+/// document names, on every tick, by `Lifecycle::refresh_helper` -- never from
+/// `--print-status`, which is the one command that cannot answer while an
+/// environment is being replaced (spec F9).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UpdateNarration {
+    /// The episode's records, oldest first.
+    pub stages: Vec<UpdateStage>,
+    /// The installer transcript's path, as the receipt names it.
+    pub log_path: Option<String>,
+    /// Its last lines, freshly read.
+    pub log_tail: Vec<String>,
+    /// The installer's process id, when it recorded one.
+    pub helper_pid: Option<i64>,
+    /// Seconds since the episode started, from the newest record.
+    pub elapsed_seconds: Option<f64>,
 }
 
 /// Whether `mcc-desktop --print-status` could be run at all.
@@ -357,6 +411,9 @@ pub struct Observation {
     /// `Foreign` holder becomes a reason to stop only past the grace window.
     pub holder_age: f64,
     pub helper: Helper,
+    /// What the update in flight is saying about itself. Empty when there is
+    /// no receipt, which is every ordinary tick.
+    pub update: UpdateNarration,
     pub status: StatusHealth,
     /// Whether a child this window started is still running. The one signal
     /// that separates "slow" from "gone" while the port is still free.
@@ -974,6 +1031,15 @@ fn environment_replaced_page(observation: &Observation) -> Page {
         }
         Helper::None => String::new(),
     };
+    let (stages, elapsed) = narration_of(observation);
+    // With a timeline under it, the helper's own sentence in the lead paragraph
+    // is the same fact twice inside nested parentheses. Quote it only when
+    // there is no timeline to read it off.
+    let detail = if stages.is_empty() {
+        detail
+    } else {
+        String::new()
+    };
     Page::Updating {
         message: format!(
             "Installing My Claude Code{detail}: the environment is being replaced. \
@@ -984,6 +1050,15 @@ fn environment_replaced_page(observation: &Observation) -> Page {
              by itself the moment the new version answers.",
             observation.facts.tick_seconds
         ),
+        // The same timeline and the same live transcript as the page above.
+        // Losing them here would mean the window went quiet exactly when the
+        // environment went away -- which is the minute the user most wants to
+        // see something happening.
+        stages,
+        elapsed,
+        log_path: observation.update.log_path.clone(),
+        log_tail: observation.update.log_tail.clone(),
+        helper: helper_phrase(observation),
     }
 }
 
@@ -1107,6 +1182,90 @@ fn seconds(value: f64) -> String {
     format!("{:.0} s", value.max(0.0))
 }
 
+/// A duration, worded for a timeline: seconds under a minute, minutes and
+/// seconds above it. An update is one to three minutes long, so "94 s" and
+/// "1 m 34 s" are both readable and only one of them is readable at eight
+/// minutes.
+fn duration(value: f64) -> String {
+    let total = value.max(0.0);
+    if total < 60.0 {
+        return format!("{total:.0} s");
+    }
+    // Stays in f64 rather than casting to an integer: the shell has no `as`
+    // casts anywhere, and the arithmetic is exact for every duration an update
+    // can have.
+    let minutes = (total / 60.0).floor();
+    let rest = (total - minutes * 60.0).min(59.0);
+    format!("{minutes:.0} m {rest:02.0} s")
+}
+
+/// The stage timeline, worded.
+///
+/// `took` is the gap to the NEXT record for a stage that is over, and the gap
+/// to now for the one still running -- which is the number that answers the
+/// question a user actually has during an update ("has it stopped?"). The
+/// writers record `elapsed_seconds` against the start of the episode, so both
+/// are subtractions rather than a second clock.
+fn stage_lines(update: &UpdateNarration) -> Vec<StageLine> {
+    let total = update.elapsed_seconds;
+    let count = update.stages.len();
+    update
+        .stages
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            let current = index + 1 == count;
+            let next = if current {
+                total
+            } else {
+                update.stages[index + 1].elapsed_seconds
+            };
+            let took = match (record.elapsed_seconds, next) {
+                (Some(from), Some(to)) if to >= from => Some(duration(to - from)),
+                _ => None,
+            };
+            StageLine {
+                stage: record.stage.clone(),
+                message: record
+                    .message
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|message| !message.is_empty())
+                    .map(str::to_owned),
+                at: record.clock(),
+                took,
+                current,
+            }
+        })
+        .collect()
+}
+
+/// The installer, in one phrase, so a window that is waiting says what it is
+/// waiting for rather than only that it is waiting.
+fn helper_phrase(observation: &Observation) -> Option<String> {
+    let alive = matches!(observation.helper, Helper::Alive { .. });
+    match (observation.update.helper_pid, alive) {
+        (Some(pid), true) => Some(format!("installer pid {pid}, running")),
+        (Some(pid), false) => Some(format!("installer pid {pid}, finished")),
+        (None, true) => Some("an installer is running".to_owned()),
+        (None, false) => None,
+    }
+}
+
+/// Everything the window shows about an update in flight, beyond its stage.
+///
+/// Assembled once here so the two pages that narrate an update -- the one shown
+/// while `mcc-desktop` still answers and the one shown while it cannot -- show
+/// the same thing. They differ in the sentence at the top and nothing else,
+/// which is the point: what is happening does not depend on whether the shell
+/// can currently ask a subprocess about it.
+fn narration_of(observation: &Observation) -> (Vec<StageLine>, Option<String>) {
+    (
+        stage_lines(&observation.update),
+        observation.update.elapsed_seconds.map(duration),
+    )
+}
+
 fn starting_page(observation: &Observation, lead: &str) -> Page {
     Page::Starting {
         message: format!("{lead}... ({})", cadence_tail(observation)),
@@ -1136,7 +1295,18 @@ fn draining_page(observation: &Observation) -> Page {
 
 fn updating_page(stage: Option<&str>, observation: &Observation) -> Page {
     let named = stage.map(str::trim).filter(|value| !value.is_empty());
-    let detail = named.map_or_else(String::new, |stage| format!(" ({stage})"));
+    let (stages, elapsed) = narration_of(observation);
+    // The helper's own sentence is quoted only when the timeline below is
+    // empty. With a timeline there, repeating it in the lead paragraph gave
+    // the page two copies of the same fact inside nested parentheses --
+    // "Updating My Claude Code (Updating to 6.71.0... (installer running,
+    // 150 s). Installing the new version.)" -- which is what the acceptance
+    // screenshots showed.
+    let detail = if stages.is_empty() {
+        named.map_or_else(String::new, |stage| format!(" ({stage})"))
+    } else {
+        String::new()
+    };
     Page::Updating {
         message: format!(
             "Updating My Claude Code{detail}: the installer is running. This window \
@@ -1144,6 +1314,11 @@ fn updating_page(stage: Option<&str>, observation: &Observation) -> Page {
              itself the moment it finishes -- last checked {} ago.",
             seconds(observation.since_probe)
         ),
+        stages,
+        elapsed,
+        log_path: observation.update.log_path.clone(),
+        log_tail: observation.update.log_tail.clone(),
+        helper: helper_phrase(observation),
     }
 }
 
@@ -1186,6 +1361,7 @@ mod tests {
             holder: Holder::Absent,
             holder_age: 0.0,
             helper: Helper::None,
+            update: UpdateNarration::default(),
             status: StatusHealth::Ok,
             child_alive: false,
             since_last_start: None,
@@ -2413,5 +2589,225 @@ mod tests {
         let (next, effects) = step(&State::Attached, &broken, 1.0);
         assert!(effects.contains(&Effect::Install), "{effects:?}");
         assert_eq!(next, State::Installing { attempts: 1 });
+    }
+
+    // -- 6.71.0: "see everything happening during an update" -----------------
+
+    /// The observation a window has mid-update: an installer alive, three
+    /// stages recorded, and a transcript with something in it.
+    fn updating_observation(tail: &[&str]) -> Observation {
+        let mut observation = observation(Health::Absent);
+        observation.helper = Helper::Alive {
+            stage: Some("Updating to 6.71.0... (installer running, 25 s).".to_owned()),
+        };
+        observation.update = UpdateNarration {
+            stages: vec![
+                UpdateStage {
+                    stage: "waiting-for-parent".to_owned(),
+                    message: Some("Waiting for the running server to stop.".to_owned()),
+                    at: Some("2026-09-11T08:21:14.9680000Z".to_owned()),
+                    elapsed_seconds: Some(0.0),
+                },
+                UpdateStage {
+                    stage: "stopping".to_owned(),
+                    message: Some("The server has stopped. Preparing to install.".to_owned()),
+                    at: Some("2026-09-11T08:21:37.7250000Z".to_owned()),
+                    elapsed_seconds: Some(22.757),
+                },
+                UpdateStage {
+                    stage: "installing".to_owned(),
+                    message: Some("Installing the new version.".to_owned()),
+                    at: Some("2026-09-11T08:21:39.7250000Z".to_owned()),
+                    elapsed_seconds: Some(24.757),
+                },
+            ],
+            log_path: Some("C:/config/updates/install-20260911-082114.log".to_owned()),
+            log_tail: tail.iter().map(|line| (*line).to_owned()).collect(),
+            helper_pid: Some(11372),
+            elapsed_seconds: Some(94.5),
+        };
+        observation
+    }
+
+    fn updating_page_of(effects: &[Effect]) -> Page {
+        effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Show(page @ Page::Updating { .. }) => Some(page.clone()),
+                _ => None,
+            })
+            .expect("an Updating page")
+    }
+
+    #[test]
+    fn the_updating_page_draws_the_stage_timeline_with_the_writers_own_stamps() {
+        let observation = updating_observation(&["Resolved 101 packages"]);
+        let (_, effects) = step(&State::Booting, &observation, 0.0);
+        let Page::Updating {
+            stages,
+            elapsed,
+            log_path,
+            log_tail,
+            helper,
+            ..
+        } = updating_page_of(&effects)
+        else {
+            unreachable!("matched above");
+        };
+        assert_eq!(stages.len(), 3, "{stages:?}");
+        assert_eq!(stages[0].at.as_deref(), Some("08:21:14"));
+        assert_eq!(
+            stages[0].message.as_deref(),
+            Some("Waiting for the running server to stop.")
+        );
+        // A finished stage is timed by the gap to the next record...
+        assert_eq!(stages[0].took.as_deref(), Some("23 s"));
+        assert_eq!(stages[1].took.as_deref(), Some("2 s"));
+        // ...and the one still running by the gap to now, which is the number
+        // that answers "has it stopped?".
+        assert!(stages[2].current, "{stages:?}");
+        assert_eq!(stages[2].took.as_deref(), Some("1 m 10 s"));
+        assert!(!stages[0].current);
+        assert_eq!(elapsed.as_deref(), Some("1 m 34 s"));
+        assert_eq!(
+            log_path.as_deref(),
+            Some("C:/config/updates/install-20260911-082114.log")
+        );
+        assert_eq!(log_tail, vec!["Resolved 101 packages"]);
+        assert_eq!(helper.as_deref(), Some("installer pid 11372, running"));
+    }
+
+    #[test]
+    fn the_page_shown_while_the_environment_is_gone_shows_the_same_timeline() {
+        // The minute the user most wants to see something happening is the one
+        // in which `mcc-desktop` cannot answer. Losing the narration there
+        // would be losing it exactly when it is needed.
+        let mut observation = updating_observation(&["Preparing packages"]);
+        observation.status = StatusHealth::Unreadable {
+            detail: "mcc-desktop --print-status exited with 1. No module named 'my_claude_code'"
+                .to_owned(),
+        };
+        let (state, effects) = step(&State::Booting, &observation, 0.0);
+        assert!(matches!(state, State::Updating { .. }), "{state:?}");
+        let Page::Updating {
+            message,
+            stages,
+            log_tail,
+            log_path,
+            ..
+        } = updating_page_of(&effects)
+        else {
+            unreachable!("matched above");
+        };
+        assert!(
+            message.contains("environment is being replaced"),
+            "{message}"
+        );
+        assert_eq!(stages.len(), 3);
+        assert_eq!(log_tail, vec!["Preparing packages"]);
+        assert!(log_path.is_some());
+    }
+
+    #[test]
+    fn an_updating_window_repaints_when_the_transcript_grows() {
+        // The whole of "refreshed every tick": two paint ticks in the same
+        // state, one line of installer output apart, must not produce the same
+        // page -- or the window would be a screenshot of an update rather than
+        // a view of one.
+        let state = State::Updating { since: 0.0 };
+        let mut first = updating_observation(&["Resolved 101 packages"]);
+        first.fresh = false;
+        let (_, before) = step(&state, &first, 5.0);
+
+        let mut second = updating_observation(&["Resolved 101 packages", "Prepared 44 packages"]);
+        second.fresh = false;
+        let (_, after) = step(&state, &second, 6.0);
+
+        assert_ne!(before, after, "a grown transcript must reach the window");
+        let Page::Updating { log_tail, .. } = updating_page_of(&after) else {
+            unreachable!("matched above");
+        };
+        assert_eq!(log_tail.len(), 2, "{log_tail:?}");
+        assert_eq!(
+            log_tail.last().map(String::as_str),
+            Some("Prepared 44 packages")
+        );
+    }
+
+    #[test]
+    fn a_receipt_with_no_elapsed_times_is_drawn_without_durations() {
+        // A helper from 6.70.1 or earlier records no elapsed seconds. The
+        // timeline still draws -- it just does not invent the numbers.
+        let mut observation = updating_observation(&[]);
+        for stage in &mut observation.update.stages {
+            stage.elapsed_seconds = None;
+        }
+        observation.update.elapsed_seconds = None;
+        let (_, effects) = step(&State::Booting, &observation, 0.0);
+        let Page::Updating {
+            stages, elapsed, ..
+        } = updating_page_of(&effects)
+        else {
+            unreachable!("matched above");
+        };
+        assert_eq!(stages.len(), 3);
+        assert!(
+            stages.iter().all(|stage| stage.took.is_none()),
+            "{stages:?}"
+        );
+        assert_eq!(elapsed, None);
+    }
+
+    #[test]
+    fn an_ordinary_tick_carries_no_update_narration_at_all() {
+        // There is no receipt on the overwhelming majority of ticks, and the
+        // narration must cost nothing and say nothing then.
+        let mut observation = observation(Health::Healthy);
+        observation.facts.admin_url = "http://localhost/admin".to_owned();
+        let (state, effects) = step(&State::Booting, &observation, 0.0);
+        assert_eq!(state, State::Attached);
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Show(Page::Updating { .. }))),
+            "{effects:?}"
+        );
+        assert_eq!(observation.update, UpdateNarration::default());
+    }
+
+    #[test]
+    fn a_duration_is_worded_for_the_length_an_update_actually_takes() {
+        assert_eq!(duration(0.0), "0 s");
+        assert_eq!(duration(23.4), "23 s");
+        assert_eq!(duration(59.9), "60 s");
+        assert_eq!(duration(60.0), "1 m 00 s");
+        assert_eq!(duration(94.5), "1 m 34 s");
+        assert_eq!(duration(766.6), "12 m 47 s");
+        // Never negative, whatever a clock that moved backwards produces.
+        assert_eq!(duration(-5.0), "0 s");
+    }
+
+    #[test]
+    fn the_helper_phrase_says_running_or_finished_and_nothing_when_unknown() {
+        let mut observation = updating_observation(&[]);
+        assert_eq!(
+            helper_phrase(&observation).as_deref(),
+            Some("installer pid 11372, running")
+        );
+        observation.helper = Helper::Finished {
+            stage: Some("done".to_owned()),
+            seconds_ago: Some(2.0),
+        };
+        assert_eq!(
+            helper_phrase(&observation).as_deref(),
+            Some("installer pid 11372, finished")
+        );
+        observation.update.helper_pid = None;
+        assert_eq!(helper_phrase(&observation), None);
+        observation.helper = Helper::Alive { stage: None };
+        assert_eq!(
+            helper_phrase(&observation).as_deref(),
+            Some("an installer is running")
+        );
     }
 }
