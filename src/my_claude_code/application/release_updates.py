@@ -1583,6 +1583,49 @@ if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
         }}
     }}
 }}
+if ($refused.Count -gt 0) {{
+    # Say WHO is holding them. Until 6.72.2 a locked launcher produced a retry
+    # and a sentence about a file being "in use", and the user was left to
+    # guess. On the machine this was written for the holders were two
+    # mcc-server launches from the previous day that were STILL SERVING WORK.
+    #
+    # Report only. Nothing here stops anything: this cannot tell a finished
+    # server from a busy one, the staged fallback below already survives the
+    # lock, and stopping a server somebody is using to save one install
+    # attempt is not a trade this program gets to make.
+    #
+    # Matched on the resolved executable path, never on an image name -- every
+    # MCC command on Windows is called python.exe, and the bin directory also
+    # holds programs (Claude Code's own claude.exe) that this install never
+    # touches and must never accuse.
+    Write-InstallLog 'These My Claude Code processes are running from the files being replaced:'
+    $ourPrefixes = @('mcc-', 'fcc-', 'my-claude-code', 'free-claude-code')
+    $toolPrefix = ''
+    if ($toolDir) {{ $toolPrefix = $toolDir.TrimEnd('\', '/') + '\' }}
+    $binPrefix = $binDir.TrimEnd('\', '/') + '\'
+    $namedAny = $false
+    foreach ($proc in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {{
+        $exe = $proc.ExecutablePath
+        if (-not $exe) {{ continue }}
+        $inBin = $exe.StartsWith($binPrefix, [StringComparison]::OrdinalIgnoreCase)
+        $inTool = $toolPrefix -and $exe.StartsWith($toolPrefix, [StringComparison]::OrdinalIgnoreCase)
+        if (-not ($inBin -or $inTool)) {{ continue }}
+        $leaf = [IO.Path]::GetFileNameWithoutExtension($exe).ToLowerInvariant()
+        $ours = $inTool
+        foreach ($prefix in $ourPrefixes) {{
+            if ($leaf.StartsWith($prefix)) {{ $ours = $true; break }}
+        }}
+        if (-not $ours) {{ continue }}
+        $started = ''
+        if ($proc.CreationDate) {{ $started = $proc.CreationDate.ToString('yyyy-MM-dd HH:mm:ss') }}
+        Write-InstallLog ('  pid ' + $proc.ProcessId + '  ' + $proc.Name + '  started ' + $started + '  ' + $exe)
+        $namedAny = $true
+    }}
+    if (-not $namedAny) {{
+        Write-InstallLog '  (none -- the lock is something else, such as an antivirus scan)'
+    }}
+    Write-InstallLog 'None of them will be stopped: one may be a server you are using right now. The new version is placed beside them instead.'
+}}
 $delays = @(0, 5, 10, 20, 30)
 $code = 1
 $attempts = 0

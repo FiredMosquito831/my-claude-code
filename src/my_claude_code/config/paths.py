@@ -52,6 +52,11 @@ ONBOARDING_STATE_FILENAME = "onboarding.json"
 # would drag the GUI stack into a dependency-free command.
 DESKTOP_LOCK_FILENAME = "desktop.lock"
 MODEL_OVERRIDES_FILENAME = "model_overrides.json"
+
+# Where a server records the other My Claude Code servers it found when it
+# started, so the desktop status document can name them without re-scanning
+# every process on the machine on every tick.
+OTHER_SERVERS_FILENAME = "other-servers.json"
 LEARNED_FACTS_FILENAME = "learned_facts.json"
 HARNESS_TIERS_FILENAME = "harness_tiers.json"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
@@ -511,6 +516,16 @@ def request_log_path() -> Path:
     """Return the request log database path under the resolved config directory."""
 
     return config_dir_path() / FCC_LOGS_DIRNAME / REQUEST_LOG_FILENAME
+
+
+def other_servers_path() -> Path:
+    """Return where a server records the other MCC servers it found at start.
+
+    Read by ``mcc-desktop --print-status`` so the status document can name them
+    without running its own two-second process scan every ten seconds.
+    """
+
+    return config_dir_path() / OTHER_SERVERS_FILENAME
 
 
 def managed_env_path() -> Path:

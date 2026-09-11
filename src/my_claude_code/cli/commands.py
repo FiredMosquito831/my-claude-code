@@ -39,6 +39,7 @@ from my_claude_code.config.paths import (
     legacy_env_paths,
     managed_env_path,
     new_config_dir_path,
+    other_servers_path,
     request_log_path,
     server_log_path,
 )
@@ -46,6 +47,13 @@ from my_claude_code.config.proxy_auth import open_proxy_without_auth_error
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.process_handoff import external_upgrade_helper_pending
+from my_claude_code.core.request_log import set_server_bind_address
+from my_claude_code.core.server_inventory import (
+    observe_servers,
+    report_servers,
+    stop_stale_servers,
+    write_survey,
+)
 from my_claude_code.core.startup_state import LISTENER_STAGE, startup_state
 from my_claude_code.core.stop_deadline import (
     HARD_EXIT_GRACE_SECONDS,
@@ -248,6 +256,43 @@ def _log_bind_failure(settings: Settings, exc: OSError) -> None:
 
 
 _config_dir_banner_emitted = False
+
+
+def _survey_other_servers(settings: Settings) -> None:
+    """Say which other MCC servers are running, in the background, at start.
+
+    On a daemon thread, and never a gate. Enumerating processes costs about two
+    seconds on Windows, and this is a *report*: making the start wait for it
+    would trade a measurable slowdown on every start for a log line that is
+    only interesting on the rare start that follows a leak.
+
+    What it does about what it finds is the operator's decision and defaults to
+    nothing. ``SERVER_STALE_SERVER_ACTION=report`` -- the default -- stops
+    nothing at all, because "owns no listening socket in one scan" is not
+    evidence that a server is finished: it may be starting, draining, or
+    streaming an answer to a request accepted before the socket closed. Two of
+    those were running on the machine that produced this feature, with live
+    upstream connections, while the port they had been started for belonged to
+    somebody else.
+    """
+
+    def survey() -> None:
+        try:
+            observations = observe_servers(
+                request_log_path=request_log_path(),
+                self_pid=os.getpid(),
+                stale_after_seconds=settings.server_stale_session_seconds,
+            )
+        except OSError as exc:
+            logger.debug("Could not survey other My Claude Code servers: {}", exc)
+            return
+        report_servers(observations, context="At start")
+        if settings.server_stale_server_action == "stop":
+            stopped = {item.pids for item in stop_stale_servers(observations)}
+            observations = [item for item in observations if item.pids not in stopped]
+        write_survey(other_servers_path(), observations)
+
+    threading.Thread(target=survey, name="fcc-server-survey", daemon=True).start()
 
 
 def _bootstrap_request_log_path() -> None:
@@ -535,6 +580,12 @@ def _run_supervised_server(
                 port=settings.port,
                 what=outcome.describe(),
             )
+    # After the takeover and before the bind: who else is running? The port
+    # takeover has just settled the one process that was in this server's way;
+    # this settles the ones that are in an *installer's* way, which nothing has
+    # ever been able to see. It reports and returns -- nothing here decides to
+    # stop anybody unless SERVER_STALE_SERVER_ACTION says so.
+    _survey_other_servers(settings)
     # Bind here, in the supervisor, rather than leaving it to uvicorn.
     #
     # This is the load-bearing half of "bind the listener first". uvicorn
@@ -551,6 +602,12 @@ def _run_supervised_server(
     except OSError as exc:
         _log_bind_failure(settings, exc)
         raise SystemExit(1) from exc
+    # The session row in the request log was opened while this process was
+    # still starting, before there was an address to record. Publishing it here
+    # is what lets the NEXT server -- and an installer -- tell "a server that
+    # was superseded on this port" from "a server that is busy elsewhere",
+    # which is the whole difference between a safe sweep and a destructive one.
+    set_server_bind_address(settings.host, settings.port)
     logger.info(
         "Listening on {url}; answering /health with 'starting' until ready.",
         url=local_proxy_root_url(settings),
@@ -560,6 +617,11 @@ def _run_supervised_server(
         try:
             server.run(sockets=[listening_socket])
         finally:
+            # The socket is closed the moment run() returns, so the claim on
+            # the port goes with it. A session that kept claiming an address it
+            # no longer serves is exactly the stale claim this feature exists
+            # to reason about, and it must never be one MCC writes itself.
+            set_server_bind_address(None, None)
             # Control is back in the supervisor, so the ordered stop path won
             # and the watchdog has nothing left to guard. Anything after this
             # point carries its own bound.

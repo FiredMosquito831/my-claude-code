@@ -88,6 +88,9 @@ from .constants import (
     SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
     SERVER_PORT_TAKEOVER_CHOICES,
     SERVER_PORT_TAKEOVER_DEFAULT,
+    SERVER_STALE_SERVER_ACTION_CHOICES,
+    SERVER_STALE_SERVER_ACTION_DEFAULT,
+    SERVER_STALE_SESSION_SECONDS_DEFAULT,
     STREAM_COMMIT_HOLDBACK_CHARS_DEFAULT,
     STREAM_COMMIT_HOLDBACK_SECONDS_DEFAULT,
     STREAM_EARLY_RETRY_ATTEMPTS_DEFAULT,
@@ -1461,6 +1464,20 @@ class Settings(BaseSettings):
         default=SERVER_PORT_TAKEOVER_DEFAULT,
         validation_alias="SERVER_PORT_TAKEOVER",
     )
+    # How long another server's session heartbeat must have been silent before
+    # this install is willing to call it stale. See
+    # ``core/server_inventory.py``; silence alone is never enough on its own.
+    server_stale_session_seconds: float = Field(
+        default=SERVER_STALE_SESSION_SECONDS_DEFAULT,
+        validation_alias="SERVER_STALE_SESSION_SECONDS",
+    )
+    # What to do about other My Claude Code servers found at start, and about
+    # one holding a launcher an install wants to replace. ``report`` is the
+    # default and stops nothing; see ``constants.py`` for why.
+    server_stale_server_action: str = Field(
+        default=SERVER_STALE_SERVER_ACTION_DEFAULT,
+        validation_alias="SERVER_STALE_SERVER_ACTION",
+    )
     # Seconds an ``mcc-<agent>`` launcher waits for the server to build a
     # harness catalogue document that is not on disk yet. Read by the launcher
     # process, not by the server: it is the budget for one cold-start
@@ -1629,6 +1646,24 @@ class Settings(BaseSettings):
         raise ValueError(
             "SERVER_PORT_TAKEOVER must be one of "
             f"{', '.join(SERVER_PORT_TAKEOVER_CHOICES)}, got {value!r}"
+        )
+
+    @field_validator("server_stale_server_action")
+    @classmethod
+    def validate_server_stale_server_action(cls, value: str) -> str:
+        """Refuse an unknown action rather than guessing at one.
+
+        Same reasoning as the port takeover above, and more so: a typo that
+        silently fell through to ``stop`` would stop a server somebody is
+        using. There are two words; neither of them is worth guessing.
+        """
+
+        normalised = (value or "").strip().lower()
+        if normalised in SERVER_STALE_SERVER_ACTION_CHOICES:
+            return normalised
+        raise ValueError(
+            "SERVER_STALE_SERVER_ACTION must be one of "
+            f"{', '.join(SERVER_STALE_SERVER_ACTION_CHOICES)}, got {value!r}"
         )
 
     @field_validator("whisper_device")

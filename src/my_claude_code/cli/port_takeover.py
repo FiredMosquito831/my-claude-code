@@ -33,40 +33,30 @@ to tell the user that MCC's own python.exe "is not the MCC server". The image
 name and command line answer it without a request.
 """
 
-import os
 import platform
-import signal
 import subprocess
-import time
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
 
+from my_claude_code.core.mcc_processes import (
+    MCC_COMMAND_SUBSTRINGS,
+    MCC_IMAGE_NAMES,
+    process_is_alive,
+    stop_process,
+)
+
 from .port_diagnostics import PortOwner, diagnose_port_owner, wait_for_port_free
 
-#: Executable names that are MCC and nothing else.
-_MCC_IMAGE_NAMES = (
-    "mcc-server",
-    "mcc-desktop",
-    "my-claude-code",
-    "fcc-server",
-    "fcc-desktop",
-)
-
-#: Substrings that identify MCC inside a generic interpreter's command line.
-#: ``python.exe`` is the image name of every MCC server on Windows, so the
-#: command line is the only thing that separates ours from anybody else's.
-_MCC_COMMAND_SUBSTRINGS = (
-    "mcc-server",
-    "mcc_server",
-    "mcc-desktop",
-    "my_claude_code",
-    "my-claude-code",
-    "free_claude_code",
-    "fcc-server",
-)
+# The two name lists this module matches on live in ``core.mcc_processes``, so
+# there is exactly one place that says what an MCC process is called. They stay
+# broad -- every command in the family, launchers included -- because the
+# question asked here is narrow: *the process holding the port I am configured
+# to bind* is, if it is ours at all, a server. ``core.mcc_processes`` answers
+# the opposite-shaped question ("sweep the machine for servers") and must be
+# far stricter; see its module docstring for why a substring test is fatal
+# there and free here.
 
 #: How long to wait for a killed holder to actually release the socket. A
 #: terminated process on Windows can hold a listening socket for a beat after
@@ -97,10 +87,10 @@ class ProcessIdentity:
 
         image = (self.image or "").lower()
         stem = Path(image).stem
-        if stem.startswith(_MCC_IMAGE_NAMES):
+        if stem.startswith(MCC_IMAGE_NAMES):
             return True
         command = (self.command or "").lower()
-        return any(needle in command for needle in _MCC_COMMAND_SUBSTRINGS)
+        return any(needle in command for needle in MCC_COMMAND_SUBSTRINGS)
 
     def describe(self) -> str:
         name = self.image or "an unidentified process"
@@ -228,60 +218,19 @@ def identify_port_holder(
 
 
 def _kill(pid: int) -> bool:
-    """Stop ``pid``, politely first. Returns whether the signal was delivered."""
+    """Stop ``pid``, politely first. Returns whether the signal was delivered.
 
-    if pid == os.getpid():
-        return False
-    # On Windows SIGTERM is TerminateProcess already; a failure here means the
-    # process is gone or is not ours to signal. Either way, fall through to the
-    # forced attempt below, which reports the truth.
-    with suppress(OSError, ValueError):
-        os.kill(pid, signal.SIGTERM)
-    deadline = time.monotonic() + TERMINATE_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        if not _alive(pid):
-            return True
-        time.sleep(0.2)
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except AttributeError, OSError, ValueError:
-        if platform.system() == "Windows":
-            try:
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    capture_output=True,
-                    timeout=10,
-                    check=False,
-                )
-            except OSError, subprocess.SubprocessError:
-                return False
-        else:
-            return False
-    return not _alive(pid)
+    The ask-wait-terminate escalation itself lives in ``core.mcc_processes``,
+    which is also what the stale-server sweep uses: one implementation of
+    "stop exactly this pid", so a change to the escalation cannot apply to one
+    caller and not the other.
+    """
+
+    return stop_process(pid, grace=TERMINATE_GRACE_SECONDS)
 
 
 def _alive(pid: int) -> bool:
-    if platform.system() == "Windows":
-        try:
-            completed = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-        except OSError, subprocess.SubprocessError:
-            return True
-        return str(pid) in completed.stdout
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return True
-    return True
+    return process_is_alive(pid)
 
 
 def take_port(

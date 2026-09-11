@@ -388,6 +388,25 @@ PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT = 0.5
 SERVER_PORT_TAKEOVER_DEFAULT = "always"
 SERVER_PORT_TAKEOVER_CHOICES = ("always", "mcc-only", "never")
 
+# How quiet another MCC server's heartbeat must go before this install will
+# even use the word "stale" about it. The request log touches a session row
+# every 30 seconds, so the default is thirty missed beats -- deliberately far
+# past any plausible pause, because the cost of calling a busy server stale is
+# a user's work stopped mid-flight and the cost of waiting is a log line.
+SERVER_STALE_SESSION_SECONDS_DEFAULT = 900.0
+
+# What the server does about OTHER My Claude Code servers it finds running when
+# it starts, and what an install does about one holding a file it wants.
+# ``report`` names them in the log and in the desktop status document and
+# stops nothing at all -- the default, and the only safe default: a server that
+# owns no listening socket in one scan may be starting, draining, or streaming
+# an answer to a request it accepted before the socket closed. ``stop`` also
+# stops the ones this install can *prove* are finished, which is a much smaller
+# set than "owns no socket": see core/server_inventory.py for the two
+# arguments that qualify.
+SERVER_STALE_SERVER_ACTION_DEFAULT = "report"
+SERVER_STALE_SERVER_ACTION_CHOICES = ("report", "stop")
+
 # wall-clock deadline (core/stop_deadline.py) shared by uvicorn's connection
 # drain, the streaming-response cleanup, the provider-generation drain and the
 # ASGI lifespan shutdown. A small fixed teardown margin sits past it for the

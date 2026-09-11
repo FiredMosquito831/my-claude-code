@@ -1420,6 +1420,54 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "SERVER_STALE_SERVER_ACTION",
+        "Other My Claude Code servers",
+        "deadlines",
+        "select",
+        settings_attr="server_stale_server_action",
+        default="report",
+        restart_required=True,
+        options=(
+            ConfigOptionSpec("report", "Name them in the log and leave them alone"),
+            ConfigOptionSpec("stop", "Also stop the ones proven to be finished"),
+        ),
+        description=(
+            "What this server does about OTHER My Claude Code servers it finds "
+            "running when it starts. Report -- the default -- writes one line "
+            "per server into the server log naming its process id, its session, "
+            "the port it recorded, when it started, when it last checked in and "
+            "which files it is holding open, and stops nothing whatsoever. That "
+            "is the safe answer and almost always the right one: a server that "
+            "is not listening on a port right now may be starting, may be "
+            "draining, or may be streaming an answer to a request it accepted "
+            "before its socket closed. Stop also stops the ones this install "
+            "can PROVE are finished -- a server whose heartbeat has been silent "
+            "past the budget below AND whose port is now served by a different "
+            "My Claude Code, or a launcher whose server process is gone "
+            "entirely. It never stops a server merely because no listening "
+            "socket was found for it. Turn this on if stale servers keep "
+            "holding files open and making your updates retry."
+        ),
+    ),
+    ConfigFieldSpec(
+        "SERVER_STALE_SESSION_SECONDS",
+        "Silence before a server counts as stale",
+        "deadlines",
+        "number",
+        settings_attr="server_stale_session_seconds",
+        default="900",
+        restart_required=True,
+        description=(
+            "How long another My Claude Code server's heartbeat must have been "
+            "silent before this install is willing to describe it as stale. A "
+            "running server writes into its session row every 30 seconds, so "
+            "the default of 900 is thirty missed beats. Silence alone never "
+            "stops anything -- it only makes the word available; something else "
+            "must also be serving that server's port before the setting above "
+            "will act. Raise it if you keep servers parked for long periods."
+        ),
+    ),
+    ConfigFieldSpec(
         "CATALOGUE_FETCH_TIMEOUT_SECONDS",
         "Coding agent catalogue build budget",
         "deadlines",
