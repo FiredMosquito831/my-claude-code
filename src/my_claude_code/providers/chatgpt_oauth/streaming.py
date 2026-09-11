@@ -36,6 +36,47 @@ def _usage_int(source: Any, key: str) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+#: Responses frames that stream a piece of the model's visible reasoning.
+#: ``reasoning_summary_text`` is the summary the endpoint writes for a client;
+#: ``reasoning_text`` is raw reasoning, which only some models expose. Both are
+#: thinking as far as Anthropic's protocol is concerned.
+_REASONING_DELTA_EVENTS = frozenset(
+    {
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_text.delta",
+    }
+)
+
+#: Frames that repeat a whole reasoning part after its deltas. They are the
+#: only source of the text when a part arrives in one piece, and a duplicate of
+#: it otherwise, which is why every emission is keyed (see
+#: ``_reasoning_part_key``).
+_REASONING_DONE_EVENTS = frozenset(
+    {
+        "response.reasoning_summary_text.done",
+        "response.reasoning_text.done",
+        "response.reasoning_summary_part.done",
+    }
+)
+
+
+def _reasoning_done_text(event: Mapping[str, Any]) -> str:
+    """Read the complete part text off one terminal reasoning frame.
+
+    ``*_text.done`` carries it as ``text``; ``reasoning_summary_part.done``
+    nests it under ``part``.
+    """
+    text = event.get("text")
+    if isinstance(text, str) and text:
+        return text
+    part = event.get("part")
+    if isinstance(part, Mapping):
+        nested = part.get("text")
+        if isinstance(nested, str):
+            return nested
+    return ""
+
+
 class ChatGPTOAuthStreamConverter:
     """Own state for one ChatGPT Responses API stream.
 
@@ -49,9 +90,23 @@ class ChatGPTOAuthStreamConverter:
         ledger: AnthropicStreamLedger,
         *,
         log_raw_events: bool = False,
+        output_reasoning: bool = True,
     ) -> None:
         self._ledger = ledger
         self._log_raw_events = log_raw_events
+        #: Whether the client's reasoning policy allows the model's thinking to
+        #: be shown. ``True`` by default because a converter handed no policy
+        #: has been told nothing that would justify dropping content the
+        #: endpoint sent; ``stream_response`` passes the real intent.
+        self._output_reasoning = output_reasoning
+        #: Summary/reasoning parts already streamed as deltas, keyed by
+        #: ``(kind, item_id, index)``. A terminal ``.done`` frame repeats the
+        #: whole part, so it must only be emitted for a part nobody streamed.
+        self._reasoning_parts_streamed: set[tuple[str, str, int]] = set()
+        #: Characters emitted into the currently open thinking block, so a
+        #: second summary part is separated from the first instead of being
+        #: glued onto it.
+        self._thinking_chars_in_block = 0
         self._active_tool_calls: dict[str, dict[str, Any]] = {}
         self._usage: dict[str, int] = {
             "input_tokens": 0,
@@ -82,9 +137,33 @@ class ChatGPTOAuthStreamConverter:
                 yield self._ledger.emit_text_delta(delta)
             return
 
+        if event_type in _REASONING_DELTA_EVENTS:
+            delta = event.get("delta")
+            if isinstance(delta, str) and delta:
+                key = self._reasoning_part_key(event_type, event)
+                if key is not None and key not in self._reasoning_parts_streamed:
+                    self._reasoning_parts_streamed.add(key)
+                    yield from self._begin_reasoning_part()
+                yield from self._emit_thinking(delta)
+            return
+
+        if event_type in _REASONING_DONE_EVENTS:
+            key = self._reasoning_part_key(event_type, event)
+            text = _reasoning_done_text(event)
+            if key is not None and key not in self._reasoning_parts_streamed and text:
+                self._reasoning_parts_streamed.add(key)
+                yield from self._begin_reasoning_part()
+                yield from self._emit_thinking(text)
+            return
+
         if event_type == "response.output_item.added":
             item = event.get("item") or {}
             item_type = item.get("type")
+            if item_type == "reasoning":
+                # Deliberately opens nothing. A reasoning item whose only
+                # payload is ``encrypted_content`` carries no text anybody may
+                # read, and an empty thinking block would claim otherwise.
+                return
             if item_type == "function_call":
                 tool_id = item.get("id") or f"call_{len(self._active_tool_calls)}"
                 name = item.get("name") or "unknown"
@@ -114,6 +193,9 @@ class ChatGPTOAuthStreamConverter:
         if event_type == "response.output_item.done":
             item = event.get("item") or {}
             item_type = item.get("type")
+            if item_type == "reasoning":
+                yield from self._flush_reasoning_item(item)
+                return
             if item_type == "function_call":
                 tool_id = item.get("id")
                 tool = self._active_tool_calls.get(tool_id)
@@ -138,6 +220,88 @@ class ChatGPTOAuthStreamConverter:
             if isinstance(usage, Mapping):
                 self._read_usage(usage)
             return
+
+    def _reasoning_part_key(
+        self, event_type: str, event: Mapping[str, Any]
+    ) -> tuple[str, str, int] | None:
+        """Name the one summary/reasoning part an event belongs to.
+
+        The Responses API numbers summary parts with ``summary_index`` and raw
+        reasoning parts with ``content_index``, both scoped to the reasoning
+        item's ``item_id``. The triple is what makes a ``.done`` frame
+        recognisable as a repeat of deltas already streamed.
+        """
+        item_id = event.get("item_id")
+        if not isinstance(item_id, str):
+            return None
+        kind = "text" if "reasoning_text" in event_type else "summary"
+        index_key = "content_index" if kind == "text" else "summary_index"
+        index = event.get(index_key)
+        if not isinstance(index, int) or isinstance(index, bool):
+            index = 0
+        return (kind, item_id, index)
+
+    def _begin_reasoning_part(self) -> Iterator[str]:
+        """Separate a new summary part from whatever is already in the block.
+
+        Every part of a summary lands in one thinking block (see
+        :meth:`_emit_thinking`), so without this the last word of one part and
+        the first word of the next would run together. A part that opens a
+        *new* block -- because text intervened and closed the last one -- needs
+        no separator, which is why the ledger's own flag decides and not the
+        character count alone.
+        """
+        if (
+            self._output_reasoning
+            and self._ledger.blocks.thinking_started
+            and self._thinking_chars_in_block
+        ):
+            yield from self._emit_thinking("\n\n")
+
+    def _emit_thinking(self, text: str) -> Iterator[str]:
+        """Route one piece of model reasoning into the Anthropic thinking block.
+
+        The ledger owns the block bookkeeping: ``ensure_thinking_block`` closes
+        an open text block first and ``ensure_text_block`` closes an open
+        thinking block, so a thinking block can never interleave illegally with
+        text or tool_use -- the same contract ``openai_chat/provider.py`` relies
+        on for the Chat Completions family.
+        """
+        if not self._output_reasoning or not text:
+            return
+        if not self._ledger.blocks.thinking_started:
+            self._thinking_chars_in_block = 0
+        yield from self._ledger.ensure_thinking_block()
+        yield self._ledger.emit_thinking_delta(text)
+        self._thinking_chars_in_block += len(text)
+
+    def _flush_reasoning_item(self, item: Mapping[str, Any]) -> Iterator[str]:
+        """Emit any summary text of a finished reasoning item nobody streamed.
+
+        The endpoint may deliver a summary only on the item's terminal frame,
+        and an item that carries ``encrypted_content`` and an empty ``summary``
+        carries nothing to show -- which is the honest "it thought, and
+        returned none of it" case that must stay ``thinking_chars = 0``.
+        """
+        item_id = item.get("id")
+        if not isinstance(item_id, str):
+            return
+        for kind, field in (("summary", "summary"), ("text", "content")):
+            parts = item.get(field)
+            if not isinstance(parts, list):
+                continue
+            for index, part in enumerate(parts):
+                if not isinstance(part, Mapping):
+                    continue
+                text = part.get("text")
+                key = (kind, item_id, index)
+                if not isinstance(text, str) or not text:
+                    continue
+                if key in self._reasoning_parts_streamed:
+                    continue
+                self._reasoning_parts_streamed.add(key)
+                yield from self._begin_reasoning_part()
+                yield from self._emit_thinking(text)
 
     def _read_usage(self, usage: Mapping[str, Any]) -> None:
         """Fold one Responses ``usage`` block into Anthropic's shape.
