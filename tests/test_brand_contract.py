@@ -126,3 +126,48 @@ def test_legacy_shim_package_present():
     # The free_claude_code compatibility shim is still shipped (re-exports
     # my_claude_code); its absence would break the fcc-* aliases.
     assert (REPO / "src" / "free_claude_code" / "__init__.py").exists()
+
+
+# -- The dashboard wears the real mark ---------------------------------------
+
+
+def test_dashboard_brand_mark_is_the_packaged_mark_not_initials():
+    """BRAND.md S5: the mark is the shipped icon, never gradient initials.
+
+    The sidebar carried a literal `<div class="brand-mark">MC</div>` text
+    badge on an accent gradient for the product's whole life, which is
+    exactly the "gradient initials" the brand document forbids. Guard both
+    halves: the image is wired up, and the text badge does not come back.
+    """
+
+    index = _read("src/my_claude_code/api/admin_static/index.html")
+    assert '<div class="brand-mark">MC</div>' not in index
+    assert 'src="/admin/img/app-icon-96.png"' in index
+    assert 'alt="My Claude Code"' in index
+    # The same mark is the page's favicon rather than a blank data: URI.
+    assert '<link rel="icon" type="image/png" href="/admin/img/app-icon-96.png" />' in (
+        index
+    )
+    # The mark ships with the package, small enough to load with the page.
+    mark = REPO / "src/my_claude_code/api/admin_static/img/app-icon-96.png"
+    assert mark.is_file()
+    assert mark.stat().st_size <= 20 * 1024
+
+
+def test_dashboard_brand_mark_is_not_recolored_or_glowed():
+    """BRAND.md S5: no gradient, glow or drop shadow on top of the mark.
+
+    The mark's inner glyph is near-black navy on a transparent ground, so it
+    needs an opaque light plate to survive the three dark themes -- but the
+    plate is behind it, and the mark itself stays untouched.
+    """
+
+    css = _read("src/my_claude_code/api/admin_static/admin.css")
+    start = css.index(".brand-mark {")
+    block = css[start : css.index("}", start)]
+    assert "background: #ffffff;" in block
+    assert "linear-gradient" not in block
+    assert "box-shadow" not in block
+    # The footprint the sidebar layout depends on is unchanged.
+    assert "width: 40px;" in block
+    assert "height: 40px;" in block
