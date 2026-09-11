@@ -1,18 +1,38 @@
 """Report the running version and upgrade to the latest published release.
 
-The upgrade path deliberately mirrors ``scripts/install.sh``: fetch the wheel
-published for the latest tag, verify its SHA-256, then hand it to
-``uv tool install --force``. Reusing that shape keeps a dashboard-triggered
-upgrade byte-identical to one done from the command line, checksum
-verification included.
+Fetch the wheel published for the latest tag, verify its SHA-256, then install
+it. A successful dashboard upgrade closes the current runtime and starts the
+updated server. Windows cannot replace an environment underneath a running
+process -- its interpreter and loaded DLLs are held open -- so there the
+verified wheel is staged and a detached PowerShell helper takes over after this
+process exits.
 
-A successful dashboard upgrade automatically closes the current runtime and
-starts the updated server. POSIX installs first and then replaces the process
-image through the stable ``fcc-server`` launcher. Windows cannot replace the
-environment underneath a running process: its interpreter and loaded DLLs are
-held open, so ``uv tool install --force`` would fail partway and leave it
-broken. There the verified wheel is staged and a detached PowerShell helper
-installs only after this process exits, then relaunches that stable launcher.
+**How the install itself works, since 6.72.0.** It used to be one call:
+``uv tool install --force`` against the live environment. uv empties a tool
+environment *in place* before it resolves a single new byte, so that one call
+deleted the only working copy of MCC on the machine and then went to the
+network. Measured here: ``mcc-server`` answered at t=0, failed with
+``ModuleNotFoundError: annotated_types`` at +7.17 s, with
+``ModuleNotFoundError: my_claude_code`` -- the error users actually reported --
+at +7.99 s, and the executable itself was gone at +9.36 s. Two real updates
+took 58 s and 102 s end to end. For all of that there was no server, no
+``mcc-server``, and nothing to go back to.
+
+Now the new environment is built **beside** the old one, in a tools root of its
+own; it is **executed** once to prove it runs; the two directories are
+**exchanged** by two renames (measured: 3.9 ms median); the old one is kept
+until the new server **answers /health**, and put back if it does not. That is
+the shape VS Code, Squirrel, Caddy, rustup and uv's own ``self update`` all
+use, and the shape this project already used for its desktop shell
+(``config/desktop_shell.py`` + ``swap.rs``) and not for its server.
+
+The one thing that makes the exchange possible is a property of uv's launcher
+shims, verified at the byte level: ``<bin>/mcc-server.exe`` and
+``<tool dir>/Scripts/mcc-server.exe`` are the *same file*, and what they embed
+is the absolute path ``<tool dir>/Scripts/python.exe``. They do not care which
+environment is at that path. So the shims are never rewritten, never locked,
+and never a reason an install fails -- the instant a new environment lands at
+the canonical path, every already-installed launcher runs the new code.
 """
 
 import asyncio
@@ -40,11 +60,19 @@ from my_claude_code.config.constants import (
     DASHBOARD_RECONNECT_TIMEOUT_SECONDS,
 )
 from my_claude_code.config.paths import config_dir_path
+from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 from my_claude_code.config.update_progress import (
     INSTALL_LOG_PREFIX,
     INSTALL_LOG_SUFFIX,
+    INSTALL_TRANSCRIPTS_KEPT,
+    PREVIOUS_ENV_DIRNAME,
+    PREVIOUS_ENVS_KEPT,
+    STAGING_ENV_DIRNAME,
+    UPDATE_HEALTH_GATE_SECONDS,
+    UPDATE_HEALTH_POLL_SECONDS,
     UPDATE_PROGRESS_FILENAME,
+    UPDATE_PROGRESS_STAGE_ORDER,
     UPDATE_PROGRESS_STAGES,
     UPDATE_STAGE_DIRNAME,
     active_update,
@@ -416,6 +444,156 @@ def _installed_tool_dir() -> Path | None:
     return None
 
 
+def _aside_root(dirname: str, tool_dir: Path | None = None) -> Path | None:
+    """``<uv tools root>/../<dirname>``: where an update keeps its spare copies.
+
+    Beside uv's tools root, never inside it. A directory inside the tools root
+    whose name does not normalise to a valid package name makes ``uv tool
+    list`` fail outright -- measured on uv 0.11.21::
+
+        error: Not a valid package or extra name: ".mcc-previous".
+
+    and then list nothing at all, which is worse than the malformed-tool
+    warnings the existing ``my-claude-code.old-<stamp>`` directories produce.
+    A sibling is invisible to uv and still on the same volume, so the swap
+    stays a rename rather than a copy.
+
+    Derived from ``tool_dir`` (itself derived from ``sys.executable``) rather
+    than from ``uv tool dir``, because no uv may run while the server is alive.
+    """
+
+    env_dir = tool_dir if tool_dir is not None else _installed_tool_dir()
+    if env_dir is None:
+        return None
+    return env_dir.parent.parent / dirname
+
+
+def _is_superseded_env_dir(name: str) -> bool:
+    """Whether ``name`` is an environment an installer renamed aside.
+
+    ``scripts/install.ps1``'s rename-then-reinstall ladder leaves
+    ``my-claude-code.old-<stamp>`` beside the live environment, inside uv's
+    tools root. uv normalises that directory name into the *tool name*
+    ``my-claude-code-old-<stamp>``, which is a valid package name, so it tries
+    to read it as a tool and prints::
+
+        warning: Ignoring malformed tool `my-claude-code-old-20260907-193858`
+
+    on every single ``uv tool`` command. Four of them had accumulated on the
+    machine this was found on, and nothing had ever swept one.
+    """
+
+    for distribution in (NATIVE_DISTRIBUTION, LEGACY_DISTRIBUTION):
+        if name.startswith(f"{distribution}.old-"):
+            return True
+    return False
+
+
+def sweep_superseded_environments() -> str | None:
+    """Move aside-copies out of uv's tools root and keep exactly one.
+
+    Runs once per server start, on the post-readiness thread, never on a
+    request path. Three jobs, all best-effort:
+
+    * every ``<distribution>.old-<stamp>`` directory left in uv's tools root by
+      an older installer moves to ``<tools root>/../.mcc-previous/<stamp>/``,
+      where uv does not look, so ``uv tool list`` stops warning about it;
+    * the previous-environment directory is pruned to
+      :data:`PREVIOUS_ENVS_KEPT` -- it is the rollback, and a second one is
+      only disk;
+    * installer transcripts are pruned to :data:`INSTALL_TRANSCRIPTS_KEPT`.
+
+    Returns one sentence for the log when it did something, and ``None`` when
+    there was nothing to do -- a sweep that ran and found nothing should be
+    silent, or every start would say so.
+    """
+
+    tool_dir = _installed_tool_dir()
+    done: list[str] = []
+    previous_root = _aside_root(PREVIOUS_ENV_DIRNAME, tool_dir)
+    if tool_dir is not None and previous_root is not None:
+        tools_root = tool_dir.parent
+        moved = 0
+        for candidate in sorted(tools_root.iterdir()):
+            if not candidate.is_dir() or not _is_superseded_env_dir(candidate.name):
+                continue
+            stamp = candidate.name.partition(".old-")[2] or candidate.name
+            destination = previous_root / stamp / candidate.name.split(".old-")[0]
+            try:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                candidate.replace(destination)
+                moved += 1
+            except OSError as exc:
+                logger.debug(f"Could not move {candidate} aside: {exc}")
+        if moved:
+            done.append(
+                f"moved {moved} superseded environment(s) out of uv's tools root"
+            )
+    if previous_root is not None and previous_root.is_dir():
+        removed = 0
+        kept = sorted(
+            (child for child in previous_root.iterdir() if child.is_dir()),
+            key=lambda child: child.name,
+            reverse=True,
+        )
+        for stale in kept[PREVIOUS_ENVS_KEPT:]:
+            try:
+                shutil.rmtree(stale)
+                removed += 1
+            except OSError as exc:
+                logger.debug(f"Could not remove {stale}: {exc}")
+        if removed:
+            done.append(f"removed {removed} superseded copy(ies)")
+    # A staging directory only survives an update that did not finish -- the
+    # machine lost power, the helper was killed, uv refused the wheel. It is a
+    # whole environment's worth of disk and nothing will ever read it again,
+    # because every episode stamps a directory of its own. The live server
+    # reaching readiness is proof that no update is in flight, so this is the
+    # safe moment to drop them.
+    staging_root = _aside_root(STAGING_ENV_DIRNAME, tool_dir)
+    if staging_root is not None and staging_root.is_dir():
+        abandoned = 0
+        for stale in sorted(staging_root.iterdir()):
+            if not stale.is_dir():
+                continue
+            try:
+                shutil.rmtree(stale)
+                abandoned += 1
+            except OSError as exc:
+                logger.debug(f"Could not remove {stale}: {exc}")
+        if abandoned:
+            done.append(f"removed {abandoned} abandoned staging environment(s)")
+    transcripts = sorted(
+        _stage_dir().glob(f"{INSTALL_LOG_PREFIX}*{INSTALL_LOG_SUFFIX}"),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+    dropped = 0
+    for stale_log in transcripts[INSTALL_TRANSCRIPTS_KEPT:]:
+        try:
+            stale_log.unlink()
+            dropped += 1
+        except OSError as exc:
+            logger.debug(f"Could not remove {stale_log}: {exc}")
+    if dropped:
+        done.append(f"removed {dropped} old installer transcript(s)")
+    if not done:
+        return None
+    return "Update housekeeping: " + "; ".join(done) + "."
+
+
+def _health_url() -> str:
+    """Where the cutover asks whether the new server actually came up.
+
+    The server knows its own address and the helper does not, so the address is
+    baked into the helper at generation time. ``0.0.0.0`` is a bind address,
+    not a destination: asking it would be asking every interface at once, so
+    the loopback spelling is used to talk to ourselves.
+    """
+
+    return f"{local_proxy_root_url(get_settings())}/health"
+
+
 def _uv_tool_bin_dir(uv_executable: str | None = None) -> Path | None:
     """Return the stable executable directory outside a uv tool environment."""
     uv = uv_executable or shutil.which("uv")
@@ -663,6 +841,9 @@ def _deferred_helper_script(
     version: str | None = None,
     no_restart: bool = False,
     install_log: Path | None = None,
+    staging_root: Path | None = None,
+    previous_root: Path | None = None,
+    health_url: str | None = None,
 ) -> str:
     """PowerShell that waits for this process to exit, then installs.
 
@@ -694,6 +875,17 @@ def _deferred_helper_script(
     arrive, with an ``AppendAllText`` per line so the bytes are on disk (and
     readable by another process) the instant they exist rather than whenever a
     stream buffer happens to flush. Every progress record names the file.
+
+    ``staging_root``, ``previous_root`` and ``health_url`` are 6.72.0's, and
+    together they are the atomic update. The new environment is built under
+    ``staging_root`` while the old one keeps serving, executed once to prove it
+    works, exchanged with the live one by two directory renames, and the old
+    one is kept under ``previous_root`` until ``health_url`` answers 200. Both
+    roots are siblings of uv's tools root rather than children of it: a child
+    whose name does not normalise to a valid package name makes ``uv tool
+    list`` fail outright. When any of the three is missing -- this is not a uv
+    tool environment, or the server could not name its own address -- the
+    helper falls back to the in-place ``--force`` install it has always done.
     """
 
     quoted_args = ", ".join(_powershell_literal(arg) for arg in command[1:])
@@ -725,6 +917,41 @@ def _deferred_helper_script(
         _powershell_literal(name)
         for name in ("mcc-desktop.exe", "fcc-desktop.exe", "MyClaudeCode.exe")
     )
+    # The staging pass runs the SAME uv command against an empty tools root of
+    # its own, minus ``--force``. ``--force`` exists to overwrite a live
+    # environment, which is exactly what the staged path is built never to do;
+    # leaving it in would be inert but would say the opposite of what this
+    # release means (decision Q1: ``--force`` is reserved for repair, and the
+    # repair is the in-place fallback further down).
+    staging_args = ", ".join(
+        _powershell_literal(arg) for arg in command[1:] if arg != "--force"
+    )
+    staging_root_literal = _powershell_literal(
+        str(staging_root) if staging_root else ""
+    )
+    previous_root_literal = _powershell_literal(
+        str(previous_root) if previous_root else ""
+    )
+    health_url_literal = _powershell_literal(health_url or "")
+    # The launcher whose name the staged environment is executed under. Taken
+    # from the launcher we already resolved rather than hard-coded, so the
+    # legacy and native command families cannot drift apart here.
+    server_command = server_launcher.stem
+    native_command = "mcc-server"
+    install_log_glob = f"{INSTALL_LOG_PREFIX}*{INSTALL_LOG_SUFFIX}"
+    # Written out from the Python table rather than typed twice. It WAS typed
+    # twice until 6.72.0, and the two copies disagreed the moment a stage was
+    # added -- the PowerShell one still ranked `installing` third while Python
+    # had moved it to fourth, which a monotonic guard turns into silently
+    # dropped records rather than a visible error.
+    stage_order_literal = "\n".join(
+        f"    {_powershell_literal(stage)} = {rank}"
+        for stage, rank in UPDATE_PROGRESS_STAGE_ORDER.items()
+    )
+    health_gate_seconds = UPDATE_HEALTH_GATE_SECONDS
+    health_poll_ms = int(UPDATE_HEALTH_POLL_SECONDS * 1000)
+    previous_kept = PREVIOUS_ENVS_KEPT
+    transcripts_kept = INSTALL_TRANSCRIPTS_KEPT
     return f"""$ErrorActionPreference = 'Stop'
 $parent = {os.getpid()}
 # One JSON object per line, appended as this script moves between stages. It is
@@ -792,15 +1019,7 @@ $script:HelperDone = $false
 # by 'recovered'. A stage this table does not know is written rather than
 # dropped -- a guard that silently swallows records is worse than no guard.
 $stageOrder = @{{
-    'waiting-for-parent' = 1
-    'stopping' = 2
-    'installing' = 3
-    'verifying' = 4
-    'starting' = 5
-    'handing-off' = 5
-    'done' = 6
-    'failed' = 6
-    'recovered' = 6
+{stage_order_literal}
 }}
 $script:StageRank = 0
 function Write-Stage($stage, $message) {{
@@ -830,6 +1049,23 @@ function Write-Stage($stage, $message) {{
         # A receipt nobody can write must never be the reason an update fails.
     }}
 }}
+# Every path this script needs, named once, up here, because 6.72.0's staged
+# install needs them BEFORE the wait for the parent rather than after it.
+# `$toolDir` is the live environment (`<tools root>/my-claude-code`); the
+# staging and previous roots are SIBLINGS of the tools root, never children of
+# it -- a child whose name does not normalise to a valid package name makes
+# `uv tool list` fail outright and list nothing at all, which is worse than the
+# malformed-tool warnings the old `.old-<stamp>` directories produce.
+$binDir = {bin_dir_literal}
+$toolDir = {tool_dir_literal}
+$stagingRoot = {staging_root_literal}
+$previousRoot = {previous_root_literal}
+$healthUrl = {health_url_literal}
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$stagingDir = if ($stagingRoot) {{ Join-Path $stagingRoot $stamp }} else {{ '' }}
+$stagingBin = if ($stagingDir) {{ Join-Path $stagingDir '.bin' }} else {{ '' }}
+$previousDir = if ($previousRoot) {{ Join-Path $previousRoot $stamp }} else {{ '' }}
+$commandNames = @({quoted_names})
 # A fresh episode starts a fresh file: a stale 'done' from the previous update
 # would otherwise be the first thing the window reads and believes.
 try {{ [System.IO.File]::WriteAllText($progressPath, '', $progressEncoding) }} catch {{ }}
@@ -852,6 +1088,68 @@ function Test-ParentAlive {{
     if ($parentStart -eq 0) {{ return $true }}
     try {{ return $proc.StartTime.ToFileTimeUtc() -eq $parentStart }}
     catch {{ return $false }}   # access denied reading StartTime => not ours
+}}
+# ===========================================================================
+# STAGE. 6.72.0, and the whole point of this release.
+#
+# Until now the first thing an update did was hand the LIVE environment to
+# `uv tool install --force`, and uv empties a tool environment IN PLACE before
+# it resolves a single new byte. Measured on this machine: `mcc-server`
+# answered exit 0 at t=0, `ModuleNotFoundError: annotated_types` at +7.17 s,
+# `ModuleNotFoundError: my_claude_code` -- the user's exact error -- at
+# +7.99 s, and the executable itself was gone at +9.36 s. The whole install
+# took 58 s and 102 s on two real updates. For all of it there was no server
+# and no way back: the old bits were already deleted.
+#
+# So build the new environment BESIDE the old one, in a tools root of its own.
+# uv never looks at the live directory, `mcc-server` keeps answering the entire
+# time, and a wheel that cannot be installed costs nothing at all. This runs
+# BEFORE the wait below, so it overlaps the server's own drain instead of
+# following it.
+$stagingEnv = ''
+$stagedOk = $false
+# Set only once a swap has actually happened, and read by the in-place fallback
+# below: a release that adds a new command swaps first and then asks uv to write
+# the launchers, and if THAT fails the canonical path holds a half-written
+# environment while a perfectly good one sits aside with nothing to restore it.
+$swappedAside = ''
+if ($stagingDir -and $toolDir -and $binDir) {{
+    Write-Stage 'staging' 'Building the new version beside the running one.'
+    Write-InstallLog ('Staging into ' + $stagingDir + '. The running version is not touched.')
+    try {{
+        New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $stagingBin -Force | Out-Null
+        $hadToolDir = Test-Path Env:\\UV_TOOL_DIR
+        $previousToolDir = if ($hadToolDir) {{ $env:UV_TOOL_DIR }} else {{ '' }}
+        $hadBinDir = Test-Path Env:\\UV_TOOL_BIN_DIR
+        $previousBinDir = if ($hadBinDir) {{ $env:UV_TOOL_BIN_DIR }} else {{ '' }}
+        $env:UV_TOOL_DIR = $stagingDir
+        $env:UV_TOOL_BIN_DIR = $stagingBin
+        # uv writes its progress to stderr, and under 'Stop' a native command's
+        # stderr is a TERMINATING error. Judge it by its exit code alone.
+        $ErrorActionPreference = 'Continue'
+        $env:NO_COLOR = '1'
+        try {{ [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) }} catch {{ }}
+        $stageOutput = & {_powershell_literal(uv_executable)} {staging_args} 2>&1 |
+            ForEach-Object {{ $line = Convert-OutputLine $_; Write-InstallLog $line; $line }} |
+            Out-String
+        $stageCode = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($hadToolDir) {{ $env:UV_TOOL_DIR = $previousToolDir }} else {{ Remove-Item Env:\\UV_TOOL_DIR -ErrorAction SilentlyContinue }}
+        if ($hadBinDir) {{ $env:UV_TOOL_BIN_DIR = $previousBinDir }} else {{ Remove-Item Env:\\UV_TOOL_BIN_DIR -ErrorAction SilentlyContinue }}
+        Write-InstallLog ('The staged install exited with ' + $stageCode + '.')
+        $stagingEnv = Join-Path $stagingDir {_powershell_literal(PACKAGE_NAME)}
+        if (($stageCode -eq 0) -and (Test-Path -LiteralPath $stagingEnv -PathType Container)) {{
+            $stagedOk = $true
+        }} else {{
+            Write-InstallLog 'Nothing was staged; the running version is untouched.'
+        }}
+    }}
+    catch {{
+        $ErrorActionPreference = 'Stop'
+        $stagedOk = $false
+        Write-InstallLog ('The staged install could not run: ' + $_.Exception.Message)
+    }}
 }}
 $deadline = (Get-Date).AddSeconds({wait_budget:.1f})
 while ((Get-Date) -lt $deadline) {{
@@ -885,6 +1183,315 @@ if (Test-ParentAlive) {{
     $result = @{{ ok = $false; message = 'The server could not be stopped, so the update was not applied.' }}
     [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
     exit 1
+}}
+# Ask the new server whether it is actually up. This is the gate the cutover
+# turns on: an install that produced a server which never answers is not a
+# successful update, it is an outage with a new version number.
+function Wait-ForHealth {{
+    param($url, $seconds)
+    if (-not $url) {{ return $true }}
+    $deadline = (Get-Date).AddSeconds($seconds)
+    while ((Get-Date) -lt $deadline) {{
+        try {{
+            $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5 -Method Get
+            if ($response.StatusCode -eq 200) {{ return $true }}
+        }}
+        catch {{
+            # 503 + x-mcc-starting is a server that has bound the socket and is
+            # still coming up (6.59.0). Not an answer yet, not a failure yet.
+        }}
+        Start-Sleep -Milliseconds {health_poll_ms}
+    }}
+    return $false
+}}
+# Keep exactly one previous environment: it is the rollback, and a second one is
+# only disk. Swept after /health answers, never before, so the copy being
+# deleted is never the one a rollback would need.
+function Remove-StalePrevious {{
+    param($root, $keep)
+    if (-not $root) {{ return }}
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {{ return }}
+    $all = @(Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
+    if ($all.Count -le $keep) {{ return }}
+    foreach ($old in $all[$keep..($all.Count - 1)]) {{
+        try {{
+            Remove-Item -LiteralPath $old.FullName -Recurse -Force -ErrorAction Stop
+            Write-InstallLog ('Removed the superseded previous environment ' + $old.Name + '.')
+        }}
+        catch {{
+            Write-InstallLog ('Could not remove ' + $old.FullName + ': ' + $_.Exception.Message)
+        }}
+    }}
+}}
+# One transcript per update is one file per update, for ever. Keep the recent
+# ones -- they are the only record of what an update actually did -- and let
+# the rest go.
+function Remove-StaleTranscripts {{
+    $dir = Split-Path -Parent $installLog
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {{ return }}
+    $all = @(Get-ChildItem -Path $dir -Filter '{install_log_glob}' -File -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
+    if ($all.Count -le {transcripts_kept}) {{ return }}
+    foreach ($old in $all[{transcripts_kept}..($all.Count - 1)]) {{
+        Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue
+    }}
+}}
+if ($stagedOk) {{
+    # =======================================================================
+    # VERIFY. Run the staged environment once, before it is anywhere near the
+    # live path. Caddy's rule: the gate is EXECUTING the new thing, not
+    # trusting an installer's exit code. A wheel that resolves, installs and
+    # then cannot import itself is a real failure mode, and it used to be
+    # discovered by the user.
+    # =======================================================================
+    Write-Stage 'verifying' 'Running the new version once before it replaces the old one.'
+    # The native command first, the legacy launcher only as a fallback: both
+    # are published, but `fcc-server --version` prints the LEGACY distribution
+    # name ("free-claude-code 6.71.1"), and a version check that reads the
+    # wrong product name is a check waiting to be misread.
+    $stagedServer = Join-Path $stagingEnv 'Scripts\\{native_command}.exe'
+    if (-not (Test-Path -LiteralPath $stagedServer -PathType Leaf)) {{
+        $stagedServer = Join-Path $stagingEnv 'Scripts\\{server_command}.exe'
+    }}
+    $stagedPython = Join-Path $stagingEnv 'Scripts\\python.exe'
+    $verified = $false
+    $verifyNote = 'The staged version could not be run.'
+    $ErrorActionPreference = 'Continue'
+    try {{
+        if ((Test-Path -LiteralPath $stagedServer -PathType Leaf) -and (Test-Path -LiteralPath $stagedPython -PathType Leaf)) {{
+            $versionOut = (& $stagedServer --version 2>&1 | Out-String).Trim()
+            $versionCode = $LASTEXITCODE
+            Write-InstallLog ('Staged --version said "' + $versionOut + '" (exit ' + $versionCode + ').')
+            $importOut = (& $stagedPython -c 'import my_claude_code' 2>&1 | Out-String).Trim()
+            $importCode = $LASTEXITCODE
+            Write-InstallLog ('Staged import exited with ' + $importCode + '.')
+            if ($importOut) {{ Write-InstallLog $importOut }}
+            $versionMatches = $true
+            if ($targetVersion -and ($versionOut -notmatch [regex]::Escape($targetVersion))) {{
+                $versionMatches = $false
+                $verifyNote = 'The staged version reported "' + $versionOut + '" rather than ' + $targetVersion + '.'
+            }}
+            if (($versionCode -eq 0) -and ($importCode -eq 0) -and $versionMatches) {{
+                $verified = $true
+            }} elseif ($versionMatches) {{
+                $verifyNote = 'The staged version did not run: --version exited ' + $versionCode + ', import exited ' + $importCode + '.'
+            }}
+        }} else {{
+            $verifyNote = 'The staged install produced no runnable launcher.'
+        }}
+    }}
+    catch {{
+        $verified = $false
+        $verifyNote = 'The staged version could not be run: ' + $_.Exception.Message
+    }}
+    $ErrorActionPreference = 'Stop'
+
+    if (-not $verified) {{
+        # Nothing has moved. The live environment is exactly as it was, so the
+        # recovery is "start what is already installed" and the whole episode
+        # cost the user a download.
+        Write-InstallLog $verifyNote
+        Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        $message = $verifyNote + ' Nothing was replaced; the installed version is unchanged.'
+        Write-Stage 'failed' $message
+        $result = @{{ ok = $false; exit_code = 1; attempts = 1; staged = $true; verified = $false; swapped = $false; message = $message; restarted = $false }}
+        $restarted = $false
+        if (-not $noRestart) {{
+            try {{ Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}; $restarted = $true }}
+            catch {{ Write-InstallLog ('The installed server could not be started: ' + $_.Exception.Message) }}
+        }}
+        $result['restarted'] = $restarted
+        $result['message'] = $message + $(if ($restarted) {{ ' The installed version was restarted.' }} elseif ($noRestart) {{ ' The desktop app starts it again within ten seconds.' }} else {{ ' The installed version could not be restarted either.' }})
+        [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+        $script:HelperDone = $true
+        Write-Stage 'recovered' $result.message
+        exit 1
+    }}
+
+    # =======================================================================
+    # SWAP. Two directory renames on one volume. Measured on this machine over
+    # ten rounds: 2.7 ms fastest, 3.9 ms median, 20.0 ms slowest -- against the
+    # 7-to-14.5 second hole `uv tool install --force` used to open.
+    #
+    # The launcher shims in the bin directory are NOT touched, and that is the
+    # whole trick. Every one of them is a uv trampoline whose embedded path is
+    # `<tools root>/my-claude-code/Scripts/python.exe` (verified at the byte
+    # level: the bin shim and the environment's own Scripts copy are the same
+    # file, sha256 for sha256). They do not care WHICH environment is at that
+    # path -- so the instant the new one lands there, every already-installed
+    # launcher runs the new code, and no locked `.exe` can abort anything,
+    # because nothing is being written over.
+    #
+    # The environment's own `Scripts/*.exe` are a different matter: uv baked
+    # the STAGING path into them, so after the move they are dead. They are
+    # replaced with the bin copies, which carry the canonical path.
+    # =======================================================================
+    Write-Stage 'swapping' 'Putting the new version in place.'
+    $asideEnv = Join-Path $previousDir {_powershell_literal(PACKAGE_NAME)}
+    $swapped = $false
+    try {{
+        New-Item -ItemType Directory -Path $previousDir -Force | Out-Null
+        $swapWatch = [Diagnostics.Stopwatch]::StartNew()
+        [System.IO.Directory]::Move($toolDir, $asideEnv)
+        [System.IO.Directory]::Move($stagingEnv, $toolDir)
+        $swapWatch.Stop()
+        $swapped = $true
+        $swappedAside = $asideEnv
+        Write-InstallLog ('Swapped in ' + [math]::Round($swapWatch.Elapsed.TotalMilliseconds, 1) + ' ms. The previous version is at ' + $asideEnv + '.')
+    }}
+    catch {{
+        Write-InstallLog ('The swap failed: ' + $_.Exception.Message)
+        # Put the live environment back if the first move succeeded and the
+        # second did not. Anything else and nothing moved at all.
+        if ((-not (Test-Path -LiteralPath $toolDir -PathType Container)) -and (Test-Path -LiteralPath $asideEnv -PathType Container)) {{
+            try {{ [System.IO.Directory]::Move($asideEnv, $toolDir); Write-InstallLog 'The previous environment was put back.' }}
+            catch {{ Write-InstallLog ('The previous environment could not be put back: ' + $_.Exception.Message) }}
+        }}
+    }}
+
+    if ($swapped) {{
+        # The environment's own trampolines, re-pointed at the canonical path.
+        $repaired = 0
+        if (Test-Path -LiteralPath $binDir -PathType Container) {{
+            foreach ($file in @(Get-ChildItem -Path $binDir -Filter '*.exe' -ErrorAction SilentlyContinue)) {{
+                $target = Join-Path $toolDir ('Scripts\\' + $file.Name)
+                if (Test-Path -LiteralPath $target -PathType Leaf) {{
+                    try {{ Copy-Item -LiteralPath $file.FullName -Destination $target -Force -ErrorAction Stop; $repaired = $repaired + 1 }}
+                    catch {{ }}
+                }}
+            }}
+        }}
+        Write-InstallLog ('Re-pointed ' + $repaired + ' launcher(s) inside the new environment.')
+        # uv recorded every entry point under the STAGING bin directory, which
+        # is about to be deleted; a receipt left as written would send a later
+        # uninstall or upgrade at a path that no longer exists. Same rewrite
+        # 6.33.1 does for the staged-bin fallback, for the same reason.
+        $receiptPath = Join-Path $toolDir 'uv-receipt.toml'
+        if (Test-Path -LiteralPath $receiptPath -PathType Leaf) {{
+            try {{
+                $receiptText = [IO.File]::ReadAllText($receiptPath)
+                $realPrefix = $binDir.Replace('\\', '/').TrimEnd('/')
+                $backslashPrefix = $stagingBin.Replace('/', '\\').TrimEnd('\\')
+                $rewritten = $receiptText
+                foreach ($stagePrefix in @($stagingBin.Replace('\\', '/').TrimEnd('/'), $backslashPrefix.Replace('\\', '\\\\'), $backslashPrefix)) {{
+                    $rewritten = $rewritten.Replace($stagePrefix, $realPrefix)
+                }}
+                if ($rewritten -ne $receiptText) {{
+                    [System.IO.File]::WriteAllText(($receiptPath + '.new'), $rewritten, (New-Object System.Text.UTF8Encoding($false)))
+                    Move-Item -LiteralPath ($receiptPath + '.new') -Destination $receiptPath -Force
+                    Write-InstallLog 'Rewrote the receipt entry points to the real bin directory.'
+                }}
+            }}
+            catch {{ Write-InstallLog ('The receipt could not be rewritten: ' + $_.Exception.Message) }}
+        }}
+        Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+
+        # A release that publishes a command this machine has never had cannot
+        # be finished by a rename: there is no trampoline anywhere carrying the
+        # canonical path for it, and one cannot be written by hand (the path is
+        # baked into the binary twice, once as a PE resource and once as the
+        # shebang of an appended zip). That case -- rare, and only on releases
+        # that ADD an entry point -- falls through to the in-place install
+        # below, which is now a repair rather than the ordinary path, and which
+        # runs against a fully warm cache because the staging pass just filled
+        # it. The previous environment is already aside, so it is still safe.
+        $missingShims = @()
+        foreach ($name in $commandNames) {{
+            if (-not (Test-Path -LiteralPath (Join-Path $binDir ($name + '.exe')) -PathType Leaf)) {{ $missingShims += $name }}
+        }}
+        if ($missingShims.Count -gt 0) {{
+            Write-InstallLog ('This release adds ' + ($missingShims -join ', ') + '; uv has to write the launcher(s), so the install is finished in place.')
+        }} else {{
+            $result = @{{
+                ok = $true
+                exit_code = 0
+                attempts = 1
+                staged = $true
+                verified = $true
+                swapped = $true
+                previous_environment = $asideEnv
+                disk_full = $false
+                missing_commands = @()
+                kept_shims = @()
+                restored_shims = @()
+                restarted = $false
+                message = 'The new version was installed beside the old one and swapped in.'
+                output = $stageOutput
+            }}
+            [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+            $restarted = $false
+            if ($noRestart) {{
+                Write-Stage 'handing-off' 'Installed. Handing the restart to the desktop app.'
+            }} else {{
+                Write-Stage 'starting' 'Starting the updated server.'
+                try {{
+                    Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}
+                    $restarted = $true
+                    Write-InstallLog 'Started the updated server.'
+                }}
+                catch {{ Write-InstallLog ('The updated server could not be started: ' + $_.Exception.Message) }}
+            }}
+            $result['restarted'] = $restarted
+
+            # ===============================================================
+            # HEALTH GATE. Nothing is deleted until the new server answers.
+            # ===============================================================
+            Write-InstallLog ('Waiting up to {health_gate_seconds:.0f} s for ' + $healthUrl + ' to answer.')
+            $healthy = Wait-ForHealth $healthUrl {health_gate_seconds:.1f}
+            if ($healthy) {{
+                Write-InstallLog 'The updated server answered /health.'
+                Remove-StalePrevious $previousRoot {previous_kept}
+                Remove-StaleTranscripts
+                $script:HelperDone = $true
+                [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+                Remove-Item -Path {_powershell_literal(str(stage_dir / "wheel"))} -Recurse -Force -ErrorAction SilentlyContinue
+                if ($noRestart) {{
+                    Write-Stage 'done' 'The new version is installed. The desktop app starts it.'
+                }} else {{
+                    Write-Stage 'done' 'The updated server was started.'
+                }}
+                exit 0
+            }}
+
+            # ===============================================================
+            # ROLLBACK. The new version is installed and does not answer, so
+            # put the one that did back and start it. This is the reason the
+            # old environment was renamed rather than deleted.
+            # ===============================================================
+            Write-Stage 'rolling-back' 'The new version did not answer, so the previous one is being put back.'
+            Write-InstallLog ('No answer from ' + $healthUrl + ' within {health_gate_seconds:.0f} s. Rolling back.')
+            $rolledBack = $false
+            try {{
+                $failedDir = Join-Path $stagingRoot ($stamp + '-failed')
+                New-Item -ItemType Directory -Path $failedDir -Force | Out-Null
+                [System.IO.Directory]::Move($toolDir, (Join-Path $failedDir {_powershell_literal(PACKAGE_NAME)}))
+                [System.IO.Directory]::Move($asideEnv, $toolDir)
+                $rolledBack = $true
+                Write-InstallLog 'The previous environment is back at the canonical path.'
+                # The stamp directory it came out of is now empty, and an empty
+                # one would be kept as "the rollback" by the next sweep while
+                # holding nothing to roll back to.
+                Remove-Item -LiteralPath $previousDir -Recurse -Force -ErrorAction SilentlyContinue
+                # Its own Scripts trampolines carry the canonical path already
+                # -- they were never rewritten -- so nothing else is needed.
+            }}
+            catch {{
+                Write-InstallLog ('The rollback failed: ' + $_.Exception.Message)
+            }}
+            $restartedPrevious = $false
+            if ($rolledBack -and (-not $noRestart)) {{
+                try {{ Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}; $restartedPrevious = $true }}
+                catch {{ Write-InstallLog ('The previous version could not be started: ' + $_.Exception.Message) }}
+            }}
+            $result['ok'] = $false
+            $result['rolled_back'] = $rolledBack
+            $result['restarted'] = $restartedPrevious
+            $result['message'] = $(if ($rolledBack) {{ 'The new version was installed but never answered, so the previous version was put back' + $(if ($restartedPrevious) {{ ' and restarted.' }} elseif ($noRestart) {{ '. The desktop app starts it within ten seconds.' }} else {{ ', but it could not be restarted.' }}) }} else {{ 'The new version never answered and the previous version could not be put back. Re-run the install command.' }})
+            [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+            $script:HelperDone = $true
+            Write-Stage 'recovered' $result.message
+            exit 1
+        }}
+    }}
 }}
 Write-Stage 'installing' 'Installing the new version.'
 # Give Windows a moment to release the handles the exiting process held.
@@ -936,11 +1543,7 @@ try {{ [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) }
 # because it had already written a failure. uv overwrites these in place, and a
 # momentarily locked one is kept by the staged fallback exactly like any other,
 # so there was never anything the rename bought here.
-$binDir = {bin_dir_literal}
-$toolDir = {tool_dir_literal}
-$commandNames = @({quoted_names})
 $neverRename = @({quoted_never_rename})
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $managed = @{{}}
 $refused = @()
 # Every shim actually moved out of the way, so a failed install can put them
@@ -1156,6 +1759,28 @@ if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
 # already runs the new code through the canonical tool directory. Report it as
 # refreshing on the next install and keep ok = true.
 $ok = ($code -eq 0) -and ($missing.Count -eq 0)
+# The only way to reach here with something already swapped is the
+# new-command repair above: the environment was exchanged, and uv was then
+# asked to write the launcher for a command this machine has never had. If that
+# failed, the canonical path holds whatever uv left behind and a known-good
+# environment is sitting aside with nothing to bring it back. Bring it back.
+if ((-not $ok) -and $swappedAside -and (Test-Path -LiteralPath $swappedAside -PathType Container)) {{
+    Write-InstallLog 'The launcher repair failed after the swap; putting the previous environment back.'
+    Write-Stage 'rolling-back' 'The new version could not be finished, so the previous one is being put back.'
+    try {{
+        $wreckage = Join-Path $stagingRoot ($stamp + '-failed')
+        New-Item -ItemType Directory -Path $wreckage -Force | Out-Null
+        if (Test-Path -LiteralPath $toolDir -PathType Container) {{
+            [System.IO.Directory]::Move($toolDir, (Join-Path $wreckage {_powershell_literal(PACKAGE_NAME)}))
+        }}
+        [System.IO.Directory]::Move($swappedAside, $toolDir)
+        Remove-Item -LiteralPath $previousDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-InstallLog 'The previous environment is back at the canonical path.'
+    }}
+    catch {{
+        Write-InstallLog ('The previous environment could not be put back: ' + $_.Exception.Message)
+    }}
+}}
 $restartNote = if ($targetVersion) {{ ' to pick up ' + $targetVersion }} else {{ '' }}
 $keptNote = if ($kept.Count -gt 0) {{ ' kept: ' + (($kept | ForEach-Object {{ $_ + '.exe (in use)' }}) -join ', ') + ' -- restart it' + $restartNote + '. These launchers were locked and kept the file they had. They keep working and will refresh on the next install.' }} else {{ '' }}
 $result = @{{
@@ -1292,6 +1917,15 @@ def _spawn_deferred_upgrade(
                 # GAP-3: the desktop window asked for this update and owns the
                 # restart. See `_deferred_helper_script`.
                 no_restart=no_restart,
+                # 6.72.0: where the new environment is built and where the old
+                # one waits until the new one answers. Both derived from
+                # `sys.executable`, like the tool directory above and for the
+                # same reason -- no uv may run while the server is alive.
+                staging_root=_aside_root(STAGING_ENV_DIRNAME),
+                previous_root=_aside_root(PREVIOUS_ENV_DIRNAME),
+                # The server knows its own address; the helper cannot find it
+                # out once the server is gone, so it is baked in here.
+                health_url=_health_url(),
             ),
             encoding="utf-8",
         )

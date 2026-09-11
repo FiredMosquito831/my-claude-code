@@ -1086,11 +1086,14 @@ install_stage_rank() {
     # UPDATE_PROGRESS_STAGE_ORDER, and a contract test compares them.
     case "$1" in
         waiting-for-parent) printf '1' ;;
-        stopping) printf '2' ;;
-        installing) printf '3' ;;
-        verifying) printf '4' ;;
-        starting|handing-off) printf '5' ;;
-        done|failed|recovered) printf '6' ;;
+        staging) printf '2' ;;
+        stopping) printf '3' ;;
+        installing) printf '4' ;;
+        verifying) printf '5' ;;
+        swapping) printf '6' ;;
+        starting|handing-off) printf '7' ;;
+        rolling-back) printf '8' ;;
+        done|failed|recovered) printf '9' ;;
         *) printf '0' ;;
     esac
 }

@@ -52,13 +52,23 @@ UPDATE_PROGRESS_FILENAME = "progress.json"
 #: wrote ``starting`` there, from a ``$noRestart`` it read one line before the
 #: line that assigns it, so a receipt claimed the helper was starting a server
 #: it had been told not to start (spec F6, seen in the live 6.66.1 receipt).
+#:
+#: 6.72.0 added ``staging``, ``swapping`` and ``rolling-back``. An update no
+#: longer replaces the live environment in place: it builds the new one BESIDE
+#: it (``staging``), runs it once to prove it works (``verifying``), and only
+#: then exchanges the two directories (``swapping``). ``rolling-back`` is the
+#: stage between a cutover whose ``/health`` never answered and the
+#: ``recovered`` that follows it.
 UPDATE_PROGRESS_STAGES: tuple[str, ...] = (
     "waiting-for-parent",
+    "staging",
     "stopping",
     "installing",
     "verifying",
+    "swapping",
     "starting",
     "handing-off",
+    "rolling-back",
     "done",
     "failed",
     "recovered",
@@ -71,14 +81,17 @@ UPDATE_PROGRESS_STAGES: tuple[str, ...] = (
 #: ends exactly once and ``failed`` may be followed by ``recovered``.
 UPDATE_PROGRESS_STAGE_ORDER: dict[str, int] = {
     "waiting-for-parent": 1,
-    "stopping": 2,
-    "installing": 3,
-    "verifying": 4,
-    "starting": 5,
-    "handing-off": 5,
-    "done": 6,
-    "failed": 6,
-    "recovered": 6,
+    "staging": 2,
+    "stopping": 3,
+    "installing": 4,
+    "verifying": 5,
+    "swapping": 6,
+    "starting": 7,
+    "handing-off": 7,
+    "rolling-back": 8,
+    "done": 9,
+    "failed": 9,
+    "recovered": 9,
 }
 
 #: The stages that end an episode. ``handing-off`` is deliberately absent: the
@@ -105,6 +118,47 @@ INSTALL_LOG_SUFFIX = ".log"
 #: looks, and because a name documented in USAGE.md has to exist somewhere the
 #: docs-drift guard can find it.
 INSTALL_LOG_ENV = "MCC_INSTALL_LOG"
+
+#: Where an update builds the new environment, and where it keeps the old one.
+#:
+#: Both are SIBLINGS of uv's tools root, never children of it. That is a
+#: measured requirement, not a preference: a directory inside the tools root
+#: whose name does not normalise to a valid package name makes ``uv tool list``
+#: fail outright --
+#:
+#:     error: Not a valid package or extra name: ".mcc-previous".
+#:
+#: -- and list NOTHING, which is strictly worse than the malformed-tool
+#: warnings the existing ``my-claude-code.old-<stamp>`` directories produce
+#: (those normalise to ``my-claude-code-old-<stamp>``, which is valid, so uv
+#: merely skips them). A sibling is invisible to uv, is on the same volume as
+#: the tools root, and so keeps the swap a rename. Measured on uv 0.11.21,
+#: 2026-09-11.
+STAGING_ENV_DIRNAME = ".mcc-staging"
+PREVIOUS_ENV_DIRNAME = ".mcc-previous"
+
+#: How many previous environments to keep. Exactly one: it is the rollback, and
+#: a second one is only disk (decision Q5). Swept after ``/health`` answers, so
+#: the copy being kept is never the one the running server came from.
+PREVIOUS_ENVS_KEPT = 1
+
+#: How many installer transcripts to keep. They are the only record of what an
+#: update did, and they are small, but one per update is unbounded.
+INSTALL_TRANSCRIPTS_KEPT = 5
+
+#: How long the cutover waits for the new server to answer ``/health`` before
+#: it puts the previous environment back.
+#:
+#: The desktop shell's own start budget is 15 s x 3 attempts (6.58.1's
+#: ``server_start_retries``), and under ``--no-restart`` it is the shell, not
+#: the helper, that starts the server -- so the gate has to outlast the shell's
+#: whole ladder plus the ten-second tick that begins it, or a slow first start
+#: would be rolled back as a failure. 90 s covers 10 + 45 and leaves margin for
+#: a cold interpreter (measured cold ``--print-status``: 18 s).
+UPDATE_HEALTH_GATE_SECONDS = 90.0
+
+#: How often the cutover asks.
+UPDATE_HEALTH_POLL_SECONDS = 1.0
 
 
 def stage_rank(stage: str) -> int:

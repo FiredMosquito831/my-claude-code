@@ -387,8 +387,17 @@ def test_update_deferred_helper_completes_within_its_bound(tmp_path) -> None:
     # creation time, and only then gives up.
     assert "Stop-Process -Id $parent -Force" in script
     stop_at = script.index("Stop-Process -Id $parent -Force")
-    install_at = script.index("tool")
-    assert stop_at < install_at, "the helper must install after it clears the parent"
+    # What has to come after the parent is cleared is anything that touches the
+    # LIVE environment: the swap, and the in-place fallback. Since 6.72.0 the
+    # ordinary install happens in a tools root of its own and deliberately runs
+    # first, overlapping the drain -- which is why "the first mention of uv"
+    # stopped being a usable marker for it.
+    assert stop_at < script.index("[System.IO.Directory]::Move"), (
+        "the helper must swap after it clears the parent"
+    )
+    assert stop_at < script.index("Write-Stage 'installing'"), (
+        "the helper must install in place after it clears the parent"
+    )
     # And the receipt it writes when even that fails says what actually
     # happened, instead of "timed out waiting".
     assert "could not be stopped" in script

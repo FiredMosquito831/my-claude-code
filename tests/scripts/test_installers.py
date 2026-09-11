@@ -2087,10 +2087,21 @@ def test_the_updater_helper_always_leaves_a_server_running() -> None:
     """A failed update used to end with no server and no recovery."""
 
     updater = _release_updates_py()
-    assert updater.count("Start-Process -FilePath") == 1
+    # Four starts, one per branch that can end an episode, because every one of
+    # them has to end with a server running:
+    #   1. the staged version refused verification  -> start what is installed
+    #   2. the staged version was swapped in        -> start the new one
+    #   3. the cutover was rolled back              -> start the previous one
+    #   4. the in-place fallback, success or not    -> start whatever is there
+    # Before 6.58.3 there was one, under `if ($ok)`, which is how a failed
+    # update left a machine with no server at all and nothing to start one.
+    assert updater.count("Start-Process -FilePath") == 4
     assert "$result['restarted'] = $restarted" in updater
     assert "The previous version was restarted." in updater
     assert "Write-Stage 'recovered'" in updater
+    # Every terminal branch that is not `done` leaves `recovered` behind, so a
+    # reader never has to infer whether anything is running.
+    assert updater.count("Write-Stage 'recovered'") == 3
 
 
 def test_updater_helper_script_is_valid_powershell_after_rendering() -> None:
