@@ -530,11 +530,257 @@ def _deferred_script(tmp_path: Path, *, command: list[str] | None = None) -> str
     )
 
 
+def test_the_sweep_moves_old_tool_dirs_out_and_keeps_exactly_one(
+    monkeypatch, tmp_path
+) -> None:
+    """Spec F8: four of these had accumulated, and nothing ever swept one.
+
+    ``install.ps1``'s rename-then-reinstall ladder leaves
+    ``my-claude-code.old-<stamp>`` inside uv's own tools root. uv normalises
+    that directory name into the tool name ``my-claude-code-old-<stamp>``,
+    which is a valid package name, so it reads it as a tool and prints
+    ``warning: Ignoring malformed tool`` on every ``uv tool`` command.
+    """
+
+    tools_root = tmp_path / "uv" / "tools"
+    live = tools_root / "my-claude-code"
+    (live / "Scripts").mkdir(parents=True)
+    (live / "uv-receipt.toml").write_text("[tool]\n", encoding="utf-8")
+    stamps = ("20260907-193858", "20260907-232333", "20260909-015046")
+    for stamp in stamps:
+        (tools_root / f"my-claude-code.old-{stamp}" / "Scripts").mkdir(parents=True)
+    # And something that is not ours at all, which must not be touched.
+    (tools_root / "ruff").mkdir()
+
+    stage_dir = tmp_path / "config" / "updates"
+    stage_dir.mkdir(parents=True)
+    for index in range(8):
+        (stage_dir / f"install-2026091{index}-000000.log").write_text(
+            "x", encoding="utf-8"
+        )
+
+    monkeypatch.setattr(release_updates, "_installed_tool_dir", lambda: live)
+    monkeypatch.setattr(release_updates, "_stage_dir", lambda: stage_dir)
+
+    message = release_updates.sweep_superseded_environments()
+
+    previous_root = tools_root.parent / update_progress.PREVIOUS_ENV_DIRNAME
+    # Out of uv's way entirely: beside the tools root, not inside it.
+    assert previous_root.parent == tools_root.parent
+    assert not list(tools_root.glob("my-claude-code.old-*"))
+    # Exactly one kept, and it is the newest.
+    kept = sorted(child.name for child in previous_root.iterdir())
+    assert kept == [max(stamps)]
+    # The live environment and other people's tools are untouched.
+    assert (live / "uv-receipt.toml").is_file()
+    assert (tools_root / "ruff").is_dir()
+    # Five transcripts, the most recent five.
+    logs = sorted(path.name for path in stage_dir.glob("install-*.log"))
+    assert len(logs) == 5
+    assert logs[-1] == "install-20260917-000000.log"
+    assert message is not None
+    assert "superseded" in message
+
+
+def test_the_sweep_says_nothing_when_there_is_nothing_to_do(
+    monkeypatch, tmp_path
+) -> None:
+    """A sweep that ran and found nothing should be silent.
+
+    Otherwise every single server start logs a line about housekeeping it did
+    not do, and the one start where it mattered is invisible among them.
+    """
+
+    live = tmp_path / "uv" / "tools" / "my-claude-code"
+    live.mkdir(parents=True)
+    stage_dir = tmp_path / "config" / "updates"
+    stage_dir.mkdir(parents=True)
+    monkeypatch.setattr(release_updates, "_installed_tool_dir", lambda: live)
+    monkeypatch.setattr(release_updates, "_stage_dir", lambda: stage_dir)
+
+    assert release_updates.sweep_superseded_environments() is None
+
+
+def test_the_sweep_is_harmless_outside_a_uv_tool_install(monkeypatch, tmp_path) -> None:
+    """A development checkout has no tools root, and must not grow one."""
+
+    stage_dir = tmp_path / "updates"
+    stage_dir.mkdir()
+    monkeypatch.setattr(release_updates, "_installed_tool_dir", lambda: None)
+    monkeypatch.setattr(release_updates, "_stage_dir", lambda: stage_dir)
+
+    assert release_updates.sweep_superseded_environments() is None
+    # It made no directories of its own. (The hermetic-home fixture's own
+    # directory is not this test's business.)
+    assert not any(child.name.startswith(".mcc-") for child in tmp_path.rglob(".mcc-*"))
+
+
+def _fallback_section(script: str) -> str:
+    """The part of the helper that still installs in place.
+
+    6.72.0 put a staged install, an execute-verify, a swap, a health gate and a
+    rollback ahead of it, all of which exit before reaching this. What is left
+    below ``Write-Stage 'installing'`` is the repair path -- a release that
+    adds a new command, or a machine that is not a uv tool install at all --
+    and it is unchanged. Tests about the shim-rename ladder belong here.
+    """
+
+    return script[script.index("Write-Stage 'installing'") :]
+
+
+def _staged_script(tmp_path: Path) -> str:
+    """The helper as it is generated on a real uv tool install.
+
+    ``_deferred_script`` above deliberately omits the staging arguments, which
+    is the shape the helper takes when this is not a uv tool environment at all
+    and it falls back to the in-place install. This one is the ordinary case.
+    """
+
+    return release_updates._deferred_helper_script(
+        uv_executable=r"C:\tools\uv.exe",
+        command=[r"C:\tools\uv.exe", "tool", "install", "--force", "pkg"],
+        result_path=tmp_path / "result.json",
+        stage_dir=tmp_path,
+        server_launcher=tmp_path / "bin" / "fcc-server.exe",
+        working_directory=tmp_path / "cwd",
+        bin_dir=tmp_path / "bin",
+        tool_dir=tmp_path / "uv" / "tools" / "my-claude-code",
+        commands=["mcc-server", "mcc-desktop"],
+        staging_root=tmp_path / "uv" / ".mcc-staging",
+        previous_root=tmp_path / "uv" / ".mcc-previous",
+        health_url="http://127.0.0.1:8391/health",
+    )
+
+
+def test_the_staged_install_verifies_by_running_the_new_server_before_the_swap(
+    tmp_path,
+) -> None:
+    """Caddy's rule: the gate is EXECUTING the new thing, not an exit code.
+
+    A wheel that resolves, installs and then cannot import itself is a real
+    failure mode, and before 6.72.0 it was discovered by the user -- the old
+    verification asked only whether every published command had an ``.exe`` in
+    the bin directory, which an untouched OLD shim satisfies perfectly.
+    """
+
+    script = _staged_script(tmp_path)
+    verify = script.index("Write-Stage 'verifying'")
+    swap = script.index("Write-Stage 'swapping'")
+    assert verify < swap
+    body = script[verify:swap]
+    assert "& $stagedServer --version" in body
+    assert "& $stagedPython -c 'import my_claude_code'" in body
+    # And the version it prints has to be the version we asked for, or a
+    # staging root left behind by an earlier episode would sail through.
+    assert "[regex]::Escape($targetVersion)" in body
+
+
+def test_a_staged_install_that_fails_verification_restores_the_previous_environment(
+    tmp_path,
+) -> None:
+    """Nothing has moved yet, so "restore" is "never touch it"."""
+
+    script = _staged_script(tmp_path)
+    verify = script.index("Write-Stage 'verifying'")
+    swap = script.index("Write-Stage 'swapping'")
+    body = script[verify:swap]
+    assert "if (-not $verified)" in body
+    # The staging directory goes, the live one does not, and the helper still
+    # leaves a running server behind.
+    assert "Remove-Item -LiteralPath $stagingDir" in body
+    assert "Nothing was replaced; the installed version is unchanged." in body
+    assert "Start-Process -FilePath" in body
+    assert "Write-Stage 'recovered'" in body
+    assert "[System.IO.Directory]::Move" not in body
+
+
+def test_the_previous_environment_is_deleted_only_after_health_answers(
+    tmp_path,
+) -> None:
+    """The rollback is not a rollback if it is swept before the gate."""
+
+    script = _staged_script(tmp_path)
+    gate = script.index("$healthy = Wait-ForHealth")
+    sweep = script.index("Remove-StalePrevious $previousRoot")
+    assert gate < sweep
+    # And the sweep is inside the branch the gate passes, not after it.
+    assert "if ($healthy) {" in script[gate:sweep]
+
+
+def test_a_cutover_that_never_answers_puts_the_previous_environment_back(
+    tmp_path,
+) -> None:
+    """Health-gated cutover, and the reason the old bits were kept at all."""
+
+    script = _staged_script(tmp_path)
+    rollback = script.index("Write-Stage 'rolling-back'")
+    body = script[rollback:]
+    # The live directory goes aside and the previous one comes back.
+    assert "[System.IO.Directory]::Move($asideEnv, $toolDir)" in body
+    assert "Start-Process -FilePath" in body
+    assert "Write-Stage 'recovered'" in body
+    assert "$result['rolled_back'] = $rolledBack" in body
+
+
+def test_the_aside_directory_is_not_inside_uvs_tools_root(tmp_path) -> None:
+    """Measured, and the reason decision Q5's own spelling was not used.
+
+    uv normalises a directory name inside its tools root into a *tool name*. A
+    dot-prefixed one does not normalise to anything valid, and ``uv tool list``
+    then fails outright with
+
+        error: Not a valid package or extra name: ".mcc-previous".
+
+    and lists nothing at all -- strictly worse than the malformed-tool warnings
+    the ``my-claude-code.old-<stamp>`` directories produce, which is the bug
+    this was meant to fix.
+    """
+
+    tool_dir = tmp_path / "uv" / "tools" / "my-claude-code"
+    tools_root = tool_dir.parent
+    for dirname in (
+        update_progress.STAGING_ENV_DIRNAME,
+        update_progress.PREVIOUS_ENV_DIRNAME,
+    ):
+        root = release_updates._aside_root(dirname, tool_dir)
+        assert root is not None
+        assert root.parent == tools_root.parent
+        assert tools_root not in root.parents
+        assert root != tools_root
+
+
+def test_the_launcher_shims_are_never_rewritten_on_the_staged_path(
+    tmp_path,
+) -> None:
+    """The property that makes the exchange possible, stated as a test.
+
+    ``<bin>/mcc-server.exe`` and ``<tool dir>/Scripts/mcc-server.exe`` are the
+    same file, and what they embed is the absolute path
+    ``<tool dir>/Scripts/python.exe``. They do not care which environment sits
+    at that path -- so the staged path never renames one aside, never copies
+    one in, and a launcher window the user left open can no longer abort an
+    install. The rename ladder survives only on the in-place fallback.
+    """
+
+    script = _staged_script(tmp_path)
+    staged_branch = script[
+        script.index("if ($stagedOk) {") : script.index("Write-Stage 'installing'")
+    ]
+    assert "Rename-Item -LiteralPath $shim" not in staged_branch
+    # The one copy it does make goes the other way: the bin shims, which carry
+    # the canonical path, are copied INTO the new environment to replace the
+    # trampolines uv baked with the staging path.
+    assert "Join-Path $toolDir ('Scripts\\' + $file.Name)" in staged_branch
+
+
 def test_deferred_helper_script_waits_then_installs(tmp_path) -> None:
-    """The helper must not run uv until this process is gone.
+    """The helper must not touch the LIVE environment until this process is gone.
 
     Installing in place on Windows deletes the environment the running
-    interpreter lives in, which fails partway and leaves it unusable.
+    interpreter lives in, which fails partway and leaves it unusable. From
+    6.72.0 the ordinary install happens in a tools root of its own and can
+    therefore start while the server is still draining; what still has to wait
+    for the parent is the in-place ``--force`` fallback, and the swap.
     """
 
     script = release_updates._deferred_helper_script(
@@ -546,8 +792,15 @@ def test_deferred_helper_script_waits_then_installs(tmp_path) -> None:
         working_directory=tmp_path / "cwd",
     )
     assert f"$parent = {os.getpid()}" in script
-    # The wait loop must precede the install, not follow it.
-    assert script.index("Get-Process -Id $parent") < script.index("tool")
+    # The wait loop must precede the in-place install, not follow it.
+    assert script.index("Get-Process -Id $parent") < script.index(
+        "Write-Stage 'installing'"
+    )
+    # ... and it must also precede the swap, which is the moment the live
+    # directory is renamed out from under anything still running.
+    assert script.index("Get-Process -Id $parent") < script.index(
+        "[System.IO.Directory]::Move"
+    )
     assert "'tool', 'install', '--force', 'pkg'" in script
     assert str(tmp_path / "result.json") in script
     result_write = script.index("[System.IO.File]::WriteAllText")
@@ -555,7 +808,31 @@ def test_deferred_helper_script_waits_then_installs(tmp_path) -> None:
     assert result_write < launch
     assert str(tmp_path / "bin" / "fcc-server.exe") in script
     assert str(tmp_path / "cwd") in script
-    assert "if ($ok)" in script[:launch]
+
+
+def test_the_staging_install_runs_before_the_parent_has_even_stopped(
+    tmp_path,
+) -> None:
+    """Building beside the live environment need not wait for anything.
+
+    This is the whole of why an update stopped being an outage. uv is not
+    allowed near the live tool directory while the server holds it open -- but
+    a tools root of its own is not the live tool directory, so the download,
+    the resolve and the venv build all overlap the server's own drain instead
+    of following it.
+    """
+
+    script = _staged_script(tmp_path)
+    assert script.index("Write-Stage 'staging'") < script.index(
+        "$deadline = (Get-Date).AddSeconds"
+    )
+    # And the staged call must not carry --force. It exists to overwrite a live
+    # environment, which is exactly what this path is built never to do.
+    staging_call = script[
+        script.index("Write-Stage 'staging'") : script.index("$deadline = (Get-Date)")
+    ]
+    assert "'--force'" not in staging_call
+    assert "$env:UV_TOOL_DIR = $stagingDir" in staging_call
 
 
 def test_deferred_helper_script_quotes_hostile_arguments(tmp_path) -> None:
@@ -591,8 +868,14 @@ def test_release_updates_renames_shims_before_reinstall(tmp_path) -> None:
         commands=["mcc-claude", "mcc-server", "mcc-desktop"],
     )
 
-    rename = script.index("Rename-Item -LiteralPath $shim")
-    install = script.index(r"& 'C:\tools\uv.exe'")
+    # Scoped to the in-place fallback. Since 6.72.0 the ordinary path never
+    # touches a shim at all -- it exchanges directories and leaves every
+    # launcher exactly where it is -- so the rename ladder this test is about
+    # lives below the `installing` stage, and the first uv call in the file is
+    # now the staging one.
+    fallback = _fallback_section(script)
+    rename = fallback.index("Rename-Item -LiteralPath $shim")
+    install = fallback.index(r"& 'C:\tools\uv.exe'")
     assert rename < install, (
         "the helper calls uv before moving the shims aside, so a launcher "
         "window still open aborts the install exactly as before"
@@ -741,14 +1024,20 @@ def test_deferred_helper_writes_the_receipt_without_a_bom(tmp_path) -> None:
     relaunch attempt.
     """
     script = _deferred_script(tmp_path)
-    # Six whole-file writes: the progress truncation, the install transcript's
-    # truncation (6.71.0 -- a fresh episode starts a fresh transcript exactly as
-    # it starts a fresh receipt), the "could not be stopped" result, and the
-    # outcome receipt TWICE -- once before the server is started and once after,
-    # so the receipt on disk is complete even if the helper dies during the
-    # relaunch, and so it can then say whether a server is running (6.58.3
-    # starts one on the failure branch too).
-    assert script.count("[System.IO.File]::WriteAllText") == 6
+    # Eleven whole-file writes. Six are the pre-6.72.0 set: the progress
+    # truncation, the install transcript's truncation (6.71.0 -- a fresh
+    # episode starts a fresh transcript exactly as it starts a fresh receipt),
+    # the "could not be stopped" result, and the outcome receipt TWICE -- once
+    # before the server is started and once after, so the receipt on disk is
+    # complete even if the helper dies during the relaunch, and so it can then
+    # say whether a server is running (6.58.3 starts one on the failure branch
+    # too) -- plus the staged fallback's rewritten uv receipt.
+    #
+    # The other five are 6.72.0's staged path, which has terminal branches of
+    # its own and so has to write its own receipts: the verification failure,
+    # the rewritten uv receipt after the swap, the result before the start, the
+    # result again once /health has answered, and the result after a rollback.
+    assert script.count("[System.IO.File]::WriteAllText") == 11
     # Two appenders: one per stage record, one per line of installer output.
     # Both append a line at a time rather than holding a stream open, so a
     # reader in another process sees each line the moment it exists and a
@@ -760,7 +1049,7 @@ def test_deferred_helper_writes_the_receipt_without_a_bom(tmp_path) -> None:
     # box-drawing characters and PowerShell decodes a native command's output
     # with the console code page, so without this the transcript carried
     # mojibake where uv had drawn a tree.
-    assert script.count("UTF8Encoding($false)") == 6
+    assert script.count("UTF8Encoding($false)") == 12
     assert "[Console]::OutputEncoding" in script
     assert "Set-Content" not in script
     first_write = script.index("[System.IO.File]::WriteAllText")
@@ -915,18 +1204,35 @@ def test_the_helper_writes_a_progress_file_for_each_stage(tmp_path) -> None:
     for stage in release_updates.UPDATE_PROGRESS_STAGES:
         assert f"Write-Stage '{stage}'" in script, stage
 
-    # The order the stages are written in is the order they happen in.
+    # The order the stages are written in is the order they happen in. Read on
+    # the in-place fallback, which is the only branch that reaches
+    # `installing`: the staged path above it has a `starting` and a `done` of
+    # its own, and they come earlier in the file precisely because they come
+    # earlier in time on the branch that uses them.
     waiting = script.index("Write-Stage 'waiting-for-parent'")
-    installing = script.index("Write-Stage 'installing'")
-    starting = script.index("Write-Stage 'starting'")
-    done = script.index("Write-Stage 'done'")
-    assert waiting < installing < starting < done
+    fallback_at = script.index("Write-Stage 'installing'")
+    fallback = _fallback_section(script)
+    assert waiting < fallback_at
+    assert fallback.index("Write-Stage 'starting'") < fallback.index(
+        "Write-Stage 'done'"
+    )
+    # The staged path's own sequence, which is the ordinary one.
+    staged = script[script.index("Write-Stage 'staging'") : fallback_at]
+    for earlier, later in (
+        ("'staging'", "'verifying'"),
+        ("'verifying'", "'swapping'"),
+        ("'swapping'", "'starting'"),
+        ("'starting'", "'rolling-back'"),
+    ):
+        assert staged.index(f"Write-Stage {earlier}") < staged.index(
+            f"Write-Stage {later}"
+        ), (earlier, later)
 
     # The first stage is written before the wait loop, not after it: the whole
     # point is to say something during the wait.
     assert waiting < script.index("while ((Get-Date) -lt $deadline)")
     # And installing is written before uv is invoked.
-    assert installing < script.index("$delays = @(0, 5, 10, 20, 30)")
+    assert fallback_at < script.index("$delays = @(0, 5, 10, 20, 30)")
 
     # A fresh episode truncates: a stale 'done' from the previous update would
     # otherwise be the first thing a window reads and believes.
@@ -1060,23 +1366,23 @@ def test_a_failed_install_still_starts_a_server(tmp_path) -> None:
     recovery -- which is exactly what happened on 2026-09-07 at 23:24:04.
     """
 
-    script = _deferred_script(tmp_path)
+    fallback = _fallback_section(_deferred_script(tmp_path))
 
-    start = script.index("Start-Process -FilePath")
+    start = fallback.index("Start-Process -FilePath")
     # Nothing between the receipt and the start gates it on success.
-    preamble = script[script.index("$ok = ($code -eq 0)") : start]
+    preamble = fallback[fallback.index("$ok = ($code -eq 0)") : start]
     assert "if ($ok)" in preamble  # the stage line, which is allowed to branch
-    assert script.count("Start-Process -FilePath") == 1
+    assert fallback.count("Start-Process -FilePath") == 1
     # The start is outside every `if ($ok)` block: the terminal stage after it
     # is 'done' on success and 'recovered' on failure, and both are reached.
-    assert "Write-Stage 'recovered'" in script
-    assert script.index("Write-Stage 'recovered'") > start
-    assert script.index("Write-Stage 'done'") > start
+    assert "Write-Stage 'recovered'" in fallback
+    assert fallback.index("Write-Stage 'recovered'") > start
+    assert fallback.index("Write-Stage 'done'") > start
     # The outcome receipt says whether a server is running, and the message
     # says so in words, because the banner shows the message.
-    assert "$result['restarted'] = $restarted" in script
-    assert "The previous version was restarted." in script
-    assert "The previous version could not be restarted either." in script
+    assert "$result['restarted'] = $restarted" in fallback
+    assert "The previous version was restarted." in fallback
+    assert "The previous version could not be restarted either." in fallback
 
 
 def test_the_helper_records_its_own_liveness(tmp_path) -> None:
@@ -1095,12 +1401,22 @@ def test_the_helper_records_its_own_liveness(tmp_path) -> None:
         assert field in script, field
     assert "helper_done = $script:HelperDone" in script
     assert "version = $targetVersion" in script
-    # Set exactly where the helper is finished: before the terminal stages and
-    # nowhere before the install.
-    assert script.count("$script:HelperDone = $true") == 2
-    assert script.index("$script:HelperDone = $true") < script.index(
-        "Write-Stage 'installing'"
-    )
+    # Set exactly where the helper is finished, on every branch that ends an
+    # episode: the "could not be stopped" exit, the staged path's three
+    # terminal branches (verification refused, /health answered, rolled back)
+    # and the in-place fallback's own ending.
+    assert script.count("$script:HelperDone = $true") == 5
+    # Never before the helper has actually finished. Each occurrence is
+    # immediately followed by a terminal stage or an exit.
+    tail_of_each = [
+        part[:1200] for part in script.split("$script:HelperDone = $true")[1:]
+    ]
+    for tail in tail_of_each:
+        assert (
+            "Write-Stage 'failed'" in tail
+            or "Write-Stage 'done'" in tail
+            or "Write-Stage 'recovered'" in tail
+        ), tail
 
 
 def test_the_helper_names_the_version_it_is_installing(tmp_path) -> None:
@@ -1135,7 +1451,7 @@ def test_a_failed_install_puts_the_launchers_it_moved_aside_back(tmp_path) -> No
     always restored on its failure path; the helper never did.
     """
 
-    script = _deferred_script(tmp_path)
+    script = _fallback_section(_deferred_script(tmp_path))
 
     assert "$movedAside += $fileName" in script
     restore = script.index(
@@ -1272,13 +1588,14 @@ def test_the_helper_tees_uv_output_while_it_happens(tmp_path) -> None:
 
     script = _deferred_script(tmp_path)
 
-    # Every uv invocation streams through a per-line append, and there are two
-    # of them: the fast path and the staged fallback.
+    # Every uv invocation streams through a per-line append, and there are
+    # three of them: 6.72.0's staged install, and the in-place fallback's fast
+    # path and staged-bin retry.
     assert (
         script.count(
             "ForEach-Object { $line = Convert-OutputLine $_; Write-InstallLog $line; $line }"
         )
-        == 2
+        == 3
     )
     assert "$output = & 'uv'" in script
     # A transcript nobody can write is never the reason an update fails.
@@ -1337,12 +1654,15 @@ def test_the_helper_never_writes_an_earlier_stage_than_the_one_before(
     assert "if ($rank -lt $script:StageRank) { return }" in script
     for stage, rank in (
         ("waiting-for-parent", 1),
-        ("stopping", 2),
-        ("installing", 3),
-        ("verifying", 4),
-        ("starting", 5),
-        ("handing-off", 5),
-        ("done", 6),
+        ("staging", 2),
+        ("stopping", 3),
+        ("installing", 4),
+        ("verifying", 5),
+        ("swapping", 6),
+        ("starting", 7),
+        ("handing-off", 7),
+        ("rolling-back", 8),
+        ("done", 9),
     ):
         assert f"'{stage}' = {rank}" in script, stage
     # The PowerShell table and the Python one are the same table.
@@ -1352,11 +1672,19 @@ def test_the_helper_never_writes_an_earlier_stage_than_the_one_before(
 
 def test_the_helper_writes_the_stages_in_the_order_they_happen(tmp_path) -> None:
     script = _deferred_script(tmp_path)
+    # The staged path's sequence, which is the one an ordinary update takes.
     order = [
         script.index(f"Write-Stage '{stage}'")
-        for stage in ("waiting-for-parent", "stopping", "installing", "verifying")
+        for stage in ("waiting-for-parent", "staging", "stopping", "verifying")
     ]
     assert order == sorted(order), order
+    # And the in-place fallback's, below it.
+    fallback = _fallback_section(script)
+    tail = [
+        fallback.index(f"Write-Stage '{stage}'")
+        for stage in ("installing", "verifying", "starting", "done")
+    ]
+    assert tail == sorted(tail), tail
 
 
 def test_the_upgrade_response_names_both_files_before_the_server_stops() -> None:

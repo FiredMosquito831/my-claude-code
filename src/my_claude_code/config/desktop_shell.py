@@ -342,7 +342,22 @@ def binary_matches_pin(binary: Path) -> bool:
     if receipt is None or receipt.get("tag") != DESKTOP_SHELL_RELEASE_TAG:
         return False
     expected = release_for(sys.platform, platform.machine())
-    return expected is not None and receipt.get("sha256") == expected[1]
+    if expected is None or receipt.get("sha256") != expected[1]:
+        return False
+    # And what is actually on disk (decision Q6 / D6-Q13). The tag comparison
+    # above stays the "the pin moved" trigger; this is the "the file is still
+    # the file we wrote" check, and a mismatch means the next launch fetches
+    # again rather than running something we cannot vouch for.
+    #
+    # Absent on receipts written before 6.72.0, and absent is NOT a mismatch:
+    # treating it as one would re-download the shell on every machine that
+    # already has the right one, which is a large download to charge people for
+    # a field that did not exist when their receipt was written. Those receipts
+    # gain the field the next time the pin moves.
+    recorded = receipt.get("binary_sha256")
+    if not isinstance(recorded, str) or not recorded:
+        return True
+    return binary_digest_of(binary) == recorded
 
 
 def is_desktop_shell_installed() -> bool:
@@ -356,16 +371,46 @@ def is_desktop_shell_installed() -> bool:
     return binary_matches_pin(desktop_shell_path())
 
 
-def _write_receipt_at(path: Path, asset: str, digest: str) -> None:
-    payload = json.dumps(
-        {
-            "tag": DESKTOP_SHELL_RELEASE_TAG,
-            "asset": asset,
-            "sha256": digest,
-            "binary": desktop_shell_binary_name(),
-        },
-        indent=2,
-    )
+def binary_digest_of(binary: Path) -> str | None:
+    """The sha256 of ``binary`` itself, or ``None`` when it cannot be read.
+
+    Read in chunks: the shell binary is tens of megabytes and this runs on
+    ``--ensure-shell``, which the server calls on its post-readiness thread.
+    """
+
+    hasher = hashlib.sha256()
+    try:
+        with binary.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
+    except OSError:
+        return None
+    return hasher.hexdigest()
+
+
+def _write_receipt_at(
+    path: Path, asset: str, digest: str, binary: Path | None = None
+) -> None:
+    # ``sha256`` is the digest of the published ARCHIVE, which is what the pin
+    # table holds and what the release's own SHA256SUMS file can confirm.
+    # ``binary_sha256`` is the digest of the extracted executable, and it is
+    # 6.72.0's (decision Q6 / D6-Q13): without it "is the app up to date?" was
+    # answered entirely by a small JSON file sitting next to the exe, and a
+    # truncated, half-written or replaced exe with an intact receipt passed.
+    # The archive digest cannot answer that question -- the exe is not the
+    # archive -- so the exe's own digest is recorded at the moment it is
+    # written and re-checked against the file afterwards.
+    record: dict[str, str] = {
+        "tag": DESKTOP_SHELL_RELEASE_TAG,
+        "asset": asset,
+        "sha256": digest,
+        "binary": desktop_shell_binary_name(),
+    }
+    if binary is not None:
+        binary_digest = binary_digest_of(binary)
+        if binary_digest is not None:
+            record["binary_sha256"] = binary_digest
+    payload = json.dumps(record, indent=2)
     tmp_path = path.with_name(f".{path.name}.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -655,7 +700,7 @@ def fetch_desktop_shell(
     asset, pinned_digest = _place_verified_binary(
         destination, timeout=timeout, install=True
     )
-    _write_receipt_at(receipt_path_for(destination), asset, pinned_digest)
+    _write_receipt_at(receipt_path_for(destination), asset, pinned_digest, destination)
     return destination
 
 
@@ -722,7 +767,7 @@ def stage_desktop_shell(
     exists = binary.is_file()
     if not exists:
         asset, digest = _place_verified_binary(binary, timeout=timeout, install=True)
-        _write_receipt_at(receipt_path_for(binary), asset, digest)
+        _write_receipt_at(receipt_path_for(binary), asset, digest, binary)
         result["updated"] = True
         result["staged_path"] = str(binary)
         return result
@@ -730,12 +775,12 @@ def stage_desktop_shell(
     staged = staged_binary_path(binary)
     asset, digest = _place_verified_binary(staged, timeout=timeout, install=False)
     if _replace_if_not_running(staged, binary):
-        _write_receipt_at(receipt_path_for(binary), asset, digest)
+        _write_receipt_at(receipt_path_for(binary), asset, digest, binary)
         result["updated"] = True
         result["staged_path"] = str(binary)
         return result
 
-    _write_receipt_at(staged_receipt_path(binary), asset, digest)
+    _write_receipt_at(staged_receipt_path(binary), asset, digest, staged)
     result["updated"] = True
     result["staged_path"] = str(staged)
     result["restart_required"] = True

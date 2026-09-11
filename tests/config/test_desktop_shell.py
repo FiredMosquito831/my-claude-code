@@ -373,6 +373,74 @@ class TestEnsure:
         assert len(release.requested) > before
         assert desktop_shell.installed_release_tag() == DESKTOP_SHELL_RELEASE_TAG
 
+    def test_the_receipt_records_the_binarys_own_digest(
+        self, release, shell_dir
+    ) -> None:
+        """Decision Q6 / D6-Q13.
+
+        ``sha256`` in the receipt is the digest of the published ARCHIVE, which
+        cannot answer "is the executable beside this receipt still the one we
+        extracted?" -- the executable is not the archive. So the executable's
+        own digest is recorded at the moment it is written.
+        """
+
+        ensure_desktop_shell()
+        receipt = desktop_shell.read_receipt()
+
+        assert receipt is not None
+        assert receipt["binary_sha256"] == desktop_shell.binary_digest_of(
+            desktop_shell_path()
+        )
+        assert receipt["binary_sha256"] != receipt["sha256"]
+
+    def test_a_replaced_binary_with_an_intact_receipt_is_refused(
+        self, release, shell_dir
+    ) -> None:
+        """The hole D6-Q13 named: the file itself was never re-checked.
+
+        Before 6.72.0 "is the app up to date?" was answered entirely by a small
+        JSON file sitting next to the exe, so a truncated, half-written or
+        swapped exe with an intact receipt passed and was launched.
+        """
+
+        ensure_desktop_shell()
+        assert is_desktop_shell_installed()
+
+        desktop_shell_path().write_bytes(b"not the binary we installed")
+
+        assert not is_desktop_shell_installed()
+
+    def test_a_replaced_binary_is_downloaded_again(self, release, shell_dir) -> None:
+        """And the refusal has to lead somewhere: it re-fetches."""
+
+        ensure_desktop_shell()
+        desktop_shell_path().write_bytes(b"corrupted")
+        before = len(release.requested)
+
+        ensure_desktop_shell()
+
+        assert len(release.requested) > before
+        assert is_desktop_shell_installed()
+
+    def test_a_receipt_written_before_the_digest_existed_still_passes(
+        self, release, shell_dir
+    ) -> None:
+        """Absent is not a mismatch.
+
+        Every machine already holding the right shell has a receipt with no
+        ``binary_sha256`` in it. Treating that as a failure would re-download
+        the whole shell on all of them to fill in a field that did not exist
+        when their receipt was written.
+        """
+
+        ensure_desktop_shell()
+        receipt_path = Path(desktop_shell.desktop_shell_receipt_path())
+        record = json.loads(receipt_path.read_text(encoding="utf-8"))
+        del record["binary_sha256"]
+        receipt_path.write_text(json.dumps(record), encoding="utf-8")
+
+        assert is_desktop_shell_installed()
+
     def test_a_binary_with_no_receipt_is_not_trusted(self, release, shell_dir) -> None:
         shell_dir.mkdir(parents=True, exist_ok=True)
         desktop_shell_path().write_bytes(b"who put this here")

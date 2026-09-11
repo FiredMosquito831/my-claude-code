@@ -156,6 +156,37 @@ def _desktop_shell_auto_update() -> None:
         logger.info(result.message)
 
 
+def _sweep_superseded_environments() -> None:
+    """Tidy what earlier updates left behind, once per server start.
+
+    Shares the post-readiness thread with the desktop-app update for the same
+    reasons: it touches the filesystem, it is nobody's hurry, and it must never
+    be on a request path.
+
+    What it cleans is the tail of an old installer habit. ``install.ps1``
+    renames the live environment to ``my-claude-code.old-<stamp>`` before
+    reinstalling, inside uv's own tools root, and nothing ever swept one -- so
+    uv prints ``warning: Ignoring malformed tool`` for each of them on every
+    ``uv tool`` command a user runs. Four had accumulated on the machine this
+    was found on.
+
+    Imported lazily, like the shell update above, so that building the ASGI app
+    still imports no ``httpx``.
+    """
+
+    try:
+        from my_claude_code.application.release_updates import (
+            sweep_superseded_environments,
+        )
+
+        message = sweep_superseded_environments()
+    except Exception:
+        logger.debug("Update housekeeping could not be attempted.")
+        return
+    if message:
+        logger.info(message)
+
+
 def start_desktop_shell_auto_update() -> None:
     """Schedule :func:`_desktop_shell_auto_update`, once per server start."""
 
@@ -164,10 +195,17 @@ def start_desktop_shell_auto_update() -> None:
         return
     _SHELL_AUTO_UPDATE_RUN = True
     threading.Thread(
-        target=_desktop_shell_auto_update,
+        target=_post_readiness_housekeeping,
         name="mcc-desktop-shell-auto-update",
         daemon=True,
     ).start()
+
+
+def _post_readiness_housekeeping() -> None:
+    """Everything the server does once, after it is answering, off the loop."""
+
+    _desktop_shell_auto_update()
+    _sweep_superseded_environments()
 
 
 def reset_desktop_shell_auto_update_for_tests() -> None:

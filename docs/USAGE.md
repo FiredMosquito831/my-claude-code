@@ -985,8 +985,7 @@ last line is where it stopped.
 
 #### What you see during an update (6.71.0)
 
-An update stops the server, empties the tool environment and writes a new one,
-and on a warm cache that takes about a minute and a half. Until 6.71.0 the whole
+An update takes about a minute and a half on a warm cache. Until 6.71.0 the whole
 of it looked like this: one sentence, painted once. `uv`'s output went into a
 variable and was written out at the very end, into a file nothing reads until the
 episode is over — so during the only part of an update anyone cares about there
@@ -1002,9 +1001,69 @@ Now the installer writes **two files, as it goes**, both in
 
 The stages are monotonic — an episode only ever moves forward:
 
-`waiting-for-parent` → `stopping` → `installing` → `verifying` →
+`waiting-for-parent` → `staging` → `stopping` → `verifying` → `swapping` →
 `starting` (the installer starts the server) or `handing-off` (the desktop app
-does) → `done`, or `failed` then `recovered`.
+does) → `done`; or `rolling-back` → `recovered` when the new version does not
+answer, or `failed` → `recovered` when it never gets that far. `installing`
+appears in place of `staging`/`swapping` on the repair path described below.
+
+#### How an update is applied (6.72.0)
+
+Until 6.72.0 an update was one command: `uv tool install --force` against the
+environment you were running. uv empties a tool environment *in place* before it
+resolves a single new byte, so that one command deleted the only working copy of
+MCC on the machine and then went to the network. Measured here: `mcc-server`
+answered normally at the start, failed with
+`ModuleNotFoundError: annotated_types` 7.2 seconds later, failed with
+`ModuleNotFoundError: my_claude_code` at 8 seconds, and the executable itself was
+gone at 9.4 seconds. Two real updates took 58 and 102 seconds end to end. For all
+of that there was no server, no `mcc-server`, and nothing to go back to — if the
+download failed halfway, you had neither version.
+
+Now the new version is built **beside** the one you are running:
+
+1. **`staging`** — the new version is installed into a tools directory of its
+   own, at `<uv tools root>/../.mcc-staging/<stamp>/`. Your installed version is
+   not touched, so `mcc-server` keeps answering for the whole of it. This is
+   where all the time goes, and it starts before the server has even finished
+   stopping.
+2. **`verifying`** — the staged version is **run**: `mcc-server --version` has to
+   print the version that was asked for, and `import my_claude_code` has to
+   succeed. A wheel that installs and then cannot run never reaches your
+   installed copy; the update stops here and says so, and nothing was replaced.
+3. **`swapping`** — two directory renames exchange the old environment for the
+   new one. Measured on the machine this was built on: 3.9 ms typical, 20 ms
+   worst of ten. Your launchers are not rewritten at all — every `mcc-*` command
+   is a small stub that runs whatever environment is at the canonical path, so
+   the instant the new one lands there they run the new code. A command window
+   you left open can no longer hold up an install.
+4. The old environment moves to `<uv tools root>/../.mcc-previous/<stamp>/`. It
+   is **not deleted** yet.
+5. **`starting`** / **`handing-off`**, then the new server has to answer
+   `/health` within 90 seconds. If it does, the update is `done` and the previous
+   copy is swept. If it does not, the update goes `rolling-back`: the previous
+   environment goes back to the canonical path, it is started, and the page says
+   `recovered` rather than pretending the update worked.
+
+Exactly one previous copy is kept — it is the rollback, and a second one is only
+disk. It is deleted only after the new server has answered.
+
+Both directories are **siblings** of uv's tools root rather than children of it.
+That is measured, not taste: a directory inside the tools root whose name uv
+cannot read as a package name makes `uv tool list` fail outright and list
+nothing.
+
+**The repair path.** A release that adds a brand-new command needs uv to write a
+launcher for it, and no rename can produce one. Those updates (and any machine
+that is not a uv tool install) finish with the old in-place `--force` install
+instead, against a cache the staging pass has already filled. It is a repair
+path now, not the ordinary one.
+
+**Housekeeping.** Older installers renamed the environment aside as
+`my-claude-code.old-<stamp>` *inside* uv's tools root, where uv reads each one as
+a broken tool and warns about it on every `uv tool` command. Any that are still
+there are moved out on the next server start, along with abandoned staging
+directories, and the last five installer transcripts are kept.
 
 **The desktop app shows all of it.** While an update runs, the window shows the
 stage timeline with each stage's clock time and how long it took, the total

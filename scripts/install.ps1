@@ -1538,14 +1538,17 @@ function Get-InstallStageRank {
 
     switch ($Stage) {
         'waiting-for-parent' { return 1 }
-        'stopping' { return 2 }
-        'installing' { return 3 }
-        'verifying' { return 4 }
-        'starting' { return 5 }
-        'handing-off' { return 5 }
-        'done' { return 6 }
-        'failed' { return 6 }
-        'recovered' { return 6 }
+        'staging' { return 2 }
+        'stopping' { return 3 }
+        'installing' { return 4 }
+        'verifying' { return 5 }
+        'swapping' { return 6 }
+        'starting' { return 7 }
+        'handing-off' { return 7 }
+        'rolling-back' { return 8 }
+        'done' { return 9 }
+        'failed' { return 9 }
+        'recovered' { return 9 }
         default { return 0 }
     }
 }
