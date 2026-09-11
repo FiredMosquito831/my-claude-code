@@ -734,7 +734,8 @@ fn read_receipt(config_dir: &str) -> Option<String> {
     if metadata.len() <= MAX_BYTES {
         return std::fs::read_to_string(&path).ok();
     }
-    file.seek(SeekFrom::Start(metadata.len() - MAX_BYTES)).ok()?;
+    file.seek(SeekFrom::Start(metadata.len() - MAX_BYTES))
+        .ok()?;
     let mut bytes = Vec::new();
     file.take(MAX_BYTES).read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(&bytes).into_owned();

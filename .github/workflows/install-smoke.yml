@@ -45,7 +45,11 @@ name: install smoke
 # answering /health, the lock stands a second installer down, and episodes
 # accumulate in the receipt. The stop-the-holder half needs a published
 # wheel that knows the flag, and the run after this release is where it
-# first proves itself here.
+# first proves itself here. For the same reason there is no "stop the
+# scratch server" step: `mcc-server --stop-holder` on a build that predates
+# the flag does not refuse it -- it ignores every argument but --version and
+# STARTS a server, which would block the step until the job timed out. The
+# runner is thrown away at the end of the job, so nothing needs stopping.
 
 on:
   push:
@@ -224,8 +228,22 @@ jobs:
       # ---------------------------------------------------------------
       - name: --no-start installs and starts nothing
         run: |
-          set -eu
+          # No `set -e` on the install itself: an exit code this step SWALLOWS
+          # is an exit code nobody can act on, and the first run of this leg
+          # failed with nothing on screen but "Process completed with exit code
+          # 1". Capture it, print it, and print the receipt beside it.
+          set -u
           env -u PSModulePath sh scripts/install.sh --no-start
+          status=$?
+          echo "install.sh --no-start exited ${status}"
+          echo "--- the receipt ---"
+          cat "${RUNNER_TEMP}/fresh-machine/config/updates/progress.json" || true
+          echo "--- what is listening ---"
+          ss -ltn || netstat -ltn || true
+          if [ "$status" -ne 0 ]; then
+            echo "::error::install.sh --no-start exited ${status}"
+            exit 1
+          fi
           if curl -fsS -o /dev/null -m 3 http://127.0.0.1:8391/health; then
             echo "::error::--no-start started a server anyway"
             exit 1
@@ -234,8 +252,17 @@ jobs:
 
       - name: --restart ends with a listener answering /health
         run: |
-          set -eu
+          set -u
           env -u PSModulePath sh scripts/install.sh --restart
+          status=$?
+          echo "install.sh --restart exited ${status}"
+          echo "--- the receipt ---"
+          cat "${RUNNER_TEMP}/fresh-machine/config/updates/progress.json" || true
+          if [ "$status" -ne 0 ]; then
+            echo "::error::install.sh --restart exited ${status}"
+            exit 1
+          fi
+          set -e
           waited=0
           until curl -fsS -o /dev/null -m 3 http://127.0.0.1:8391/health; do
             waited=$((waited + 1))
@@ -294,15 +321,6 @@ jobs:
           # It stood down without touching the lock.
           grep -q "\"pid\":$$" "$lock" || { echo "::error::the lock was taken"; exit 1; }
           rm -f "$lock"
-
-      - name: Stop the scratch server this job started
-        if: always()
-        run: |
-          set -eu
-          # By the pids of the ONE launch on the scratch port, through the
-          # product's own classifier -- never by name, and never anything else.
-          "${RUNNER_TEMP}/fresh-machine/uv-tool-bin/mcc-server" \
-            --stop-holder 8391 --host 127.0.0.1 || true
 
       - name: Missing curl is a clear, per-distro failure
         run: |
@@ -461,15 +479,6 @@ jobs:
           if ($last -notmatch '"restarted"\s*:\s*true') {
             Write-Host "::error::the receipt does not record the restart"
             exit 1
-          }
-
-      - name: Stop the scratch server this job started
-        if: always()
-        shell: pwsh
-        run: |
-          $server = Join-Path $env:RUNNER_TEMP "cmd-smoke\uv-tool-bin\mcc-server.exe"
-          if (Test-Path -LiteralPath $server) {
-            & $server --stop-holder 8391 --host 127.0.0.1
           }
 
       - name: An unknown flag is refused before anything is downloaded
