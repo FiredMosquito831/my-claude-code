@@ -124,6 +124,10 @@ class ProcessFacts:
     command: str | None = None
     #: Process start time as a UTC epoch, when the OS will give one.
     started_at: float | None = None
+    #: The command line already split by the OS, when the OS split it for us.
+    #: ``/proc/<pid>/cmdline`` is NUL-separated, so on POSIX there is nothing to
+    #: parse and nothing to get wrong; Windows hands over one string.
+    command_tokens: tuple[str, ...] | None = None
 
     @property
     def argument_tokens(self) -> tuple[str, ...]:
@@ -133,13 +137,25 @@ class ProcessFacts:
         every MCC process on Windows -- and it is exactly the token that must
         not be consulted, because its path contains the uv tool environment's
         ``my-claude-code`` directory for launchers and servers alike.
+
+        When the command line has to be parsed, it is parsed with ``posix=False``
+        whatever this machine is. POSIX lexing treats a backslash as an escape,
+        so ``"C:\\Users\\x\\.local\\bin\\mcc-server.exe"`` comes back as
+        ``C:Usersx.localbinmcc-server.exe`` -- the separators eaten, the
+        basename no longer recognisable, and a running server classified as a
+        launcher whose child has died. A Windows command line is a perfectly
+        ordinary thing to be holding on a Linux machine (a test fixture, a
+        report copied from a user), and the parse must not depend on where it is
+        read.
         """
 
+        if self.command_tokens is not None:
+            return self.command_tokens[1:]
         command = self.command or ""
         if not command.strip():
             return ()
         try:
-            tokens = shlex.split(command, posix=not _WINDOWS)
+            tokens = shlex.split(command, posix=False)
         except ValueError:
             tokens = command.split()
         return tuple(token.strip('"') for token in tokens[1:])
@@ -335,14 +351,19 @@ def _scan_posix() -> list[ProcessFacts]:
             continue
         pid = int(entry.name)
         command = None
+        tokens: tuple[str, ...] | None = None
         with suppress(OSError):
             raw = (entry / "cmdline").read_bytes()
             if raw:
-                command = shlex.join(
+                tokens = tuple(
                     part
                     for part in raw.decode("utf-8", errors="replace").split("\0")
                     if part
                 )
+                # The joined form is for humans and log lines only; every
+                # decision reads ``command_tokens``, which the kernel already
+                # separated for us.
+                command = shlex.join(tokens)
         image = None
         with suppress(OSError):
             image = (entry / "comm").read_text(encoding="utf-8").strip() or None
@@ -366,6 +387,7 @@ def _scan_posix() -> list[ProcessFacts]:
                 image=image,
                 executable=executable,
                 command=command,
+                command_tokens=tokens,
                 started_at=started_at,
             )
         )

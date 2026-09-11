@@ -274,23 +274,40 @@ def _survey_other_servers(settings: Settings) -> None:
     those were running on the machine that produced this feature, with live
     upstream connections, while the port they had been started for belonged to
     somebody else.
+
+    **Both paths are resolved here, on the calling thread, and handed to the
+    thread as values.** Resolving them inside it instead was a real defect, not
+    a style point: the thread outlives the call, ``config_dir_path()`` reads the
+    environment at the moment it is called, and a survey that started under one
+    configuration directory would then write its report into whichever one
+    happened to be current when it finished. The test suite caught it as a
+    hermeticity violation -- a survey started by one test resolved
+    ``~/.mcc`` on the *real* home after that test's redirect had been torn down
+    -- and the same shape in production is a server writing its report into
+    somebody else's config directory.
     """
+
+    log_path = request_log_path()
+    survey_path = other_servers_path()
+    self_pid = os.getpid()
+    stale_after = settings.server_stale_session_seconds
+    action = settings.server_stale_server_action
 
     def survey() -> None:
         try:
             observations = observe_servers(
-                request_log_path=request_log_path(),
-                self_pid=os.getpid(),
-                stale_after_seconds=settings.server_stale_session_seconds,
+                request_log_path=log_path,
+                self_pid=self_pid,
+                stale_after_seconds=stale_after,
             )
         except OSError as exc:
             logger.debug("Could not survey other My Claude Code servers: {}", exc)
             return
         report_servers(observations, context="At start")
-        if settings.server_stale_server_action == "stop":
+        if action == "stop":
             stopped = {item.pids for item in stop_stale_servers(observations)}
             observations = [item for item in observations if item.pids not in stopped]
-        write_survey(other_servers_path(), observations)
+        write_survey(survey_path, observations)
 
     threading.Thread(target=survey, name="fcc-server-survey", daemon=True).start()
 

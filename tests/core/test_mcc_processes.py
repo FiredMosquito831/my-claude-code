@@ -233,3 +233,51 @@ def test_an_established_connection_is_not_a_listening_socket() -> None:
         "  TCP    127.0.0.1:10477       127.0.0.1:10476      ESTABLISHED     63484\n"
     )
     assert _listening_pids_from(established) == frozenset()
+
+
+def test_a_windows_command_line_parses_the_same_on_every_platform() -> None:
+    r"""Backslashes are separators, not escapes, wherever the parse happens.
+
+    Caught by CI on Linux: ``shlex.split(..., posix=True)`` turns
+    ``"C:\Users\x\.local\bin\mcc-server.exe"`` into
+    ``C:Usersx.localbinmcc-server.exe``. The basename is then unrecognisable,
+    the server child stops being a server, the chain collapses to the
+    trampoline alone -- and the collapsed chain is exactly the shape this
+    module calls a provable orphan. A parse that depends on which machine is
+    reading is a classifier that can convict a running server.
+    """
+
+    facts = ProcessFacts(
+        pid=1,
+        image="python.exe",
+        executable=_TOOL_PYTHON,
+        command=rf'"{_TOOL_PYTHON}" "C:\Users\x\.local\bin\mcc-server.exe"',
+    )
+    assert facts.argument_tokens == (r"C:\Users\x\.local\bin\mcc-server.exe",)
+    assert facts.is_mcc_server
+
+
+def test_a_posix_command_line_is_never_re_parsed() -> None:
+    """``/proc/<pid>/cmdline`` is NUL-separated, so the OS already split it.
+
+    Passing the split form through means a path containing a space or a quote
+    survives, which round-tripping it through a joiner and a lexer does not
+    guarantee.
+    """
+
+    facts = ProcessFacts(
+        pid=1,
+        image="python3",
+        executable="/usr/bin/python3",
+        command="/usr/bin/python3 '/opt/my apps/mcc-server'",
+        command_tokens=("/usr/bin/python3", "/opt/my apps/mcc-server"),
+    )
+    assert facts.argument_tokens == ("/opt/my apps/mcc-server",)
+    assert facts.is_mcc_server
+
+
+def test_an_unparseable_command_line_is_not_a_server() -> None:
+    """An unbalanced quote must degrade to "cannot tell", never to a match."""
+
+    facts = ProcessFacts(pid=1, image="python.exe", command='"C:\broken')
+    assert not facts.is_mcc_server
