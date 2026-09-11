@@ -4346,6 +4346,47 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   server&rdquo; is how one update came to start two of them.
                 </p>
                 <p class="guide-note">
+                  <strong>The install command can restart the server itself
+                  (6.73.0).</strong> Run it with <code>-Restart</code> (PowerShell) or
+                  <code>--restart</code> (<code>install.cmd</code>,
+                  <code>install.sh</code>) and it finishes the job rather than printing a
+                  hint: it reads <code>PORT</code> and <code>HOST</code> from the
+                  configuration directory it installed for, asks the product what holds
+                  that port, stops that one server by its exact process ids inside the
+                  <a href="#guide-limits">graceful shutdown budget</a>, starts
+                  <code>mcc-server</code> detached, and waits for <code>/health</code> to
+                  answer. <strong>A listener answering is what counts as success</strong>
+                  &mdash; not an install that exited 0. Before this, nothing in the
+                  product would start a server after a hand-run install, and on
+                  2026-09-11 two installs finished cleanly fifteen minutes apart with no
+                  server running through either of them.
+                </p>
+                <p class="guide-note">
+                  <strong>Exactly one server, and never anyone else's.</strong> The
+                  restart means the server bound to the port of the configuration
+                  directory the install is for. Every other My Claude Code server &mdash;
+                  another port, another configuration directory, the instances you have
+                  agents waiting on &mdash; is <em>listed</em> in the transcript and left
+                  running. A port held by something that is not ours is reported and
+                  never touched, and so is a holder that could not be identified:
+                  &ldquo;cannot tell&rdquo; is never &ldquo;ours&rdquo;.
+                  <code>-NoStart</code> / <code>--no-start</code> (or
+                  <code>MCC_INSTALL_NO_START=1</code>) starts nothing at all.
+                </p>
+                <p class="guide-note">
+                  <strong>One update at a time, and the receipt keeps every
+                  episode.</strong> Both update paths take one exclusive lock,
+                  <code>update.lock</code>, beside the receipt. A second updater does not
+                  queue and does not install &mdash; it names the owner, points at the
+                  transcript that owner is writing, and exits. A lock whose owner is gone
+                  is reclaimed rather than waited on. And nobody truncates
+                  <code>progress.json</code> any more: every writer appends, and an
+                  episode opens with a marker record naming the writer, so a watcher that
+                  looks a minute late still sees what happened. That truncation is how, at
+                  15:04 on 2026-09-11, a hand-run install erased the whole record of the
+                  update that had finished two minutes earlier.
+                </p>
+                <p class="guide-note">
                   <strong>On Windows the install is deferred.</strong> Windows holds the
                   running interpreter open, so the environment cannot be replaced under a
                   live process. The verified wheel is staged and a background helper

@@ -106,6 +106,9 @@ def serve(argv: Sequence[str] | None = None) -> None:
     if _print_version_if_requested(argv):
         return
 
+    if _answer_installer_question(argv):
+        return
+
     _bootstrap_config_paths()
 
     # Keep the server composition root off metadata-only command paths.
@@ -145,6 +148,38 @@ def anthropic_oauth_login(argv: Sequence[str] | None = None) -> None:
     from my_claude_code.cli.commands import anthropic_oauth_login as run_login
 
     run_login()
+
+
+def _answer_installer_question(argv: Sequence[str] | None) -> bool:
+    """Serve ``--report-holder``/``--stop-holder`` instead of starting a server.
+
+    The official installer restarts exactly one server -- the one bound to the
+    port of the configuration directory it installed for -- and it may not
+    decide in PowerShell or in ``sh`` which processes MCC is allowed to stop.
+    It asks the product instead, and the product answers here. See
+    :mod:`my_claude_code.cli.installer_support`.
+
+    A build that predates these flags exits non-zero from argument parsing
+    instead, which is how a pinned ``--version`` install tells a newer
+    installer to start nothing rather than to guess.
+    """
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not any(
+        item == flag or item.startswith(f"{flag}=")
+        for item in args
+        for flag in ("--report-holder", "--stop-holder")
+    ):
+        return False
+
+    from my_claude_code.cli.installer_support import run_installer_support
+
+    status = run_installer_support(args)
+    if status is None:
+        return False
+    if status != 0:
+        raise SystemExit(status)
+    return True
 
 
 def _print_version_if_requested(argv: Sequence[str] | None) -> bool:

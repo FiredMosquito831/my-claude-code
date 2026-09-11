@@ -107,11 +107,22 @@ def test_the_scripts_emit_parseable_json_lines() -> None:
     """
 
     text = INSTALL_SH.read_text(encoding="utf-8")
-    start = text.index('printf \'{"stage"')
-    skeleton = text[text.index("{", start) : text.index("}", start) + 1]
-    for placeholder, value in (('"%s"', '"x"'), ("%s", "0")):
-        skeleton = skeleton.replace(placeholder, value)
-    assert json.loads(skeleton)["stage"] == "x"
+    # BOTH of them since 6.73.0: the episode marker that opens an episode, and
+    # the stage record. A marker that is not parseable JSON would make every
+    # reader treat the whole file as one episode again.
+    starts = [
+        index
+        for index in range(len(text))
+        if text.startswith('printf \'{"stage"', index)
+    ]
+    assert len(starts) == 2, starts
+    stages = []
+    for start in starts:
+        skeleton = text[text.index("{", start) : text.index("}", start) + 1]
+        for placeholder, value in (('"%s"', '"x"'), ("%s", "0")):
+            skeleton = skeleton.replace(placeholder, value)
+        stages.append(json.loads(skeleton)["stage"])
+    assert stages == ["episode", "x"], stages
 
 
 # -- 6.71.0: the timeline both installers write --------------------------------

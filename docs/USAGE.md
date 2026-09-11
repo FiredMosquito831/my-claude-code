@@ -3919,6 +3919,110 @@ installing anything.
 
 Re-running the install command does exactly the same thing and always fetches the newest release.
 
+<a id="the-installer-restarts-the-server"></a>
+
+#### The installer can restart the server too (6.73.0)
+
+Until 6.73.0 nothing in the product would start a server after an update unless
+the desktop app did it, and on 2026-09-11 that produced the worst case it can
+produce: the dashboard's helper stood down because the app said it was watching,
+the app was a version that could not act, and the hand-run installer three
+minutes later was never allowed to act at all. **Two installs exited 0 and the
+machine had no server for a quarter of an hour.**
+
+Add `-Restart` (or `--restart`) and the install command finishes the job:
+
+```powershell
+# Windows, PowerShell
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.ps1"))) -Restart
+```
+
+```
+rem Windows, Command Prompt
+"%TEMP%\install-mcc.cmd" --restart
+```
+
+```bash
+# Linux, macOS, WSL
+curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh" | sh -s -- --restart
+```
+
+**Exactly one server is restarted**, and this is the whole of the rule:
+
+1. The installer reads `PORT` and `HOST` from the configuration directory it is
+   installing for — `MCC_CONFIG_DIR` if you set it, otherwise `~/.mcc`. It only
+   ever *reads*: it never creates that file, never migrates a legacy directory
+   and never writes a default back.
+2. It asks the product what holds that port (`mcc-server --report-holder`). The
+   answer is the same classification the port takeover has used since 6.59.0 and
+   the process-tree scan 6.72.2 added — **never** an image name, and never a
+   substring of a command line, because the uv tool environment is a directory
+   literally named `my-claude-code` and every launcher's command line therefore
+   contains the product's name.
+3. If that holder is a My Claude Code **server**, it is stopped by its exact
+   process ids, within the budget `SERVER_GRACEFUL_SHUTDOWN_SECONDS` sets, and
+   the installer waits for the port to come free.
+4. `mcc-server` is started detached, so it outlives the installer.
+5. The installer waits for `/health` to answer on that port. **That** is success.
+   An install that exited 0 is not.
+
+Everything else on the machine is left alone, and said so in the transcript:
+
+> Other My Claude Code servers are running. None of them is touched:
+> mcc-server.exe (pid 6764) -> pid 63484
+
+- **A server on another port, or another configuration directory, is never
+  stopped.** If you run several instances with agents waiting on them, `-Restart`
+  touches the one this install is for and lists the rest.
+- **Something that is not ours on the configured port is never stopped either.**
+  The installer names the holder, starts nothing, and finishes with
+  `restarted: false`.
+- **A holder it could not identify is treated as a stranger.** "Cannot tell" is
+  never "ours".
+
+If the new server never answers `/health`, the receipt records `failed` with the
+child's exit code, the last lines it wrote, and the path to its log. This release
+has no staged swap in the installer yet (that is the next one), so the honest
+instruction in that case is the one it prints: **the previous version is no
+longer installed; run the installer again.**
+
+#### Starting nothing
+
+`-NoStart` / `--no-start`, or `MCC_INSTALL_NO_START=1` in the environment, means
+no server is started whatever else was asked — it overrides `-Restart`. The
+environment form exists for callers that pass arguments through a layer with its
+own opinions about quoting.
+
+#### One update at a time
+
+Both update paths — the dashboard's helper and the install command — now take one
+exclusive lock, `<config dir>/updates/update.lock`, before they write anything.
+It holds the owner's process id, the second it started and which script it is.
+
+A second updater does not queue and does not install. It says who is installing,
+points at the transcript that updater is writing, and exits 0:
+
+> An update is already running (pid 13820, started 15:04:24) -- watching it instead.
+> It is writing: C:\Users\you\.mcc\updates\install-20260911-150424.log
+
+A lock whose owner is **gone** is reclaimed rather than waited on, because a
+crashed installer must not take the machine out of updating for the rest of the
+day.
+
+#### The receipt keeps every episode
+
+`<config dir>/updates/progress.json` used to be emptied by whichever writer
+started next. That is how, at 15:04 on 2026-09-11, a hand-run install erased the
+entire record of the update that had finished two minutes earlier — while a
+window was supposed to be reading it.
+
+Now every writer **appends**, and an episode opens with a marker record
+(stage `episode`) naming the writer and its process id. A watcher that looks a
+minute late still sees what happened, and the desktop window draws the *current*
+episode rather than a timeline that starts with last week's install. Two fields
+are new on every record: `restarted` (empty until a restart is attempted, then
+true or false) and `holder` (what was on the port).
+
 ---
 
 ## 15. Security and networking

@@ -20,6 +20,32 @@ name: install smoke
 # Both legs install the LATEST PUBLISHED release, not this branch's code: the
 # thing under test is the script, and the wheel it fetches is whatever GitHub
 # says is current. A release that has not happened yet cannot break this job.
+#
+# ONE ASYMMETRY, and it decides where the 6.73.0 restart legs can live:
+# scripts/install.cmd downloads scripts/install.ps1 from **main**, by design
+# (it is the published route, and every decision about what to install stays
+# in one script). So the cmd steps exercise MAIN's install.ps1, never this
+# branch's, and a switch this branch adds is an unknown option to them until
+# it has merged. The restart legs therefore run:
+#   * scripts/install.sh directly (the checkout's file), and
+#   * scripts/install.ps1 directly through powershell.exe (the checkout's
+#     file), rather than through install.cmd.
+# The cmd route's own pass-through of --restart is pinned by
+# tests/scripts/test_installer_restart.py, which reads the file rather than
+# running it.
+#
+# AND ONE MORE, which decides what the restart legs may ASSERT. The wheel
+# these jobs install is the LATEST PUBLISHED one -- so on the pull request
+# that introduces the restart, the `mcc-server` on disk is the release
+# BEFORE it and does not know `--report-holder`. The installer's documented
+# behaviour in exactly that case is to fall back to a connect test: a free
+# port is started into, an occupied one is reported and nothing is stopped.
+# These legs therefore assert the half that is true of every version --
+# --no-start starts nothing, --restart into a free port ends with a listener
+# answering /health, the lock stands a second installer down, and episodes
+# accumulate in the receipt. The stop-the-holder half needs a published
+# wheel that knows the flag, and the run after this release is where it
+# first proves itself here.
 
 on:
   push:
@@ -69,6 +95,7 @@ jobs:
             echo "UV_PYTHON_INSTALL_DIR=${scratch}/uv-python"
             echo "UV_CACHE_DIR=${scratch}/uv-cache"
             echo "MCC_CONFIG_DIR=${scratch}/config"
+            echo "MCC_OPEN_BROWSER=0"
             echo "XDG_CONFIG_HOME=${scratch}/home/.config"
             echo "XDG_DATA_HOME=${scratch}/home/.local/share"
             # A real machine has SHELL set; the runner does not.
@@ -99,6 +126,18 @@ jobs:
           done
           IFS=$old_ifs
           echo "PATH=${shadow}" >> "$GITHUB_ENV"
+
+      - name: Give the scratch configuration a port of its own
+        run: |
+          set -eu
+          scratch="${RUNNER_TEMP}/fresh-machine"
+          # The installer READS this file and never writes it, so the restart
+          # legs below need it to exist before the first install. 8391 rather
+          # than the default 8082: the port under test must be one nothing else
+          # on the runner could be holding.
+          printf 'HOST=127.0.0.1\nPORT=8391\nMCC_OPEN_BROWSER=0\n' \
+            > "${scratch}/config/.env"
+          cat "${scratch}/config/.env"
 
       - name: Prove the machine has no uv and no Python
         run: |
@@ -174,6 +213,96 @@ jobs:
             fi
           done
           echo "no config directory was created in the real home"
+
+      # ---------------------------------------------------------------
+      # 6.73.0: the installer updates AND restarts.
+      #
+      # The success condition of every one of these is a LISTENER ANSWERING on
+      # the configured port -- never "the install exited 0". On 2026-09-11 two
+      # installs exited 0 fifteen minutes apart with no server running through
+      # either of them, which is the defect this release exists for.
+      # ---------------------------------------------------------------
+      - name: --no-start installs and starts nothing
+        run: |
+          set -eu
+          env -u PSModulePath sh scripts/install.sh --no-start
+          if curl -fsS -o /dev/null -m 3 http://127.0.0.1:8391/health; then
+            echo "::error::--no-start started a server anyway"
+            exit 1
+          fi
+          echo "nothing is listening on 8391, as asked"
+
+      - name: --restart ends with a listener answering /health
+        run: |
+          set -eu
+          env -u PSModulePath sh scripts/install.sh --restart
+          waited=0
+          until curl -fsS -o /dev/null -m 3 http://127.0.0.1:8391/health; do
+            waited=$((waited + 1))
+            if [ "$waited" -gt 60 ]; then
+              echo "::error::no listener answered /health on 8391"
+              cat "${RUNNER_TEMP}/fresh-machine/config/updates/"server-start-*.log || true
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "/health answered on 8391 -- which is the success condition, and"
+          echo "not the install's exit code."
+          # And the receipt says so, in the record the desktop window reads.
+          tail -n 1 "${RUNNER_TEMP}/fresh-machine/config/updates/progress.json"
+          tail -n 1 "${RUNNER_TEMP}/fresh-machine/config/updates/progress.json" \
+            | grep -q '"restarted":true' \
+            || { echo "::error::the receipt does not record the restart"; exit 1; }
+
+      - name: An occupied port is reported and never taken by force
+        run: |
+          set -eu
+          # The server started above is still on 8391. Whatever this build of
+          # mcc-server can say about it, the one thing that must be true is that
+          # the installer did not end up with a SECOND server on that socket and
+          # did not kill anything it could not identify.
+          env -u PSModulePath sh scripts/install.sh --restart 2>&1 | tee "${RUNNER_TEMP}/second.txt"
+          waited=0
+          until curl -fsS -o /dev/null -m 3 http://127.0.0.1:8391/health; do
+            waited=$((waited + 1))
+            [ "$waited" -gt 60 ] && { echo "::error::8391 stopped answering"; exit 1; }
+            sleep 1
+          done
+          echo "8391 still answers"
+          # Every episode is still in the receipt: nobody truncates it any more.
+          episodes="$(grep -c '"stage":"episode"' \
+            "${RUNNER_TEMP}/fresh-machine/config/updates/progress.json")"
+          echo "episodes recorded: $episodes"
+          [ "$episodes" -ge 3 ] \
+            || { echo "::error::expected at least three episodes, got $episodes"; exit 1; }
+
+      - name: A second installer finds the lock held and watches instead
+        run: |
+          set -eu
+          lock="${RUNNER_TEMP}/fresh-machine/config/updates/update.lock"
+          # A lock owned by a process that IS alive: this shell.
+          printf '{"pid":%s,"started_at":0,"started_display":"00:00:00","source":"install.sh"}' \
+            "$$" > "$lock"
+          out="$(env -u PSModulePath sh scripts/install.sh --restart 2>&1)"
+          status=$?
+          echo "$out"
+          [ "$status" -eq 0 ] || { echo "::error::expected exit 0, got $status"; exit 1; }
+          case "$out" in
+            *"watching it instead"*) ;;
+            *) echo "::error::the second installer did not stand down"; exit 1 ;;
+          esac
+          # It stood down without touching the lock.
+          grep -q "\"pid\":$$" "$lock" || { echo "::error::the lock was taken"; exit 1; }
+          rm -f "$lock"
+
+      - name: Stop the scratch server this job started
+        if: always()
+        run: |
+          set -eu
+          # By the pids of the ONE launch on the scratch port, through the
+          # product's own classifier -- never by name, and never anything else.
+          "${RUNNER_TEMP}/fresh-machine/uv-tool-bin/mcc-server" \
+            --stop-holder 8391 --host 127.0.0.1 || true
 
       - name: Missing curl is a clear, per-distro failure
         run: |
@@ -287,6 +416,61 @@ jobs:
           )
           echo the failure returned %ERRORLEVEL% and kept %TEMP%\install-mcc.ps1
           exit /b 0
+
+      # 6.73.0, run against THIS branch's install.ps1 rather than through
+      # install.cmd, because install.cmd downloads install.ps1 from main (see
+      # the header) and main does not know the switch until this has merged.
+      - name: -NoStart installs and starts nothing
+        shell: pwsh
+        run: |
+          $config = Join-Path $env:RUNNER_TEMP "cmd-smoke\config"
+          Set-Content -LiteralPath (Join-Path $config ".env") `
+            -Value "HOST=127.0.0.1`nPORT=8391`nMCC_OPEN_BROWSER=0`n" -Encoding ascii
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -NoStart
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::install failed"; exit 1 }
+          try {
+            $null = Invoke-WebRequest -Uri "http://127.0.0.1:8391/health" -UseBasicParsing -TimeoutSec 3
+            Write-Host "::error::-NoStart started a server anyway"
+            exit 1
+          } catch {
+            Write-Host "nothing is listening on 8391, as asked"
+          }
+
+      - name: -Restart starts the server and /health answers
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Restart
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::install failed"; exit 1 }
+          $config = Join-Path $env:RUNNER_TEMP "cmd-smoke\config"
+          $deadline = (Get-Date).AddSeconds(60)
+          $ok = $false
+          while ((Get-Date) -lt $deadline) {
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:8391/health" -UseBasicParsing -TimeoutSec 3
+              if ([int] $response.StatusCode -eq 200) { $ok = $true; break }
+            } catch { }
+            Start-Sleep -Milliseconds 750
+          }
+          if (-not $ok) {
+            Write-Host "::error::no listener answered /health on 8391"
+            Get-ChildItem (Join-Path $config "updates") | ForEach-Object { Write-Host $_.Name }
+            exit 1
+          }
+          $last = (Get-Content -LiteralPath (Join-Path $config "updates\progress.json") | Where-Object { $_.Trim() })[-1]
+          Write-Host $last
+          if ($last -notmatch '"restarted"\s*:\s*true') {
+            Write-Host "::error::the receipt does not record the restart"
+            exit 1
+          }
+
+      - name: Stop the scratch server this job started
+        if: always()
+        shell: pwsh
+        run: |
+          $server = Join-Path $env:RUNNER_TEMP "cmd-smoke\uv-tool-bin\mcc-server.exe"
+          if (Test-Path -LiteralPath $server) {
+            & $server --stop-holder 8391 --host 127.0.0.1
+          }
 
       - name: An unknown flag is refused before anything is downloaded
         run: |

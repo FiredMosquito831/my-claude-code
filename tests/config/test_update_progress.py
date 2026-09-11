@@ -9,6 +9,8 @@ the top, the helper lost all five of its attempts, and the upgrade landed only
 through the shell's emergency reinstall.
 """
 
+import json
+import os
 import time
 
 import pytest
@@ -275,3 +277,123 @@ def test_the_transcript_lives_beside_the_receipt(monkeypatch, tmp_path) -> None:
     assert path.name == "install-20260911-082114.log"
     assert path.parent == tmp_path / "updates"
     assert path.parent == update_progress.update_progress_path().parent
+
+
+# ---------------------------------------------------------------- 6.73.0: the
+# receipt is APPENDED to, never truncated, and an episode is opened by a marker.
+#
+# At 15:04 on 2026-09-11 a hand-run install.ps1 truncated this file and erased
+# the entire record of the update helper that had finished two minutes earlier,
+# while a desktop window was supposed to be reading it. Three writers did that
+# -- install.ps1, install.sh and the generated helper -- and none of them took a
+# lock first, which is also how two installs wrote over each other's uv tool
+# environment on 2026-09-09.
+
+
+def test_the_last_episode_is_the_one_after_the_last_marker(monkeypatch, tmp_path):
+    stage_dir = tmp_path / UPDATE_STAGE_DIRNAME
+    stage_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        update_progress, "config_dir_path", lambda: tmp_path, raising=True
+    )
+    _write(
+        stage_dir,
+        '{"stage":"episode","message":"An update started.","source":"helper"}',
+        '{"stage":"installing","message":"Installing 6.72.2."}',
+        '{"stage":"done","message":"6.72.2 is installed.","helper_done":true}',
+        '{"stage":"episode","message":"An update started.","source":"install.ps1"}',
+        '{"stage":"installing","message":"Installing 6.73.0."}',
+    )
+
+    stages = [record["stage"] for record in update_progress.last_episode_records()]
+    assert stages == ["episode", "installing"]
+    # ...and the earlier episode is still on disk, which is the whole point.
+    assert len(update_progress.read_update_records()) == 5
+    # The last record is still the last record, so every existing reader --
+    # the helper-alive gate included -- keeps working unchanged.
+    latest = read_update_progress()
+    assert latest is not None
+    assert latest["message"] == "Installing 6.73.0."
+
+
+def test_a_receipt_from_before_episodes_is_read_whole(monkeypatch, tmp_path):
+    """A build that truncated the file meant the whole file to be one episode."""
+
+    stage_dir = tmp_path / UPDATE_STAGE_DIRNAME
+    stage_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        update_progress, "config_dir_path", lambda: tmp_path, raising=True
+    )
+    _write(
+        stage_dir,
+        '{"stage":"installing","message":"Installing."}',
+        '{"stage":"done","message":"Installed.","helper_done":true}',
+    )
+
+    stages = [record["stage"] for record in update_progress.last_episode_records()]
+    assert stages == ["installing", "done"]
+
+
+def test_the_episode_marker_never_moves_an_episode_backwards():
+    """Rank 0, so a monotonic writer keeps the rank it had and writes it anyway."""
+
+    from my_claude_code.config.update_progress import (
+        EPISODE_MARKER_STAGE,
+        stage_rank,
+    )
+
+    assert stage_rank(EPISODE_MARKER_STAGE) == 0
+    assert EPISODE_MARKER_STAGE in UPDATE_PROGRESS_STAGES
+    assert UPDATE_PROGRESS_STAGES[0] == EPISODE_MARKER_STAGE
+
+
+def test_a_live_lock_owner_is_believed_and_a_dead_one_is_not(monkeypatch, tmp_path):
+    """Decision Q5: the pid decides, so a crashed updater is reclaimable.
+
+    A lock waited on for ever is worse than no lock: it would take the machine
+    out of updating for the rest of the day the first time an installer was
+    killed.
+    """
+
+    stage_dir = tmp_path / UPDATE_STAGE_DIRNAME
+    stage_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        update_progress, "config_dir_path", lambda: tmp_path, raising=True
+    )
+    lock = update_progress.update_lock_path()
+    assert lock.name == "update.lock"
+    assert lock.parent == update_progress.update_progress_path().parent
+
+    lock.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "started_at": time.time(),
+                "started_display": "18:45:12",
+                "source": "install.ps1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    owner = update_progress.read_update_lock()
+    assert update_progress.lock_owner_is_alive(owner) is True
+    assert "pid" in update_progress.describe_lock_owner(owner)
+    assert "18:45:12" in update_progress.describe_lock_owner(owner)
+
+    monkeypatch.setattr(update_progress, "_pid_is_running", lambda pid: False)
+    assert update_progress.lock_owner_is_alive(owner) is False
+
+
+def test_an_unreadable_lock_is_held_rather_than_absent(monkeypatch, tmp_path):
+    """ "I could not read it" must never be the reading that starts a second one."""
+
+    stage_dir = tmp_path / UPDATE_STAGE_DIRNAME
+    stage_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        update_progress, "config_dir_path", lambda: tmp_path, raising=True
+    )
+    update_progress.update_lock_path().write_text("{not json", encoding="utf-8")
+
+    owner = update_progress.read_update_lock()
+    assert owner is not None
+    assert update_progress.describe_lock_owner(owner)

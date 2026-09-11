@@ -1024,8 +1024,8 @@ def test_deferred_helper_writes_the_receipt_without_a_bom(tmp_path) -> None:
     relaunch attempt.
     """
     script = _deferred_script(tmp_path)
-    # Eleven whole-file writes. Six are the pre-6.72.0 set: the progress
-    # truncation, the install transcript's truncation (6.71.0 -- a fresh
+    # Ten whole-file writes. Five are the pre-6.72.0 set that survive: the
+    # install transcript's truncation (6.71.0 -- a fresh
     # episode starts a fresh transcript exactly as it starts a fresh receipt),
     # the "could not be stopped" result, and the outcome receipt TWICE -- once
     # before the server is started and once after, so the receipt on disk is
@@ -1037,7 +1037,8 @@ def test_deferred_helper_writes_the_receipt_without_a_bom(tmp_path) -> None:
     # its own and so has to write its own receipts: the verification failure,
     # the rewritten uv receipt after the swap, the result before the start, the
     # result again once /health has answered, and the result after a rollback.
-    assert script.count("[System.IO.File]::WriteAllText") == 11
+    # 6.73.0 removed the progress truncation: ten, not eleven.
+    assert script.count("[System.IO.File]::WriteAllText") == 10
     # Two appenders: one per stage record, one per line of installer output.
     # Both append a line at a time rather than holding a stream open, so a
     # reader in another process sees each line the moment it exists and a
@@ -1234,10 +1235,17 @@ def test_the_helper_writes_a_progress_file_for_each_stage(tmp_path) -> None:
     # And installing is written before uv is invoked.
     assert fallback_at < script.index("$delays = @(0, 5, 10, 20, 30)")
 
-    # A fresh episode truncates: a stale 'done' from the previous update would
-    # otherwise be the first thing a window reads and believes.
-    truncate = script.index("[System.IO.File]::WriteAllText($progressPath, ''")
-    assert truncate < waiting
+    # 6.73.0: the receipt is APPENDED to and never truncated. The episode is
+    # opened by a MARKER record instead, before any other stage, so a reader
+    # that arrives a minute late can still find where this episode begins. The
+    # truncate this replaced is what erased the helper's whole record at 15:04
+    # on 2026-09-11, while a window was supposed to be reading it.
+    assert "[System.IO.File]::WriteAllText($progressPath, ''" not in script
+    marker = script.index("Write-Stage 'episode'")
+    assert marker < waiting
+    # And the lock is taken before the marker: an installer that narrated an
+    # episode it was not allowed to run would be a second source of truth.
+    assert script.index("Enter-UpdateLock") < marker
 
     # Appended, never rewritten. The writer is a detached process that may be
     # killed at any point and the reader is a window polling while that

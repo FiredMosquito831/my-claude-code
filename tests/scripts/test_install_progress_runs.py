@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from my_claude_code.config.update_progress import (
+    EPISODE_MARKER_STAGE,
     INSTALLING_MESSAGE,
     UPDATE_PROGRESS_FILENAME,
     UPDATE_STAGE_DIRNAME,
@@ -63,6 +64,8 @@ INITIALISERS = (
     "$script:InstallProgressStarted",
     "$script:InstallProgressVersion",
     "$script:InstallProgressRank",
+    "$script:InstallProgressRestarted",
+    "$script:InstallProgressHolder",
 )
 
 
@@ -180,8 +183,14 @@ def test_the_powershell_receipt_function_actually_writes_a_record(
     assert completed.returncode == 0, completed.stderr
 
     records = _records(config_dir)
-    assert len(records) == 3, records
-    installing = records[0]
+    # 6.73.0: the marker that OPENS the episode, then the three stages. Nobody
+    # truncates this file any more, so the marker is how a reader arriving a
+    # minute late still knows where the current episode begins.
+    assert len(records) == 4, records
+    assert records[0]["stage"] == EPISODE_MARKER_STAGE
+    assert records[0]["source"] == "install.ps1"
+    assert records[0]["helper_pid"] > 0
+    installing = records[1]
     for field in LIVENESS_FIELDS:
         assert field in installing, f"{field} is missing from {installing}"
     assert installing["stage"] == "installing"
@@ -225,6 +234,7 @@ def test_the_installer_transcript_is_written_where_the_record_says(
     assert _run(executable, script).returncode == 0
 
     named = Path(_records(config_dir)[0]["log"])
+    assert _records(config_dir)[0]["stage"] == EPISODE_MARKER_STAGE
     assert named.parent == config_dir / UPDATE_STAGE_DIRNAME
     assert named.name.startswith("install-")
     assert named.is_file(), f"the receipt names {named}, which does not exist"
@@ -261,7 +271,7 @@ def test_a_shared_transcript_is_appended_to_rather_than_replaced(
 
     assert _run(executable, script).returncode == 0
 
-    assert _records(config_dir)[0]["log"] == str(shared)
+    assert _records(config_dir)[1]["log"] == str(shared)
     text = shared.read_text(encoding="utf-8")
     assert "the helper was already writing here" in text, "the transcript was truncated"
     assert "uv tool install --force" in text
@@ -322,7 +332,7 @@ def test_the_receipt_never_goes_backwards(
     assert _run(executable, script).returncode == 0
 
     stages = [record["stage"] for record in _records(config_dir)]
-    assert stages == ["installing", "verifying", "done"], stages
+    assert stages == [EPISODE_MARKER_STAGE, "installing", "verifying", "done"], stages
 
 
 def test_at_least_one_powershell_was_actually_exercised() -> None:
