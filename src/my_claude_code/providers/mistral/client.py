@@ -101,6 +101,10 @@ class MistralProvider(OpenAIChatProvider):
         )
         return retry_body
 
-    async def _create_stream(self, body: dict) -> tuple[Any, dict]:
-        stream, final_body = await super()._create_stream(body)
+    async def _create_stream(
+        self, body: dict, *, surface_label: str = ""
+    ) -> tuple[Any, dict]:
+        stream, final_body = await super()._create_stream(
+            body, surface_label=surface_label
+        )
         return normalize_mistral_stream(stream), final_body

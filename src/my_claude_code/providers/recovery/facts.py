@@ -61,6 +61,20 @@ FACT_MODELS_ETAG = "models_etag"
 #: it, ``False`` when a probe looked and found no difference -- which is a
 #: real answer with a date on it, not an absence.
 FACT_CLIENT_IDENTITY_REQUIRED = "client_identity_required"
+#: Which wire surface this host actually serves one model on, proven by a
+#: probe that succeeded there after the resolved surface failed in a
+#: surface-shaped way. Value: a :class:`ResponseSurface` value
+#: (``chat_completions`` / ``responses`` / ``messages`` / ``unservable``).
+#:
+#: The *positive* of the pair the rest of this file is made of, and the
+#: exception that proves its rule: every other fact here is a negative MCC can
+#: never be contradicted about, because it stops sending the thing that would
+#: produce a positive. This one is re-proved on every request that uses it --
+#: if the learned surface stops answering, the probe runs again and the fact is
+#: rewritten. ``unservable`` is the only negative it can hold, and it is a
+#: *listing* statement, never a hiding one: the model keeps its row, with the
+#: reason on it.
+FACT_RESPONSE_SURFACE = "response_surface"
 
 #: The allow-list. Whatever lands in this document is read back into live
 #: request-shaping state, so an unknown kind is dropped with one log line
@@ -77,6 +91,7 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_TOOL_CALLS_UNSUPPORTED,
         FACT_MODELS_ETAG,
         FACT_CLIENT_IDENTITY_REQUIRED,
+        FACT_RESPONSE_SURFACE,
     }
 )
 
@@ -114,6 +129,12 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     # either did the thing or a probe watched it not do the thing, and
     # both answers are worth a month before they are asked again.
     FACT_CLIENT_IDENTITY_REQUIRED: STATED_FACT_TTL_SECONDS,
+    # An endpoint that answered 200 where the other answered 500 is as stated
+    # as evidence gets -- the deployment demonstrated it rather than described
+    # it -- but a gateway rearranges which of its APIs serves a model far more
+    # often than it changes an output cap (four of Zen's free models moved in
+    # six weeks), so this sits on the weaker clock on purpose.
+    FACT_RESPONSE_SURFACE: INFERRED_FACT_TTL_SECONDS,
     FACT_REASONING_FIELD_REJECTED: INFERRED_FACT_TTL_SECONDS,
     FACT_STREAM_USAGE_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
     FACT_VISION_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,

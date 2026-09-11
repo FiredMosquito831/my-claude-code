@@ -12912,6 +12912,11 @@ function formatWireFacts(attempt) {
   const wire = (attempt.params && attempt.params.wire) || {};
   const widened = attempt.params && attempt.params.output_widened_from;
   const parts = [];
+  /* First, because it answers a question that comes before every number below
+     it: which of the host's endpoints this attempt was actually posted to, and
+     whether that was published, learned or forced. Only a gateway with more
+     than one surface records it. */
+  if (wire.surface) parts.push(`surface ${wire.surface}`);
   if (wire.max_tokens != null) parts.push(`max_tokens ${Number(wire.max_tokens).toLocaleString()}`);
   /* The "from" for the max_tokens above. Only present when the allowance was
      actually raised because the attempt was going to think, so the line reads
@@ -16579,6 +16584,14 @@ function buildCapabilityPanel(capabilities, labels) {
   table.className = "models-table";
   const rows = [];
   if (capabilities) {
+    /* Which of a multi-surface gateway's endpoints this model is actually
+       posted to, and where that came from. Absent for every provider that has
+       one endpoint, which is why this row appears only on OpenCode rows. A
+       model whose surface this provider cannot speak reads "unservable" here
+       WITH the reason beside it -- it keeps its row on purpose, because a
+       catalogue that silently drops a model the vendor is giving away is
+       exactly the failure this row exists to make visible. */
+    rows.push(["wire surface", capabilities.response_surface]);
     rows.push(["output limit", capabilities.max_output_tokens]);
     rows.push(["context length", capabilities.context_length]);
     rows.push(["reads images", capabilities.supports_vision]);
@@ -16710,6 +16723,16 @@ function buildCapabilityRow(label, field, labels, format) {
   // The exact rung of the resolution ladder, not just the coarse badge: a
   // "provider /models" answer that matched the id exactly reads very
   // differently from one that only matched after the pricing tag came off.
+  /* A sentence the resolver wrote about this particular answer -- the npm
+     package that selected a wire surface, or why one cannot be reached. Only
+     the surface row carries one today; every other field's provenance is
+     fully said by the badge and the tier. */
+  if (field.note) {
+    const note = document.createElement("span");
+    note.className = "models-approx-note";
+    note.textContent = field.note;
+    source.appendChild(note);
+  }
   if (field.tier) {
     const tier = document.createElement("span");
     tier.className = "models-approx-note";

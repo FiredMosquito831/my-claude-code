@@ -5,12 +5,22 @@ import sys
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 import httpx
 from loguru import logger
 
-from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.application.errors import (
+    ApplicationUnavailableError,
+    InvalidRequestError,
+)
+from my_claude_code.application.model_metadata import (
+    ProviderModelInfo,
+    ResolvedResponseSurface,
+    ResponseSurface,
+    ResponseSurfaceSource,
+)
 from my_claude_code.core.anthropic import (
     ContentType,
     HeuristicToolParser,
@@ -45,8 +55,10 @@ from my_claude_code.core.request_log import (
     record_recovery_event,
 )
 from my_claude_code.core.trace import provider_chat_body_snapshot, trace_event
+from my_claude_code.core.upstream_ladder import paused_ladder
 from my_claude_code.core.wire_capture import (
     ResponseShape,
+    paused_wire_trace,
     record_reasoning_adaptation,
     record_response_shape,
     record_wire_request,
@@ -72,6 +84,7 @@ from my_claude_code.providers.recovery import (
     RecoveryLadder,
     RecoveryMemory,
     learned_fact_store,
+    surface_shaped_failure,
 )
 from my_claude_code.providers.stream_recovery import (
     MIDSTREAM_RECOVERY_ATTEMPTS,
@@ -87,6 +100,16 @@ from .identity_enforcement import observe_identity_enforcement
 from .opencode_identity import identity_wire_record
 from .profiles import OpenAIChatProfile
 from .request_policy import build_openai_chat_request_body
+from .response_surface import (
+    alternative_surfaces,
+    remember_response_surface,
+    resolve_response_surface,
+)
+from .responses_transport import (
+    PROBE_MAX_OUTPUT_TOKENS,
+    PROBE_PROMPT,
+    ResponsesTransport,
+)
 from .tool_calls import (
     OpenAIToolCallAssembler,
     all_emitted_tools_complete,
@@ -167,7 +190,15 @@ class OpenAIChatProvider(BaseProvider):
                 f"{profile.provider_name} requires an API key or credential provider"
             )
         self._api_key = config.api_key
+        self._api_key_provider = api_key_provider
         self._base_url = profile.base_url(config.base_url).rstrip("/")
+        # The constant half of the declared identity, as the SDK client was
+        # handed it. The Responses surface sends the same set, so it is kept
+        # rather than rebuilt: two copies of an identity is how they drift.
+        self._default_headers = dict(default_headers or {})
+        # Built on first use and only by a profile that declares the surface,
+        # so nothing that will never speak Responses opens a client for it.
+        self._responses_transport: ResponsesTransport | None = None
         # What this host has taught MCC about itself: per-model output caps it
         # stated, reasoning fields it refused, and whether it takes streamed
         # usage. Keyed by the bare model id, so a gateway that takes
@@ -267,6 +298,26 @@ class OpenAIChatProvider(BaseProvider):
         client = getattr(self, "_client", None)
         if client is not None:
             await client.close()
+        transport = getattr(self, "_responses_transport", None)
+        if transport is not None:
+            await transport.aclose()
+
+    @property
+    def _responses(self) -> ResponsesTransport:
+        """This provider's Responses sender, built on first use."""
+        transport = self._responses_transport
+        if transport is None:
+            transport = ResponsesTransport(
+                self._config,
+                base_url=self._base_url,
+                provider_name=self._provider_name,
+                identity=self._profile.client_identity,
+                api_key=self._api_key,
+                rate_limiter=self._rate_limiter,
+                api_key_provider=self._api_key_provider,
+            )
+            self._responses_transport = transport
+        return transport
 
     async def list_models_payload(self) -> Any:
         """Return the raw OpenAI-compatible model-list payload."""
@@ -438,8 +489,16 @@ class OpenAIChatProvider(BaseProvider):
             fields["cache_creation_input_tokens"] = written
         return fields
 
-    async def _create_stream(self, body: dict) -> tuple[Any, dict]:
-        """Create a streaming chat completion with bounded request fallbacks."""
+    async def _create_stream(
+        self, body: dict, *, surface_label: str = ""
+    ) -> tuple[Any, dict]:
+        """Create a streaming chat completion with bounded request fallbacks.
+
+        ``surface_label`` is recorded beside the body so the request log can
+        say which of a multi-surface gateway's endpoints served the attempt and
+        where that decision came from. Empty for every provider that has one
+        surface, which leaves their recorded params byte-identical.
+        """
         body = self._output_cap_recovery.apply_learned(body)
         body = self._apply_learned_stream_usage(body)
         used_retry_kinds: set[str] = set()
@@ -475,6 +534,7 @@ class OpenAIChatProvider(BaseProvider):
                 record_wire_request(
                     create_body,
                     stream=True,
+                    **({"surface": surface_label} if surface_label else {}),
                     **(
                         {"client_identity": identity_wire_record(identity)}
                         if identity
@@ -612,14 +672,266 @@ class OpenAIChatProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
     ) -> AsyncIterator[str]:
         """Stream response in Anthropic SSE format."""
+        if not self._profile.response_surfaces:
+            # Every profile but the two OpenCode ones. One surface, no
+            # resolution, no label -- the call this family has always made.
+            runner = _OpenAIChatStreamRunner(
+                self,
+                request=request,
+                input_tokens=input_tokens,
+                request_id=request_id,
+                reasoning=reasoning,
+            )
+            return runner.run()
+        return self._stream_across_surfaces(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            reasoning=reasoning,
+        )
+
+    def resolved_surface(self, model_id: str) -> ResolvedResponseSurface:
+        """Which endpoint this provider will use for one model, and why."""
+
+        return resolve_response_surface(
+            self._provider_id,
+            model_id,
+            registry_provider=self._profile.surface_registry_provider,
+            declared=self._profile.response_surfaces,
+        )
+
+    async def _stream_across_surfaces(
+        self,
+        request: MessagesRequest,
+        *,
+        input_tokens: int,
+        request_id: str | None,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        """Serve one request on the endpoint that actually serves this model.
+
+        The rung the recovery ladder could not hold. Every rung in
+        ``providers/recovery/ladder.py`` answers a refusal by rewriting the
+        *body*; this one answers it by changing the *endpoint*, which is a
+        different kind of retry and needs the whole request rebuilt rather than
+        edited -- a Chat Completions body and a Responses body are two
+        protocols, not two option sets. It fires only for a profile that
+        declares more than one surface, only on a refusal
+        ``providers/recovery/surface.py`` recognises as being about the
+        endpoint, only before a single byte has been committed to the client,
+        and at most once per surface.
+
+        A probe that succeeds is written down (``source="probe"``) so the next
+        request goes straight to the right door; a failure on every surface is
+        the ordinary upstream failure, raised as it always was, and the model
+        keeps its place in the catalogue.
+        """
+
+        resolved = self.resolved_surface(request.model)
+        if resolved.surface is ResponseSurface.UNSERVABLE:
+            raise ApplicationUnavailableError(
+                f"{self._provider_name} cannot serve {request.model}: "
+                f"{resolved.detail or 'no surface this provider speaks'}."
+            )
+
+        attempted: list[ResponseSurface] = []
+        surface = resolved.surface
+        label = resolved.label
+        while True:
+            attempted.append(surface)
+            committed = False
+            try:
+                stream = self._stream_on_surface(
+                    surface,
+                    label,
+                    request,
+                    input_tokens=input_tokens,
+                    request_id=request_id,
+                    reasoning=reasoning,
+                )
+                async for event in stream:
+                    committed = True
+                    yield event
+                return
+            except Exception as error:
+                evidence = _surface_failure_evidence(error)
+                if committed or evidence is None:
+                    raise
+                learned = await self._probe_for_another_surface(
+                    request.model, surface, attempted, evidence
+                )
+                if learned is None:
+                    raise
+                surface = learned
+                label = ResolvedResponseSurface(
+                    learned, ResponseSurfaceSource.LEARNED, "proved by a probe"
+                ).label
+
+    def _stream_on_surface(
+        self,
+        surface: ResponseSurface,
+        label: str,
+        request: MessagesRequest,
+        *,
+        input_tokens: int,
+        request_id: str | None,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        """Run this request on one named endpoint."""
+
+        if surface is ResponseSurface.RESPONSES:
+            body, headers = self._responses.build_body(
+                request,
+                reasoning=reasoning,
+                max_output_tokens=request.max_tokens,
+                extra_body=self._responses_extra_body(request),
+            )
+            return self._responses.stream(
+                request,
+                input_tokens=input_tokens,
+                reasoning=reasoning,
+                body=body,
+                headers=headers,
+                surface_label=label,
+                request_id=request_id,
+            )
         runner = _OpenAIChatStreamRunner(
             self,
             request=request,
             input_tokens=input_tokens,
             request_id=request_id,
             reasoning=reasoning,
+            surface_label=label,
         )
         return runner.run()
+
+    async def _probe_for_another_surface(
+        self,
+        model_id: str,
+        failed: ResponseSurface,
+        attempted: list[ResponseSurface],
+        evidence: str,
+    ) -> ResponseSurface | None:
+        """Ask the other endpoint one tiny question, and remember the answer.
+
+        ``None`` means nothing else is worth trying, and the caller re-raises
+        the host's own failure -- which is the point: a surface MCC could not
+        prove never becomes a reason to stop offering a model.
+        """
+
+        candidates = [
+            candidate
+            for candidate in alternative_surfaces(
+                failed, self._profile.response_surfaces
+            )
+            if candidate not in attempted
+        ]
+        if not candidates:
+            return None
+        logger.warning(
+            "{}_STREAM: {} refused {} in a way that names the endpoint ({}); "
+            "probing {}",
+            self._provider_name,
+            model_id,
+            failed.value,
+            evidence,
+            ", ".join(candidate.value for candidate in candidates),
+        )
+        for candidate in candidates:
+            # The probe is MCC's own question, not the client's attempt: its
+            # body must not land in the attempt's wire slot and its refusal
+            # must not be counted as a rung of the client's ladder.
+            with paused_wire_trace(), paused_ladder():
+                try:
+                    await self._probe_surface(candidate, model_id)
+                except Exception as error:
+                    logger.warning(
+                        "{}_STREAM: {} does not serve {} either ({})",
+                        self._provider_name,
+                        candidate.value,
+                        model_id,
+                        type(error).__name__,
+                    )
+                    continue
+            remember_response_surface(
+                self._provider_id, model_id, candidate, evidence=evidence
+            )
+            return candidate
+        return None
+
+    def _responses_extra_body(
+        self, request: MessagesRequest
+    ) -> Mapping[str, Any] | None:
+        """The caller's ``extra_body`` for the Responses surface, or nothing.
+
+        The same three rules the Chat Completions builder applies, read off the
+        same policy: a profile that refuses one says so, a profile that does
+        not carry one drops it, and a profile that does validates it first.
+        Merged into the Responses body itself rather than handed to an SDK,
+        because this surface has no SDK to hand it to.
+        """
+
+        extra = request.extra_body
+        if not isinstance(extra, dict) or not extra:
+            return None
+        policy = self._profile.request_policy
+        if policy.reject_extra_body_message:
+            raise InvalidRequestError(policy.reject_extra_body_message)
+        if not policy.include_extra_body:
+            return None
+        validated = deepcopy(extra)
+        if policy.extra_body_validator is not None:
+            try:
+                policy.extra_body_validator(validated)
+            except ValueError as exc:
+                raise InvalidRequestError(str(exc)) from exc
+        return validated
+
+    async def _probe_surface(self, surface: ResponseSurface, model_id: str) -> None:
+        """One ~16-token question to one endpoint. Raises what the host said."""
+
+        if surface is ResponseSurface.RESPONSES:
+            await self._responses.probe(model_id)
+            return
+        await self._client.chat.completions.create(
+            model=model_id,
+            messages=[{"role": "user", "content": PROBE_PROMPT}],
+            max_tokens=PROBE_MAX_OUTPUT_TOKENS,
+            stream=False,
+            **(
+                {
+                    "extra_headers": identity_headers_for_body(
+                        self._profile.client_identity,
+                        {"messages": [{"role": "user", "content": PROBE_PROMPT}]},
+                        current_fingerprint().session_id,
+                    )
+                }
+                if self._profile.client_identity is not None
+                else {}
+            ),
+        )
+
+
+#: How far up a ``__cause__`` chain the surface matcher looks. The stream
+#: runner classifies an upstream refusal into an ``ExecutionFailure`` and
+#: raises it ``from`` the original, so the host's own words are one link away;
+#: a small bound keeps a pathological chain from being walked.
+_SURFACE_CAUSE_DEPTH = 4
+
+
+def _surface_failure_evidence(error: BaseException) -> str | None:
+    """Read the endpoint complaint out of a failure, however it was wrapped."""
+
+    current: BaseException | None = error
+    for _ in range(_SURFACE_CAUSE_DEPTH):
+        if current is None:
+            return None
+        if isinstance(current, Exception):
+            evidence = surface_shaped_failure(current)
+            if evidence is not None:
+                return evidence
+        current = current.__cause__
+    return None
 
 
 class _OpenAIChatStreamRunner:
@@ -633,8 +945,10 @@ class _OpenAIChatStreamRunner:
         input_tokens: int,
         request_id: str | None,
         reasoning: ReasoningPolicy,
+        surface_label: str = "",
     ) -> None:
         self._provider = provider
+        self._surface_label = surface_label
         self._request = request
         self._input_tokens = input_tokens
         self._request_id = request_id
@@ -702,7 +1016,9 @@ class _OpenAIChatStreamRunner:
                 stream_opened = False
                 shape: ResponseShape | None = None
                 try:
-                    stream, body = await self._provider._create_stream(body)
+                    stream, body = await self._provider._create_stream(
+                        body, surface_label=self._surface_label
+                    )
                     stream_opened = True
                     # Opposite the wire body recorded at the commit boundary:
                     # what came back, by shape only. Started here because a
@@ -1053,7 +1369,9 @@ class _OpenAIChatStreamRunner:
         for attempt in range(MIDSTREAM_RECOVERY_ATTEMPTS):
             stream: Any | None = None
             try:
-                stream, _ = await self._provider._create_stream(body)
+                stream, _ = await self._provider._create_stream(
+                    body, surface_label=self._surface_label
+                )
                 text_parts: list[str] = []
                 thinking_parts: list[str] = []
                 terminal_seen = False

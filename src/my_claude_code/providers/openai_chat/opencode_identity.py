@@ -69,6 +69,32 @@ consequence, stated rather than glossed: MCC's requests remain *distinguishable*
 from OpenCode's by that SDK telemetry. What is faithful is the five headers the
 limiter actually names.
 
+**Three corrections from a real capture, 2026-09-11.** 6.69.0 wrote this file
+from the client's *source*; a recording proxy has since caught the client's
+actual *wire*, model ``muse-spark-1.3-contributor-free``, HTTP 200
+(``tests/contracts/opencode_reference_request.json``). All three are cosmetic,
+none is on the path of any failure, and none of them is changed here --
+6.69.0's USER DECISION made the live probe the acceptance test rather than the
+header list, and a byte-faithful user-agent belongs in a PATCH of its own.
+
+1. **The user-agent has three more segments.** The wire carries
+   ``opencode/1.18.30 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14``; the
+   ```opencode/${Ci}``` literal read out of the bundle is only the first,
+   because the ai-sdk transport appends the rest underneath. The limiter's own
+   check is a substring ``includes()``, so the first segment still matches any
+   plausible entry -- this matters only if the vendor ever matches on the bun
+   runtime.
+2. **``x-opencode-project`` is usually a git SHA.** The capture carried a
+   40-hex commit id, not the literal ``global``. ``global`` is the fallback for
+   a working directory that is not a repository, and it is rarer than 6.69.0
+   assumed. The header is an opaque grouping key either way.
+3. **The emission order below is not the client's.** The capture emits
+   ``User-Agent``, ``x-opencode-client``, ``x-opencode-project``,
+   ``x-opencode-request``, ``x-opencode-session``. HTTP header order is not
+   significant and no host may depend on it; what :data:`OPENCODE_HEADER_ORDER`
+   buys is that MCC's two *surfaces* emit the same set in the same sequence as
+   each other, which is what the contract test asserts.
+
 **The opt-out.** ``OPENCODE_CLIENT_IDENTITY=mcc`` swaps the two headers that
 name a program for MCC's own name and version and the project id for ``mcc``.
 The three functional headers are unchanged: they are what the vendor asked
@@ -107,7 +133,14 @@ OPENCODE_CLIENT_HEADER = "x-opencode-client"
 #: The user-agent both branches of the client's own header block send.
 USER_AGENT_HEADER = "User-Agent"
 
-#: The five, in the order the client emits them.
+#: The five, in one fixed sequence. Read off the client's source in 6.69.0 as
+#: "the order the client emits them"; the 2026-09-11 capture shows the client's
+#: real wire order is ``User-Agent``, ``x-opencode-client``,
+#: ``x-opencode-project``, ``x-opencode-request``, ``x-opencode-session``.
+#: Header order carries no meaning in HTTP and nothing may depend on it, so
+#: this is kept as it is: what it buys is that every set MCC builds -- both
+#: halves of an identity, and both of its wire surfaces -- is emitted the same
+#: way, which is what makes the sets comparable at all.
 OPENCODE_HEADER_ORDER: tuple[str, ...] = (
     OPENCODE_PROJECT_HEADER,
     OPENCODE_SESSION_HEADER,

@@ -650,3 +650,28 @@ def test_the_lazy_fill_and_the_page_size_survive_the_redesign() -> None:
     assert 'editor.dataset.filled === "1"' in section
     assert "matching.length === 1" in section
     assert "window.setTimeout" in section and "modelsState.filter = next;" in section
+
+
+def test_the_capability_panel_renders_the_wire_surface_row() -> None:
+    """6.74.0: which endpoint a model is posted to is a capability like any other.
+
+    Static, like everything else here: the row is built from
+    ``capabilities.response_surface``, which the payload emits only for a
+    gateway that has more than one surface -- so a provider with one endpoint
+    grows no row, and the 39 single-surface profiles render exactly as before.
+    """
+
+    script = _script()
+    assert 'rows.push(["wire surface", capabilities.response_surface]);' in script
+    # The resolver's sentence about *this* answer -- the npm package that chose
+    # the surface, or why one cannot be reached -- has to reach the page, or
+    # "unservable" would be a verdict with no reason attached.
+    assert "if (field.note)" in script
+    assert 'note.className = "models-approx-note";' in script
+
+
+def test_the_request_log_says_which_surface_an_attempt_used() -> None:
+    """The other half: a row in the log that answers "which door did it knock on"."""
+
+    script = _script()
+    assert "if (wire.surface) parts.push(`surface ${wire.surface}`);" in script

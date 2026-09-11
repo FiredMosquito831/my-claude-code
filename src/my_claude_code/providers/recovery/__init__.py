@@ -35,6 +35,7 @@ from .facts import (
     FACT_MODELS_ETAG,
     FACT_OUTPUT_CAP,
     FACT_REASONING_FIELD_REJECTED,
+    FACT_RESPONSE_SURFACE,
     FACT_STREAM_USAGE_UNSUPPORTED,
     FACT_TOOL_CALLS_UNSUPPORTED,
     FACT_VISION_UNSUPPORTED,
@@ -79,6 +80,7 @@ from .store import (
     reset_learned_fact_store,
     set_learned_fact_store,
 )
+from .surface import surface_shaped_failure
 
 __all__ = [
     "ALLOWED_FACT_KINDS",
@@ -90,6 +92,7 @@ __all__ = [
     "FACT_MODEL_WITHHELD",
     "FACT_OUTPUT_CAP",
     "FACT_REASONING_FIELD_REJECTED",
+    "FACT_RESPONSE_SURFACE",
     "FACT_STREAM_USAGE_UNSUPPORTED",
     "FACT_TOOL_CALLS_UNSUPPORTED",
     "FACT_VISION_UNSUPPORTED",
@@ -128,6 +131,7 @@ __all__ = [
     "reset_learned_fact_store",
     "sampling_parameter_evidence",
     "set_learned_fact_store",
+    "surface_shaped_failure",
     "upstream_complaint",
     "upstream_error_payload",
     "upstream_status_code",

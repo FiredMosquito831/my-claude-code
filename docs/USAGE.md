@@ -38,6 +38,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
 - [8. Providers and API keys](#8-providers-and-api-keys)
   - [Using Claude models](#using-claude-models)
   - [OpenCode Zen and OpenCode Go: what MCC sends about itself](#opencode-zen-and-opencode-go-what-mcc-sends-about-itself)
+  - [OpenCode Zen serves different models on different endpoints](#opencode-zen-serves-different-models-on-different-endpoints)
   - [Custom providers](#custom-providers)
 - [9. Model tiers and routing](#9-model-tiers-and-routing)
   - [Tiers for every other coding agent](#tiers-for-every-other-coding-agent)
@@ -2437,6 +2438,61 @@ halving its own quota. A 429 that names the free daily quota and resets at
 requests asking the host directly, and records *"checked <date>, no difference
 observed"* when it cannot tell — which is the honest answer, not a clean bill
 of health.
+
+### OpenCode Zen serves different models on different endpoints
+
+**New in 6.74.0.** OpenCode Zen is not one API. It is a front door onto four,
+and which one a model lives behind is a property of that model, published in
+OpenCode's own registry as a `provider.npm` override. Five of the seven free
+models Zen lists today are on Chat Completions; **two — both Muse Spark
+contributor models — are served only on the Responses API**, and a request
+sent to the wrong endpoint comes back as a bare `HTTP 500 Internal server
+error` that names nothing (the vendor's own open issue
+[anomalyco/opencode#47969](https://github.com/anomalyco/opencode/issues/47969)
+calls it a missing `WrongEndpointError`). Every MCC release before 6.74.0
+spoke Chat Completions to all of them, which is exactly what those 500s were.
+
+MCC now resolves the endpoint per model, from four sources, strongest first:
+
+| Shown as | Where it came from |
+| --- | --- |
+| `responses (override)` | you wrote `"response_surface"` into `model_overrides.json` |
+| `responses (learned)` | MCC probed this deployment and the endpoint answered |
+| `responses (registry)` | the vendor's published registry, already cached from models.dev |
+| `chat_completions (default)` | nobody said otherwise |
+
+The row is on the **Models** page beside every other capability, with the
+reason attached — the npm package that selected the endpoint, or why one
+cannot be reached. The request log carries it too: each attempt's wire facts
+now open with `surface responses (registry)`, so a failed request tells you
+which door it knocked on.
+
+**When the registry is wrong, MCC finds out in one request.** If the endpoint
+MCC chose refuses in a way that is *about the endpoint* — a bare 500, the
+`403 RegionError` the vendor's region check emits instead, or a 4xx naming the
+other path — MCC sends one ~16-token probe to the alternative, and on success
+remembers it as a learned fact and retries your request there. A 401, a 404, a
+429 or any quota refusal never triggers this: those are answers about your
+credential or your rate, and moving endpoints would learn nothing. A 500 that
+carried a real complaint stays an ordinary retryable outage.
+
+**No model is ever hidden.** A model MCC cannot reach at all — Zen serves a
+few through Anthropic's Messages API and one through Google's own API, neither
+of which this provider speaks — keeps its row and reads
+`unservable (registry)` with the reason spelled out. A catalogue that silently
+drops a model the vendor is giving away is worse than one that says why it
+cannot use it.
+
+To pin an endpoint yourself, in `model_overrides.json`:
+
+```json
+{"models": {"opencode/muse-spark-1.3-contributor-free": {"response_surface": "responses"}}}
+```
+
+Values are `chat_completions`, `responses`, `messages` and `unservable`. This
+key is deliberately **not** a request parameter — it is never written into a
+request body — and an unrecognised value is ignored with a log line rather
+than obeyed.
 
 ### Local providers
 

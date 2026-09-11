@@ -41,6 +41,11 @@ from .reasoning import (
     ReasoningObject,
 )
 from .request_policy import OpenAIChatRequestPolicy, build_openai_chat_request_body
+from .response_surface import (
+    NPM_SURFACES,
+    catalogue_surface,
+    resolve_response_surface,
+)
 from .usage import usage_int
 
 
@@ -73,6 +78,7 @@ def create_openai_chat_provider(
 __all__ = [
     "GENERIC_OPENAI_PROFILE",
     "NO_REASONING",
+    "NPM_SURFACES",
     "OPENAI_CHAT_PROFILES",
     "OPENAI_STANDARD_REASONING",
     "OPENCODE_CLIENT_IDENTITY",
@@ -85,6 +91,7 @@ __all__ = [
     "OpenAIChatRequestPolicy",
     "ReasoningObject",
     "build_openai_chat_request_body",
+    "catalogue_surface",
     "complaint_evidence_snippet",
     "create_openai_chat_provider",
     "free_quota_reset",
@@ -97,6 +104,7 @@ __all__ = [
     "observe_identity_enforcement",
     "openai_v1_base_url",
     "profile_with_learned_dialect",
+    "resolve_response_surface",
     "sampling_parameter_evidence",
     "upstream_complaint",
     "usage_int",

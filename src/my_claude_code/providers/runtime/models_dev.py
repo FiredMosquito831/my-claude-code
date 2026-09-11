@@ -207,6 +207,49 @@ def models_dev_provider_model_ids(
     )
 
 
+def models_dev_provider_npm_overrides(
+    provider: str, path: Path | None = None
+) -> dict[str, str]:
+    """Return the per-model ``provider.npm`` overrides one bucket publishes.
+
+    models.dev copies each provider's own registry, and a handful of gateways
+    use a per-model ``provider: {npm: "..."}`` block to say this particular
+    model is served by a different SDK -- which, for a gateway that fronts
+    several APIs behind one base URL, is the same statement as "it is served
+    on a different endpoint". OpenCode Zen is the case this exists for: 56 of
+    its 102 models carry the field, and it is the only *published* account of
+    which of Zen's four surfaces a model lives behind.
+
+    Read out of the document already on disk, and nothing is fetched -- the
+    caller is on a request path. A missing or unknown bucket answers with an
+    empty mapping, so the family's default surface stands rather than a model
+    becoming unreachable because a cache file was absent.
+    """
+
+    cache = read_models_dev_cache(path)
+    if cache is None:
+        return {}
+    bucket = cache.index.get(provider)
+    if not isinstance(bucket, Mapping):
+        return {}
+    models = bucket.get("models")
+    if not isinstance(models, Mapping):
+        return {}
+    overrides: dict[str, str] = {}
+    for model_id, metadata in models.items():
+        if not isinstance(model_id, str) or not model_id:
+            continue
+        if not isinstance(metadata, Mapping):
+            continue
+        model_provider = metadata.get("provider")
+        if not isinstance(model_provider, Mapping):
+            continue
+        npm = model_provider.get("npm")
+        if isinstance(npm, str) and npm.strip():
+            overrides[model_id] = npm.strip()
+    return overrides
+
+
 def write_models_dev_cache(
     index: Mapping[str, Any], path: Path | None = None, etag: str | None = None
 ) -> Path:
