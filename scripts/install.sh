@@ -1500,10 +1500,10 @@ restart_after_install() {
         # or the first install of this release, whose wheel is the one BEFORE
         # it). It cannot classify the port holder, and this script must not try.
         #
-        # What it CAN do without classifying anything is ask whether the port is
-        # occupied at all -- a connect, which stops nothing and identifies
-        # nothing. A refused connection is a free port and safe to start into;
-        # anything else is reported and left exactly as it is.
+        # What it CAN do without classifying anything is ask whether the port
+        # is occupied at all -- the socket table, which stops nothing and
+        # identifies nothing. A free port is safe to start into; an occupied
+        # one is reported and left exactly as it is.
         if port_is_occupied "$server_reachable_host" "$server_port"; then
             restart_message="Port $server_port is in use and this build of mcc-server cannot say by what, so nothing was stopped and nothing was started. Run the installer again once this version is installed, or stop the server yourself and start it with: mcc-server"
             printf '%s\n' "$restart_message"
