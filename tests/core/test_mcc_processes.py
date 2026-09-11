@@ -281,3 +281,33 @@ def test_an_unparseable_command_line_is_not_a_server() -> None:
 
     facts = ProcessFacts(pid=1, image="python.exe", command='"C:\broken')
     assert not facts.is_mcc_server
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        # Windows shapes. On Linux, pathlib.Path is PosixPath and does not treat
+        # a backslash as a separator, so Path(...).stem returns the WHOLE
+        # string -- which is how fourteen tests turned a live server into a
+        # stale one on the CI runner.
+        (r"C:\Users\x\.local\bin\mcc-server.exe", "mcc-server"),
+        (
+            r"C:\Users\x\AppData\Roaming\uv\tools\my-claude-code\Scripts\python.exe",
+            "python",
+        ),
+        (r"C:\Users\x\.local\bin\mcc-claude.exe", "mcc-claude"),
+        ("mcc-server.exe", "mcc-server"),
+        # POSIX shapes must keep working, on either platform.
+        ("/home/x/.local/bin/mcc-server", "mcc-server"),
+        ("/usr/bin/python3", "python3"),
+        ("mcc-server", "mcc-server"),
+        # Quoting and whitespace the OS hands back.
+        (r'"C:\Users\x\.local\bin\mcc-server.exe"', "mcc-server"),
+        ("", ""),
+        (None, ""),
+    ],
+)
+def test_a_basename_is_read_the_same_way_on_every_platform(path, expected) -> None:
+    from my_claude_code.core.mcc_processes import _stem
+
+    assert _stem(path) == expected

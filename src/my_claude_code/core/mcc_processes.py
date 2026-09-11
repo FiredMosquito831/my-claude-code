@@ -40,7 +40,7 @@ import subprocess
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from loguru import logger
 
@@ -254,11 +254,36 @@ class ProcessChain:
 
 
 def _stem(path: str | None) -> str:
-    """The lowercased basename of ``path`` without its extension."""
+    """The lowercased basename of ``path`` without its extension.
+
+    Deliberately NOT ``pathlib.Path``. ``Path`` is whichever flavour the
+    *running* machine is, and on Linux ``PosixPath`` does not treat a backslash
+    as a separator -- so
+
+        PosixPath(r"C:\\Users\\x\\.local\\bin\\mcc-server.exe").stem
+
+    is the entire string, ``C:\\Users\\x\\.local\\bin\\mcc-server``, not
+    ``mcc-server``. Every basename comparison in this module then fails, the
+    interpreter child stops being recognised as a server, the chain collapses to
+    the uv trampoline alone -- and a chain that is only a trampoline is exactly
+    what this module calls a provable orphan. Caught by CI: fourteen tests
+    turned a `live` server into a `stale` one purely because Linux was reading
+    a Windows path.
+
+    So the flavour is chosen from the shape of the string, not from the host: a
+    drive letter or a backslash means Windows rules, anything else means POSIX
+    rules. A classifier that can stop a process must never give two answers for
+    one input.
+    """
 
     if not path:
         return ""
-    return Path(path.strip().strip('"')).stem.lower()
+    text = path.strip().strip('"')
+    if not text:
+        return ""
+    looks_like_windows = "\\" in text or (len(text) > 1 and text[1] == ":")
+    flavour = PureWindowsPath if looks_like_windows else PurePosixPath
+    return flavour(text).stem.lower()
 
 
 def _basename_is_server(path: str | None) -> bool:
