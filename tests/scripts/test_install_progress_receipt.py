@@ -13,6 +13,7 @@ reader understands is the same as no receipt.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -145,3 +146,42 @@ def test_the_installers_rank_stages_exactly_as_python_does(script: Path) -> None
         else:
             assert stage in text, stage
             assert f"printf '{rank}'" in text, (stage, rank)
+
+
+def test_the_receipt_function_is_strictmode_safe() -> None:
+    """Every ``$script:`` variable the receipt path READS is assigned first.
+
+    Static, so it runs on the Linux pytest job too -- where the tests that
+    actually execute the function cannot. That matters: the bug this guards
+    was invisible for eleven releases precisely because the only checks were
+    Windows-shaped or text-shaped.
+
+    ``Set-StrictMode -Version Latest`` makes *retrieving* an unset variable a
+    terminating error, and ``Write-InstallProgress``'s own ``catch`` swallows
+    it -- so the failure mode is not a crash, it is silence.
+    """
+
+    text = INSTALL_PS1.read_text(encoding="utf-8")
+    assert "Set-StrictMode -Version Latest" in text, (
+        "this guard is pointless if the script stops being strict"
+    )
+
+    read_names = set(re.findall(r"\$script:(InstallProgress\w*)", text))
+    assert read_names, "the receipt's script-scope variables were renamed"
+
+    # Module scope is everything before the first `function` declaration: a
+    # `$script:` assignment inside a function runs only if that function runs,
+    # which is exactly the hole `$script:InstallProgressVersion` fell into (it
+    # was assigned at the very end of the script and read near the beginning).
+    module_scope = text[: text.index("\nfunction ")]
+    assigned = set(
+        re.findall(r"^\$script:(InstallProgress\w*)\s*=", module_scope, re.M)
+    )
+
+    missing = sorted(read_names - assigned)
+    assert not missing, (
+        "read under StrictMode but never assigned at module scope: "
+        f"{missing}. The function's own catch swallows the terminating error, "
+        "so the receipt is simply never written and every reader of the "
+        "helper-alive gate is blind to this installer."
+    )
