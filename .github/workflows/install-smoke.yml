@@ -226,6 +226,18 @@ jobs:
       # installs exited 0 fifteen minutes apart with no server running through
       # either of them, which is the defect this release exists for.
       # ---------------------------------------------------------------
+      # Every leg below runs the installer AGAIN, and `uv tool update-shell`
+      # refuses with exit 2 when the executable directory is not on PATH but the
+      # shell configuration files already name it -- the exact state the first
+      # install leaves behind. Putting the directory on PATH is what a user's
+      # next terminal does anyway, and it is what the closing message tells them
+      # to open one for.
+      - name: Put the scratch tool bin on PATH, as a new terminal would
+        run: |
+          set -eu
+          scratch="${RUNNER_TEMP}/fresh-machine"
+          echo "PATH=${scratch}/uv-tool-bin:${scratch}/home/.local/bin:${PATH}" >> "$GITHUB_ENV"
+
       - name: --no-start installs and starts nothing
         run: |
           # No `set -e` on the install itself: an exit code this step SWALLOWS
