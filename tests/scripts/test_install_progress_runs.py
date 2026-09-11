@@ -420,3 +420,93 @@ Write-Output ("QUIET=" + $silent.Count)
     # UTF-8, and this test is about what was RETURNED, not about the encoding.
     captured = (tmp_path / "capture.txt").read_bytes()
     assert b"one" in captured.replace(b"\x00", b""), captured[:80]
+
+
+@pytest.mark.parametrize(
+    ("name", "executable"), _powershells(), ids=lambda value: value
+)
+def test_the_install_returns_one_version_and_not_a_transcript(
+    name: str, executable: str, tmp_path: Path
+) -> None:
+    """The exact statement that failed, with everything around it stubbed.
+
+    ``$InstalledVersion = Install-FreeClaudeCode`` followed by
+    ``Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion``,
+    where that parameter is ``[string]``. When the install's `uv` printed
+    anything -- and it always does -- the assignment produced an array and the
+    call died with *Cannot process argument transformation on parameter
+    'ExpectedVersion'*.
+
+    The CI job that catches this in the wild (``install.cmd on Windows``)
+    downloads ``install.ps1`` from ``main``, so it can never go green on a
+    branch and it cannot prove a fix before the fix is merged. This can.
+    """
+
+    text = INSTALL_PS1.read_text(encoding="utf-8")
+    config_dir = tmp_path / name
+    config_dir.mkdir()
+    tool_bin = tmp_path / "bin"
+    tool_bin.mkdir()
+    noisy = tmp_path / "uv.cmd"
+    noisy.write_text(
+        "@echo off\r\n"
+        "echo Resolved 87 packages in 1.43s 1>&2\r\n"
+        "echo Installed 26 executables 1>&2\r\n"
+        "exit /b 0\r\n",
+        encoding="ascii",
+    )
+
+    bodies = "\n\n".join(
+        _extract_function(text, function)
+        for function in (*NEEDED, *NATIVE, "Install-FreeClaudeCode")
+    )
+    lines = text.splitlines()
+    initialisers = "\n".join(
+        next(line for line in lines if line.startswith(f"{name} ="))
+        for name in INITIALISERS
+    )
+    script = tmp_path / f"install-return-{name}.ps1"
+    script.write_text(
+        f"""Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$DryRun = $false
+$TorchBackend = ''
+$PythonVersion = '3.14.0'
+$env:MCC_CONFIG_DIR = '{config_dir}'
+{initialisers}
+
+# Everything Install-FreeClaudeCode leans on, stubbed. The real uv is the
+# `uv.cmd` above, which writes to stderr exactly as uv does.
+function Resolve-Release {{ return [pscustomobject]@{{ Version = '6.71.0' }} }}
+function Get-VerifiedReleaseWheel {{ param($Release) return '{tmp_path.as_posix()}/w.whl' }}
+function Get-PackageSpec {{ param([string] $PackageUrl) return 'my-claude-code @ ' + $PackageUrl }}
+function Resolve-UvPath {{ param([string] $Purpose) return '{noisy}' }}
+function Get-RunningLaunchers {{ return @() }}
+function New-CapturePath {{ return '{tmp_path.as_posix()}/capture.txt' }}
+function Read-CapturedOutput {{ param([string] $Path) return '' }}
+function Get-UvFailureCategory {{ param([string] $Text) return 'unknown' }}
+function Get-UvToolDir {{ param([string] $UvPath) return '{tmp_path.as_posix()}/tool' }}
+function Write-Step {{ param([string] $Message) }}
+# The verification step, with the SIGNATURE that matters: [string].
+function Configure-AndConfirmFreeClaudeCode {{
+    param([Parameter(Mandatory = $true)] [string] $ExpectedVersion)
+    Write-Output ("VERIFIED=" + $ExpectedVersion)
+}}
+
+{bodies}
+
+New-Item -ItemType File -Path '{tmp_path.as_posix()}/w.whl' -Force | Out-Null
+$InstalledVersion = Install-FreeClaudeCode
+Write-Output ("COUNT=" + @($InstalledVersion).Count)
+Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
+""",
+        encoding="utf-8",
+    )
+
+    completed = _run(executable, script)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "COUNT=1" in completed.stdout, (
+        "Install-FreeClaudeCode returned uv's output alongside the version:\n"
+        + completed.stdout
+    )
+    assert "VERIFIED=6.71.0" in completed.stdout, completed.stdout
