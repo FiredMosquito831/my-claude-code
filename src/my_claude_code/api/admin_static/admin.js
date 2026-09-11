@@ -8044,7 +8044,37 @@ async function checkForUpdates(button) {
   }
 }
 
-async function waitForUpdatedServer(expectedVersion) {
+// What a browser tab can honestly say about an update it cannot watch.
+//
+// The dashboard is HTTP-only and the update deliberately stops the server, so
+// for the ninety seconds that matter there is nothing for this page to poll and
+// no way for it to read a file on the machine. Until 6.71.0 it said "Updating...
+// (this can take a few minutes)" and then nothing at all, which is
+// indistinguishable from a page that has hung. It now hands over the two paths
+// the installer is writing -- so the user can open either one in an editor --
+// and names the desktop app, which is the only thing that CAN show the install
+// happening line by line.
+function describeUpdateOutage(result) {
+  const lines = [];
+  if (result.log_path) {
+    lines.push(`The installer writes to: ${result.log_path}`);
+  }
+  if (result.progress_path) {
+    lines.push(`Its stage receipt is:    ${result.progress_path}`);
+  }
+  if (!lines.length) return "";
+  lines.push("");
+  lines.push(
+    "This tab cannot read those files or reach the server while it is being replaced,",
+  );
+  lines.push(
+    "so it counts down instead. The desktop app shows the stage timeline and the last",
+  );
+  lines.push("lines of that log as they are written.");
+  return lines.join("\n");
+}
+
+async function waitForUpdatedServer(expectedVersion, onCountdown) {
   // The reconnect window comes from the server (the install + graceful-drain +
   // startup budget), not a hard-coded two minutes: a slow upgrade must not be
   // abandoned mid-handoff. Fall back to 120s if the status lacks the field.
@@ -8054,6 +8084,9 @@ async function waitForUpdatedServer(expectedVersion) {
   const deadline = Date.now() + reconnectSeconds * 1000;
   let sawDisconnect = false;
   while (Date.now() < deadline) {
+    if (typeof onCountdown === "function") {
+      onCountdown(Math.max(0, Math.round((deadline - Date.now()) / 1000)));
+    }
     try {
       const info = await api("/admin/api/version");
       if (!expectedVersion || info.current === expectedVersion) return info;
@@ -8103,11 +8136,29 @@ async function runVersionUpgrade(button) {
       logEl.hidden = false;
     }
     if (result.ok) {
+      // Hand over the paths BEFORE the server goes away: once it does, this
+      // page has no channel left at all.
+      const outage = describeUpdateOutage(result);
+      if (logEl && outage) {
+        logEl.textContent = logEl.textContent
+          ? `${logEl.textContent}\n\n${outage}`
+          : outage;
+        logEl.hidden = false;
+      }
       [button, updateButton].forEach((candidate) => {
         if (candidate) candidate.textContent = "Restarting — reconnecting...";
       });
       showMessage(result.message || "Update installed; restarting...", "ok");
-      state.versionInfo = await waitForUpdatedServer(result.installed_version);
+      state.versionInfo = await waitForUpdatedServer(
+        result.installed_version,
+        (remaining) => {
+          [button, updateButton].forEach((candidate) => {
+            if (candidate) {
+              candidate.textContent = `Installing — reconnecting in up to ${remaining}s`;
+            }
+          });
+        },
+      );
       renderVersionIndicator();
       renderVersionBanners();
       renderVersionPanel();

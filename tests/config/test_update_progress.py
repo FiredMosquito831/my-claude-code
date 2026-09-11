@@ -168,3 +168,110 @@ def test_this_processs_own_id_is_seen_as_running() -> None:
     assert update_progress._pid_is_running(os.getpid()) is not False
     assert update_progress._pid_is_running(0) is False
     assert update_progress._pid_is_running(-1) is False
+
+
+# -- 6.71.0: monotonic stages and the installer transcript ---------------------
+
+
+def test_the_new_stages_are_part_of_the_vocabulary() -> None:
+    """``stopping``, ``verifying`` and ``handing-off`` (decision Q2)."""
+
+    for stage in ("stopping", "verifying", "handing-off"):
+        assert stage in UPDATE_PROGRESS_STAGES, stage
+    # ``recovered`` stays last: it is the stage a failed install ends on.
+    assert UPDATE_PROGRESS_STAGES[-1] == "recovered"
+
+
+def test_stages_are_monotonic_within_one_episode() -> None:
+    """An episode only moves forward, so a window can draw it as a timeline.
+
+    The vocabulary tuple and the rank table have to agree, or a writer would
+    silently drop a stage a reader is waiting for.
+    """
+
+    from my_claude_code.config.update_progress import (
+        UPDATE_PROGRESS_STAGE_ORDER,
+        stage_rank,
+    )
+
+    assert set(UPDATE_PROGRESS_STAGE_ORDER) == set(UPDATE_PROGRESS_STAGES)
+    ranks = [stage_rank(stage) for stage in UPDATE_PROGRESS_STAGES]
+    assert ranks == sorted(ranks), list(zip(UPDATE_PROGRESS_STAGES, ranks, strict=True))
+    # The terminal stages share the last rank: an episode ends once, and
+    # ``failed`` may be followed by ``recovered``.
+    assert stage_rank("failed") == stage_rank("recovered") == stage_rank("done")
+    # ``handing-off`` is where ``starting`` would be, because they are the same
+    # moment told from the two sides of decision Q4.
+    assert stage_rank("handing-off") == stage_rank("starting")
+    # An unknown stage ranks below every known one, so a guard never drops a
+    # record it cannot place.
+    assert stage_rank("something-a-later-release-invents") == 0
+
+
+def test_handing_off_does_not_end_the_episode() -> None:
+    """The helper is still running when it writes one.
+
+    Reading it as terminal would reopen the "one installer at a time" gate a
+    beat before the installer actually stopped.
+    """
+
+    from my_claude_code.config.update_progress import UPDATE_TERMINAL_STAGES
+
+    assert "handing-off" not in UPDATE_TERMINAL_STAGES
+    assert {"done", "failed", "recovered"} == UPDATE_TERMINAL_STAGES
+    assert helper_is_alive({"stage": "handing-off"})
+    assert helper_is_alive({"stage": "verifying"})
+
+
+def test_the_report_names_the_transcript_a_window_can_tail(
+    monkeypatch, tmp_path
+) -> None:
+    """Decision Q2's "see everything happening", from the Python side."""
+
+    import json
+    import os
+
+    stage_dir = tmp_path / "updates"
+    stage_dir.mkdir(parents=True)
+    record = {
+        "stage": "installing",
+        "message": "Installing the new version.",
+        "helper_pid": os.getpid(),
+        "started_at": 1788859708,
+        "elapsed_seconds": 24.757,
+        "helper_done": False,
+        "version": "6.71.0",
+        "log": str(stage_dir / "install-20260911-082114.log"),
+    }
+    (stage_dir / "progress.json").write_text(
+        json.dumps(record) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        update_progress, "config_dir_path", lambda: tmp_path, raising=True
+    )
+
+    report = update_progress.update_report()
+    assert report is not None
+    assert report["stage"] == "installing"
+    assert report["log"] == str(stage_dir / "install-20260911-082114.log")
+    assert report["version"] == "6.71.0"
+
+    # A record from a build that named no transcript reports none rather than
+    # a path it made up.
+    (stage_dir / "progress.json").write_text(
+        json.dumps({k: v for k, v in record.items() if k != "log"}) + "\n",
+        encoding="utf-8",
+    )
+    without_log = update_progress.update_report()
+    assert without_log is not None
+    assert without_log["log"] is None
+
+
+def test_the_transcript_lives_beside_the_receipt(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        update_progress, "config_dir_path", lambda: tmp_path, raising=True
+    )
+    path = update_progress.install_log_path("20260911-082114")
+    assert path.name == "install-20260911-082114.log"
+    assert path.parent == tmp_path / "updates"
+    assert path.parent == update_progress.update_progress_path().parent

@@ -159,6 +159,7 @@ Longer versions of all of these, per platform: [Usage Guide → Install](docs/US
 | Dashboard | Everything above, local-only, at `http://127.0.0.1:8082/admin` | browser | [below](#dashboard) |
 | Desktop app and tray | A real window and a tray icon, three server modes (`spawn`/`attach`/`off`), start at login | `mcc-desktop` | [Guide](docs/USAGE.md#3-first-run) |
 | Updates | Running version, release announcements, one-click upgrade with checksum verification | dashboard sidebar | [Guide](docs/USAGE.md#14-updating) |
+| Update progress | Stage timeline with timestamps, elapsed time and the installer's log tailed live in the desktop window; `updates/progress.json` + `updates/install-<stamp>.log` | desktop app during an update | [Guide](docs/USAGE.md#what-you-see-during-an-update) |
 | npm packaging | `npm install -g @firedmosquito831/my-claude-code` wraps the same digest-verified installer | terminal | [Guide](docs/USAGE.md#2-install) |
 | Web search | Claude Code's `web_search` tool fulfilled at the proxy by 14 providers, 66 advanced options, full-page text, keyless fallback | **Web Search** page | [Guide](docs/USAGE.md#10-web-search) |
 | Token optimizer | What never reached a provider: tokens saved, rule fire counts, prompt-cache effectiveness, plus the opt-in RTK binary via `mcc-rtk` | **Token Optimizer** page | [Guide](docs/USAGE.md#the-rtk-token-optimizer) |

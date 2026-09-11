@@ -981,6 +981,50 @@ Those stages are appended to `~/.mcc/updates/progress.json`, one JSON object per
 line, by the helper that performs the update. Read it if a restart goes wrong; the
 last line is where it stopped.
 
+<a id="what-you-see-during-an-update"></a>
+
+#### What you see during an update (6.71.0)
+
+An update stops the server, empties the tool environment and writes a new one,
+and on a warm cache that takes about a minute and a half. Until 6.71.0 the whole
+of it looked like this: one sentence, painted once. `uv`'s output went into a
+variable and was written out at the very end, into a file nothing reads until the
+episode is over — so during the only part of an update anyone cares about there
+was literally nothing on disk to look at.
+
+Now the installer writes **two files, as it goes**, both in
+`~/.mcc/updates/`:
+
+| File | What it is |
+| --- | --- |
+| `progress.json` | One JSON object per line, one per stage. Each carries the stage, the installer's own sentence, a UTC timestamp, seconds since the episode started, the installer's process id, the version it is heading for, and `log` — the path of the transcript below. |
+| `install-<stamp>.log` | Everything `uv` printed, **appended a line at a time as it prints it**. One episode, one transcript. |
+
+The stages are monotonic — an episode only ever moves forward:
+
+`waiting-for-parent` → `stopping` → `installing` → `verifying` →
+`starting` (the installer starts the server) or `handing-off` (the desktop app
+does) → `done`, or `failed` then `recovered`.
+
+**The desktop app shows all of it.** While an update runs, the window shows the
+stage timeline with each stage's clock time and how long it took, the total
+elapsed time, the last fifteen lines of `install-<stamp>.log` refreshed on every
+tick, the path of that file so you can open it yourself, and the installer's
+process id. It reads both files directly, so it keeps showing them through the
+seconds in which `mcc-desktop` itself cannot answer because its environment is
+being replaced.
+
+**A dashboard in an ordinary browser tab cannot.** It has no way to read a file
+on your disk, and the server it would ask is the thing being replaced. So it is
+honest about it instead: when you press **Update now** it prints both paths
+before the server stops, then counts down to the reconnect. That is the whole
+reason to run the desktop app during an update.
+
+The hand-run installers write the same two files in the same vocabulary, so a
+window watching them shows the same timeline whichever installer is running. Set
+`MCC_INSTALL_LOG` to an existing transcript to make an installer append to it
+rather than open one of its own.
+
 **A slow start is no longer a failed one.** The window gives the server it
 starts `DESKTOP_SERVER_START_TIMEOUT` (default 20 s) to answer, and since 6.58.1
 it does that **three times** — `DESKTOP_SERVER_START_RETRIES` (default 2) more

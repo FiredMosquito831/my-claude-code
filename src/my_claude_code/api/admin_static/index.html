@@ -4398,6 +4398,27 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   running, N&nbsp;s)</em> and waits.
                 </p>
                 <p class="guide-note">
+                  <strong>You can see everything happening during an update
+                  (6.71.0).</strong> The installer writes two files in
+                  <code>updates/</code> inside your configuration directory as it goes:
+                  <code>progress.json</code>, one JSON line per stage with a timestamp
+                  and the seconds since the update started, and
+                  <code>install-&lt;stamp&gt;.log</code>, everything <code>uv</code>
+                  printed, appended a line at a time <em>as it prints it</em>. The
+                  desktop window shows the stage timeline
+                  (<code>waiting-for-parent</code> &rarr; <code>stopping</code> &rarr;
+                  <code>installing</code> &rarr; <code>verifying</code> &rarr;
+                  <code>starting</code> or <code>handing-off</code> &rarr;
+                  <code>done</code>), the elapsed time, and the last fifteen lines of
+                  that log, refreshed every tick &mdash; including through the seconds
+                  in which the environment is genuinely gone. This tab cannot: a page in
+                  a browser has no way to read a file on your disk and no server to ask
+                  while the server is the thing being replaced, so <strong>Update
+                  now</strong> prints both paths here before the server stops and then
+                  counts down. That is the reason to run the desktop app during an
+                  update.
+                </p>
+                <p class="guide-note">
                   <strong>An open <code>mcc-claude</code> window no longer costs the
                   install its fast path.</strong> Windows refuses to rename a running
                   launcher's <code>.exe</code>, and one refusal used to send the whole

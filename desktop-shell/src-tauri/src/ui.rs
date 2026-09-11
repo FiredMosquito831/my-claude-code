@@ -13,6 +13,26 @@
 
 use serde::Serialize;
 
+/// One stage of an update, as the timeline draws it.
+///
+/// Every field is already worded here rather than in the page, because the page
+/// is a renderer and a renderer that formats durations is a second place where
+/// "how long did that take" is decided.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StageLine {
+    /// The stage name, exactly as the installer wrote it.
+    pub stage: String,
+    /// The sentence beside it, when there was one.
+    pub message: Option<String>,
+    /// `HH:MM:SS` UTC, from the installer's own stamp.
+    pub at: Option<String>,
+    /// How long this stage took -- or, for the one still running, how long it
+    /// has been running. `None` when the receipt carried no elapsed times.
+    pub took: Option<String>,
+    /// Whether this is the stage the installer is in right now.
+    pub current: bool,
+}
+
 /// One screen. `kind` is the tag the page switches on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -36,7 +56,29 @@ pub enum Page {
     /// Claude Code" would say the window is doing the very thing it is
     /// carefully not doing. The distinction is the whole fix -- one installer
     /// at a time -- so the window says which one it is.
-    Updating { message: String },
+    ///
+    /// Everything after `message` is 6.71.0's, and it is the user's ask in
+    /// full: "we should see everything happening during an update". The window
+    /// is the only process that CAN show it -- a dashboard in a browser tab
+    /// cannot read a file on the disk, and during an update there is no server
+    /// to ask -- so it shows the stage timeline with the writer's own stamps,
+    /// how long the episode has run, the installer's own last lines as they are
+    /// written, and where that transcript lives so the user can open it.
+    Updating {
+        message: String,
+        /// The episode so far, oldest first.
+        stages: Vec<StageLine>,
+        /// Total elapsed, already worded ("1 m 32 s"). `None` before any
+        /// writer recorded a start.
+        elapsed: Option<String>,
+        /// The installer transcript's path, verbatim from the receipt.
+        log_path: Option<String>,
+        /// Its last lines, as text. Inserted with `textContent`: an installer's
+        /// output is untrusted exactly as a server's stderr is.
+        log_tail: Vec<String>,
+        /// The helper, in one phrase: "installer pid 11372, running".
+        helper: Option<String>,
+    },
     /// The port is free but starting the server is not this windows job.
     NotOurServer { message: String },
     /// Someone else holds the port. The message is Pythons, verbatim.
@@ -104,6 +146,19 @@ pub fn append_output_script(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An `Updating` page with nothing in it, for the tests that only care
+    /// that every variant carries a kind and a heading.
+    fn bare_updating() -> Page {
+        Page::Updating {
+            message: String::new(),
+            stages: Vec::new(),
+            elapsed: None,
+            log_path: None,
+            log_tail: Vec::new(),
+            helper: None,
+        }
+    }
 
     #[test]
     fn a_page_is_pushed_as_json_the_document_can_pick_up_late() {
@@ -207,9 +262,7 @@ mod tests {
                 command: String::new(),
                 message: String::new(),
             },
-            Page::Updating {
-                message: String::new(),
-            },
+            bare_updating(),
             Page::NotOurServer {
                 message: String::new(),
             },
@@ -255,9 +308,7 @@ mod tests {
                 command: String::new(),
                 message: String::new(),
             },
-            Page::Updating {
-                message: String::new(),
-            },
+            bare_updating(),
             Page::NotOurServer {
                 message: String::new(),
             },

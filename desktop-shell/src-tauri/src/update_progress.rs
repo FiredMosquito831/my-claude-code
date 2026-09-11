@@ -32,6 +32,17 @@ pub const PROGRESS_FILENAME: &str = "progress.json";
 /// reading it into a window's memory would be the wrong response to that.
 const MAX_BYTES: u64 = 64 * 1024;
 
+/// How much of the tail of an installer transcript to read. `uv` can print
+/// megabytes over a slow install and this is read on every paint tick, so the
+/// window reads the END of the file rather than the file: enough bytes that
+/// fifteen wrapped lines are certainly inside it, and a bounded, predictable
+/// cost whatever `uv` did.
+const LOG_TAIL_BYTES: u64 = 64 * 1024;
+
+/// How many lines of the transcript the window shows (decision Q2: "the last
+/// fifteen lines of that log, refreshed every tick").
+pub const LOG_TAIL_LINES: usize = 15;
+
 /// The receipt path inside a configuration directory.
 ///
 /// Built the same way `activation::activation_path` is built: from the
@@ -77,6 +88,160 @@ impl Stage {
             _ => self.stage.clone(),
         }
     }
+}
+
+/// One record in the episode, with everything a timeline needs.
+///
+/// 6.71.0's. Until then only the LAST record was ever read, so the window could
+/// say which stage an update was in and nothing at all about how it got there
+/// -- and an update that spends ninety seconds inside `installing` looked
+/// exactly like one that had stopped. The whole file is a dozen short lines, so
+/// reading all of them costs nothing that reading one did not.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StageRecord {
+    /// The stage name, exactly as the writer wrote it.
+    pub stage: String,
+    /// The sentence beside it, if there was one.
+    pub message: Option<String>,
+    /// The wall-clock stamp the writer put on it, verbatim.
+    pub at: Option<String>,
+    /// Seconds between the start of the episode and this record, as the writer
+    /// measured it. `None` for a receipt from a build that did not record it.
+    pub elapsed_seconds: Option<f64>,
+}
+
+impl StageRecord {
+    /// The clock time to put beside the stage, `HH:MM:SS`.
+    ///
+    /// Taken out of the writer's own ISO 8601 stamp rather than converted:
+    /// every writer records UTC, the window shows what the receipt says, and a
+    /// timezone conversion here would be a second opinion about a fact the
+    /// receipt already states.
+    pub fn clock(&self) -> Option<String> {
+        let at = self.at.as_deref()?.trim();
+        let time = at.split_once('T').or_else(|| at.split_once(' '))?.1;
+        let time = time.split(['Z', 'z', '+']).next()?;
+        let mut parts = time.split(':');
+        let hour = parts.next()?;
+        let minute = parts.next()?;
+        let second = parts.next()?.split('.').next()?;
+        if hour.len() != 2 || minute.len() != 2 || second.len() != 2 {
+            return None;
+        }
+        Some(format!("{hour}:{minute}:{second}"))
+    }
+}
+
+/// Every record in `contents`, oldest first, at most `max` of them.
+///
+/// Unparseable lines are skipped exactly as [`latest_record`] skips them: the
+/// writer is a separate process appending while this reads, so a torn line is
+/// expected and costs one record rather than the whole timeline. When there are
+/// more than `max`, the OLDEST are dropped -- what an update is doing now
+/// matters more than what it did first.
+pub fn timeline_in(contents: &str, max: usize) -> Vec<StageRecord> {
+    let mut records: Vec<StageRecord> = Vec::new();
+    for line in contents.lines() {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(stage) = stage_of(&value) else {
+            continue;
+        };
+        records.push(StageRecord {
+            stage: stage.stage,
+            message: stage.message,
+            at: value
+                .get("at")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            elapsed_seconds: value
+                .get("elapsed_seconds")
+                .and_then(serde_json::Value::as_f64)
+                .filter(|seconds| seconds.is_finite() && *seconds >= 0.0),
+        });
+    }
+    if records.len() > max {
+        records.drain(..records.len() - max);
+    }
+    records
+}
+
+/// The installer transcript the last record names, if it named one.
+///
+/// The path comes off the receipt rather than being rebuilt here, and that is
+/// contract C1 rather than convenience: the stamp in the name belongs to the
+/// episode, so a shell that guessed it would show the wrong file exactly when
+/// two updates happened close together.
+pub fn log_path_in(contents: &str) -> Option<String> {
+    latest_record(contents)?
+        .get("log")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+}
+
+/// The last `max` lines of `text`, trimmed of trailing blank lines.
+///
+/// A trailing line with no newline after it is KEPT: the writer appends a line
+/// at a time and the file is read while it is being written, so the newest
+/// thing an installer said is routinely the thing with no newline yet.
+pub fn tail_of(text: &str, max: usize) -> Vec<String> {
+    let mut lines: Vec<String> = text
+        .split('\n')
+        .map(|line| line.trim_end_matches('\r').to_owned())
+        .collect();
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    if lines.len() > max {
+        lines.drain(..lines.len() - max);
+    }
+    lines
+}
+
+/// The last `max` lines of the file at `path`, or an empty list for every
+/// failure there can be.
+///
+/// Reads at most [`LOG_TAIL_BYTES`] from the END of the file, so the cost is
+/// bounded however much `uv` printed, and decodes them lossily: `uv` writes
+/// UTF-8 but a transcript can carry a filename in whatever the volume uses, and
+/// a window must never fail to paint over a byte it did not expect. When the
+/// read started in the middle of the file the first line is a fragment of a
+/// line, so it is dropped.
+pub fn read_log_tail(path: &str, max: usize) -> Vec<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let Ok(metadata) = file.metadata() else {
+        return Vec::new();
+    };
+    if !metadata.is_file() {
+        return Vec::new();
+    }
+    let length = metadata.len();
+    let partial_first_line = length > LOG_TAIL_BYTES;
+    let offset = length.saturating_sub(LOG_TAIL_BYTES);
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return Vec::new();
+    }
+    let mut bytes = Vec::new();
+    if file.take(LOG_TAIL_BYTES).read_to_end(&mut bytes).is_err() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines = tail_of(&text, if partial_first_line { max + 1 } else { max });
+    if partial_first_line && lines.len() > max {
+        lines.remove(0);
+    }
+    lines
 }
 
 /// The most recent stage in `contents`, or `None`.
@@ -264,6 +429,90 @@ pub fn active_helper_in(
 /// Read the receipt in `config_dir` and report a helper that is still working.
 pub fn active_helper(config_dir: &str) -> Option<ActiveHelper> {
     active_helper_in(&read_receipt(config_dir)?, pid_is_running)
+}
+
+/// Everything the window needs to narrate an update, read once per tick.
+///
+/// One read of the receipt and one bounded read of the transcript's tail, which
+/// is the whole cost of decision Q2's "refreshed every tick". Both are reads:
+/// C4 (this shell writes nothing under the configuration directory) and C5
+/// (this shell is not an updater) are untouched.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Narration {
+    /// The episode's stages, oldest first.
+    pub stages: Vec<StageRecord>,
+    /// Where the installer is writing, as the receipt names it.
+    pub log_path: Option<String>,
+    /// The last [`LOG_TAIL_LINES`] lines of that file, right now.
+    pub log_tail: Vec<String>,
+    /// The helper's process id, when it recorded one.
+    pub helper_pid: Option<i64>,
+    /// Seconds since the episode started, **now**.
+    ///
+    /// Measured against the writer's `started_at` rather than taken from the
+    /// newest record's own `elapsed_seconds`, and that is the difference
+    /// between a clock and a photograph of a clock: the installer writes a
+    /// record when it changes stage, and `uv` can spend two minutes inside one
+    /// -- so a window that showed the last record's number said *Elapsed: 5 s*
+    /// for the whole of an install that had been running for two and a half
+    /// minutes. Seen in the acceptance run of 2026-09-11 and fixed before it
+    /// shipped. The record's own figure is the fallback for a receipt that
+    /// carried no start time.
+    pub elapsed_seconds: Option<f64>,
+}
+
+/// How many stages of an episode the window draws. An episode has at most nine
+/// (`UPDATE_PROGRESS_STAGES`), and a receipt with more than this in it is one
+/// that is not what we think it is.
+const MAX_TIMELINE: usize = 12;
+
+/// Read the receipt in `config_dir` and everything it points at.
+pub fn narration(config_dir: &str) -> Narration {
+    let Some(contents) = read_receipt(config_dir) else {
+        return Narration::default();
+    };
+    narration_of(&contents, unix_now(), |path| {
+        read_log_tail(path, LOG_TAIL_LINES)
+    })
+}
+
+/// The narration `contents` describes, as of `now_unix`, with the transcript
+/// supplied by `tail` -- split from the I/O and from the clock so the assembly
+/// is testable without a file and without waiting.
+pub fn narration_of(
+    contents: &str,
+    now_unix: Option<f64>,
+    tail: impl Fn(&str) -> Vec<String>,
+) -> Narration {
+    let stages = timeline_in(contents, MAX_TIMELINE);
+    let log_path = log_path_in(contents);
+    let log_tail = log_path.as_deref().map(tail).unwrap_or_default();
+    let record = latest_record(contents);
+    let started = record
+        .as_ref()
+        .and_then(|value| value.get("started_at"))
+        .and_then(serde_json::Value::as_f64)
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0);
+    Narration {
+        elapsed_seconds: started
+            .zip(now_unix)
+            .map(|(started, now)| (now - started).max(0.0))
+            .or_else(|| {
+                record
+                    .as_ref()
+                    .and_then(|value| value.get("elapsed_seconds"))
+                    .and_then(serde_json::Value::as_f64)
+                    .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+            })
+            .or_else(|| stages.last().and_then(|stage| stage.elapsed_seconds)),
+        helper_pid: record
+            .as_ref()
+            .and_then(|value| value.get("helper_pid"))
+            .and_then(serde_json::Value::as_i64),
+        stages,
+        log_path,
+        log_tail,
+    }
 }
 
 /// Read the most recent stage from the receipt in `config_dir`, if there is
@@ -709,5 +958,204 @@ mod tests {
         assert_ne!(pid_is_running(mine), Some(false));
         assert_eq!(pid_is_running(0), Some(false));
         assert_eq!(pid_is_running(-1), Some(false));
+    }
+
+    // -- 6.71.0: the timeline and the live transcript -----------------------
+
+    /// One episode as 6.71.0 writes it: monotonic stages, elapsed seconds, and
+    /// the transcript named in every record.
+    fn episode(log: &str) -> String {
+        format!(
+            "{{\"stage\":\"waiting-for-parent\",\"message\":\"Waiting for the running server to stop.\",\
+             \"at\":\"2026-09-11T08:21:14.9680000Z\",\"elapsed_seconds\":0.0,\"started_at\":1789085000,\"helper_pid\":11372,\
+             \"helper_done\":false,\"version\":\"6.71.0\",\"log\":\"{log}\"}}\n\
+             {{\"stage\":\"stopping\",\"message\":\"The server has stopped. Preparing to install.\",\
+             \"at\":\"2026-09-11T08:21:37.7250000Z\",\"elapsed_seconds\":22.757,\"started_at\":1789085000,\"helper_pid\":11372,\
+             \"helper_done\":false,\"version\":\"6.71.0\",\"log\":\"{log}\"}}\n\
+             {{\"stage\":\"installing\",\"message\":\"Installing the new version.\",\
+             \"at\":\"2026-09-11T08:21:39.7250000Z\",\"elapsed_seconds\":24.757,\"started_at\":1789085000,\"helper_pid\":11372,\
+             \"helper_done\":false,\"version\":\"6.71.0\",\"log\":\"{log}\"}}\n"
+        )
+    }
+
+    #[test]
+    fn every_record_of_the_episode_is_read_not_only_the_last() {
+        let stages = timeline_in(&episode("C:/x/install-1.log"), 12);
+        assert_eq!(stages.len(), 3, "{stages:?}");
+        assert_eq!(stages[0].stage, "waiting-for-parent");
+        assert_eq!(stages[2].stage, "installing");
+        // Oldest first, so the window draws it top to bottom in the order it
+        // happened.
+        assert_eq!(stages[1].elapsed_seconds, Some(22.757));
+    }
+
+    #[test]
+    fn the_timeline_keeps_the_newest_records_when_it_has_to_choose() {
+        let stages = timeline_in(&episode("C:/x/install-1.log"), 2);
+        assert_eq!(stages.len(), 2);
+        assert_eq!(stages[0].stage, "stopping");
+        assert_eq!(stages[1].stage, "installing");
+    }
+
+    #[test]
+    fn a_torn_line_costs_one_record_and_not_the_timeline() {
+        let contents = format!("{}{{\"stage\":\"verif", episode("C:/x/install-1.log"));
+        let stages = timeline_in(&contents, 12);
+        assert_eq!(stages.len(), 3, "{stages:?}");
+    }
+
+    #[test]
+    fn the_clock_beside_a_stage_is_the_writers_own_stamp() {
+        let stages = timeline_in(&episode("C:/x/install-1.log"), 12);
+        assert_eq!(stages[0].clock().as_deref(), Some("08:21:14"));
+        // A record with no stamp has no clock rather than an invented one.
+        let bare = StageRecord {
+            stage: "installing".to_owned(),
+            message: None,
+            at: None,
+            elapsed_seconds: None,
+        };
+        assert_eq!(bare.clock(), None);
+        // And neither does one this build cannot read.
+        let odd = StageRecord {
+            at: Some("yesterday afternoon".to_owned()),
+            ..bare
+        };
+        assert_eq!(odd.clock(), None);
+    }
+
+    #[test]
+    fn the_transcript_path_comes_off_the_receipt_and_is_never_rebuilt() {
+        let contents = episode("C:/config/updates/install-20260911-082114.log");
+        assert_eq!(
+            log_path_in(&contents).as_deref(),
+            Some("C:/config/updates/install-20260911-082114.log")
+        );
+        // A receipt from a build that named no transcript is not a reason to
+        // guess one: two updates close together would guess the wrong stamp.
+        assert_eq!(log_path_in("{\"stage\":\"installing\"}\n"), None);
+        assert_eq!(
+            log_path_in("{\"stage\":\"installing\",\"log\":\"  \"}\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_tail_is_the_last_lines_and_an_empty_file_is_no_lines() {
+        assert_eq!(tail_of("", 15), Vec::<String>::new());
+        assert_eq!(tail_of("\n\n  \n", 15), Vec::<String>::new());
+        let many: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+        let tail = tail_of(&many, 15);
+        assert_eq!(tail.len(), 15);
+        assert_eq!(tail.first().map(String::as_str), Some("line 26"));
+        assert_eq!(tail.last().map(String::as_str), Some("line 40"));
+    }
+
+    #[test]
+    fn a_last_line_with_no_newline_yet_is_still_shown() {
+        // The transcript is read WHILE it is written, so the newest thing an
+        // installer said is routinely the line with no newline after it.
+        // Dropping it would mean the window is always one line behind.
+        let tail = tail_of("Resolved 101 packages\nPreparing pack", 15);
+        assert_eq!(tail, vec!["Resolved 101 packages", "Preparing pack"]);
+        // CRLF is the ordinary case on the machine that writes this file.
+        assert_eq!(tail_of("a\r\nb\r\n", 15), vec!["a", "b"]);
+    }
+
+    /// A scratch file, removed by the test that made it.
+    fn scratch_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock after 1970")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("mcc-shell-{name}-{stamp}.log"));
+        std::fs::write(&path, bytes).expect("scratch transcript");
+        path
+    }
+
+    #[test]
+    fn a_transcript_with_bytes_that_are_not_utf8_is_still_shown() {
+        // uv writes UTF-8, but a transcript can carry a path in whatever the
+        // volume uses, and a window must never fail to paint over one byte.
+        let path = scratch_file("tail-bytes", b"ok\n\xff\xfe not utf 8\nlast\n");
+        let tail = read_log_tail(&path.to_string_lossy(), 15);
+        std::fs::remove_file(&path).ok();
+        assert_eq!(tail.len(), 3, "{tail:?}");
+        assert_eq!(tail.first().map(String::as_str), Some("ok"));
+        assert_eq!(tail.last().map(String::as_str), Some("last"));
+        assert!(tail[1].contains("not utf 8"), "{tail:?}");
+    }
+
+    #[test]
+    fn a_transcript_bigger_than_the_window_costs_the_same_read() {
+        // 200 KB of output, of which the window reads the end.
+        let many: String = (1..=20_000).map(|n| format!("line {n}\n")).collect();
+        assert!(many.len() > usize::try_from(LOG_TAIL_BYTES).expect("fits"));
+        let path = scratch_file("tail-big", many.as_bytes());
+        let tail = read_log_tail(&path.to_string_lossy(), LOG_TAIL_LINES);
+        std::fs::remove_file(&path).ok();
+        assert_eq!(tail.len(), LOG_TAIL_LINES);
+        assert_eq!(tail.last().map(String::as_str), Some("line 20000"));
+        // The first line of a mid-file read is a fragment of a line, so it is
+        // dropped rather than shown as a truncated one.
+        assert!(
+            tail.iter().all(|line| line.starts_with("line ")),
+            "{tail:?}"
+        );
+    }
+
+    #[test]
+    fn a_missing_transcript_is_no_lines_and_not_a_failure() {
+        let path = std::env::temp_dir().join("mcc-shell-no-such-transcript-7a1c.log");
+        assert_eq!(
+            read_log_tail(&path.to_string_lossy(), 15),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn the_narration_is_the_receipt_and_the_file_it_names() {
+        let narration = narration_of(
+            &episode("C:/x/install-1.log"),
+            Some(1_789_085_000.0 + 150.0),
+            |path| {
+                assert_eq!(path, "C:/x/install-1.log");
+                vec!["Resolved 101 packages".to_owned()]
+            },
+        );
+        assert_eq!(narration.stages.len(), 3);
+        assert_eq!(narration.log_path.as_deref(), Some("C:/x/install-1.log"));
+        assert_eq!(narration.log_tail, vec!["Resolved 101 packages"]);
+        assert_eq!(narration.helper_pid, Some(11372));
+        // NOW, not the newest record's own figure. `uv` can spend two minutes
+        // inside `installing`, and the acceptance run of 2026-09-11 showed the
+        // window reporting *Elapsed: 5 s* through two and a half minutes of it.
+        assert_eq!(narration.elapsed_seconds, Some(150.0));
+    }
+
+    #[test]
+    fn an_episode_with_no_start_time_falls_back_to_the_records_own_figure() {
+        let contents = "{\"stage\":\"installing\",\"elapsed_seconds\":24.757}\n";
+        let narration = narration_of(contents, Some(1_789_085_000.0), |_| Vec::new());
+        assert_eq!(narration.elapsed_seconds, Some(24.757));
+    }
+
+    #[test]
+    fn a_receipt_that_names_no_transcript_is_narrated_without_one() {
+        let narration = narration_of("{\"stage\":\"installing\"}\n", None, |_| {
+            panic!("nothing to tail");
+        });
+        assert_eq!(narration.stages.len(), 1);
+        assert_eq!(narration.log_path, None);
+        assert!(narration.log_tail.is_empty());
+    }
+
+    #[test]
+    fn there_is_nothing_to_narrate_without_a_receipt() {
+        let directory = std::env::temp_dir().join("mcc-shell-no-such-config-9d2f");
+        assert_eq!(
+            narration(&directory.to_string_lossy()),
+            Narration::default()
+        );
     }
 }

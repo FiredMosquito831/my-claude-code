@@ -45,14 +45,88 @@ UPDATE_PROGRESS_FILENAME = "progress.json"
 #: but the sequence is pinned by a test so a stage cannot silently stop being
 #: written. ``recovered`` is 6.58.3's: an install that failed and put the
 #: previously installed server back.
+#:
+#: 6.71.0 added ``stopping``, ``verifying`` and ``handing-off`` so the window
+#: can draw a timeline rather than a single sentence. ``handing-off`` is the
+#: honest name for what the helper does under ``--no-restart``: until 6.71.0 it
+#: wrote ``starting`` there, from a ``$noRestart`` it read one line before the
+#: line that assigns it, so a receipt claimed the helper was starting a server
+#: it had been told not to start (spec F6, seen in the live 6.66.1 receipt).
 UPDATE_PROGRESS_STAGES: tuple[str, ...] = (
     "waiting-for-parent",
+    "stopping",
     "installing",
+    "verifying",
     "starting",
+    "handing-off",
     "done",
     "failed",
     "recovered",
 )
+
+#: How far through an episode each stage is. Stages are **monotonic**: a writer
+#: never goes back to an earlier one, so a window can draw the sequence as a
+#: timeline and a reader can tell "still installing" from "installed, starting"
+#: without guessing. Terminal stages share the last rank, because an episode
+#: ends exactly once and ``failed`` may be followed by ``recovered``.
+UPDATE_PROGRESS_STAGE_ORDER: dict[str, int] = {
+    "waiting-for-parent": 1,
+    "stopping": 2,
+    "installing": 3,
+    "verifying": 4,
+    "starting": 5,
+    "handing-off": 5,
+    "done": 6,
+    "failed": 6,
+    "recovered": 6,
+}
+
+#: The stages that end an episode. ``handing-off`` is deliberately absent: the
+#: helper is still running when it writes one, and reading it as terminal would
+#: reopen the "one installer at a time" gate a beat too early.
+UPDATE_TERMINAL_STAGES: frozenset[str] = frozenset({"done", "failed", "recovered"})
+
+#: Basename prefix of the installer transcript the helper tees ``uv`` into,
+#: beside the receipt: ``<config>/updates/install-<stamp>.log``. Every progress
+#: record names the file in its ``log`` field, so a reader never has to guess
+#: the stamp -- and the desktop window tails it while the install happens,
+#: which is the whole of "see everything happening" (decision Q2).
+INSTALL_LOG_PREFIX = "install-"
+INSTALL_LOG_SUFFIX = ".log"
+
+#: Set to an existing transcript to make ``scripts/install.ps1`` and
+#: ``scripts/install.sh`` append to it rather than open one of their own.
+#:
+#: One episode, one transcript. A caller that already owns one -- the deferred
+#: helper, whose recovery ladder can run the hand-run installer -- would
+#: otherwise leave the window tailing whichever of two files it happened to be
+#: told about, with half the story in the other. Declared here rather than only
+#: in the scripts because this module is where every reader of the receipt
+#: looks, and because a name documented in USAGE.md has to exist somewhere the
+#: docs-drift guard can find it.
+INSTALL_LOG_ENV = "MCC_INSTALL_LOG"
+
+
+def stage_rank(stage: str) -> int:
+    """How far through an episode ``stage`` is; ``0`` for one we do not know.
+
+    An unknown stage ranks below every known one so that a reader written
+    before a stage existed still orders the stages it does know, and a writer's
+    monotonic guard never *drops* a record it cannot place.
+    """
+
+    return UPDATE_PROGRESS_STAGE_ORDER.get(stage.strip(), 0)
+
+
+def install_log_path(stamp: str) -> Path:
+    """The installer transcript for the episode identified by ``stamp``."""
+
+    return (
+        config_dir_path()
+        / UPDATE_STAGE_DIRNAME
+        / f"{INSTALL_LOG_PREFIX}{stamp}{INSTALL_LOG_SUFFIX}"
+    )
+
 
 #: The exact sentence each writer of this receipt uses for a stage, so the two
 #: writers cannot drift. ``application/release_updates.py`` generates the
@@ -174,7 +248,7 @@ def helper_is_alive(record: dict[str, Any] | None) -> bool:
     # No pid, no start time: a pre-6.58.3 helper. Anything but a terminal stage
     # is treated as in flight, which is the safe reading.
     stage = str(record.get("stage") or "")
-    return stage not in {"done", "failed", "recovered"}
+    return stage not in UPDATE_TERMINAL_STAGES
 
 
 def active_update() -> dict[str, Any] | None:
@@ -190,7 +264,14 @@ def update_report() -> dict[str, Any] | None:
     ``None`` when no helper is running, which is the ordinary case and the one
     a reader must handle first. Otherwise a small document a window can render
     without knowing anything about PowerShell: which stage, the helper's own
-    sentence, the version it is installing, and how long it has been at it.
+    sentence, the version it is installing, how long it has been at it, and --
+    since 6.71.0 -- where the installer transcript it is writing right now
+    lives, so a reader can show the thing itself rather than a summary of it.
+
+    Frozen as informational and never required by the status contract (C9,
+    decision Q7): the only transport for it is ``mcc-desktop --print-status``,
+    which is the very command that cannot answer while an installer is
+    replacing the environment. See ``cli/desktop_status.py``.
     """
 
     record = active_update()
@@ -202,8 +283,12 @@ def update_report() -> dict[str, Any] | None:
         if isinstance(started, int | float)
         else None
     )
+    recorded = record.get("elapsed_seconds")
+    if elapsed is None and isinstance(recorded, int | float):
+        elapsed = max(0.0, float(recorded))
     return {
         "stage": str(record.get("stage") or ""),
+        "log": record.get("log") if isinstance(record.get("log"), str) else None,
         "message": record.get("message")
         if isinstance(record.get("message"), str)
         else None,

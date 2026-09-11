@@ -113,6 +113,63 @@
         word-break: break-word;
         color: var(--muted);
       }
+      /* The update timeline. One row per stage the installer recorded, with
+         the installer's own clock time and how long the stage took -- so a
+         window that is waiting shows what it is waiting for and how long that
+         step has taken, instead of one sentence that never changes. */
+      ol#stages {
+        margin: 0 0 14px;
+        padding: 0;
+        list-style: none;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      ol#stages li {
+        display: grid;
+        grid-template-columns: 74px 1fr auto;
+        gap: 10px;
+        align-items: baseline;
+        padding: 7px 12px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+      }
+      ol#stages li:first-child {
+        border-top: 0;
+      }
+      ol#stages li.current {
+        color: var(--ink);
+        background: var(--ground);
+      }
+      ol#stages .clock,
+      ol#stages .took {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 12px;
+      }
+      ol#stages .stage {
+        font-weight: 600;
+      }
+      ol#stages li.current .stage::after {
+        content: " ...";
+      }
+      p#elapsed,
+      p#helper {
+        margin: 0 0 10px;
+        font-size: 13px;
+      }
+      pre#log-tail {
+        max-height: 260px;
+        overflow: auto;
+        margin: 0 0 10px;
+        padding: 10px 12px;
+        background: var(--ground);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: var(--muted);
+      }
       .path {
         display: block;
         padding: 8px 10px;
@@ -164,6 +221,17 @@
       <code class="command" id="command" hidden></code>
       <pre id="output" hidden></pre>
 
+      <!-- An update in flight, narrated: the stages the installer recorded,
+           how long it has been going, the last lines it wrote, and where it is
+           writing them. All of it comes from the one progress document and the
+           file that document names; this page fetches nothing (C8). -->
+      <ol id="stages" hidden></ol>
+      <p id="elapsed" hidden></p>
+      <p id="helper" hidden></p>
+      <pre id="log-tail" hidden></pre>
+      <p id="install-log-label" hidden>The installer is writing to:</p>
+      <code class="path" id="install-log" hidden></code>
+
       <pre id="detail" hidden></pre>
 
       <p id="log-label" hidden>The server log is at:</p>
@@ -192,6 +260,12 @@
         var log = document.getElementById("log");
         var shellLogLabel = document.getElementById("shell-log-label");
         var shellLog = document.getElementById("shell-log");
+        var stages = document.getElementById("stages");
+        var elapsed = document.getElementById("elapsed");
+        var helper = document.getElementById("helper");
+        var logTail = document.getElementById("log-tail");
+        var installLogLabel = document.getElementById("install-log-label");
+        var installLog = document.getElementById("install-log");
         var retry = document.getElementById("retry");
         var takePort = document.getElementById("take-port");
 
@@ -206,6 +280,34 @@
           error: "My Claude Code could not start",
           "server-failed": "The server is not answering",
         };
+
+        function cell(className, text) {
+          var span = document.createElement("span");
+          span.className = className;
+          span.textContent = text;
+          return span;
+        }
+
+        // The stage timeline. Rebuilt from scratch on every paint, because it
+        // is a handful of rows once a second and a diff would be more code
+        // than the thing it optimises.
+        function renderStages(list) {
+          stages.textContent = "";
+          stages.hidden = list.length === 0;
+          list.forEach(function (entry) {
+            if (!entry || !entry.stage) {
+              return;
+            }
+            var row = document.createElement("li");
+            if (entry.current) {
+              row.className = "current";
+            }
+            row.appendChild(cell("clock", entry.at || ""));
+            row.appendChild(cell("stage", entry.message || entry.stage));
+            row.appendChild(cell("took", entry.took || ""));
+            stages.appendChild(row);
+          });
+        }
 
         function render(state) {
           if (!state || !state.kind) {
@@ -241,6 +343,41 @@
           output.hidden = !installing;
           if (installing) {
             command.textContent = state.command;
+          }
+
+          // An update in flight, narrated. Everything here is built with
+          // createElement/textContent -- never innerHTML: an installer's
+          // output, a stage message and a path a user chose are all untrusted
+          // text as far as this page is concerned.
+          renderStages(Array.isArray(state.stages) ? state.stages : []);
+
+          var hasElapsed = !!state.elapsed;
+          elapsed.hidden = !hasElapsed;
+          if (hasElapsed) {
+            elapsed.textContent = "Elapsed: " + state.elapsed;
+          }
+
+          var hasHelper = !!state.helper;
+          helper.hidden = !hasHelper;
+          if (hasHelper) {
+            helper.textContent = state.helper;
+          }
+
+          var tail = Array.isArray(state.log_tail) ? state.log_tail : [];
+          logTail.hidden = tail.length === 0;
+          if (tail.length) {
+            logTail.textContent = tail.join("\n");
+            // Keep the newest line in view. The tail is replaced wholesale on
+            // every tick, so without this the box would scroll back to the top
+            // of a fifteen-line window once a second.
+            logTail.scrollTop = logTail.scrollHeight;
+          }
+
+          var hasInstallLog = !!state.log_path;
+          installLogLabel.hidden = !hasInstallLog;
+          installLog.hidden = !hasInstallLog;
+          if (hasInstallLog) {
+            installLog.textContent = state.log_path;
           }
 
           // The server's own words, as TEXT. `textContent`, never
