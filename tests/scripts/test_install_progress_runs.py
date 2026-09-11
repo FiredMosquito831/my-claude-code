@@ -333,3 +333,90 @@ def test_at_least_one_powershell_was_actually_exercised() -> None:
     """
 
     assert _powershells(), "no PowerShell on PATH; the receipt was never run"
+
+
+# -- the fresh-Windows-install defect this PR's own workflow surfaced ----------
+
+
+NATIVE = (
+    "Convert-OutputLine",
+    "Format-Argument",
+    "Format-Command",
+    "Invoke-NativeCommand",
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "executable"), _powershells(), ids=lambda value: value
+)
+def test_running_a_command_does_not_return_what_it_printed(
+    name: str, executable: str, tmp_path: Path
+) -> None:
+    """``Invoke-NativeCommand`` runs a command and SHOWS its output.
+
+    It must not RETURN it. PowerShell returns everything a function writes to
+    the output stream, so while this passed the command's two streams down the
+    pipeline, ``$InstalledVersion = Install-FreeClaudeCode`` was the version
+    string prefixed by every line uv printed -- an array -- and the very next
+    statement, ``Configure-AndConfirmFreeClaudeCode -ExpectedVersion
+    $InstalledVersion``, refused it with *Cannot convert value to type
+    System.String*.
+
+    That is every fresh Windows install through ``install.cmd`` failing at the
+    verification step. It shipped in 6.64.0 and was red on main from
+    2026-09-08 (install-smoke run 34285771201) with nothing to notice it,
+    because that workflow only runs when ``scripts/**`` changes.
+    """
+
+    text = INSTALL_PS1.read_text(encoding="utf-8")
+    config_dir = tmp_path / name
+    config_dir.mkdir()
+    noisy = tmp_path / "noisy.cmd"
+    noisy.write_text(
+        "@echo off\r\necho one\r\necho two 1>&2\r\nexit /b 0\r\n", encoding="ascii"
+    )
+    quiet = tmp_path / "quiet.cmd"
+    quiet.write_text("@echo off\r\nexit /b 0\r\n", encoding="ascii")
+
+    bodies = "\n\n".join(
+        _extract_function(text, function) for function in NEEDED + NATIVE
+    )
+    lines = text.splitlines()
+    initialisers = "\n".join(
+        next(line for line in lines if line.startswith(f"{name} ="))
+        for name in INITIALISERS
+    )
+    script = tmp_path / f"native-{name}.ps1"
+    script.write_text(
+        f"""Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$DryRun = $false
+$env:MCC_CONFIG_DIR = '{config_dir}'
+{initialisers}
+
+{bodies}
+
+$captured = @(Invoke-NativeCommand -FilePath '{noisy}' -Arguments @() -CaptureTo '{tmp_path / "capture.txt"}')
+Write-Output ("CAPTURED=" + $captured.Count)
+$bare = @(Invoke-NativeCommand -FilePath '{noisy}' -Arguments @())
+Write-Output ("BARE=" + $bare.Count)
+$silent = @(Invoke-NativeCommand -FilePath '{quiet}' -Arguments @() -CaptureTo '{tmp_path / "capture2.txt"}')
+Write-Output ("QUIET=" + $silent.Count)
+""",
+        encoding="utf-8",
+    )
+
+    completed = _run(executable, script)
+    assert completed.returncode == 0, completed.stderr
+    assert "CAPTURED=0" in completed.stdout, completed.stdout
+    assert "BARE=0" in completed.stdout, completed.stdout
+    assert "QUIET=0" in completed.stdout, completed.stdout
+    # ...and the user still watches the install happen: the command's output is
+    # shown, it is merely not returned.
+    assert "one" in completed.stdout, completed.stdout
+    assert "two" in completed.stdout, completed.stdout
+    # The capture file the failure classifier reads is still written. Read it
+    # leniently: PowerShell 5.1's Tee-Object writes UTF-16LE and pwsh 7 writes
+    # UTF-8, and this test is about what was RETURNED, not about the encoding.
+    captured = (tmp_path / "capture.txt").read_bytes()
+    assert b"one" in captured.replace(b"\x00", b""), captured[:80]

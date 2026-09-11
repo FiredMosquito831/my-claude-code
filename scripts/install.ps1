@@ -185,8 +185,25 @@ function Invoke-NativeCommand {
     # installer runs goes through here, so naming it here covers all of them.
     Write-InstallLog "+ $commandText"
     $global:LASTEXITCODE = 0
+    # `Out-Host` on both branches: this function RUNS a command and shows what
+    # it printed. It must not RETURN it.
+    #
+    # PowerShell returns everything a function writes to the output stream, so
+    # while these branches passed the command's output down the pipeline,
+    # `$InstalledVersion = Install-FreeClaudeCode` was the version string
+    # PREFIXED BY EVERY LINE UV PRINTED -- an array -- and the next statement,
+    # `Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion`,
+    # refused it with "Cannot convert value to type System.String". That is
+    # every fresh Windows install through install.cmd / install.ps1 failing at
+    # the verification step, and it has been failing since 6.64.0: the
+    # install-smoke workflow only runs when `scripts/**` changes, so it was red
+    # on main from 2026-09-08 (run 34285771201) with nothing to notice it.
+    # `$renamed = Invoke-RenameThenReinstall ...` had the same latent shape.
+    #
+    # Out-Host writes to the console exactly as the passthrough did and emits
+    # nothing, so the user still watches the install happen.
     if ([string]::IsNullOrWhiteSpace($CaptureTo)) {
-        & $FilePath @Arguments
+        & $FilePath @Arguments | Out-Host
     }
     else {
         # uv's diagnosis of a failure is in the text it prints, never in its
@@ -209,7 +226,8 @@ function Invoke-NativeCommand {
             # is tailing WHILE the install happens.
             & $FilePath @Arguments 2>&1 |
                 ForEach-Object { $line = Convert-OutputLine $_; Write-InstallLog $line; $line } |
-                Tee-Object -FilePath $CaptureTo
+                Tee-Object -FilePath $CaptureTo |
+                Out-Host
         }
         finally {
             $ErrorActionPreference = $previousPreference
