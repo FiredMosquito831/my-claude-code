@@ -44,6 +44,10 @@ def old_database(path: Path) -> None:
     """
     RequestLogStore(path).close()
     conn = sqlite3.connect(path)
+    # The partial index over the image columns has to go first: SQLite refuses
+    # to drop a column any index names. Nothing is being weakened here -- the
+    # migration recreates it, and the assertions below are untouched.
+    conn.execute("DROP INDEX IF EXISTS idx_requests_image_v1")
     for table, dropped in (
         ("requests", NEW_REQUEST_COLUMNS),
         ("request_attempts", NEW_ATTEMPT_COLUMNS),

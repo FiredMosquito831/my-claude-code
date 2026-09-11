@@ -49,6 +49,25 @@ _STOP = object()
 _CLOSE_TIMEOUT_SECONDS = 10.0
 _CLOSE_SECONDS_PER_RECORD = 0.01
 _STATS_CACHE_TTL_SECONDS = 5.0
+# Memory-mapped reads hand SQLite the operating system's page cache directly
+# instead of copying every page into the connection's own buffer. On the 4.5 GB
+# log this was measured against, that is the largest single win available
+# without changing one line of SQL: the per-host image estimate went 1.221 s ->
+# 0.183 s and a filtered COUNT(*) 0.133 s -> 0.080 s, while `cache_size` tuning
+# did nothing at all.
+#
+# Sized from the file rather than fixed: a small log should not reserve a
+# gigabyte of address space, and a huge one gains nothing past the cap. The
+# headroom factor keeps a growing database mapped between connections.
+#
+# The cost, which sqlite.org/mmap.html is explicit about: an I/O error inside a
+# mapped region arrives as SIGBUS / EXCEPTION_IN_PAGE_ERROR instead of
+# SQLITE_IOERR. This is a local file on a local disk, which is the case that
+# documentation calls acceptable. Builds compiled with SQLITE_MAX_MMAP_SIZE=0
+# ignore the pragma, and any error applying it is suppressed -- an unmapped
+# connection is the behaviour of every release before this one.
+_MMAP_HEADROOM = 1.25
+_MMAP_MAX_BYTES = 1 << 30
 # Bounds the stats cache to the most recently used filter combinations. Without
 # this, every distinct filter tuple a user tries leaks an entry holding a full
 # stats payload for the lifetime of the process.
@@ -1295,6 +1314,25 @@ _ADDED_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_requests_harness_v1 ON requests(harness, ts_epoch)",
 )
 
+# Created on the writer thread by ``_ensure_partial_indexes``, which carries the
+# measurements. Kept here beside ``_ADDED_INDEXES`` so every index this module
+# creates after the schema script is readable in one place.
+#
+# The image index carries every column its query reads, so the plan is
+# index-only and never touches a row: measured 0.072 s with the narrow column
+# list against 0.002 s with this one, for 168 KB more index. That is the one
+# place a wide index pays, because the index holds 2.7% of the rows rather than
+# all of them.
+_PARTIAL_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_requests_image_v1 ON requests("
+    " ts_epoch, provider, status, cache_read_tokens, tokens_in,"
+    " est_tokens_in, est_image_tokens, input_image_count)"
+    " WHERE est_image_tokens IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_requests_optimization_v1 ON requests("
+    " optimization, ts_epoch, optimization_tokens_saved)"
+    " WHERE optimization IS NOT NULL",
+)
+
 
 def pack_fields(values: dict[str, Any], fields: tuple[tuple[str, str], ...]) -> bytes:
     """Serialise the named body fields of one request into a blob."""
@@ -1724,11 +1762,32 @@ class RequestLogStore:
     def db_path(self) -> Path:
         return self._db_path
 
+    def _mmap_size(self) -> int:
+        """Bytes of this database to memory-map on a connection.
+
+        ``min(size * headroom, cap)``, and zero when the file is not there yet
+        or cannot be stat'ed -- zero is the pragma's own "do not map" value, so
+        a missing file costs nothing and raises nothing.
+        """
+        try:
+            size = self._db_path.stat().st_size
+        except OSError:
+            return 0
+        if size <= 0:
+            return 0
+        return min(int(size * _MMAP_HEADROOM), _MMAP_MAX_BYTES)
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path, timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        mmap_size = self._mmap_size()
+        if mmap_size:
+            # Not parameterisable: PRAGMA takes a literal. The value is an int
+            # this method computed, never caller input.
+            with contextlib.suppress(sqlite3.Error):
+                conn.execute(f"PRAGMA mmap_size={mmap_size}")
         # Text search has to reach inside compressed bodies. Doing it in SQL
         # keeps the scan in SQLite instead of pulling every blob into Python
         # just to discard it, and costs no extra storage -- unlike an FTS index,
@@ -2031,6 +2090,46 @@ class RequestLogStore:
                 " tokens_in, tokens_out, cache_read_tokens, cache_write_tokens,"
                 " optimization)"
             )
+
+    @staticmethod
+    def _ensure_partial_indexes(conn: sqlite3.Connection) -> None:
+        """Index only the rows two dashboard panels ever look at.
+
+        Both of these panels filter on a column that is NULL on the
+        overwhelming majority of the log -- ``est_image_tokens`` on 2.7% of
+        rows, ``optimization`` on 2.2% -- and SQLite, which has no statistics
+        here, answered them by walking an equality index over
+        ``status = 'success'`` that matches 99.2% of the table. A partial index
+        holds only the rows that satisfy its own WHERE, so these cost a few
+        hundred kilobytes against a multi-gigabyte log and are touched on an
+        insert only when that insert would appear in them.
+
+        Measured on a 4.5 GB, 333,838-row copy of a real log, best of three:
+
+        - image estimate per host, 7 days: 1.051 s -> **0.002 s**, 504 KB of
+          index (and it needs the ``INDEXED BY`` hint on
+          ``_image_estimate_sql`` to be chosen at all).
+        - optimization rules: 0.951 s -> **0.003 s**; its daily series
+          0.976 s -> **0.015 s**; 303 KB of index, chosen with no hint.
+        - insert cost of both together, 2,000 real rows re-inserted inside a
+          rolled-back transaction, three alternating cycles: **below the noise
+          floor** -- 44.6 us/row without them, 36.7 us/row with them, i.e. the
+          difference is smaller than the spread between cycles. A partial
+          index over 2-3% of rows is only walked on 2-3% of inserts.
+
+        A third candidate, ``(status, ts_epoch) WHERE status <> 'success'``,
+        was measured and **left out**: the query it would serve already answers
+        in 0.000-0.016 s from the covering ``idx_requests_status``, so it would
+        have been an index with no measurement behind it.
+
+        Versioned names, per the index rule: changing a column list means
+        ``_v2`` and an explicit drop of ``_v1`` in the same migration.
+        ``ANALYZE`` is deliberately not run -- measured on the same copy it
+        took 2.2 s and made the image-estimate plan *worse*.
+        """
+        for statement in _PARTIAL_INDEXES:
+            with contextlib.suppress(sqlite3.Error):
+                conn.execute(statement)
 
     @staticmethod
     def _ensure_auto_vacuum(conn: sqlite3.Connection) -> None:
@@ -2855,6 +2954,9 @@ class RequestLogStore:
             # large existing database, so they belong here and never on a
             # request path.
             self._ensure_stats_index(conn)
+            # Sub-second to build even on a 4.5 GB log, but a migration all the
+            # same, and migrations live here rather than on a request path.
+            self._ensure_partial_indexes(conn)
             # Before the rollup backfill, which keys every bucket on the stored
             # column this fills in.
             self._ensure_is_local_backfill(conn)
@@ -4933,6 +5035,53 @@ class RequestLogStore:
             if row[0] is not None
         ]
 
+    @staticmethod
+    def _image_estimate_sql(conn: sqlite3.Connection, since_clause: str) -> str:
+        """The per-host image-estimate query, pinned to its own index.
+
+        The predicate this question is really about -- ``est_image_tokens IS
+        NOT NULL`` -- is true on 2.7% of the log, and ``status = 'success'`` is
+        true on 99.2%. With no ``ANALYZE`` statistics SQLite cannot know that,
+        so it picked ``idx_requests_status`` and walked almost the whole table:
+        measured 1.051 s on a 4.5 GB copy. ``INDEXED BY`` hands it the partial
+        index instead, which is index-only over 8,867 entries: **0.002 s, the
+        same rows** (verified by comparing the result sets).
+
+        ``ANALYZE`` is not the alternative. Measured on the same copy it took
+        2.2 s and moved this plan onto ``idx_requests_provider``, which was
+        slower than doing nothing.
+
+        The hint is dropped when the index is not there. ``INDEXED BY`` is an
+        error, not a preference, if the named index is missing -- and it is
+        created by a writer-thread migration that a very early read can race,
+        so the unhinted query stays as the fallback and answers identically.
+        """
+        hint = ""
+        with contextlib.suppress(sqlite3.Error):
+            present = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
+                ("idx_requests_image_v1",),
+            ).fetchone()
+            if present is not None:
+                hint = " INDEXED BY idx_requests_image_v1"
+        return (
+            "SELECT provider AS provider,"
+            " COUNT(*) AS requests,"
+            " SUM(COALESCE(tokens_in, 0)) AS billed_tokens_in,"
+            " SUM(COALESCE(est_tokens_in, 0)) AS est_tokens_in,"
+            " SUM(COALESCE(est_image_tokens, 0)) AS est_image_tokens,"
+            " SUM(COALESCE(input_image_count, 0)) AS images"
+            f" FROM requests{hint}"
+            " WHERE est_image_tokens IS NOT NULL"
+            " AND provider IS NOT NULL"
+            " AND status = 'success'"
+            " AND COALESCE(cache_read_tokens, 0) = 0"
+            f"{since_clause}"
+            " GROUP BY provider"
+            " ORDER BY requests DESC"
+            " LIMIT ?"
+        )
+
     def image_estimate_by_provider(
         self, *, since: float | None = None, limit: int = _BREAKDOWN_LIMIT
     ) -> list[dict[str, Any]]:
@@ -4971,22 +5120,7 @@ class RequestLogStore:
                 rows = [
                     dict(row)
                     for row in conn.execute(
-                        "SELECT provider AS provider,"
-                        " COUNT(*) AS requests,"
-                        " SUM(COALESCE(tokens_in, 0)) AS billed_tokens_in,"
-                        " SUM(COALESCE(est_tokens_in, 0)) AS est_tokens_in,"
-                        " SUM(COALESCE(est_image_tokens, 0)) AS est_image_tokens,"
-                        " SUM(COALESCE(input_image_count, 0)) AS images"
-                        " FROM requests"
-                        " WHERE est_image_tokens IS NOT NULL"
-                        " AND provider IS NOT NULL"
-                        " AND status = 'success'"
-                        " AND COALESCE(cache_read_tokens, 0) = 0"
-                        f"{since_clause}"
-                        " GROUP BY provider"
-                        " ORDER BY requests DESC"
-                        " LIMIT ?",
-                        args,
+                        self._image_estimate_sql(conn, since_clause), args
                     ).fetchall()
                 ]
         except sqlite3.Error as exc:
