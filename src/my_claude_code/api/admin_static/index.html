@@ -2334,6 +2334,24 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <em>max_tokens raised from 64,000 to 131,072 for reasoning</em>.
                   Turning reasoning off changes nothing about the ask.
                 </p>
+                <p class="guide-note">
+                  <strong>What comes back is measured separately from what was
+                  asked.</strong> The Models page counts <em>reasoning requested</em> and
+                  <em>reasoning returned</em> as two independent facts, and Analytics
+                  stores the second as <code>thinking_chars</code>: <code>0</code> means
+                  a stream completed and carried no reasoning, while
+                  <em>Not measured</em> means nobody counted. From <strong>6.73.2</strong>
+                  the <strong>ChatGPT (Codex)</strong> provider returns thinking blocks
+                  whenever the endpoint sends a reasoning summary &mdash; its Responses
+                  protocol names that channel as an event type rather than a delta field,
+                  and the converter had no branch for it, so 2,671 of 2,671 requests over
+                  seven days read <em>returned 0</em> while the summary was arriving on
+                  57% of them. Rows written before that release stay at <code>0</code>:
+                  they record what was delivered, and nothing is backfilled. A turn where
+                  the endpoint sends only <code>encrypted_content</code> and no summary
+                  still reads <code>0</code>, and correctly &mdash; the model thought and
+                  released none of it, so no empty block is invented.
+                </p>
                 <p>
                   <code>MAX_OUTPUT_TOKENS_CEILING</code> on
                   <a href="#guide-limits">Limits &amp; Resilience</a> caps that widening

@@ -584,6 +584,7 @@ class ChatGPTOAuthProvider(BaseProvider):
             converter = ChatGPTOAuthStreamConverter(
                 ledger,
                 log_raw_events=self._config.log_raw_sse_events,
+                output_reasoning=reasoning.output_enabled,
             )
 
             async with self._rate_limiter.concurrency_slot():
