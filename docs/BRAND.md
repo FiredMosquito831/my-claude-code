@@ -68,6 +68,16 @@ OS icon slots:
 | `app-icon.icns` | 10% (same render as above) | multi-size slots: 16/32/128/256/512 | macOS `.app` bundle `CFBundleIconFile` |
 | `tray-icon.png` | 2% | 128×128, RGBA, transparent | System tray / menu-bar rendering at 16-24px, where the extra margin of the app-icon render would make the mark look too small |
 
+The dashboard ships one further derivative, a 96×96 downscale of the
+`app-icon` render at `src/my_claude_code/api/admin_static/img/app-icon-96.png`,
+served through `/admin/img/`. It is the sidebar brand mark and the admin
+page's favicon. It exists because the sidebar draws the mark at 40–48 CSS px
+and a page load should not pay for the full 256×256 render; it is a plain
+resize of the same file, never a re-draw. The mark is transparent and its
+inner glyph is near-black navy, so the sidebar sets it on a fixed white
+plate — behind the mark, never a gradient, glow or shadow on top of it — and
+that keeps it identical and legible in all four themes.
+
 These are deliberately **two separate source files**, not one file scaled at
 render time: the tighter 2% margin on `tray-icon.png` keeps the mark legible
 at the tiny sizes trays actually render (16-24px), where the 10% margin used
