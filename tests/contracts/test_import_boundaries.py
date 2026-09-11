@@ -63,6 +63,18 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "exists to show. Read-only, admin surface only."
     ),
     (
+        "my_claude_code.api.model_admin",
+        "my_claude_code.providers.openai_chat",
+    ): (
+        "Owner: admin Models page capability inspector. "
+        "Reason: which of a multi-surface gateway's endpoints a model is "
+        "served on is decided by the provider profile that declares those "
+        "surfaces, so the page reads the same resolver the request path uses. "
+        "A mirror in the api package would be a second answer to the same "
+        "question, and the whole point of the row is that it reports the real "
+        "one. Through the package facade, read-only, admin surface only."
+    ),
+    (
         "my_claude_code.api.request_pricing",
         "my_claude_code.providers.runtime.models_dev",
     ): (

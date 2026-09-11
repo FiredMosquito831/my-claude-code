@@ -1734,6 +1734,24 @@
                   its daily free quota, the 429 that resets at midnight UTC is recorded
                   against the provider and shown on <a href="#guide-learned">Models</a>.
                 </p>
+                <p>
+                  <strong>New in 6.74.0 &mdash; OpenCode Zen is four APIs, not one.</strong>
+                  Which one a model is served on is a property of that model, published in
+                  OpenCode's own registry, and two of the seven free models Zen lists today
+                  (both Muse Spark contributor models) live on the Responses API. Sending
+                  them to Chat Completions came back as a bare <code>HTTP 500</code> with
+                  nothing in it &mdash; the vendor has an open issue calling that a missing
+                  &ldquo;wrong endpoint&rdquo; error. MCC now resolves the endpoint per
+                  model and shows it on <a href="#guide-learned">Models</a> as a
+                  <em>wire surface</em> row: <code>responses (registry)</code> when the
+                  vendor published it, <code>(learned)</code> when MCC probed this
+                  deployment and found out, <code>(override)</code> when you pinned it. If
+                  the endpoint MCC picked refuses in a way that is about the endpoint, MCC
+                  spends one tiny probe on the other one, remembers the answer and retries
+                  your request there. Nothing is ever hidden: a model Zen serves through an
+                  API this provider does not speak keeps its row and reads
+                  <code>unservable</code> with the reason.
+                </p>
                 <table class="guide-table">
                   <thead><tr><th>Result</th><th>Almost always means</th></tr></thead>
                   <tbody>

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from my_claude_code.application.errors import InvalidRequestError
+from my_claude_code.application.model_metadata import ResponseSurface
 from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
@@ -102,6 +103,12 @@ OPENAI_STANDARD_REASONING = NamedEffortReasoning(
     _OPENAI_STANDARD_EFFORTS, origin=ReasoningDialectOrigin.DEFAULT
 )
 
+#: The models.dev bucket carrying OpenCode's own model registry, including the
+#: per-model ``provider.npm`` override that names each model's wire surface.
+#: One name for both OpenCode profiles: Zen and Go are the same vendor, the
+#: same credential and the same registry behind two path prefixes.
+OPENCODE_REGISTRY_PROVIDER = "opencode"
+
 
 @dataclass(frozen=True, slots=True)
 class OpenAIModelPagination:
@@ -158,6 +165,21 @@ class OpenAIChatProfile:
     # request declares one here; nothing in the construction path names a
     # provider or a model, which is the whole point of it being a field.
     client_identity: ClientIdentity | None = None
+    # Which wire surfaces this host serves, in the order they should be tried.
+    # Empty -- every profile but the two OpenCode ones -- means one surface,
+    # Chat Completions, and no surface resolution happens at all: that provider
+    # sends the request it has always sent, on the endpoint it has always sent
+    # it to, with nothing added to its request log.
+    #
+    # A flag on the profile rather than a check on the provider id, and that is
+    # the point: "this gateway fronts more than one API" is a property of a
+    # deployment, and the day another one does, it declares it here instead of
+    # somebody adding a second name to an ``if``.
+    response_surfaces: tuple[ResponseSurface, ...] = ()
+    # The models.dev bucket whose per-model ``provider.npm`` overrides say
+    # which surface each model is on. Empty means "nothing published", and the
+    # resolver falls through to the learned facts and then to the default.
+    surface_registry_provider: str = ""
 
     @property
     def provider_name(self) -> str:
@@ -302,6 +324,17 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         # unconditionally.
         NamedEffortReasoning(_ALL_EFFORTS, disabled_value="none"),
         client_identity=OPENCODE_CLIENT_IDENTITY,
+        # Zen is a front door onto four APIs, and its own registry says which
+        # one each model is behind. Two of the seven free models it lists today
+        # -- both Muse Spark contributor models -- are Responses-only, which is
+        # why every request MCC made to them before 6.74.0 came back a bare
+        # HTTP 500 (CONFIRMED 2026-09-11: the same model, key and headers, 500
+        # on /chat/completions and 200 on /responses minutes apart).
+        response_surfaces=(
+            ResponseSurface.CHAT_COMPLETIONS,
+            ResponseSurface.RESPONSES,
+        ),
+        surface_registry_provider=OPENCODE_REGISTRY_PROVIDER,
     ),
     "opencode_go": OpenAIChatProfile(
         _policy(
@@ -312,6 +345,18 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         OPENAI_STANDARD_REASONING,
         client_identity=OPENCODE_CLIENT_IDENTITY,
+        # The Go endpoint is the same vendor, the same credential and the same
+        # model registry behind a different path prefix, so it is declared the
+        # same way. Nothing about it was measured -- the subscription behind
+        # this machine's key is out of credit and answers 401 to everything --
+        # which is exactly why the registry is only the *first* source: a Go
+        # model whose surface the registry gets wrong is corrected by one probe
+        # and remembered, without a release.
+        response_surfaces=(
+            ResponseSurface.CHAT_COMPLETIONS,
+            ResponseSurface.RESPONSES,
+        ),
+        surface_registry_provider=OPENCODE_REGISTRY_PROVIDER,
     ),
     "vercel": OpenAIChatProfile(
         _policy(

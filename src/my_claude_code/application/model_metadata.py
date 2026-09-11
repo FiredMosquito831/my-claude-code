@@ -235,3 +235,73 @@ class ProviderModelRefreshResult:
             if failure.provider_id == provider_id:
                 return failure
         return None
+
+
+class ResponseSurface(StrEnum):
+    """Which wire protocol one model is actually served on.
+
+    A gateway is not always one API. OpenCode Zen is a front door onto four:
+    its own registry gives each model a ``provider.npm`` override that selects
+    the surface, and a request sent to the wrong one is answered with a bare
+    HTTP 500 that names nothing (vendor issue ``anomalyco/opencode#47969``).
+    So "which endpoint" is a per-model property like any other capability, and
+    it is read from metadata rather than from the model's name -- the rule
+    ``test_no_header_value_is_derived_from_the_model_name`` already enforces
+    one level up.
+
+    :data:`UNSERVABLE` is a real answer, not an absence: it says MCC knows
+    which surface this model needs and does not speak it. A model that resolves
+    to it is still **listed**, with the reason shown. Nothing here ever hides a
+    model.
+    """
+
+    #: ``POST <base>/chat/completions``. The default, and what every
+    #: OpenAI-compatible profile has always sent.
+    CHAT_COMPLETIONS = "chat_completions"
+    #: ``POST <base>/responses``. Selected by ``provider.npm ==
+    #: "@ai-sdk/openai"``; confirmed live against
+    #: ``muse-spark-1.3-contributor-free`` on 2026-09-11.
+    RESPONSES = "responses"
+    #: ``POST <base>/messages``. Selected by ``provider.npm ==
+    #: "@ai-sdk/anthropic"``. INFERRED from the package, never probed: the one
+    #: free model on it has been withdrawn.
+    MESSAGES = "messages"
+    #: A surface this provider cannot speak at all (``@ai-sdk/google``), or one
+    #: every probe failed on. Listed with the reason, never hidden.
+    UNSERVABLE = "unservable"
+
+
+class ResponseSurfaceSource(StrEnum):
+    """Where a resolved :class:`ResponseSurface` came from.
+
+    Ordered as the resolver reads them, strongest first: an operator said so,
+    then MCC measured it, then the published registry, then the default nobody
+    stands behind.
+    """
+
+    #: ``model_overrides.json`` named it.
+    OVERRIDE = "override"
+    #: A probe of this deployment succeeded on it and the fact was stored.
+    LEARNED = "learned"
+    #: The vendor's own published registry (models.dev ``provider.npm``).
+    REGISTRY = "registry"
+    #: Nothing said anything, so the family's long-standing surface stands.
+    DEFAULT = "default"
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedResponseSurface:
+    """One model's surface, and why MCC believes it."""
+
+    surface: ResponseSurface
+    source: ResponseSurfaceSource
+    #: One short clause for the Models page and the log line -- the npm
+    #: package that selected it, or the probe that proved it. Never a
+    #: credential, never response text.
+    detail: str = ""
+
+    @property
+    def label(self) -> str:
+        """``"responses (registry)"`` -- what the Models page shows."""
+
+        return f"{self.surface.value} ({self.source.value})"

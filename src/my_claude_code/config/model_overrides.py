@@ -78,6 +78,23 @@ ALLOWED_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
     }
 )
 
+#: Settable here, and deliberately **not** in
+#: :data:`ALLOWED_OVERRIDE_PARAMETERS`: these are operator statements *about*
+#: a model, not fields of a request body, and that list is a body-injection
+#: boundary rather than a convenience. Anything named here is parsed, stored
+#: and handed to the layer that owns it;
+#: :func:`apply_model_parameter_overrides` never writes one into a body.
+#:
+#: ``response_surface`` names which wire endpoint a gateway serves this model
+#: on (``chat_completions`` / ``responses`` / ``messages`` / ``unservable``).
+#: The vocabulary is checked where the enum lives -- the provider layer -- not
+#: here, because this module is a leaf and importing the enum would make it
+#: one no longer. An unrecognised value is logged and ignored there, so the
+#: resolved surface falls back to the next source rather than to nothing.
+NON_BODY_OVERRIDE_PARAMETERS: frozenset[str] = frozenset({"response_surface"})
+
+RESPONSE_SURFACE_OVERRIDE = "response_surface"
+
 # Named rather than merely absent, so a user who sets one is told why it did
 # nothing instead of watching it be ignored alongside their typos.
 OWNED_ELSEWHERE_PARAMETERS: dict[str, str] = {
@@ -162,6 +179,26 @@ class ModelParameterOverrides:
         resolved.update(self.models.get(normalize_override_key(model_ref), {}))
         return resolved
 
+    def non_body_override(
+        self, name: str, provider_id: str, model_ref: str
+    ) -> str | None:
+        """Return one :data:`NON_BODY_OVERRIDE_PARAMETERS` value, or ``None``.
+
+        Same per-parameter merge as :meth:`resolve` -- a model row beats the
+        provider row -- and the same meaning for absence: nobody said anything,
+        which is not the same as saying "the default". A ``null`` written to
+        force the key off resolves to ``None`` too, which is exactly right
+        here: the operator has stopped stating an opinion and the next source
+        down answers instead.
+        """
+
+        if name not in NON_BODY_OVERRIDE_PARAMETERS:
+            return None
+        value = self.resolve(provider_id, model_ref).get(name)
+        if not isinstance(value, str) or not value.strip():
+            return None
+        return value.strip()
+
     def as_document(self) -> dict[str, dict[str, dict[str, Any]]]:
         """Render back to the on-disk shape."""
 
@@ -212,7 +249,7 @@ def _parse_parameters(raw: Mapping[Any, Any], where: str) -> dict[str, Any]:
                 OWNED_ELSEWHERE_PARAMETERS[name],
             )
             continue
-        if name not in ALLOWED_OVERRIDE_PARAMETERS:
+        if name not in ALLOWED_OVERRIDE_PARAMETERS | NON_BODY_OVERRIDE_PARAMETERS:
             logger.warning(
                 "MODEL OVERRIDES: '{}.{}' is not a known request parameter; ignoring it",
                 where,
@@ -322,6 +359,11 @@ def apply_model_parameter_overrides(
         return {}
     applied: dict[str, Any] = {}
     for name, value in overrides.resolve(provider_id, model_ref).items():
+        # The boundary, enforced rather than merely documented: a key that is
+        # an operator statement about a model never becomes a field of the
+        # body sent to the host.
+        if name in NON_BODY_OVERRIDE_PARAMETERS:
+            continue
         if value is None:
             # Only a key that was actually there counts as applied: forcing off
             # something nobody set changed nothing and should not read as an

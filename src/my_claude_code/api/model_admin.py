@@ -31,6 +31,7 @@ from my_claude_code.application.model_metadata import (
     ModelListingProvenance,
     ModelReasoningCapability,
     ProviderModelInfo,
+    ResponseSurfaceSource,
 )
 from my_claude_code.config.model_overrides import (
     ALLOWED_OVERRIDE_PARAMETERS,
@@ -53,6 +54,7 @@ from my_claude_code.core.reasoning import (
     ReasoningDialect,
     ReasoningDialectOrigin,
 )
+from my_claude_code.providers.openai_chat import catalogue_surface
 from my_claude_code.providers.runtime.models_dev import (
     cross_provider_match,
     model_context_length_tiered,
@@ -101,6 +103,18 @@ FACT_KIND_LABELS: dict[str, str] = {
     "tool_calls_unsupported": "no tool calls",
     "models_etag": "catalogue validator",
     "client_identity_required": "client identity checked",
+    "response_surface": "wire surface",
+}
+
+# Where a resolved wire surface came from, in the operator's words. A separate
+# table from ``SOURCE_LABELS`` on purpose: that one names rungs of the
+# capability ladder, and a surface is not resolved on it -- an endpoint is a
+# fact about a deployment, never a number voted across catalogues.
+SURFACE_SOURCE_LABELS: dict[str, str] = {
+    ResponseSurfaceSource.OVERRIDE: "an operator override",
+    ResponseSurfaceSource.LEARNED: "a probe of this deployment",
+    ResponseSurfaceSource.REGISTRY: "the vendor's published registry",
+    ResponseSurfaceSource.DEFAULT: "this provider's only surface",
 }
 
 # Which capability field a fact narrows, so the chip can be drawn beside the
@@ -570,6 +584,35 @@ def capability_payload(
         ),
         "reasoning": reasoning,
         "reasoning_dialect": dialect_payload(dialect),
+        # Which of a multi-surface gateway's endpoints MCC will actually post
+        # this model to, and why. ``None`` -- and therefore no row at all --
+        # for every provider that has one surface, which is 39 of the 41.
+        "response_surface": response_surface_payload(provider_id, model_id),
+    }
+
+
+def response_surface_payload(provider_id: str, model_id: str) -> dict[str, Any] | None:
+    """The wire surface for one model, in the capability row's own shape.
+
+    ``unservable`` is a value like any other here, and it always carries the
+    reason in ``note``: a model this provider cannot reach keeps its row and
+    says why, because a catalogue that quietly drops a model the vendor is
+    giving away is the failure this whole feature exists to avoid.
+    """
+
+    resolved = catalogue_surface(provider_id, model_id)
+    if resolved is None:
+        return None
+    return {
+        "value": resolved.surface.value,
+        "source": resolved.source.value,
+        "source_label": SURFACE_SOURCE_LABELS.get(resolved.source, resolved.source),
+        "approximate": False,
+        "reference": False,
+        "tier": None,
+        "tier_label": None,
+        "note": resolved.detail,
+        "label": resolved.label,
     }
 
 
