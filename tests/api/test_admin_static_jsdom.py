@@ -3067,3 +3067,22 @@ class TestDesktopAppUpdateBanner:
         assert "available" not in state["banners"]
         # But the panel still reports what is installed, so a person can check.
         assert "v6.60.0" in state["panel"]
+
+
+def test_analytics_paints_while_the_cost_breakdown_is_still_loading(rendered) -> None:
+    """The slowest panel on the page must not hold the other three hostage.
+
+    Measured on a 4.5 GB log: the cost breakdown takes 9.0 s, the stats panel
+    0.11 s, the request list 0.15 s and the lifetime totals 0.004 s. Inside one
+    ``Promise.all`` that made opening Analytics a nine-second wait for numbers
+    that were ready in a tenth of a second. Here the cost route is held open,
+    and the page must already be drawn when it is.
+    """
+
+    panel = rendered["costPanel"]
+
+    assert panel["statCardsWhileCostPending"] > 0
+    assert panel["noteWhileCostPending"] == "Working out what this traffic cost..."
+    # Started with the others, not after them: the wait moved, not the request.
+    assert panel["costRequested"] >= 1
+    assert panel["noteAfterCostLands"] != panel["noteWhileCostPending"]

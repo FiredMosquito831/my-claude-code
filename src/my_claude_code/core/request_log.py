@@ -209,6 +209,26 @@ def _cost_row(row: Any, *, key: str | None) -> dict[str, Any]:
     return shaped
 
 
+def _copy_cost_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a cost breakdown deeply enough that a caller cannot edit the cache.
+
+    ``stats()`` gets away with a shallow ``dict()`` because its own callers do
+    not mutate the lists inside it; this payload is four lists of dictionaries
+    and a route could reasonably annotate one. Two hundred rows at most, so the
+    copy is far cheaper than the bug it forecloses.
+    """
+
+    copied: dict[str, Any] = {}
+    for name, value in payload.items():
+        if isinstance(value, list):
+            copied[name] = [dict(row) for row in value]
+        elif isinstance(value, Mapping):
+            copied[name] = dict(value)
+        else:
+            copied[name] = value
+    return copied
+
+
 def _cost_sort_key(row: Mapping[str, Any]) -> tuple[float, int]:
     """Order cost rows by spend, then by volume.
 
@@ -3994,6 +4014,35 @@ class RequestLogStore:
         NULL, and NULL -- not zero -- is the correct answer for a group nothing
         priced.
         """
+        limit = max(1, min(limit, 200))
+        # Twelve elements, and the first is a literal string. ``stats()`` keys
+        # on a ten-element tuple of filters, and the two live in the same dict:
+        # a different arity is what makes a collision impossible, which matters
+        # here because a user really can filter on ``provider=cost_breakdown``.
+        # The same shape ``reasoning_by_model`` and ``image_estimate_by_provider``
+        # already use.
+        cache_key = (
+            "cost_breakdown",
+            limit,
+            provider,
+            model,
+            status,
+            endpoint,
+            key,
+            since,
+            until,
+            q,
+            local,
+            harness,
+        )
+        now = time.monotonic()
+        with self._stats_lock:
+            cached = self._stats_cache.get(cache_key)
+            if cached is not None:
+                if now - cached[0] < _STATS_CACHE_TTL_SECONDS:
+                    self._stats_cache.move_to_end(cache_key)
+                    return _copy_cost_payload(cached[1])
+                del self._stats_cache[cache_key]
         where, args = self._where(
             provider=provider,
             model=model,
@@ -4006,7 +4055,6 @@ class RequestLogStore:
             local=local,
             harness=harness,
         )
-        limit = max(1, min(limit, 200))
         measures = (
             "SUM(CASE WHEN cost_source = 'provider' THEN cost_usd END)"
             " AS reported_usd,"
@@ -4047,6 +4095,22 @@ class RequestLogStore:
                     reverse=True,
                 )
                 result[f"by_{name}"] = ordered[:limit]
+        with self._stats_lock:
+            # Stamped when the answer was *finished*, not when it was asked for.
+            # Every neighbouring method in this file stamps the start, and for
+            # them that is the same instant -- ``stats()`` answers in 0.11 s.
+            # This one measured 12 s on a 4.5 GB log, which is longer than the
+            # whole TTL: stamping the start meant every entry was already
+            # expired the moment it was written, and the cache never once hit.
+            # Measured: two consecutive calls 12.0 s and 12.2 s before this
+            # line, 13.4 s and 0.004 s after it.
+            self._stats_cache[cache_key] = (
+                time.monotonic(),
+                _copy_cost_payload(result),
+            )
+            self._stats_cache.move_to_end(cache_key)
+            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
+                self._stats_cache.popitem(last=False)
         return result
 
     def get_request(self, request_id: str) -> dict[str, Any] | None:

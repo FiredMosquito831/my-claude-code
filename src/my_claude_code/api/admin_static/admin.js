@@ -10884,18 +10884,23 @@ async function loadRequestsView() {
   let stats;
   let list;
   let lifetime;
-  let cost;
+  // The cost panel is computed apart from stats -- the stats rollup counts
+  // integers over nine dimensions, and a currency in it would mean a versioned
+  // rebuild of every bucket on every install -- and it is also by far the
+  // slowest thing this page asks for: measured at 9.0 s against 0.11 s for
+  // stats, 0.15 s for the list and 0.004 s for lifetime on a 4.5 GB log.
+  // Inside the Promise.all that made the whole page wait for it, so opening
+  // Analytics cost nine seconds to show numbers that were ready in a tenth of
+  // one. The request still starts here, at the same moment as the other three;
+  // only the *wait* has moved, to after the page has painted.
+  loadRequestCostPanel(loadId, params);
   try {
-    [stats, list, lifetime, cost] = await Promise.all([
+    [stats, list, lifetime] = await Promise.all([
       api(`/admin/api/requests/stats?${params}`),
       api(
         `/admin/api/requests?limit=${reqState.limit}&offset=${reqState.offset}&${params}`,
       ),
       api("/admin/api/requests/lifetime"),
-      // Served apart from stats because it is computed apart: the stats
-      // rollup counts integers over nine dimensions, and a currency in it
-      // would mean a versioned rebuild of every bucket on every install.
-      api(`/admin/api/requests/cost?${params}`),
     ]);
   } catch (error) {
     if (loadId !== reqState.loadId) return;
@@ -10948,7 +10953,6 @@ async function loadRequestsView() {
   renderRequestFallbackRoutes(stats.fallback_routes || []);
   renderRequestDivertedRoutes(stats.diverted_routes || []);
   renderReqBreakdownTruncatedNote(stats);
-  renderRequestCost(cost);
   reqState.total = list.total || 0;
   renderRequestsTable(list.rows || []);
   renderReqPager();
@@ -11274,6 +11278,27 @@ function renderRequestStatsCards(stats) {
    nobody can tell which half was which -- which is exactly the failure the
    whole provenance column exists to prevent. Every sum carries its own
    "N of M priced" denominator for the same reason. */
+async function loadRequestCostPanel(loadId, params) {
+  // Says what it is doing while it does it, then fills the card it owns. A
+  // stale load (the user changed a filter while this was in flight) drops its
+  // answer on the floor, the same rule the rest of this view follows.
+  const note = byId("reqCostNote");
+  note.textContent = "Working out what this traffic cost...";
+  let cost;
+  try {
+    cost = await api(`/admin/api/requests/cost?${params}`);
+  } catch (error) {
+    // Deliberately not rethrown: this promise is not awaited on the paint
+    // path, and an unhandled rejection would be a console error for a card
+    // that can say so itself.
+    if (loadId !== reqState.loadId) return;
+    note.textContent = `The cost breakdown could not be loaded: ${error.message}`;
+    return;
+  }
+  if (loadId !== reqState.loadId) return;
+  renderRequestCost(cost);
+}
+
 function renderRequestCost(cost) {
   const cards = byId("reqCostCards");
   const note = byId("reqCostNote");

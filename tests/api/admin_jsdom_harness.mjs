@@ -1670,8 +1670,14 @@ let customCreateResult = {
     message: "query failure: PermissionDeniedError",
   },
 };
+// Held open by the cost-panel block below: the whole point of taking the cost
+// breakdown out of the Analytics `Promise.all` is that a slow cost answer must
+// not delay the paint, and a stub that resolves instantly cannot show that.
+const slowRoutes = new Map();
 window.fetch = async (url, options = {}) => {
   fetchCalls.push(String(url).split("?")[0]);
+  const gate = slowRoutes.get(String(url).split("?")[0]);
+  if (gate) await gate;
   // The query string is the whole point for the analytics filters: which
   // filter went out, and whether the page reset to offset 0.
   fetchUrls.push(String(url));
@@ -3320,6 +3326,39 @@ const analytics = {};
   analytics.loadsAfterEnterAndPause = statsCalls().length;
 }
 
+// ------------------------------------------------------- cost panel timing
+/* The Analytics page must paint from the three fast answers while the cost
+   breakdown -- measured at 9 s on a real 4.5 GB log against 0.11 s for stats --
+   is still in flight, and then fill its own card. */
+const costPanel = {};
+{
+  let release = () => {};
+  slowRoutes.set(
+    "/admin/api/requests/cost",
+    new Promise((resolve) => {
+      release = resolve;
+    }),
+  );
+  doc.getElementById("reqStatsCards").innerHTML = "";
+  doc.getElementById("reqCostNote").textContent = "";
+  const requestsLink = navLinks.find((link) => link.dataset.view === "requests");
+  requestsLink.click();
+  await new Promise((resolve) => setTimeout(resolve, 250));
+
+  // The page has painted and the cost card says what it is doing, with the
+  // cost request already sent rather than queued behind the paint.
+  costPanel.statCardsWhileCostPending = doc.getElementById("reqStatsCards").children.length;
+  costPanel.noteWhileCostPending = doc.getElementById("reqCostNote").textContent;
+  costPanel.costRequested = fetchCalls.filter(
+    (path) => path === "/admin/api/requests/cost",
+  ).length;
+
+  release();
+  slowRoutes.delete("/admin/api/requests/cost");
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  costPanel.noteAfterCostLands = doc.getElementById("reqCostNote").textContent;
+}
+
 // ------------------------------------------------- harness attribution
 /* Who sent the request, end to end: the column and its chip, the empty-state
    colspan that has to follow the header, the modal's two wordings, the filter
@@ -4524,6 +4563,7 @@ console.log(
       visionMode,
       describedImages,
       analytics,
+      costPanel,
       harnessAttr,
       optimizer: {
         present: Boolean(optimizer),
