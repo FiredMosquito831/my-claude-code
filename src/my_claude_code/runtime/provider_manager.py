@@ -39,6 +39,11 @@ from my_claude_code.providers.runtime.models_dev import (
     resolve_model_reasoning_capability,
 )
 from my_claude_code.providers.runtime.validation import ConfiguredModelValidator
+from my_claude_code.runtime.catalogue_store import (
+    catalogue_scope_key,
+    read_stored_catalogue,
+    store_catalogue,
+)
 
 ProviderRuntimeFactory = Callable[[Settings], ProviderRuntime]
 ConnectedProviderIds = Callable[[], tuple[str, ...]]
@@ -130,6 +135,11 @@ class ProviderRuntimeManager:
         # When the last sweep finished, for the dashboard's "last refreshed"
         # readout. None until one has completed in this process.
         self._last_refresh_at: float | None = None
+        # True while the catalogue in memory is the one a previous process
+        # wrote and no sweep has corrected it yet. The Models page says so, so
+        # that "last refreshed 40 min ago" is not mistaken for a sweep this
+        # process ran.
+        self._catalogue_from_store = False
         self._next_generation_id = 2
         self._retired: dict[int, _ProviderGeneration] = {}
         self._unpublished: set[ProviderRuntime] = set()
@@ -534,6 +544,70 @@ class ProviderRuntimeManager:
         return self._refresh_task is not None and not self._refresh_task.done()
 
     @property
+    def catalogue_from_store(self) -> bool:
+        """Whether the catalogue in memory was loaded rather than swept."""
+
+        return self._catalogue_from_store
+
+    def load_stored_catalogue(self) -> int:
+        """Fill the model cache from the stored catalogue. Returns the models read.
+
+        Called once, before the start sweep, on a worker thread: it is one file
+        read and a parse, and the point of it is that the first Models page and
+        the first ``/v1/models`` are answerable before any provider has been
+        asked anything. The sweep runs behind readiness exactly as it does now
+        and overwrites what it learns.
+
+        Never fatal, and never a reason to fail a start -- an unreadable
+        document just means the sweep is the only source, which is what every
+        release before this one did.
+        """
+
+        if self._closing or self._closed:
+            return 0
+        key = catalogue_scope_key(self._model_cache.cached_scope())
+        try:
+            stored = read_stored_catalogue(key)
+        except Exception as exc:
+            logger.debug("Stored model catalogue could not be read: {}", exc)
+            return 0
+        if stored is None:
+            return 0
+        catalogues, written_at = stored
+        loaded = 0
+        for provider_id, infos in catalogues.items():
+            self._model_cache.cache_model_infos(provider_id, infos)
+            if self._model_cache.has_provider(provider_id):
+                loaded += len(infos)
+        if not loaded:
+            return 0
+        self._last_refresh_at = written_at
+        self._catalogue_from_store = True
+        # Deliberately not published to the harness catalogue documents. Those
+        # are files in the user's own tool configs, the sweep a few seconds
+        # later writes them with whatever it learns, and writing them twice per
+        # start to say the same thing is exactly the churn the "do not rewrite
+        # an unchanged catalogue" rule exists to stop.
+        logger.info(
+            "Loaded {} models from the stored catalogue written {:.0f}s ago",
+            loaded,
+            max(0.0, time.time() - written_at),
+        )
+        return loaded
+
+    def _store_catalogue(self, computed_at: float) -> None:
+        """Write what the sweep just learned, unless it is already on disk."""
+
+        try:
+            store_catalogue(
+                self._model_cache.cached_model_infos_by_provider(),
+                catalogue_scope_key(self._model_cache.cached_scope()),
+                computed_at=computed_at,
+            )
+        except Exception as exc:
+            logger.debug("Model catalogue could not be stored: {}", exc)
+
+    @property
     def last_catalogue_refresh_at(self) -> float | None:
         """Epoch seconds of the last completed sweep, or ``None``."""
 
@@ -745,7 +819,12 @@ class ProviderRuntimeManager:
                 only_missing=only_missing, skip_provider_ids=skip_provider_ids
             )
             self._last_refresh_at = time.time()
+            self._catalogue_from_store = False
             self._publish_model_catalog()
+            # On a worker thread: a 1 MB document written under the event loop
+            # is a stall on every configured provider's behalf, and nothing
+            # waits for this.
+            await asyncio.to_thread(self._store_catalogue, self._last_refresh_at)
             return result
         finally:
             await self._release(generation)

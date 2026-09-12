@@ -66,6 +66,33 @@ class ProviderModelCache:
             for provider_id, infos in self._model_infos_by_provider.items()
         }
 
+    def cached_scope(self) -> frozenset[str]:
+        """Which providers this cache will accept metadata for.
+
+        The stored catalogue is keyed on it: a document written when a
+        different set of providers was configured describes a different
+        installation, and the sweep that was going to run anyway is the cheap
+        answer to that.
+        """
+
+        return self._available_provider_ids
+
+    def cached_model_infos_by_provider(
+        self,
+    ) -> dict[str, tuple[ProviderModelInfo, ...]]:
+        """Every cached catalogue, whole, in the order each provider listed it.
+
+        The order is part of the answer: ``cached_prefixed_model_infos`` walks
+        these dicts in insertion order, and a catalogue restored from disk that
+        reordered them would change what the Models page and ``/v1/models``
+        list first.
+        """
+
+        return {
+            provider_id: tuple(infos.values())
+            for provider_id, infos in self._model_infos_by_provider.items()
+        }
+
     def has_provider(self, provider_id: str) -> bool:
         """Return whether this provider has any cached model-list result."""
         return provider_id in self._model_infos_by_provider

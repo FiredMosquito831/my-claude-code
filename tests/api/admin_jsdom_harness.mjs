@@ -4579,10 +4579,54 @@ for (const [label, info] of [
   };
 }
 
+// The catalogue readout has three sentences to tell apart: a sweep this
+// process ran, a catalogue this process only read from disk (which must not
+// claim a network call it never made), and the sweep being off entirely.
+const catalogueReadout = {};
+{
+  const seconds = Date.now() / 1000;
+  for (const [label, status] of [
+    [
+      "swept",
+      {
+        enabled: true,
+        last_refreshed_at: seconds - 720,
+        next_refresh_at: seconds + 2880,
+        refreshing: false,
+        from_stored_catalogue: false,
+      },
+    ],
+    [
+      "stored",
+      {
+        enabled: true,
+        last_refreshed_at: seconds - 2400,
+        next_refresh_at: seconds + 1200,
+        refreshing: true,
+        from_stored_catalogue: true,
+      },
+    ],
+    ["off", { enabled: false }],
+  ]) {
+    // Through the real loader and the real route, because the readout is
+    // rendered from whatever that payload said -- reaching into the page's
+    // own state would be testing a different function.
+    MODEL_ADMIN_PAGE.catalogue_refresh = status;
+    await window.eval("loadModelsView(true)");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    catalogueReadout[label] = (
+      doc.getElementById("modelsRefreshReadout").textContent || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+}
+
 console.log(
   JSON.stringify(
     {
       fatal: null,
+      catalogueReadout,
       desktopAppBanner,
       guideLinks,
       scriptErrors,

@@ -261,6 +261,12 @@ class ApplicationRuntime:
             # every configured provider over the network. It used to run
             # before the listener existed, which is most of why a start looked
             # like a free port for twenty seconds.
+            # Before the sweep, and on a worker thread: one file read that
+            # makes the first Models page and the first /v1/models answerable
+            # without waiting for twelve gateways. The sweep below runs behind
+            # readiness exactly as it did, and overwrites what it learns.
+            state.mark("stored-catalogue")
+            await asyncio.to_thread(self.provider_manager.load_stored_catalogue)
             state.mark("catalogue")
             self.provider_manager.start_model_list_refresh()
             state.mark("rediscovery")
@@ -680,6 +686,13 @@ class ApplicationRuntime:
             "last_refreshed_at": self.provider_manager.last_catalogue_refresh_at,
             "next_refresh_at": self._discovery_timer.next_refresh_at,
             "running": self._discovery_timer.running,
+            # Two different questions the readout has to keep apart: whether a
+            # sweep is happening right now, and whether the catalogue on show
+            # is one this process swept or one it read from disk. Without the
+            # second, "last refreshed 40 min ago" reads as a sweep that never
+            # happened in this process.
+            "refreshing": self.provider_manager.refresh_in_flight,
+            "from_stored_catalogue": self.provider_manager.catalogue_from_store,
         }
 
     async def refresh_models(self) -> ProviderModelRefreshResult:
