@@ -11366,9 +11366,24 @@ function costPanelNote(cost) {
       ? ""
       : ` Mode: ${cost.cost_estimation_mode}.`;
   const litellm = cost.cost_source_litellm_enabled ? "" : " LiteLLM source off.";
+  const asOf = costAsOfNote(cost);
   return sources
-    ? `Priced by — ${sources}.${mode}${litellm}`
-    : `Nothing in this range could be priced.${mode}${litellm}`;
+    ? `Priced by — ${sources}.${mode}${litellm}${asOf}`
+    : `Nothing in this range could be priced.${mode}${litellm}${asOf}`;
+}
+
+// A stored answer says when it was true. Silence would be the dishonest
+// option: the whole point of keeping this payload across a restart is that the
+// reader does not wait twelve seconds for it, and the price of that is saying
+// out loud that the figures are from a moment ago and a fresh set is coming.
+function costAsOfNote(cost) {
+  if (!cost || !cost.computed_at) return "";
+  const when = new Date(Number(cost.computed_at) * 1000);
+  if (Number.isNaN(when.getTime())) return "";
+  const clock = when.toLocaleTimeString();
+  return cost.stale
+    ? ` As of ${clock}, refreshing.`
+    : ` As of ${clock}.`;
 }
 
 // Prune leaves the count just above the cap between runs, so an exact

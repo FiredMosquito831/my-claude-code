@@ -38,6 +38,11 @@ from my_claude_code.api.model_admin import (
 )
 from my_claude_code.api.model_catalog import settings_model_visibility
 from my_claude_code.api.optimization_handlers import OPTIMIZATION_RULE_SPECS
+from my_claude_code.application.derived_payloads import (
+    cached_payload,
+    cost_breakdown_cache_key,
+    cost_breakdown_entry_name,
+)
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.release_updates import (
     get_release_status,
@@ -2846,19 +2851,40 @@ async def request_log_cost(
         return {"enabled": False}
     _validate_request_log_status(status)
     _validate_request_log_local(local)
-    result = await asyncio.to_thread(
-        store.cost_breakdown,
-        provider=provider,
-        model=model,
-        status=status,
-        endpoint=endpoint,
-        key=key,
-        since=since,
-        until=until,
-        q=q,
-        local=local,
-        harness=harness,
-    )
+    filters: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "status": status,
+        "endpoint": endpoint,
+        "key": key,
+        "since": since,
+        "until": until,
+        "q": q,
+        "local": local,
+        "harness": harness,
+    }
+
+    def compute() -> dict[str, Any]:
+        return store.cost_breakdown(**filters)
+
+    entry_name = cost_breakdown_entry_name(**filters)
+    if entry_name is None:
+        # A filtered question is asked once and moved on from; it is answered
+        # the way it always was.
+        result = await asyncio.to_thread(compute)
+        result["stale"] = False
+    else:
+        # The unfiltered breakdown is what the page opens with, and it is the
+        # twelve seconds a restart used to cost. Answered from the stored
+        # payload whenever the log has not changed under it -- and answered
+        # *immediately* even when it has, marked stale, with the recomputation
+        # behind it.
+        key_for_entry = await asyncio.to_thread(
+            cost_breakdown_cache_key, store, **filters
+        )
+        result = await asyncio.to_thread(
+            cached_payload, entry_name, key=key_for_entry, compute=compute
+        )
     result["enabled"] = True
     # Whether costing is on at all, and under which rules. A page showing an
     # empty cost card has to be able to say *why* it is empty: nothing priced,

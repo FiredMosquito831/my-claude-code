@@ -155,6 +155,25 @@ def _isolate_request_log(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _reset_derived_refresh_state():
+    """Forget any in-flight derived-payload refresh between tests.
+
+    ``application.derived_payloads`` keeps one process-wide set of the entries
+    currently being recomputed, so that a page polling three times does not
+    start three twelve-second recomputations of the same answer. It is a
+    singleton, and the house rule for a singleton is that a test never inherits
+    another test's copy of it.
+    """
+    from my_claude_code.application import derived_payloads
+
+    with derived_payloads._refresh_lock:
+        derived_payloads._refreshing.clear()
+    yield
+    with derived_payloads._refresh_lock:
+        derived_payloads._refreshing.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_websearch_analytics(monkeypatch, tmp_path):
     """Keep the web-search analytics database out of the real config directory.
 
