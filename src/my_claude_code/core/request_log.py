@@ -11,11 +11,11 @@ import sqlite3
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Generator, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from compression import zstd
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
@@ -33,6 +33,71 @@ from my_claude_code.core.upstream_ladder import format_status_census
 # opened. See ``tests/contracts/test_config_dir_is_single_sourced.py``, which
 # pins the two modules' column inventories together.
 _default_request_log_path: Path | None = None
+
+#: What the one-time cost backfill calls to price one historical row:
+#: ``(provider, model, tokens_in, tokens_out, cache_read, cache_write)`` ->
+#: ``(cost_usd, cost_source)``.
+#:
+#: Injected for the same reason the path above is. The pricing ladder lives in
+#: ``application.cost`` and its rungs are catalogues in ``providers``; ``core``
+#: may import neither. Re-implementing the ladder here would be a second answer
+#: to the question ``cost_source`` exists to record the answer to, and the two
+#: would drift the first time a rung changed. So the composition root hands the
+#: real one in, and a process that never registers one simply never backfills.
+CostBackfillPricer = Callable[
+    [str | None, str | None, int | None, int | None, int | None, int | None],
+    tuple[float | None, str | None],
+]
+
+_cost_backfill_pricer: CostBackfillPricer | None = None
+
+
+def _utc_day(ts_epoch: float) -> str:
+    """The UTC calendar day one timestamp falls in, as ``YYYY-MM-DD``.
+
+    The same spelling ``_COST_DIMENSION_SQL`` groups by, so a backfill's
+    progress and the cost card's day buckets name the same days.
+    """
+    return datetime.fromtimestamp(ts_epoch, tz=UTC).strftime("%Y-%m-%d")
+
+
+def _next_utc_day(day: str) -> str | None:
+    """The day after ``day``, or None if that is not a day at all.
+
+    None rather than a raise: the value arrives from a stored marker, and a
+    database carrying a nonsense one must cost a rescan, never a start.
+    """
+    try:
+        parsed = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+    return (parsed + timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def _utc_day_bounds(day: str) -> tuple[float, float]:
+    """``[start, end)`` epoch seconds for one UTC day.
+
+    Half-open, so consecutive days neither overlap nor leave a second between
+    them -- a row at exactly midnight belongs to the day that starts there.
+    """
+    start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)
+    return (start.timestamp(), (start + timedelta(days=1)).timestamp())
+
+
+def set_cost_backfill_pricer(pricer: CostBackfillPricer | None) -> None:
+    """Register (or clear) the pricer the historical cost backfill may use.
+
+    Called by the server's composition root once the models.dev catalogue is
+    known to be on disk, and by tests in their teardown. Until it is called the
+    backfill does not run at all -- which is the desired behaviour on a cold
+    cache, because the backfill's "nobody publishes a rate for this" is
+    recorded permanently and must never be recorded about a catalogue that was
+    merely missing.
+    """
+
+    global _cost_backfill_pricer
+    _cost_backfill_pricer = pricer
+
 
 RequestStatus = Literal["success", "error", "cancelled"]
 
@@ -128,6 +193,26 @@ _IS_LOCAL_CHUNK_ROWS = 5_000
 # Rows classified per committed chunk of the ``harness`` backfill. Measured on
 # the real 272 132-row log: 55 chunks, 15.8 s in total.
 _HARNESS_CHUNK_ROWS = 5_000
+# Versioned for the reason the rollup keys above are: the ladder that priced
+# these rows is a moving thing, and bumping the name is how a future release
+# says "price them again" without a user step. Nothing an older release wrote
+# can satisfy the v1 name, because no older release wrote anything here.
+_COST_BACKFILL_KEY = "cost_backfilled_at_v1"
+#: The last UTC day the walk completed, ``YYYY-MM-DD``. Progress, not
+#: correctness: the predicate below is what makes the walk resumable, and this
+#: only saves a finished day from being re-scanned. A missing or nonsense value
+#: costs one extra pass over days that have nothing left to do.
+_COST_BACKFILL_THROUGH_KEY = "cost_backfilled_through_v1"
+# Rows priced per committed chunk. A day is already a good tick -- 0.48-3.10 s
+# on the measured log, busiest day 24,004 rows -- and this bounds a future day
+# ten times that size from holding the writer.
+_COST_CHUNK_ROWS = 5_000
+#: Stored on a row the backfill tried and could not price. The same string as
+#: ``application.cost.SOURCE_UNPRICED``, which owns the vocabulary; ``core``
+#: may not import it, so ``tests/contracts`` pins the two together. It is
+#: spelled here because ``cost_breakdown`` has to keep it out of the list of
+#: sources that priced something.
+_UNPRICED_COST_SOURCE = "unpriced"
 _HOUR_SECONDS = 3_600
 
 # A request answered by a local optimization rule never reached a provider, so
@@ -1762,6 +1847,11 @@ class RequestLogStore:
         self._active_dict_id: int | None = None
         self._queue: queue.Queue[Any] = queue.Queue(maxsize=self._queue_max_size)
         self._inserts_since_prune = 0
+        # Session-level "stop asking": set when the historical cost backfill
+        # finishes, when its marker is already there, or when it gave up. The
+        # writer's idle branch runs every 0.25 s and must not pay a meta read
+        # that often for the rest of the process's life.
+        self._cost_backfill_done = False
         self._closed = threading.Event()
         self._stats_lock = threading.Lock()
         # OrderedDict as an LRU: ``move_to_end`` on every hit/insert keeps the
@@ -2355,6 +2445,191 @@ class RequestLogStore:
                 updated,
                 time.monotonic() - started,
             )
+
+    def _ensure_cost_backfill(self, conn: sqlite3.Connection) -> None:
+        """Price the rows that were logged before anything priced anything.
+
+        ``cost_usd``/``cost_source`` arrived in 6.54.0 and were deliberately
+        not backfilled: "pricing 275,000 old requests at today's rates would
+        produce a confident number that was never anybody's bill". That is
+        right about confidence and wrong about availability -- the answer is
+        not to refuse the number but to **label** it, which is what the
+        retroactive ``cost_source`` values exist for. A backfilled price is an
+        estimate, it says so in the column, and ``cost_breakdown``'s
+        ``reported_usd`` keeps matching only the rows a host really reported.
+
+        Three properties, each bought deliberately:
+
+        - **Resumable with no cursor of its own.** ``cost_usd IS NULL AND
+          cost_source IS NULL`` *is* the progress, exactly as ``harness IS
+          NULL`` is for :meth:`_ensure_harness_backfill`: a committed row stops
+          matching, so a kill mid-walk costs only the uncommitted chunk. The
+          stored day is a scan-saver, not the mechanism.
+        - **A row that cannot be priced stops matching too.** It is stored as
+          ``cost_source = 'unpriced'`` with ``cost_usd`` still NULL -- the
+          150,000-odd rows naming a model nobody publishes a rate for are
+          answered once rather than re-asked on every start for the life of the
+          log. NULL survives, because NULL is still the honest cost, and
+          ``cost_usd`` remains the only thing anything sums.
+        - **It never holds the writer.** One committed chunk at a time, and it
+          hands the thread back the moment a request is queued behind it.
+
+        Runs on the writer thread's idle branch, never on a request path and
+        never before the first flush: it is a migration over hundreds of
+        thousands of rows, and the file already says where those belong.
+        """
+        if self._cost_backfill_done:
+            return
+        pricer = _cost_backfill_pricer
+        if pricer is None:
+            # No catalogue, no backfill. Deliberately re-checked rather than
+            # latched: the composition root registers the pricer once the
+            # models.dev cache is on disk, which can be after this store opened.
+            return
+        try:
+            if self._meta_get(conn, _COST_BACKFILL_KEY) is not None:
+                self._cost_backfill_done = True
+                return
+            bounds = conn.execute(
+                "SELECT MIN(ts_epoch), MAX(ts_epoch) FROM requests"
+            ).fetchone()
+        except sqlite3.Error as exc:
+            logger.warning("Request log cost backfill skipped: {}", exc)
+            self._cost_backfill_done = True
+            return
+        if bounds is None or bounds[0] is None or bounds[1] is None:
+            with conn:
+                self._meta_set(conn, _COST_BACKFILL_KEY, str(time.time()))
+            self._cost_backfill_done = True
+            return
+        day = _utc_day(float(bounds[0]))
+        last = _utc_day(float(bounds[1]))
+        resumed = self._meta_get(conn, _COST_BACKFILL_THROUGH_KEY)
+        if resumed:
+            day = max(day, _next_utc_day(resumed) or day)
+        started = time.monotonic()
+        priced = 0
+        unpriced = 0
+        try:
+            while day <= last:
+                chunk_priced, chunk_unpriced, status = self._backfill_cost_day(
+                    conn, day, pricer
+                )
+                priced += chunk_priced
+                unpriced += chunk_unpriced
+                if status == "stalled":
+                    # Every row in a chunk refused by the pricer. Nothing here
+                    # can make progress, and retrying every 0.25 s would be a
+                    # spin; the next start tries again with a fresh pricer.
+                    logger.warning(
+                        "Request log cost backfill paused at {}: nothing priceable",
+                        day,
+                    )
+                    self._cost_backfill_done = True
+                    return
+                if status == "yield":
+                    self._log_cost_backfill(priced, unpriced, started, done=False)
+                    return
+                with conn:
+                    self._meta_set(conn, _COST_BACKFILL_THROUGH_KEY, day)
+                following = _next_utc_day(day)
+                if following is None:
+                    break
+                day = following
+                if day <= last and not self._queue.empty():
+                    self._log_cost_backfill(priced, unpriced, started, done=False)
+                    return
+            with conn:
+                self._meta_set(conn, _COST_BACKFILL_KEY, str(time.time()))
+        except sqlite3.Error as exc:
+            # Same rule as its siblings: a concurrent store on the same file may
+            # have won the race, and its marker means "already done", not
+            # "corrupt". Committed chunks stay; the next start resumes.
+            logger.warning("Request log cost backfill skipped: {}", exc)
+            self._cost_backfill_done = True
+            return
+        self._cost_backfill_done = True
+        self._log_cost_backfill(priced, unpriced, started, done=True)
+
+    def _backfill_cost_day(
+        self,
+        conn: sqlite3.Connection,
+        day: str,
+        pricer: CostBackfillPricer,
+    ) -> tuple[int, int, str]:
+        """Price one UTC day, committing per chunk.
+
+        Returns ``(priced, unpriced, status)`` where status is ``"done"`` when
+        the day has no unanswered rows left, ``"yield"`` when a request arrived
+        and the writer is owed its thread back, and ``"stalled"`` when a whole
+        chunk came back with no answer at all -- which only the loss of the
+        pricer's catalogue between two chunks can produce, and which must stop
+        the walk rather than spin it.
+
+        The day bounds are what makes this cheap: they are a range on
+        ``ts_epoch``, so each chunk is an index seek rather than the full scan
+        ``cost_usd IS NULL`` on its own would have to be.
+        """
+        start, end = _utc_day_bounds(day)
+        priced = 0
+        unpriced = 0
+        while True:
+            rows = conn.execute(
+                "SELECT id, provider, resolved_model, tokens_in, tokens_out,"
+                " cache_read_tokens, cache_write_tokens FROM requests"
+                " WHERE ts_epoch >= ? AND ts_epoch < ?"
+                " AND cost_usd IS NULL AND cost_source IS NULL LIMIT ?",
+                (start, end, _COST_CHUNK_ROWS),
+            ).fetchall()
+            if not rows:
+                return (priced, unpriced, "done")
+            updates: list[tuple[float | None, str, str]] = []
+            for row in rows:
+                cost, source = pricer(row[1], row[2], row[3], row[4], row[5], row[6])
+                if source is None:
+                    # The pricer declined to answer at all. Left untouched, so
+                    # the row is asked about again rather than being recorded
+                    # as unpriceable on the strength of a missing catalogue.
+                    continue
+                if cost is not None and not cost > 0.0:
+                    # The never-zero rule, at the last gate before storage. A
+                    # zero here would read as "this request was free", a claim
+                    # only a source that publishes a zero may make, and a
+                    # backfill is in no position to make it about a request
+                    # from six weeks ago. Measured on the 333,838-row log this
+                    # was written against: no row took this branch.
+                    cost, source = None, _UNPRICED_COST_SOURCE
+                updates.append((cost, source, str(row[0])))
+                if cost is None:
+                    unpriced += 1
+                else:
+                    priced += 1
+            if not updates:
+                return (priced, unpriced, "stalled")
+            with conn:
+                conn.executemany(
+                    "UPDATE requests SET cost_usd = ?, cost_source = ?"
+                    " WHERE id = ? AND cost_usd IS NULL AND cost_source IS NULL",
+                    updates,
+                )
+            if not self._queue.empty():
+                return (priced, unpriced, "yield")
+
+    @staticmethod
+    def _log_cost_backfill(
+        priced: int, unpriced: int, started: float, *, done: bool
+    ) -> None:
+        """Say what the walk did, once per pass, and only when it did something."""
+        if not priced and not unpriced:
+            return
+        logger.info(
+            "Request log priced {} older requests ({} have no published rate)"
+            " in {:.1f}s{}",
+            priced,
+            unpriced,
+            time.monotonic() - started,
+            "" if done else ", continuing",
+        )
 
     @staticmethod
     def _has_ln_function(conn: sqlite3.Connection) -> bool:
@@ -3011,6 +3286,14 @@ class RequestLogStore:
                     if pending:
                         self._flush(pending, conn)
                         pending.clear()
+                        continue
+                    # Nothing to write. This -- after the first flush, behind
+                    # readiness, on the thread migrations already live on -- is
+                    # where the one-time historical cost backfill runs. It
+                    # commits per chunk and returns the moment a request is
+                    # queued behind it, so the cost of it being in progress is
+                    # bounded by one chunk rather than by the walk.
+                    self._ensure_cost_backfill(conn)
                     continue
                 if item is _STOP:
                     stopping = True
@@ -4079,6 +4362,11 @@ class RequestLogStore:
                     "SELECT cost_source AS key, SUM(cost_usd) AS cost_usd,"
                     f" COUNT(*) AS requests FROM requests{where}"
                     f"{' AND' if where else ' WHERE'} cost_source IS NOT NULL"
+                    # "Priced by" is a list of sources that priced something,
+                    # and the unpriced marker is the record of an attempt that
+                    # did not. Counting it here would put "nobody" at the top
+                    # of the list of who priced this month.
+                    f" AND cost_source <> '{_UNPRICED_COST_SOURCE}'"
                     " GROUP BY cost_source ORDER BY cost_source",
                     args,
                 ).fetchall()

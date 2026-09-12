@@ -43,6 +43,63 @@ COST_SOURCES: tuple[str, ...] = (
     SOURCE_CROSS_PROVIDER,
 )
 
+#: The same three computed rungs, spelled as what they are when a price is
+#: resolved long after the request happened. A retroactive price is not the
+#: label the live path writes: ``models_dev`` means "models.dev priced this at
+#: the moment it happened", and a request from August priced from September's
+#: catalogue has to say so or the column stops being provenance and becomes a
+#: guess wearing provenance's clothes.
+SOURCE_MODELS_DEV_BACKFILL = "models_dev_backfill"
+SOURCE_LITELLM_BACKFILL = "litellm_backfill"
+SOURCE_CROSS_PROVIDER_BACKFILL = "cross_provider_backfill"
+
+#: There is deliberately **no** ``provider_backfill``. The ``provider`` rung is
+#: a figure the host reported for one specific request and it is gone; a
+#: reported cost can never be reconstructed. Everything below is an estimate,
+#: full stop, which is why ``cost_breakdown``'s ``reported_usd`` keeps matching
+#: only the rows a host really did report.
+_RETROACTIVE: dict[str, str] = {
+    SOURCE_MODELS_DEV: SOURCE_MODELS_DEV_BACKFILL,
+    SOURCE_LITELLM: SOURCE_LITELLM_BACKFILL,
+    SOURCE_CROSS_PROVIDER: SOURCE_CROSS_PROVIDER_BACKFILL,
+}
+
+BACKFILL_COST_SOURCES: tuple[str, ...] = (
+    SOURCE_MODELS_DEV_BACKFILL,
+    SOURCE_LITELLM_BACKFILL,
+    SOURCE_CROSS_PROVIDER_BACKFILL,
+)
+
+#: Stored on a row the backfill *tried* and could not price, with ``cost_usd``
+#: still NULL. It is not a price and nothing ever sums it; it exists so the
+#: predicate the backfill walks -- "no cost and no source" -- stops matching a
+#: row whose answer is already known to be "nobody publishes a rate for this",
+#: and 154,000 such rows are not re-priced on every start for the rest of the
+#: log's life. NULL survives, because NULL is still the honest cost.
+SOURCE_UNPRICED = "unpriced"
+
+#: Every value that may appear in the stored ``cost_source`` column: a closed
+#: set, so a reader can enumerate it and a renderer can be held to labelling
+#: all of it.
+ALL_COST_SOURCES: tuple[str, ...] = (
+    *COST_SOURCES,
+    *BACKFILL_COST_SOURCES,
+    SOURCE_UNPRICED,
+)
+
+
+def retroactive_source(source: str) -> str | None:
+    """Spell one live ladder rung as its retroactive equivalent.
+
+    ``None`` for :data:`SOURCE_PROVIDER`, which has no retroactive form, and
+    for anything that is not a computed rung -- a caller handed something else
+    has resolved a price from a source this module does not know about, and
+    inventing a label for it would be the one thing the ``cost_source``
+    contract forbids.
+    """
+    return _RETROACTIVE.get(source)
+
+
 #: How the ladder may be walked. Mirrors ccusage's three modes, and exists so
 #: an operator can audit a host's own billing against a computed estimate
 #: without editing code.
@@ -242,18 +299,25 @@ def resolve_cost(
 
 
 __all__ = [
+    "ALL_COST_SOURCES",
+    "BACKFILL_COST_SOURCES",
     "COST_MODES",
     "COST_SOURCES",
     "MODE_AUTO",
     "MODE_COMPUTED_ONLY",
     "MODE_REPORTED_ONLY",
     "SOURCE_CROSS_PROVIDER",
+    "SOURCE_CROSS_PROVIDER_BACKFILL",
     "SOURCE_LITELLM",
+    "SOURCE_LITELLM_BACKFILL",
     "SOURCE_MODELS_DEV",
+    "SOURCE_MODELS_DEV_BACKFILL",
     "SOURCE_PROVIDER",
+    "SOURCE_UNPRICED",
     "CostResult",
     "RateCard",
     "TokenUsage",
     "compute_from_rates",
     "resolve_cost",
+    "retroactive_source",
 ]

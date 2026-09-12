@@ -11779,14 +11779,26 @@ function requestTableColumnCount() {
   return headers.length || 12;
 }
 
-/* Short names for the four rungs of the pricing ladder, in ladder order.
-   These are the values stored in `cost_source`, so they are a wire contract
-   with the request log and not a display choice. */
+/* Short names for the rungs of the pricing ladder, in ladder order. These are
+   the values stored in `cost_source`, so they are a wire contract with the
+   request log and not a display choice.
+
+   The `_backfill` three are the same three rungs resolved long after the
+   request happened, by the one-time historical backfill. They are spelled
+   apart because "models.dev priced this when it happened" and "models.dev
+   prices it like this today" are different claims, and a reader deciding
+   whether to trust a figure is entitled to know which one they are looking at.
+   `unpriced` is not a price at all: it is the record that the backfill asked
+   and nobody published a rate, which is why the row still shows a dash. */
 const COST_SOURCE_LABELS = {
   provider: "the host itself",
   models_dev: "models.dev",
   litellm: "LiteLLM",
   cross_provider: "a cross-provider vote",
+  models_dev_backfill: "models.dev, priced later",
+  litellm_backfill: "LiteLLM, priced later",
+  cross_provider_backfill: "a cross-provider vote, priced later",
+  unpriced: "nobody publishes a rate",
 };
 
 /* A dash, not a zero. `cost_usd` is NULL when nothing priced the request, and

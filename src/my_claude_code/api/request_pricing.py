@@ -19,13 +19,22 @@ into one price.
 from collections.abc import Mapping
 
 from my_claude_code.application.cost import (
+    MODE_COMPUTED_ONLY,
     SOURCE_CROSS_PROVIDER,
     SOURCE_MODELS_DEV,
+    SOURCE_UNPRICED,
     RateCard,
+    TokenUsage,
+    resolve_cost,
+    retroactive_source,
 )
 from my_claude_code.core.model_ids import ResolutionTier
+from my_claude_code.core.request_log import CostBackfillPricer
 from my_claude_code.providers.runtime.litellm_prices import litellm_rate_card
-from my_claude_code.providers.runtime.models_dev import model_prices_tiered
+from my_claude_code.providers.runtime.models_dev import (
+    model_prices_tiered,
+    read_models_dev_cache,
+)
 
 #: models.dev field name -> :class:`RateCard` field name. The names already
 #: agree; the map exists so a rename upstream fails here rather than silently
@@ -127,4 +136,74 @@ def rate_cards(
     return tuple(cards)
 
 
-__all__ = ["rate_cards"]
+def backfill_pricer(*, litellm_enabled: bool) -> CostBackfillPricer | None:
+    """A pricer for the one-time historical backfill, or None if it cannot run.
+
+    ``None`` when the models.dev catalogue is not on disk yet. That case has to
+    be a refusal rather than a run: the backfill records "nobody publishes a
+    rate for this" permanently, and a cold cache would record it about every
+    row in the log. A later start, with the catalogue fetched, registers a real
+    pricer and the backfill happens then.
+
+    ``MODE_COMPUTED_ONLY`` because there is nothing else it could be. The
+    host's own figure for a request from August was never stored, so every
+    answer here is computed -- which is exactly why each one comes back under a
+    retroactive label rather than under the live rung's name.
+
+    The rate cards are memoised per ``(provider, model)``: a 276,000-row
+    backfill names a few thousand distinct routes, and the lookup is the whole
+    cost of the walk.
+    """
+    catalogue = read_models_dev_cache()
+    if catalogue is None or not catalogue.index:
+        return None
+    cards: dict[tuple[str, str], tuple[RateCard, ...]] = {}
+
+    def price(
+        provider: str | None,
+        model: str | None,
+        tokens_in: int | None,
+        tokens_out: int | None,
+        cache_read_tokens: int | None,
+        cache_write_tokens: int | None,
+    ) -> tuple[float | None, str | None]:
+        if not provider or not model:
+            # A locally answered request cost nobody anything and is priced by
+            # nobody. Marking it unpriced is the truth and stops it being
+            # asked about again.
+            return (None, SOURCE_UNPRICED)
+        key = (provider, model)
+        rungs = cards.get(key)
+        if rungs is None:
+            rungs = rate_cards(provider, model, litellm_enabled=litellm_enabled)
+            cards[key] = rungs
+        result = resolve_cost(
+            reported_usd=None,
+            usage=TokenUsage(
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cache_read_tokens=cache_read_tokens,
+                cache_write_tokens=cache_write_tokens,
+                # Never stored on a request row, so never priced here. A
+                # source that publishes a separate reasoning rate simply
+                # prices those tokens as output, which is what every host
+                # bills anyway.
+                reasoning_tokens=None,
+            ),
+            cards=rungs,
+            mode=MODE_COMPUTED_ONLY,
+        )
+        if result.cost_usd is None or result.cost_source is None:
+            return (None, SOURCE_UNPRICED)
+        retroactive = retroactive_source(result.cost_source)
+        if retroactive is None:
+            # A rung with no retroactive spelling. Refusing to label it is the
+            # contract; storing it under the live rung's name would be the
+            # rewrite of history the label exists to prevent.
+            return (None, SOURCE_UNPRICED)
+        return (result.cost_usd, retroactive)
+
+    return price
+
+
+__all__ = ["backfill_pricer", "rate_cards"]
