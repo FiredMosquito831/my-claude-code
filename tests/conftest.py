@@ -149,8 +149,14 @@ def _isolate_request_log(monkeypatch, tmp_path):
     from my_claude_code.core import request_log
 
     request_log.set_request_log_path(tmp_path / "requests.db")
+    # The historical cost backfill runs only when a pricer is registered, and
+    # the registration is process-wide. A test that registers one must not
+    # leave the next test's store quietly rewriting its rows -- the house rule
+    # for a singleton is that a test never inherits another test's copy of it.
+    request_log.set_cost_backfill_pricer(None)
     yield
     request_log.set_request_log_path(None)
+    request_log.set_cost_backfill_pricer(None)
     request_log.reset_request_log_stores()
 
 

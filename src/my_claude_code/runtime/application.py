@@ -15,6 +15,7 @@ from loguru import logger
 import my_claude_code.cli.managed as cli_managed
 import my_claude_code.messaging.session as messaging_session
 import my_claude_code.messaging.workflow as messaging_workflow_module
+from my_claude_code.api.request_pricing import backfill_pricer
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.ports import StopResult
@@ -36,7 +37,10 @@ from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
-from my_claude_code.core.request_log import reset_request_log_stores
+from my_claude_code.core.request_log import (
+    reset_request_log_stores,
+    set_cost_backfill_pricer,
+)
 from my_claude_code.core.startup_state import startup_state
 from my_claude_code.messaging.platforms import factory as messaging_platform_factory
 from my_claude_code.messaging.platforms.factory import MessagingPlatformOptions
@@ -263,6 +267,13 @@ class ApplicationRuntime:
             self._discovery_timer.start()
             state.mark("messaging")
             await self._start_messaging_if_configured()
+            # One read of the models.dev cache, on a worker thread, and that is
+            # the whole of it: registering a pricer is what lets the request log
+            # price the requests it logged before anything priced anything. The
+            # walk itself runs on the log's own writer thread, in its idle time,
+            # and a process that gets no pricer simply never backfills.
+            state.mark("cost-backfill")
+            await asyncio.to_thread(self._register_cost_backfill_pricer)
             # Off the readiness path, and the single largest thing on it: this
             # asks every configured provider, over the network, whether the
             # models named in the configuration exist. It is best-effort -- it
@@ -725,6 +736,27 @@ class ApplicationRuntime:
             "admin_url": local_admin_url(settings) if automatic else None,
             "fields": list(fields),
         }
+
+    def _register_cost_backfill_pricer(self) -> None:
+        """Hand the request log the real pricing ladder, or nothing.
+
+        ``core`` may not import the ladder and must not carry a second copy of
+        it, so the composition root injects it -- the same shape as the
+        request-log path. Nothing is registered when cost estimation is off, or
+        when the models.dev catalogue is not on disk yet: the backfill records
+        "nobody publishes a rate for this" permanently, and a cold cache is not
+        grounds for recording it about the whole log.
+        """
+        if not bool(getattr(self.settings, "cost_estimation_enabled", True)):
+            set_cost_backfill_pricer(None)
+            return
+        set_cost_backfill_pricer(
+            backfill_pricer(
+                litellm_enabled=bool(
+                    getattr(self.settings, "cost_source_litellm_enabled", False)
+                )
+            )
+        )
 
     async def _validate_configured_models_best_effort(self) -> None:
         """Probe every configured model, and never let the result stop a start.
