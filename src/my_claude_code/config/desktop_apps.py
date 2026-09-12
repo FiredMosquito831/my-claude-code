@@ -125,6 +125,23 @@ class DesktopAppState(StrEnum):
     CONFIGURED = "configured"
     DRIFTED = "drifted"
     UNREADABLE = "unreadable"
+    #: MCC's configuration is in the file and the credential it names cannot
+    #: be resolved on this machine, so the app will fail the moment it is
+    #: started. Deliberately **not** ``CONFIGURED``: the probe used to report
+    #: green here and hang the one true fact -- "not exported yet" -- in a
+    #: details table under a "Configured by MCC" badge, which is how four apps
+    #: shipped for months sending an unexpanded reference as a bearer token
+    #: and getting 401 (measured). A state where the credential cannot resolve
+    #: is not configured, and this is the badge that says so.
+    CREDENTIAL_UNRESOLVED = "credential_unresolved"
+    #: The restore record and the backup are both here, MCC has not been
+    #: undone, and MCC's keys are gone from the document anyway -- so the
+    #: application removed them. Until 6.84.0 this was indistinguishable from
+    #: "installed, never configured", because ``undo()`` left no mark and a
+    #: stale record meant nothing. It is the only state that can surface an
+    #: app which rewrites its own configuration file, which is the failure
+    #: mode the Cline lesson already cost one release.
+    REMOVED_BY_APP = "removed_by_app"
     #: A higher-precedence source -- a policy key, a managed profile -- owns
     #: this app's configuration, so the file MCC would write is ignored. The
     #: card names the source and offers no button, because a button that wrote
@@ -424,6 +441,19 @@ class DesktopAppSpec:
     doc_url: str
     #: Required when NOT_ROUTABLE, and dated, so it can be re-checked.
     unavailable_reason: str = ""
+    #: Required when INSTRUCTIONS_ONLY, and dated, for the same reason.
+    #:
+    #: This field is the honesty pass of 6.84.0 made checkable. Spec §5's
+    #: binding rule is that a row keeps its Configure button only where MCC's
+    #: *generated document* is validated in CI against a rule extracted from
+    #: that application's own shipped code or published schema, vendored under
+    #: ``tests/fixtures/app_rules/`` with the version and the extraction
+    #: command. A row that cannot meet that bar is demoted here rather than
+    #: given a validator invented to justify the button -- and it has to say,
+    #: with a date, what was not proven, so the demotion can be re-checked
+    #: instead of believed. ``tests/config/test_desktop_apps_registry.py``
+    #: asserts every INSTRUCTIONS_ONLY row carries one and that it is dated.
+    instructions_reason: str = ""
     detect: DesktopDetect | None = None
     document: DesktopDocument | None = None
     sidecar: DesktopSidecar | None = None
@@ -442,6 +472,17 @@ class DesktopAppSpec:
     #: token. MCC never sets it at user scope -- the card says what to export
     #: and the next status poll verifies it.
     token_env_var: str = ""
+    #: Whether :attr:`token_env_var` is a variable **MCC itself sets** in the
+    #: process it launches, rather than one a human has to export.
+    #:
+    #: Command Code is the only true case: ``mcc-commandcode`` sets
+    #: ``MCC_COMMANDCODE_API_KEY`` in the child it starts, so the reference in
+    #: ``providers.json`` resolves every time that launcher is used and the
+    #: variable's absence from the dashboard's own environment says nothing at
+    #: all. Without this field the credential-unresolved state of fix 8 would
+    #: have painted that card red on every poll for a configuration that works
+    #: -- which is the same class of lie in the other direction.
+    token_env_var_set_by_mcc: bool = False
     #: The key holding a request-header map, or empty where the app has none.
     attribution_header_field: str = ""
     #: Whether the app must be restarted. Stated on the card, never performed.
@@ -867,25 +908,46 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         token_env_var=DESKTOP_TOKEN_ENV_VAR,
         attribution_header_field="",
         catalogue_format_id="goose",
-        # Goose's custom-provider file, which MCC owns whole. ``api_url`` is
-        # the host half of the split and ``base_path`` the other; no key field,
-        # because a key written here is ignored -- Goose reads its keyring.
+        # Goose's custom-provider file, which MCC owns whole, keyed exactly as
+        # Goose's own ``DeclarativeProviderConfig`` is keyed -- read out of
+        # ``goose-source-v1.50.0.zip`` and vendored as
+        # ``tests/fixtures/app_rules/goose-1.50.0.json``.
+        #
+        # Until 6.84.0 this row wrote ``api_url`` and ``model_details``, and
+        # neither is a field of that struct: the URL is ``base_url``
+        # (``api_url`` is the name of the parameter Goose's own
+        # create-provider API takes before assigning it to ``base_url``) and
+        # the models are ``models``. ``engine`` has no serde default and was
+        # missing entirely, so the document could not deserialise at all --
+        # ``load_custom_providers`` would have reported
+        # ``Failed to parse …: missing field `engine` `` and dropped it.
+        #
+        # ``base_path`` is the other half of ``SPLIT_HOST_PATH``: Goose's
+        # OpenAI client splits ``base_url`` into host and path and lets this
+        # field override the path. ``requires_auth`` is Goose's own default
+        # and is stated so the failure is loud rather than an unauthenticated
+        # request. No key field, because a key written here is ignored --
+        # ``api_key_env`` names a *keyring* entry, resolved through
+        # ``Config::get_secret``, never the process environment.
         provider=DesktopProvider(
-            base_url_key="api_url",
-            models_key="model_details",
+            base_url_key="base_url",
+            models_key="models",
             constants={
                 "name": DESKTOP_PROVIDER_ID,
+                "engine": "openai",
                 "display_name": DESKTOP_PROVIDER_LABEL,
                 "base_path": "v1/chat/completions",
                 "api_key_env": DESKTOP_TOKEN_ENV_VAR,
+                "requires_auth": True,
             },
         ),
         open_command="goose",
         notes=(
-            "Goose ignores API keys written into config.yaml -- it reads them "
-            "from its keyring, or from secrets.yaml when GOOSE_DISABLE_KEYRING "
-            "is set. A literal there would silently not work, so MCC writes "
-            "none.",
+            "Goose ignores API keys written into config.yaml or into this "
+            "provider file -- api_key_env names an entry in its keyring, or "
+            "in secrets.yaml when GOOSE_DISABLE_KEYRING is set. A literal "
+            "would silently not work, so MCC writes none and this card is "
+            "green only once MCC_AUTH_TOKEN can actually be resolved.",
             "Goose publishes no per-provider request-header field, so it is "
             "attributed by user-agent rather than x-mcc-harness.",
         ),
@@ -988,10 +1050,28 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         id="vscode_copilot",
         display_name="VS Code (Copilot custom endpoint)",
         summary=(
-            "VS Code's custom chat endpoints live in a bare JSON array. MCC "
-            "owns exactly one element and reorders nothing else."
+            "VS Code's custom chat endpoints live in a bare JSON array. The "
+            "values are listed here for you to add by hand; MCC will not "
+            "write a file no program on this machine has been seen reading."
         ),
-        status=DesktopAppStatus.SERVABLE,
+        status=DesktopAppStatus.INSTRUCTIONS_ONLY,
+        instructions_reason=(
+            "2026-09-12: demoted from a Configure button. Spec section 5 lets "
+            "a row keep its button only where MCC's generated document is "
+            "validated in CI against a rule extracted from the application's "
+            "own shipped code or published schema. The program that reads "
+            "chatLanguageModels.json is GitHub Copilot Chat, and it is not "
+            "installed on any machine this was developed against -- 39 "
+            "extensions in ~/.vscode/extensions, none matching github.copilot* "
+            "-- so there is no shipped code to extract the element's accepted "
+            "keys, its vendor/apiType enums or its credential handling from. "
+            "Everything MCC knows about this file came from documentation, "
+            "which is exactly what produced the bug report this release "
+            "answers. Copilot's own BYOK key is entered in its UI and kept in "
+            "VS Code SecretStorage in any case, so a file MCC writes could "
+            "never carry the credential. Re-check by installing Copilot Chat "
+            "and extracting the rule from its bundle."
+        ),
         doc_url="https://code.visualstudio.com/docs/copilot/customization/language-models",
         # The *extension* directory, not %APPDATA%\Code\User. That directory
         # proves VS Code is installed and says nothing about Copilot, so the
@@ -1050,6 +1130,19 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             "${input:mcc_token} makes VS Code prompt once and keep the value "
             "in its own SecretStorage, so no token is written to the file.",
         ),
+        # The element a human adds to the array by hand, in the order the
+        # documentation lists the fields. These are the same values the
+        # provider block above would have produced, which is deliberate: the
+        # demotion is about who writes them, not about what they are.
+        instruction_fields=(
+            ("File", "%APPDATA%\\Code\\User\\chatLanguageModels.json"),
+            ("name", DESKTOP_PROVIDER_LABEL),
+            ("vendor", "customendpoint"),
+            ("apiType", "openai"),
+            ("url", "{root}"),
+            ("apiKey", "${input:mcc_token}"),
+            ("models", "the mcc/* routes you want listed"),
+        ),
     ),
     DesktopAppSpec(
         id="crush_desktop",
@@ -1088,8 +1181,22 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             document_format=DocumentFormat.JSON,
             owned_key_path=("providers", DESKTOP_PROVIDER_ID),
         ),
-        protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
-        base_url_shape=BaseUrlShape.V1,
+        protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        # The **root**, not ``/v1``, and this is the half of fix 14 that
+        # matters. MCC shipped two different Crush documents for one
+        # application: the launcher's ``~/.mcc/crush/crush.json`` wrote
+        # ``type: "anthropic"`` with a bare root ``base_url``, and this row
+        # wrote ``type: "openai-compat"`` with ``/v1``. Only one of the two was
+        # ever put on the wire, and it was the launcher's: Crush's Anthropic
+        # provider is ``anthropic-sdk-go``, which appends ``/v1/messages``
+        # itself, so a root base URL produced ``POST /v1/messages`` and a
+        # ``/v1`` one would have produced ``POST /v1/v1/messages``
+        # (``application/catalogues/crush.py``, module docstring -- measured
+        # against a local endpoint). The desktop row now writes the document
+        # that was measured rather than the one that was assumed, so the two
+        # agree key for key and the model ids -- ``models[].id``, MCC's
+        # gateway id verbatim -- already did.
+        base_url_shape=BaseUrlShape.ROOT,
         # ``$MCC_AUTH_TOKEN`` until 6.67.0, and nothing sets that variable, so
         # Crush sent ``Authorization: Bearer $MCC_AUTH_TOKEN`` -- 401,
         # measured. ``api_key`` takes a plain string.
@@ -1098,8 +1205,8 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         token_env_var="",
         attribution_header_field="extra_headers",
         catalogue_format_id="crush",
-        # Crush's ``providers.<id>`` entry, from ``crush schema``. ``type`` is
-        # ``openai-compat`` for a custom OpenAI-compatible endpoint, and
+        # Crush's ``providers.<id>`` entry, from ``crush schema`` v0.92.0
+        # (vendored at ``tests/fixtures/schemas/crush.schema.json``).
         # ``discover_models`` has to be off: discovery would GET ``/models``
         # rather than ``/v1/models`` and find nothing.
         provider=DesktopProvider(
@@ -1110,13 +1217,16 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             constants={
                 "id": DESKTOP_PROVIDER_ID,
                 "name": DESKTOP_PROVIDER_LABEL,
-                "type": "openai-compat",
+                "type": "anthropic",
                 "discover_models": False,
             },
         ),
         open_command="crush",
         notes=(
-            "Crush's provider type for an OpenAI-compatible endpoint is openai-compat.",
+            "Crush reaches MCC through its Anthropic provider type, which "
+            "appends /v1/messages to the base URL itself -- the same document "
+            "mcc-crush writes, so the CLI and this card configure one "
+            "application the same way.",
             "MCC's proxy token is written into crush.json as api_key, and the "
             "file is tightened to 0600 where the OS allows it. Undo removes it.",
         ),
@@ -1126,9 +1236,29 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         display_name="Antigravity (agy CLI)",
         summary=(
             "Google's agy CLI speaks the public Gemini API when its "
-            "modelProvider is set to gemini -- the surface MCC already serves."
+            "modelProvider is set to gemini -- the surface MCC already serves "
+            "-- but the endpoint and the key are environment variables, so "
+            "this card shows the three values rather than writing one of them."
         ),
-        status=DesktopAppStatus.SERVABLE,
+        status=DesktopAppStatus.INSTRUCTIONS_ONLY,
+        instructions_reason=(
+            "2026-09-12: demoted from a Configure button, and the file is the "
+            "reason rather than the excuse. Read out of the shipped agy build "
+            "(189,485,208 bytes, mtime 2026-09-07; strings only -- the binary "
+            "is never executed, because a HOME redirect does not isolate its "
+            "credential store and two control runs reached a real Google "
+            "account), agy's own error string is: 'modelProvider is set to "
+            "%q in settings.json, but the %s environment variable is not set. "
+            'Set %s to your Gemini API key, or remove "modelProvider" from '
+            "settings.json to use the default backend.' Two of the three "
+            "values this app needs -- GEMINI_API_KEY and "
+            "GOOGLE_GEMINI_BASE_URL -- have no field in any file, so a "
+            "Configure that wrote the one key it can write would leave agy "
+            "strictly worse than it found it: with modelProvider set and the "
+            "variable unset, agy refuses to start against the default "
+            "backend it was working with. MCC never sets a user-scope "
+            "variable, so there is nothing here a button can honestly do."
+        ),
         doc_url="https://antigravity.google/docs/cli/install/",
         # The binary, not ``~/.gemini/antigravity-cli`` -- which is a settings
         # directory, and the one MCC itself writes into.
@@ -1139,6 +1269,18 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
                 _home(".agy", "bin", "agy", platforms=("darwin", "linux")),
             ),
         ),
+        # The path is agy's own, and it is the one MCC already declared. Spec
+        # section 2.11 recorded that agy's strings "call ~/.gemini/
+        # antigravity-cli/ a fixed bug" and name ~/.gemini/config/ as the
+        # global configuration directory; re-extracting the strings on
+        # 2026-09-12 does not support that. The binary's own embedded
+        # documentation says, verbatim, "The CLI is configured via
+        # `~/.gemini/antigravity-cli/settings.json`", and every ~/.gemini/
+        # config/ string in the binary names MCP configuration, workflows or
+        # skills -- mcp_config.json, workflows.json, global_workflows/,
+        # skills/ -- never the CLI's settings. So the path stands; what is
+        # wrong with this row is that no path can carry the credential or the
+        # endpoint at all. See ``instructions_reason``.
         document=DesktopDocument(
             paths=(_home(".gemini", "antigravity-cli", "settings.json"),),
             display_path="~/.gemini/antigravity-cli/settings.json",
@@ -1161,6 +1303,16 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             "status poll reports whether they took.",
             "The Antigravity IDE lists custom endpoints as unsupported. This "
             "card is about the agy CLI only.",
+            "Set modelProvider only together with the two variables. agy's "
+            "own message is that modelProvider without GEMINI_API_KEY stops "
+            "it using the backend it was signed in to, so half a "
+            "configuration is worse than none.",
+        ),
+        # The three values, in the order agy's own changelog gives them.
+        instruction_fields=(
+            ("~/.gemini/antigravity-cli/settings.json", '{"modelProvider": "gemini"}'),
+            ("GEMINI_API_KEY", "your MCC proxy token"),
+            ("GOOGLE_GEMINI_BASE_URL", "{root}"),
         ),
     ),
     DesktopAppSpec(
@@ -1309,6 +1461,11 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         token_form=TokenForm.ENV_REFERENCE,
         token_template="${name}",
         token_env_var=COMMANDCODE_API_KEY_ENV,
+        # And MCC is what sets it: ``mcc-commandcode`` exports it into the
+        # process it launches. So its absence from the dashboard's own
+        # environment is not evidence of anything, and this card must not
+        # report ``credential_unresolved`` the way Goose's does.
+        token_env_var_set_by_mcc=True,
         attribution_header_field="headers",
         catalogue_format_id="commandcode",
         # Unchanged from the shipped 6.27.0 merge, and asserted byte-identical
@@ -1324,6 +1481,28 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         notes=(
             "Command Code ships no desktop application. The CLI is what is "
             "installed, and mcc-commandcode has configured it since 6.27.0.",
+            # Fix 16, and the honest half of it. The provider block lands and
+            # nothing routes through it until Command Code is told to use it,
+            # and the selection lives in a *different* document: read out of
+            # the shipped bundle (command-code 1.50.0,
+            # dist/cli.mjs), the config layers are merged by a loop that
+            # treats "model" and "modelProvider" as one pair -- a layer
+            # setting "model" without "modelProvider" deletes the inherited
+            # "modelProvider" outright. So the two keys have to be written
+            # together, in ~/.commandcode/config.json, which is not the
+            # document this row owns. MCC will not reach into a second file to
+            # overwrite the model a user picked, so the card says what to
+            # pick instead.
+            "Command Code does not switch to a provider just because it is "
+            "declared. Open it and pick a My Claude Code model, or set both "
+            '"modelProvider": "mcc" and "model" together in '
+            "~/.commandcode/config.json -- Command Code drops modelProvider "
+            "from any layer that sets model without it, so one without the "
+            "other does nothing.",
+            "Command Code refuses a raw key in providers.json -- its own "
+            "message is that raw secrets do not belong there -- and accepts a "
+            '"$ENV_VAR", "{env:VAR}" or "!command" reference. MCC writes '
+            "$MCC_COMMANDCODE_API_KEY, and mcc-commandcode is what sets it.",
         ),
     ),
     DesktopAppSpec(

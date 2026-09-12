@@ -8609,6 +8609,8 @@ const DESKTOP_STATE_LABELS = {
   drifted: "Configured but drifted",
   unreadable: "Config file will not parse",
   managed: "Managed by your organisation",
+  credential_unresolved: "Written, but the key cannot resolve",
+  removed_by_app: "The app removed MCC's configuration",
 };
 
 const DESKTOP_STATE_CLASS = {
@@ -8617,6 +8619,11 @@ const DESKTOP_STATE_CLASS = {
   not_routable: "agent-state unavailable",
   unreadable: "agent-state unavailable",
   managed: "agent-state unavailable",
+  // Both of these are "MCC wrote here and it is not working", which is the
+  // same thing `drifted` means to a reader, so they share its colour rather
+  // than inventing two more.
+  credential_unresolved: "agent-state drifted",
+  removed_by_app: "agent-state drifted",
 };
 
 async function loadDesktopApps() {
@@ -8687,6 +8694,16 @@ function desktopAppCard(app) {
   }
 
   if (app.status === "instructions_only") {
+    // Why there is no button, dated, in the same place `not_routable` puts
+    // its evidence. A card that simply stopped offering Configure between two
+    // releases would read as a regression; this one says what was not proven
+    // and how to re-check it.
+    if (app.instructions_reason) {
+      const reason = document.createElement("p");
+      reason.className = "agent-unavailable-reason";
+      reason.textContent = app.instructions_reason;
+      card.append(reason);
+    }
     card.append(desktopInstructionTable(app));
     card.append(desktopAppNotes(app));
     card.append(desktopAppMeta(app));
@@ -8761,6 +8778,33 @@ function desktopAppCard(app) {
       "One of the keys MCC owns has been changed since MCC wrote it -- by hand, " +
       "by the app, or by an older MCC. Configure will bring it back in line.";
     card.append(drift);
+  }
+
+  if (stateId === "credential_unresolved") {
+    // The state that used to be reported green. The file is right and the
+    // app will still fail on its first request, so the card says the one
+    // thing that is actually wrong instead of burying it in the meta table.
+    const unresolved = document.createElement("p");
+    unresolved.className = "desktop-drift-note";
+    unresolved.textContent =
+      `MCC's configuration is in the file, but ${app.display_name} reads its ` +
+      `credential from ${app.token_env_var}, and that is not set where this ` +
+      "server can see it. Export it and restart the app -- until then the " +
+      "requests will be refused. MCC does not set variables for you, and " +
+      "this card turns green by itself once the variable is there.";
+    card.append(unresolved);
+  }
+
+  if (stateId === "removed_by_app") {
+    const removed = document.createElement("p");
+    removed.className = "desktop-drift-note";
+    removed.textContent =
+      `MCC configured ${app.display_name} and the keys are gone, without ` +
+      "anyone pressing Undo -- so the application rewrote its own " +
+      "configuration file and dropped them. Configure puts them back; if " +
+      "they disappear again, the app is doing it on purpose and the card " +
+      "will keep saying so rather than reporting it as never configured.";
+    card.append(removed);
   }
 
   card.append(desktopAppActions(app));
@@ -8917,7 +8961,16 @@ function desktopAppActions(app) {
   const wrapper = document.createElement("div");
   wrapper.className = "desktop-app-actions";
   const probe = app.probe || {};
-  const configured = probe.state === "configured" || probe.state === "drifted";
+  // Every state in which MCC has something on disk to take back out. The
+  // two added in 6.84.0 belong here for different reasons: a credential that
+  // cannot resolve is a *written* configuration, so Undo has work to do; and
+  // keys an application removed still leave MCC's owned file and its restore
+  // record behind, which is exactly what Undo cleans up.
+  const configured =
+    probe.state === "configured" ||
+    probe.state === "drifted" ||
+    probe.state === "credential_unresolved" ||
+    probe.state === "removed_by_app";
 
   const preview = document.createElement("pre");
   preview.className = "desktop-preview";

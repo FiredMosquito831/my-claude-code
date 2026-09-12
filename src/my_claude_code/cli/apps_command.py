@@ -53,6 +53,8 @@ STATE_LABELS: dict[str, str] = {
     "configured": "configured by MCC",
     "drifted": "configured but drifted",
     "unreadable": "config file will not parse",
+    "credential_unresolved": "written, but the credential cannot resolve",
+    "removed_by_app": "the application removed MCC's configuration",
 }
 
 
@@ -151,6 +153,8 @@ def _print_status(app_id: str) -> None:
     if command := entry.get("open_command"):
         print(f"  open with     {command}")
     if entry.get("status") == "instructions_only":
+        if reason := entry.get("instructions_reason"):
+            print(f"  no button     {reason}")
         print("  set these by hand:")
         for field in entry.get("instruction_fields", []):
             print(f"    {field.get('label'):<16} {field.get('value')}")

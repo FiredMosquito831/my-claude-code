@@ -1435,14 +1435,56 @@ user who had it pointed at another gateway lost it. It is remembered now.
 |---|---|---|
 | **Codex desktop** | yes | Also writes `model = "mcc/best"`, by necessity: with a custom `model_provider` the app has no UI to pick a model. |
 | **OpenCode desktop** | yes | The token is written into `opencode.json` as `options.apiKey`, at mode 0600 where the OS allows it: OpenCode does expand `{env:...}`, but nothing sets the variable MCC used to name, so what went on the wire was the unexpanded string and a 401. No attribution header — `ProviderConfig.options` has no `headers` key and OpenCode dropped the one MCC wrote, silently. |
-| **Crush** | yes | Also the official client for Charm's Hyper/HyperCharm. |
-| **VS Code (Copilot custom endpoint)** | yes | MCC owns exactly one element of `chatLanguageModels.json`, matched by name; nothing else in the array is touched. |
-| **Goose desktop** | yes | Keys written into Goose's `config.yaml` are *ignored* by Goose, so MCC writes none: it owns a whole provider file and Goose reads the key from its keyring. |
-| **Antigravity (`agy`)** | yes | See below. |
+| **Crush** | yes | Also the official client for Charm's Hyper/HyperCharm. Since 6.84.0 the card writes the *same* document `mcc-crush` writes: provider `type: "anthropic"` with the proxy root as `base_url`, which is the pair that was measured on the wire. It used to write `openai-compat` with a `/v1` suffix, so MCC shipped two disagreeing documents for one application and only one of them had ever been tried. |
+| **VS Code (Copilot custom endpoint)** | **no — instructions only** | Demoted in 6.84.0. The program that reads `chatLanguageModels.json` is GitHub Copilot Chat, and nothing about that file has ever been read out of Copilot Chat's own shipped code — only out of documentation. The card now lists the element's fields for you to add by hand and says so with a date. Copilot's own BYOK key lives in VS Code SecretStorage in any case, so no file MCC writes could carry it. |
+| **Goose desktop** | yes | Keys written into Goose's `config.yaml` *or* into the provider file are ignored: `api_key_env` names an entry in Goose's **keyring**, so MCC writes no credential at all and the card stays amber until `MCC_AUTH_TOKEN` resolves. 6.84.0 also fixed the document itself — read out of Goose 1.50.0's own source, the file is a bare provider config with `base_url`, `engine` and `models`, and what MCC wrote before (`api_url`, `model_details`, no `engine`, and in the CLI serialiser a `custom_provider` wrapper) could not be parsed by Goose at all. |
+| **Antigravity (`agy`)** | **no — instructions only** | Demoted in 6.84.0, and the file is the reason. `agy` takes its key from `GEMINI_API_KEY` and its endpoint from `GOOGLE_GEMINI_BASE_URL`; the only thing a file can carry is `modelProvider`, and `agy`'s own error message is that `modelProvider` set with the variable unset stops it using the backend it was signed in to. A Configure that wrote the one key it can write would leave `agy` worse than it found it. See below. |
 | **Roo Code** | yes | Uses Roo's own import hook. MCC writes a Roo *settings export* — `providerProfiles` with one `openai` profile, both required `openAiCustomModelInfo` fields — into a file it owns at mode 0600, and adds one key to your `settings.json`, `roo-cline.autoImportSettingsPath`, naming it. Reload the VS Code window: Roo reads that file at activation only. |
-| **Command Code** | status only | Already configured by `mcc-commandcode` since 6.27.0; the card reports and does not re-mechanise. |
+| **Command Code** | status only | Already configured by `mcc-commandcode` since 6.27.0; the card reports and does not re-mechanise. Declaring a provider is not selecting one: open Command Code and pick a My Claude Code model, or set `"modelProvider": "mcc"` **and** `"model"` together in `~/.commandcode/config.json` — its own config merge deletes `modelProvider` from any layer that sets `model` without it, so one of the two on its own does nothing. |
 | **Claude Desktop** | yes | Anthropic's MDM documentation names the local configuration source, so MCC owns one document in `%LOCALAPPDATA%\Claude-3p\configLibrary\` (macOS `~/Library/Application Support/Claude-3p/configLibrary/`) and merges exactly one foreign key, `_meta.json`'s `appliedId`. It is the **lowest**-precedence source the app reads, so a managed profile under `HKLM`/`HKCU\SOFTWARE\Policies\Claude` (macOS: Managed Preferences) replaces it wholesale — MCC probes for one before every write and shows the card as *Managed by your organisation*, with no button, rather than writing a file the app ignores. The credential has no reference form in this store, so it goes into MCC's own document at mode 0600 and never into one you edit. Relaunch the app to load it. |
 | **Kimi desktop, Qwen desktop, LM Studio, Warp** | not routable | Each card carries the measured reason and its date. |
+
+### Why some cards lost their button in 6.84.0
+
+**A card keeps its Configure button only where the document MCC generates is
+checked, in CI, against a rule read out of that application's own shipped code
+or published schema.** The rule is vendored under
+`tests/fixtures/app_rules/`, and each one records the application version it
+was read from and the exact command that read it, so the claim can be
+re-checked rather than believed. A test fails if a card has a button and no
+rule beside it, which is how a future card is stopped from being added the way
+these were.
+
+Seven cards have one: Codex (its binary's own 17-field provider table and the
+`wire_api` rejection), Claude Desktop (the entry-id regex and key allow-list
+from `app.asar`), Goose (`DeclarativeProviderConfig` and `ModelInfo` from the
+v1.50.0 source release), Roo Code (its extension bundle), Command Code (its
+npm bundle), and OpenCode and Crush (each application's own published schema).
+Two do not, and say so on the card with the date and what was not proven:
+**VS Code / Copilot** and **Antigravity**.
+
+This is why: every desktop card shipped a Configure button on the strength of
+documentation, and every single one of them was broken — one of them
+*un*configured a working setup. "MCC wrote what MCC intended" was the wrong
+thing to be testing.
+
+### Two card states that used to be hidden
+
+**Written, but the key cannot resolve.** A card whose app reads its credential
+from a variable — Goose, from its keyring entry `MCC_AUTH_TOKEN` — used to go
+green the moment the file was written, with one line in the details table
+saying the variable was not exported yet. The application would still fail on
+its first request. That is now its own amber state, and the card says which
+variable to export; it turns green by itself on the next poll once it is
+there. MCC does not set variables for you.
+
+**The app removed MCC's configuration.** MCC's keys can vanish for three
+different reasons, and until 6.84.0 all three read *Installed, not
+configured*: you never pressed Configure, you pressed Undo, or the application
+rewrote its own configuration file and dropped a table it does not own. Undo
+now stamps its own record, so the third case — an unstamped record, the backup
+still on disk, and MCC's keys gone anyway — gets a badge that names it. It is
+the only way an app that keeps deleting MCC's block can ever become visible.
 
 ### What counts as installed, and what Configure refuses
 
@@ -1487,8 +1529,21 @@ all 32 lines of it while changing nothing at all.
 
 `agy` **is** routable, as of a 2026-09-07 measurement, and MCC needed no new
 inbound surface for it: with `modelProvider` set to `gemini`, `agy` speaks the
-**public** Gemini API, which MCC has served at `/v1beta` for some time. Two
-limits are worth knowing before you turn it on:
+**public** Gemini API, which MCC has served at `/v1beta` for some time. What it
+does **not** have is a button, since 6.84.0: the card lists the three values
+and you set them yourself. Read out of the shipped binary's own strings, `agy`
+says
+
+> `modelProvider` is set to "…" in settings.json, but the … environment
+> variable is not set. Set … to your Gemini API key, or remove
+> `"modelProvider"` from settings.json to use the default backend.
+
+so writing the one key a file can carry, without the two variables MCC will
+never set at user scope, would stop `agy` using the backend it was already
+signed in to. The three values are `{"modelProvider": "gemini"}` in
+`~/.gemini/antigravity-cli/settings.json`, `GEMINI_API_KEY` set to your MCC
+token, and `GOOGLE_GEMINI_BASE_URL` set to the proxy root. Two more limits are
+worth knowing before you turn it on:
 
 - `modelProvider` is the switch, not the base URL. With that key absent, `agy`
   talks to Google's own backend whatever `GOOGLE_GEMINI_BASE_URL` says.

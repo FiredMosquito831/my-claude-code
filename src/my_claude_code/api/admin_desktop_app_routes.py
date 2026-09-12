@@ -230,6 +230,7 @@ def _spec_payload(
         "status": spec.status.value,
         "doc_url": spec.doc_url,
         "unavailable_reason": spec.unavailable_reason,
+        "instructions_reason": spec.instructions_reason,
         "protocol": spec.protocol.value,
         "base_url": base_url_for(spec, proxy_root),
         "token_form": spec.token_form.value,

@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from my_claude_code.application.catalogue_model import CatalogueModel
+from my_claude_code.application.desktop_documents import sidecar_document
 from my_claude_code.config import desktop_apply
 from my_claude_code.config.desktop_apps import (
     CLAUDE_DESKTOP_CONFIG_ID,
@@ -30,7 +32,26 @@ from my_claude_code.config.desktop_apps import (
     desktop_app,
 )
 from my_claude_code.config.document_codecs import DocumentFormat, parse_document
-from my_claude_code.config.restore_record import UndoMode
+from my_claude_code.config.restore_record import UndoMode, read_entry
+
+#: Two routes, enough to make a real owned document for the states below.
+#: ``config`` is a leaf and may not import the serialisers; a test may.
+SIDECAR_MODELS: tuple[CatalogueModel, ...] = (
+    CatalogueModel(
+        gateway_id="mcc/best",
+        provider_model_ref="mcc/best",
+        display_name="MCC best",
+        context_length=400_000,
+        input_price=3.0,
+        output_price=15.0,
+    ),
+    CatalogueModel(
+        gateway_id="mcc/cheap",
+        provider_model_ref="mcc/cheap",
+        display_name="MCC cheap",
+        context_length=200_000,
+    ),
+)
 
 #: Claude Desktop 1.46388.4.0's own validator for a configuration-library id,
 #: extracted from ``app.asar`` -> ``.vite/build/index.chunk--WuAOADe.js`` line
@@ -825,15 +846,31 @@ def test_a_legacy_claude_desktop_entry_is_repaired_on_probe(tmp_path):
     assert json.loads(moved.read_text(encoding="utf-8")) == CLAUDE_SIDECAR
 
 
-def test_the_claude_desktop_repair_happens_once(tmp_path):
+def test_the_claude_desktop_repair_happens_once_and_says_so_afterwards(tmp_path):
+    """The repair runs once; the sentence about it survives every later poll.
+
+    Until 6.84.0 the note lived for exactly one probe. It is the only place a
+    user ever learns that their configuration was silently not working and
+    that the app has to be relaunched -- and the dashboard polls every few
+    seconds, so the sentence was gone before anybody read it. It is now
+    written down beside the restore record and cleared by Undo.
+    """
+
+    record = tmp_path / "r.json"
     spec, env, path, _legacy = _legacy_library(tmp_path)
 
-    assert desktop_apply.probe(spec, env=env, record_path=tmp_path / "r.json").repaired
+    first = desktop_apply.probe(spec, env=env, record_path=record)
+    assert first.repaired
     after_first = path.read_bytes()
-    second = desktop_apply.probe(spec, env=env, record_path=tmp_path / "r.json")
 
-    assert second.repaired == ()
+    second = desktop_apply.probe(spec, env=env, record_path=record)
+    assert second.repaired == first.repaired
+    # The repair itself is over: nothing moved a second time.
     assert path.read_bytes() == after_first
+
+    desktop_apply.undo(spec, env=env, record_path=record)
+    third = desktop_apply.probe(spec, env=env, record_path=record)
+    assert third.repaired == ()
 
 
 def test_an_already_repaired_claude_desktop_library_is_left_alone(tmp_path):
@@ -1447,3 +1484,162 @@ def test_a_changed_sidecar_still_shows_a_diff_with_the_credential_masked(tmp_pat
     assert not plan.no_op
     assert str(CLAUDE_SIDECAR["inferenceGatewayApiKey"]) not in plan.sidecar_diff
     assert "***" in plan.sidecar_diff
+
+
+# ------------------------------------------------- fix 8: the credential
+# ------------------------------------------------- fix 12: undo vs the app
+
+
+def test_a_written_document_whose_credential_cannot_resolve_is_not_configured(
+    tmp_path,
+):
+    """The state that used to be reported green while the app got a 401.
+
+    Goose is the row: it reads its credential from a name, out of its own
+    secret store, and MCC writes none. Everything MCC owns can be byte-perfect
+    and the application still fail on its first request -- so the badge says
+    that, instead of hanging "not exported yet" in a details table under
+    "Configured by MCC".
+    """
+
+    spec = desktop_app("goose_desktop")
+    prepare(tmp_path, spec, "")
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+    scalars = {"GOOSE_PROVIDER": "mcc"}
+    document = sidecar_document(
+        spec, SIDECAR_MODELS, proxy_root_url="http://127.0.0.1:8299"
+    )
+    assert document is not None
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=None,
+        scalars=scalars,
+        sidecar_document=document,
+        record_path=record,
+    )
+
+    unresolved = desktop_apply.probe(
+        spec,
+        env=env,
+        expected_scalars=scalars,
+        expected_sidecar=document,
+        record_path=record,
+    )
+    assert unresolved.state is DesktopAppState.CREDENTIAL_UNRESOLVED
+    assert unresolved.token_env_present is False
+
+    exported = desktop_apply.probe(
+        spec,
+        env={**env, spec.token_env_var: "a-scratch-token"},
+        expected_scalars=scalars,
+        expected_sidecar=document,
+        record_path=record,
+    )
+    assert exported.state is DesktopAppState.CONFIGURED
+    assert exported.token_env_present is True
+
+
+def test_a_variable_mcc_sets_itself_never_reports_the_credential_unresolved():
+    """Command Code's reference resolves in the process MCC launches.
+
+    Without this distinction the new badge would paint a working card red on
+    every poll, which is the same class of lie as the green one it replaces.
+    """
+
+    commandcode = desktop_app("commandcode")
+    assert commandcode.token_env_var
+    assert commandcode.token_env_var_set_by_mcc is True
+
+
+def _configured_codex(tmp_path):
+    spec = desktop_app("codex_desktop")
+    prepare(tmp_path, spec, CODEX_DOCUMENT)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+    scalars = {"model_provider": "mcc", "model": "mcc/best"}
+    desktop_apply.apply(spec, env=env, block=BLOCK, scalars=scalars, record_path=record)
+    return spec, env, record, scalars
+
+
+def test_a_keys_only_undo_leaves_the_card_reading_installed_not_configured(tmp_path):
+    """The user asked for this, so the card must not cry foul about it."""
+
+    spec, env, record, scalars = _configured_codex(tmp_path)
+    desktop_apply.undo(spec, env=env, record_path=record)
+
+    probe = desktop_apply.probe(
+        spec,
+        env=env,
+        expected_block=BLOCK,
+        expected_scalars=scalars,
+        record_path=record,
+    )
+    assert probe.state is DesktopAppState.INSTALLED
+    # And the record survives, because the second undo mode needs it.
+    assert probe.restorable is True
+    stamped = read_entry(spec.id, path=record)
+    assert stamped is not None and stamped.undone_at
+
+
+def test_keys_removed_with_no_undo_read_as_the_application_removing_them(tmp_path):
+    """Spec section 2.5's unanswerable question, answered.
+
+    MCC's Codex block was written at 02:20 on a real machine and gone by
+    02:36, and nothing anywhere could say whether the user had pressed Undo or
+    Codex had rewritten the file. An unstamped record plus a surviving backup
+    plus missing keys is the third history, and it now has a badge of its own.
+    """
+
+    spec, env, record, scalars = _configured_codex(tmp_path)
+    path = document_path(spec, env)
+    # The application rewrites its own configuration and drops a table it does
+    # not own. No Undo was pressed, so the record is unstamped.
+    path.write_text(CODEX_DOCUMENT, encoding="utf-8", newline="")
+
+    probe = desktop_apply.probe(
+        spec,
+        env=env,
+        expected_block=BLOCK,
+        expected_scalars=scalars,
+        record_path=record,
+    )
+    assert probe.state is DesktopAppState.REMOVED_BY_APP
+    unstamped = read_entry(spec.id, path=record)
+    assert unstamped is not None and unstamped.undone_at == ""
+
+
+def test_a_machine_that_never_pressed_configure_is_installed_not_configured(
+    tmp_path,
+):
+    """The first of the three histories, and the one that must not change."""
+
+    spec = desktop_app("codex_desktop")
+    prepare(tmp_path, spec, CODEX_DOCUMENT)
+    env = env_for(tmp_path)
+
+    probe = desktop_apply.probe(
+        spec, env=env, expected_block=BLOCK, record_path=tmp_path / "record.json"
+    )
+    assert probe.state is DesktopAppState.INSTALLED
+
+
+def test_a_second_configure_clears_the_undone_stamp(tmp_path):
+    """Undone, then configured again: the record is live again, not stale."""
+
+    spec, env, record, scalars = _configured_codex(tmp_path)
+    desktop_apply.undo(spec, env=env, record_path=record)
+    stamped = read_entry(spec.id, path=record)
+    assert stamped is not None and stamped.undone_at
+
+    desktop_apply.apply(spec, env=env, block=BLOCK, scalars=scalars, record_path=record)
+    entry = read_entry(spec.id, path=record)
+    assert entry is not None
+    assert entry.undone_at == ""
+    # And the pre-MCC value is still the user's own, not MCC's -- the record
+    # answers "what did the user have before MCC ever wrote here?" and a
+    # re-apply must not bury that under yesterday's MCC output.
+    prior = {".".join(value.key_path): value.prior_value for value in entry.overwritten}
+    assert prior["model"] == "gpt-5.6-luna"

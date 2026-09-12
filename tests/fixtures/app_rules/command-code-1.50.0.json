@@ -1,0 +1,31 @@
+{
+  "app_id": "commandcode",
+  "display_name": "Command Code",
+  "app_version": "1.50.0",
+  "extracted": "2026-09-12",
+  "source_file": "%APPDATA%\\npm\\node_modules\\command-code\\dist\\cli.mjs (2,555,640 bytes, one minified bundle; package.json version 1.50.0)",
+  "note": "A rule, not a schema. Command Code publishes no schema for providers.json, so every entry is a string read out of the shipped bundle.",
+
+  "providers_document": "~/.commandcode/providers.json",
+  "providers_document_evidence": "getUserProvidersConfigPath: `${homeDir15(runtime)}/.commandcode/providers.json`, read by readConfigFile -> parseProvidersConfig(JSON.parse(...)).",
+
+  "owned_key_path": ["provider", "mcc"],
+
+  "credential": {
+    "rejects_literals": true,
+    "accepted_reference_forms": ["$ENV_VAR", "{env:VAR}", "!command"],
+    "evidence": "parseProvider: 'provider.${t}.apiKey: raw secrets don't belong in providers.json - paste the key in /connect (stored in ~/.commandcode/auth.json), or use a \"$ENV_VAR\" / \"{env:VAR}\" / \"!command\" reference - ignored'. A literal is not merely refused: the warning is emitted and the value is set to undefined, so the provider is left with no key at all."
+  },
+
+  "selection": {
+    "document": "~/.commandcode/config.json",
+    "keys": ["model", "modelProvider"],
+    "must_be_written_together": true,
+    "evidence": "the config-layer merge loop: `const e = t.modelProvider; t = deepMerge({base: t, override: o}); \"model\" in o ? (\"modelProvider\" in o || delete t.modelProvider) : (\"modelProvider\" in o && (void 0 === e ? delete t.modelProvider : t.modelProvider = e))`. A layer that sets 'model' without 'modelProvider' deletes the inherited modelProvider outright, so the two keys are one setting.",
+    "mcc_writes_it": false,
+    "why_not": "It is a second document, and the value it would replace is the model the user picked. Spec fix 16 offers exactly two answers -- write it, or say on the card that the user must pick it -- and MCC takes the second: the card names both keys and says they have to be set together. Writing a second document per app is a new engine capability, not a registry row, and section 4.8 says a new need is a new declared field rather than a branch."
+  },
+
+  "keys_mcc_must_write": ["name", "baseURL", "apiKey", "models"],
+  "keys_evidence": "the provider entry parseProvider builds: {id, name?, baseURL, apiKey, headers?, models}. Unchanged from the 6.27.0 launcher merge, which a regression test asserts byte-identical -- this card reports, it does not re-mechanise."
+}

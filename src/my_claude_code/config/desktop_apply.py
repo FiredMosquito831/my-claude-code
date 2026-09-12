@@ -88,7 +88,11 @@ from my_claude_code.config.restore_record import (
     capture_overwritten,
     document_sha256,
     forget_entry,
+    forget_repairs,
+    mark_undone,
     read_entry,
+    read_repairs,
+    record_repairs,
     write_entry,
 )
 
@@ -686,7 +690,11 @@ def probe(
     # need it. It is skipped where a managed source outranks the file, since
     # nothing MCC does there has any effect. See :func:`repair_legacy` for why
     # an already-repaired library comes out untouched.
-    repaired = () if managed_by else repair_legacy(spec, env)
+    repaired = (
+        read_repairs(spec.id, path=record_path)
+        if managed_by
+        else record_repairs(spec.id, repair_legacy(spec, env), path=record_path)
+    )
 
     if managed_by:
         # Checked before the document is read, and before "installed" matters:
@@ -761,11 +769,11 @@ def probe(
         # holding only the user's own configuration read as *drifted*, which
         # says MCC wrote something here and it has changed. Nothing had.
         state = (
-            DesktopAppState.CONFIGURED
+            _configured_state(spec, token_env_present)
             if scalars_present is True
             else DesktopAppState.DRIFTED
             if scalars_present is False and _any_scalar_set(document, spec.document)
-            else DesktopAppState.INSTALLED
+            else _absent_state(spec, path, record_path)
         )
         return DesktopProbe(
             app_id=spec.id,
@@ -789,13 +797,13 @@ def probe(
         expected[spec.document.match_field] = spec.document.match_value
 
     if present is None:
-        state = DesktopAppState.INSTALLED
+        state = _absent_state(spec, path, record_path)
     elif expected is None or (
         present == expected
         and scalars_present is not False
         and _sidecar_matches(spec, env, expected_sidecar) is not False
     ):
-        state = DesktopAppState.CONFIGURED
+        state = _configured_state(spec, token_env_present)
     else:
         state = DesktopAppState.DRIFTED
 
@@ -808,6 +816,69 @@ def probe(
         restorable=restorable,
         repaired=repaired,
     )
+
+
+def _configured_state(spec: DesktopAppSpec, token_env_present: bool) -> DesktopAppState:
+    """Return ``CONFIGURED``, or the badge for a credential that cannot resolve.
+
+    Fix 8. MCC's document can be byte-perfect and the application still fail
+    on its first request, because the only thing it names for a credential is
+    a variable nobody on this machine exports. Every one of those rows was
+    reported ``configured`` until 6.84.0 -- the dashboard did render one line
+    saying "not exported yet", in a details table, under a green
+    "Configured by MCC" badge -- and the measured consequence was an
+    unexpanded reference going out as a bearer token and MCC answering 401.
+
+    Two conditions, both declared in the registry rather than inferred here:
+    the row names a variable at all, and that variable is not one **MCC
+    itself** sets in the process it launches. Command Code is the second
+    case, and without it this state would paint a working configuration red
+    on every poll, which is the same lie the other way round.
+    """
+
+    if (
+        spec.token_env_var
+        and not spec.token_env_var_set_by_mcc
+        and not token_env_present
+    ):
+        return DesktopAppState.CREDENTIAL_UNRESOLVED
+    return DesktopAppState.CONFIGURED
+
+
+def _absent_state(
+    spec: DesktopAppSpec, path: Path, record_path: Path | None
+) -> DesktopAppState:
+    """Return ``INSTALLED``, or the badge for keys the application removed.
+
+    Fix 12. MCC's keys are not in the document. Three histories produce that,
+    and until 6.84.0 all three read "Installed, not configured":
+
+    * Configure was never pressed -- no record, nothing to say.
+    * The user pressed Undo -- the record is stamped ``undone_at``, so this
+      *is* "installed, not configured" and saying anything else would be
+      alarming about a state the user asked for.
+    * The application rewrote its own configuration file and dropped a table
+      it does not own -- an unstamped record, a backup still on disk, and
+      MCC's keys gone anyway.
+
+    Only the third is reported, and only with both pieces of evidence
+    present, because the whole value of the badge is that it is rare. The
+    backup is required as well as the record for a plain reason: the record
+    outlives the document it describes (a user who deletes ``config.toml``
+    entirely, or points ``CODEX_HOME`` somewhere else, has a record for a file
+    that is not there), and the backup is the thing that only exists where MCC
+    really did edit *this* file.
+    """
+
+    if spec.document is None:
+        return DesktopAppState.INSTALLED
+    entry = read_entry(spec.id, path=record_path)
+    if entry is None or entry.undone_at:
+        return DesktopAppState.INSTALLED
+    backup = path.with_name(path.name + spec.document.backup_suffix)
+    if not backup.exists():
+        return DesktopAppState.INSTALLED
+    return DesktopAppState.REMOVED_BY_APP
 
 
 def _sidecar_matches(
@@ -1631,6 +1702,12 @@ def undo(
         _backup_once(path, spec.document.backup_suffix)
         _write_text(path, after_text)
 
+    # Whatever else Undo did, MCC's configuration is no longer meant to be
+    # here -- so the one-time repair note goes with it. It says "an earlier
+    # MCC wrote an identity this app rejects and it has been moved", and after
+    # an Undo there is nothing of MCC's left for that sentence to be about.
+    forget_repairs(spec.id, path=record_path)
+
     if mode is UndoMode.RESTORE:
         # Consumed: the values are back in the document, so the record has
         # done its job. KEYS_ONLY deliberately keeps it. The record answers
@@ -1639,6 +1716,12 @@ def undo(
         # undo is what disarmed the second option of the picker and made the
         # data loss unrecoverable through the UI.
         forget_entry(spec.id, path=record_path)
+    else:
+        # Kept, and stamped. The record stays because the second undo mode
+        # needs it; the stamp is what stops a later probe reading a kept
+        # record plus missing keys as "the application deleted MCC's
+        # configuration" when in fact the user asked for exactly this.
+        mark_undone(spec.id, path=record_path)
 
     return DesktopWriteResult(
         app_id=spec.id,

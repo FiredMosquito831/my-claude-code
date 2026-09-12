@@ -1,0 +1,51 @@
+{
+  "app_id": "codex_desktop",
+  "display_name": "Codex desktop",
+  "app_version": "0.153.4",
+  "extracted": "2026-09-12",
+  "source_file": "%LOCALAPPDATA%\\OpenAI\\Codex\\bin\\8e5b6932251c2c1c\\codex.exe (the engine the MSIX ChatGPT app and the npm CLI both unpack; byte-identical codex-cli 0.153.4)",
+  "note": "A rule, not a schema. Codex publishes no machine-readable schema for config.toml, so every entry here is a string read out of the shipped binary's own serde tables and error text, with the live runs that reproduced the behaviour recorded in versions.txt.",
+
+  "provider_table": "model_providers.<id>",
+  "provider_fields": [
+    "name",
+    "base_url",
+    "env_key",
+    "env_key_instructions",
+    "experimental_bearer_token",
+    "auth",
+    "wire_api",
+    "query_params",
+    "http_headers",
+    "env_http_headers",
+    "request_max_retries",
+    "stream_max_retries",
+    "stream_idle_timeout_ms",
+    "websocket_connect_timeout_ms",
+    "requires_openai_auth",
+    "supports_websockets",
+    "supports_standalone_web_search"
+  ],
+  "provider_fields_evidence": "the serde field list emitted next to the literal 'ModelProviderInfo' in the binary's string table: 'namebase_urlenv_keyenv_key_instructionsexperimental_bearer_tokenauthwire_apiquery_paramshttp_headersenv_http_headersrequest_max_retriesstream_max_retriesstream_idle_timeout_mswebsocket_connect_timeout_msrequires_openai_authsupports_websocketssupports_standalone_web_searchModelProviderInfo'",
+
+  "unknown_keys_tolerated": true,
+  "unknown_keys_evidence": "no deny_unknown_fields on the root config or on ModelProviderInfo; a bogus root key and a bogus provider field both left `codex doctor` reporting 'config loaded'. Retired *known* keys are the exception, which is what wire_api = \"chat\" is.",
+
+  "wire_api_accepted": ["responses"],
+  "wire_api_rejected": ["chat"],
+  "wire_api_evidence": "two strings, six occurrences: '`wire_api = \"chat\"` is no longer supported.' and 'set `wire_api = \"responses\"` in your provider config.' Reproduced live under a scratch CODEX_HOME: `codex exec --skip-git-repo-check \"say hi\"` answered 'Error loading config.toml: ...' and exited 1. This is a config-load failure, so it takes every unrelated setting in the file down with it, in the CLI and in the desktop app.",
+
+  "base_url_must_end_with": "/v1",
+  "base_url_evidence": "Codex appends '/responses' to base_url; the bundled responses-api-proxy default is 'https://api.openai.com/v1/responses'.",
+
+  "credential": {
+    "literal_field": "experimental_bearer_token",
+    "reference_field": "env_key",
+    "reference_is_fatal_when_unset": true,
+    "evidence": "'Missing environment variable: `' is a hard error with no fallback to the ChatGPT OAuth in auth.json; `codex doctor` renders it as 'auth   active model provider auth env var is missing'. experimental_bearer_token takes the literal and proceeds to the network -- the field CLIProxyAPI's own Codex-App recipe uses for exactly this reason."
+  },
+
+  "keys_mcc_must_write": ["name", "base_url", "wire_api", "experimental_bearer_token"],
+
+  "not_extracted": "What the desktop GUI does after a valid config loads. openai/codex#29156 reports the model picker degrading with any custom provider; the app was never launched here, so that is on the card as a report and is not asserted."
+}

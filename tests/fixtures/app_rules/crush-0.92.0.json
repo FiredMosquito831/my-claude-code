@@ -1,0 +1,30 @@
+{
+  "app_id": "crush_desktop",
+  "display_name": "Crush",
+  "app_version": "0.92.0",
+  "extracted": "2026-09-12",
+  "source_file": "tests/fixtures/schemas/crush.schema.json -- emitted by the shipped binary itself, `crush schema` on v0.92.0 (an undocumented command; it is not in --help), vendored so the suite never needs the network",
+  "note": "Crush emits its own schema, so the rule *is* the schema and this file says where MCC's block sits inside it plus the two behaviours a schema cannot state, both of which were measured on the wire against a running Crush before this row existed.",
+
+  "schema_file": "crush.schema.json",
+  "embed_at": ["providers", "mcc"],
+
+  "provider_type": "anthropic",
+  "provider_type_evidence": "measured: Crush's Anthropic provider is anthropic-sdk-go, and with type 'anthropic' and a root base_url the request arrived as POST /v1/messages carrying x-api-key. That is the document mcc-crush has written since the launcher existed. The desktop row wrote 'openai-compat' with a /v1 base URL until 6.84.0 and was never put on the wire at all, so MCC shipped two disagreeing documents for one application. Fix 14 keeps the measured one.",
+
+  "base_url_shape": "root",
+  "base_url_evidence": "the SDK appends /v1/messages itself, so a /v1 base URL would have produced POST /v1/v1/messages.",
+
+  "discover_models_must_be_false": true,
+  "discover_models_evidence": "measured: with discovery on, Crush issues GET <base_url>/models -- not /v1/models -- so against a root base URL it discovers nothing. The explicit list is the only correct option.",
+
+  "credential": {
+    "field": "api_key",
+    "accepts_literal": true,
+    "reference_form": "$VAR",
+    "evidence": "the schema's own example for api_key is \"$OPENAI_API_KEY\". MCC wrote $MCC_AUTH_TOKEN here until 6.67.0 and nothing sets that variable, so Crush sent 'Bearer $MCC_AUTH_TOKEN' -- 401, measured. A desktop app started from Explorer cannot resolve a reference MCC never exports, so the literal goes in the file at mode 0600."
+  },
+
+  "model_id_is_the_gateway_id": true,
+  "model_id_evidence": "Crush passes models[].id through to the request body untouched -- measured -- and both MCC documents take it from application/catalogues/crush._model_id, which returns model.gateway_id. The two never disagreed about this half; they disagreed about type and base_url."
+}

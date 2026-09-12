@@ -1,0 +1,36 @@
+{
+  "app_id": "opencode_desktop",
+  "display_name": "OpenCode desktop",
+  "app_version": "1.18.26",
+  "extracted": "2026-09-12",
+  "source_file": "tests/fixtures/schemas/opencode-config.schema.json -- OpenCode's own published JSON Schema, https://opencode.ai/config.json, vendored so the suite never needs the network",
+  "note": "The one row in the set whose application publishes a machine-readable schema, so the rule *is* the schema and this file only says where MCC's block sits inside it and what the schema cannot express.",
+
+  "schema_file": "opencode-config.schema.json",
+  "embed_at": ["provider", "mcc"],
+  "embed_evidence": "the desktop card merges into the user's own ~/.config/opencode/opencode.json under provider.<id>, so what has to validate is the whole document with MCC's block in place -- not the block alone, which no schema describes.",
+
+  "credential": {
+    "field": "options.apiKey",
+    "accepts_literal": true,
+    "evidence": "ProviderConfig.options.apiKey is a plain string in the schema, and createOpenAICompatible sends it verbatim as Authorization: Bearer. MCC used to write {env:MCC_AUTH_TOKEN}; OpenCode does expand {env:...}, but nothing sets that variable, so what went on the wire was the literal reference -- HTTP 401, measured against a scratch MCC server."
+  },
+
+  "base_url_must_end_with": "/v1",
+  "base_url_evidence": "createOpenAICompatible builds new URL(baseURL + '/chat/completions'), and the trailing slash is stripped for you.",
+
+  "options_known_keys": [
+    "apiKey",
+    "baseURL",
+    "enterpriseUrl",
+    "setCacheKey",
+    "timeout",
+    "headerTimeout",
+    "chunkTimeout"
+  ],
+  "options_headers_is_ignored": true,
+  "options_headers_evidence": "ProviderConfig.options declares no 'headers'; the only two 'headers' properties in the whole schema belong to MCP server entries. The block validated with one anyway because options omits additionalProperties: false, so OpenCode dropped MCC's attribution header silently. Removed in 6.83.0 -- this rule is what stops it coming back.",
+
+  "top_level_unknown_key_is_fatal": true,
+  "top_level_unknown_key_evidence": "the config validator throws ConfigInvalidError on an unknown key at the document root and opencode refuses to start, while an unknown key nested inside provider.<id> or a model is silently ignored (decodeUnknownExit with no onExcessProperty). The desktop path is safe because the models node is taken verbatim and MCC's _mcc_defaulted record never leaves the serialiser's root."
+}
