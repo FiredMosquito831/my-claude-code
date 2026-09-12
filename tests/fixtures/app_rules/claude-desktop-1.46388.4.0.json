@@ -1,0 +1,75 @@
+{
+  "app_id": "claude_desktop",
+  "display_name": "Claude Desktop",
+  "app_version": "1.46388.4.0",
+  "extracted": "2026-09-12",
+  "source_file": "C:\\Program Files\\WindowsApps\\Claude_1.46388.4.0_x64__pzs8sxrjxfjjc\\app\\resources\\app.asar -> .vite/build/index.chunk--WuAOADe.js (beautified; line numbers below are the beautified copy's)",
+  "note": "A rule, not a schema. Every entry is an identifier read out of the shipped main-process bundle. The application was never launched: it is a packaged Store app signed into a real account, and spec section 5 excludes it from launch-proof by name.",
+
+  "entry_id_regex": "^[a-f0-9-]{36}$",
+  "entry_id_evidence": "var vAe = /^[a-f0-9-]{36}$/ at :35967, tested against _meta.json's appliedId by the boot-time loader $je at :36626 *before* the document is read. A failing id returns undefined, nMe (:36642) substitutes {}, and the app discards its entire local configuration tier with no message naming the id. This is the assertion that would have prevented the bug report: MCC's own id was 'mcc-9c2f4b18-...' -- 40 characters, containing an 'm'.",
+
+  "meta_document": {
+    "applied_id_key": "appliedId",
+    "entries_key": "entries",
+    "entry_match_field": "id",
+    "evidence": "$je reads e?.appliedId and loads fl(t); the picker lists 'entries', each carrying the id the loader resolves."
+  },
+
+  "inference_provider_values": [
+    "gateway",
+    "anthropic",
+    "bedrock",
+    "mantle",
+    "vertex",
+    "foundry"
+  ],
+  "inference_provider_evidence": "ao = {gateway: \"Gateway\", anthropic: \"Claude API\", bedrock: \"Bedrock\", mantle: \"Bedrock Mantle\", vertex: \"Vertex AI\", foundry: \"Foundry\"}; oo = Object.keys(ao) at :27989-27991, and LTe (:33714) is Rn(oo) under flatKey 'inferenceProvider'.",
+
+  "inference_credential_kind_values": [
+    "static",
+    "helper-script",
+    "interactive",
+    "vendor-profile",
+    "workforce"
+  ],
+  "inference_credential_kind_evidence": "Cve = [\"static\", \"helper-script\", \"interactive\", \"vendor-profile\", \"workforce\"] at :27993; RTe (:33730) is Rn(Cve) under flatKey 'inferenceCredentialKind'.",
+
+  "gateway_auth_scheme": {
+    "values": ["bearer", "x-api-key"],
+    "default": "bearer",
+    "evidence": "kSe at :34374: Rn([\"bearer\", \"x-api-key\"]).optional() with default: \"bearer\", flatKey 'inferenceGatewayAuthScheme'. MCC omits the key and takes the default, which is what the working configuration on a real machine does too."
+  },
+
+  "gateway_keys": [
+    "inferenceProvider",
+    "inferenceGatewayBaseUrl",
+    "inferenceGatewayApiKey",
+    "inferenceCredentialKind",
+    "inferenceGatewayAuthScheme",
+    "inferenceGatewayHeaders",
+    "inferenceGatewayOidc",
+    "inferenceGatewayOidcAuthFlow",
+    "inferenceCustomHeaders",
+    "inferenceModels",
+    "modelDiscoveryEnabled",
+    "modelPrefer1mContext"
+  ],
+  "gateway_keys_evidence": "every flatKey in the bundle beginning 'inference' or 'model', filtered to the ones whose predicates.show or group applies to inferenceProvider 'gateway'. Unknown keys are not fatal -- the reader pc (:34118) iterates its own allow-list and never the input object -- but a key outside this list is a key the app will not read, and an in-app save through NEe (:34148) copies only known keys, so it would be dropped the first time the user saves.",
+
+  "credential": {
+    "field": "inferenceGatewayApiKey",
+    "resolves_references": false,
+    "evidence": "ASe (:34390) declares kind: \"static\" with apiKey as a plain redacted string. The only indirection the app offers is inferenceCredentialKind 'helper-script', which runs a command rather than expanding a variable -- so the literal has to go in a file, and MCC owns that file outright at mode 0600."
+  },
+
+  "base_url_shape": "root",
+  "base_url_evidence": "the gateway URL is used as `${base.replace(/\\/+$/,\"\")}/v1/messages` (:85339) and discovery as `${base}/v1/models?limit=1000` (:83465), so the value written is the proxy root.",
+
+  "gateway_model_name_rule": {
+    "accepts_when": "Ga(name) -- not in the foreign-vendor denylist r_e, and either matching ^(sonnet|opus|haiku|fable|mythos)(-[\\d.]+)?$ or containing one of claude/sonnet/opus/haiku/fable/mythos/anthropic",
+    "filter_is_all_or_nothing": true,
+    "evidence": "Ka(provider, name) at :27752 dispatches provider 'gateway' to d_e, which returns Ga(name) or 'expected a gateway model route referencing an Anthropic model (e.g. claude-sonnet-4-5, anthropic/claude-*)'. BCe (:31871) filters inferenceModels by it -- but only replaces the list when at least one entry survived: `a.length !== i.length && a.length > 0 && (e.inferenceModels = a)`. So a list in which *every* entry fails is passed through unchanged.",
+    "not_asserted_here": "MCC names its five routes mcc/best..mcc/vision, and none of them satisfies Ga -- so every entry is reported by the validation UI as 'not an Anthropic model for this provider' and the list survives only because of the all-or-nothing guard above. Changing what MCC lists means changing which model id Claude Desktop then sends, which is a routing decision and not this release's; it is recorded as the top residual risk of 6.84.0 instead of being fixed blind."
+  }
+}

@@ -46,3 +46,140 @@ Not extracted, and so not asserted: what Roo does with the profile *after* the
 import. The import itself was not run -- that would write the user's own VS Code
 SecretStorage -- so this rule says what the document has to look like to be
 accepted, and nothing about what the extension then sends on the wire.
+
+--------------------------------------------------------------------------
+codex-0.153.4.json
+--------------------------------------------------------------------------
+App:        Codex desktop (the MSIX ChatGPT app, OpenAI.Codex 26.901.6511.0)
+            and the npm CLI. Both unpack the same engine and read the same
+            ~/.codex/config.toml.
+Version:    codex-cli 0.153.4, from `codex --version`
+Read from:  %LOCALAPPDATA%\OpenAI\Codex\bin\8e5b6932251c2c1c\codex.exe
+Date:       2026-09-12 (strings first taken 2026-09-08; re-greped for this rule)
+Platform:   Windows 11
+
+Extraction (the binary publishes no schema, so the evidence is its own string
+table plus live runs under a scratch CODEX_HOME -- never the user's):
+
+    # the 17-field serde list, emitted beside the struct's name
+    grep -oa '.\{0,120\}wire_apiquery_paramshttp_headers.\{0,220\}' codex.strings.txt
+
+    # the wire_api rejection, six occurrences
+    grep -oa 'wire_api[ =]\{0,3\}.\{0,90\}' codex.strings.txt | sort -u
+
+    # the credential errors
+    grep -oa 'Missing environment variable.\{0,80\}' codex.strings.txt
+
+    # behaviour, against a scratch CODEX_HOME and base_url http://127.0.0.1:1/v1
+    CODEX_HOME=<scratch> codex exec --skip-git-repo-check "say hi"
+    CODEX_HOME=<scratch> codex doctor
+
+`codex.strings.txt` is `strings -n 6` over that codex.exe (24.8 MB of output).
+
+Not extracted, and so not asserted: what the desktop GUI does *after* a valid
+config loads. openai/codex#29156 reports the model picker degrading with any
+custom provider; the app was never launched.
+
+--------------------------------------------------------------------------
+claude-desktop-1.46388.4.0.json
+--------------------------------------------------------------------------
+App:        Claude Desktop (Microsoft Store / MSIX package)
+Version:    1.46388.4.0, from the package directory name
+Read from:  C:\Program Files\WindowsApps\Claude_1.46388.4.0_x64__pzs8sxrjxfjjc
+            \app\resources\app.asar
+Date:       2026-09-12 (extracted 2026-09-08; re-greped for this rule)
+Platform:   Windows 11
+
+Extraction:
+
+    npx @electron/asar extract app.asar <scratch>/asar
+    npx prettier --parser babel \
+        <scratch>/asar/.vite/build/index.chunk--WuAOADe.js \
+        > chunk-WuAOADe.pretty.js
+
+    grep -n 'a-f0-9-\]{36}' chunk-WuAOADe.pretty.js      # the entry-id regex
+    grep -n 'inferenceProvider' chunk-WuAOADe.pretty.js  # LTe, flatKey, enum
+    grep -n 'inferenceCredentialKind' chunk-WuAOADe.pretty.js
+    grep -o 'inference[A-Za-z]*' chunk-WuAOADe.pretty.js | sort -u
+    sed -n '27975,27995p' chunk-WuAOADe.pretty.js        # ao / oo / Cve
+    sed -n '27700,27790p' chunk-WuAOADe.pretty.js        # Ga / Ka / d_e
+    sed -n '31860,31890p' chunk-WuAOADe.pretty.js        # BCe, the model filter
+
+The application was **never launched**. Spec section 5 excludes it from
+launch-proof by name: it is a packaged Store app signed into a real account.
+
+--------------------------------------------------------------------------
+goose-1.50.0.json
+--------------------------------------------------------------------------
+App:        Goose desktop / CLI (Block)
+Version:    v1.50.0, the release tag
+Read from:  goose-source-v1.50.0.zip, the release's own source archive
+Date:       2026-09-12
+Platform:   n/a -- source, not a binary. Goose is NOT installed on this
+            machine (no goose.exe or goosed.exe on PATH, in Program Files,
+            scoop, cargo, go/bin or the uninstall registry), which is why the
+            source archive is the artefact. Nothing here was put on the wire.
+
+Extraction (Git Bash):
+
+    gh release download v1.50.0 --repo block/goose \
+        --pattern 'goose-source-v1.50.0.zip'
+    unzip -o -j goose-source-v1.50.0.zip \
+        goose-v1.50.0/crates/goose-providers/src/declarative.rs \
+        goose-v1.50.0/crates/goose-providers/src/openai.rs \
+        goose-v1.50.0/crates/goose-provider-types/src/base.rs \
+        goose-v1.50.0/crates/goose/src/config/declarative_providers.rs \
+        goose-v1.50.0/crates/goose-providers/src/declarative/definitions/lmstudio.json \
+        -d .
+
+    grep -n 'pub struct DeclarativeProviderConfig' -A 46 declarative.rs
+    grep -n 'enum ProviderEngine' -A 20 declarative.rs
+    grep -n 'fn load_custom_providers' -A 18 declarative.rs
+    grep -n 'fn create_custom_provider' -A 45 declarative_providers.rs
+    grep -n 'fn from_declarative_config' -A 50 openai.rs
+    grep -n 'pub struct ModelInfo' -A 26 base.rs
+
+Not extracted, and so not asserted: anything about what a running Goose sends.
+The rule says what the document has to look like to deserialise and how the
+credential is resolved, and nothing about the wire.
+
+--------------------------------------------------------------------------
+command-code-1.50.0.json
+--------------------------------------------------------------------------
+App:        Command Code CLI
+Version:    1.50.0, from its package.json "version"
+Read from:  %APPDATA%\npm\node_modules\command-code\dist\cli.mjs
+Date:       2026-09-12
+Platform:   Windows 11
+
+Extraction. The bundle is one 2.5 MB minified line, and a windowed grep over
+it does not finish, so the reads are a small script that prints a fixed window
+around each literal:
+
+    uv run --offline python scan.py dist/cli.mjs 200 "providers.json"
+    uv run --offline python scan.py dist/cli.mjs 180 "modelProvider"
+    uv run --offline python scan.py dist/cli.mjs 150 "config.json"
+
+(`scan.py` is ten lines: read the file, re.finditer the escaped needle, print
+`text[start-width : end+width]`.) The user's own ~/.commandcode was read
+read-only and nothing under it was written.
+
+--------------------------------------------------------------------------
+opencode-1.18.26.json  and  crush-0.92.0.json
+--------------------------------------------------------------------------
+These two applications publish machine-readable schemas, which
+tests/fixtures/schemas/ has vendored since the catalogue-contract work:
+
+    opencode-config.schema.json   from https://opencode.ai/config.json
+                                  (OpenCode 1.18.25/1.18.26 loaded the
+                                  generated document and reported MCC's
+                                  models with MCC's limits)
+    crush.schema.json             emitted by the binary itself,
+                                  `crush schema` on v0.92.0 -- an
+                                  undocumented command, not in --help
+
+So the rule files above do not restate the schema. They record which document
+the desktop card's block is embedded in before validation (`embed_at`), and
+the handful of behaviours a JSON Schema cannot express -- each of which was
+measured on the wire against the running binary at the time, and is quoted
+with what was measured.

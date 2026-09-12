@@ -218,21 +218,47 @@ def test_a_sidecar_is_only_declared_where_the_app_reads_a_file_of_its_own():
 
 
 def test_the_goose_sidecar_is_the_whole_provider_document():
+    """And it is keyed the way Goose's own loader deserialises it.
+
+    ``api_url`` and ``model_details`` were what this test asserted until
+    6.84.0, and neither is a field of Goose's ``DeclarativeProviderConfig`` --
+    the fields are ``base_url`` and ``models``, and ``engine`` is required.
+    See ``tests/contracts/test_desktop_document_matches_app_rule.py`` for the
+    rule extracted from ``goose-source-v1.50.0.zip``.
+    """
+
     goose = DESKTOP_APPS_BY_ID["goose_desktop"]
     document = sidecar_document(goose, MODELS, proxy_root_url="http://127.0.0.1:8082")
     assert document is not None
-    assert document["api_url"] == "http://127.0.0.1:8082"
+    assert document["base_url"] == "http://127.0.0.1:8082"
     assert document["base_path"] == "v1/chat/completions"
+    assert document["engine"] == "openai"
+    assert "api_url" not in document
+    assert "model_details" not in document
 
 
-def test_antigravity_is_servable_again_and_says_what_changed():
-    """The 1.0.14 refusal was re-measured on 2026-09-07 and no longer holds."""
+def test_antigravity_is_instructions_only_because_no_file_can_configure_it():
+    """The 2026-09-07 re-measurement made this row servable; 6.84.0 undoes that.
+
+    Not because the path was wrong -- the binary's own embedded documentation
+    still names ``~/.gemini/antigravity-cli/settings.json`` -- but because agy
+    takes its key from ``GEMINI_API_KEY`` and its endpoint from
+    ``GOOGLE_GEMINI_BASE_URL``, and MCC never sets a user-scope variable. A
+    Configure that wrote the one key it could write would leave agy refusing
+    to start against the backend it was working with, which its own error
+    string says in as many words.
+    """
 
     agy = DESKTOP_APPS_BY_ID["antigravity"]
-    assert agy.status is DesktopAppStatus.SERVABLE
+    assert agy.status is DesktopAppStatus.INSTRUCTIONS_ONLY
     assert agy.base_url_shape.value == "v1beta"
     assert overwritten_scalars(agy) == {"modelProvider": "gemini"}
     assert any("2026-09-07" in note for note in agy.notes)
+    assert agy.instructions_reason.startswith("2026-09-12: ")
+    assert {label for label, _ in agy.instruction_fields} >= {
+        "GEMINI_API_KEY",
+        "GOOGLE_GEMINI_BASE_URL",
+    }
 
 
 def test_claude_desktop_writes_the_file_anthropic_documents():

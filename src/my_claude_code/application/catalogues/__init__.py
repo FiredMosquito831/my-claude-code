@@ -94,7 +94,7 @@ MODEL_ENTRY_PATHS: dict[str, tuple[str, ...]] = {
     "crush": ("providers", CRUSH_PROVIDER_ID, "models"),
     "droid": (DROID_MODELS_KEY,),
     "gemini_cli": GEMINI_CLI_ALIASES_PATH,
-    "goose": ("custom_provider", "model_details"),
+    "goose": ("models",),
     "kilo": ("provider", OPENCODE_PROVIDER_ID, "models"),
     "kimi": ("models",),
     "opencode": ("provider", OPENCODE_PROVIDER_ID, "models"),

@@ -1,0 +1,80 @@
+{
+  "app_id": "goose_desktop",
+  "display_name": "Goose desktop",
+  "app_version": "1.50.0",
+  "extracted": "2026-09-12",
+  "source_file": "goose-source-v1.50.0.zip (block/goose release v1.50.0) -> crates/goose-providers/src/declarative.rs, crates/goose/src/config/declarative_providers.rs, crates/goose-provider-types/src/base.rs, crates/goose-providers/src/openai.rs",
+  "note": "Goose is not installed on the machine this was extracted on, so the rule comes from the release's own source archive rather than from a running binary -- which spec section 5 allows ('the application's own shipped code') and spec question 6 requires, since the alternative was demoting the row. Nothing here was measured on the wire.",
+
+  "document_is_bare_config": true,
+  "document_is_bare_config_evidence": "load_custom_providers (declarative.rs:330) reads every *.json in custom_providers/ and calls deserialize_provider_config, which is serde_json::from_value straight into DeclarativeProviderConfig. Goose's own writer, create_custom_provider (declarative_providers.rs:170-241), builds that struct and writes serde_json::to_string_pretty of it. There is no wrapper key -- so the {\"custom_provider\": {...}} envelope MCC's serialiser produced until 6.84.0 was a struct with every required field missing.",
+
+  "file_name": "<name>.json",
+  "file_name_evidence": "custom_provider_file_path (declarative_providers.rs:117) joins custom_providers_dir() with format!(\"{}.json\", id); validate_provider_id allows a leading lowercase ASCII letter, digit or '_' and then lowercase ASCII, digits, '_' and '-'.",
+
+  "config_dir": "Paths::config_dir()/custom_providers",
+
+  "required_keys": ["name", "engine", "display_name", "base_url", "models"],
+  "optional_keys": [
+    "description",
+    "api_key_env",
+    "headers",
+    "timeout_seconds",
+    "supports_streaming",
+    "requires_auth",
+    "catalog_provider_id",
+    "base_path",
+    "env_vars",
+    "auth",
+    "dynamic_models",
+    "skip_canonical_filtering",
+    "model_doc_link",
+    "setup_steps",
+    "preserves_thinking",
+    "emit_clear_thinking",
+    "setup"
+  ],
+  "required_keys_evidence": "DeclarativeProviderConfig (declarative.rs:148-193): the five listed have neither #[serde(default)] nor an Option type. Everything else carries a default or is Option with #[serde(default)].",
+
+  "engine_values": [
+    "openai",
+    "openai_compatible",
+    "anthropic",
+    "anthropic_compatible",
+    "ollama",
+    "ollama_compatible"
+  ],
+  "engine_evidence": "enum ProviderEngine with #[serde(rename_all = \"lowercase\")] plus #[serde(alias = \"openai_compatible\")] / \"ollama_compatible\" / \"anthropic_compatible\", and FromStr accepting the same six spellings (declarative.rs:95-113).",
+
+  "base_url_and_path": {
+    "base_path_overrides_derived_path": true,
+    "derived_default": "v1/chat/completions",
+    "evidence": "openai::from_declarative_config (openai.rs:931-941) parses base_url, takes the host from it, and uses config.base_path when set, else derive_base_path(url.path()), whose empty-path answer is 'v1/chat/completions'. So MCC writes the proxy root in base_url and names the path explicitly -- which is what BaseUrlShape.SPLIT_HOST_PATH is."
+  },
+
+  "credential": {
+    "field": "api_key_env",
+    "is_a_key_name_not_a_value": true,
+    "resolved_from": "Goose's own secret store, not the process environment",
+    "evidence": "ConfigKeyResolver::resolve_key (goose/src/providers/custom_provider_config.rs) is self.config.get_secret(key) -- the keyring, or secrets.yaml under GOOSE_DISABLE_KEYRING. from_declarative_config bails with 'missing required key {}' when requires_auth is true and the key cannot be resolved. A literal written anywhere in this document is ignored."
+  },
+
+  "model_required_keys": [
+    "name",
+    "context_limit",
+    "input_token_cost",
+    "output_token_cost",
+    "currency",
+    "supports_cache_control"
+  ],
+  "model_optional_keys": [
+    "resolved_model",
+    "reasoning",
+    "thinking_preservation_format",
+    "request_params"
+  ],
+  "model_required_keys_evidence": "struct ModelInfo (goose-provider-types/src/base.rs:246-270). The six listed are Option<T> *without* #[serde(default)], so serde requires the key to be present even when the value is null; 'reasoning' and the three skip_serializing_if members carry defaults. There is no 'id', no 'output_limit', no 'supports_vision' and no 'supports_tools' -- the four keys MCC wrote until 6.84.0.",
+
+  "model_cost_unit": "per token",
+  "model_cost_unit_evidence": "'Cost per token for input in USD (optional)' / 'Cost per token for output in USD (optional)'. MCC's ladder carries prices per million, so every price is divided by 1000000 before it is written."
+}

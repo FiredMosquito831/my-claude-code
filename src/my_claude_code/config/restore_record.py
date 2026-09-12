@@ -51,6 +51,7 @@ import os
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -109,6 +110,22 @@ class RestoreEntry:
     document_sha256: str
     #: The values MCC replaced. Empty for a spec that only creates keys.
     overwritten: tuple[OverwrittenValue, ...]
+    #: When Undo last ran for this subject, as an ISO-8601 UTC timestamp, or
+    #: "" while MCC's configuration is supposed to be in place.
+    #:
+    #: This is the mark that makes "the user undid it" a different fact from
+    #: "the application deleted MCC's keys". Until 6.84.0 there was none:
+    #: ``KEYS_ONLY`` deliberately kept its record -- it has to, or the second
+    #: undo mode goes away -- so a record for an app whose block is gone meant
+    #: nothing at all, and a probe could only report "installed, not
+    #: configured". That is the exact ambiguity spec section 2.5 could not
+    #: resolve about Codex: MCC's block was written at 02:20 and gone by
+    #: 02:36, and nothing on the machine could say whether the user had
+    #: pressed Undo or Codex had rewritten the file. A timestamp answers it,
+    #: and answers it for the *next* release as well, because the app that
+    #: rewrites its own configuration is the failure mode that already cost a
+    #: release once.
+    undone_at: str = ""
 
     def as_payload(self) -> dict[str, object]:
         return {
@@ -116,6 +133,7 @@ class RestoreEntry:
             "document_path": self.document_path,
             "document_sha256": self.document_sha256,
             "overwritten": [value.as_payload() for value in self.overwritten],
+            "undone_at": self.undone_at,
         }
 
 
@@ -226,7 +244,7 @@ def write_entry(entry: RestoreEntry, *, path: Path | None = None) -> Path:
         subjects.pop(entry.subject, None)
 
     record_path.parent.mkdir(parents=True, exist_ok=True)
-    write_json_document_atomically(record_path, {"subjects": subjects})
+    write_json_document_atomically(record_path, _with_subjects(record, subjects))
     _harden(record_path)
     return record_path
 
@@ -265,7 +283,127 @@ def read_entry(subject: str, *, path: Path | None = None) -> RestoreEntry | None
         document_path=str(payload.get("document_path", "")),
         document_sha256=str(payload.get("document_sha256", "")),
         overwritten=tuple(values),
+        undone_at=str(payload.get("undone_at", "")),
     )
+
+
+def mark_undone(subject: str, *, path: Path | None = None) -> None:
+    """Stamp one subject's record as undone by the user, keeping the record.
+
+    The counterpart of :func:`forget_entry`, and the reason both exist.
+    ``RESTORE`` consumes its record because the values are back in the
+    document and the question it answers is settled. ``KEYS_ONLY`` must keep
+    its record -- dropping it is what disarmed the second undo mode and made a
+    data loss unrecoverable through the UI in 6.56.0 -- so it stamps instead.
+
+    A stamped record means "MCC's keys are gone because somebody asked". An
+    unstamped record with MCC's keys gone means the application removed them,
+    which is a state the probe can now report rather than guess at.
+    """
+
+    record_path = path if path is not None else restore_record_path()
+    entry = read_entry(subject, path=record_path)
+    if entry is None:
+        return
+    record = _load_record(record_path)
+    subjects = record.get("subjects")
+    subjects = dict(subjects) if isinstance(subjects, dict) else {}
+    stamped = RestoreEntry(
+        subject=entry.subject,
+        document_path=entry.document_path,
+        document_sha256=entry.document_sha256,
+        overwritten=entry.overwritten,
+        undone_at=datetime.now(UTC).isoformat(timespec="seconds"),
+    )
+    subjects[subject] = stamped.as_payload()
+    write_json_document_atomically(record_path, _with_subjects(record, subjects))
+    _harden(record_path)
+
+
+def read_repairs(subject: str, *, path: Path | None = None) -> tuple[str, ...]:
+    """Return the repair notes recorded for one subject, oldest first.
+
+    A repair happens **once**, on the probe that finds an identity an earlier
+    MCC wrote and the current app rejects -- and it is the only place a user
+    ever learns that their configuration was silently not working and that the
+    app has to be relaunched. Until 6.84.0 the note existed for exactly one
+    poll: the probe that performed the repair returned it, the dashboard
+    refreshed a few seconds later, and the sentence was gone. The only thing
+    that survived was a timestamped directory under MCC's configuration
+    folder, which nobody is looking at. So the note is written down beside the
+    restore record and the card shows it until Undo clears it.
+    """
+
+    record_path = path if path is not None else restore_record_path()
+    record = _load_record(record_path)
+    repairs = record.get("repairs")
+    if not isinstance(repairs, dict):
+        return ()
+    lines = repairs.get(subject)
+    if not isinstance(lines, list):
+        return ()
+    return tuple(str(line) for line in lines)
+
+
+def record_repairs(
+    subject: str, lines: Sequence[str], *, path: Path | None = None
+) -> tuple[str, ...]:
+    """Add repair notes for one subject, keeping every earlier one, and return all.
+
+    Additive and duplicate-free: a repair that runs again -- it should not,
+    because every step of it is conditioned on finding the legacy value, but a
+    restored backup can put one back -- must not print the same sentence
+    twice.
+    """
+
+    record_path = path if path is not None else restore_record_path()
+    record = _load_record(record_path)
+    repairs = record.get("repairs")
+    repairs = dict(repairs) if isinstance(repairs, dict) else {}
+    existing = read_repairs(subject, path=record_path)
+    merged = list(existing)
+    for line in lines:
+        if line and line not in merged:
+            merged.append(line)
+    if tuple(merged) == existing:
+        return existing
+    repairs[subject] = merged
+    record["repairs"] = repairs
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_document_atomically(record_path, record)
+    _harden(record_path)
+    return tuple(merged)
+
+
+def forget_repairs(subject: str, *, path: Path | None = None) -> None:
+    """Drop one subject's repair notes, which Undo does: it is no longer true."""
+
+    record_path = path if path is not None else restore_record_path()
+    record = _load_record(record_path)
+    repairs = record.get("repairs")
+    if not isinstance(repairs, dict) or subject not in repairs:
+        return
+    repairs = dict(repairs)
+    del repairs[subject]
+    record["repairs"] = repairs
+    write_json_document_atomically(record_path, record)
+    _harden(record_path)
+
+
+def _with_subjects(
+    record: dict[str, object], subjects: dict[str, object]
+) -> dict[str, object]:
+    """Return the record with its subjects replaced and every other key kept.
+
+    The record file grew a second top-level key in 6.84.0 -- ``repairs`` --
+    and every writer that rebuilt the document as ``{"subjects": …}`` would
+    have deleted it. Rebuilding from the loaded record instead means a third
+    key can be added without auditing the writers again.
+    """
+
+    updated = dict(record)
+    updated["subjects"] = subjects
+    return updated
 
 
 def forget_entry(subject: str, *, path: Path | None = None) -> None:
@@ -278,5 +416,5 @@ def forget_entry(subject: str, *, path: Path | None = None) -> None:
         return
     subjects = dict(subjects)
     del subjects[subject]
-    write_json_document_atomically(record_path, {"subjects": subjects})
+    write_json_document_atomically(record_path, _with_subjects(record, subjects))
     _harden(record_path)

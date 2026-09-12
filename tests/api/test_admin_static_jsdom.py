@@ -2849,7 +2849,7 @@ def test_the_desktop_apps_group_renders_one_card_per_app(rendered: dict) -> None
     apps = rendered["desktopApps"]
 
     assert apps["present"] is True
-    assert apps["cardCount"] == 7
+    assert apps["cardCount"] == 10
     assert [card["id"] for card in apps["cards"]] == [
         "codex_desktop",
         "opencode_desktop",
@@ -2857,12 +2857,15 @@ def test_the_desktop_apps_group_renders_one_card_per_app(rendered: dict) -> None
         "crush_desktop",
         "claude_desktop",
         "roo_code",
+        "goose_unresolved",
+        "codex_removed",
+        "antigravity",
         "warp",
     ]
 
 
 def test_each_probe_state_reaches_the_badge_in_its_own_words(rendered: dict) -> None:
-    """Seven states, seven labels. Collapsing any two hides a real difference."""
+    """Nine states, nine labels. Collapsing any two hides a real difference."""
 
     badges = {card["id"]: card["badge"] for card in rendered["desktopApps"]["cards"]}
     assert badges["codex_desktop"] == "Configured by MCC"
@@ -2873,7 +2876,55 @@ def test_each_probe_state_reaches_the_badge_in_its_own_words(rendered: dict) -> 
     # New in 6.56.0: a source outranks the file MCC would write.
     assert badges["roo_code"] == "Managed by your organisation"
     assert badges["claude_desktop"] == "Configured by MCC"
-    assert len(set(badges.values())) == 6
+    # New in 6.84.0. Both of these used to be reported as something else:
+    # the first as "Configured by MCC" while the app got a 401, the second as
+    # "Installed, not configured" whoever had removed the keys.
+    assert badges["goose_unresolved"] == "Written, but the key cannot resolve"
+    assert badges["codex_removed"] == "The app removed MCC's configuration"
+    assert len(set(badges.values())) == 8
+
+
+def test_a_credential_that_cannot_resolve_is_not_a_configured_card(
+    rendered: dict,
+) -> None:
+    """The badge says it, and the card names the variable to export."""
+
+    card = _desktop_card(rendered, "goose_unresolved")
+
+    assert card["badgeState"] == "credential_unresolved"
+    assert card["drifted"] is True
+    assert "MCC_AUTH_TOKEN" in card["driftNote"]
+    assert "does not set variables for you" in card["driftNote"]
+    # It is still configurable: the file is right, so Re-apply is offered.
+    assert card["hasConfigure"] is True
+    assert card["hasUndo"] is True
+
+
+def test_keys_the_application_removed_are_not_reported_as_never_configured(
+    rendered: dict,
+) -> None:
+    """The third history, which used to be indistinguishable from the first."""
+
+    card = _desktop_card(rendered, "codex_removed")
+
+    assert card["badgeState"] == "removed_by_app"
+    assert "without anyone pressing Undo" in card["driftNote"]
+    assert card["hasConfigure"] is True
+
+
+def test_an_instructions_only_card_says_why_it_has_no_button(
+    rendered: dict,
+) -> None:
+    """A button that disappears between releases has to explain itself."""
+
+    card = _desktop_card(rendered, "antigravity")
+
+    assert card["hasConfigure"] is False
+    assert card["hasUndo"] is False
+    assert card["unavailableReason"].startswith("2026-09-12: ")
+    assert "GEMINI_API_KEY" in card["unavailableReason"]
+    assert "GEMINI_API_KEY" in card["instructionLabels"]
+    assert "GOOGLE_GEMINI_BASE_URL" in card["instructionLabels"]
 
 
 def test_a_drifted_card_says_what_drift_means_and_offers_a_re_apply(
