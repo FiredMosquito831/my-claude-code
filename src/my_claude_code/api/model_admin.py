@@ -49,6 +49,7 @@ from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.model_visibility import (
     MODEL_PATTERN_SEPARATOR,
     ModelVisibility,
+    is_glob,
 )
 from my_claude_code.core.reasoning import (
     ReasoningDialect,
@@ -864,11 +865,14 @@ def hiding_pattern(visibility: ModelVisibility, model_ref: str) -> str:
         return ""
     own = exact_pattern(model_ref)
     candidate = model_ref.strip().casefold()
-    for pattern in visibility.deny:
-        if pattern != own and fnmatchcase(candidate, pattern):
-            return pattern
+    # Declaration order is preserved by ``first_deny_match`` itself; see its
+    # docstring for why that matters and how it avoids walking the list.
+    matched = visibility.first_deny_match(candidate, ignoring=own)
+    if matched:
+        return matched
     if visibility.allow and not any(
-        fnmatchcase(candidate, pattern) for pattern in visibility.allow
+        fnmatchcase(candidate, pattern) if is_glob(pattern) else pattern == candidate
+        for pattern in visibility.allow
     ):
         return ALLOW_LIST_SENTINEL
     return ""
