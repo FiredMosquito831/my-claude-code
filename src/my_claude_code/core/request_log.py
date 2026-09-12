@@ -207,6 +207,18 @@ _COST_BACKFILL_THROUGH_KEY = "cost_backfilled_through_v1"
 # on the measured log, busiest day 24,004 rows -- and this bounds a future day
 # ten times that size from holding the writer.
 _COST_CHUNK_ROWS = 5_000
+# ``request_attempts.ts_epoch``, copied from each attempt's parent request.
+# Versioned by the same rule as the rollup keys: the day the copy is defined
+# differently, bumping the name is how every installation redoes it.
+_ATTEMPTS_TS_BACKFILL_KEY = "attempts_ts_backfilled_at_v1"
+#: The highest rowid the walk has passed. A cursor rather than a predicate,
+#: unlike the harness and cost backfills: an attempt whose parent request has
+#: been pruned can never be filled in, so "still NULL" is not progress here and
+#: a predicate-only walk would re-read those rows forever.
+_ATTEMPTS_TS_BACKFILL_THROUGH_KEY = "attempts_ts_backfilled_through_v1"
+# Rows per committed chunk. Measured on the real table: 571,665 attempts in
+# 54.0 s at this size.
+_ATTEMPTS_TS_CHUNK_ROWS = 5_000
 #: Stored on a row the backfill tried and could not price. The same string as
 #: ``application.cost.SOURCE_UNPRICED``, which owns the vocabulary; ``core``
 #: may not import it, so ``tests/contracts`` pins the two together. It is
@@ -1276,6 +1288,14 @@ _ATTEMPT_ADDED_COLUMNS = (
     # priced", never zero, exactly as on the parent row.
     ("cost_usd", "ALTER TABLE request_attempts ADD COLUMN cost_usd REAL"),
     ("cost_source", "ALTER TABLE request_attempts ADD COLUMN cost_source TEXT"),
+    # When the request this attempt belongs to happened. A copy of the parent
+    # row's ``ts_epoch``, deliberately: ``reasoning_by_model`` filters on time
+    # and the time lived only on ``requests``, so the plan was "walk all 571,665
+    # attempts through a covering index, then one rowid lookup into ``requests``
+    # per attempt". NULL means the row predates the column, which is why
+    # ``reasoning_by_model`` keeps using the old query until the backfill marker
+    # is set: a time filter against NULL would silently drop history.
+    ("ts_epoch", "ALTER TABLE request_attempts ADD COLUMN ts_epoch REAL"),
 )
 
 # Written in this order by ``_record_to_row``. The INSERT's column list, its
@@ -1394,6 +1414,7 @@ _ATTEMPT_INSERT_COLUMNS = (
     "tokens_out",
     "cost_usd",
     "cost_source",
+    "ts_epoch",
 )
 
 # Blank, not zero: a request whose attempts predate the ladder measured
@@ -1852,6 +1873,8 @@ class RequestLogStore:
         # writer's idle branch runs every 0.25 s and must not pay a meta read
         # that often for the rest of the process's life.
         self._cost_backfill_done = False
+        # The same "stop asking" flag for the attempt-timestamp walk beside it.
+        self._attempts_ts_backfill_done = False
         self._closed = threading.Event()
         self._stats_lock = threading.Lock()
         # OrderedDict as an LRU: ``move_to_end`` on every hit/insert keeps the
@@ -2162,6 +2185,21 @@ class RequestLogStore:
                 "CREATE INDEX IF NOT EXISTS idx_request_attempts_model_v1"
                 " ON request_attempts(model_ref, outcome, reasoning_emitted,"
                 " request_id)"
+            )
+            # And the same query's *other* shape, once ``ts_epoch`` exists on
+            # the attempt: filter by time on the attempt rather than on its
+            # parent. Covering on purpose -- it carries every column the
+            # attempts side of the query reads. Measured on the real 571,665-row
+            # table: the narrow ``(outcome, ts_epoch, model_ref)`` the spec asked
+            # for takes 1.758 s to 1.649 s for 33.8 MB, which is not worth
+            # having; this one takes it to 0.849 s for 56.1 MB, and it is the
+            # difference between a scan of every attempt and a seek. The
+            # remaining 0.8 s is the rowid lookup into ``requests`` for
+            # ``thinking_chars``, which no index on this table can remove.
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_request_attempts_ts_v1"
+                " ON request_attempts(outcome, ts_epoch, model_ref,"
+                " reasoning_emitted, request_id)"
             )
 
     @staticmethod
@@ -2551,6 +2589,73 @@ class RequestLogStore:
         self._cost_backfill_done = True
         self._log_cost_backfill(priced, unpriced, started, done=True)
 
+    def _ensure_attempts_ts_backfill(self, conn: sqlite3.Connection) -> None:
+        """Copy each attempt's parent request instant onto the attempt.
+
+        ``reasoning_by_model`` asks a question about a window of time, and the
+        time lived only on ``requests`` -- so the plan walked all 571,665
+        attempts through a covering index and did one rowid lookup per attempt
+        to find out when it happened. With the column and its index the filter
+        is a seek: measured 1.758 s to 0.849 s on the real log.
+
+        Chunked by rowid and committed per chunk, and it yields to the writer
+        the moment a request is queued behind it -- the same shape as the cost
+        backfill beside it, for the same reason.
+
+        The cursor is real, unlike the harness backfill's. An attempt whose
+        parent request has been pruned has nothing to copy, so it stays NULL
+        forever; without a cursor the walk would re-read those rows on every
+        chunk and never finish.
+        """
+        if self._attempts_ts_backfill_done:
+            return
+        try:
+            if self._meta_get(conn, _ATTEMPTS_TS_BACKFILL_KEY) is not None:
+                self._attempts_ts_backfill_done = True
+                return
+            resumed = self._meta_get(conn, _ATTEMPTS_TS_BACKFILL_THROUGH_KEY)
+            cursor = int(resumed) if resumed and resumed.isdigit() else 0
+            started = time.monotonic()
+            filled = 0
+            while True:
+                rowids = [
+                    int(row[0])
+                    for row in conn.execute(
+                        "SELECT rowid FROM request_attempts WHERE rowid > ?"
+                        " AND ts_epoch IS NULL ORDER BY rowid LIMIT ?",
+                        (cursor, _ATTEMPTS_TS_CHUNK_ROWS),
+                    )
+                ]
+                if not rowids:
+                    break
+                with conn:
+                    conn.execute(
+                        "UPDATE request_attempts SET ts_epoch = (SELECT r.ts_epoch"
+                        " FROM requests r WHERE r.id = request_attempts.request_id)"
+                        " WHERE rowid BETWEEN ? AND ? AND ts_epoch IS NULL",
+                        (rowids[0], rowids[-1]),
+                    )
+                    cursor = rowids[-1]
+                    self._meta_set(conn, _ATTEMPTS_TS_BACKFILL_THROUGH_KEY, str(cursor))
+                filled += len(rowids)
+                if not self._queue.empty():
+                    return
+            with conn:
+                self._meta_set(conn, _ATTEMPTS_TS_BACKFILL_KEY, str(time.time()))
+        except sqlite3.Error as exc:
+            # Same rule as its siblings: a concurrent store may have won the
+            # race, and its marker means "already done", not "corrupt".
+            logger.warning("Request log attempt timestamp backfill skipped: {}", exc)
+            self._attempts_ts_backfill_done = True
+            return
+        self._attempts_ts_backfill_done = True
+        if filled:
+            logger.info(
+                "Request log dated {} route attempts in {:.1f}s",
+                filled,
+                time.monotonic() - started,
+            )
+
     def _backfill_cost_day(
         self,
         conn: sqlite3.Connection,
@@ -2661,6 +2766,12 @@ class RequestLogStore:
         joined = ", ".join(dims)
         group = ", ".join(str(index) for index in range(1, len(dims) + 1))
         window = "ts_epoch >= ? AND ts_epoch < ?"
+        # The same window for the one pass that joins two tables. Both halves
+        # qualified, not just the first: ``request_attempts`` has a
+        # ``ts_epoch`` of its own now, and a bare second half is "ambiguous
+        # column name" to SQLite -- which the rollup backfill swallows as
+        # "skipped", leaving ``stats()`` serving from rows forever.
+        joined_window = "r.ts_epoch >= ? AND r.ts_epoch < ?"
         bounds = (low, high)
 
         conn.execute(
@@ -2686,7 +2797,7 @@ class RequestLogStore:
                 for name in _ROLLUP_RECOVERY_COUNTERS
             )
             + " FROM request_attempts AS a, requests AS r"
-            f" WHERE r.id = a.request_id AND r.{window}"
+            f" WHERE r.id = a.request_id AND {joined_window}"
             f" GROUP BY {group}"
             f" ON CONFLICT({', '.join(_ROLLUP_DIMENSIONS)}) DO UPDATE SET "
             + ", ".join(
@@ -2758,7 +2869,7 @@ class RequestLogStore:
             " FROM request_attempts AS a,"
             " json_each(json_extract(a.params, '$.ladder.tries')) AS t,"
             " requests AS r"
-            f" WHERE r.id = a.request_id AND r.{window}"
+            f" WHERE r.id = a.request_id AND {joined_window}"
             " AND a.ladder_tries > 1"
             " AND json_extract(t.value, '$.status') IS NOT NULL"
             f" GROUP BY {detail_group}",
@@ -3294,6 +3405,7 @@ class RequestLogStore:
                     # queued behind it, so the cost of it being in progress is
                     # bounded by one chunk rather than by the walk.
                     self._ensure_cost_backfill(conn)
+                    self._ensure_attempts_ts_backfill(conn)
                     continue
                 if item is _STOP:
                     stopping = True
@@ -3695,6 +3807,10 @@ class RequestLogStore:
                 attempt.tokens_out,
                 attempt.cost_usd,
                 attempt.cost_source,
+                # The parent's instant, not a fresh clock: an attempt happened
+                # when its request did, and a second reading here would make
+                # the stored copy disagree with the row it was copied from.
+                record.ts_epoch,
             )
             for record in batch
             for attempt in record.attempts
@@ -3726,7 +3842,7 @@ class RequestLogStore:
             "SELECT attempt, provider, model_ref, outcome, error_kind,"
             " error_message, duration_ms, params, wire_body, reasoning_emitted,"
             " key_index, key_label, ladder_tries, tokens_in, tokens_out,"
-            " cost_usd, cost_source"
+            " cost_usd, cost_source, ts_epoch"
             " FROM request_attempts"
             " WHERE request_id = ? ORDER BY attempt",
             (request_id,),
@@ -3759,6 +3875,11 @@ class RequestLogStore:
                 "key_index": row["key_index"],
                 "key_label": row["key_label"],
                 "ladder_tries": row["ladder_tries"],
+                # A copy of the parent request's instant, so the attempt can be
+                # found by time without asking the parent. NULL on every
+                # attempt written before the column existed, which is "not
+                # recorded", never "at the epoch".
+                "ts_epoch": row["ts_epoch"],
                 # What this hop cost on its own. A describe attempt is a real
                 # call to a real model on a real key; NULL everywhere else,
                 # because an ordinary attempt's cost is the request row's and
@@ -5515,9 +5636,22 @@ class RequestLogStore:
                     self._stats_cache.move_to_end(cache_key)
                     return [dict(row) for row in cached[1]["rows"]]
                 del self._stats_cache[cache_key]
-        since_clause = "" if since is None else " AND r.ts_epoch >= ?"
         args: list[Any] = [] if since is None else [since]
         with self._connection() as conn:
+            # The time filter moves onto the attempt only once every attempt
+            # carries one. Until the marker is set some rows have NULL there,
+            # and ``a.ts_epoch >= ?`` would drop exactly the history this
+            # question is about -- so the old shape stays the answer, and the
+            # new one is an optimisation of it rather than a replacement.
+            dated = (
+                since is not None
+                and self._meta_get(conn, _ATTEMPTS_TS_BACKFILL_KEY) is not None
+            )
+            since_clause = (
+                ""
+                if since is None
+                else (" AND a.ts_epoch >= ?" if dated else " AND r.ts_epoch >= ?")
+            )
             rows = conn.execute(
                 "SELECT a.model_ref AS model_ref,"
                 " COUNT(*) AS attempts,"
