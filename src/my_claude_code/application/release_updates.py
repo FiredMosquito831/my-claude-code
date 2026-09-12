@@ -1,13 +1,24 @@
-"""Report the running version and upgrade to the latest published release.
+"""Report the running version and hand an upgrade to the official installer.
 
-Fetch the wheel published for the latest tag, verify its SHA-256, then install
-it. A successful dashboard upgrade closes the current runtime and starts the
-updated server. Windows cannot replace an environment underneath a running
-process -- its interpreter and loaded DLLs are held open -- so there the
-verified wheel is staged and a detached PowerShell helper takes over after this
-process exits.
+**One update path (6.82.0).** This module no longer installs anything. Pressing
+Update runs the same command a user would type by hand --
+``scripts/install.ps1 -Restart`` on Windows, ``scripts/install.sh --restart``
+on Linux and macOS, from the copy of each that ships inside this wheel. What is
+left here is the one job only the running server can do: it knows its own
+process id, so it writes a short detached helper that waits for itself to exit
+and then starts the installer.
 
-**How the install itself works, since 6.72.0.** It used to be one call:
+Until 6.82.0 there were two implementations of "install an update". The
+dashboard's lived in a thousand-line PowerShell template in this file; the
+hand-run one lived in ``scripts/install.ps1``; they downloaded the wheel
+separately, verified it separately, and disagreed about who restarts the
+server. On 2026-09-11 both ran within three minutes of each other, both exited
+0, and the machine had no server for fifteen minutes because each believed
+somebody else owned the restart. There is now one downloader, one verifier, one
+installer and one owner of the restart, and all four are the install command.
+
+**How the install itself works, since 6.72.0 and now in the installer.** It
+used to be one call:
 ``uv tool install --force`` against the live environment. uv empties a tool
 environment *in place* before it resolves a single new byte, so that one call
 deleted the only working copy of MCC on the machine and then went to the
@@ -42,10 +53,9 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import tomllib
-from contextlib import ExitStack, suppress
+from contextlib import suppress
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import distribution as installed_distribution
@@ -69,9 +79,6 @@ from my_claude_code.config.update_progress import (
     PREVIOUS_ENV_DIRNAME,
     PREVIOUS_ENVS_KEPT,
     STAGING_ENV_DIRNAME,
-    UPDATE_HEALTH_GATE_SECONDS,
-    UPDATE_HEALTH_POLL_SECONDS,
-    UPDATE_LOCK_FILENAME,
     UPDATE_PROGRESS_FILENAME,
     UPDATE_PROGRESS_STAGE_ORDER,
     UPDATE_PROGRESS_STAGES,
@@ -713,7 +720,33 @@ def _sha256_of(path: Path) -> str:
 
 
 def _stage_dir() -> Path:
+    """``<config dir>/updates``. Naming it creates nothing; see below."""
+
     return config_dir_path() / _STAGE_DIRNAME
+
+
+def _prepared_stage_dir() -> Path:
+    """``<config dir>/updates``, created if it is not there yet.
+
+    It used to be created as a side effect of the wheel download
+    (``<updates>/wheel``), and 6.82.0 removed that download -- the installer is
+    the only downloader now. On a configuration directory that had never seen
+    an update the first thing written into it became ``apply-upgrade.ps1``, and
+    the update failed with ``[Errno 2] No such file or directory``. Found by
+    running the real dashboard path against a scratch install, which is the
+    only place it could have been found.
+
+    Separate from ``_stage_dir`` because that one is called by READERS -- the
+    start-up sweep, the progress reader -- and a reader that creates a
+    directory is a reader that writes. Putting the ``mkdir`` there made the
+    post-readiness sweep create ``~/.mcc/updates`` on a machine that had never
+    updated, which the test suite's hermeticity guard caught at once.
+    """
+
+    stage = _stage_dir()
+    with suppress(OSError):
+        stage.mkdir(parents=True, exist_ok=True)
+    return stage
 
 
 def update_progress() -> dict[str, Any] | None:
@@ -827,75 +860,74 @@ def _published_commands() -> list[str]:
     )
 
 
+def _bundled_installer(name: str) -> Path | None:
+    """The installer script that shipped inside this wheel, or ``None``.
+
+    6.82.0. The helper is a launcher of the official installer, so it needs a
+    copy of that installer that is guaranteed to be present, to be the one this
+    release was tested with, and to need no network of its own. The repository's
+    ``scripts/install.ps1`` and ``scripts/install.sh`` are force-included into
+    the wheel for exactly this (``pyproject.toml``); a contract test builds a
+    real wheel and fails if either is missing from it.
+    """
+
+    candidate = Path(__file__).resolve().parent.parent / "installers" / name
+    return candidate if candidate.is_file() else None
+
+
 def _deferred_helper_script(
     *,
-    uv_executable: str,
-    command: list[str],
     result_path: Path,
     stage_dir: Path,
-    server_launcher: Path,
+    installer: Path,
+    powershell: str,
+    config_dir: Path,
     working_directory: Path,
-    bin_dir: Path | None = None,
-    tool_dir: Path | None = None,
-    commands: list[str] | None = None,
     wait_seconds: float | None = None,
     version: str | None = None,
     no_restart: bool = False,
+    no_start: bool = False,
     install_log: Path | None = None,
-    staging_root: Path | None = None,
-    previous_root: Path | None = None,
-    health_url: str | None = None,
 ) -> str:
-    """PowerShell that waits for this process to exit, then installs.
+    """PowerShell that waits for this process to exit, then runs the installer.
+
+    6.82.0 gutted this. It used to be a thousand lines that downloaded nothing,
+    staged an environment, execute-verified it, swapped it in, health-gated the
+    result and rolled back -- a complete second implementation of the install,
+    reachable only from the dashboard, and therefore the only one that was ever
+    exercised by an update. The hand-run installer did something else, which is
+    how 2026-09-11 ended with two installs that both exited 0 and a machine
+    with no server. All of that logic now lives in ``scripts/install.ps1``,
+    which is the command a user would type, and this script's whole job is:
+
+    1. wait for the server that asked for the update to exit, so the tool
+       environment is free (this is the one thing only the server can do -- it
+       knows its own pid),
+    2. run the official installer with ``-Restart``,
+    3. record the outcome in ``pending-upgrade.json``.
+
+    ``no_restart`` no longer means "someone else will start the server"
+    (decision Q2, 2026-09-11 15:34). That belief is what left the machine dead:
+    the desktop app claimed the restart, was an old build that could not act,
+    and because it had claimed the job nobody else did it. It now means only
+    "a desktop window is watching this", which is a fact for the transcript and
+    nothing else -- **the installer always restarts**. ``no_start`` is the real
+    opt-out and comes from ``MCC_INSTALL_NO_START`` in the server's own
+    environment.
 
     Written as PowerShell rather than Python because the only interpreter we
     can rely on is the one inside the environment being replaced -- using it
-    would hold the very directory uv needs to delete.
+    would hold the very directory uv needs to swap.
 
-    ``no_restart`` is decision GAP-3, and it is the whole of "the helper stops
-    restarting". The helper's restart is a single un-retried ``Start-Process``
-    whose failure is recorded and then acted on by nothing, and it starts a
-    server no supervisor owns. When a desktop window asked for this update, the
-    window is already sitting there with a ten-second tick, a health probe and
-    a spawn -- so the helper installs and exits, and the window's very next tick
-    starts the server. When nothing is watching (the dashboard in a browser tab,
-    a headless machine) the helper still restarts, because otherwise the update
-    would leave the machine with no server at all. A flag, not a second owner.
-
-    Receipts go through ``[System.IO.File]::WriteAllText`` with a BOM-less
+    Receipts go through ``[System.IO.File]::AppendAllText`` with a BOM-less
     ``UTF8Encoding($false)``: Windows PowerShell 5.1's ``Set-Content
     -Encoding utf8`` prepends a UTF-8 BOM and the Python reader parses JSON,
-    which refuses a leading U+FEFF.
-
-    ``install_log`` is 6.71.0's, and it is the difference between a window that
-    says an install is happening and a window that shows it happening. ``uv``'s
-    two streams used to be collected into a PowerShell ``$output`` variable and
-    written out at the very end, into a file nothing reads until the episode is
-    over -- so for the whole of the two minutes that matter there was literally
-    nothing on disk to look at. They are now appended a line at a time, as they
-    arrive, with an ``AppendAllText`` per line so the bytes are on disk (and
-    readable by another process) the instant they exist rather than whenever a
-    stream buffer happens to flush. Every progress record names the file.
-
-    ``staging_root``, ``previous_root`` and ``health_url`` are 6.72.0's, and
-    together they are the atomic update. The new environment is built under
-    ``staging_root`` while the old one keeps serving, executed once to prove it
-    works, exchanged with the live one by two directory renames, and the old
-    one is kept under ``previous_root`` until ``health_url`` answers 200. Both
-    roots are siblings of uv's tools root rather than children of it: a child
-    whose name does not normalise to a valid package name makes ``uv tool
-    list`` fail outright. When any of the three is missing -- this is not a uv
-    tool environment, or the server could not name its own address -- the
-    helper falls back to the in-place ``--force`` install it has always done.
+    which refuses a leading U+FEFF. The receipt is APPEND-ONLY (decision Q5);
+    truncating it is how a hand-run install erased a finished helper's whole
+    record at 15:04 on 2026-09-11 while a window was reading it.
     """
 
-    quoted_args = ", ".join(_powershell_literal(arg) for arg in command[1:])
     progress_path = stage_dir / UPDATE_PROGRESS_FILENAME
-    # The caller names the transcript, because it has to hand the path to the
-    # dashboard in the very response that triggers the update -- before the
-    # server it answered with goes away. A caller that does not care gets one
-    # beside the receipt anyway: a helper with nowhere to tee is a helper that
-    # goes quiet for two minutes, which is the whole bug.
     if install_log is None:
         install_log = stage_dir / (
             f"{INSTALL_LOG_PREFIX}{time.strftime('%Y%m%d-%H%M%S')}{INSTALL_LOG_SUFFIX}"
@@ -903,90 +935,47 @@ def _deferred_helper_script(
     wait_budget = (
         _helper_wait_seconds() if wait_seconds is None else float(wait_seconds)
     )
-    names = commands if commands is not None else _published_commands()
-    quoted_names = ", ".join(_powershell_literal(name) for name in names)
-    bin_dir_literal = _powershell_literal(str(bin_dir) if bin_dir else "")
-    tool_dir_literal = _powershell_literal(str(tool_dir) if tool_dir else "")
-    version_literal = _powershell_literal(version or "")
-    # Launchers the RUNNING desktop shell needs in order to keep asking what is
-    # going on. Renaming these aside is what turned an update into a race: the
-    # shell reads `NotInstalled` from its status ladder and, by design, starts
-    # an install of its own into the same tool directory. They are not shims
-    # this update has to move -- uv overwrites them in place, and if one is
-    # momentarily locked the staged fallback keeps it, exactly like any other.
-    quoted_never_rename = ", ".join(
-        _powershell_literal(name)
-        for name in ("mcc-desktop.exe", "fcc-desktop.exe", "MyClaudeCode.exe")
+    installer_args = ["-Restart"]
+    if no_start:
+        installer_args = ["-NoStart"]
+    if version:
+        installer_args += ["-Version", version]
+    quoted_installer_args = ", ".join(
+        _powershell_literal(arg) for arg in installer_args
     )
-    # The staging pass runs the SAME uv command against an empty tools root of
-    # its own, minus ``--force``. ``--force`` exists to overwrite a live
-    # environment, which is exactly what the staged path is built never to do;
-    # leaving it in would be inert but would say the opposite of what this
-    # release means (decision Q1: ``--force`` is reserved for repair, and the
-    # repair is the in-place fallback further down).
-    staging_args = ", ".join(
-        _powershell_literal(arg) for arg in command[1:] if arg != "--force"
-    )
-    staging_root_literal = _powershell_literal(
-        str(staging_root) if staging_root else ""
-    )
-    previous_root_literal = _powershell_literal(
-        str(previous_root) if previous_root else ""
-    )
-    health_url_literal = _powershell_literal(health_url or "")
-    # The launcher whose name the staged environment is executed under. Taken
-    # from the launcher we already resolved rather than hard-coded, so the
-    # legacy and native command families cannot drift apart here.
-    server_command = server_launcher.stem
-    native_command = "mcc-server"
-    install_log_glob = f"{INSTALL_LOG_PREFIX}*{INSTALL_LOG_SUFFIX}"
     # Written out from the Python table rather than typed twice. It WAS typed
     # twice until 6.72.0, and the two copies disagreed the moment a stage was
-    # added -- the PowerShell one still ranked `installing` third while Python
-    # had moved it to fourth, which a monotonic guard turns into silently
-    # dropped records rather than a visible error.
+    # added -- which a monotonic guard turns into silently dropped records
+    # rather than a visible error.
     stage_order_literal = "\n".join(
         f"    {_powershell_literal(stage)} = {rank}"
         for stage, rank in UPDATE_PROGRESS_STAGE_ORDER.items()
     )
-    # The one lock both update paths take. Beside the receipt, in the same
-    # directory, so a config dir is self-describing: what happened, and who is
-    # doing something right now.
-    lock_path_literal = _powershell_literal(str(stage_dir / UPDATE_LOCK_FILENAME))
-    health_gate_seconds = UPDATE_HEALTH_GATE_SECONDS
-    health_poll_ms = int(UPDATE_HEALTH_POLL_SECONDS * 1000)
-    previous_kept = PREVIOUS_ENVS_KEPT
-    transcripts_kept = INSTALL_TRANSCRIPTS_KEPT
     return f"""$ErrorActionPreference = 'Stop'
 $parent = {os.getpid()}
-# One JSON object per line, appended as this script moves between stages. It is
-# the only trace an update leaves while it is happening: the parent's log stops
-# at the stop line, uv writes to a pipe nobody is reading, and the whole window
-# between "Update" and the new server answering was, measured on a real
-# machine, fourteen minutes of a desktop app showing one unchanging sentence.
-# The desktop window reads this file and says which stage it is in.
+$helperPid = $PID
+$helperStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$targetVersion = {_powershell_literal(version or "")}
+$noRestart = {"$true" if no_restart else "$false"}
+$noStart = {"$true" if no_start else "$false"}
 $progressPath = {_powershell_literal(str(progress_path))}
-$progressEncoding = New-Object System.Text.UTF8Encoding($false)
-# uv's own two streams, teed here a line at a time WHILE the install happens.
-# Until 6.71.0 they went into a PowerShell variable and were written out once,
-# at the end, into a file nothing reads until the episode is over -- so during
-# the only part of an update a user cares about there was nothing to look at.
-# Every progress record below names this path so a reader never guesses it.
 $installLog = {_powershell_literal(str(install_log))}
-# One line of a native command's merged output, as text. `2>&1` turns every
-# stderr line into an ErrorRecord, whose default string form is sometimes the
-# exception's TYPE NAME rather than what was written --
-# "System.Management.Automation.RemoteException" appeared in the middle of uv's
-# own diagnostics on 2026-09-11. The message is the line uv actually printed.
-function Convert-OutputLine($value) {{
-    if ($null -eq $value) {{ return '' }}
-    if ($value -is [System.Management.Automation.ErrorRecord]) {{ return [string] $value.Exception.Message }}
-    return [string] $value
+$resultPath = {_powershell_literal(str(result_path))}
+$installer = {_powershell_literal(str(installer))}
+$powershell = {_powershell_literal(powershell)}
+$configDir = {_powershell_literal(str(config_dir))}
+$workingDirectory = {_powershell_literal(str(working_directory))}
+$progressEncoding = New-Object System.Text.UTF8Encoding($false)
+$stageOrder = @{{
+{stage_order_literal}
 }}
+$script:Rank = 0
 function Write-InstallLog($text) {{
     try {{
         $stampNow = (Get-Date).ToUniversalTime().ToString('HH:mm:ss')
-        $body = Convert-OutputLine $text
+        $body = if ($null -eq $text) {{ '' }}
+            elseif ($text -is [System.Management.Automation.ErrorRecord]) {{ [string] $text.Exception.Message }}
+            else {{ [string] $text }}
         # One append per line rather than a held stream: a reader in another
         # process must see the line the moment it exists, and this helper can
         # be killed at any point without truncating what it already said.
@@ -996,166 +985,42 @@ function Write-InstallLog($text) {{
         # A transcript nobody can write must never be the reason an update fails.
     }}
 }}
-# GAP-3, read HERE rather than three hundred lines further down. Until 6.71.0
-# the first read of $noRestart was above its own assignment: PowerShell (no
-# StrictMode in this generated script) answers $null, $null is falsey, and the
-# helper wrote stage 'starting' -- "Starting the updated server." -- under the
-# very flag that tells it not to start one. The live 6.66.1 receipt shows it:
-# a 'starting' record 22 ms before a 'done' record saying the desktop app
-# starts it. The Start-Process itself was always correctly skipped, because
-# that guard sat after the assignment.
-$noRestart = {"$true" if no_restart else "$false"}
-# Liveness, not just narration. Every record carries the helper's own process
-# id, when it started, and whether it has finished, so a reader can answer the
-# one question that stops an update racing itself: IS AN INSTALLER RUNNING
-# RIGHT NOW? A stage name alone cannot answer it -- a helper killed mid-install
-# leaves 'installing' behind forever -- and neither can a heartbeat, because
-# this is single-threaded PowerShell blocked inside uv for minutes at a time.
-# The pid is the fact; `helper_done` is the fast path for the ordinary ending.
-$helperPid = $PID
-$helperStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-$targetVersion = {version_literal}
-$script:HelperDone = $false
-# Stages are MONOTONIC (decision Q2): an episode only ever moves forward, so a
-# window can draw them as a timeline and a reader can tell "still installing"
-# from "installed, starting" without guessing. The ranks are
-# config/update_progress.py's UPDATE_PROGRESS_STAGE_ORDER; the terminal stages
-# share the last rank because an episode ends once and 'failed' may be followed
-# by 'recovered'. A stage this table does not know is written rather than
-# dropped -- a guard that silently swallows records is worse than no guard.
-$stageOrder = @{{
-{stage_order_literal}
-}}
-$script:StageRank = 0
-# 6.73.0's two extra receipt fields. `$null` means "this episode has not
-# decided yet"; a window renders nothing for it rather than "false".
-$script:Restarted = $null
-$script:Holder = ''
 function Write-Stage($stage, $message) {{
     try {{
-        $rank = $stageOrder[$stage]
-        if ($null -eq $rank) {{ $rank = $script:StageRank }}
-        if ($rank -lt $script:StageRank) {{ return }}
-        $script:StageRank = $rank
-        $elapsed = [math]::Round(([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - ($helperStarted * 1000)) / 1000.0, 3)
-        if ($elapsed -lt 0) {{ $elapsed = 0 }}
+        $rank = 0
+        if ($stageOrder.ContainsKey($stage)) {{ $rank = [int] $stageOrder[$stage] }}
+        if ($rank -eq 0) {{ $rank = $script:Rank }}
+        if ($rank -lt $script:Rank) {{ return }}
+        $script:Rank = $rank
+        $nowSeconds = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         $record = [ordered]@{{
-            stage = $stage
-            message = $message
-            at = (Get-Date).ToUniversalTime().ToString('o')
-            parent = $parent
-            helper_pid = $helperPid
-            started_at = $helperStarted
-            elapsed_seconds = $elapsed
-            helper_done = $script:HelperDone
-            version = $targetVersion
-            log = $installLog
-            # 6.73.0. Which writer this record came from, and what it did about
-            # the server, so a window showing one appended file can tell an
-            # episode the dashboard started from one the user started by hand,
-            # and can say whether anything is running at the end of it.
-            source = 'helper'
-            restarted = $script:Restarted
-            holder = $script:Holder
+            stage           = $stage
+            message         = $message
+            at              = (Get-Date).ToUniversalTime().ToString('o')
+            parent          = $parent
+            helper_pid      = $helperPid
+            started_at      = $helperStarted
+            elapsed_seconds = [math]::Round($nowSeconds - $helperStarted, 3)
+            helper_done     = (@('done', 'failed', 'recovered') -contains $stage)
+            version         = $targetVersion
+            log             = $installLog
+            source          = 'apply-upgrade.ps1'
+            restarted       = $null
+            holder          = ''
         }}
-        $line = ($record | ConvertTo-Json -Compress) + [Environment]::NewLine
-        [System.IO.File]::AppendAllText($progressPath, $line, $progressEncoding)
+        # APPEND, never truncate (decision Q5). An episode is opened by the
+        # 'episode' marker above, so a watcher that looks a minute late can
+        # still find where the current episode begins.
+        [System.IO.File]::AppendAllText($progressPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), $progressEncoding)
     }}
     catch {{
         # A receipt nobody can write must never be the reason an update fails.
     }}
-    # The episode is over on any terminal stage, and this helper has a dozen
-    # ways of reaching one. Releasing the lock HERE rather than at each of them
-    # is the only shape in which no ending can forget.
-    if (@('done', 'failed', 'recovered') -contains $stage) {{ Exit-UpdateLock }}
 }}
-# Every path this script needs, named once, up here, because 6.72.0's staged
-# install needs them BEFORE the wait for the parent rather than after it.
-# `$toolDir` is the live environment (`<tools root>/my-claude-code`); the
-# staging and previous roots are SIBLINGS of the tools root, never children of
-# it -- a child whose name does not normalise to a valid package name makes
-# `uv tool list` fail outright and list nothing at all, which is worse than the
-# malformed-tool warnings the old `.old-<stamp>` directories produce.
-$binDir = {bin_dir_literal}
-$toolDir = {tool_dir_literal}
-$stagingRoot = {staging_root_literal}
-$previousRoot = {previous_root_literal}
-$healthUrl = {health_url_literal}
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$stagingDir = if ($stagingRoot) {{ Join-Path $stagingRoot $stamp }} else {{ '' }}
-$stagingBin = if ($stagingDir) {{ Join-Path $stagingDir '.bin' }} else {{ '' }}
-$previousDir = if ($previousRoot) {{ Join-Path $previousRoot $stamp }} else {{ '' }}
-$commandNames = @({quoted_names})
-$lockPath = {lock_path_literal}
-# The transcript is this episode's own file, so opening it fresh is correct.
-# The RECEIPT is not: until 6.73.0 every writer truncated it here, and at 15:04
-# on 2026-09-11 a hand-run install.ps1 erased this helper's entire record two
-# minutes after it finished, while a window was supposed to be reading it. The
-# receipt is now append-only, and an episode is opened by a marker record
-# instead (decision Q5).
 try {{ [System.IO.File]::WriteAllText($installLog, '', $progressEncoding) }} catch {{ }}
-# ONE exclusive lock for both update paths. A second updater does not queue and
-# does not install: it says who is installing and watches the same transcript.
-$script:HoldsLock = $false
-function Get-LockOwner {{
-    try {{
-        if (-not (Test-Path -LiteralPath $lockPath)) {{ return $null }}
-        $raw = [System.IO.File]::ReadAllText($lockPath)
-        if (-not $raw.Trim()) {{ return $null }}
-        return ($raw | ConvertFrom-Json)
-    }}
-    catch {{ return $null }}
-}}
-function Test-LockOwnerAlive($owner) {{
-    if ($null -eq $owner) {{ return $false }}
-    $ownerPid = 0
-    try {{ $ownerPid = [int] $owner.pid }} catch {{ $ownerPid = 0 }}
-    if ($ownerPid -le 0) {{ return $false }}
-    if ($ownerPid -eq $PID) {{ return $false }}
-    return [bool] (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue)
-}}
-function Enter-UpdateLock {{
-    try {{
-        $stream = [System.IO.File]::Open($lockPath, 'CreateNew', 'Write', 'None')
-        $record = [ordered]@{{
-            pid = $PID
-            started_at = $helperStarted
-            started_display = (Get-Date).ToString('HH:mm:ss')
-            source = 'the dashboard update'
-        }}
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes(($record | ConvertTo-Json -Compress))
-        $stream.Write($bytes, 0, $bytes.Length)
-        $stream.Dispose()
-        $script:HoldsLock = $true
-        return $true
-    }}
-    catch {{
-        return $false
-    }}
-}}
-function Exit-UpdateLock {{
-    if (-not $script:HoldsLock) {{ return }}
-    $script:HoldsLock = $false
-    try {{ Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue }} catch {{ }}
-}}
-if (-not (Enter-UpdateLock)) {{
-    $owner = Get-LockOwner
-    if (Test-LockOwnerAlive $owner) {{
-        Write-InstallLog ('An update is already running (pid ' + $owner.pid + ', started ' + $owner.started_display + ') -- watching it instead.')
-        exit 0
-    }}
-    # A dead owner's lock is reclaimed rather than waited on until the end of
-    # the day: the pid decides, exactly as the helper-alive gate decides.
-    try {{ Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue }} catch {{ }}
-    if (-not (Enter-UpdateLock)) {{
-        Write-InstallLog 'The update lock could not be taken; another updater holds it.'
-        exit 0
-    }}
-    Write-InstallLog 'Reclaimed an update lock left behind by a process that is gone.'
-}}
 Write-Stage 'episode' 'An update started.'
 Write-InstallLog ('My Claude Code update helper, pid ' + $helperPid + ', target ' + $(if ($targetVersion) {{ $targetVersion }} else {{ 'the latest release' }}) + '.')
-Write-InstallLog ('Restart is owned by ' + $(if ($noRestart) {{ 'the desktop app' }} else {{ 'this helper' }}) + '.')
+Write-InstallLog ('The installer owns the restart. A desktop window ' + $(if ($noRestart) {{ 'is' }} else {{ 'is not' }}) + ' watching.')
 Write-Stage 'waiting-for-parent' 'Waiting for the running server to stop.'
 # Windows recycles process ids quickly, so a bare Get-Process -Id would happily
 # match an unrelated process that inherited ours and wait out the full deadline
@@ -1166,74 +1031,10 @@ function Test-ParentAlive {{
     $proc = Get-Process -Id $parent -ErrorAction SilentlyContinue
     if (-not $proc) {{ return $false }}
     # 0 means we could not read our own creation time; fall back to the id
-    # alone, which is the old behaviour rather than a new failure mode. Never
-    # treat "unknown start time" as "parent gone", or we would install while
-    # the server is still running -- the exact corruption this avoids.
+    # alone, which is the old behaviour rather than a new failure mode.
     if ($parentStart -eq 0) {{ return $true }}
     try {{ return $proc.StartTime.ToFileTimeUtc() -eq $parentStart }}
     catch {{ return $false }}   # access denied reading StartTime => not ours
-}}
-# ===========================================================================
-# STAGE. 6.72.0, and the whole point of this release.
-#
-# Until now the first thing an update did was hand the LIVE environment to
-# `uv tool install --force`, and uv empties a tool environment IN PLACE before
-# it resolves a single new byte. Measured on this machine: `mcc-server`
-# answered exit 0 at t=0, `ModuleNotFoundError: annotated_types` at +7.17 s,
-# `ModuleNotFoundError: my_claude_code` -- the user's exact error -- at
-# +7.99 s, and the executable itself was gone at +9.36 s. The whole install
-# took 58 s and 102 s on two real updates. For all of it there was no server
-# and no way back: the old bits were already deleted.
-#
-# So build the new environment BESIDE the old one, in a tools root of its own.
-# uv never looks at the live directory, `mcc-server` keeps answering the entire
-# time, and a wheel that cannot be installed costs nothing at all. This runs
-# BEFORE the wait below, so it overlaps the server's own drain instead of
-# following it.
-$stagingEnv = ''
-$stagedOk = $false
-# Set only once a swap has actually happened, and read by the in-place fallback
-# below: a release that adds a new command swaps first and then asks uv to write
-# the launchers, and if THAT fails the canonical path holds a half-written
-# environment while a perfectly good one sits aside with nothing to restore it.
-$swappedAside = ''
-if ($stagingDir -and $toolDir -and $binDir) {{
-    Write-Stage 'staging' 'Building the new version beside the running one.'
-    Write-InstallLog ('Staging into ' + $stagingDir + '. The running version is not touched.')
-    try {{
-        New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
-        New-Item -ItemType Directory -Path $stagingBin -Force | Out-Null
-        $hadToolDir = Test-Path Env:\\UV_TOOL_DIR
-        $previousToolDir = if ($hadToolDir) {{ $env:UV_TOOL_DIR }} else {{ '' }}
-        $hadBinDir = Test-Path Env:\\UV_TOOL_BIN_DIR
-        $previousBinDir = if ($hadBinDir) {{ $env:UV_TOOL_BIN_DIR }} else {{ '' }}
-        $env:UV_TOOL_DIR = $stagingDir
-        $env:UV_TOOL_BIN_DIR = $stagingBin
-        # uv writes its progress to stderr, and under 'Stop' a native command's
-        # stderr is a TERMINATING error. Judge it by its exit code alone.
-        $ErrorActionPreference = 'Continue'
-        $env:NO_COLOR = '1'
-        try {{ [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) }} catch {{ }}
-        $stageOutput = & {_powershell_literal(uv_executable)} {staging_args} 2>&1 |
-            ForEach-Object {{ $line = Convert-OutputLine $_; Write-InstallLog $line; $line }} |
-            Out-String
-        $stageCode = $LASTEXITCODE
-        $ErrorActionPreference = 'Stop'
-        if ($hadToolDir) {{ $env:UV_TOOL_DIR = $previousToolDir }} else {{ Remove-Item Env:\\UV_TOOL_DIR -ErrorAction SilentlyContinue }}
-        if ($hadBinDir) {{ $env:UV_TOOL_BIN_DIR = $previousBinDir }} else {{ Remove-Item Env:\\UV_TOOL_BIN_DIR -ErrorAction SilentlyContinue }}
-        Write-InstallLog ('The staged install exited with ' + $stageCode + '.')
-        $stagingEnv = Join-Path $stagingDir {_powershell_literal(PACKAGE_NAME)}
-        if (($stageCode -eq 0) -and (Test-Path -LiteralPath $stagingEnv -PathType Container)) {{
-            $stagedOk = $true
-        }} else {{
-            Write-InstallLog 'Nothing was staged; the running version is untouched.'
-        }}
-    }}
-    catch {{
-        $ErrorActionPreference = 'Stop'
-        $stagedOk = $false
-        Write-InstallLog ('The staged install could not run: ' + $_.Exception.Message)
-    }}
 }}
 $deadline = (Get-Date).AddSeconds({wait_budget:.1f})
 while ((Get-Date) -lt $deadline) {{
@@ -1245,13 +1046,8 @@ while ((Get-Date) -lt $deadline) {{
 # it is stuck -- and the old behaviour (wait an hour, then write a failure
 # receipt and exit) left the user with neither a running new version nor an
 # installed one. Escalate to the EXACT pid we were given, whose identity is
-# still pinned by its creation time, then install.
-if (-not (Test-ParentAlive)) {{
-    Write-Stage 'stopping' 'The server has stopped. Preparing to install.'
-    Write-InstallLog 'The running server exited; the environment is free.'
-}}
+# still pinned by its creation time.
 if (Test-ParentAlive) {{
-    Write-Stage 'stopping' 'The server did not stop in time, so it is being ended.'
     Write-InstallLog ('The server (pid ' + $parent + ') outlived its stop budget; ending it.')
     Stop-Process -Id $parent -Force -ErrorAction SilentlyContinue
     $killDeadline = (Get-Date).AddSeconds(10)
@@ -1261,734 +1057,125 @@ if (Test-ParentAlive) {{
     }}
 }}
 if (Test-ParentAlive) {{
-    $script:HelperDone = $true
     Write-InstallLog 'The server could not be stopped. Nothing was installed.'
     Write-Stage 'failed' 'The server could not be stopped, so the update was not applied.'
-    $result = @{{ ok = $false; message = 'The server could not be stopped, so the update was not applied.' }}
-    [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+    $result = @{{ ok = $false; restarted = $false; message = 'The server could not be stopped, so the update was not applied.' }}
+    [System.IO.File]::WriteAllText($resultPath, ($result | ConvertTo-Json), $progressEncoding)
     exit 1
 }}
-# Ask the new server whether it is actually up. This is the gate the cutover
-# turns on: an install that produced a server which never answers is not a
-# successful update, it is an outage with a new version number.
-function Wait-ForHealth {{
-    param($url, $seconds)
-    if (-not $url) {{ return $true }}
-    $deadline = (Get-Date).AddSeconds($seconds)
-    while ((Get-Date) -lt $deadline) {{
-        try {{
-            $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5 -Method Get
-            if ($response.StatusCode -eq 200) {{ return $true }}
-        }}
-        catch {{
-            # 503 + x-mcc-starting is a server that has bound the socket and is
-            # still coming up (6.59.0). Not an answer yet, not a failure yet.
-        }}
-        Start-Sleep -Milliseconds {health_poll_ms}
-    }}
-    return $false
+Write-InstallLog 'The running server exited; the environment is free.'
+if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {{
+    $message = 'The installer that ships with this version was not found at ' + $installer + '. Re-run the install command.'
+    Write-InstallLog $message
+    Write-Stage 'failed' $message
+    $result = @{{ ok = $false; restarted = $false; message = $message }}
+    [System.IO.File]::WriteAllText($resultPath, ($result | ConvertTo-Json), $progressEncoding)
+    exit 1
 }}
-# Keep exactly one previous environment: it is the rollback, and a second one is
-# only disk. Swept after /health answers, never before, so the copy being
-# deleted is never the one a rollback would need.
-function Remove-StalePrevious {{
-    param($root, $keep)
-    if (-not $root) {{ return }}
-    if (-not (Test-Path -LiteralPath $root -PathType Container)) {{ return }}
-    $all = @(Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
-    if ($all.Count -le $keep) {{ return }}
-    foreach ($old in $all[$keep..($all.Count - 1)]) {{
-        try {{
-            Remove-Item -LiteralPath $old.FullName -Recurse -Force -ErrorAction Stop
-            Write-InstallLog ('Removed the superseded previous environment ' + $old.Name + '.')
-        }}
-        catch {{
-            Write-InstallLog ('Could not remove ' + $old.FullName + ': ' + $_.Exception.Message)
-        }}
-    }}
-}}
-# One transcript per update is one file per update, for ever. Keep the recent
-# ones -- they are the only record of what an update actually did -- and let
-# the rest go.
-function Remove-StaleTranscripts {{
-    $dir = Split-Path -Parent $installLog
-    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {{ return }}
-    $all = @(Get-ChildItem -Path $dir -Filter '{install_log_glob}' -File -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
-    if ($all.Count -le {transcripts_kept}) {{ return }}
-    foreach ($old in $all[{transcripts_kept}..($all.Count - 1)]) {{
-        Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue
-    }}
-}}
-if ($stagedOk) {{
-    # =======================================================================
-    # VERIFY. Run the staged environment once, before it is anywhere near the
-    # live path. Caddy's rule: the gate is EXECUTING the new thing, not
-    # trusting an installer's exit code. A wheel that resolves, installs and
-    # then cannot import itself is a real failure mode, and it used to be
-    # discovered by the user.
-    # =======================================================================
-    Write-Stage 'verifying' 'Running the new version once before it replaces the old one.'
-    # The native command first, the legacy launcher only as a fallback: both
-    # are published, but `fcc-server --version` prints the LEGACY distribution
-    # name ("free-claude-code 6.71.1"), and a version check that reads the
-    # wrong product name is a check waiting to be misread.
-    $stagedServer = Join-Path $stagingEnv 'Scripts\\{native_command}.exe'
-    if (-not (Test-Path -LiteralPath $stagedServer -PathType Leaf)) {{
-        $stagedServer = Join-Path $stagingEnv 'Scripts\\{server_command}.exe'
-    }}
-    $stagedPython = Join-Path $stagingEnv 'Scripts\\python.exe'
-    $verified = $false
-    $verifyNote = 'The staged version could not be run.'
+# ===========================================================================
+# HAND OVER TO THE OFFICIAL INSTALLER. Everything an update does -- download,
+# verify, stage beside the running version, execute-verify, stop exactly the
+# one server this configuration directory is for, swap, start, health-gate,
+# roll back -- happens in there, which is also what a user gets when they type
+# the install command by hand. One update path (decision Q1).
+#
+# MCC_INSTALL_LOG makes it APPEND to this episode's transcript instead of
+# opening a second one, so a window tailing this file sees the whole story.
+# MCC_CONFIG_DIR is explicit rather than merely inherited: the restart means
+# the server of the directory this update is for, and a start that lost it
+# once came up for a different configuration home.
+# ===========================================================================
+$env:MCC_INSTALL_LOG = $installLog
+$env:MCC_CONFIG_DIR = $configDir
+Write-InstallLog ('Running ' + $installer + ' {" ".join(installer_args)}.')
+$installerArgs = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $installer) + @({quoted_installer_args})
+$exitCode = 1
+try {{
     $ErrorActionPreference = 'Continue'
-    try {{
-        if ((Test-Path -LiteralPath $stagedServer -PathType Leaf) -and (Test-Path -LiteralPath $stagedPython -PathType Leaf)) {{
-            $versionOut = (& $stagedServer --version 2>&1 | Out-String).Trim()
-            $versionCode = $LASTEXITCODE
-            Write-InstallLog ('Staged --version said "' + $versionOut + '" (exit ' + $versionCode + ').')
-            $importOut = (& $stagedPython -c 'import my_claude_code' 2>&1 | Out-String).Trim()
-            $importCode = $LASTEXITCODE
-            Write-InstallLog ('Staged import exited with ' + $importCode + '.')
-            if ($importOut) {{ Write-InstallLog $importOut }}
-            $versionMatches = $true
-            if ($targetVersion -and ($versionOut -notmatch [regex]::Escape($targetVersion))) {{
-                $versionMatches = $false
-                $verifyNote = 'The staged version reported "' + $versionOut + '" rather than ' + $targetVersion + '.'
-            }}
-            if (($versionCode -eq 0) -and ($importCode -eq 0) -and $versionMatches) {{
-                $verified = $true
-            }} elseif ($versionMatches) {{
-                $verifyNote = 'The staged version did not run: --version exited ' + $versionCode + ', import exited ' + $importCode + '.'
-            }}
-        }} else {{
-            $verifyNote = 'The staged install produced no runnable launcher.'
+    & $powershell @installerArgs 2>&1 |
+        ForEach-Object {{
+            $line = if ($_ -is [System.Management.Automation.ErrorRecord]) {{ [string] $_.Exception.Message }} else {{ [string] $_ }}
+            Write-InstallLog $line
         }}
-    }}
-    catch {{
-        $verified = $false
-        $verifyNote = 'The staged version could not be run: ' + $_.Exception.Message
-    }}
+    $exitCode = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
-
-    if (-not $verified) {{
-        # Nothing has moved. The live environment is exactly as it was, so the
-        # recovery is "start what is already installed" and the whole episode
-        # cost the user a download.
-        Write-InstallLog $verifyNote
-        Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
-        $message = $verifyNote + ' Nothing was replaced; the installed version is unchanged.'
-        Write-Stage 'failed' $message
-        $result = @{{ ok = $false; exit_code = 1; attempts = 1; staged = $true; verified = $false; swapped = $false; message = $message; restarted = $false }}
-        $restarted = $false
-        if (-not $noRestart) {{
-            try {{ Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}; $restarted = $true }}
-            catch {{ Write-InstallLog ('The installed server could not be started: ' + $_.Exception.Message) }}
-        }}
-        $result['restarted'] = $restarted
-        $script:Restarted = [bool] $restarted
-        $result['message'] = $message + $(if ($restarted) {{ ' The installed version was restarted.' }} elseif ($noRestart) {{ ' The desktop app starts it again within ten seconds.' }} else {{ ' The installed version could not be restarted either.' }})
-        [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
-        $script:HelperDone = $true
-        Write-Stage 'recovered' $result.message
-        exit 1
-    }}
-
-    # =======================================================================
-    # SWAP. Two directory renames on one volume. Measured on this machine over
-    # ten rounds: 2.7 ms fastest, 3.9 ms median, 20.0 ms slowest -- against the
-    # 7-to-14.5 second hole `uv tool install --force` used to open.
-    #
-    # The launcher shims in the bin directory are NOT touched, and that is the
-    # whole trick. Every one of them is a uv trampoline whose embedded path is
-    # `<tools root>/my-claude-code/Scripts/python.exe` (verified at the byte
-    # level: the bin shim and the environment's own Scripts copy are the same
-    # file, sha256 for sha256). They do not care WHICH environment is at that
-    # path -- so the instant the new one lands there, every already-installed
-    # launcher runs the new code, and no locked `.exe` can abort anything,
-    # because nothing is being written over.
-    #
-    # The environment's own `Scripts/*.exe` are a different matter: uv baked
-    # the STAGING path into them, so after the move they are dead. They are
-    # replaced with the bin copies, which carry the canonical path.
-    # =======================================================================
-    Write-Stage 'swapping' 'Putting the new version in place.'
-    $asideEnv = Join-Path $previousDir {_powershell_literal(PACKAGE_NAME)}
-    $swapped = $false
-    try {{
-        New-Item -ItemType Directory -Path $previousDir -Force | Out-Null
-        $swapWatch = [Diagnostics.Stopwatch]::StartNew()
-        [System.IO.Directory]::Move($toolDir, $asideEnv)
-        [System.IO.Directory]::Move($stagingEnv, $toolDir)
-        $swapWatch.Stop()
-        $swapped = $true
-        $swappedAside = $asideEnv
-        Write-InstallLog ('Swapped in ' + [math]::Round($swapWatch.Elapsed.TotalMilliseconds, 1) + ' ms. The previous version is at ' + $asideEnv + '.')
-    }}
-    catch {{
-        Write-InstallLog ('The swap failed: ' + $_.Exception.Message)
-        # Put the live environment back if the first move succeeded and the
-        # second did not. Anything else and nothing moved at all.
-        if ((-not (Test-Path -LiteralPath $toolDir -PathType Container)) -and (Test-Path -LiteralPath $asideEnv -PathType Container)) {{
-            try {{ [System.IO.Directory]::Move($asideEnv, $toolDir); Write-InstallLog 'The previous environment was put back.' }}
-            catch {{ Write-InstallLog ('The previous environment could not be put back: ' + $_.Exception.Message) }}
-        }}
-    }}
-
-    if ($swapped) {{
-        # The environment's own trampolines, re-pointed at the canonical path.
-        $repaired = 0
-        if (Test-Path -LiteralPath $binDir -PathType Container) {{
-            foreach ($file in @(Get-ChildItem -Path $binDir -Filter '*.exe' -ErrorAction SilentlyContinue)) {{
-                $target = Join-Path $toolDir ('Scripts\\' + $file.Name)
-                if (Test-Path -LiteralPath $target -PathType Leaf) {{
-                    try {{ Copy-Item -LiteralPath $file.FullName -Destination $target -Force -ErrorAction Stop; $repaired = $repaired + 1 }}
-                    catch {{ }}
-                }}
-            }}
-        }}
-        Write-InstallLog ('Re-pointed ' + $repaired + ' launcher(s) inside the new environment.')
-        # uv recorded every entry point under the STAGING bin directory, which
-        # is about to be deleted; a receipt left as written would send a later
-        # uninstall or upgrade at a path that no longer exists. Same rewrite
-        # 6.33.1 does for the staged-bin fallback, for the same reason.
-        $receiptPath = Join-Path $toolDir 'uv-receipt.toml'
-        if (Test-Path -LiteralPath $receiptPath -PathType Leaf) {{
-            try {{
-                $receiptText = [IO.File]::ReadAllText($receiptPath)
-                $realPrefix = $binDir.Replace('\\', '/').TrimEnd('/')
-                $backslashPrefix = $stagingBin.Replace('/', '\\').TrimEnd('\\')
-                $rewritten = $receiptText
-                foreach ($stagePrefix in @($stagingBin.Replace('\\', '/').TrimEnd('/'), $backslashPrefix.Replace('\\', '\\\\'), $backslashPrefix)) {{
-                    $rewritten = $rewritten.Replace($stagePrefix, $realPrefix)
-                }}
-                if ($rewritten -ne $receiptText) {{
-                    [System.IO.File]::WriteAllText(($receiptPath + '.new'), $rewritten, (New-Object System.Text.UTF8Encoding($false)))
-                    Move-Item -LiteralPath ($receiptPath + '.new') -Destination $receiptPath -Force
-                    Write-InstallLog 'Rewrote the receipt entry points to the real bin directory.'
-                }}
-            }}
-            catch {{ Write-InstallLog ('The receipt could not be rewritten: ' + $_.Exception.Message) }}
-        }}
-        Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
-
-        # A release that publishes a command this machine has never had cannot
-        # be finished by a rename: there is no trampoline anywhere carrying the
-        # canonical path for it, and one cannot be written by hand (the path is
-        # baked into the binary twice, once as a PE resource and once as the
-        # shebang of an appended zip). That case -- rare, and only on releases
-        # that ADD an entry point -- falls through to the in-place install
-        # below, which is now a repair rather than the ordinary path, and which
-        # runs against a fully warm cache because the staging pass just filled
-        # it. The previous environment is already aside, so it is still safe.
-        $missingShims = @()
-        foreach ($name in $commandNames) {{
-            if (-not (Test-Path -LiteralPath (Join-Path $binDir ($name + '.exe')) -PathType Leaf)) {{ $missingShims += $name }}
-        }}
-        if ($missingShims.Count -gt 0) {{
-            Write-InstallLog ('This release adds ' + ($missingShims -join ', ') + '; uv has to write the launcher(s), so the install is finished in place.')
-        }} else {{
-            $result = @{{
-                ok = $true
-                exit_code = 0
-                attempts = 1
-                staged = $true
-                verified = $true
-                swapped = $true
-                previous_environment = $asideEnv
-                disk_full = $false
-                missing_commands = @()
-                kept_shims = @()
-                restored_shims = @()
-                restarted = $false
-                message = 'The new version was installed beside the old one and swapped in.'
-                output = $stageOutput
-            }}
-            [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
-            $restarted = $false
-            if ($noRestart) {{
-                Write-Stage 'handing-off' 'Installed. Handing the restart to the desktop app.'
-            }} else {{
-                Write-Stage 'starting' 'Starting the updated server.'
-                try {{
-                    Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}
-                    $restarted = $true
-                    Write-InstallLog 'Started the updated server.'
-                }}
-                catch {{ Write-InstallLog ('The updated server could not be started: ' + $_.Exception.Message) }}
-            }}
-            $result['restarted'] = $restarted
-            $script:Restarted = [bool] $restarted
-
-            # ===============================================================
-            # HEALTH GATE. Nothing is deleted until the new server answers.
-            # ===============================================================
-            Write-InstallLog ('Waiting up to {health_gate_seconds:.0f} s for ' + $healthUrl + ' to answer.')
-            $healthy = Wait-ForHealth $healthUrl {health_gate_seconds:.1f}
-            if ($healthy) {{
-                Write-InstallLog 'The updated server answered /health.'
-                Remove-StalePrevious $previousRoot {previous_kept}
-                Remove-StaleTranscripts
-                $script:HelperDone = $true
-                [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
-                Remove-Item -Path {_powershell_literal(str(stage_dir / "wheel"))} -Recurse -Force -ErrorAction SilentlyContinue
-                if ($noRestart) {{
-                    Write-Stage 'done' 'The new version is installed. The desktop app starts it.'
-                }} else {{
-                    Write-Stage 'done' 'The updated server was started.'
-                }}
-                exit 0
-            }}
-
-            # ===============================================================
-            # ROLLBACK. The new version is installed and does not answer, so
-            # put the one that did back and start it. This is the reason the
-            # old environment was renamed rather than deleted.
-            # ===============================================================
-            Write-Stage 'rolling-back' 'The new version did not answer, so the previous one is being put back.'
-            Write-InstallLog ('No answer from ' + $healthUrl + ' within {health_gate_seconds:.0f} s. Rolling back.')
-            $rolledBack = $false
-            try {{
-                $failedDir = Join-Path $stagingRoot ($stamp + '-failed')
-                New-Item -ItemType Directory -Path $failedDir -Force | Out-Null
-                [System.IO.Directory]::Move($toolDir, (Join-Path $failedDir {_powershell_literal(PACKAGE_NAME)}))
-                [System.IO.Directory]::Move($asideEnv, $toolDir)
-                $rolledBack = $true
-                Write-InstallLog 'The previous environment is back at the canonical path.'
-                # The stamp directory it came out of is now empty, and an empty
-                # one would be kept as "the rollback" by the next sweep while
-                # holding nothing to roll back to.
-                Remove-Item -LiteralPath $previousDir -Recurse -Force -ErrorAction SilentlyContinue
-                # Its own Scripts trampolines carry the canonical path already
-                # -- they were never rewritten -- so nothing else is needed.
-            }}
-            catch {{
-                Write-InstallLog ('The rollback failed: ' + $_.Exception.Message)
-            }}
-            $restartedPrevious = $false
-            if ($rolledBack -and (-not $noRestart)) {{
-                try {{ Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}; $restartedPrevious = $true }}
-                catch {{ Write-InstallLog ('The previous version could not be started: ' + $_.Exception.Message) }}
-            }}
-            $result['ok'] = $false
-            $result['rolled_back'] = $rolledBack
-            $result['restarted'] = $restartedPrevious
-            $script:Restarted = [bool] $restartedPrevious
-            $result['message'] = $(if ($rolledBack) {{ 'The new version was installed but never answered, so the previous version was put back' + $(if ($restartedPrevious) {{ ' and restarted.' }} elseif ($noRestart) {{ '. The desktop app starts it within ten seconds.' }} else {{ ', but it could not be restarted.' }}) }} else {{ 'The new version never answered and the previous version could not be put back. Re-run the install command.' }})
-            [System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
-            $script:HelperDone = $true
-            Write-Stage 'recovered' $result.message
-            exit 1
-        }}
-    }}
 }}
-Write-Stage 'installing' 'Installing the new version.'
-# Give Windows a moment to release the handles the exiting process held.
-Start-Sleep -Seconds 2
-# uv writes progress to stderr. Under ErrorActionPreference='Stop' a native
-# command's stderr becomes a *terminating* NativeCommandError, which would kill
-# this script before it installs anything, so drop back to Continue for the
-# call itself and judge the result by exit code alone.
-$ErrorActionPreference = 'Continue'
-# uv draws its diagnostics with box-drawing characters and colours them when it
-# thinks it is talking to a terminal. PowerShell decodes a native command's
-# output with the CONSOLE code page, which on this machine is cp437 -- so every
-# box character reached the transcript as three mojibake bytes and the window
-# showed the user 'GoeGoeCGoe' where uv had drawn a tree. Ask uv for plain text
-# and read its bytes as the UTF-8 they are. Both are best-effort: a helper with
-# no console attached must not fail over the encoding of a log line.
-$env:NO_COLOR = '1'
-try {{ [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) }} catch {{ }}
-# Handle release is not instantaneous on Windows -- an antivirus scan, the
-# search indexer, or a slow shutdown can still hold the environment briefly.
-# A single attempt that loses that race leaves uv having deleted part of the
-# environment, which is precisely the broken install this whole path exists to
-# avoid, so retry with backoff: a later attempt succeeds because the earlier
-# one already removed whatever it could.
-# uv writes the launcher shims into the uv tool bin directory in ASCII order of
-# the file name including its ".exe" suffix, and ABORTS THE WHOLE INSTALL on the
-# first one it cannot overwrite. A launcher window the user still has open (an
-# `mcc-claude` session, say) holds its own .exe without FILE_SHARE_DELETE, so
-# every entrypoint alphabetically after it is never written and uv leaves no
-# receipt -- `uv tool list` then calls the tool malformed. Waiting for the
-# server does not help: those are different processes.
-#
-# Windows refuses to DELETE a running image but happily RENAMES one, and the
-# process keeps executing from the renamed file. So move every shim aside first
-# and let uv write a complete fresh set at the canonical paths.
-#
-# The shim set is a UNION of the mcc-*/fcc-* family pattern, uv's own receipt,
-# and the distribution's entry points, so a command added by a release can never
-# be missed by all three -- and a rename that is REFUSED is recorded rather than
-# swallowed. A swallowed refusal is what let uv walk into a locked
-# `mcc-desktop.exe` and abort an entire install.
-#
-# One family of shims is EXEMPT from the rename. The desktop shell asks
-# `mcc-desktop --print-status` on every pass of its ladder; with that shim
-# renamed aside the shell reads NotInstalled and starts its own `uv tool
-# install` into this very tool directory. Measured 2026-09-07: the helper's
-# five attempts all failed against the shell's concurrent installer, the shell
-# won at 23:25:43, and the helper's "start the server again" step never ran
-# because it had already written a failure. uv overwrites these in place, and a
-# momentarily locked one is kept by the staged fallback exactly like any other,
-# so there was never anything the rename bought here.
-$neverRename = @({quoted_never_rename})
-$managed = @{{}}
-$refused = @()
-# Every shim actually moved out of the way, so a failed install can put them
-# back. Without this list a failure is not recoverable: the old launchers are
-# sitting under '.old-' names, the new ones were never written, and the machine
-# has no `mcc-server` at all -- measured on a scratch install on 2026-09-08,
-# where the helper's own restart step then reported "could not be restarted
-# either". The install script has always restored on its failure path
-# (`Restore-LauncherShim`); the helper never did.
-$movedAside = @()
-if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
-    foreach ($file in @(Get-ChildItem -Path $binDir -Filter '*.exe' -ErrorAction SilentlyContinue)) {{
-        if (($file.Name -match '^(mcc|fcc)-.+\\.exe$') -or (@('my-claude-code.exe', 'free-claude-code.exe') -contains $file.Name.ToLowerInvariant())) {{
-            $managed[$file.Name] = $true
-        }}
-    }}
-    if ($toolDir) {{
-        $receiptPath = Join-Path $toolDir 'uv-receipt.toml'
-        if (Test-Path -LiteralPath $receiptPath -PathType Leaf) {{
-            foreach ($hit in [regex]::Matches([IO.File]::ReadAllText($receiptPath), 'install-path\\s*=\\s*"([^"]+)"')) {{
-                $leaf = Split-Path -Leaf $hit.Groups[1].Value
-                if ($leaf -like '*.exe') {{ $managed[$leaf] = $true }}
-            }}
-        }}
-    }}
-    foreach ($name in $commandNames) {{ $managed[($name + '.exe')] = $true }}
-    foreach ($fileName in ($managed.Keys | Sort-Object)) {{
-        $shim = Join-Path $binDir $fileName
-        if (-not (Test-Path -LiteralPath $shim -PathType Leaf)) {{ continue }}
-        if ($neverRename -contains $fileName) {{ continue }}
-        try {{
-            Rename-Item -LiteralPath $shim -NewName ($fileName + '.old-' + $stamp) -ErrorAction Stop
-            $movedAside += $fileName
-        }}
-        catch {{
-            $refused += $fileName
-        }}
-    }}
+catch {{
+    $ErrorActionPreference = 'Stop'
+    Write-InstallLog ('The installer could not be started: ' + $_.Exception.Message)
+    $exitCode = 1
 }}
-if ($refused.Count -gt 0) {{
-    # Say WHO is holding them. Until 6.72.2 a locked launcher produced a retry
-    # and a sentence about a file being "in use", and the user was left to
-    # guess. On the machine this was written for the holders were two
-    # mcc-server launches from the previous day that were STILL SERVING WORK.
-    #
-    # Report only. Nothing here stops anything: this cannot tell a finished
-    # server from a busy one, the staged fallback below already survives the
-    # lock, and stopping a server somebody is using to save one install
-    # attempt is not a trade this program gets to make.
-    #
-    # Matched on the resolved executable path, never on an image name -- every
-    # MCC command on Windows is called python.exe, and the bin directory also
-    # holds programs (Claude Code's own claude.exe) that this install never
-    # touches and must never accuse.
-    Write-InstallLog 'These My Claude Code processes are running from the files being replaced:'
-    $ourPrefixes = @('mcc-', 'fcc-', 'my-claude-code', 'free-claude-code')
-    $toolPrefix = ''
-    if ($toolDir) {{ $toolPrefix = $toolDir.TrimEnd('\', '/') + '\' }}
-    $binPrefix = $binDir.TrimEnd('\', '/') + '\'
-    $namedAny = $false
-    foreach ($proc in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {{
-        $exe = $proc.ExecutablePath
-        if (-not $exe) {{ continue }}
-        $inBin = $exe.StartsWith($binPrefix, [StringComparison]::OrdinalIgnoreCase)
-        $inTool = $toolPrefix -and $exe.StartsWith($toolPrefix, [StringComparison]::OrdinalIgnoreCase)
-        if (-not ($inBin -or $inTool)) {{ continue }}
-        $leaf = [IO.Path]::GetFileNameWithoutExtension($exe).ToLowerInvariant()
-        $ours = $inTool
-        foreach ($prefix in $ourPrefixes) {{
-            if ($leaf.StartsWith($prefix)) {{ $ours = $true; break }}
-        }}
-        if (-not $ours) {{ continue }}
-        $started = ''
-        if ($proc.CreationDate) {{ $started = $proc.CreationDate.ToString('yyyy-MM-dd HH:mm:ss') }}
-        Write-InstallLog ('  pid ' + $proc.ProcessId + '  ' + $proc.Name + '  started ' + $started + '  ' + $exe)
-        $namedAny = $true
-    }}
-    if (-not $namedAny) {{
-        Write-InstallLog '  (none -- the lock is something else, such as an antivirus scan)'
-    }}
-    Write-InstallLog 'None of them will be stopped: one may be a server you are using right now. The new version is placed beside them instead.'
-}}
-$delays = @(0, 5, 10, 20, 30)
-$code = 1
-$attempts = 0
-$output = ''
-# The fast loop ALWAYS runs. It used to be skipped whenever a single rename was
-# refused, and one `mcc-claude` window the user had left open for the afternoon
-# is enough to refuse one -- which is the normal case on this machine, not an
-# edge case. Skipping cost the whole install its cheap path (measured:
-# attempts=5, meaning the fast loop never ran at all) for a lock the staged
-# fallback below was already written to survive. A refusal does mean uv will
-# probably trip over that one file, so it buys a single attempt rather than the
-# full backoff: the point is not to pay 65 seconds of sleeps on the way to a
-# path that handles the lock properly.
-$fastDelays = if ($refused.Count -eq 0) {{ $delays }} else {{ @(0) }}
-# The same table scripts/install.ps1 keeps, for the same reason: uv reports a
-# full disk and a locked file identically -- a non-zero exit code and a
-# sentence -- so the code alone cannot tell them apart. Every retry below
-# writes more files, and the staged fallback writes a whole second copy of
-# them, so on a volume with no room left the ladder turns one honest failure
-# into ten and 130 seconds of sleeps.
-$diskFullSignatures = @('os error 112', 'not enough space on the disk', 'no space left on device', 'enospc')
-function Test-UvDiskFull($text) {{
-    if (-not $text) {{ return $false }}
-    $haystack = ([string] $text).ToLowerInvariant()
-    foreach ($signature in $diskFullSignatures) {{
-        if ($haystack.Contains($signature)) {{ return $true }}
-    }}
-    return $false
-}}
-$diskFull = $false
-foreach ($wait in $fastDelays) {{
-    if ($wait -gt 0) {{
-        Write-InstallLog ('Waiting ' + $wait + ' s before the next attempt.')
-        Start-Sleep -Seconds $wait
-    }}
-    Write-InstallLog ('uv tool install, attempt ' + ($attempts + 1) + '.')
-    # The tee. `2>&1 |` streams uv's two channels through this pipeline one
-    # object at a time, so each line reaches the transcript as uv prints it --
-    # `| Out-String` at the end still yields the whole capture for the receipt,
-    # but it is no longer the FIRST time the output exists anywhere.
-    $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 |
-        ForEach-Object {{ $line = Convert-OutputLine $_; Write-InstallLog $line; $line }} |
-        Out-String
-    $code = $LASTEXITCODE
-    $attempts = $attempts + 1
-    Write-InstallLog ('uv exited with ' + $code + '.')
-    if ($code -eq 0) {{ break }}
-    if (Test-UvDiskFull $output) {{ $diskFull = $true; break }}
-}}
-# Staged fallback: uv writes every shim and a complete receipt into a directory
-# nothing can be holding, and the shims are placed one at a time afterwards, so
-# one stuck file costs exactly that one file instead of the whole install.
-$kept = @()
-if (($code -ne 0) -and $binDir -and (-not $diskFull)) {{
-    $stageBin = Join-Path ([IO.Path]::GetTempPath()) ('mcc-stage-bin-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $stageBin | Out-Null
-    $hadBin = Test-Path Env:\\UV_TOOL_BIN_DIR
-    $previousBin = if ($hadBin) {{ $env:UV_TOOL_BIN_DIR }} else {{ '' }}
-    $env:UV_TOOL_BIN_DIR = $stageBin
-    Write-InstallLog 'Retrying into a staging bin directory: a launcher is still locked.'
-    foreach ($wait in $delays) {{
-        if ($wait -gt 0) {{
-            Write-InstallLog ('Waiting ' + $wait + ' s before the next attempt.')
-            Start-Sleep -Seconds $wait
-        }}
-        Write-InstallLog ('uv tool install (staged), attempt ' + ($attempts + 1) + '.')
-        $output = & {_powershell_literal(uv_executable)} {quoted_args} 2>&1 |
-            ForEach-Object {{ $line = Convert-OutputLine $_; Write-InstallLog $line; $line }} |
-            Out-String
-        $code = $LASTEXITCODE
-        $attempts = $attempts + 1
-        Write-InstallLog ('uv exited with ' + $code + '.')
-        if ($code -eq 0) {{ break }}
-    }}
-    if ($hadBin) {{ $env:UV_TOOL_BIN_DIR = $previousBin }} else {{ Remove-Item Env:\\UV_TOOL_BIN_DIR -ErrorAction SilentlyContinue }}
-    if ($code -eq 0) {{
-        foreach ($staged in @(Get-ChildItem -Path $stageBin -Filter '*.exe' -ErrorAction SilentlyContinue)) {{
-            $target = Join-Path $binDir $staged.Name
-            $asideName = $staged.Name + '.old-' + $stamp + '-staged'
-            $aside = Join-Path $binDir $asideName
-            $movedAside = $false
-            if (Test-Path -LiteralPath $target -PathType Leaf) {{
-                foreach ($attempt in 1..4) {{
-                    try {{ Rename-Item -LiteralPath $target -NewName $asideName -ErrorAction Stop; $movedAside = $true; break }}
-                    catch {{ Start-Sleep -Milliseconds (150 * $attempt) }}
-                }}
-            }}
-            try {{
-                Copy-Item -LiteralPath $staged.FullName -Destination $target -Force -ErrorAction Stop
-            }}
-            catch {{
-                # Keep the old launcher. It is a version-agnostic stub that execs
-                # the interpreter under the canonical tool directory, and that
-                # directory now holds the new install, so the command already
-                # runs the new code.
-                if ($movedAside -and (Test-Path -LiteralPath $aside -PathType Leaf)) {{
-                    Move-Item -LiteralPath $aside -Destination $target -Force -ErrorAction SilentlyContinue
-                }}
-                $kept += [IO.Path]::GetFileNameWithoutExtension($staged.Name)
-            }}
-        }}
-        # uv records install-path under whatever UV_TOOL_BIN_DIR was set to, so a
-        # receipt left as written would send a later uninstall or upgrade at a
-        # temp path that no longer exists.
-        if ($toolDir) {{
-            $receiptPath = Join-Path $toolDir 'uv-receipt.toml'
-            if (Test-Path -LiteralPath $receiptPath -PathType Leaf) {{
-                $receiptText = [IO.File]::ReadAllText($receiptPath)
-                $realPrefix = $binDir.Replace('\\', '/').TrimEnd('/')
-                $backslashPrefix = $stageBin.Replace('/', '\\').TrimEnd('\\')
-                $rewritten = $receiptText
-                foreach ($stagePrefix in @($stageBin.Replace('\\', '/').TrimEnd('/'), $backslashPrefix.Replace('\\', '\\\\'), $backslashPrefix)) {{
-                    $rewritten = $rewritten.Replace($stagePrefix, $realPrefix)
-                }}
-                if ($rewritten -ne $receiptText) {{
-                    [System.IO.File]::WriteAllText(($receiptPath + '.new'), $rewritten, (New-Object System.Text.UTF8Encoding($false)))
-                    Move-Item -LiteralPath ($receiptPath + '.new') -Destination $receiptPath -Force
-                }}
-            }}
-        }}
-    }}
-    Remove-Item -LiteralPath $stageBin -Recurse -Force -ErrorAction SilentlyContinue
-}}
-$ErrorActionPreference = 'Stop'
-# Nothing was installed. Put back what was moved out of the way, or this
-# machine has no launchers at all: the old ones are under '.old-' names and the
-# new ones were never written. That is the difference between "the update
-# failed" and "the update failed and took your server with it".
-$restoredShims = @()
-if (($code -ne 0) -and $binDir) {{
-    foreach ($fileName in $movedAside) {{
-        $target = Join-Path $binDir $fileName
-        $aside = Join-Path $binDir ($fileName + '.old-' + $stamp)
-        if ((Test-Path -LiteralPath $aside -PathType Leaf) -and (-not (Test-Path -LiteralPath $target -PathType Leaf))) {{
-            try {{
-                Rename-Item -LiteralPath $aside -NewName $fileName -ErrorAction Stop
-                $restoredShims += $fileName
-            }}
-            catch {{
-                # Nothing further to try: the file is held by something, which
-                # means it is also still runnable under its old name.
-            }}
-        }}
-    }}
-}}
-# Report every command that is not there, rather than trusting the exit code.
-# A version check cannot substitute: the shims are version-agnostic launchers,
-# so an OLD shim reports the NEW version and "verified" would be a lie.
-Write-Stage 'verifying' 'Checking that every command is in place.'
-Write-InstallLog 'Verifying the installed launchers.'
-$missing = @()
-if ($binDir -and (Test-Path -LiteralPath $binDir -PathType Container)) {{
-    foreach ($name in $commandNames) {{
-        if (-not (Test-Path -LiteralPath (Join-Path $binDir ($name + '.exe')) -PathType Leaf)) {{
-            $missing += $name
-        }}
-    }}
-    # Reap the shims we moved aside -- but only after an install that WORKED.
-    # On a failure the '.old-' files are the only launchers left and the sweep
-    # above has just put them back; deleting them here is how a failed update
-    # used to leave nothing at all behind.
-    if ($code -eq 0) {{
-        Get-ChildItem -Path $binDir -Filter '*.exe.old-*' -ErrorAction SilentlyContinue |
-            ForEach-Object {{ Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }}
-    }}
-}}
-# A shim whose rename was refused is NOT automatically a kept shim: uv may well
-# have overwritten it in place, and saying otherwise would tell the user to
-# restart a window that is already running the new code. The staged fallback's
-# copy is the only thing that knows, because it is the step that fails on a file
-# still held -- which is why $kept is built there and nowhere else, in both this
-# helper and scripts/install.ps1.
-# A shim that could not be replaced is NOT a failure: the command is present and
-# already runs the new code through the canonical tool directory. Report it as
-# refreshing on the next install and keep ok = true.
-$ok = ($code -eq 0) -and ($missing.Count -eq 0)
-# The only way to reach here with something already swapped is the
-# new-command repair above: the environment was exchanged, and uv was then
-# asked to write the launcher for a command this machine has never had. If that
-# failed, the canonical path holds whatever uv left behind and a known-good
-# environment is sitting aside with nothing to bring it back. Bring it back.
-if ((-not $ok) -and $swappedAside -and (Test-Path -LiteralPath $swappedAside -PathType Container)) {{
-    Write-InstallLog 'The launcher repair failed after the swap; putting the previous environment back.'
-    Write-Stage 'rolling-back' 'The new version could not be finished, so the previous one is being put back.'
-    try {{
-        $wreckage = Join-Path $stagingRoot ($stamp + '-failed')
-        New-Item -ItemType Directory -Path $wreckage -Force | Out-Null
-        if (Test-Path -LiteralPath $toolDir -PathType Container) {{
-            [System.IO.Directory]::Move($toolDir, (Join-Path $wreckage {_powershell_literal(PACKAGE_NAME)}))
-        }}
-        [System.IO.Directory]::Move($swappedAside, $toolDir)
-        Remove-Item -LiteralPath $previousDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-InstallLog 'The previous environment is back at the canonical path.'
-    }}
-    catch {{
-        Write-InstallLog ('The previous environment could not be put back: ' + $_.Exception.Message)
-    }}
-}}
-$restartNote = if ($targetVersion) {{ ' to pick up ' + $targetVersion }} else {{ '' }}
-$keptNote = if ($kept.Count -gt 0) {{ ' kept: ' + (($kept | ForEach-Object {{ $_ + '.exe (in use)' }}) -join ', ') + ' -- restart it' + $restartNote + '. These launchers were locked and kept the file they had. They keep working and will refresh on the next install.' }} else {{ '' }}
+Write-InstallLog ('The installer exited with ' + $exitCode + '.')
+# The installer wrote the terminal record itself -- `done` with `restarted:
+# true` once a listener answered /health, `failed` or `recovered` otherwise --
+# so this helper does not write a second one and does not overrule it. What it
+# DOES own is `pending-upgrade.json`, which the dashboard reads on its next
+# connection to say what the last update did.
+$ok = ($exitCode -eq 0)
 $result = @{{
     ok = $ok
-    exit_code = $code
-    attempts = $attempts
-    disk_full = $diskFull
-    missing_commands = $missing
-    kept_shims = $kept
-    restored_shims = $restoredShims
-    message = if ($ok) {{ 'Deferred install completed.' + $keptNote }} elseif ($diskFull) {{ 'The update stopped because the disk is full. Free space and update again. uv tool install --force removes the previous environment before it writes the new one, so this machine has no mcc-server until that re-run finishes.' }} elseif ($missing.Count -gt 0) {{ 'Installed, but these commands are missing: ' + ($missing -join ', ') + '. Close the mcc-claude window(s) and re-run the install command.' }} else {{ 'Deferred install failed after ' + $attempts + ' attempt(s).' }}
-    output = $output
+    exit_code = $exitCode
+    attempts = 1
+    staged = $true
+    restarted = $(if ($noStart) {{ $false }} else {{ $ok }})
+    message = $(if ($ok) {{
+        if ($noStart) {{ 'The update was installed. No server was started, because MCC_INSTALL_NO_START is set.' }}
+        else {{ 'The update was installed and the server was restarted by the installer.' }}
+    }} else {{ 'The installer did not finish; see the transcript at ' + $installLog + '.' }})
 }}
-$result['restarted'] = $false
-$script:Restarted = [bool] $false
-[System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
-Write-InstallLog $result.message
-if ($ok) {{
-    if ($noRestart) {{
-        Write-Stage 'handing-off' 'Installed. Handing the restart to the desktop app.'
-    }} else {{
-        Write-Stage 'starting' 'Starting the updated server.'
-    }}
-}} else {{
-    Write-Stage 'failed' $result.message
-}}
-# The launcher lives in uv's bin directory, OUTSIDE the tool environment that
-# was just replaced, and it is a version-agnostic stub. So it starts a server on
-# both branches. Until 6.58.3 it ran only under `if ($ok)`, which is how a
-# failed update left the machine with no server at all and no automatic
-# recovery: the tool directory still held a perfectly good previous install and
-# nothing ever started it. A half-installed environment is not a reason to
-# withhold the old one -- uv either replaced the environment or it did not.
-$restarted = $false
-if (-not $noRestart) {{
-    try {{
-        Start-Process -FilePath {_powershell_literal(str(server_launcher))} -WorkingDirectory {_powershell_literal(str(working_directory))}
-        $restarted = $true
-        Write-InstallLog 'Started the updated server.'
-    }}
-    catch {{
-        $restarted = $false
-        Write-InstallLog ('The updated server could not be started: ' + $_.Exception.Message)
-    }}
-}}
-$result['restarted'] = $restarted
-$script:Restarted = [bool] $restarted
+[System.IO.File]::WriteAllText($resultPath, ($result | ConvertTo-Json), $progressEncoding)
 if (-not $ok) {{
-    # Say what went wrong AND what was done about it, in the one sentence the
-    # dashboard's update banner shows. "It failed" on its own sent the user
-    # looking for a server that nobody was going to start.
-    $result['message'] = $result.message + $(if ($restarted) {{ ' The previous version was restarted.' }} elseif ($noRestart) {{ ' The desktop app starts the previous version again within ten seconds.' }} else {{ ' The previous version could not be restarted either.' }})
-}}
-[System.IO.File]::WriteAllText({_powershell_literal(str(result_path))}, ($result | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
-$script:HelperDone = $true
-Write-InstallLog $result.message
-if ($ok) {{
-    Remove-Item -Path {_powershell_literal(str(stage_dir / "wheel"))} -Recurse -Force -ErrorAction SilentlyContinue
-    if ($noRestart) {{
-        Write-Stage 'done' 'The new version is installed. The desktop app starts it.'
-    }} else {{
-        Write-Stage 'done' 'The updated server was started.'
+    # The installer's own terminal record is the authority on WHAT happened.
+    # Only write one here when it never got far enough to write any at all.
+    $wroteTerminal = $false
+    try {{
+        foreach ($line in [System.IO.File]::ReadAllLines($progressPath)) {{
+            if ($line -match '"helper_done":true') {{ $wroteTerminal = $true }}
+        }}
     }}
-}} else {{
-    Write-Stage 'recovered' $result.message
+    catch {{ }}
+    if (-not $wroteTerminal) {{ Write-Stage 'failed' $result.message }}
 }}
+exit $(if ($ok) {{ 0 }} else {{ 1 }})
 """
 
 
+def _powershell_child_environment() -> dict[str, str]:
+    """This process's environment, minus a ``PSModulePath`` it must not pass on.
+
+    Measured on 2026-09-12, running the real update flow against a scratch
+    install. A server started from a PowerShell 7 prompt inherits PowerShell
+    7's ``PSModulePath``, whose first entries are
+    ``C:\\Program Files\\PowerShell\\7\\Modules``. The helper then starts
+    **Windows PowerShell 5.1** (``shutil.which("powershell")``), which
+    autoloads ``Microsoft.PowerShell.Utility`` off that path, finds PowerShell
+    7's copy, cannot load it -- and every cmdlet in that module simply does not
+    exist for the rest of the run::
+
+        Get-FileHash : The term 'Get-FileHash' is not recognized as the name
+        of a cmdlet ... At install.ps1:833
+
+    which failed the release wheel's checksum step and ended the update. It
+    would equally have taken ``ConvertTo-Json``, ``Invoke-WebRequest`` and
+    ``Get-FileHash`` away from the old helper.
+
+    Unsetting the variable is the fix rather than rewriting it: PowerShell
+    computes the correct default for its own edition when it is absent, and
+    guessing a path here would be this module holding an opinion about a
+    layout it cannot see.
+    """
+
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name.upper() != "PSMODULEPATH"
+    }
+
+
 def _spawn_deferred_upgrade(
-    *,
-    uv_executable: str,
-    command: list[str],
-    tag: str,
-    log: list[str],
-    no_restart: bool = False,
+    *, tag: str, log: list[str], no_restart: bool = False
 ) -> UpgradeResult:
-    """Hand the install to a detached helper that runs after we exit."""
+    """Hand the update to a detached helper that runs the installer after we exit."""
 
     powershell = shutil.which("powershell") or shutil.which("pwsh")
     if powershell is None:
@@ -2000,7 +1187,17 @@ def _spawn_deferred_upgrade(
             ),
             log=log,
         )
-    stage_dir = _stage_dir()
+    installer = _bundled_installer("install.ps1")
+    if installer is None:
+        return UpgradeResult(
+            ok=False,
+            message=(
+                "The installer that ships with this version was not found, so "
+                "the update cannot run. Re-run the install command instead."
+            ),
+            log=log,
+        )
+    stage_dir = _prepared_stage_dir()
     result_path = stage_dir / _PENDING_RESULT_FILENAME
     # One episode, one transcript, named before the helper starts so the
     # response that triggers the update can hand the path to a browser tab
@@ -2009,55 +1206,30 @@ def _spawn_deferred_upgrade(
         f"{INSTALL_LOG_PREFIX}{time.strftime('%Y%m%d-%H%M%S')}{INSTALL_LOG_SUFFIX}"
     )
     progress_path = str(stage_dir / UPDATE_PROGRESS_FILENAME)
-    server_launcher = _server_launcher(uv_executable)
-    if server_launcher is None:
-        return UpgradeResult(
-            ok=False,
-            message=(
-                "fcc-server was not found in uv's tool bin directory, so the "
-                "update cannot be restarted safely. Re-run the install command instead."
-            ),
-            log=log,
-        )
+    no_start = os.environ.get("MCC_INSTALL_NO_START") == "1"
     with suppress(OSError):
         result_path.unlink()
     script_path = stage_dir / "apply-upgrade.ps1"
     try:
         script_path.write_text(
             _deferred_helper_script(
-                uv_executable=uv_executable,
-                command=command,
                 result_path=result_path,
                 stage_dir=stage_dir,
                 install_log=install_log,
-                server_launcher=server_launcher,
+                installer=installer,
+                powershell=powershell,
+                config_dir=config_dir_path(),
                 working_directory=Path.cwd(),
-                # The launcher lives in the uv tool bin directory, so its parent
-                # IS that directory -- no second `uv tool dir --bin` call while
-                # the server is still alive.
-                bin_dir=server_launcher.parent,
-                # The staged fallback rewrites the receipt's entrypoint paths
-                # back to the real bin directory, so it needs the owner's dir.
-                # Derived from sys.executable, not from `uv tool dir`: no uv
-                # may run while the server is alive.
-                tool_dir=_installed_tool_dir(),
-                commands=_published_commands(),
                 # Named in the receipt so a window can say WHICH version is
-                # being installed while it waits, and so the kept-shim note can
-                # tell the user which version a restart of that window buys.
+                # being installed while it waits, and passed to the installer
+                # as `-Version` so the update that was offered is the update
+                # that happens even if a newer release lands mid-flight.
                 version=tag or None,
-                # GAP-3: the desktop window asked for this update and owns the
-                # restart. See `_deferred_helper_script`.
+                # Decision Q2: this says a desktop window is watching. It does
+                # NOT say anybody else will start the server -- the installer
+                # always restarts.
                 no_restart=no_restart,
-                # 6.72.0: where the new environment is built and where the old
-                # one waits until the new one answers. Both derived from
-                # `sys.executable`, like the tool directory above and for the
-                # same reason -- no uv may run while the server is alive.
-                staging_root=_aside_root(STAGING_ENV_DIRNAME),
-                previous_root=_aside_root(PREVIOUS_ENV_DIRNAME),
-                # The server knows its own address; the helper cannot find it
-                # out once the server is gone, so it is baked in here.
-                health_url=_health_url(),
+                no_start=no_start,
             ),
             encoding="utf-8",
         )
@@ -2073,7 +1245,6 @@ def _spawn_deferred_upgrade(
     # update silently never happened. CREATE_NO_WINDOW keeps a console the
     # child can use while hiding it, and the new process group means the helper
     # is not signalled along with the console this server was started from.
-    # Verified: with CREATE_NO_WINDOW the helper both runs and outlives us.
     creation_flags = 0x08000000 | 0x00000200
     try:
         subprocess.Popen(
@@ -2091,31 +1262,107 @@ def _spawn_deferred_upgrade(
             stderr=subprocess.DEVNULL,
             creationflags=creation_flags,
             close_fds=True,
+            env=_powershell_child_environment(),
         )
     except (OSError, ValueError) as exc:
         return UpgradeResult(
             ok=False, message=f"Could not start the update helper: {exc!s}", log=log
         )
 
-    log.append(
-        "staged for install after shutdown (Windows); the desktop app starts the server"
-        if no_restart
-        else "staged for install and automatic restart after shutdown (Windows)"
-    )
+    log.append("staged for install and restart by the official installer (Windows)")
     _CACHE.restart_required = True
     _CACHE.staged_install = True
     set_external_upgrade_helper_pending(True)
-    started_by = (
-        "the desktop app starts the updated server within ten seconds"
-        if no_restart
-        else "start the updated server automatically"
-    )
     return UpgradeResult(
         ok=True,
         message=(
-            f"{tag or 'The latest release'} is verified and staged. The server "
-            f"will close, install it after Windows releases the environment, then "
-            f"{started_by}."
+            f"{tag or 'The latest release'} will be installed by the install "
+            "command itself: the server closes, the new version is built beside "
+            "it, checked, swapped in, and started again."
+        ),
+        installed_version=tag or None,
+        log=log,
+        log_path=str(install_log),
+        progress_path=progress_path,
+    )
+
+
+def _spawn_posix_upgrade(
+    *, tag: str, log: list[str], no_restart: bool = False
+) -> UpgradeResult:
+    """Run ``install.sh --restart`` detached, and return without waiting.
+
+    6.82.0. Until now the POSIX update ran ``uv tool install --force`` **in
+    this process**, synchronously, against the environment this process is
+    running out of -- and then restarted nothing at all, on any platform, ever.
+    The same installer that a Linux or macOS user would type now does the whole
+    job, with the same staging, the same execute-verify, the same swap and the
+    same health gate as Windows (decision Q7).
+
+    ``setsid``/``nohup`` so it outlives this server, and ``/dev/null`` on all
+    three streams because a child that keeps this process's stdout open holds
+    its caller open too.
+    """
+
+    installer = _bundled_installer("install.sh")
+    if installer is None:
+        return UpgradeResult(
+            ok=False,
+            message=(
+                "The installer that ships with this version was not found, so "
+                "the update cannot run. Re-run the install command instead."
+            ),
+            log=log,
+        )
+    shell = shutil.which("sh")
+    if shell is None:
+        return UpgradeResult(
+            ok=False,
+            message="No POSIX shell was found; re-run the install command instead.",
+            log=log,
+        )
+    stage_dir = _prepared_stage_dir()
+    install_log = stage_dir / (
+        f"{INSTALL_LOG_PREFIX}{time.strftime('%Y%m%d-%H%M%S')}{INSTALL_LOG_SUFFIX}"
+    )
+    progress_path = str(stage_dir / UPDATE_PROGRESS_FILENAME)
+    arguments = [shell, str(installer)]
+    if os.environ.get("MCC_INSTALL_NO_START") == "1":
+        arguments.append("--no-start")
+    else:
+        arguments.append("--restart")
+    if tag:
+        arguments += ["--version", tag]
+    environment = dict(os.environ)
+    # One episode, one transcript; and the configuration directory explicitly,
+    # because the restart means the server of the directory this update is for.
+    environment["MCC_INSTALL_LOG"] = str(install_log)
+    environment["MCC_CONFIG_DIR"] = str(config_dir_path())
+    try:
+        subprocess.Popen(
+            arguments,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+            env=environment,
+            cwd=str(Path.cwd()),
+        )
+    except (OSError, ValueError) as exc:
+        return UpgradeResult(
+            ok=False, message=f"Could not start the installer: {exc!s}", log=log
+        )
+    log.append("handed to install.sh --restart (POSIX)")
+    _CACHE.restart_required = True
+    _CACHE.staged_install = True
+    set_external_upgrade_helper_pending(True)
+    return UpgradeResult(
+        ok=True,
+        message=(
+            f"{tag or 'The latest release'} will be installed by the install "
+            "command itself: the new version is built beside the running one, "
+            "checked, swapped in, and the server is started again."
         ),
         installed_version=tag or None,
         log=log,
@@ -2127,35 +1374,31 @@ def _spawn_deferred_upgrade(
 def upgrade_to_latest(
     payload: dict[str, Any], *, no_restart: bool = False
 ) -> UpgradeResult:
-    """Download, verify, and install the wheel from ``payload``.
+    """Hand ``payload``'s release to the official installer.
 
-    Synchronous and slow (a full dependency resolve): callers must run this in
-    a worker thread so it never blocks the event loop.
+    6.82.0: this function no longer installs anything. It used to download the
+    wheel, verify its digest and then run ``uv tool install --force`` -- a
+    second, independent implementation of what ``scripts/install.ps1`` and
+    ``scripts/install.sh`` already do, reachable only from the dashboard.
+    Two downloaders and two installers is how the two paths drifted until one
+    of them could leave a machine with no server (2026-09-11 §1). There is now
+    one downloader, one verifier and one installer, and it is the install
+    command itself (decision Q1).
 
-    ``no_restart`` says that whoever asked for this update owns the restart --
-    the desktop app, which has a ten-second tick and a spawn of its own. It
-    only reaches the Windows deferred-helper path, because that is the only
-    path on which anything here starts a server at all.
+    Synchronous only in the sense that it writes a script and spawns it;
+    callers still run it in a worker thread because ``config_dir_path()`` and
+    ``shutil.which`` touch the filesystem.
+
+    ``no_restart`` says a desktop window is watching. It no longer says anyone
+    else owns the restart (decision Q2) -- the installer always restarts.
     """
+
     log: list[str] = []
-    uv_executable = shutil.which("uv")
-    if uv_executable is None:
-        return UpgradeResult(
-            ok=False,
-            message="uv was not found on PATH; re-run the install script instead.",
-        )
-
-    asset = _select_wheel_asset(payload)
-    if asset is None:
-        return UpgradeResult(ok=False, message="That release publishes no wheel.")
-    download_url = asset.get("browser_download_url")
-    if not download_url:
-        return UpgradeResult(ok=False, message="Release wheel has no download URL.")
-
-    expected_digest = str(asset.get("digest") or "").removeprefix("sha256:").lower()
     tag = str(payload.get("tag_name") or "").lstrip("vV")
+    if _select_wheel_asset(payload) is None:
+        return UpgradeResult(ok=False, message="That release publishes no wheel.")
 
-    if _wsl_windows_mount_tool_dir(uv_executable):
+    if _WINDOWS and _wsl_windows_mount_tool_dir(shutil.which("uv")):
         return UpgradeResult(
             ok=False,
             message=(
@@ -2165,116 +1408,20 @@ def upgrade_to_latest(
             ),
         )
 
-    with ExitStack() as stack:
-        if _WINDOWS:
-            wheel_dir = _stage_dir() / "wheel"
-            with suppress(OSError):
-                shutil.rmtree(wheel_dir)
-            wheel_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            wheel_dir = Path(
-                stack.enter_context(tempfile.TemporaryDirectory(prefix="fcc-upgrade-"))
-            )
-        wheel_path = wheel_dir / str(asset.get("name"))
-        try:
-            with httpx.stream(
-                "GET",
-                download_url,
-                timeout=_HTTP_TIMEOUT_SECONDS,
-                follow_redirects=True,
-            ) as response:
-                response.raise_for_status()
-                with wheel_path.open("wb") as handle:
-                    for chunk in response.iter_bytes():
-                        handle.write(chunk)
-        except httpx.HTTPError as exc:
-            return UpgradeResult(
-                ok=False, message=f"Could not download the release wheel: {exc!s}"
-            )
-        log.append(f"downloaded {wheel_path.name}")
-
-        actual_digest = _sha256_of(wheel_path)
-        if expected_digest and actual_digest != expected_digest:
-            # Same refusal the install scripts make: never install a wheel
-            # whose checksum does not match what the release advertises.
-            return UpgradeResult(
-                ok=False,
-                message="Release wheel checksum mismatch; refusing to install.",
-                log=log,
-            )
-        log.append(
-            f"verified sha256 {actual_digest[:16]}…"
-            if expected_digest
-            else "release published no digest; skipped checksum verification"
-        )
-
-        extras, python = _installed_extras_and_python(uv_executable)
-        spec = wheel_path.as_uri()
-        if extras:
-            spec = f"{spec}[{','.join(extras)}]"
-            log.append(f"preserving extras: {', '.join(extras)}")
-        command = [
-            uv_executable,
-            "tool",
-            "install",
-            "--force",
-            "--refresh-package",
-            PACKAGE_NAME,
-            "--python",
-            python,
-            spec,
-        ]
-        if _WINDOWS:
-            return _spawn_deferred_upgrade(
-                uv_executable=uv_executable,
-                command=command,
-                tag=tag,
-                log=log,
-                no_restart=no_restart,
-            )
-        try:
-            # Fixed argv, never a shell string, so the release metadata cannot
-            # inject arguments.
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=_UPGRADE_TIMEOUT_SECONDS,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            return UpgradeResult(
-                ok=False, message=f"Upgrade command failed: {exc!s}", log=log
-            )
-
-    tail = (completed.stderr or completed.stdout or "").strip().splitlines()
-    log.extend(tail[-8:])
-    if completed.returncode != 0:
-        return UpgradeResult(
-            ok=False,
-            message=f"uv tool install exited with code {completed.returncode}.",
-            log=log,
-        )
-
-    _CACHE.restart_required = True
-    return UpgradeResult(
-        ok=True,
-        message=(
-            f"Installed {tag or 'the latest release'}. The server will restart "
-            "automatically and reconnect the dashboard."
-        ),
-        installed_version=tag or None,
-        log=log,
-    )
+    if _WINDOWS:
+        return _spawn_deferred_upgrade(tag=tag, log=log, no_restart=no_restart)
+    return _spawn_posix_upgrade(tag=tag, log=log, no_restart=no_restart)
 
 
 async def perform_upgrade(*, no_restart: bool = False) -> UpgradeResult:
-    """Fetch the latest release and install it off the event loop.
+    """Fetch the latest release and hand it to the installer off the event loop.
 
     ``no_restart`` is passed by the dashboard when it is being shown inside the
-    desktop app: that window owns the restart from 6.61.0, and two owners is
-    how one update came to start two servers. A dashboard in a browser tab
-    sends nothing and the helper restarts, exactly as before.
+    desktop app. From 6.82.0 it means only "a window is watching, so do not
+    open a browser": the installer restarts the server on every path, and the
+    window attaches when the listener answers (decision Q2). Two owners of the
+    restart is how one update came to start two servers, and how another
+    started none.
     """
 
     payload, _checked_at, error = await _CACHE.get(force=True)

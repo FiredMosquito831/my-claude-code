@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "6.81.0"
+version = "6.82.0"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 license = "AGPL-3.0-or-later AND MIT"
@@ -100,6 +100,16 @@ packages = ["src/my_claude_code", "src/free_claude_code"]
 
 [tool.hatch.build.targets.wheel.force-include]
 ".env.example" = "my_claude_code/config/env.example"
+# The official installers, bundled so that the update path IS the install
+# command (6.82.0). The dashboard's Update button writes a short helper that
+# waits for this server to exit and then runs one of these two files; shipping
+# them inside the wheel means the installer that runs is exactly the one this
+# release was tested with, needs no network of its own to be fetched, and
+# cannot be substituted between the download and the run.
+# tests/application/test_installers_are_bundled.py builds a real wheel and
+# fails if either is missing from it.
+"scripts/install.ps1" = "my_claude_code/installers/install.ps1"
+"scripts/install.sh" = "my_claude_code/installers/install.sh"
 # User-facing documentation, rendered by the dashboard's Docs page. Bundled
 # rather than fetched so the page works offline and shows the docs for the
 # version that is actually installed. Kept in sync by DOCUMENTS in

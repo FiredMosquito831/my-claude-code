@@ -741,17 +741,280 @@ install_managed_python() {
     run "$uv_bin" python install --no-bin --no-registry "$PYTHON_VERSION"
 }
 
-install_my_claude_code() {
+resolve_install_plan() {
+    # The release, its verified wheel, and the one uv command every install
+    # path runs. Called once per episode: there are two paths that need it --
+    # the staged swap and the in-place repair -- and a second resolve would be
+    # a second download of the same wheel.
     resolve_release
     download_verified_release_wheel
     package_url="file://$release_wheel_path"
-    spec=$(package_spec "$package_url")
+    install_spec=$(package_spec "$package_url")
+}
+
+install_my_claude_code() {
+    # The in-place install. From 6.82.0 this is the REPAIR path: the ordinary
+    # path is the staged swap below, and this runs when there is no tool
+    # environment to swap (a first install), when staging could not be built,
+    # or when a release adds a launcher uv has to write.
+    if [ -z "${install_spec:-}" ]; then
+        resolve_install_plan
+    fi
 
     if [ -n "$torch_backend" ]; then
-        run_uv_capturing "$uv_bin" tool install --managed-python --force --refresh-package my-claude-code --python "$PYTHON_VERSION" --torch-backend "$torch_backend" "$spec"
+        run_uv_capturing "$uv_bin" tool install --managed-python --force --refresh-package my-claude-code --python "$PYTHON_VERSION" --torch-backend "$torch_backend" "$install_spec"
     else
-        run_uv_capturing "$uv_bin" tool install --managed-python --force --refresh-package my-claude-code --python "$PYTHON_VERSION" "$spec"
+        run_uv_capturing "$uv_bin" tool install --managed-python --force --refresh-package my-claude-code --python "$PYTHON_VERSION" "$install_spec"
     fi
+}
+
+# ===========================================================================
+# THE STAGED SWAP (6.82.0). The same shape as scripts/install.ps1 and as the
+# 6.72.0 update helper, on all three platforms (decision Q7).
+#
+# The roots are SIBLINGS of uv's tools root, never children: a child whose name
+# does not normalise to a valid package name makes `uv tool list` fail outright
+# and list nothing at all. These names are the ones
+# src/my_claude_code/config/update_progress.py declares, and a contract test
+# compares the three files.
+# ===========================================================================
+STAGING_ENV_DIRNAME=".mcc-staging"
+PREVIOUS_ENV_DIRNAME=".mcc-previous"
+PREVIOUS_ENVS_KEPT=1
+PACKAGE_ENV_DIRNAME="my-claude-code"
+
+uv_tools_root() {
+    "$uv_bin" tool dir 2>/dev/null | head -n 1
+}
+
+update_aside_root() {
+    # <uv tools root>/../<name>
+    aside_tools_root=$1
+    aside_name=$2
+    [ -n "$aside_tools_root" ] || return 1
+    printf '%s/%s' "$(dirname "$aside_tools_root")" "$aside_name"
+}
+
+stage_new_environment() {
+    # Build the new version beside the running one. Never touches the live
+    # environment, so a wheel that cannot be installed costs nothing at all.
+    # Sets staged_ok=1 on success. `--force` is deliberately absent: it exists
+    # to overwrite a live environment, which is exactly what this path is built
+    # never to do.
+    staged_ok=0
+    staged_reason=""
+    staging_root=$(update_aside_root "$1" "$STAGING_ENV_DIRNAME") || return 1
+    staging_dir="$staging_root/$staged_stamp"
+    staging_bin="$staging_dir/.bin"
+    staging_env="$staging_dir/$PACKAGE_ENV_DIRNAME"
+    mkdir -p "$staging_bin" 2>/dev/null || {
+        staged_reason="could not create $staging_bin"
+        return 1
+    }
+
+    stage_status_file=$(mktemp "${TMPDIR:-/tmp}/mcc-stage.XXXXXX") || return 1
+    stage_capture_file=$(mktemp "${TMPDIR:-/tmp}/mcc-stage-out.XXXXXX") || return 1
+    write_install_log "Staging into $staging_dir. The running version is not touched."
+    if [ -n "$torch_backend" ]; then
+        { UV_TOOL_DIR="$staging_dir" UV_TOOL_BIN_DIR="$staging_bin" "$uv_bin" tool install --managed-python --refresh-package my-claude-code --python "$PYTHON_VERSION" --torch-backend "$torch_backend" "$install_spec" 2>&1; printf '%s' "$?" >"$stage_status_file"; } | tee "$stage_capture_file" |
+            while IFS= read -r stage_line; do
+                write_install_log "$stage_line"
+                printf '%s\n' "$stage_line"
+            done
+    else
+        { UV_TOOL_DIR="$staging_dir" UV_TOOL_BIN_DIR="$staging_bin" "$uv_bin" tool install --managed-python --refresh-package my-claude-code --python "$PYTHON_VERSION" "$install_spec" 2>&1; printf '%s' "$?" >"$stage_status_file"; } | tee "$stage_capture_file" |
+            while IFS= read -r stage_line; do
+                write_install_log "$stage_line"
+                printf '%s\n' "$stage_line"
+            done
+    fi
+    stage_status=$(cat "$stage_status_file" 2>/dev/null)
+    [ -n "$stage_status" ] || stage_status=1
+    staged_category=$(classify_uv_failure "$(cat "$stage_capture_file" 2>/dev/null)")
+    rm -f "$stage_status_file" "$stage_capture_file"
+    write_install_log "The staged install exited with $stage_status."
+
+    if [ "$stage_status" -eq 0 ] && [ -d "$staging_env" ]; then
+        staged_ok=1
+        return 0
+    fi
+    if [ "$staged_category" = "disk-full" ]; then
+        staged_reason="disk-full"
+    else
+        staged_reason="uv exited $stage_status"
+    fi
+    rm -rf -- "$staging_dir" 2>/dev/null || true
+    write_install_log "Nothing was staged ($staged_reason); the running version is untouched."
+    return 1
+}
+
+verify_staged_environment() {
+    # Run the staged environment once, before it is anywhere near the live
+    # path. The gate is EXECUTING the new thing, not trusting an installer's
+    # exit code: a wheel that resolves, installs and then cannot import itself
+    # is a real failure mode, and it used to be discovered by the user.
+    #
+    # This runs BEFORE the stop, so a wheel that cannot run costs a download
+    # instead of an outage.
+    verify_reason="The staged version could not be run."
+    staged_server="$staging_env/bin/mcc-server"
+    [ -x "$staged_server" ] || staged_server="$staging_env/bin/fcc-server"
+    staged_python="$staging_env/bin/python"
+    if [ ! -x "$staged_server" ] || [ ! -x "$staged_python" ]; then
+        verify_reason="The staged install produced no runnable launcher."
+        return 1
+    fi
+    verify_version_output=$("$staged_server" --version 2>&1) || {
+        verify_reason="The staged version did not run: $verify_version_output"
+        return 1
+    }
+    write_install_log "Staged --version said \"$verify_version_output\"."
+    verify_import_output=$("$staged_python" -c 'import my_claude_code' 2>&1) || {
+        verify_reason="The staged version could not import itself: $verify_import_output"
+        return 1
+    }
+    write_install_log "Staged import succeeded."
+    case "$verify_version_output" in
+        *"$FCC_VERSION"*) ;;
+        *)
+            verify_reason="The staged version reported \"$verify_version_output\" rather than $FCC_VERSION."
+            return 1
+            ;;
+    esac
+    verify_reason=""
+    return 0
+}
+
+swap_environment() {
+    # Exchange the staged environment with the live one: two directory renames
+    # on one filesystem. uv's bin entries are NOT touched -- each is a link or
+    # a stub naming <tools root>/my-claude-code/bin/<name>, and it does not
+    # care WHICH environment is at that path, so the instant the new one lands
+    # there every installed launcher runs the new code (decision Q6,
+    # invariant 9).
+    swap_tool_dir=$1
+    previous_root=$(update_aside_root "$(dirname "$swap_tool_dir")" "$PREVIOUS_ENV_DIRNAME") || return 1
+    swap_previous_dir="$previous_root/$staged_stamp"
+    swap_aside_env="$swap_previous_dir/$PACKAGE_ENV_DIRNAME"
+    mkdir -p "$swap_previous_dir" 2>/dev/null || return 1
+    mv "$swap_tool_dir" "$swap_aside_env" 2>/dev/null || {
+        write_install_log "The swap failed: the live environment could not be moved aside."
+        return 1
+    }
+    if ! mv "$staging_env" "$swap_tool_dir" 2>/dev/null; then
+        write_install_log "The swap failed: the staged environment could not be moved into place."
+        mv "$swap_aside_env" "$swap_tool_dir" 2>/dev/null &&
+            write_install_log "The previous environment was put back."
+        return 1
+    fi
+    staged_swapped=1
+    write_install_log "Swapped. The previous version is at $swap_aside_env."
+    # The staging directory is NOT deleted here. What is left in it is an empty
+    # shell -- the environment itself has been MOVED out -- but its .bin
+    # directory and uv's links are still hundreds of megabytes, and deleting
+    # them measured 7.2 s on the Windows twin of this script, every second of
+    # it between "the old server stopped" and "the new server started". It is
+    # swept after the health gate instead, where nobody is waiting.
+    return 0
+}
+
+complete_environment_swap() {
+    # The tidying the swap leaves behind, and none of it is needed to RUN the
+    # new server -- which is why it happens AFTER the start rather than between
+    # the stop and the start, where every second of it would be outage.
+    #
+    # uv writes each launcher in the environment's own bin directory as a
+    # script whose shebang is an ABSOLUTE path to that environment's
+    # interpreter, and the staged install baked the STAGING path into all of
+    # them. After the move those shebangs name a directory that is about to be
+    # deleted. The entries in uv's own bin directory are untouched by all of
+    # this -- they name <tools root>/my-claude-code/bin/<name>, which is where
+    # the new environment now is -- so the server starts fine before this runs
+    # and these are fixed behind it.
+    swap_tool_dir=$1
+    complete_staging_env=$2
+    complete_rewritten=0
+    for complete_entry in "$swap_tool_dir"/bin/*; do
+        [ -f "$complete_entry" ] || continue
+        head -n 1 "$complete_entry" 2>/dev/null | grep -q '^#!' || continue
+        grep -q -- "$complete_staging_env" "$complete_entry" 2>/dev/null || continue
+        if sed "s|$complete_staging_env|$swap_tool_dir|g" "$complete_entry" \
+            > "$complete_entry.mcc-new" 2>/dev/null; then
+            chmod 755 "$complete_entry.mcc-new" 2>/dev/null || true
+            mv "$complete_entry.mcc-new" "$complete_entry" 2>/dev/null &&
+                complete_rewritten=$((complete_rewritten + 1))
+        else
+            rm -f "$complete_entry.mcc-new" 2>/dev/null || true
+        fi
+    done
+    write_install_log "Re-pointed $complete_rewritten launcher(s) inside the new environment."
+
+    # uv recorded every entry point under the STAGING bin directory, which is
+    # about to be deleted; a receipt left as written would send a later
+    # uninstall or upgrade at a path that no longer exists.
+    complete_receipt="$swap_tool_dir/uv-receipt.toml"
+    if [ -f "$complete_receipt" ] && [ -n "${staged_bin_dir:-}" ]; then
+        if sed "s|$staging_bin|$staged_bin_dir|g" "$complete_receipt" \
+            > "$complete_receipt.mcc-new" 2>/dev/null; then
+            mv "$complete_receipt.mcc-new" "$complete_receipt" 2>/dev/null &&
+                write_install_log "Rewrote the receipt entry points to the real bin directory."
+        else
+            rm -f "$complete_receipt.mcc-new" 2>/dev/null || true
+        fi
+    fi
+    return 0
+}
+
+missing_launcher_shims() {
+    # Commands this release publishes for which no entry exists in uv's bin
+    # directory yet. A release that ADDS an entry point cannot be finished by a
+    # rename, so it falls through to the in-place install -- against a cache
+    # the staging pass just filled.
+    missing_bin=$1
+    missing_scripts=$2
+    missing_names=""
+    [ -d "$missing_scripts" ] || return 0
+    for missing_candidate in "$missing_scripts"/*; do
+        [ -f "$missing_candidate" ] || continue
+        missing_leaf=$(basename "$missing_candidate")
+        case "$missing_leaf" in
+            python|python3|python3.*|pip|pip3|activate*|Activate*) continue ;;
+        esac
+        [ -e "$missing_bin/$missing_leaf" ] && continue
+        missing_names="$missing_names $missing_leaf"
+    done
+    printf '%s' "${missing_names# }"
+}
+
+restore_previous_environment() {
+    # Put the version that worked back at the canonical path. This is the
+    # reason the old environment was renamed rather than deleted.
+    restore_tool_dir=$1
+    restore_failed_dir="$staging_root/$staged_stamp-failed"
+    mkdir -p "$restore_failed_dir" 2>/dev/null || true
+    [ -d "$restore_tool_dir" ] && mv "$restore_tool_dir" "$restore_failed_dir/$PACKAGE_ENV_DIRNAME" 2>/dev/null
+    if mv "$swap_aside_env" "$restore_tool_dir" 2>/dev/null; then
+        write_install_log "The previous environment is back at the canonical path."
+        rmdir "$swap_previous_dir" 2>/dev/null || true
+        return 0
+    fi
+    write_install_log "The rollback failed: the previous environment could not be moved back."
+    return 1
+}
+
+remove_stale_previous_environment() {
+    # Keep exactly one previous environment: it is the rollback, and a second
+    # one is only disk. Swept after /health answers, never before.
+    sweep_root=$1
+    [ -d "$sweep_root" ] || return 0
+    sweep_index=0
+    for sweep_candidate in $(ls -1 "$sweep_root" 2>/dev/null | sort -r); do
+        sweep_index=$((sweep_index + 1))
+        [ "$sweep_index" -le "$PREVIOUS_ENVS_KEPT" ] && continue
+        rm -rf -- "$sweep_root/$sweep_candidate" 2>/dev/null &&
+            write_install_log "Removed the superseded previous environment $sweep_candidate."
+    done
+    return 0
 }
 
 enable_rtk_for_agents() {
@@ -1083,9 +1346,18 @@ precompile_bytecode() {
     if [ "$dry_run" -eq 1 ]; then
         return 0
     fi
-    uv_tool_root=$("$uv_bin" tool dir 2>/dev/null) || return 0
-    [ -n "$uv_tool_root" ] || return 0
-    tool_dir="$uv_tool_root/my-claude-code"
+    # $1 is 6.82.0's, and it is what keeps this OUT of the outage window: on
+    # the staged path the environment to compile is the staged one, and it is
+    # compiled while the old server is still serving. Compiling after the swap
+    # would have put the whole of it between "stopped" and "started", which is
+    # the hole this release exists to close.
+    if [ -n "${1:-}" ]; then
+        tool_dir=$1
+    else
+        uv_tool_root=$("$uv_bin" tool dir 2>/dev/null) || return 0
+        [ -n "$uv_tool_root" ] || return 0
+        tool_dir="$uv_tool_root/my-claude-code"
+    fi
     for python in "$tool_dir/bin/python" "$tool_dir/bin/python3" "$tool_dir/Scripts/python.exe"; do
         if [ -x "$python" ]; then
             printf 'Precompiling My Claude Code (saves a few seconds on the next start)...\n'
@@ -1441,8 +1713,115 @@ start_server_detached() {
     return 0
 }
 
+find_server_launcher() {
+    # The mcc-server this machine runs. uv's bin directory first, PATH second.
+    restart_launcher=""
+    if [ -n "${tool_bin:-}" ] && [ -x "$tool_bin/mcc-server" ]; then
+        restart_launcher="$tool_bin/mcc-server"
+    elif [ -n "${tool_bin:-}" ] && [ -x "$tool_bin/mcc-server.exe" ]; then
+        restart_launcher="$tool_bin/mcc-server.exe"
+    elif command -v mcc-server >/dev/null 2>&1; then
+        restart_launcher=$(command -v mcc-server)
+    fi
+    [ -n "$restart_launcher" ]
+}
+
+installed_server_version() {
+    # The version of the mcc-server that is installed RIGHT NOW, read from the
+    # launcher itself. 6.82.0 stops the old server BEFORE the swap (decision
+    # Q6), so the build that has to answer --report-holder is the one already
+    # on disk, not the one being installed. --version is the one argument every
+    # build has ever answered; anything else an older mcc-server ignores, and
+    # cli.entrypoints.serve then STARTS A SERVER on the configured port.
+    installed_version_text=$("$1" --version 2>/dev/null) || return 1
+    printf '%s' "$installed_version_text" |
+        sed -n 's/.*[^0-9]\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p;s/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' |
+        head -n 1
+}
+
+stop_configured_server() {
+    # Stop exactly the one server this install is for, and say what happened in
+    # $stop_outcome / $stop_message.
+    #
+    # "Restart" means exactly one server: the MCC server bound to the PORT of
+    # the configuration directory this install is for. Every other MCC server
+    # -- other ports, other configuration directories, the user's
+    # agent-serving instances -- is listed and never stopped (binding scope
+    # decision, 2026-09-11 15:37). A foreign holder is never killed by any path
+    # (invariant 1).
+    #
+    #   stopped           our server was stopped and the port is free
+    #   nothing-listening the port was already free
+    #   foreign           a non-MCC process holds the port; nothing touched
+    #   unclassifiable    the port is busy and this build cannot say by what
+    #   failed            our server would not stop
+    stop_launcher=$1
+    stop_launcher_version=$2
+    stop_outcome="failed"
+    stop_message=""
+
+    if ! version_at_least "$stop_launcher_version" "$RESTART_AWARE_VERSION"; then
+        write_install_log "The installed mcc-server (${stop_launcher_version:-version unknown}) predates --report-holder; not asking it."
+        stop_report_available=0
+    elif ask_the_product_about_the_port "$stop_launcher" --report-holder; then
+        stop_report_available=1
+    else
+        stop_report_available=0
+    fi
+
+    if [ "$stop_report_available" -ne 1 ]; then
+        # The installed mcc-server cannot classify the port holder, and this
+        # script must not try. What it CAN do is ask whether the port is
+        # occupied at all -- the socket table, which stops nothing and
+        # identifies nothing.
+        if port_is_occupied "$server_reachable_host" "$server_port"; then
+            stop_outcome="unclassifiable"
+            stop_message="Port $server_port is in use and the installed mcc-server cannot say by what, so nothing was stopped and nothing was started."
+            return 0
+        fi
+        stop_outcome="nothing-listening"
+        stop_message="Nothing is listening on port $server_port."
+        return 0
+    fi
+
+    report_other_servers
+    install_progress_holder=$mcc_holder_description
+
+    if [ "$mcc_holder_pid" -gt 0 ] && [ "$mcc_holder_is_server" != "1" ]; then
+        stop_outcome="foreign"
+        stop_message="Port $server_port is held by $mcc_holder_description, which is not a My Claude Code server. Nothing was stopped and nothing was started."
+        [ -n "$mcc_holder_reason" ] && stop_message="$stop_message ($mcc_holder_reason)"
+        return 0
+    fi
+
+    if [ "$mcc_holder_pid" -le 0 ]; then
+        stop_outcome="nothing-listening"
+        stop_message="Nothing was listening on port $server_port."
+        return 0
+    fi
+
+    write_install_progress stopping "Stopping the server on port $server_port."
+    printf 'Stopping %s.\n' "$mcc_holder_description"
+    if ! ask_the_product_about_the_port "$stop_launcher" --stop-holder; then
+        stop_outcome="failed"
+        stop_message="The server on port $server_port could not be stopped."
+        return 0
+    fi
+    [ -n "$mcc_message" ] && printf '%s\n' "$mcc_message" && write_install_log "$mcc_message"
+    if [ "$mcc_port_free" != "1" ]; then
+        stop_outcome="failed"
+        stop_message="The server on port $server_port could not be stopped. $mcc_message"
+        return 0
+    fi
+    stop_outcome="stopped"
+    stop_message=$mcc_message
+    return 0
+}
+
 restart_after_install() {
     # Stop the one server this install is for, start the new one, prove it.
+    # The path taken when nothing was swapped -- a first install, or the
+    # in-place repair ladder.
     #
     #   1. Read the port and host of the configuration directory this install
     #      is for. Not "the default port" and not "every MCC port".
@@ -1452,23 +1831,13 @@ restart_after_install() {
     #   3. Stop it by exact pid, within its own configured budget, and wait for
     #      the port to come free.
     #   4. Start mcc-server detached.
-    #   5. Wait for /health. If it never answers, say so plainly -- V1 has no
-    #      staged swap in the installer, so the previous version is no longer
-    #      on disk and the honest instruction is to run the installer again.
+    #   5. Wait for /health. A LISTENER ANSWERING is the success condition.
     resolve_server_address
     restart_health_url="http://$server_reachable_host:$server_port/health"
     step "Restarting the My Claude Code server on port $server_port"
     write_install_log "Restart requested for the server on $server_reachable_host:$server_port."
 
-    restart_launcher=""
-    if [ -n "${tool_bin:-}" ] && [ -x "$tool_bin/mcc-server" ]; then
-        restart_launcher="$tool_bin/mcc-server"
-    elif [ -n "${tool_bin:-}" ] && [ -x "$tool_bin/mcc-server.exe" ]; then
-        restart_launcher="$tool_bin/mcc-server.exe"
-    elif command -v mcc-server >/dev/null 2>&1; then
-        restart_launcher=$(command -v mcc-server)
-    fi
-    if [ -z "$restart_launcher" ]; then
+    if ! find_server_launcher; then
         restart_message="The server was not restarted: mcc-server was not found after the install."
         printf '%s\n' "$restart_message"
         install_progress_restarted=false
@@ -1476,106 +1845,81 @@ restart_after_install() {
         return 1
     fi
 
-    # ONLY of a build that has the question. cli.entrypoints.serve ignores every
-    # argument but --version, so an older mcc-server does not fail on
-    # --report-holder -- it STARTS A SERVER on the configured port, and the
-    # installer waiting for its answer blocks behind it for ever. Measured on
-    # the real installer at 20:12 on 2026-09-11.
-    if ! version_at_least "${FCC_VERSION:-}" "$RESTART_AWARE_VERSION"; then
-        write_install_log "Installed version ${FCC_VERSION:-unknown} predates --report-holder; not asking it."
-        mcc_holder_pid=0
-        mcc_holder_is_server=0
-        mcc_holder_description=""
-        mcc_holder_reason=""
-        mcc_other_servers=0
-        mcc_other_server_lines=""
-        restart_report_available=0
-    elif ask_the_product_about_the_port "$restart_launcher" --report-holder; then
-        restart_report_available=1
-    else
-        restart_report_available=0
-    fi
-    if [ "$restart_report_available" -ne 1 ]; then
-        # The installed mcc-server predates --report-holder (a pinned --version,
-        # or the first install of this release, whose wheel is the one BEFORE
-        # it). It cannot classify the port holder, and this script must not try.
-        #
-        # What it CAN do without classifying anything is ask whether the port
-        # is occupied at all -- the socket table, which stops nothing and
-        # identifies nothing. A free port is safe to start into; an occupied
-        # one is reported and left exactly as it is.
-        if port_is_occupied "$server_reachable_host" "$server_port"; then
-            restart_message="Port $server_port is in use and this build of mcc-server cannot say by what, so nothing was stopped and nothing was started. Run the installer again once this version is installed, or stop the server yourself and start it with: mcc-server"
+    # On this path the build that answers --report-holder is the one that was
+    # just installed, because nothing was swapped and the old environment is
+    # gone.
+    stop_configured_server "$restart_launcher" "${FCC_VERSION:-}"
+    case "$stop_outcome" in
+        stopped) ;;
+        nothing-listening)
+            printf 'Nothing was listening on port %s; starting the server.\n' "$server_port"
+            write_install_log "Nothing held the port; starting the server."
+            ;;
+        foreign)
+            printf '\n%s\n' "$stop_message"
+            write_install_log "$stop_message"
+            install_progress_restarted=false
+            write_install_progress done "$stop_message"
+            return 1
+            ;;
+        unclassifiable)
+            restart_message="$stop_message Run the installer again once this version is installed, or stop the server yourself and start it with: mcc-server"
             printf '%s\n' "$restart_message"
             write_install_log "$restart_message"
             install_progress_restarted=false
             write_install_progress done "$restart_message"
             return 1
-        fi
-        printf 'Nothing is listening on port %s; starting the server.\n' "$server_port"
-        write_install_log "The installed build cannot classify a port holder, and nothing holds the port; starting."
-        start_and_prove_server "$restart_launcher" "$restart_health_url"
-        return $?
-    fi
-    report_other_servers
-    install_progress_holder=$mcc_holder_description
-
-    if [ "$mcc_holder_pid" -gt 0 ] && [ "$mcc_holder_is_server" != "1" ]; then
-        # A foreign holder of the port is never killed, by any path.
-        restart_message="Port $server_port is held by $mcc_holder_description, which is not a My Claude Code server. Nothing was stopped and nothing was started."
-        printf '\n%s\n' "$restart_message"
-        [ -n "$mcc_holder_reason" ] && printf '  (%s)\n' "$mcc_holder_reason"
-        write_install_log "$restart_message"
-        install_progress_restarted=false
-        write_install_progress done "$restart_message"
-        return 1
-    fi
-
-    if [ "$mcc_holder_pid" -gt 0 ]; then
-        write_install_progress stopping "Stopping the server on port $server_port."
-        printf 'Stopping %s.\n' "$mcc_holder_description"
-        if ! ask_the_product_about_the_port "$restart_launcher" --stop-holder; then
-            restart_message="The server on port $server_port could not be stopped, so nothing was started."
+            ;;
+        *)
+            restart_message="$stop_message Nothing was started."
             printf '%s\n' "$restart_message"
             write_install_log "$restart_message"
             install_progress_restarted=false
             write_install_progress failed "$restart_message"
             return 1
-        fi
-        [ -n "$mcc_message" ] && printf '%s\n' "$mcc_message" && write_install_log "$mcc_message"
-        if [ "$mcc_port_free" != "1" ]; then
-            restart_message="The server on port $server_port could not be stopped, so nothing was started. $mcc_message"
-            printf '%s\n' "$restart_message"
-            write_install_log "$restart_message"
-            install_progress_restarted=false
-            write_install_progress failed "$restart_message"
-            return 1
-        fi
-    else
-        printf 'Nothing was listening on port %s; starting the server.\n' "$server_port"
-        write_install_log "Nothing held the port; starting the server."
-    fi
+            ;;
+    esac
 
     start_and_prove_server "$restart_launcher" "$restart_health_url"
     return $?
 }
 
-start_and_prove_server() {
-    # Start mcc-server detached and wait for /health. The second half of the
-    # restart, in a function of its own because two paths reach it -- the
-    # ordinary one and the fallback for an installed build that cannot classify
-    # a port holder -- and a second copy of "start it and prove it" is a second
-    # definition of success.
+start_restarted_server() {
+    # Start mcc-server detached. Split from the health gate in 6.82.0, and the
+    # split is what keeps the outage short: on the staged path the swap is
+    # followed by the ordinary post-install work -- PATH, the file-based
+    # verification, RTK, the launcher entry -- which was measured at 12.3 s on
+    # the Windows twin of this script. Run before the start, every second of it
+    # is a second the machine has no server; run beside it, it costs nothing,
+    # because the server spends that time booting anyway.
     restart_launcher=$1
-    restart_health_url=$2
     write_install_progress starting "Starting My Claude Code $FCC_VERSION."
     restart_updates_dir="$(mcc_config_dir)/updates"
     mkdir -p "$restart_updates_dir" 2>/dev/null || true
     restart_start_log="$restart_updates_dir/server-start-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || printf 'unknown').log"
     start_server_detached "$restart_launcher" "$restart_start_log"
-    printf 'Started mcc-server (pid %s). Waiting for it to answer %s.\n' \
-        "$started_server_pid" "$restart_health_url"
-    write_install_log "Started mcc-server, pid $started_server_pid; waiting for $restart_health_url."
+    printf 'Started mcc-server (pid %s).\n' "$started_server_pid"
+    write_install_log "Started mcc-server, pid $started_server_pid."
+    return 0
+}
+
+confirm_restarted_server() {
+    # Wait for /health and write the terminal record. A LISTENER ANSWERING is
+    # the success condition; "the install exited 0" is not.
+    #
+    # $2 = 1 means a rollback is available: on the staged path the version that
+    # was working is still on disk, so the honest sentence is "the previous one
+    # is being put back", not "run the installer again" -- and the terminal
+    # record belongs to the ROLLBACK, which the caller writes.
+    restart_health_url=$1
+    rollback_available=${2:-0}
+    if [ "$rollback_available" -eq 1 ]; then
+        no_way_back=" The previous version is still on disk and is being put back."
+    else
+        no_way_back=" The previous version is no longer installed; run the installer again."
+    fi
+    printf 'Waiting for it to answer %s.\n' "$restart_health_url"
+    write_install_log "Waiting for $restart_health_url."
 
     if wait_for_server_health "$restart_health_url" "$(server_start_budget_seconds)"; then
         install_progress_restarted=true
@@ -1590,7 +1934,7 @@ start_and_prove_server() {
     if ! kill -0 "$started_server_pid" 2>/dev/null; then
         wait "$started_server_pid" 2>/dev/null && restart_exit=0 || restart_exit=$?
     fi
-    restart_message="The new server did not answer $restart_health_url. Exit code: $restart_exit. The previous version is no longer installed; run the installer again."
+    restart_message="The new server did not answer $restart_health_url. Exit code: $restart_exit.$no_way_back"
     printf '\n%s\n' "$restart_message"
     printf 'Its output is in: %s\n' "$restart_start_log"
     if [ -f "$restart_start_log" ]; then
@@ -1599,8 +1943,20 @@ start_and_prove_server() {
     fi
     write_install_log "$restart_message"
     install_progress_restarted=false
-    write_install_progress failed "$restart_message"
+    if [ "$rollback_available" -ne 1 ]; then
+        write_install_progress failed "$restart_message"
+    fi
     return 1
+}
+
+start_and_prove_server() {
+    # The in-place path's shape, where there is no post-install work worth
+    # overlapping: nothing was swapped, so the environment the verification
+    # checks is the one uv has just written, and it has already been checked by
+    # the time this runs.
+    start_restarted_server "$1"
+    confirm_restarted_server "$2" "${3:-0}"
+    return $?
 }
 
 install_progress_started=""
@@ -1737,10 +2093,158 @@ install_managed_python
 step "Installing or updating My Claude Code"
 # From here to the last line, anything that reads the update receipt sees an
 # installer in flight and stays out of the way.
-write_install_progress installing "Installing the new version."
-if ! install_my_claude_code; then
-    write_install_progress failed "The install failed."
-    exit 1
+#
+# ===========================================================================
+# THE STAGED SWAP (6.82.0). One update path, and this is it.
+#
+#   staging    build the new environment beside the live one; the old server
+#              keeps serving for the whole of it
+#   verifying  RUN the staged environment once. A wheel that resolves,
+#              installs and cannot import itself used to be discovered by the
+#              user. This happens BEFORE the stop, so a bad wheel costs a
+#              download rather than an outage
+#   stopping   stop EXACTLY the MCC server bound to the configured port of the
+#              configuration directory this install is for, by exact pid.
+#              Every other MCC server is listed and never touched
+#   swapping   two directory renames -- milliseconds, not minutes
+#   starting   mcc-server detached, then /health. A LISTENER ANSWERING is the
+#              success condition; "the install exited 0" is not
+#   rolling-back / recovered  the new one never answered, so the previous
+#              environment goes back and IT is started
+#
+# The in-place `uv tool install --force` below is still here and is still
+# correct -- it is now the REPAIR.
+# ===========================================================================
+resolve_install_plan
+staged_swapped=0
+staged_ok=0
+staged_stamp=$(date -u +%Y%m%d-%H%M%S 2>/dev/null || printf 'unknown')
+staged_tools_root=""
+staged_tool_dir=""
+staged_bin_dir=""
+stage_may_start=0
+stop_outcome="skipped"
+stop_message=""
+precompiled_before_swap=0
+staged_server_started=0
+
+if [ "$dry_run" -ne 1 ]; then
+    staged_tools_root=$(uv_tools_root) || staged_tools_root=""
+    [ -n "$staged_tools_root" ] && staged_tool_dir="$staged_tools_root/$PACKAGE_ENV_DIRNAME"
+    staged_bin_dir=$("$uv_bin" tool dir --bin 2>/dev/null | head -n 1) || staged_bin_dir=""
+    if [ -n "$staged_tool_dir" ] && [ -d "$staged_tool_dir" ] && [ -n "$staged_bin_dir" ] && [ -d "$staged_bin_dir" ]; then
+        write_install_progress staging "Building the new version beside the running one."
+        printf 'Building My Claude Code %s beside the running one; nothing is replaced until it is proved.\n' "$FCC_VERSION"
+        stage_new_environment "$staged_tools_root" || true
+        if [ "$staged_ok" -ne 1 ] && [ "$staged_reason" = "disk-full" ]; then
+            # A staging directory is one more copy of the same files on the
+            # same volume. Do not attempt the in-place install.
+            write_install_progress failed "The volume is out of space; nothing was installed."
+            report_disk_full
+        fi
+        if [ "$staged_ok" -ne 1 ]; then
+            printf 'The new version could not be built beside the old one (%s); installing in place instead.\n' "$staged_reason"
+        fi
+    else
+        write_install_log "There is no existing tool environment to stage beside; installing in place."
+    fi
+fi
+
+if [ "$staged_ok" -eq 1 ]; then
+    # The RECORD for this is written after the stop, not here. Stage ranks are
+    # monotonic so a window can draw them as a timeline -- `stopping` is 3 and
+    # `verifying` is 5 -- so a `verifying` record written here would make the
+    # guard drop the `stopping` record that follows it, which is exactly the
+    # defect V1 shipped with. The WORK happens first (a wheel that cannot run
+    # must cost a download, not an outage); the receipt reports it in rank
+    # order and says so.
+    if ! verify_staged_environment; then
+        # Nothing has moved and nothing was stopped. The live environment is
+        # exactly as it was, so the whole episode cost the user a download. It
+        # is NOT a reason to fall through to --force: that would install the
+        # wheel that cannot run over the one that can.
+        rm -rf -- "$staging_dir" 2>/dev/null || true
+        restart_message="$verify_reason Nothing was replaced; the installed version is unchanged and keeps serving."
+        printf '\n%s\n' "$restart_message"
+        write_install_log "$restart_message"
+        install_progress_restarted=false
+        write_install_progress failed "$restart_message"
+        exit 1
+    fi
+    printf 'The new version ran; putting it in place.\n'
+    precompile_bytecode "$staging_env"
+    precompiled_before_swap=1
+
+    resolve_server_address
+    restart_health_url="http://$server_reachable_host:$server_port/health"
+    if [ "$restart_requested" -eq 1 ] && [ "$no_start_requested" -ne 1 ] && find_server_launcher; then
+        stage_may_start=1
+        step "Restarting the My Claude Code server on port $server_port"
+        write_install_log "Restart requested for the server on $server_reachable_host:$server_port."
+        stop_configured_server "$restart_launcher" "$(installed_server_version "$restart_launcher" || printf '')"
+        case "$stop_outcome" in
+            stopped|nothing-listening) ;;
+            failed)
+                # The old server is still serving and still owns its
+                # environment. Swapping underneath it would leave the machine
+                # running one version out of a directory named "previous".
+                rm -rf -- "$staging_dir" 2>/dev/null || true
+                restart_message="$stop_message Nothing was replaced and nothing was started."
+                printf '%s\n' "$restart_message"
+                write_install_log "$restart_message"
+                install_progress_restarted=false
+                write_install_progress failed "$restart_message"
+                exit 1
+                ;;
+            *)
+                # Invariant 1: a foreign holder of the port is never killed, by
+                # any path. The install still happens -- it replaces files, not
+                # processes -- but nothing is stopped and nothing is started.
+                printf '\n%s\n' "$stop_message"
+                write_install_log "$stop_message"
+                stage_may_start=0
+                ;;
+        esac
+    fi
+
+    write_install_progress verifying "The new version was run before the old one was stopped; it works."
+    write_install_progress swapping "Putting the new version in place."
+    staged_server_started=0
+    if swap_environment "$staged_tool_dir"; then
+        staged_missing=$(missing_launcher_shims "$staged_bin_dir" "$staged_tool_dir/bin")
+        if [ -n "$staged_missing" ]; then
+            # A release that ADDS a command has no entry anywhere carrying the
+            # canonical path for it. That case is finished by uv in place,
+            # against a cache the staging pass just filled. The previous
+            # environment is already aside, so it is still safe.
+            printf 'This release adds %s; uv has to write the launcher(s), so the install is finished in place.\n' "$staged_missing"
+            write_install_log "This release adds $staged_missing; finishing in place."
+            install_my_claude_code || true
+        fi
+        # Started BEFORE the post-install work rather than after it. The outage
+        # ends when a listener answers, so everything between the swap and the
+        # start is outage; the verification below checks the canonical install
+        # and cannot move ahead of the swap, but it can move beside the boot.
+        if [ "$stage_may_start" -eq 1 ]; then
+            start_restarted_server "$restart_launcher"
+            staged_server_started=1
+        fi
+        # AFTER the start: none of it is needed to run the new server, and all
+        # of it would otherwise sit inside the outage.
+        complete_environment_swap "$staged_tool_dir" "$staging_env"
+    else
+        rm -rf -- "$staging_dir" 2>/dev/null || true
+        staged_ok=0
+        printf 'The new version could not be put in place; installing in place instead.\n'
+    fi
+fi
+
+if [ "$staged_swapped" -ne 1 ]; then
+    write_install_progress installing "Installing the new version."
+    if ! install_my_claude_code; then
+        write_install_progress failed "The install failed."
+        exit 1
+    fi
 fi
 
 step "Configuring PATH and verifying My Claude Code"
@@ -1750,7 +2254,7 @@ step "Configuring PATH and verifying My Claude Code"
 write_install_progress verifying "Checking that every command is in place."
 configure_and_verify_my_claude_code
 
-precompile_bytecode
+[ "$precompiled_before_swap" -eq 1 ] || precompile_bytecode
 enable_rtk_for_agents
 create_desktop_shortcut
 
@@ -1813,6 +2317,52 @@ if [ "$no_start_requested" -eq 1 ]; then
         printf 'No server was started. Start one with: mcc-server\n'
     fi
     write_install_progress done "The new version is installed."
+elif [ "$staged_swapped" -eq 1 ]; then
+    # The staged path already stopped the one server this install is for and
+    # swapped the environment. What is left is the start, the health gate, and
+    # the rollback the previous environment was kept for.
+    if [ "$stage_may_start" -ne 1 ]; then
+        restart_message=${stop_message:-"My Claude Code $FCC_VERSION is installed. Start the server with: mcc-server"}
+        printf '\n%s\n' "$restart_message"
+        install_progress_restarted=false
+        write_install_progress done "$restart_message"
+    elif [ "$staged_server_started" -eq 1 ] && confirm_restarted_server "$restart_health_url" 1; then
+        # Nothing is deleted until the new server answers, so the copy being
+        # swept is never the one a rollback would have needed -- and the sweep
+        # itself is out of the outage window, which is why it is here and not
+        # beside the swap.
+        rm -rf -- "$staging_dir" 2>/dev/null || true
+        remove_stale_previous_environment "$(update_aside_root "$staged_tools_root" "$PREVIOUS_ENV_DIRNAME")"
+    else
+        # =====================================================================
+        # ROLLBACK. The new version is installed and does not answer, so put
+        # the one that did back and start THAT. This is the reason the old
+        # environment was renamed rather than deleted.
+        # =====================================================================
+        write_install_progress rolling-back "The new version did not answer, so the previous one is being put back."
+        rollback_started=0
+        if restore_previous_environment "$staged_tool_dir"; then
+            rollback_log="$(mcc_config_dir)/updates/server-start-rollback-$staged_stamp.log"
+            start_server_detached "$restart_launcher" "$rollback_log"
+            if wait_for_server_health "$restart_health_url" "$(server_start_budget_seconds)"; then
+                rollback_started=1
+            fi
+            restart_message="The new version was installed but never answered, so the previous version was put back"
+            if [ "$rollback_started" -eq 1 ]; then
+                restart_message="$restart_message and is answering on port $server_port."
+                install_progress_restarted=true
+            else
+                restart_message="$restart_message, but it could not be started either."
+                install_progress_restarted=false
+            fi
+        else
+            restart_message="The new version never answered and the previous version could not be put back. Re-run the install command."
+            install_progress_restarted=false
+        fi
+        printf '\n%s\n' "$restart_message"
+        write_install_log "$restart_message"
+        write_install_progress recovered "$restart_message"
+    fi
 elif [ "$restart_requested" -eq 1 ] && [ "$dry_run" -ne 1 ]; then
     restart_after_install || true
 else

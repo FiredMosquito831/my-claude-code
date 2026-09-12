@@ -148,27 +148,34 @@ def test_both_installers_take_the_same_lock(script: Path) -> None:
     assert UPDATE_LOCK_FILENAME in script.read_text(encoding="utf-8")
 
 
-def test_the_helper_takes_the_same_lock_and_opens_an_episode(tmp_path) -> None:
-    """The third writer. Two paths that share a file must share its lock."""
+def test_the_helper_leaves_the_lock_to_the_installer_it_launches(tmp_path) -> None:
+    """One writer takes the lock, and from 6.82.0 it is the installer.
+
+    Until now the helper took the lock and then did the install itself. It is
+    now a launcher, so if it kept the lock the installer it starts would find
+    the file held by a live process, print "an update is already running (pid
+    N) -- watching it instead", and exit 0 without installing anything. One
+    lock, one holder, and the holder is whoever does the work.
+    """
 
     from my_claude_code.application.release_updates import _deferred_helper_script
     from my_claude_code.config.update_progress import UPDATE_LOCK_FILENAME
 
     script = _deferred_helper_script(
-        uv_executable="uv",
-        command=["uv", "tool", "install", "my-claude-code"],
         result_path=tmp_path / "updates" / "pending-upgrade.json",
         stage_dir=tmp_path / "updates",
-        server_launcher=tmp_path / "bin" / "mcc-server.exe",
+        installer=tmp_path / "installers" / "install.ps1",
+        powershell="powershell.exe",
+        config_dir=tmp_path / "config",
         working_directory=tmp_path,
     )
 
-    assert UPDATE_LOCK_FILENAME in script
-    assert "watching it instead" in script
-    assert script.index("Enter-UpdateLock") < script.index("Write-Stage 'episode'")
-    # Released on every ending, from inside Write-Stage: this helper has a
-    # dozen ways of reaching a terminal stage and no ending may forget.
-    assert "Exit-UpdateLock" in script
+    assert UPDATE_LOCK_FILENAME not in script
+    assert "Enter-UpdateLock" not in script
+    # It still opens the episode, so a watcher that arrives between the press
+    # of Update and the installer's first record has something to read.
+    assert "Write-Stage 'episode'" in script
+    assert script.index("Write-Stage 'episode'") < script.index("& $powershell")
 
 
 # ------------------------------------------------------------------- RUN (ps1)
@@ -474,14 +481,17 @@ def test_an_older_mcc_server_is_never_asked_the_port_question() -> None:
 
     assert '$RestartAwareVersion = "6.73.0"' in powershell
     assert 'RESTART_AWARE_VERSION="6.73.0"' in shell
-    # The gate is BEFORE the call, in both.
-    assert powershell.index("Test-VersionAtLeast -Version $InstalledVersion") < (
+    # The gate is BEFORE the call, in both. 6.82.0 stops the old server BEFORE
+    # the swap (decision Q6), so the build that has to answer the question is
+    # the one already ON DISK -- read from the launcher with `--version` --
+    # rather than the one being installed.
+    assert powershell.index("Test-VersionAtLeast -Version $LauncherVersion") < (
         powershell.index("$report = Get-PortHolderDocument")
     )
-    assert shell.index('version_at_least "${FCC_VERSION:-}"') < (
-        shell.index(
-            'ask_the_product_about_the_port "$restart_launcher" --report-holder'
-        )
+    assert "function Get-InstalledServerVersion" in powershell
+    assert "installed_server_version()" in shell
+    assert shell.index('version_at_least "$stop_launcher_version"') < (
+        shell.index('ask_the_product_about_the_port "$stop_launcher" --report-holder')
     )
     # And an unreadable version is NOT new enough.
     gate = powershell[powershell.index("function Test-VersionAtLeast") :]

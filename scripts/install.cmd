@@ -23,6 +23,11 @@ rem                                   port this configuration directory is for
 rem   install.cmd --no-start          install and start nothing
 rem   install.cmd --dry-run           print what it would do, change nothing
 rem
+rem   set MCC_INSTALL_REF=my-branch    fetch install.ps1 from that branch, tag
+rem                                    or commit instead of main. This is how a
+rem                                    change to the installer is proven before
+rem                                    it is merged.
+rem
 rem Notes for anyone editing this file:
 rem   * curl.exe ships with Windows 10 1803 and later, and with Windows 11.
 rem     It is the one prerequisite this route adds over the PowerShell one
@@ -37,7 +42,23 @@ rem     its path printed, so a failed install leaves something to read.
 
 setlocal
 
-set "MCC_RAW=https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.ps1"
+rem Which revision of install.ps1 to fetch (F1 / decision Q10 PR 3).
+rem
+rem It used to be the literal string `main`, always, for every run. That meant
+rem `install.cmd --version 6.63.0` fetched TODAY's installer and asked it to
+rem install a release from last week -- a combination nobody has ever tested --
+rem and it meant there was no way at all to prove a branch's installer before
+rem merging it, because the only thing this file would ever run was main's.
+rem
+rem   * --version X            -> the tag vX, so the installer that runs is the
+rem                              one that shipped with the release being asked
+rem                              for
+rem   * MCC_INSTALL_REF=<ref>  -> that branch, tag or commit, which is how a
+rem                              change to install.ps1 is proven before it is
+rem                              merged. It wins over --version deliberately:
+rem                              someone who names a ref is testing that ref.
+rem   * neither                -> main, exactly as before
+set "MCC_REF=main"
 set "MCC_SCRIPT=%TEMP%\install-mcc.ps1"
 set "MCC_PSARGS="
 
@@ -111,6 +132,10 @@ goto parse
 :arg_version
 if "%~2"=="" goto missing_version
 set "MCC_PSARGS=%MCC_PSARGS% -Version "%~2""
+rem The installer for a release is the one that shipped with it. Tags are
+rem `v<version>` and install.ps1 has lived at scripts/install.ps1 for every one
+rem of them.
+set "MCC_REF=v%~2"
 shift
 shift
 goto parse
@@ -131,13 +156,34 @@ echo install.cmd: --torch-backend needs a backend, for example: install.cmd --to
 exit /b 2
 
 :parsed
+rem An explicitly named ref wins: whoever set it is proving that ref.
+if not "%MCC_INSTALL_REF%"=="" set "MCC_REF=%MCC_INSTALL_REF%"
+set "MCC_RAW=https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/%MCC_REF%/scripts/install.ps1"
+
 where curl.exe >nul 2>&1
 if errorlevel 1 goto no_curl
 
-echo Downloading the My Claude Code installer...
+echo Downloading the My Claude Code installer (%MCC_REF%)...
+curl.exe -fsSL -o "%MCC_SCRIPT%" "%MCC_RAW%"
+if errorlevel 1 goto ref_fallback
+if not exist "%MCC_SCRIPT%" goto ref_fallback
+goto downloaded
+
+rem A pin that does not resolve must not be a dead end. A tag can be missing
+rem (a release that does not exist), and a tag old enough can predate
+rem scripts/install.ps1 itself. Say so and fall back to main, which is what
+rem this file did unconditionally before 6.82.0 -- the pin is an improvement on
+rem the default, not a new way to fail.
+:ref_fallback
+if "%MCC_REF%"=="main" goto download_failed
+echo install.cmd: no installer at %MCC_REF%; falling back to main.
+set "MCC_REF=main"
+set "MCC_RAW=https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.ps1"
 curl.exe -fsSL -o "%MCC_SCRIPT%" "%MCC_RAW%"
 if errorlevel 1 goto download_failed
 if not exist "%MCC_SCRIPT%" goto download_failed
+
+:downloaded
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%MCC_SCRIPT%"%MCC_PSARGS%
 set "MCC_EXIT=%ERRORLEVEL%"

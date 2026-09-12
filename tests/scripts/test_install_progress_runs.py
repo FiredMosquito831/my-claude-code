@@ -468,7 +468,7 @@ def test_the_install_returns_one_version_and_not_a_transcript(
 
     bodies = "\n\n".join(
         _extract_function(text, function)
-        for function in (*NEEDED, *NATIVE, "Install-FreeClaudeCode")
+        for function in (*NEEDED, *NATIVE, "Get-InstallPlan", "Install-FreeClaudeCode")
     )
     lines = text.splitlines()
     initialisers = "\n".join(
@@ -520,3 +520,106 @@ Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
         + completed.stdout
     )
     assert "VERIFIED=6.71.0" in completed.stdout, completed.stdout
+
+
+# -- 6.82.0: the stage order of a restart run ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "executable"), _powershells(), ids=lambda value: value
+)
+def test_the_installer_emits_every_stage_of_a_restart_run(
+    name: str, executable: str, tmp_path: Path
+) -> None:
+    """Decision Q8 + §6: the whole sequence reaches the receipt, in order.
+
+    This is a measured defect, not a hypothetical. V1's `install.ps1 -Restart`
+    wrote `installing` (rank 4), then `verifying` (rank 5), and only THEN
+    `stopping` (rank 3) from inside Invoke-RestartAfterInstall -- so the
+    monotonic guard, which exists so a window can draw the records as a
+    timeline, silently threw the `stopping` record away. No restart run has
+    ever recorded one, and the window that was supposed to be showing
+    "Stopping the server..." never had the fact to show.
+
+    6.82.0's order is the update helper's, and the ranks rise all the way:
+    staging (2) -> stopping (3) -> verifying (5) -> swapping (6) ->
+    starting (7) -> done (9).
+    """
+
+    config_dir = tmp_path / name
+    config_dir.mkdir()
+    script = tmp_path / f"harness-stages-{name}.ps1"
+    body = _harness(config_dir).replace(
+        f"Write-InstallProgress -Stage 'installing' -Message '{INSTALLING_MESSAGE}'\n"
+        "Write-InstallLog 'uv tool install --force'\n"
+        "Write-InstallProgress -Stage 'verifying' -Message "
+        "'Checking that every command is in place.'\n"
+        "Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'",
+        "\n".join(
+            (
+                "Write-InstallProgress -Stage 'staging' -Message "
+                "'Building the new version beside the running one.'",
+                "Write-InstallProgress -Stage 'stopping' -Message "
+                "'Stopping the server on port 8391.'",
+                "Write-InstallProgress -Stage 'verifying' -Message "
+                "'Running the new version once before it replaces the old one.'",
+                "Write-InstallProgress -Stage 'swapping' -Message "
+                "'Putting the new version in place.'",
+                "Write-InstallProgress -Stage 'starting' -Message "
+                "'Starting My Claude Code 6.82.0.'",
+                "Write-InstallProgress -Stage 'done' -Message "
+                "'My Claude Code 6.82.0 is installed and answering on port 8391.'",
+            )
+        ),
+    )
+    script.write_text(body, encoding="utf-8")
+
+    assert _run(executable, script).returncode == 0
+
+    records = _records(config_dir)
+    stages = [record["stage"] for record in records]
+    assert stages == [
+        EPISODE_MARKER_STAGE,
+        "staging",
+        "stopping",
+        "verifying",
+        "swapping",
+        "starting",
+        "done",
+    ], stages
+    # And `version` is filled from the moment it is known, so a watcher can say
+    # WHICH version is being installed rather than an empty string.
+    assert all(record["version"] for record in records[1:])
+    assert records[-1]["helper_done"] is True
+
+
+@pytest.mark.parametrize(
+    ("name", "executable"), _powershells(), ids=lambda value: value
+)
+def test_the_v1_stage_order_really_did_lose_the_stopping_record(
+    name: str, executable: str, tmp_path: Path
+) -> None:
+    """The defect above, reproduced, so the fix cannot be undone by accident.
+
+    A test that cannot fail is not a test: this one runs the ORDER V1 used and
+    asserts the loss, which is the only way to know the new order is doing
+    something.
+    """
+
+    config_dir = tmp_path / name
+    config_dir.mkdir()
+    script = tmp_path / f"harness-v1order-{name}.ps1"
+    body = _harness(config_dir).replace(
+        "Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'",
+        "Write-InstallProgress -Stage 'stopping' -Message 'Stopping the server.'\n"
+        "Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'",
+    )
+    script.write_text(body, encoding="utf-8")
+
+    assert _run(executable, script).returncode == 0
+    stages = [record["stage"] for record in _records(config_dir)]
+    assert "stopping" not in stages, (
+        "the monotonic guard is what dropped it; if this ever passes a "
+        "`stopping` through, the guard is gone and the timeline can go "
+        "backwards"
+    )

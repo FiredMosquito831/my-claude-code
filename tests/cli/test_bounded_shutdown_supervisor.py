@@ -371,13 +371,12 @@ def test_update_deferred_helper_completes_within_its_bound(tmp_path) -> None:
     from my_claude_code.application import release_updates
 
     script = release_updates._deferred_helper_script(
-        uv_executable="uv.exe",
-        command=["uv.exe", "tool", "install", "my-claude-code"],
         result_path=tmp_path / "pending-upgrade.json",
         stage_dir=tmp_path,
-        server_launcher=tmp_path / "fcc-server.exe",
+        installer=tmp_path / "installers" / "install.ps1",
+        powershell="powershell.exe",
+        config_dir=tmp_path / "config",
         working_directory=tmp_path,
-        commands=["mcc-server"],
         wait_seconds=BOUND + STOP_TEARDOWN_MARGIN_SECONDS,
     )
 
@@ -387,16 +386,11 @@ def test_update_deferred_helper_completes_within_its_bound(tmp_path) -> None:
     # creation time, and only then gives up.
     assert "Stop-Process -Id $parent -Force" in script
     stop_at = script.index("Stop-Process -Id $parent -Force")
-    # What has to come after the parent is cleared is anything that touches the
-    # LIVE environment: the swap, and the in-place fallback. Since 6.72.0 the
-    # ordinary install happens in a tools root of its own and deliberately runs
-    # first, overlapping the drain -- which is why "the first mention of uv"
-    # stopped being a usable marker for it.
-    assert stop_at < script.index("[System.IO.Directory]::Move"), (
-        "the helper must swap after it clears the parent"
-    )
-    assert stop_at < script.index("Write-Stage 'installing'"), (
-        "the helper must install in place after it clears the parent"
+    # What has to come after the parent is cleared is the whole install, which
+    # from 6.82.0 is one thing: the official installer. It may not be started
+    # while the interpreter it is going to replace is still running.
+    assert stop_at < script.index("& $powershell"), (
+        "the helper must run the installer after it clears the parent"
     )
     # And the receipt it writes when even that fails says what actually
     # happened, instead of "timed out waiting".

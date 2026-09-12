@@ -1,10 +1,8 @@
 """Tests for version reporting and the dashboard-triggered upgrade."""
 
-import hashlib
 import os
 import subprocess
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -233,113 +231,6 @@ def _stub_download(monkeypatch, payload: bytes):
     monkeypatch.setattr(release_updates.httpx, "stream", lambda *a, **k: _Stream())
 
 
-def test_upgrade_refuses_a_wheel_whose_checksum_does_not_match(
-    monkeypatch, tmp_path
-) -> None:
-    """Same refusal the install scripts make, so the UI path is not weaker."""
-    # The Windows branch stages the download under ``_stage_dir()``, which is
-    # ``config_dir_path()/"updates"``. Its three siblings each redirect that
-    # (or turn ``_WINDOWS`` off); this one did neither, and wrote a real
-    # ``~/.fcc/updates/wheel/w.whl`` on every run.
-    monkeypatch.setattr(release_updates, "_stage_dir", lambda: tmp_path)
-    monkeypatch.setattr(release_updates.shutil, "which", lambda _n: "/usr/bin/uv")
-    _stub_download(monkeypatch, b"actual-bytes")
-    ran = False
-
-    def _run(*_args, **_kwargs):
-        nonlocal ran
-        ran = True
-        raise AssertionError("must not install a mismatched wheel")
-
-    monkeypatch.setattr(release_updates.subprocess, "run", _run)
-
-    result = upgrade_to_latest(_release(digest="0" * 64))
-    assert result.ok is False
-    assert "checksum mismatch" in result.message
-    assert ran is False
-
-
-def test_upgrade_installs_a_verified_wheel(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(release_updates, "_WINDOWS", False)
-    body = b"wheel-bytes"
-    digest = hashlib.sha256(body).hexdigest()
-    monkeypatch.setattr(release_updates.shutil, "which", lambda _n: "/usr/bin/uv")
-    _stub_download(monkeypatch, body)
-    monkeypatch.setattr(
-        release_updates, "_installed_extras_and_python", lambda _uv=None: ([], "3.14.0")
-    )
-    captured: dict[str, list[str]] = {}
-
-    def _run(command, **_kwargs):
-        captured["command"] = command
-        return subprocess.CompletedProcess(command, 0, stdout="installed", stderr="")
-
-    monkeypatch.setattr(release_updates.subprocess, "run", _run)
-
-    result = upgrade_to_latest(_release("v4.15.0", digest=digest))
-    assert result.ok is True
-    assert result.installed_version == "4.15.0"
-    assert "restart automatically" in result.message
-    command = captured["command"]
-    assert "--force" in command
-    assert "--refresh-package" in command
-    assert "3.14.0" in command
-
-
-def test_upgrade_preserves_installed_extras(monkeypatch) -> None:
-    """A reinstall must not silently drop voice support."""
-    monkeypatch.setattr(release_updates, "_WINDOWS", False)
-    body = b"wheel-bytes"
-    digest = hashlib.sha256(body).hexdigest()
-    monkeypatch.setattr(release_updates.shutil, "which", lambda _n: "/usr/bin/uv")
-    _stub_download(monkeypatch, body)
-    monkeypatch.setattr(
-        release_updates,
-        "_installed_extras_and_python",
-        lambda _uv=None: (["voice"], "3.14.0"),
-    )
-    captured: dict[str, list[str]] = {}
-
-    def _run(command, **_kwargs):
-        captured["command"] = command
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(release_updates.subprocess, "run", _run)
-
-    result = upgrade_to_latest(_release("v4.15.0", digest=digest))
-    assert result.ok is True
-    assert any("[voice]" in str(part) for part in captured["command"])
-
-
-def test_upgrade_reports_a_failing_install_command(monkeypatch) -> None:
-    monkeypatch.setattr(release_updates, "_WINDOWS", False)
-    body = b"wheel-bytes"
-    digest = hashlib.sha256(body).hexdigest()
-    monkeypatch.setattr(release_updates.shutil, "which", lambda _n: "/usr/bin/uv")
-    _stub_download(monkeypatch, body)
-    monkeypatch.setattr(
-        release_updates, "_installed_extras_and_python", lambda _uv=None: ([], "3.14.0")
-    )
-    monkeypatch.setattr(
-        release_updates.subprocess,
-        "run",
-        lambda command, **_k: subprocess.CompletedProcess(
-            command, 2, stdout="", stderr="resolution failed"
-        ),
-    )
-    result = upgrade_to_latest(_release("v4.15.0", digest=digest))
-    assert result.ok is False
-    assert "exited with code 2" in result.message
-    assert any("resolution failed" in line for line in result.log)
-
-
-def test_upgrade_without_uv_explains_itself(monkeypatch) -> None:
-    monkeypatch.setattr(release_updates.shutil, "which", lambda _n: None)
-    result = upgrade_to_latest(_release())
-    assert result.ok is False
-    assert "uv was not found" in result.message
-
-
 def test_upgrade_requires_a_wheel_asset(monkeypatch) -> None:
     monkeypatch.setattr(release_updates.shutil, "which", lambda _n: "/usr/bin/uv")
     payload = _release()
@@ -519,17 +410,6 @@ def _stub_stream(body: bytes):
 # ------------------------------------------------- deferred Windows upgrade
 
 
-def _deferred_script(tmp_path: Path, *, command: list[str] | None = None) -> str:
-    return release_updates._deferred_helper_script(
-        uv_executable="uv",
-        command=command or ["uv", "tool", "install", "--force", "pkg"],
-        result_path=tmp_path / "r.json",
-        stage_dir=tmp_path,
-        server_launcher=tmp_path / "bin" / "fcc-server.exe",
-        working_directory=tmp_path / "cwd",
-    )
-
-
 def test_the_sweep_moves_old_tool_dirs_out_and_keeps_exactly_one(
     monkeypatch, tmp_path
 ) -> None:
@@ -615,113 +495,6 @@ def test_the_sweep_is_harmless_outside_a_uv_tool_install(monkeypatch, tmp_path) 
     assert not any(child.name.startswith(".mcc-") for child in tmp_path.rglob(".mcc-*"))
 
 
-def _fallback_section(script: str) -> str:
-    """The part of the helper that still installs in place.
-
-    6.72.0 put a staged install, an execute-verify, a swap, a health gate and a
-    rollback ahead of it, all of which exit before reaching this. What is left
-    below ``Write-Stage 'installing'`` is the repair path -- a release that
-    adds a new command, or a machine that is not a uv tool install at all --
-    and it is unchanged. Tests about the shim-rename ladder belong here.
-    """
-
-    return script[script.index("Write-Stage 'installing'") :]
-
-
-def _staged_script(tmp_path: Path) -> str:
-    """The helper as it is generated on a real uv tool install.
-
-    ``_deferred_script`` above deliberately omits the staging arguments, which
-    is the shape the helper takes when this is not a uv tool environment at all
-    and it falls back to the in-place install. This one is the ordinary case.
-    """
-
-    return release_updates._deferred_helper_script(
-        uv_executable=r"C:\tools\uv.exe",
-        command=[r"C:\tools\uv.exe", "tool", "install", "--force", "pkg"],
-        result_path=tmp_path / "result.json",
-        stage_dir=tmp_path,
-        server_launcher=tmp_path / "bin" / "fcc-server.exe",
-        working_directory=tmp_path / "cwd",
-        bin_dir=tmp_path / "bin",
-        tool_dir=tmp_path / "uv" / "tools" / "my-claude-code",
-        commands=["mcc-server", "mcc-desktop"],
-        staging_root=tmp_path / "uv" / ".mcc-staging",
-        previous_root=tmp_path / "uv" / ".mcc-previous",
-        health_url="http://127.0.0.1:8391/health",
-    )
-
-
-def test_the_staged_install_verifies_by_running_the_new_server_before_the_swap(
-    tmp_path,
-) -> None:
-    """Caddy's rule: the gate is EXECUTING the new thing, not an exit code.
-
-    A wheel that resolves, installs and then cannot import itself is a real
-    failure mode, and before 6.72.0 it was discovered by the user -- the old
-    verification asked only whether every published command had an ``.exe`` in
-    the bin directory, which an untouched OLD shim satisfies perfectly.
-    """
-
-    script = _staged_script(tmp_path)
-    verify = script.index("Write-Stage 'verifying'")
-    swap = script.index("Write-Stage 'swapping'")
-    assert verify < swap
-    body = script[verify:swap]
-    assert "& $stagedServer --version" in body
-    assert "& $stagedPython -c 'import my_claude_code'" in body
-    # And the version it prints has to be the version we asked for, or a
-    # staging root left behind by an earlier episode would sail through.
-    assert "[regex]::Escape($targetVersion)" in body
-
-
-def test_a_staged_install_that_fails_verification_restores_the_previous_environment(
-    tmp_path,
-) -> None:
-    """Nothing has moved yet, so "restore" is "never touch it"."""
-
-    script = _staged_script(tmp_path)
-    verify = script.index("Write-Stage 'verifying'")
-    swap = script.index("Write-Stage 'swapping'")
-    body = script[verify:swap]
-    assert "if (-not $verified)" in body
-    # The staging directory goes, the live one does not, and the helper still
-    # leaves a running server behind.
-    assert "Remove-Item -LiteralPath $stagingDir" in body
-    assert "Nothing was replaced; the installed version is unchanged." in body
-    assert "Start-Process -FilePath" in body
-    assert "Write-Stage 'recovered'" in body
-    assert "[System.IO.Directory]::Move" not in body
-
-
-def test_the_previous_environment_is_deleted_only_after_health_answers(
-    tmp_path,
-) -> None:
-    """The rollback is not a rollback if it is swept before the gate."""
-
-    script = _staged_script(tmp_path)
-    gate = script.index("$healthy = Wait-ForHealth")
-    sweep = script.index("Remove-StalePrevious $previousRoot")
-    assert gate < sweep
-    # And the sweep is inside the branch the gate passes, not after it.
-    assert "if ($healthy) {" in script[gate:sweep]
-
-
-def test_a_cutover_that_never_answers_puts_the_previous_environment_back(
-    tmp_path,
-) -> None:
-    """Health-gated cutover, and the reason the old bits were kept at all."""
-
-    script = _staged_script(tmp_path)
-    rollback = script.index("Write-Stage 'rolling-back'")
-    body = script[rollback:]
-    # The live directory goes aside and the previous one comes back.
-    assert "[System.IO.Directory]::Move($asideEnv, $toolDir)" in body
-    assert "Start-Process -FilePath" in body
-    assert "Write-Stage 'recovered'" in body
-    assert "$result['rolled_back'] = $rolledBack" in body
-
-
 def test_the_aside_directory_is_not_inside_uvs_tools_root(tmp_path) -> None:
     """Measured, and the reason decision Q5's own spelling was not used.
 
@@ -749,172 +522,6 @@ def test_the_aside_directory_is_not_inside_uvs_tools_root(tmp_path) -> None:
         assert root != tools_root
 
 
-def test_the_launcher_shims_are_never_rewritten_on_the_staged_path(
-    tmp_path,
-) -> None:
-    """The property that makes the exchange possible, stated as a test.
-
-    ``<bin>/mcc-server.exe`` and ``<tool dir>/Scripts/mcc-server.exe`` are the
-    same file, and what they embed is the absolute path
-    ``<tool dir>/Scripts/python.exe``. They do not care which environment sits
-    at that path -- so the staged path never renames one aside, never copies
-    one in, and a launcher window the user left open can no longer abort an
-    install. The rename ladder survives only on the in-place fallback.
-    """
-
-    script = _staged_script(tmp_path)
-    staged_branch = script[
-        script.index("if ($stagedOk) {") : script.index("Write-Stage 'installing'")
-    ]
-    assert "Rename-Item -LiteralPath $shim" not in staged_branch
-    # The one copy it does make goes the other way: the bin shims, which carry
-    # the canonical path, are copied INTO the new environment to replace the
-    # trampolines uv baked with the staging path.
-    assert "Join-Path $toolDir ('Scripts\\' + $file.Name)" in staged_branch
-
-
-def test_deferred_helper_script_waits_then_installs(tmp_path) -> None:
-    """The helper must not touch the LIVE environment until this process is gone.
-
-    Installing in place on Windows deletes the environment the running
-    interpreter lives in, which fails partway and leaves it unusable. From
-    6.72.0 the ordinary install happens in a tools root of its own and can
-    therefore start while the server is still draining; what still has to wait
-    for the parent is the in-place ``--force`` fallback, and the swap.
-    """
-
-    script = release_updates._deferred_helper_script(
-        uv_executable=r"C:\tools\uv.exe",
-        command=[r"C:\tools\uv.exe", "tool", "install", "--force", "pkg"],
-        result_path=tmp_path / "result.json",
-        stage_dir=tmp_path,
-        server_launcher=tmp_path / "bin" / "fcc-server.exe",
-        working_directory=tmp_path / "cwd",
-    )
-    assert f"$parent = {os.getpid()}" in script
-    # The wait loop must precede the in-place install, not follow it.
-    assert script.index("Get-Process -Id $parent") < script.index(
-        "Write-Stage 'installing'"
-    )
-    # ... and it must also precede the swap, which is the moment the live
-    # directory is renamed out from under anything still running.
-    assert script.index("Get-Process -Id $parent") < script.index(
-        "[System.IO.Directory]::Move"
-    )
-    assert "'tool', 'install', '--force', 'pkg'" in script
-    assert str(tmp_path / "result.json") in script
-    result_write = script.index("[System.IO.File]::WriteAllText")
-    launch = script.index("Start-Process -FilePath")
-    assert result_write < launch
-    assert str(tmp_path / "bin" / "fcc-server.exe") in script
-    assert str(tmp_path / "cwd") in script
-
-
-def test_the_staging_install_runs_before_the_parent_has_even_stopped(
-    tmp_path,
-) -> None:
-    """Building beside the live environment need not wait for anything.
-
-    This is the whole of why an update stopped being an outage. uv is not
-    allowed near the live tool directory while the server holds it open -- but
-    a tools root of its own is not the live tool directory, so the download,
-    the resolve and the venv build all overlap the server's own drain instead
-    of following it.
-    """
-
-    script = _staged_script(tmp_path)
-    assert script.index("Write-Stage 'staging'") < script.index(
-        "$deadline = (Get-Date).AddSeconds"
-    )
-    # And the staged call must not carry --force. It exists to overwrite a live
-    # environment, which is exactly what this path is built never to do.
-    staging_call = script[
-        script.index("Write-Stage 'staging'") : script.index("$deadline = (Get-Date)")
-    ]
-    assert "'--force'" not in staging_call
-    assert "$env:UV_TOOL_DIR = $stagingDir" in staging_call
-
-
-def test_deferred_helper_script_quotes_hostile_arguments(tmp_path) -> None:
-    """Release metadata reaches the wheel name; it must not break out."""
-
-    script = _deferred_script(
-        tmp_path, command=["uv", "tool", "install", "it's; rm -rf /"]
-    )
-    assert "'it''s; rm -rf /'" in script
-
-
-def test_release_updates_renames_shims_before_reinstall(tmp_path) -> None:
-    """The dashboard updater hits the same shim lock as the install script.
-
-    uv writes the launcher shims in ASCII order of the file name including the
-    ".exe" suffix and aborts the whole install on the first one it cannot
-    overwrite, leaving every entrypoint after it unwritten and no receipt.
-    Waiting for the server to exit does not help: an `mcc-claude` window the
-    user still has open is a different process holding a different shim. So the
-    helper must move every shim aside -- Windows refuses to delete a running
-    image but happily renames one -- before it calls uv.
-    """
-
-    bin_dir = tmp_path / "bin"
-    script = release_updates._deferred_helper_script(
-        uv_executable=r"C:\tools\uv.exe",
-        command=[r"C:\tools\uv.exe", "tool", "install", "--force", "pkg"],
-        result_path=tmp_path / "result.json",
-        stage_dir=tmp_path,
-        server_launcher=bin_dir / "fcc-server.exe",
-        working_directory=tmp_path / "cwd",
-        bin_dir=bin_dir,
-        commands=["mcc-claude", "mcc-server", "mcc-desktop"],
-    )
-
-    # Scoped to the in-place fallback. Since 6.72.0 the ordinary path never
-    # touches a shim at all -- it exchanges directories and leaves every
-    # launcher exactly where it is -- so the rename ladder this test is about
-    # lives below the `installing` stage, and the first uv call in the file is
-    # now the staging one.
-    fallback = _fallback_section(script)
-    rename = fallback.index("Rename-Item -LiteralPath $shim")
-    install = fallback.index(r"& 'C:\tools\uv.exe'")
-    assert rename < install, (
-        "the helper calls uv before moving the shims aside, so a launcher "
-        "window still open aborts the install exactly as before"
-    )
-    assert str(bin_dir) in script
-    for name in ("mcc-claude", "mcc-server", "mcc-desktop"):
-        assert f"'{name}'" in script
-    # Renamed aside, never deleted: the shim of a live window must keep working.
-    assert "Remove-Item -LiteralPath $shim" not in script
-    assert ".exe.old-" in script
-
-
-def test_release_updates_receipt_lists_missing_commands(tmp_path) -> None:
-    """A zero exit code is not proof that the commands exist.
-
-    The shims are version-agnostic launchers, so an OLD shim reports the NEW
-    version -- a version check can never catch a missing command. The helper
-    must enumerate them and say which ones are absent.
-    """
-
-    script = release_updates._deferred_helper_script(
-        uv_executable="uv",
-        command=["uv", "tool", "install", "--force", "pkg"],
-        result_path=tmp_path / "result.json",
-        stage_dir=tmp_path,
-        server_launcher=tmp_path / "bin" / "fcc-server.exe",
-        working_directory=tmp_path / "cwd",
-        bin_dir=tmp_path / "bin",
-        commands=["mcc-claude", "mcc-rtk"],
-    )
-
-    assert "$missing = @()" in script
-    assert "missing_commands = $missing" in script
-    assert "Installed, but these commands are missing: " in script
-    assert "Close the mcc-claude window(s) and re-run the install command." in script
-    # ok is not the exit code alone.
-    assert "$ok = ($code -eq 0) -and ($missing.Count -eq 0)" in script
-
-
 def test_published_commands_covers_every_entry_point() -> None:
     """The shim list is read from the distribution, so it cannot drift."""
 
@@ -925,52 +532,6 @@ def test_published_commands_covers_every_entry_point() -> None:
     # gui-scripts count too: a running tray holds its shim like any other.
     assert "mcc-desktop" in commands
     assert commands == sorted(commands)
-
-
-def test_upgrade_stages_instead_of_installing_on_windows(monkeypatch, tmp_path) -> None:
-    """On Windows the install is handed to a helper, never run in place."""
-
-    monkeypatch.setattr(release_updates, "_WINDOWS", True)
-    monkeypatch.setattr(release_updates, "_stage_dir", lambda: tmp_path)
-    monkeypatch.setattr(release_updates.shutil, "which", lambda name: f"/bin/{name}")
-    monkeypatch.setattr(
-        release_updates,
-        "_server_launcher",
-        lambda _uv=None: tmp_path / "fcc-server.exe",
-    )
-    monkeypatch.setattr(
-        release_updates, "_installed_extras_and_python", lambda _uv=None: ((), "3.14")
-    )
-
-    def _boom(*args, **kwargs):
-        raise AssertionError("uv must not run while the server is alive")
-
-    monkeypatch.setattr(release_updates.subprocess, "run", _boom)
-    spawned: dict[str, Any] = {}
-    monkeypatch.setattr(
-        release_updates.subprocess,
-        "Popen",
-        lambda argv, **kwargs: spawned.update(argv=argv, kwargs=kwargs),
-    )
-
-    wheel = tmp_path / "src.whl"
-    wheel.write_bytes(b"wheel-bytes")
-    payload = _release("v9.9.9", name="src.whl")
-    monkeypatch.setattr(
-        release_updates.httpx, "stream", _stub_stream(wheel.read_bytes())
-    )
-
-    result = release_updates.upgrade_to_latest(payload)
-
-    assert result.ok is True
-    assert "start the updated server automatically" in result.message.lower()
-    assert spawned, "expected a detached helper to be spawned"
-    # Detached + new process group so it outlives this server and its console.
-    kwargs = spawned["kwargs"]
-    # CREATE_NO_WINDOW, never DETACHED_PROCESS: the latter leaves powershell
-    # without a console and it exits without running the script at all.
-    assert kwargs["creationflags"] == (0x08000000 | 0x00000200)
-    assert not kwargs["creationflags"] & 0x00000008
 
 
 def test_pending_upgrade_result_reports_a_failed_deferred_install(
@@ -1011,95 +572,6 @@ def test_pending_upgrade_result_parses_a_utf8_bom_receipt(
         b'\xef\xbb\xbf{"ok": true}'
     )
     assert release_updates.pending_upgrade_result() == {"ok": True}
-
-
-def test_deferred_helper_writes_the_receipt_without_a_bom(tmp_path) -> None:
-    """Defense in depth: stop emitting the BOM the reader has to tolerate.
-
-    ``Set-Content -Encoding utf8`` under PowerShell 5.1 prepends U+FEFF;
-    ``[System.IO.File]::WriteAllText`` with ``UTF8Encoding($false)`` does not.
-    Every write site -- timeout, final result, the rewritten uv receipt the
-    staged fallback leaves behind, and the progress receipt's truncation and
-    appends -- must use it, and the outcome must still be recorded before any
-    relaunch attempt.
-    """
-    script = _deferred_script(tmp_path)
-    # Ten whole-file writes. Five are the pre-6.72.0 set that survive: the
-    # install transcript's truncation (6.71.0 -- a fresh
-    # episode starts a fresh transcript exactly as it starts a fresh receipt),
-    # the "could not be stopped" result, and the outcome receipt TWICE -- once
-    # before the server is started and once after, so the receipt on disk is
-    # complete even if the helper dies during the relaunch, and so it can then
-    # say whether a server is running (6.58.3 starts one on the failure branch
-    # too) -- plus the staged fallback's rewritten uv receipt.
-    #
-    # The other five are 6.72.0's staged path, which has terminal branches of
-    # its own and so has to write its own receipts: the verification failure,
-    # the rewritten uv receipt after the swap, the result before the start, the
-    # result again once /health has answered, and the result after a rollback.
-    # 6.73.0 removed the progress truncation: ten, not eleven.
-    assert script.count("[System.IO.File]::WriteAllText") == 10
-    # Two appenders: one per stage record, one per line of installer output.
-    # Both append a line at a time rather than holding a stream open, so a
-    # reader in another process sees each line the moment it exists and a
-    # killed helper never truncates what it already said.
-    assert script.count("[System.IO.File]::AppendAllText") == 2
-    # One shared encoder object for the progress receipt and the transcript,
-    # plus one at each of the four whole-file writes that do not share it, plus
-    # 6.71.0's console output encoding -- uv draws its diagnostics with
-    # box-drawing characters and PowerShell decodes a native command's output
-    # with the console code page, so without this the transcript carried
-    # mojibake where uv had drawn a tree.
-    assert script.count("UTF8Encoding($false)") == 12
-    assert "[Console]::OutputEncoding" in script
-    assert "Set-Content" not in script
-    first_write = script.index("[System.IO.File]::WriteAllText")
-    launch = script.index("Start-Process -FilePath")
-    assert first_write < launch
-
-
-def test_deferred_helper_survives_native_stderr(tmp_path) -> None:
-    """uv writes progress to stderr; that must not kill the helper.
-
-    Under ``$ErrorActionPreference = 'Stop'`` a native command's stderr becomes
-    a terminating NativeCommandError, so the script died before installing
-    anything and never wrote its result file.
-    """
-
-    script = _deferred_script(tmp_path)
-    invoke = script.index("$output = &")
-    # The native call must run with Continue in effect, not Stop.
-    preference_before = script.rfind("$ErrorActionPreference = 'Continue'", 0, invoke)
-    assert preference_before != -1, "native call must drop back to Continue"
-    # Success is judged by the exit code captured immediately after the call --
-    # and, since 6.30.1, by every published command actually being there.
-    assert "$code = $LASTEXITCODE" in script
-    assert "$ok = ($code -eq 0) -and ($missing.Count -eq 0)" in script
-
-
-def test_deferred_helper_pins_parent_identity_not_just_pid(tmp_path) -> None:
-    """Windows recycles pids fast; matching on the id alone hangs the helper.
-
-    Observed in practice: the server was stopped, Windows handed its pid to an
-    unrelated python process seconds later, and the helper waited out its whole
-    deadline without ever installing.
-    """
-
-    script = _deferred_script(tmp_path)
-    assert "$parentStart" in script
-    assert "StartTime.ToFileTimeUtc()" in script
-    # An unknown start time must mean "assume alive", never "assume gone":
-    # installing while the server still runs is the corruption we avoid.
-    assert "if ($parentStart -eq 0) { return $true }" in script
-
-
-def test_deferred_helper_retries_the_install(tmp_path) -> None:
-    """Handle release lags; one lost race must not leave a broken install."""
-
-    script = _deferred_script(tmp_path)
-    assert "$delays = @(0, 5, 10, 20, 30)" in script
-    assert "foreach ($wait in $delays)" in script
-    assert "if ($code -eq 0) { break }" in script
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows process times")
@@ -1187,75 +659,6 @@ async def test_reconnect_timeout_tracks_the_configured_graceful_budget(
     )
 
 
-def test_the_helper_writes_a_progress_file_for_each_stage(tmp_path) -> None:
-    """The measured 14-minute silent update leaves a trail now.
-
-    The 23:19 update on the reporting machine left *no* trace whatsoever: the
-    stop is not logged, the helper wrote no progress, and no pending receipt
-    survived. The only forensic evidence that anything had happened was shim
-    mtimes. One appended JSON line per stage is a dozen lines of PowerShell and
-    it turns the single worst part of the experience -- a blank fourteen-minute
-    wait -- into a status line the window can read.
-    """
-
-    script = _deferred_script(tmp_path)
-    progress = str(tmp_path / release_updates.UPDATE_PROGRESS_FILENAME)
-
-    assert progress in script
-    for stage in release_updates.UPDATE_PROGRESS_STAGES:
-        assert f"Write-Stage '{stage}'" in script, stage
-
-    # The order the stages are written in is the order they happen in. Read on
-    # the in-place fallback, which is the only branch that reaches
-    # `installing`: the staged path above it has a `starting` and a `done` of
-    # its own, and they come earlier in the file precisely because they come
-    # earlier in time on the branch that uses them.
-    waiting = script.index("Write-Stage 'waiting-for-parent'")
-    fallback_at = script.index("Write-Stage 'installing'")
-    fallback = _fallback_section(script)
-    assert waiting < fallback_at
-    assert fallback.index("Write-Stage 'starting'") < fallback.index(
-        "Write-Stage 'done'"
-    )
-    # The staged path's own sequence, which is the ordinary one.
-    staged = script[script.index("Write-Stage 'staging'") : fallback_at]
-    for earlier, later in (
-        ("'staging'", "'verifying'"),
-        ("'verifying'", "'swapping'"),
-        ("'swapping'", "'starting'"),
-        ("'starting'", "'rolling-back'"),
-    ):
-        assert staged.index(f"Write-Stage {earlier}") < staged.index(
-            f"Write-Stage {later}"
-        ), (earlier, later)
-
-    # The first stage is written before the wait loop, not after it: the whole
-    # point is to say something during the wait.
-    assert waiting < script.index("while ((Get-Date) -lt $deadline)")
-    # And installing is written before uv is invoked.
-    assert fallback_at < script.index("$delays = @(0, 5, 10, 20, 30)")
-
-    # 6.73.0: the receipt is APPENDED to and never truncated. The episode is
-    # opened by a MARKER record instead, before any other stage, so a reader
-    # that arrives a minute late can still find where this episode begins. The
-    # truncate this replaced is what erased the helper's whole record at 15:04
-    # on 2026-09-11, while a window was supposed to be reading it.
-    assert "[System.IO.File]::WriteAllText($progressPath, ''" not in script
-    marker = script.index("Write-Stage 'episode'")
-    assert marker < waiting
-    # And the lock is taken before the marker: an installer that narrated an
-    # episode it was not allowed to run would be a second source of truth.
-    assert script.index("Enter-UpdateLock") < marker
-
-    # Appended, never rewritten. The writer is a detached process that may be
-    # killed at any point and the reader is a window polling while that
-    # happens, so a rewrite could hand the reader a half-written document.
-    assert "AppendAllText($progressPath" in script
-
-    # A receipt nobody can write must never be the reason an update fails.
-    assert "catch {" in script[script.index("function Write-Stage") :]
-
-
 def test_the_progress_reader_takes_the_last_complete_line(
     tmp_path, monkeypatch
 ) -> None:
@@ -1296,195 +699,6 @@ def test_the_progress_reader_takes_the_last_complete_line(
     # And a BOM from Windows PowerShell 5.1 does not hide it.
     path.write_bytes(b'\xef\xbb\xbf{"stage": "done"}')
     assert release_updates.update_progress() == {"stage": "done"}
-
-
-def test_the_helper_never_renames_the_shells_own_launcher(tmp_path) -> None:
-    """`mcc-desktop.exe` is what the running window asks; it must stay put.
-
-    The 2026-09-07 failure, in one file rename. The helper moved every managed
-    shim aside, `mcc-desktop` included; the Tauri shell calls
-    `mcc-desktop --print-status` on every pass of its ladder, read
-    `NotInstalled`, and -- by design -- started its own `uv tool install` into
-    the very tool directory the helper was writing. The helper lost all five
-    attempts and never reached the step that starts a server.
-
-    The rename bought nothing here: uv overwrites these in place, and one that
-    happens to be locked is kept by the staged fallback exactly like any other
-    shim.
-    """
-
-    bin_dir = tmp_path / "bin"
-    script = release_updates._deferred_helper_script(
-        uv_executable=r"C:\tools\uv.exe",
-        command=[r"C:\tools\uv.exe", "tool", "install", "--force", "pkg"],
-        result_path=tmp_path / "result.json",
-        stage_dir=tmp_path,
-        server_launcher=bin_dir / "fcc-server.exe",
-        working_directory=tmp_path / "cwd",
-        bin_dir=bin_dir,
-        commands=["mcc-claude", "mcc-server", "mcc-desktop"],
-    )
-
-    assert "$neverRename = @(" in script
-    for exempt in ("mcc-desktop.exe", "fcc-desktop.exe", "MyClaudeCode.exe"):
-        assert f"'{exempt}'" in script, exempt
-    # The exemption is applied in the rename loop, before the rename itself.
-    loop = script[script.index("foreach ($fileName in ($managed.Keys") :]
-    skip = loop.index("$neverRename -contains $fileName")
-    assert skip < loop.index("Rename-Item -LiteralPath $shim")
-    # It is an exemption from the RENAME only. The command is still verified as
-    # present afterwards, so a genuinely missing mcc-desktop is still reported.
-    assert "'mcc-desktop'" in script
-
-
-def test_a_refused_rename_still_attempts_the_fast_install(tmp_path) -> None:
-    """One `mcc-claude` window open must not cost the whole install its fast path.
-
-    The guard was `if ($refused.Count -eq 0)`, so a single refused rename --
-    and the user keeps `mcc-claude` windows open for hours, which refuses one --
-    skipped the fast loop entirely. The evidence was `attempts = 5` rather than
-    the 10 a fast loop plus a staged loop would give.
-    """
-
-    script = _deferred_script(tmp_path)
-
-    assert "if ($refused.Count -eq 0) {\n    foreach ($wait in $delays)" not in script
-    # The loop is no longer inside a refusal guard at all.
-    fast = script.index("$fastDelays =")
-    loop = script.index("foreach ($wait in $fastDelays)")
-    assert fast < loop
-    # A refusal buys one attempt rather than the full backoff: the staged
-    # fallback behind it is the path that actually survives the lock, and 65
-    # seconds of sleeps on the way there is not a fast path.
-    assert (
-        "if ($refused.Count -eq 0) {{ $delays }} else {{ @(0) }}".replace(
-            "{{", "{"
-        ).replace("}}", "}")
-        in script
-    )
-    # And the staged fallback still runs when the fast loop failed.
-    assert "if (($code -ne 0) -and $binDir) {" in script
-
-
-def test_a_failed_install_still_starts_a_server(tmp_path) -> None:
-    """A failed update must never leave the machine with no server.
-
-    `Start-Process` used to sit under `if ($ok)`, so a helper that failed left
-    the user with the old install on disk, nothing running, and no automatic
-    recovery -- which is exactly what happened on 2026-09-07 at 23:24:04.
-    """
-
-    fallback = _fallback_section(_deferred_script(tmp_path))
-
-    start = fallback.index("Start-Process -FilePath")
-    # Nothing between the receipt and the start gates it on success.
-    preamble = fallback[fallback.index("$ok = ($code -eq 0)") : start]
-    assert "if ($ok)" in preamble  # the stage line, which is allowed to branch
-    assert fallback.count("Start-Process -FilePath") == 1
-    # The start is outside every `if ($ok)` block: the terminal stage after it
-    # is 'done' on success and 'recovered' on failure, and both are reached.
-    assert "Write-Stage 'recovered'" in fallback
-    assert fallback.index("Write-Stage 'recovered'") > start
-    assert fallback.index("Write-Stage 'done'") > start
-    # The outcome receipt says whether a server is running, and the message
-    # says so in words, because the banner shows the message.
-    assert "$result['restarted'] = $restarted" in fallback
-    assert "The previous version was restarted." in fallback
-    assert "The previous version could not be restarted either." in fallback
-
-
-def test_the_helper_records_its_own_liveness(tmp_path) -> None:
-    """Every receipt line names the helper, so nobody has to guess.
-
-    A stage name alone cannot answer "is an installer running right now?" -- a
-    helper killed mid-install leaves 'installing' behind forever -- and the
-    answer is what stops the shell starting a second one.
-    """
-
-    script = _deferred_script(tmp_path)
-
-    assert "$helperPid = $PID" in script
-    assert "[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()" in script
-    for field in ("helper_pid = $helperPid", "started_at = $helperStarted"):
-        assert field in script, field
-    assert "helper_done = $script:HelperDone" in script
-    assert "version = $targetVersion" in script
-    # Set exactly where the helper is finished, on every branch that ends an
-    # episode: the "could not be stopped" exit, the staged path's three
-    # terminal branches (verification refused, /health answered, rolled back)
-    # and the in-place fallback's own ending.
-    assert script.count("$script:HelperDone = $true") == 5
-    # Never before the helper has actually finished. Each occurrence is
-    # immediately followed by a terminal stage or an exit.
-    tail_of_each = [
-        part[:1200] for part in script.split("$script:HelperDone = $true")[1:]
-    ]
-    for tail in tail_of_each:
-        assert (
-            "Write-Stage 'failed'" in tail
-            or "Write-Stage 'done'" in tail
-            or "Write-Stage 'recovered'" in tail
-        ), tail
-
-
-def test_the_helper_names_the_version_it_is_installing(tmp_path) -> None:
-    """So the window can say WHAT it is waiting for, not just that it waits."""
-
-    script = release_updates._deferred_helper_script(
-        uv_executable=r"C:\tools\uv.exe",
-        command=[r"C:\tools\uv.exe", "tool", "install", "--force", "pkg"],
-        result_path=tmp_path / "result.json",
-        stage_dir=tmp_path,
-        server_launcher=tmp_path / "bin" / "fcc-server.exe",
-        working_directory=tmp_path / "cwd",
-        bin_dir=tmp_path / "bin",
-        version="6.58.3",
-    )
-    assert "$targetVersion = '6.58.3'" in script
-    # And the kept-shim note tells the user what restarting that window buys.
-    assert "' to pick up ' + $targetVersion" in script
-    assert "'.exe (in use)'" in script
-    assert "-- restart it" in script
-
-
-def test_a_failed_install_puts_the_launchers_it_moved_aside_back(tmp_path) -> None:
-    """Otherwise "the update failed" also means "and your server is gone".
-
-    Found on a scratch install on 2026-09-08, running the real update path with
-    an install that could not succeed: every managed shim had been renamed to
-    `<name>.exe.old-<stamp>`, the new ones were never written, and the sweep at
-    the end DELETED the aside copies. The helper's own restart step then
-    reported "the previous version could not be restarted either" -- correctly,
-    because there was no longer an `fcc-server.exe` to start. `install.ps1` has
-    always restored on its failure path; the helper never did.
-    """
-
-    script = _fallback_section(_deferred_script(tmp_path))
-
-    assert "$movedAside += $fileName" in script
-    restore = script.index(
-        "if (($code -ne 0) -and $binDir) {\n    foreach ($fileName in $movedAside)"
-    )
-    verify = script.index("$missing = @()")
-    start = script.index("Start-Process -FilePath")
-    # Put back first, then judge what is missing, then start something.
-    assert restore < verify < start
-    # And the sweep that deletes the aside copies runs ONLY after an install
-    # that worked -- on a failure they are the only launchers left.
-    reap = script.index("Get-ChildItem -Path $binDir -Filter '*.exe.old-*'")
-    guard = script.rindex("if ($code -eq 0) {", 0, reap)
-    assert guard < reap
-    # The receipt says which launchers came back, so a failure is legible.
-    assert "restored_shims = $restoredShims" in script
-
-
-# ------------------------------------------------- the desktop app's own pin
-#
-# The version panel used to answer "are you up to date" for the wheel alone.
-# The wheel updates itself every release; the desktop app did not, because its
-# pin was enforced by a process that need not be running -- so a user could sit
-# fifteen releases behind and still read "Already up to date" (BUG-0). These
-# three keys are what the banner renders.
 
 
 @pytest.mark.asyncio
@@ -1560,141 +774,6 @@ def test_a_receipt_that_cannot_be_read_still_renders_a_version(monkeypatch) -> N
 # -- 6.71.0: see everything happening during an update -------------------------
 
 
-def test_the_helper_names_its_install_log_in_every_record(tmp_path) -> None:
-    """Decision Q2: one progress document, and it points at the transcript.
-
-    A window that had to guess the transcript's name would guess wrong exactly
-    when two updates happen close together, because the stamp belongs to the
-    episode. So the path is written into every record and read back off it.
-    """
-
-    log = tmp_path / "install-20260911-082114.log"
-    script = release_updates._deferred_helper_script(
-        uv_executable="uv",
-        command=["uv", "tool", "install", "--force", "pkg"],
-        result_path=tmp_path / "r.json",
-        stage_dir=tmp_path,
-        server_launcher=tmp_path / "bin" / "fcc-server.exe",
-        working_directory=tmp_path / "cwd",
-        install_log=log,
-    )
-
-    assert f"$installLog = '{log}'" in script
-    # One record shape, one place it is built, and `log` is part of it.
-    assert "log = $installLog" in script
-    assert "elapsed_seconds = $elapsed" in script
-
-
-def test_the_helper_tees_uv_output_while_it_happens(tmp_path) -> None:
-    """Not at the end. The end is two minutes too late.
-
-    Until 6.71.0 uv's two streams went into a PowerShell variable and were
-    written out once the episode was over, into ``pending-upgrade.json`` -- so
-    during the only part of an update anyone cares about there was nothing on
-    disk to look at at all (spec F7).
-    """
-
-    script = _deferred_script(tmp_path)
-
-    # Every uv invocation streams through a per-line append, and there are
-    # three of them: 6.72.0's staged install, and the in-place fallback's fast
-    # path and staged-bin retry.
-    assert (
-        script.count(
-            "ForEach-Object { $line = Convert-OutputLine $_; Write-InstallLog $line; $line }"
-        )
-        == 3
-    )
-    assert "$output = & 'uv'" in script
-    # A transcript nobody can write is never the reason an update fails.
-    assert "function Write-InstallLog($text)" in script
-
-
-def test_the_helper_reports_handing_off_not_starting_under_no_restart(
-    tmp_path,
-) -> None:
-    """Spec F6, seen in the live 6.66.1 receipt.
-
-    ``$noRestart`` was first READ at the branch that chooses a stage and first
-    ASSIGNED three hundred lines further down. PowerShell answers ``$null`` for
-    an unassigned variable and ``$null`` is falsey, so the helper wrote
-    ``starting`` -- "Starting the updated server." -- under the very flag that
-    tells it not to start one, twenty-two milliseconds before a ``done`` record
-    saying the desktop app starts it.
-    """
-
-    script = release_updates._deferred_helper_script(
-        uv_executable="uv",
-        command=["uv", "tool", "install", "--force", "pkg"],
-        result_path=tmp_path / "r.json",
-        stage_dir=tmp_path,
-        server_launcher=tmp_path / "bin" / "fcc-server.exe",
-        working_directory=tmp_path / "cwd",
-        no_restart=True,
-    )
-
-    # Assigned exactly once, and before every read of it.
-    assert script.count("$noRestart = $true") == 1
-    assert script.index("$noRestart = $true") < script.index("if ($noRestart)")
-    assert (
-        "Write-Stage 'handing-off' 'Installed. Handing the restart to the desktop app.'"
-        in script
-    )
-    # And the false stage is gone from that branch.
-    handing_off = script.index("Write-Stage 'handing-off'")
-    starting = script.index("Write-Stage 'starting'")
-    assert handing_off < starting, "the no-restart branch comes first"
-
-
-def test_the_helper_never_writes_an_earlier_stage_than_the_one_before(
-    tmp_path,
-) -> None:
-    """Monotonic stages, so a window can draw them as a timeline.
-
-    The guard lives in ``Write-Stage`` rather than at each call site: there are
-    eleven of them and a rule enforced eleven times is a rule that will be
-    broken once.
-    """
-
-    script = _deferred_script(tmp_path)
-
-    assert "$script:StageRank = 0" in script
-    assert "if ($rank -lt $script:StageRank) { return }" in script
-    for stage, rank in (
-        ("waiting-for-parent", 1),
-        ("staging", 2),
-        ("stopping", 3),
-        ("installing", 4),
-        ("verifying", 5),
-        ("swapping", 6),
-        ("starting", 7),
-        ("handing-off", 7),
-        ("rolling-back", 8),
-        ("done", 9),
-    ):
-        assert f"'{stage}' = {rank}" in script, stage
-    # The PowerShell table and the Python one are the same table.
-    for stage, rank in update_progress.UPDATE_PROGRESS_STAGE_ORDER.items():
-        assert f"'{stage}' = {rank}" in script, stage
-
-
-def test_the_helper_writes_the_stages_in_the_order_they_happen(tmp_path) -> None:
-    script = _deferred_script(tmp_path)
-    # The staged path's sequence, which is the one an ordinary update takes.
-    order = [
-        script.index(f"Write-Stage '{stage}'")
-        for stage in ("waiting-for-parent", "staging", "stopping", "verifying")
-    ]
-    assert order == sorted(order), order
-    # And the in-place fallback's, below it.
-    fallback = _fallback_section(script)
-    tail = [
-        fallback.index(f"Write-Stage '{stage}'")
-        for stage in ("installing", "verifying", "starting", "done")
-    ]
-    assert tail == sorted(tail), tail
-
-
 def test_the_upgrade_response_names_both_files_before_the_server_stops() -> None:
     """Spec F7: a browser tab loses its only channel the moment the server does.
 
@@ -1718,3 +797,291 @@ def test_the_upgrade_response_names_both_files_before_the_server_stops() -> None
     bare = release_updates.UpgradeResult(ok=False, message="no").as_dict()
     assert bare["log_path"] is None
     assert bare["progress_path"] is None
+
+
+# -- 6.82.0: one update path. The helper is a LAUNCHER of the installer. ------
+#
+# Everything an update does -- download, verify, stage beside the running
+# version, execute-verify, stop exactly one server, swap, start, health-gate,
+# roll back -- now happens in scripts/install.ps1 and scripts/install.sh, which
+# is the command a user would type. The tests that pinned the thousand-line
+# PowerShell template in release_updates.py went with it; what is pinned here
+# is the contract that replaced it, and the staged swap itself is pinned in
+# tests/scripts/ against the real installers.
+
+
+def _launcher_script(
+    tmp_path: Path,
+    *,
+    version: str = "9.9.9",
+    no_restart: bool = False,
+    no_start: bool = False,
+) -> str:
+    """The helper as the server generates it.
+
+    Named arguments rather than a ``**kwargs`` splat: the generator's signature
+    is the contract these tests are about, and a splat hides a renamed
+    parameter behind a runtime failure instead of a type error.
+    """
+
+    return release_updates._deferred_helper_script(
+        result_path=tmp_path / "result.json",
+        stage_dir=tmp_path,
+        installer=tmp_path / "installers" / "install.ps1",
+        powershell=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        config_dir=tmp_path / "config",
+        working_directory=tmp_path / "cwd",
+        version=version,
+        no_restart=no_restart,
+        no_start=no_start,
+    )
+
+
+def test_the_helper_is_a_launcher_of_the_official_installer(tmp_path) -> None:
+    """Decision Q4/C1: the helper's only install verb is the installer.
+
+    Until 6.82.0 this script was its own installer: it ran ``uv tool install``
+    itself, four times over four code paths, and none of them was the command a
+    user would type. Two implementations of one job is how they drifted until
+    one of them could leave a machine with no server.
+    """
+
+    script = _launcher_script(tmp_path)
+    assert "uv tool install" not in script
+    assert "'tool', 'install'" not in script
+    assert "UV_TOOL_DIR" not in script
+    assert "[System.IO.Directory]::Move" not in script
+    assert str(tmp_path / "installers" / "install.ps1") in script
+    assert "'-Restart'" in script
+
+
+def test_the_helper_waits_for_the_parent_before_it_runs_the_installer(
+    tmp_path,
+) -> None:
+    """The one job only the server can do: it knows its own process id.
+
+    The installer must not touch the environment the running interpreter lives
+    in, so the wait comes first and the hand-over second.
+    """
+
+    script = _launcher_script(tmp_path)
+    assert f"$parent = {os.getpid()}" in script
+    assert script.index("Get-Process -Id $parent") < script.index("& $powershell")
+
+
+def test_the_helper_pins_parent_identity_not_just_pid(tmp_path) -> None:
+    """Windows recycles pids fast; a bare id match waits out the deadline."""
+
+    script = _launcher_script(tmp_path)
+    assert "$parentStart = " in script
+    assert "$proc.StartTime.ToFileTimeUtc() -eq $parentStart" in script
+
+
+def test_the_helper_never_claims_the_restart_is_somebody_elses(tmp_path) -> None:
+    """Decision Q2: the watching flag no longer suppresses the restart.
+
+    On 2026-09-11 the desktop window set this flag, the helper installed and
+    started nothing "because the app owns the restart", the app was a build
+    that could not act, and the machine had no server for fifteen minutes.
+    The flag is now a fact for the transcript; the installer always restarts.
+    """
+
+    watched = _launcher_script(tmp_path, no_restart=True)
+    unwatched = _launcher_script(tmp_path, no_restart=False)
+    assert "'-Restart'" in watched
+    assert "'-Restart'" in unwatched
+    assert "'-NoStart'" not in watched
+    # The only difference is what it says about who is looking.
+    assert "A desktop window ' + $(if ($noRestart)" in watched
+    # And the stage that used to mean "installed; somebody else starts it" is
+    # never written by this script any more. (It stays in the shared stage
+    # table, which is generated from Python, so look for a write of it.)
+    assert "Write-Stage 'handing-off'" not in watched
+
+
+def test_no_start_is_the_only_opt_out(tmp_path) -> None:
+    """MCC_INSTALL_NO_START, for a machine that must not gain a server."""
+
+    script = _launcher_script(tmp_path, no_start=True)
+    assert "'-NoStart'" in script
+    assert "'-Restart'" not in script
+
+
+def test_the_helper_passes_the_version_it_was_offered(tmp_path) -> None:
+    """The update that was offered is the update that happens.
+
+    A newer release landing between "press Update" and "the installer runs"
+    would otherwise install something the user never saw.
+    """
+
+    script = _launcher_script(tmp_path, version="9.9.9")
+    assert "'-Version', '9.9.9'" in script
+
+
+def test_the_helper_hands_over_one_transcript_and_the_config_dir(tmp_path) -> None:
+    """One episode, one transcript -- and the restart means ONE server.
+
+    MCC_INSTALL_LOG makes the installer append to this episode's transcript
+    rather than open a second one, so a window tailing the file named in the
+    receipt sees the whole story. MCC_CONFIG_DIR is explicit rather than merely
+    inherited: on 2026-09-11 a start that lost it came up for a different
+    configuration home and stopped the server that was already there.
+    """
+
+    script = _launcher_script(tmp_path)
+    assert "$env:MCC_INSTALL_LOG = $installLog" in script
+    assert "$env:MCC_CONFIG_DIR = $configDir" in script
+    assert str(tmp_path / "config") in script
+
+
+def test_the_helper_appends_to_the_receipt_and_never_truncates_it(tmp_path) -> None:
+    """Decision Q5. A truncating writer erased a finished helper's whole record.
+
+    And the receipt is written BOM-less: Windows PowerShell 5.1's `Set-Content
+    -Encoding utf8` prepends a UTF-8 BOM, and the Python reader parses JSON,
+    which refuses a leading U+FEFF.
+    """
+
+    script = _launcher_script(tmp_path)
+    assert "AppendAllText($progressPath" in script
+    assert "WriteAllText($progressPath" not in script
+    assert "New-Object System.Text.UTF8Encoding($false)" in script
+    assert "Write-Stage 'episode'" in script
+
+
+def test_the_helper_does_not_overrule_the_installers_terminal_record(
+    tmp_path,
+) -> None:
+    """The installer decides what happened; this script only reports failures
+    it can see for itself.
+
+    "The install exited 0" is not success -- a listener answering on the
+    configured port is -- and the installer is the only thing that knows.
+    """
+
+    script = _launcher_script(tmp_path)
+    assert '"helper_done":true' in script
+    assert "if (-not $wroteTerminal) { Write-Stage 'failed'" in script
+
+
+def test_the_stage_table_comes_from_python_not_a_second_copy(tmp_path) -> None:
+    """Typed twice, the two copies disagreed the moment a stage was added."""
+
+    script = _launcher_script(tmp_path)
+    for stage, rank in update_progress.UPDATE_PROGRESS_STAGE_ORDER.items():
+        assert f"'{stage}' = {rank}" in script
+
+
+def test_the_upgrade_no_longer_downloads_or_installs_anything(
+    monkeypatch, tmp_path
+) -> None:
+    """One downloader, one verifier, one installer -- and it is the installer.
+
+    The dashboard used to download the wheel and check its digest, and then the
+    installer it handed to downloaded the same wheel and checked the same
+    digest again. Two downloaders is how the two paths came to disagree.
+    """
+
+    spawned: dict[str, object] = {}
+
+    def _spawn(*, tag, log, no_restart=False):
+        spawned["tag"] = tag
+        spawned["no_restart"] = no_restart
+        return UpgradeResult(ok=True, message="handed over", installed_version=tag)
+
+    monkeypatch.setattr(release_updates, "_spawn_deferred_upgrade", _spawn)
+    monkeypatch.setattr(release_updates, "_spawn_posix_upgrade", _spawn)
+
+    def _never(*args, **kwargs):
+        raise AssertionError("the dashboard must not download or install")
+
+    monkeypatch.setattr(subprocess, "run", _never)
+
+    result = upgrade_to_latest(_release("v9.9.9", digest="a" * 64))
+    assert result.ok
+    assert spawned["tag"] == "9.9.9"
+
+
+def test_the_helper_does_not_pass_on_a_foreign_powershell_module_path(
+    monkeypatch,
+) -> None:
+    """Measured on 2026-09-12, on the real update flow against a scratch install.
+
+    A server started from a PowerShell 7 prompt inherits PowerShell 7's
+    ``PSModulePath``. The helper starts **Windows PowerShell 5.1**, which
+    autoloads ``Microsoft.PowerShell.Utility`` off that path, finds PowerShell
+    7's copy, cannot load it, and then has no ``Get-FileHash``, no
+    ``ConvertTo-Json`` and no ``Invoke-WebRequest`` for the rest of the run.
+    The observed failure was the installer dying on the release wheel's
+    checksum step:
+
+        Get-FileHash : The term 'Get-FileHash' is not recognized ...
+    """
+
+    monkeypatch.setenv("PSModulePath", r"C:\Program Files\PowerShell\7\Modules")
+    monkeypatch.setenv("MCC_KEEP_ME", "yes")
+    environment = release_updates._powershell_child_environment()
+    assert "PSModulePath" not in environment
+    assert not any(name.upper() == "PSMODULEPATH" for name in environment)
+    # Everything else is passed through: the child has to see MCC_CONFIG_DIR,
+    # UV_TOOL_DIR and the rest of the configuration this server is running for.
+    assert environment["MCC_KEEP_ME"] == "yes"
+
+
+def test_the_upgrade_still_refuses_a_release_with_no_wheel(monkeypatch) -> None:
+    """Nothing to install is still nothing to install."""
+
+    payload = _release()
+    payload["assets"] = []
+    assert upgrade_to_latest(payload).ok is False
+
+
+def test_the_posix_upgrade_runs_the_installer_detached(monkeypatch, tmp_path) -> None:
+    """Decision Q7. Until 6.82.0 the POSIX update ran `uv tool install --force`
+    in THIS process, synchronously, against the environment this process runs
+    out of -- and then restarted nothing at all, ever, on any platform.
+    """
+
+    installer = tmp_path / "installers" / "install.sh"
+    installer.parent.mkdir(parents=True)
+    installer.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(release_updates, "_bundled_installer", lambda name: installer)
+    monkeypatch.setattr(release_updates.shutil, "which", lambda name: "/bin/sh")
+    monkeypatch.setattr(release_updates, "_stage_dir", lambda: tmp_path)
+    arguments: list[str] = []
+    options: dict[str, object] = {}
+    environment: dict[str, str] = {}
+
+    class _Popen:
+        def __init__(self, command, **kwargs):
+            arguments.extend(command)
+            options.update(kwargs)
+            environment.update(kwargs.get("env") or {})
+
+    monkeypatch.setattr(release_updates.subprocess, "Popen", _Popen)
+    result = release_updates._spawn_posix_upgrade(tag="9.9.9", log=[])
+    assert result.ok
+    assert arguments == [
+        "/bin/sh",
+        str(installer),
+        "--restart",
+        "--version",
+        "9.9.9",
+    ]
+    # It must outlive this server and inherit none of its streams: a child that
+    # keeps the caller's stdout open holds the caller open too.
+    assert options["start_new_session"] is True
+    assert environment["MCC_INSTALL_LOG"].endswith(".log")
+    assert environment["MCC_CONFIG_DIR"]
+
+
+def test_the_bundled_installer_is_looked_for_beside_the_package(tmp_path) -> None:
+    """It ships inside the wheel, so the installer that runs is the one this
+    release was tested with, needs no network of its own, and cannot be
+    substituted between the download and the run."""
+
+    found = release_updates._bundled_installer("install.ps1")
+    # In a source checkout the wheel layout does not exist; the function must
+    # answer None rather than hand back a path that is not there.
+    assert found is None or found.is_file()
+    assert release_updates._bundled_installer("not-an-installer") is None

@@ -78,6 +78,43 @@ $script:UvPath = ""
 # Set by Start-DeferredInstall when the app was running and the install was
 # staged for completion after the user stops it.
 $script:Deferred = $false
+# 6.82.0. The staged swap, moved out of the update helper and into the
+# installer so that BOTH update paths are the same path (decision Q1/Q10 V2).
+#
+# Until now a hand-run install called `uv tool install --force`, and uv empties
+# a tool environment IN PLACE before it resolves a single new byte: measured on
+# 2026-09-11, `mcc-server` answered at t=0, `ModuleNotFoundError: my_claude_code`
+# at +7.99 s and the executable itself was gone at +9.36 s, with the whole run
+# taking 45-102 s. For all of it there was no server and no way back. The
+# staged path builds the new environment BESIDE the live one in a sibling of
+# uv's tools root, runs it once to prove it works, and exchanges the two by
+# rename -- measured at 2.7-20 ms in the helper.
+#
+# The roots are SIBLINGS of uv's tools root, never children: a child whose name
+# does not normalise to a valid package name makes `uv tool list` fail outright
+# ("error: Not a valid package or extra name: \".mcc-previous\"") and list
+# nothing at all. These three names are the same ones
+# src/my_claude_code/config/update_progress.py declares, and a contract test
+# compares them.
+$StagingEnvDirName = ".mcc-staging"
+$PreviousEnvDirName = ".mcc-previous"
+$PreviousEnvsKept = 1
+$PackageEnvDirName = "my-claude-code"
+# Set by New-StagedEnvironment / Invoke-EnvironmentSwap so the closing message,
+# the rollback and the sweep all read one answer rather than each deciding for
+# itself.
+$script:StagedSwapped = $false
+$script:StagedPreviousEnv = ""
+$script:StagedPreviousDir = ""
+$script:StagedStagingRoot = ""
+$script:StagedStamp = ""
+$script:StagedRolledBack = $false
+# Set when the staged environment was compiled before the swap, so the
+# post-install pass does not pay for it a second time INSIDE the outage window.
+$script:PrecompiledBeforeSwap = $false
+# The staging directory the swap emptied, swept after the health gate rather
+# than inside the outage window.
+$script:StagedStagingDir = ""
 # Set by Invoke-RenameThenReinstall when the update completed immediately while
 # launchers were open (old tool env renamed aside, fresh install in place).
 $script:RenamedWhileRunning = $false
@@ -796,7 +833,7 @@ function Get-VerifiedReleaseWheel {
             throw "The downloaded FCC release wheel was empty."
         }
 
-        $actualSha256 = (Get-FileHash -LiteralPath $wheelPath -Algorithm SHA256).Hash
+        $actualSha256 = Get-FileSha256 -Path $wheelPath
         if ($($Release.Sha256)) {
             if ($actualSha256 -ne $($Release.Sha256)) {
                 throw "FCC release wheel checksum mismatch; refusing to install."
@@ -870,7 +907,18 @@ function Resolve-UvPath {
     return $uvCommand.Source
 }
 
-function Install-FreeClaudeCode {
+function Get-InstallPlan {
+    <#
+        .SYNOPSIS
+        Resolve the release, verify its wheel, and build the one uv command
+        every install path runs. Called once per episode.
+
+        .DESCRIPTION
+        Split out of Install-FreeClaudeCode in 6.82.0 because there are now two
+        paths that need it -- the staged swap and the in-place repair -- and a
+        second resolve would be a second download of the same wheel.
+    #>
+
     $release = Resolve-Release
     $wheelPath = Get-VerifiedReleaseWheel -Release $release
     $packageUrl = if ($DryRun) {
@@ -894,6 +942,30 @@ function Install-FreeClaudeCode {
         $arguments += @("--torch-backend", $TorchBackend)
     }
     $arguments += $packageSpec
+
+    return [pscustomobject]@{
+        Version   = $release.Version
+        WheelPath = $wheelPath
+        Arguments = $arguments
+    }
+}
+
+function Install-FreeClaudeCode {
+    <#
+        .SYNOPSIS
+        The in-place install ladder. From 6.82.0 this is the REPAIR path: the
+        ordinary path is the staged swap above it, and this one runs when there
+        is no uv tool environment to swap (a first install), when staging could
+        not be built, or when a release adds a launcher uv has to write.
+    #>
+    param([object] $Plan = $null)
+
+    if ($null -eq $Plan) {
+        $Plan = Get-InstallPlan
+    }
+    $wheelPath = $Plan.WheelPath
+    $arguments = $Plan.Arguments
+    $release = [pscustomobject]@{ Version = $Plan.Version }
 
     if ($DryRun) {
         return $release.Version
@@ -1014,11 +1086,24 @@ function Invoke-PrecompileBytecode {
         user is already watching an installer. Best effort by design: a failure
         costs the 3.5 seconds back and nothing else, so it must never fail an
         install that otherwise worked.
+
+        `-EnvironmentDir` is 6.82.0's, and it is what keeps this OUT of the
+        outage window: on the staged path the environment to compile is the
+        staged one, and it is compiled while the old server is still serving.
+        Compiling after the swap instead would have put the whole of it between
+        "stopped" and "started", which is the hole this release exists to close.
     #>
-    param([Parameter(Mandatory = $true)] [string] $UvPath)
+    param(
+        [string] $UvPath = "",
+        [string] $EnvironmentDir = ""
+    )
 
     try {
-        $toolDir = Get-UvToolDir -UvPath $UvPath
+        $toolDir = $EnvironmentDir
+        if ([string]::IsNullOrWhiteSpace($toolDir)) {
+            if ([string]::IsNullOrWhiteSpace($UvPath)) { return }
+            $toolDir = Get-UvToolDir -UvPath $UvPath
+        }
         if ([string]::IsNullOrWhiteSpace($toolDir)) {
             return
         }
@@ -1328,6 +1413,484 @@ function Update-UvReceiptEntrypoint {
     )
     Move-Item -LiteralPath $temporary -Destination $receipt -Force
     return $true
+}
+
+function Get-FileSha256 {
+    <#
+        .SYNOPSIS
+        The SHA-256 of a file, as upper-case hex. `Get-FileHash` when it is
+        there; the base class library when it is not.
+
+        .DESCRIPTION
+        The fallback is a measured failure rather than defensive decoration.
+        `Get-FileHash` lives in the module
+        `Microsoft.PowerShell.Utility`, which Windows PowerShell 5.1 autoloads
+        off `$env:PSModulePath` -- and a 5.1 process started BY a PowerShell 7
+        process inherits PowerShell 7's module path, whose
+        `Microsoft.PowerShell.Utility` 5.1 cannot load. Measured on this
+        machine on 2026-09-12, during the real update flow:
+
+            Get-FileHash : The term 'Get-FileHash' is not recognized as the
+            name of a cmdlet ... At install.ps1:833
+
+        The digest check is the one step of an install that must never be
+        skipped or fail for an unrelated reason, so it does not depend on a
+        module being loadable. `[System.Security.Cryptography.SHA256]` is in
+        the base class library and is there whatever the module path says.
+
+        (The root cause is fixed at the source too: the update helper strips
+        `PSModulePath` from the environment it hands its child. Both, because
+        this script is also run by hand from a pwsh 7 prompt.)
+    #>
+    param([Parameter(Mandatory = $true)][string] $Path)
+
+    # Prefer the cmdlet when it is genuinely there: it is the documented tool,
+    # and on a healthy machine this is what runs. `Get-Command` rather than a
+    # try/catch, because the failure mode is "the name does not resolve", and
+    # under `$ErrorActionPreference = 'Stop'` that is a terminating error which
+    # a catch would turn into a silently skipped digest check.
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    }
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $bytes = $sha.ComputeHash($stream)
+        }
+        finally {
+            $stream.Dispose()
+        }
+    }
+    finally {
+        $sha.Dispose()
+    }
+    return (($bytes | ForEach-Object { $_.ToString("x2") }) -join "").ToUpperInvariant()
+}
+
+function Get-UvToolsRoot {
+    <# .SYNOPSIS uv's tools ROOT (the parent of every tool environment). #>
+    param([Parameter(Mandatory = $true)] [string] $UvPath)
+
+    $root = Invoke-NativeCapture -FilePath $UvPath -Arguments @("tool", "dir")
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        return ""
+    }
+    return $root.Trim()
+}
+
+function Get-UpdateAsideRoot {
+    <#
+        .SYNOPSIS
+        `<uv tools root>/../<name>`: where an update keeps its spare copies.
+
+        .DESCRIPTION
+        Beside uv's tools root, never inside it. Measured on uv 0.11.21: a
+        directory inside the tools root whose name does not normalise to a
+        valid package name makes `uv tool list` fail outright and list nothing.
+        A sibling is invisible to uv and still on the same volume, so the swap
+        stays a rename rather than a copy.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $ToolsRoot,
+        [Parameter(Mandatory = $true)] [string] $Name
+    )
+
+    $parent = Split-Path -Parent $ToolsRoot
+    if ([string]::IsNullOrWhiteSpace($parent)) {
+        return ""
+    }
+    return (Join-Path $parent $Name)
+}
+
+function New-StagedEnvironment {
+    <#
+        .SYNOPSIS
+        Build the new version beside the running one. Never touches the live
+        environment, so a wheel that cannot be installed costs nothing at all.
+
+        .DESCRIPTION
+        The same uv command the in-place install would run, minus `--force`,
+        against an empty tools root of its own. `--force` exists to overwrite a
+        live environment, which is exactly what this path is built never to do.
+
+        Returns a descriptor whose `Ok` is $true only when uv exited 0 AND the
+        environment directory it was supposed to create exists. Every failure
+        is a $false with a reason: the caller falls back to the in-place ladder,
+        which from this release is a REPAIR rather than the ordinary path.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $UvPath,
+        [Parameter(Mandatory = $true)] [string[]] $Arguments,
+        [Parameter(Mandatory = $true)] [string] $ToolsRoot,
+        [Parameter(Mandatory = $true)] [string] $Stamp
+    )
+
+    $result = [pscustomobject]@{
+        Ok          = $false
+        Reason      = ""
+        StagingRoot = ""
+        StagingDir  = ""
+        StagingBin  = ""
+        StagingEnv  = ""
+    }
+    $stagingRoot = Get-UpdateAsideRoot -ToolsRoot $ToolsRoot -Name $StagingEnvDirName
+    if ([string]::IsNullOrWhiteSpace($stagingRoot)) {
+        $result.Reason = "uv's tools root has no parent directory to stage beside."
+        return $result
+    }
+    $result.StagingRoot = $stagingRoot
+    $stagingDir = Join-Path $stagingRoot $Stamp
+    $stagingBin = Join-Path $stagingDir ".bin"
+    $result.StagingDir = $stagingDir
+    $result.StagingBin = $stagingBin
+    $result.StagingEnv = Join-Path $stagingDir $PackageEnvDirName
+
+    # `--force` removed: see above. `--refresh-package` stays -- the wheel is a
+    # file:// URL whose name does not change between releases of the same
+    # version, and uv's cache would otherwise serve the previous bytes.
+    $stagingArgs = @($Arguments | Where-Object { $_ -ne "--force" })
+
+    $hadToolDir = Test-Path Env:\UV_TOOL_DIR
+    $previousToolDir = if ($hadToolDir) { $env:UV_TOOL_DIR } else { "" }
+    $hadBinDir = Test-Path Env:\UV_TOOL_BIN_DIR
+    $previousBinDir = if ($hadBinDir) { $env:UV_TOOL_BIN_DIR } else { "" }
+    $capturePath = New-CapturePath
+    try {
+        New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $stagingBin -Force | Out-Null
+        $env:UV_TOOL_DIR = $stagingDir
+        $env:UV_TOOL_BIN_DIR = $stagingBin
+        Invoke-NativeCommand -FilePath $UvPath -Arguments $stagingArgs -CaptureTo $capturePath
+        if (Test-Path -LiteralPath $result.StagingEnv -PathType Container) {
+            $result.Ok = $true
+        }
+        else {
+            $result.Reason = "uv exited 0 but created no environment under $stagingDir."
+        }
+    }
+    catch {
+        $result.Reason = $_.Exception.Message
+        # A full disk is not a lock, and the in-place ladder below writes MORE
+        # files on the same volume. Say so once, here, and let the caller stop.
+        if ((Get-UvFailureCategory (Read-CapturedOutput $capturePath)) -eq "disk-full") {
+            $result.Reason = "disk-full"
+        }
+    }
+    finally {
+        if ($hadToolDir) { $env:UV_TOOL_DIR = $previousToolDir } else { Remove-Item Env:\UV_TOOL_DIR -ErrorAction SilentlyContinue }
+        if ($hadBinDir) { $env:UV_TOOL_BIN_DIR = $previousBinDir } else { Remove-Item Env:\UV_TOOL_BIN_DIR -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath $capturePath -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $result.Ok) {
+        Write-InstallLog ("Nothing was staged (" + $result.Reason + "); the running version is untouched.")
+        Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return $result
+}
+
+function Test-StagedEnvironment {
+    <#
+        .SYNOPSIS
+        Run the staged environment once, before it is anywhere near the live
+        path. Returns a descriptor with `Ok` and a `Reason`.
+
+        .DESCRIPTION
+        The gate is EXECUTING the new thing, not trusting an installer's exit
+        code: a wheel that resolves, installs and then cannot import itself is
+        a real failure mode, and it used to be discovered by the user.
+
+        `mcc-server --version` first and `fcc-server --version` only as a
+        fallback: both are published, but the legacy launcher prints the LEGACY
+        distribution name ("free-claude-code 6.81.0"), and a version check that
+        reads the wrong product name is a check waiting to be misread.
+
+        This runs BEFORE the stop rather than after it (the helper's order),
+        which is the one deliberate difference from 6.72.0: a wheel that cannot
+        run now costs a download instead of an outage.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $StagingEnv,
+        [string] $ExpectedVersion = ""
+    )
+
+    $verdict = [pscustomobject]@{ Ok = $false; Reason = "The staged version could not be run." }
+    $stagedServer = Join-Path $StagingEnv "Scripts\mcc-server.exe"
+    if (-not (Test-Path -LiteralPath $stagedServer -PathType Leaf)) {
+        $stagedServer = Join-Path $StagingEnv "Scripts\fcc-server.exe"
+    }
+    $stagedPython = Join-Path $StagingEnv "Scripts\python.exe"
+    if (-not ((Test-Path -LiteralPath $stagedServer -PathType Leaf) -and (Test-Path -LiteralPath $stagedPython -PathType Leaf))) {
+        $verdict.Reason = "The staged install produced no runnable launcher."
+        return $verdict
+    }
+
+    $previousPreference = $ErrorActionPreference
+    # uv-built launchers write nothing to stderr on success, but a broken one
+    # writes a traceback -- and under "Stop" the first stderr line would end
+    # this script instead of being the answer it is.
+    $ErrorActionPreference = "Continue"
+    try {
+        $versionOut = (& $stagedServer --version 2>&1 | ForEach-Object { Convert-OutputLine $_ } | Out-String).Trim()
+        $versionCode = $LASTEXITCODE
+        Write-InstallLog ('Staged --version said "' + $versionOut + '" (exit ' + $versionCode + ').')
+        $importOut = (& $stagedPython -c "import my_claude_code" 2>&1 | ForEach-Object { Convert-OutputLine $_ } | Out-String).Trim()
+        $importCode = $LASTEXITCODE
+        Write-InstallLog ("Staged import exited with " + $importCode + ".")
+        if ($importOut) { Write-InstallLog $importOut }
+        if ($ExpectedVersion -and ($versionOut -notmatch [regex]::Escape($ExpectedVersion))) {
+            $verdict.Reason = 'The staged version reported "' + $versionOut + '" rather than ' + $ExpectedVersion + "."
+        }
+        elseif (($versionCode -eq 0) -and ($importCode -eq 0)) {
+            $verdict.Ok = $true
+            $verdict.Reason = ""
+        }
+        else {
+            $verdict.Reason = "The staged version did not run: --version exited $versionCode, import exited $importCode."
+        }
+    }
+    catch {
+        $verdict.Ok = $false
+        $verdict.Reason = "The staged version could not be run: $($_.Exception.Message)"
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    return $verdict
+}
+
+function Invoke-EnvironmentSwap {
+    <#
+        .SYNOPSIS
+        Exchange the staged environment with the live one. Two directory
+        renames on one volume. Returns $true when the new one is in place.
+
+        .DESCRIPTION
+        The launcher shims in uv's bin directory are NOT touched, and that is
+        the whole trick: every one of them is a uv trampoline whose embedded
+        path is `<tools root>/my-claude-code/Scripts/python.exe`. They do not
+        care WHICH environment is at that path -- so the instant the new one
+        lands there, every already-installed launcher runs the new code, and no
+        locked `.exe` can abort anything, because nothing is being written over
+        (invariant 9, decision Q6).
+
+        The environment's OWN `Scripts/*.exe` are a different matter: uv baked
+        the staging path into them, so after the move they are dead. They are
+        replaced with the bin copies, which carry the canonical path.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $StagingEnv,
+        [Parameter(Mandatory = $true)] [string] $StagingDir,
+        [Parameter(Mandatory = $true)] [string] $StagingBin,
+        [Parameter(Mandatory = $true)] [string] $ToolDir,
+        [Parameter(Mandatory = $true)] [string] $BinDir,
+        [Parameter(Mandatory = $true)] [string] $PreviousDir
+    )
+
+    $asideEnv = Join-Path $PreviousDir $PackageEnvDirName
+    try {
+        New-Item -ItemType Directory -Path $PreviousDir -Force | Out-Null
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        [System.IO.Directory]::Move($ToolDir, $asideEnv)
+        [System.IO.Directory]::Move($StagingEnv, $ToolDir)
+        $watch.Stop()
+        Write-InstallLog ("Swapped in " + [math]::Round($watch.Elapsed.TotalMilliseconds, 1) + " ms. The previous version is at " + $asideEnv + ".")
+    }
+    catch {
+        Write-InstallLog ("The swap failed: " + $_.Exception.Message)
+        # Put the live environment back if the first move succeeded and the
+        # second did not. Anything else and nothing moved at all.
+        if ((-not (Test-Path -LiteralPath $ToolDir -PathType Container)) -and (Test-Path -LiteralPath $asideEnv -PathType Container)) {
+            try {
+                [System.IO.Directory]::Move($asideEnv, $ToolDir)
+                Write-InstallLog "The previous environment was put back."
+            }
+            catch {
+                Write-InstallLog ("The previous environment could not be put back: " + $_.Exception.Message)
+            }
+        }
+        return $false
+    }
+
+    $script:StagedSwapped = $true
+    $script:StagedPreviousEnv = $asideEnv
+    $script:StagedPreviousDir = $PreviousDir
+    $script:StagedStagingDir = $StagingDir
+    return $true
+}
+
+function Complete-EnvironmentSwap {
+    <#
+        .SYNOPSIS
+        The tidying the swap leaves behind: the new environment's own
+        trampolines, and uv's receipt. Neither is needed to RUN the new server.
+
+        .DESCRIPTION
+        Separated from the swap in 6.82.0 because of where it falls in the
+        clock. Everything between "the old server stopped" and "the new server
+        started" is outage, and this is 41 file copies plus a receipt rewrite
+        -- measured at most of a 9.6 s gap on this machine. Nothing in it is
+        required first: the server is started through the launcher in uv's bin
+        directory, which was never touched and already names the canonical
+        path. So the server starts, and this happens while it boots.
+
+        What it fixes is the environment's OWN `Scripts/*.exe`, into which uv
+        baked the staging path, and the receipt's entry points, which name the
+        staging bin directory that is about to be deleted -- a receipt left as
+        written would send a later uninstall or upgrade at a path that no
+        longer exists.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $ToolDir,
+        [Parameter(Mandatory = $true)] [string] $BinDir,
+        [Parameter(Mandatory = $true)] [string] $StagingBin
+    )
+
+    # The environment's own trampolines, re-pointed at the canonical path.
+    $repaired = 0
+    if (Test-Path -LiteralPath $BinDir -PathType Container) {
+        foreach ($file in @(Get-ChildItem -Path $BinDir -Filter "*.exe" -ErrorAction SilentlyContinue)) {
+            $target = Join-Path $ToolDir ("Scripts\" + $file.Name)
+            if (Test-Path -LiteralPath $target -PathType Leaf) {
+                try {
+                    Copy-Item -LiteralPath $file.FullName -Destination $target -Force -ErrorAction Stop
+                    $repaired = $repaired + 1
+                }
+                catch {
+                }
+            }
+        }
+    }
+    Write-InstallLog ("Re-pointed " + $repaired + " launcher(s) inside the new environment.")
+
+    # uv recorded every entry point under the STAGING bin directory, which is
+    # about to be deleted; a receipt left as written would send a later
+    # uninstall or upgrade at a path that no longer exists.
+    $receiptPath = Join-Path $ToolDir "uv-receipt.toml"
+    if (Test-Path -LiteralPath $receiptPath -PathType Leaf) {
+        try {
+            $receiptText = [IO.File]::ReadAllText($receiptPath)
+            $realPrefix = $BinDir.Replace("\", "/").TrimEnd("/")
+            $backslashPrefix = $StagingBin.Replace("/", "\").TrimEnd("\")
+            $rewritten = $receiptText
+            foreach ($stagePrefix in @($StagingBin.Replace("\", "/").TrimEnd("/"), $backslashPrefix.Replace("\", "\\"), $backslashPrefix)) {
+                $rewritten = $rewritten.Replace($stagePrefix, $realPrefix)
+            }
+            if ($rewritten -ne $receiptText) {
+                [System.IO.File]::WriteAllText(($receiptPath + ".new"), $rewritten, (New-Object System.Text.UTF8Encoding($false)))
+                Move-Item -LiteralPath ($receiptPath + ".new") -Destination $receiptPath -Force
+                Write-InstallLog "Rewrote the receipt entry points to the real bin directory."
+            }
+        }
+        catch {
+            Write-InstallLog ("The receipt could not be rewritten: " + $_.Exception.Message)
+        }
+    }
+    # The staging directory is NOT deleted here either. What is left in it is
+    # an empty shell -- the environment itself has been MOVED out -- but the
+    # .bin directory and uv's links are still hundreds of megabytes, and
+    # deleting them measured 7.2 s on this machine. It is swept after the
+    # health gate, where nobody is waiting.
+}
+
+function Get-MissingLauncherShim {
+    <#
+        .SYNOPSIS
+        Commands this release publishes for which no trampoline exists yet.
+
+        .DESCRIPTION
+        A release that ADDS an entry point cannot be finished by a rename:
+        there is no trampoline anywhere carrying the canonical path for it, and
+        one cannot be written by hand (the path is baked into the binary twice,
+        once as a PE resource and once as the shebang of an appended zip). That
+        case falls through to the in-place install, which is now a repair --
+        and it runs against a fully warm cache, because the staging pass just
+        filled it.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $BinDir,
+        [Parameter(Mandatory = $true)] [string] $StagingBinOrEnvScripts
+    )
+
+    $missing = @()
+    if (-not (Test-Path -LiteralPath $StagingBinOrEnvScripts -PathType Container)) {
+        return $missing
+    }
+    foreach ($file in @(Get-ChildItem -Path $StagingBinOrEnvScripts -Filter "*.exe" -ErrorAction SilentlyContinue)) {
+        if ([IO.Path]::GetFileNameWithoutExtension($file.Name) -in @("python", "pythonw", "pip")) { continue }
+        if (-not (Test-Path -LiteralPath (Join-Path $BinDir $file.Name) -PathType Leaf)) {
+            $missing += [IO.Path]::GetFileNameWithoutExtension($file.Name)
+        }
+    }
+    return $missing
+}
+
+function Restore-PreviousEnvironment {
+    <#
+        .SYNOPSIS
+        Put the version that worked back at the canonical path. Returns $true
+        when the previous environment is live again.
+
+        .DESCRIPTION
+        This is the reason the old environment was renamed rather than deleted.
+        The wreckage is kept under the staging root so the failure can be
+        looked at; the previous environment's own Scripts trampolines carry the
+        canonical path already -- they were never rewritten -- so nothing else
+        is needed.
+    #>
+    param(
+        [Parameter(Mandatory = $true)] [string] $ToolDir,
+        [Parameter(Mandatory = $true)] [string] $AsideEnv,
+        [Parameter(Mandatory = $true)] [string] $StagingRoot,
+        [Parameter(Mandatory = $true)] [string] $Stamp,
+        [string] $PreviousDir = ""
+    )
+
+    try {
+        $failedDir = Join-Path $StagingRoot ($Stamp + "-failed")
+        New-Item -ItemType Directory -Path $failedDir -Force | Out-Null
+        if (Test-Path -LiteralPath $ToolDir -PathType Container) {
+            [System.IO.Directory]::Move($ToolDir, (Join-Path $failedDir $PackageEnvDirName))
+        }
+        [System.IO.Directory]::Move($AsideEnv, $ToolDir)
+        Write-InstallLog "The previous environment is back at the canonical path."
+        if ($PreviousDir) {
+            # The stamp directory it came out of is now empty, and an empty one
+            # would be kept as "the rollback" by the next sweep while holding
+            # nothing to roll back to.
+            Remove-Item -LiteralPath $PreviousDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $script:StagedRolledBack = $true
+        return $true
+    }
+    catch {
+        Write-InstallLog ("The rollback failed: " + $_.Exception.Message)
+        return $false
+    }
+}
+
+function Remove-StalePreviousEnvironment {
+    <#
+        .SYNOPSIS
+        Keep exactly one previous environment: it is the rollback, and a second
+        one is only disk. Swept after /health answers, never before.
+    #>
+    param([string] $Root, [int] $Keep = 1)
+
+    if ([string]::IsNullOrWhiteSpace($Root)) { return }
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return }
+    $all = @(Get-ChildItem -Path $Root -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
+    if ($all.Count -le $Keep) { return }
+    foreach ($old in $all[$Keep..($all.Count - 1)]) {
+        try {
+            Remove-Item -LiteralPath $old.FullName -Recurse -Force -ErrorAction Stop
+            Write-InstallLog ("Removed the superseded previous environment " + $old.Name + ".")
+        }
+        catch {
+            Write-InstallLog ("Could not remove " + $old.FullName + ": " + $_.Exception.Message)
+        }
+    }
 }
 
 function Get-ManagedShimName {
@@ -2091,10 +2654,163 @@ function Get-ChildFailureDetail {
     }
 }
 
+function Get-MccServerLauncher {
+    <#
+        .SYNOPSIS
+        The `mcc-server` this machine runs, or $null. uv's bin directory first,
+        PATH second.
+    #>
+
+    $binDir = ""
+    try {
+        $binDir = Invoke-NativeCapture -FilePath (Resolve-UvPath "the restart") -Arguments @("tool", "dir", "--bin")
+    }
+    catch {
+        $binDir = ""
+    }
+    if (-not [string]::IsNullOrWhiteSpace($binDir)) {
+        $launcher = Get-LauncherInBinDirectory -BinDir $binDir -Name "mcc-server"
+        if ($launcher) { return $launcher }
+    }
+    $command = Get-ApplicationCommand "mcc-server"
+    if ($command) { return $command.Source }
+    return $null
+}
+
+function Get-InstalledServerVersion {
+    <#
+        .SYNOPSIS
+        The version of the `mcc-server` that is installed RIGHT NOW, read from
+        the launcher itself.
+
+        .DESCRIPTION
+        6.82.0 stops the old server BEFORE the swap (decision Q6), so the build
+        that has to answer `--report-holder` is the one already on disk, not
+        the one being installed. `--version` is the one argument every build
+        has ever answered; anything else an older `mcc-server` ignores, and
+        `cli.entrypoints.serve` then STARTS A SERVER on the configured port
+        (measured 20:12 on 2026-09-11), which is why this gate exists at all.
+    #>
+    param([Parameter(Mandatory = $true)][string] $Launcher)
+
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $text = (& $Launcher --version 2>&1 | ForEach-Object { Convert-OutputLine $_ } | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) { return "" }
+        $match = [regex]::Match($text, "(\d+\.\d+\.\d+)")
+        if ($match.Success) { return $match.Groups[1].Value }
+        return ""
+    }
+    catch {
+        return ""
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
+function Stop-ConfiguredServer {
+    <#
+        .SYNOPSIS
+        Stop exactly the one server this install is for, and say what happened.
+
+        .DESCRIPTION
+        "Restart" means exactly one server: the MCC server bound to the PORT of
+        the configuration directory this install is for. Every other MCC server
+        -- other ports, other configuration directories, the user's
+        agent-serving instances -- is listed and never stopped (binding scope
+        decision, 2026-09-11 15:37). A foreign holder is never killed by any
+        path (invariant 1).
+
+        `Outcome` is one of:
+          stopped            our server was stopped and the port is free
+          nothing-listening  the port was already free
+          foreign            a non-MCC process holds the port; nothing touched
+          unclassifiable     the port is busy and this build cannot say by what
+          failed             our server would not stop
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Launcher,
+        [Parameter(Mandatory = $true)][string] $LauncherVersion,
+        [Parameter(Mandatory = $true)][object] $Address
+    )
+
+    $verdict = [pscustomobject]@{ Outcome = "failed"; Message = "" }
+    $report = $null
+    if ($LauncherVersion -and (Test-VersionAtLeast -Version $LauncherVersion -Minimum $RestartAwareVersion)) {
+        $report = Get-PortHolderDocument -Launcher $Launcher -ReachableHost $Address.ReachableHost -Port $Address.Port
+    }
+    else {
+        Write-InstallLog ("The installed mcc-server (" + $(if ($LauncherVersion) { $LauncherVersion } else { "version unknown" }) + ") predates --report-holder; not asking it.")
+    }
+    if ($null -eq $report) {
+        # The installed mcc-server cannot classify the port holder, and this
+        # script must not try: deciding which processes My Claude Code may stop
+        # in PowerShell is the second opinion that has no business existing.
+        # What it CAN do is ask whether the port is occupied at all -- a TCP
+        # connect, which stops nothing and identifies nothing.
+        if (Test-PortIsOccupied -ReachableHost $Address.ReachableHost -Port $Address.Port) {
+            $verdict.Outcome = "unclassifiable"
+            $verdict.Message = "Port $($Address.Port) is in use and the installed mcc-server cannot say by what, so nothing was stopped and nothing was started."
+            return $verdict
+        }
+        $verdict.Outcome = "nothing-listening"
+        $verdict.Message = "Nothing is listening on port $($Address.Port)."
+        return $verdict
+    }
+
+    Write-OtherServerReport -Document $report
+    $holderDescription = ""
+    try { $holderDescription = [string] $report.holder_description } catch { $holderDescription = "" }
+    $holderIsOurs = $false
+    try { $holderIsOurs = [bool] $report.holder.is_mcc_server } catch { $holderIsOurs = $false }
+    $holderPid = 0
+    try { if ($null -ne $report.holder.pid) { $holderPid = [int] $report.holder.pid } } catch { $holderPid = 0 }
+    $script:InstallProgressHolder = $holderDescription
+
+    if ($holderPid -gt 0 -and (-not $holderIsOurs)) {
+        $reason = ""
+        try { $reason = [string] $report.holder.reason } catch { $reason = "" }
+        $verdict.Outcome = "foreign"
+        $verdict.Message = "Port $($Address.Port) is held by $holderDescription, which is not a My Claude Code server. Nothing was stopped and nothing was started."
+        if ($reason) { $verdict.Message = $verdict.Message + " ($reason)" }
+        return $verdict
+    }
+
+    if ($holderPid -le 0) {
+        $verdict.Outcome = "nothing-listening"
+        $verdict.Message = "Nothing was listening on port $($Address.Port)."
+        return $verdict
+    }
+
+    Write-InstallProgress -Stage 'stopping' -Message "Stopping the server on port $($Address.Port)."
+    Write-Host "Stopping $holderDescription."
+    $stopped = Stop-PortHolderServer -Launcher $Launcher -ReachableHost $Address.ReachableHost -Port $Address.Port
+    $stopMessage = ""
+    try { $stopMessage = [string] $stopped.message } catch { $stopMessage = "" }
+    if ($stopMessage) {
+        Write-Host $stopMessage
+        Write-InstallLog $stopMessage
+    }
+    $portFree = $false
+    try { $portFree = [bool] $stopped.port_free } catch { $portFree = $false }
+    if ($portFree) {
+        $verdict.Outcome = "stopped"
+        $verdict.Message = $stopMessage
+        return $verdict
+    }
+    $verdict.Outcome = "failed"
+    $verdict.Message = "The server on port $($Address.Port) could not be stopped. $stopMessage"
+    return $verdict
+}
+
 function Invoke-RestartAfterInstall {
     <#
         .SYNOPSIS
         Stop the one server this install is for, start the new one, prove it.
+        The path taken when nothing was swapped -- a first install, or the
+        in-place repair ladder.
 
         .DESCRIPTION
         The order, and why each step is where it is:
@@ -2107,10 +2823,7 @@ function Invoke-RestartAfterInstall {
           3. Stop it by exact pid, within its own configured budget, and wait
              for the port to come free.
           4. Start `mcc-server` detached and hidden.
-          5. Wait for /health to answer 200. THIS is success. If it never
-             answers, say so plainly -- V1 has no staged swap in the installer,
-             so the previous version is no longer on disk and the honest
-             instruction is to run the installer again.
+          5. Wait for /health to answer 200. THIS is success.
 
         Returns $true when a listener is answering on the configured port.
     #>
@@ -2122,21 +2835,7 @@ function Invoke-RestartAfterInstall {
     Write-Step "Restarting the My Claude Code server on port $($address.Port)"
     Write-InstallLog ("Restart requested for the server on " + $address.ReachableHost + ":" + $address.Port + ".")
 
-    $binDir = ""
-    try {
-        $binDir = Invoke-NativeCapture -FilePath (Resolve-UvPath "the restart") -Arguments @("tool", "dir", "--bin")
-    }
-    catch {
-        $binDir = ""
-    }
-    $launcher = $null
-    if (-not [string]::IsNullOrWhiteSpace($binDir)) {
-        $launcher = Get-LauncherInBinDirectory -BinDir $binDir -Name "mcc-server"
-    }
-    if (-not $launcher) {
-        $command = Get-ApplicationCommand "mcc-server"
-        if ($command) { $launcher = $command.Source }
-    }
+    $launcher = Get-MccServerLauncher
     if (-not $launcher) {
         $message = "The server was not restarted: mcc-server was not found after the install."
         Write-Host $message
@@ -2144,82 +2843,35 @@ function Invoke-RestartAfterInstall {
         return $false
     }
 
-    # ---- who holds the port -------------------------------------------------
-    # ONLY of a build that has the question. `cli.entrypoints.serve` ignores
-    # every argument but `--version`, so a 6.72.2 or older `mcc-server
-    # --report-holder 8392` does not fail -- it STARTS A SERVER on the
-    # configured port, and the installer waiting for its answer blocks behind it
-    # for ever. Measured on the real installer at 20:12 on 2026-09-11. The
-    # version is the one thing every build has always answered.
-    $report = $null
-    if (Test-VersionAtLeast -Version $InstalledVersion -Minimum $RestartAwareVersion) {
-        $report = Get-PortHolderDocument -Launcher $launcher -ReachableHost $address.ReachableHost -Port $address.Port
-    }
-    else {
-        Write-InstallLog ("Installed version " + $InstalledVersion + " predates --report-holder; not asking it.")
-    }
-    if ($null -eq $report) {
-        # The installed mcc-server predates --report-holder (a pinned -Version,
-        # or the first install of this release, whose wheel is the one BEFORE
-        # it). It cannot classify the port holder, and this script must not try:
-        # deciding which processes My Claude Code may stop in PowerShell is the
-        # second opinion that has no business existing.
-        #
-        # What it CAN do without classifying anything is ask whether the port is
-        # occupied at all -- a TCP connect, which stops nothing and identifies
-        # nothing. A free port is safe to start into; an occupied one is
-        # reported and left exactly as it is.
-        if (Test-PortIsOccupied -ReachableHost $address.ReachableHost -Port $address.Port) {
-            $message = "Port $($address.Port) is in use and this build of mcc-server cannot say by what, so nothing was stopped and nothing was started. Run the installer again once this version is installed, or stop the server yourself and start it with: mcc-server"
+    # On this path the build that answers --report-holder is the one that was
+    # just installed, because nothing was swapped and the old environment is
+    # gone. On the staged path the caller has already stopped the server with
+    # the OLD build, which is the one that was on disk at the time.
+    $verdict = Stop-ConfiguredServer -Launcher $launcher -LauncherVersion $InstalledVersion -Address $address
+    switch ($verdict.Outcome) {
+        'stopped' { }
+        'nothing-listening' {
+            Write-Host "Nothing was listening on port $($address.Port); starting the server."
+            Write-InstallLog "Nothing held the port; starting the server."
+        }
+        'foreign' {
+            Write-Host ""
+            Write-Host $verdict.Message
+            Write-InstallLog $verdict.Message
+            $script:InstallProgressRestarted = $false
+            Write-InstallProgress -Stage 'done' -Message $verdict.Message
+            return $false
+        }
+        'unclassifiable' {
+            $message = $verdict.Message + " Run the installer again once this version is installed, or stop the server yourself and start it with: mcc-server"
             Write-Host $message
             Write-InstallLog $message
             $script:InstallProgressRestarted = $false
             Write-InstallProgress -Stage 'done' -Message $message
             return $false
         }
-        Write-Host "Nothing is listening on port $($address.Port); starting the server."
-        Write-InstallLog "The installed build cannot classify a port holder, and nothing holds the port; starting."
-        return (Start-AndProveServer -Launcher $launcher -InstalledVersion $InstalledVersion -HealthUrl $healthUrl -Port $address.Port)
-    }
-    Write-OtherServerReport -Document $report
-    $holderDescription = ""
-    try { $holderDescription = [string] $report.holder_description } catch { $holderDescription = "" }
-    $holderIsOurs = $false
-    try { $holderIsOurs = [bool] $report.holder.is_mcc_server } catch { $holderIsOurs = $false }
-    $holderPid = 0
-    try { if ($null -ne $report.holder.pid) { $holderPid = [int] $report.holder.pid } } catch { $holderPid = 0 }
-    $script:InstallProgressHolder = $holderDescription
-
-    if ($holderPid -gt 0 -and (-not $holderIsOurs)) {
-        # Invariant 1, in the one place it matters most: a foreign holder of
-        # the port is never killed, by any path.
-        $reason = ""
-        try { $reason = [string] $report.holder.reason } catch { $reason = "" }
-        $message = "Port $($address.Port) is held by $holderDescription, which is not a My Claude Code server. Nothing was stopped and nothing was started."
-        Write-Host ""
-        Write-Host $message
-        if ($reason) { Write-Host "  ($reason)" }
-        Write-InstallLog $message
-        $script:InstallProgressRestarted = $false
-        Write-InstallProgress -Stage 'done' -Message $message
-        return $false
-    }
-
-    # ---- stop exactly that one server --------------------------------------
-    if ($holderPid -gt 0) {
-        Write-InstallProgress -Stage 'stopping' -Message "Stopping the server on port $($address.Port)."
-        Write-Host "Stopping $holderDescription."
-        $stopped = Stop-PortHolderServer -Launcher $launcher -ReachableHost $address.ReachableHost -Port $address.Port
-        $stopMessage = ""
-        try { $stopMessage = [string] $stopped.message } catch { $stopMessage = "" }
-        if ($stopMessage) {
-            Write-Host $stopMessage
-            Write-InstallLog $stopMessage
-        }
-        $portFree = $false
-        try { $portFree = [bool] $stopped.port_free } catch { $portFree = $false }
-        if (-not $portFree) {
-            $message = "The server on port $($address.Port) could not be stopped, so nothing was started. $stopMessage"
+        default {
+            $message = $verdict.Message + " Nothing was started."
             Write-Host $message
             Write-InstallLog $message
             $script:InstallProgressRestarted = $false
@@ -2227,36 +2879,33 @@ function Invoke-RestartAfterInstall {
             return $false
         }
     }
-    else {
-        Write-Host "Nothing was listening on port $($address.Port); starting the server."
-        Write-InstallLog "Nothing held the port; starting the server."
-    }
 
-    # ---- start the new one --------------------------------------------------
     return (Start-AndProveServer -Launcher $launcher -InstalledVersion $InstalledVersion -HealthUrl $healthUrl -Port $address.Port)
 }
 
-function Start-AndProveServer {
+function Start-RestartedServer {
     <#
         .SYNOPSIS
-        Start mcc-server detached and wait for /health. Returns $true when a
-        listener answers.
+        Start mcc-server detached. Returns a descriptor, or $null if it could
+        not be started at all.
 
         .DESCRIPTION
-        The second half of the restart, in a function of its own because two
-        paths reach it -- the ordinary one and the fallback for an installed
-        build that cannot classify a port holder -- and a second copy of "start
-        it and prove it" is a second definition of success.
+        Split from the health gate in 6.82.0, and the split is what keeps the
+        outage short. On the staged path the swap is followed by the ordinary
+        post-install work -- PATH, the file-based verification, the RTK
+        settings, the Start Menu shortcut -- which was measured at 12.3 s on
+        this machine. Run before the start, every second of it is a second the
+        machine has no server; run beside it, it costs nothing, because the
+        server spends that time booting anyway.
 
-        THIS is the success condition. "The install exited 0" is not: on
-        2026-09-11 two installs exited 0 fifteen minutes apart and the machine
-        had no server through either of them.
+        Measured on 2026-09-12 on a scratch install: 27.0 s of outage with the
+        verification inside the window, against 10.2 s for the 6.81.0 installer
+        which did its verification before the stop. This is what closes that.
     #>
     param(
         [Parameter(Mandatory = $true)][string] $Launcher,
         [Parameter(Mandatory = $true)][string] $InstalledVersion,
-        [Parameter(Mandatory = $true)][string] $HealthUrl,
-        [Parameter(Mandatory = $true)][int] $Port
+        [switch] $RollbackAvailable
     )
 
     Write-InstallProgress -Stage 'starting' -Message "Starting My Claude Code $InstalledVersion."
@@ -2264,22 +2913,60 @@ function Start-AndProveServer {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $startOut = Join-Path $updatesDir ("server-start-" + $stamp + ".log")
     $startErr = Join-Path $updatesDir ("server-start-" + $stamp + ".err.log")
-    $child = $null
     try {
         $child = Start-MccServerDetached -Launcher $Launcher -StdOutPath $startOut -StdErrPath $startErr
     }
     catch {
-        $message = "The server could not be started: $($_.Exception.Message) The previous version is no longer installed; run the installer again."
+        $noWayBack = if ($RollbackAvailable) {
+            " The previous version is still on disk and is being put back."
+        }
+        else {
+            " The previous version is no longer installed; run the installer again."
+        }
+        $message = "The server could not be started: $($_.Exception.Message)$noWayBack"
         Write-Host $message
         Write-InstallLog $message
         $script:InstallProgressRestarted = $false
-        Write-InstallProgress -Stage 'failed' -Message $message
-        return $false
+        if (-not $RollbackAvailable) {
+            Write-InstallProgress -Stage 'failed' -Message $message
+        }
+        return $null
     }
-    Write-Host "Started mcc-server (pid $($child.Id)). Waiting for it to answer $HealthUrl."
-    Write-InstallLog ("Started mcc-server, pid " + $child.Id + "; waiting for " + $HealthUrl + ".")
+    Write-Host "Started mcc-server (pid $($child.Id))."
+    Write-InstallLog ("Started mcc-server, pid " + $child.Id + ".")
+    return [pscustomobject]@{
+        Id      = $child.Id
+        StdOut  = $startOut
+        StdErr  = $startErr
+    }
+}
 
-    # ---- prove it -----------------------------------------------------------
+function Confirm-RestartedServer {
+    <#
+        .SYNOPSIS
+        Wait for /health and write the terminal record. Returns $true when a
+        listener answers.
+
+        .DESCRIPTION
+        THIS is the success condition. "The install exited 0" is not: on
+        2026-09-11 two installs exited 0 fifteen minutes apart and the machine
+        had no server through either of them.
+
+        `-RollbackAvailable` says the version that was working is still on
+        disk, so the honest sentence is "the previous one is being put back",
+        not "run the installer again" -- and the terminal record belongs to the
+        ROLLBACK, which the caller writes.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object] $Child,
+        [Parameter(Mandatory = $true)][string] $InstalledVersion,
+        [Parameter(Mandatory = $true)][string] $HealthUrl,
+        [Parameter(Mandatory = $true)][int] $Port,
+        [switch] $RollbackAvailable
+    )
+
+    Write-Host "Waiting for it to answer $HealthUrl."
+    Write-InstallLog ("Waiting for " + $HealthUrl + ".")
     if (Wait-ForServerHealth -Url $HealthUrl -BudgetSeconds (Get-ServerStartTimeoutSeconds)) {
         $script:InstallProgressRestarted = $true
         $message = "My Claude Code $InstalledVersion is installed and answering on port $Port."
@@ -2294,17 +2981,23 @@ function Start-AndProveServer {
     # pid is still alive, and everything it wrote before it stopped.
     $exitCode = "the process did not exit"
     try {
-        if (-not (Get-Process -Id $child.Id -ErrorAction SilentlyContinue)) {
+        if (-not (Get-Process -Id $Child.Id -ErrorAction SilentlyContinue)) {
             $exitCode = "the process exited (see its output below)"
         }
     }
     catch { $exitCode = "unknown" }
-    $detail = Get-ChildFailureDetail -Path $startErr
-    if (-not $detail) { $detail = Get-ChildFailureDetail -Path $startOut }
-    $message = "The new server did not answer $HealthUrl. Exit code: $exitCode. The previous version is no longer installed; run the installer again."
+    $detail = Get-ChildFailureDetail -Path $Child.StdErr
+    if (-not $detail) { $detail = Get-ChildFailureDetail -Path $Child.StdOut }
+    $noWayBack = if ($RollbackAvailable) {
+        " The previous version is still on disk and is being put back."
+    }
+    else {
+        " The previous version is no longer installed; run the installer again."
+    }
+    $message = "The new server did not answer $HealthUrl. Exit code: $exitCode.$noWayBack"
     Write-Host ""
     Write-Host $message
-    Write-Host "Its output is in: $startErr"
+    Write-Host "Its output is in: $($Child.StdErr)"
     if ($detail) {
         Write-Host "Last lines:"
         Write-Host $detail
@@ -2312,8 +3005,37 @@ function Start-AndProveServer {
     Write-InstallLog $message
     if ($detail) { Write-InstallLog $detail }
     $script:InstallProgressRestarted = $false
-    Write-InstallProgress -Stage 'failed' -Message $message
+    if (-not $RollbackAvailable) {
+        Write-InstallProgress -Stage 'failed' -Message $message
+    }
     return $false
+}
+
+function Start-AndProveServer {
+    <#
+        .SYNOPSIS
+        Start mcc-server detached and wait for /health, in one call. Returns
+        $true when a listener answers.
+
+        .DESCRIPTION
+        The in-place path's shape, where there is no post-install work worth
+        overlapping: nothing was swapped, so the environment the verification
+        checks is the one uv has just written, and it has already been checked
+        by the time this runs.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string] $Launcher,
+        [Parameter(Mandatory = $true)][string] $InstalledVersion,
+        [Parameter(Mandatory = $true)][string] $HealthUrl,
+        [Parameter(Mandatory = $true)][int] $Port,
+        [switch] $RollbackAvailable
+    )
+
+    $child = Start-RestartedServer -Launcher $Launcher -InstalledVersion $InstalledVersion -RollbackAvailable:$RollbackAvailable
+    if ($null -eq $child) {
+        return $false
+    }
+    return (Confirm-RestartedServer -Child $child -InstalledVersion $InstalledVersion -HealthUrl $HealthUrl -Port $Port -RollbackAvailable:$RollbackAvailable)
 }
 
 function Write-InstallProgress {
@@ -3194,16 +3916,243 @@ Write-Step "Installing or updating My Claude Code"
 # From here until the last line of this script, anything that reads the update
 # receipt sees an installer in flight and stays out of the way. `finally` is
 # load-bearing: a throw between here and the end would otherwise leave
-# `installing` on disk with no terminal record, and the pid check would keep it
-# believed for as long as this pid stays alive.
-Write-InstallProgress -Stage 'installing' -Message 'Installing the new version.'
-try {
-    $InstalledVersion = Install-FreeClaudeCode
+# `installing` (or `staging`) on disk with no terminal record, and the pid
+# check would keep it believed for as long as this pid stays alive.
+#
+# ===========================================================================
+# THE STAGED SWAP (6.82.0). One update path, and this is it.
+#
+#   staging    build the new environment beside the live one; the old server
+#              keeps serving for the whole of it
+#   verifying  RUN the staged environment once -- `mcc-server --version` and
+#              `python -c "import my_claude_code"`. A wheel that resolves,
+#              installs and cannot import itself used to be discovered by the
+#              user. This happens BEFORE the stop, so a bad wheel costs a
+#              download rather than an outage
+#   stopping   stop EXACTLY the MCC server bound to the configured port of the
+#              configuration directory this install is for, by exact pid,
+#              within its own bounded budget. Every other MCC server is listed
+#              and never touched; a foreign holder is reported and nothing is
+#              stopped or started
+#   swapping   two directory renames -- milliseconds, not minutes. The bin
+#              trampolines are never written, so no locked .exe can abort it
+#   starting   `mcc-server` detached, then /health. A LISTENER ANSWERING is the
+#              success condition; "the install exited 0" is not
+#   rolling-back / recovered  the new one never answered, so the previous
+#              environment goes back and IT is started
+#
+# The in-place `uv tool install --force` ladder below is still here and is
+# still correct -- it is now the REPAIR: a first install with no environment to
+# swap, a staging build that could not be made, or a release that adds a
+# launcher uv has to write.
+# ===========================================================================
+$Plan = Get-InstallPlan
+$script:InstallProgressVersion = $Plan.Version
+$InstalledVersion = ""
+$Staged = $null
+$StagedUvPath = ""
+$StagedToolDir = ""
+$StagedBinDir = ""
+# Assigned HERE, unconditionally. `Set-StrictMode -Version Latest` makes
+# retrieving an unset variable a terminating error, and the tail of this script
+# reads all four on every path -- including the ones where nothing was staged.
+$Address = $null
+$HealthUrl = ""
+$ServerLauncher = $null
+$MayStart = $false
+$StopOutcome = "skipped"
+$StopMessage = ""
+# The child started immediately after the swap, so the post-install work --
+# PATH, the file-based verification, RTK, the shortcut, measured at 12.3 s on
+# this machine -- happens WHILE the server boots instead of before it starts.
+$StartedServer = $null
+
+if (-not $DryRun) {
+    $StagedUvPath = Resolve-UvPath "the staged install"
+    $toolsRoot = Get-UvToolsRoot -UvPath $StagedUvPath
+    if ($toolsRoot) {
+        $StagedToolDir = Join-Path $toolsRoot $PackageEnvDirName
+    }
+    try {
+        $StagedBinDir = Invoke-NativeCapture -FilePath $StagedUvPath -Arguments @("tool", "dir", "--bin")
+    }
+    catch {
+        $StagedBinDir = ""
+    }
+    $canStage = $toolsRoot `
+        -and $StagedToolDir -and (Test-Path -LiteralPath $StagedToolDir -PathType Container) `
+        -and $StagedBinDir -and (Test-Path -LiteralPath $StagedBinDir -PathType Container)
+    if ($canStage) {
+        $script:StagedStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        Write-InstallProgress -Stage 'staging' -Message 'Building the new version beside the running one.'
+        Write-Host "Building My Claude Code $($Plan.Version) beside the running one; nothing is replaced until it is proved."
+        $Staged = New-StagedEnvironment -UvPath $StagedUvPath -Arguments $Plan.Arguments -ToolsRoot $toolsRoot -Stamp $script:StagedStamp
+        $script:StagedStagingRoot = $Staged.StagingRoot
+        if ((-not $Staged.Ok) -and ($Staged.Reason -eq "disk-full")) {
+            # A staging directory is one more copy of the same files on the
+            # same volume. Do not attempt the in-place ladder, and do not
+            # pretend the reason was a lock.
+            Write-Host (Get-DiskFullMessage -UvPath $StagedUvPath)
+            $script:InstallProgressRestarted = $false
+            Write-InstallProgress -Stage 'failed' -Message 'The volume is out of space; nothing was installed.'
+            exit 1
+        }
+        if (-not $Staged.Ok) {
+            Write-Host "The new version could not be built beside the old one ($($Staged.Reason)); installing in place instead."
+            $Staged = $null
+        }
+    }
+    else {
+        Write-InstallLog "There is no existing tool environment to stage beside; installing in place."
+    }
 }
-catch {
-    $script:InstallProgressRestarted = $false
-    Write-InstallProgress -Stage 'failed' -Message 'The install failed.'
-    throw
+
+if ($null -ne $Staged) {
+    # ---- verify, before anything is stopped ---------------------------------
+    # The RECORD for this is written after the stop, not here, and that is
+    # deliberate rather than sloppy. Stage ranks are monotonic so a window can
+    # draw them as a timeline -- `stopping` is 3 and `verifying` is 5 -- so a
+    # `verifying` record written here would make the guard drop the `stopping`
+    # record that follows it. That is exactly the defect V1 shipped with, and
+    # it is why no `-Restart` run has ever recorded a stop. The WORK happens
+    # first (a wheel that cannot run must cost a download, not an outage) and
+    # the receipt reports it in rank order, saying so.
+    $verdict = Test-StagedEnvironment -StagingEnv $Staged.StagingEnv -ExpectedVersion $Plan.Version
+    if (-not $verdict.Ok) {
+        # Nothing has moved and nothing was stopped. The live environment is
+        # exactly as it was, so the whole episode cost the user a download.
+        # It is NOT a reason to fall through to `--force`: that would install
+        # the wheel that cannot run over the one that can.
+        Remove-Item -LiteralPath $Staged.StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Split-Path -Parent $Plan.WheelPath) -Recurse -Force -ErrorAction SilentlyContinue
+        $message = $verdict.Reason + " Nothing was replaced; the installed version is unchanged and keeps serving."
+        Write-Host ""
+        Write-Host $message
+        Write-InstallLog $message
+        $script:InstallProgressRestarted = $false
+        Write-InstallProgress -Stage 'failed' -Message $message
+        exit 1
+    }
+    Write-Host "The new version ran; putting it in place."
+    # Compiled HERE, while the old server is still answering. The first start
+    # after an update costs about 3.5 s more than every later one because
+    # CPython writes the .pyc files as it imports; paying that after the swap
+    # would put all of it inside the outage this release exists to close.
+    Invoke-PrecompileBytecode -EnvironmentDir $Staged.StagingEnv
+    $script:PrecompiledBeforeSwap = $true
+
+    # ---- stop exactly the one server this install is for ---------------------
+    $Address = Get-MccServerAddress
+    $HealthUrl = "http://$($Address.ReachableHost):$($Address.Port)/health"
+    $ServerLauncher = Get-MccServerLauncher
+    $MayStart = $script:RestartRequested -and (-not $script:NoStartRequested)
+    if ($MayStart -and $ServerLauncher) {
+        Write-Step "Restarting the My Claude Code server on port $($Address.Port)"
+        Write-InstallLog ("Restart requested for the server on " + $Address.ReachableHost + ":" + $Address.Port + ".")
+        # The build that has to answer --report-holder is the one ON DISK now:
+        # the swap has not happened yet. Older builds do not refuse an unknown
+        # flag, they START A SERVER, so the version gate is not optional.
+        $installedNow = Get-InstalledServerVersion -Launcher $ServerLauncher
+        $stopVerdict = Stop-ConfiguredServer -Launcher $ServerLauncher -LauncherVersion $installedNow -Address $Address
+        $StopOutcome = $stopVerdict.Outcome
+        $StopMessage = $stopVerdict.Message
+        if ($StopOutcome -eq "failed") {
+            # The old server is still serving and still owns its environment.
+            # Swapping underneath it would leave the machine running one
+            # version out of a directory named "previous", so stop here.
+            Remove-Item -LiteralPath $Staged.StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+            $message = $StopMessage + " Nothing was replaced and nothing was started."
+            Write-Host $message
+            Write-InstallLog $message
+            $script:InstallProgressRestarted = $false
+            Write-InstallProgress -Stage 'failed' -Message $message
+            exit 1
+        }
+        if ($StopOutcome -in @("foreign", "unclassifiable")) {
+            # Invariant 1: a foreign holder of the port is never killed, by any
+            # path. The install still happens -- it replaces files, not
+            # processes -- but nothing is stopped and nothing is started.
+            Write-Host ""
+            Write-Host $StopMessage
+            Write-InstallLog $StopMessage
+            $MayStart = $false
+        }
+    }
+
+    # ---- swap ---------------------------------------------------------------
+    Write-InstallProgress -Stage 'verifying' -Message 'The new version was run before the old one was stopped; it works.'
+    Write-InstallProgress -Stage 'swapping' -Message 'Putting the new version in place.'
+    $previousRoot = Get-UpdateAsideRoot -ToolsRoot (Split-Path -Parent $StagedToolDir) -Name $PreviousEnvDirName
+    $previousDir = Join-Path $previousRoot $script:StagedStamp
+    $swapped = Invoke-EnvironmentSwap `
+        -StagingEnv $Staged.StagingEnv `
+        -StagingDir $Staged.StagingDir `
+        -StagingBin $Staged.StagingBin `
+        -ToolDir $StagedToolDir `
+        -BinDir $StagedBinDir `
+        -PreviousDir $previousDir
+
+    if ($swapped) {
+        $InstalledVersion = $Plan.Version
+        # A release that ADDS a command has no trampoline anywhere carrying the
+        # canonical path for it, and one cannot be written by hand. That case
+        # -- rare, and only on releases that add an entry point -- is finished
+        # by uv in place, against a cache the staging pass just filled. The
+        # previous environment is already aside, so it is still safe.
+        $missing = @(Get-MissingLauncherShim -BinDir $StagedBinDir -StagingBinOrEnvScripts (Join-Path $StagedToolDir "Scripts"))
+        if ($missing.Count -gt 0) {
+            Write-Host "This release adds $($missing -join ', '); uv has to write the launcher(s), so the install is finished in place."
+            Write-InstallLog ("This release adds " + ($missing -join ", ") + "; finishing in place.")
+            try {
+                # The same plan, and so the same already-verified wheel: the
+                # temp directory holding it is swept below rather than by
+                # Install-FreeClaudeCode's own `finally`, which would leave a
+                # second resolve with nothing to install from.
+                $InstalledVersion = Install-FreeClaudeCode -Plan $Plan
+            }
+            catch {
+                Write-InstallLog ("The in-place finish failed: " + $_.Exception.Message)
+                $InstalledVersion = $Plan.Version
+            }
+        }
+        # ---- start, before the post-install work rather than after it -------
+        # The outage ends when a listener answers, so everything between the
+        # swap and the start is outage. The verification below checks the
+        # canonical install and therefore cannot move ahead of the swap -- but
+        # it can move BESIDE the boot, which is where it now is. Measured on
+        # 2026-09-12: 12.3 s of it, on a 27.0 s window.
+        if ($MayStart -and $ServerLauncher) {
+            $StartedServer = Start-RestartedServer `
+                -Launcher $ServerLauncher `
+                -InstalledVersion $InstalledVersion `
+                -RollbackAvailable
+        }
+        # AFTER the start: neither of these is needed to run the new server --
+        # it is launched through the bin directory's trampoline, which was
+        # never touched -- and together they are seconds of file copying that
+        # would otherwise sit inside the outage.
+        Complete-EnvironmentSwap -ToolDir $StagedToolDir -BinDir $StagedBinDir -StagingBin $Staged.StagingBin
+        Remove-Item -LiteralPath (Split-Path -Parent $Plan.WheelPath) -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    else {
+        # The swap did not happen and the live environment is back (or never
+        # moved). Fall through to the in-place ladder, which is the repair.
+        Remove-Item -LiteralPath $Staged.StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        $Staged = $null
+        Write-Host "The new version could not be put in place; installing in place instead."
+    }
+}
+
+if (-not $InstalledVersion) {
+    Write-InstallProgress -Stage 'installing' -Message 'Installing the new version.'
+    try {
+        $InstalledVersion = Install-FreeClaudeCode -Plan $Plan
+    }
+    catch {
+        $script:InstallProgressRestarted = $false
+        Write-InstallProgress -Stage 'failed' -Message 'The install failed.'
+        throw
+    }
 }
 $script:InstallProgressVersion = $InstalledVersion
 
@@ -3219,7 +4168,7 @@ if ($script:RenamedWhileRunning) {
     Write-InstallProgress -Stage 'verifying' -Message 'Checking that every command is in place.'
     Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
 
-    Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling")
+    if (-not $script:PrecompiledBeforeSwap) { Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling") }
     Enable-RtkForAgents
     New-DesktopShortcut
 
@@ -3262,7 +4211,7 @@ else {
     Write-InstallProgress -Stage 'verifying' -Message 'Checking that every command is in place.'
     Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
 
-    Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling")
+    if (-not $script:PrecompiledBeforeSwap) { Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling") }
     Enable-RtkForAgents
     New-DesktopShortcut
 
@@ -3289,6 +4238,71 @@ if ($script:NoStartRequested) {
         Write-Host "No server was started. Start one with: mcc-server"
     }
     Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'
+}
+elseif ($script:StagedSwapped) {
+    # The staged path already stopped the one server this install is for and
+    # swapped the environment. What is left is the start, the health gate, and
+    # the rollback the previous environment was kept for.
+    if (-not $MayStart) {
+        $message = if ($StopMessage) { $StopMessage } else { "My Claude Code $InstalledVersion is installed. Start the server with: mcc-server" }
+        Write-Host ""
+        Write-Host $message
+        $script:InstallProgressRestarted = $false
+        Write-InstallProgress -Stage 'done' -Message $message
+    }
+    elseif (-not $ServerLauncher) {
+        $message = "The server was not restarted: mcc-server was not found after the install."
+        Write-Host $message
+        Write-InstallProgress -Stage 'failed' -Message $message
+    }
+    elseif (($null -ne $StartedServer) -and (Confirm-RestartedServer -Child $StartedServer -InstalledVersion $InstalledVersion -HealthUrl $HealthUrl -Port $Address.Port -RollbackAvailable)) {
+        # Nothing is deleted until the new server answers, so the copy being
+        # swept is never the one a rollback would have needed -- and the sweep
+        # itself is out of the outage window, which is why it is here and not
+        # beside the swap.
+        Remove-Item -LiteralPath $script:StagedStagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-StalePreviousEnvironment -Root (Get-UpdateAsideRoot -ToolsRoot (Split-Path -Parent $StagedToolDir) -Name $PreviousEnvDirName) -Keep $PreviousEnvsKept
+    }
+    else {
+        # =====================================================================
+        # ROLLBACK. The new version is installed and does not answer, so put
+        # the one that did back and start THAT. This is the reason the old
+        # environment was renamed rather than deleted.
+        # =====================================================================
+        Write-InstallProgress -Stage 'rolling-back' -Message 'The new version did not answer, so the previous one is being put back.'
+        $restored = Restore-PreviousEnvironment `
+            -ToolDir $StagedToolDir `
+            -AsideEnv $script:StagedPreviousEnv `
+            -StagingRoot $script:StagedStagingRoot `
+            -Stamp $script:StagedStamp `
+            -PreviousDir $script:StagedPreviousDir
+        $restartedPrevious = $false
+        if ($restored) {
+            $startOut = Join-Path (Join-Path (Get-MccConfigDir) "updates") ("server-start-rollback-" + $script:StagedStamp + ".log")
+            $startErr = Join-Path (Join-Path (Get-MccConfigDir) "updates") ("server-start-rollback-" + $script:StagedStamp + ".err.log")
+            try {
+                $null = Start-MccServerDetached -Launcher $ServerLauncher -StdOutPath $startOut -StdErrPath $startErr
+                $restartedPrevious = Wait-ForServerHealth -Url $HealthUrl -BudgetSeconds (Get-ServerStartTimeoutSeconds)
+            }
+            catch {
+                Write-InstallLog ("The previous version could not be started: " + $_.Exception.Message)
+            }
+        }
+        $message = if ($restored -and $restartedPrevious) {
+            "The new version was installed but never answered, so the previous version was put back and is answering on port $($Address.Port)."
+        }
+        elseif ($restored) {
+            "The new version was installed but never answered, so the previous version was put back, but it could not be started either."
+        }
+        else {
+            "The new version never answered and the previous version could not be put back. Re-run the install command."
+        }
+        Write-Host ""
+        Write-Host $message
+        Write-InstallLog $message
+        $script:InstallProgressRestarted = $restartedPrevious
+        Write-InstallProgress -Stage 'recovered' -Message $message
+    }
 }
 elseif ($script:RestartRequested -and (-not $DryRun) -and (-not $script:Deferred)) {
     $null = Invoke-RestartAfterInstall -InstalledVersion $InstalledVersion
