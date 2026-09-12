@@ -1,7 +1,7 @@
 """Application-owned model metadata."""
 
-from dataclasses import dataclass
-from enum import StrEnum
+from dataclasses import dataclass, fields, is_dataclass
+from enum import Enum, StrEnum
 
 from my_claude_code.core.reasoning import ReasoningEffort
 
@@ -305,3 +305,50 @@ class ResolvedResponseSurface:
         """``"responses (registry)"`` -- what the Models page shows."""
 
         return f"{self.surface.value} ({self.source.value})"
+
+
+def canonical_model_info(info: ProviderModelInfo) -> str:
+    """One catalogue entry as text that does not change between processes.
+
+    ``repr`` is not that text. Two of this dataclass's fields are
+    ``frozenset``s of strings -- ``supported_parameters`` and
+    ``reasoning_capability.supported_efforts`` -- and a set's ``repr`` lists its
+    members in hash order, which CPython salts per process. A digest of
+    ``repr(info)`` therefore names a *different* catalogue every time the server
+    starts, even when not one model has moved.
+
+    So: every field named, in declaration order; every set sorted; every enum by
+    its value; nested records recursed into. A field whose type this cannot
+    encode raises rather than being skipped, because a digest that silently
+    ignores a field is a digest that says two different catalogues are the same.
+    """
+
+    return _canonical(info)
+
+
+def _canonical(value: object) -> str:
+    if value is None:
+        return "~"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, Enum):
+        return f"e:{value.value}"
+    if isinstance(value, str):
+        return f"s:{value}"
+    if isinstance(value, int | float):
+        return f"n:{value!r}"
+    if isinstance(value, frozenset | set):
+        return "{" + ",".join(sorted(_canonical(item) for item in value)) + "}"
+    if isinstance(value, tuple | list):
+        return "[" + ",".join(_canonical(item) for item in value) + "]"
+    if is_dataclass(value) and not isinstance(value, type):
+        return (
+            type(value).__name__
+            + "("
+            + ",".join(
+                f"{field.name}={_canonical(getattr(value, field.name))}"
+                for field in fields(value)
+            )
+            + ")"
+        )
+    raise TypeError(f"No canonical encoding for {type(value).__name__}")
