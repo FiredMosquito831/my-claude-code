@@ -47,6 +47,7 @@ from my_claude_code.config.desktop_apply import (
     DesktopApplyError,
     DesktopPlan,
     DesktopProbe,
+    sidecar_path_for,
 )
 from my_claude_code.config.desktop_apply import (
     apply as apply_desktop,
@@ -118,6 +119,23 @@ def _require_servable(spec: DesktopAppSpec) -> None:
         )
 
 
+def _sidecar_path(spec: DesktopAppSpec) -> str:
+    """Return where the file MCC owns outright lands on this machine.
+
+    An app whose hook into its own settings is "read my configuration from
+    over there" needs the *resolved* path written into that hook, and the
+    registry cannot know it: it is MCC's configuration directory on this box.
+    Roo Code is the case, and until 6.83.0 nothing supplied it -- the scalar
+    was skipped with a comment saying the caller would fill it in, and no
+    caller did, so Configure wrote neither the key nor the file it names.
+    """
+
+    if spec.sidecar is None or not spec.sidecar_path_key:
+        return ""
+    resolved = sidecar_path_for(spec, os.environ)
+    return str(resolved) if resolved is not None else ""
+
+
 def _documents(
     spec: DesktopAppSpec,
     services: ApiServices,
@@ -155,7 +173,11 @@ def _documents(
             proxy_root_url=proxy_root_url,
             auth_token=token if writes_literal_credential(spec) else "",
         ),
-        overwritten_scalars(spec, set_default_model=set_default_model),
+        overwritten_scalars(
+            spec,
+            set_default_model=set_default_model,
+            sidecar_path=_sidecar_path(spec),
+        ),
         sidecar_document(
             spec,
             models,
@@ -304,7 +326,9 @@ def _list_payload(settings: Settings, services: ApiServices) -> dict[str, Any]:
                 proxy_root_url=proxy_root_url,
                 auth_token=token if writes_literal_credential(spec) else "",
             )
-            expected_scalars = overwritten_scalars(spec)
+            expected_scalars = overwritten_scalars(
+                spec, sidecar_path=_sidecar_path(spec)
+            )
             expected_sidecar = sidecar_document(
                 spec,
                 models,

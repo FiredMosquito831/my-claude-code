@@ -170,16 +170,47 @@ class DesktopPath:
 
 @dataclass(frozen=True, slots=True)
 class DesktopDetect:
-    """Marker paths any one of which proves the app is installed.
+    """What proves this application is on the machine: a program, never its data.
 
-    ``shutil.which`` cannot see a desktop app -- that is the structural bug in
-    ``api/admin_harness_routes.py:300`` for anything without a binary on PATH
-    -- so detection is a path question. A marker is a directory the app creates
-    on first run, never the config file itself: an app that has run but never
-    been configured must read as *installed*, not as missing.
+    **A marker is the program.** Until 6.83.0 a marker was "a directory the app
+    creates on first run", on the reasoning that an app which has run but has
+    never been configured must still read as installed. That reasoning was
+    right and the implementation of it was not, and the cost was measured: on
+    the machine this was written for, ``%LOCALAPPDATA%\\crush`` and
+    ``%APPDATA%\\Block\\goose`` both existed, both made their cards read
+    *installed* with a Configure button -- and **no ``crush.exe`` or
+    ``goose.exe`` exists anywhere on that machine**. Both directories had been
+    created by MCC's *own* launchers, ``mcc-crush.exe`` and ``mcc-goose.exe``,
+    the one time each was run. MCC was reading its own footprint as evidence
+    that somebody else's application was installed, offering to configure it,
+    and (before the install gate in ``desktop_apply.apply``) writing the file.
+
+    So a marker now has to be the program itself: an executable, an application
+    bundle, an installed package, or -- for an editor extension, which has no
+    binary of its own -- the extension directory, which no other program
+    creates. A data directory is evidence that something ran once, and the
+    something may have been MCC.
+
+    Two kinds, either of which is enough:
+
+    ``binaries``
+        Executable names looked up on the ``PATH`` the app would be started
+        with, through ``shutil.which``, which applies ``PATHEXT`` on Windows.
+        This is how every command-line install of Crush, Goose, Codex and
+        OpenCode arrives, whatever package manager put it there. MCC's own
+        launchers are all named ``mcc-*``, so they can never satisfy one of
+        these.
+
+    ``markers``
+        Paths, for a program that is not on ``PATH``: an ``.exe`` under a
+        per-user install directory, a macOS ``.app`` bundle, an MSIX package
+        directory the OS creates only for an installed package, a VS Code
+        extension directory.
     """
 
-    markers: tuple[DesktopPath, ...]
+    markers: tuple[DesktopPath, ...] = ()
+    #: Executable names that prove the program is installed, looked up on PATH.
+    binaries: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,6 +453,17 @@ class DesktopAppSpec:
     #: Whether Configure also sets the app's default model to ``mcc/best``.
     #: True only where *not* doing it leaves a provider the user cannot pick.
     sets_default_model: bool = False
+    #: The overwritten scalar that receives the *resolved path* of the file
+    #: MCC owns outright, for an app whose hook into its own settings is
+    #: "read my configuration from over there".
+    #:
+    #: Declared rather than branched on, and the branch it replaced is the
+    #: reason. ``application/desktop_documents.overwritten_scalars`` matched on
+    #: the key name and answered ``continue`` with the comment "filled in by
+    #: the caller" -- and no caller filled it, so Roo Code's Configure wrote
+    #: neither the settings key nor the sidecar, and its only effect on disk
+    #: was to re-indent the user's ``settings.json``.
+    sidecar_path_key: str = ""
     #: How a human opens the app. MCC never runs it.
     open_command: str = ""
     #: Extra lines the card shows verbatim, for anything not mechanisable.
@@ -680,11 +722,21 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://github.com/openai/codex/blob/main/docs/config.md",
+        # The program, not its data directory. ``%LOCALAPPDATA%\\OpenAI\\Codex``
+        # and ``~/.codex`` are both written by the *first run* of anything that
+        # speaks Codex, MCC's own ``mcc-codex`` launcher included, so neither
+        # proves OpenAI's app is here. The versioned ``bin/<hash>/codex.exe``
+        # is the engine the MSIX app and the npm CLI both unpack, and it is the
+        # same 0.153.4 binary in either case.
         detect=DesktopDetect(
+            binaries=("codex",),
             markers=(
-                _windows_localappdata("OpenAI", "Codex"),
-                _home(".codex", env_vars=("CODEX_HOME",)),
-            )
+                _windows_localappdata("Packages", "OpenAI.Codex_*", glob=True),
+                _windows_localappdata(
+                    "OpenAI", "Codex", "bin", "*", "codex.exe", glob=True
+                ),
+                _home(".local", "bin", "codex", platforms=("darwin", "linux")),
+            ),
         ),
         document=DesktopDocument(
             paths=(
@@ -769,11 +821,23 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://block.github.io/goose/docs/getting-started/providers",
+        # ``%APPDATA%\\Block\\goose`` used to be the marker, and on the machine
+        # this was written for it contained one directory of empty log files
+        # written by MCC's own ``mcc-goose.exe`` launcher on 2026-09-02 -- no
+        # ``goose.exe`` or ``goosed.exe`` exists anywhere on that machine, on
+        # PATH, in Program Files, scoop, cargo, go/bin or the uninstall
+        # registry. The card said "installed" and offered to configure it.
         detect=DesktopDetect(
+            binaries=("goose", "goosed"),
             markers=(
-                _windows_appdata("Block", "goose"),
-                _home(".config", "goose"),
-            )
+                DesktopPath(
+                    env_vars=(),
+                    relative_parts=("/Applications", "Goose.app"),
+                    platforms=("darwin",),
+                ),
+                _home("Applications", "Goose.app", platforms=("darwin",)),
+                _home(".local", "bin", "goose", platforms=("darwin", "linux")),
+            ),
         ),
         document=DesktopDocument(
             paths=(
@@ -835,12 +899,24 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://opencode.ai/docs/config",
+        # The desktop build's own executable, or the CLI on PATH -- the two
+        # programs that read this file. ``%APPDATA%\\ai.opencode.desktop`` and
+        # ``~/.config/opencode`` are state and configuration directories, and
+        # the second one is the very file MCC writes, so it proved nothing but
+        # that somebody had configured something.
         detect=DesktopDetect(
+            binaries=("opencode",),
             markers=(
-                _windows_appdata("ai.opencode.desktop"),
-                _windows_appdata("opencode"),
-                _home(".config", "opencode"),
-            )
+                _windows_localappdata(
+                    "Programs", "@opencode-aidesktop", "OpenCode.exe"
+                ),
+                DesktopPath(
+                    env_vars=(),
+                    relative_parts=("/Applications", "OpenCode.app"),
+                    platforms=("darwin",),
+                ),
+                _home(".opencode", "bin", "opencode", platforms=("darwin", "linux")),
+            ),
         ),
         document=DesktopDocument(
             paths=(
@@ -874,7 +950,18 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         token_form=TokenForm.LITERAL_IN_APP_FILE,
         token_template="",
         token_env_var="",
-        attribution_header_field="headers",
+        # No attribution header. MCC wrote one at ``options.headers`` until
+        # 6.83.0 and OpenCode ignored it silently: its ``ProviderConfig.options``
+        # declares ``apiKey, baseURL, enterpriseUrl, setCacheKey, timeout,
+        # headerTimeout, chunkTimeout`` and nothing else -- checked against the
+        # vendored real schema, ``tests/fixtures/schemas/opencode-config.schema.json``,
+        # where the only two ``headers`` properties in the whole document
+        # belong to MCP server entries. The block validated only because
+        # ``options`` omits ``additionalProperties: false``. A key an app
+        # provably drops is not attribution, it is noise in the user's file;
+        # OpenCode is attributed by its user-agent fingerprint, exactly as
+        # Goose is.
+        attribution_header_field="",
         catalogue_format_id="opencode",
         # OpenCode's ``provider.<id>`` entry. ``options.baseURL`` and
         # ``options.apiKey`` are dotted because that is where OpenCode reads
@@ -882,7 +969,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         provider=DesktopProvider(
             base_url_key="options.baseURL",
             api_key_key="options.apiKey",
-            headers_key="options.headers",
+            headers_key="",
             models_key="models",
             constants={
                 "npm": "@ai-sdk/openai-compatible",
@@ -974,11 +1061,21 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://github.com/charmbracelet/crush",
+        # ``%LOCALAPPDATA%\\crush`` used to be the marker. On the machine this
+        # was written for it holds a catwalk provider catalogue and a
+        # ``projects.json`` naming two sessions rooted in an MCC scratchpad --
+        # downloaded by MCC's own ``mcc-crush.exe`` launcher -- and there is no
+        # ``crush.exe`` anywhere on the machine. Crush installs through
+        # homebrew, winget, scoop, npm, nix or ``go install``, and every one of
+        # them puts the binary on PATH; ``go install`` with no PATH entry is
+        # the one case the path markers cover.
         detect=DesktopDetect(
+            binaries=("crush",),
             markers=(
-                _windows_localappdata("crush"),
-                _home(".config", "crush"),
-            )
+                _home("go", "bin", "crush.exe", platforms=("win32",)),
+                _home("go", "bin", "crush", platforms=("darwin", "linux")),
+                _home(".local", "bin", "crush", platforms=("darwin", "linux")),
+            ),
         ),
         document=DesktopDocument(
             paths=(
@@ -1033,11 +1130,14 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://antigravity.google/docs/cli/install/",
+        # The binary, not ``~/.gemini/antigravity-cli`` -- which is a settings
+        # directory, and the one MCC itself writes into.
         detect=DesktopDetect(
+            binaries=("agy",),
             markers=(
-                _windows_localappdata("agy"),
-                _home(".gemini", "antigravity-cli"),
-            )
+                _windows_localappdata("agy", "bin", "agy.exe"),
+                _home(".agy", "bin", "agy", platforms=("darwin", "linux")),
+            ),
         ),
         document=DesktopDocument(
             paths=(_home(".gemini", "antigravity-cli", "settings.json"),),
@@ -1108,18 +1208,71 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             display_path="<MCC config dir>/roo-code-settings.json",
             document_format=DocumentFormat.JSON,
             holds_credential=True,
+            # Roo Code's own import document, and every key below was read out
+            # of the installed extension rather than out of prose: Roo Code
+            # 3.54.0, ``~/.vscode/extensions/rooveterinaryinc.roo-cline-3.54.0/
+            # dist/extension.js``. ``roo-cline.autoImportSettingsPath`` (``jpi``,
+            # :5360, called from ``activate()`` at :5370) hands this file to
+            # ``providerSettingsManager.import()``, which parses
+            # ``z.object({providerProfiles, globalSettings})``. Everything else
+            # lives in VS Code SecretStorage (``class TMe`` at :4236,
+            # ``roo_cline_config_api_config`` in a DPAPI-encrypted
+            # ``state.vscdb``), which no outside process can write -- so this
+            # file plus that one settings key is the only route in, and it runs
+            # at activation, hence the window reload on the card.
+            #
+            # ``apiProvider`` must be the literal ``"openai"`` -- not
+            # ``openai-native``, not ``openai-compatible``. Both fields of
+            # ``openAiCustomModelInfo`` (``AP``, :28) are **required**: a
+            # profile missing either is skipped silently, which is the failure
+            # mode this row exists to avoid. Unknown keys in a profile are
+            # stripped rather than rejected. The base URL must carry ``/v1``
+            # (the SDK appends ``/chat/completions``) and the key is sent as
+            # ``Authorization: Bearer``; an unset key goes out as the literal
+            # ``not-provided``.
+            #
+            # ``contextWindow`` is Roo's own context budget for the model, not
+            # a claim about the endpoint, and MCC's resolution ladder is what
+            # actually enforces a limit; 400000 is the value the extraction in
+            # specs/PR-DESKTOP-APPS-CONFIGURE-SPEC.md §2.3 recorded for an
+            # ``mcc/*`` tier. ``supportsPromptCache`` is false because the
+            # tiers are refs that may resolve to any upstream, and claiming a
+            # cache that is not there costs correctness rather than money.
+            fields={
+                "providerProfiles": {
+                    "currentApiConfigName": DESKTOP_PROVIDER_LABEL,
+                    "apiConfigs": {
+                        DESKTOP_PROVIDER_LABEL: {
+                            "apiProvider": "openai",
+                            "openAiBaseUrl": "{base_url}",
+                            "openAiApiKey": "{token}",
+                            "openAiModelId": "{default_model}",
+                            "openAiStreamingEnabled": True,
+                            "openAiCustomModelInfo": {
+                                "contextWindow": 400000,
+                                "supportsPromptCache": False,
+                            },
+                        }
+                    },
+                }
+            },
         ),
         protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         base_url_shape=BaseUrlShape.V1,
         token_form=TokenForm.MCC_OWNED_FILE,
         attribution_header_field="",
         catalogue_format_id="",
+        sidecar_path_key="roo-cline.autoImportSettingsPath",
         open_command="code",
         notes=(
             "Roo Code's export format carries the key in plaintext and "
             "resolves no reference, so MCC keeps it in a file of its own at "
             "mode 0600 rather than in a document the user edits.",
-            "Reload the VS Code window for the import to run.",
+            "Reload the VS Code window for the import to run: Roo Code reads "
+            "the imported file at activation only.",
+            "The import re-runs on every window it activates in, so the "
+            "profile comes back if it is deleted from Roo's own UI. Undo "
+            "removes the settings key and the file together.",
         ),
     ),
     DesktopAppSpec(
@@ -1131,7 +1284,10 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         ),
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://docs.commandcode.ai/",
-        detect=DesktopDetect(markers=(_home(".commandcode"),)),
+        # ``~/.commandcode`` is where MCC's own ``mcc-commandcode`` launcher
+        # writes the provider merge, so its existence can be MCC's doing. The
+        # binary is the program.
+        detect=DesktopDetect(binaries=("commandcode",)),
         document=DesktopDocument(
             paths=(_home(".commandcode", "providers.json"),),
             display_path="~/.commandcode/providers.json",
@@ -1188,28 +1344,20 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
                 # the package directory carries a publisher hash Microsoft
                 # assigns, hence the glob.
                 _windows_localappdata("Packages", "Claude_*", glob=True),
-                # The third-party data directory. Present whenever the app has
-                # ever been started in its Claude Desktop on 3P mode, and the
-                # directory the configuration library lives in.
-                _windows_localappdata("Claude-3p"),
-                # The Squirrel (per-user .exe) install.
+                # The Squirrel (per-user .exe) install, and the machine-wide
+                # one. Both are program directories.
                 _windows_localappdata("AnthropicClaude"),
-                _windows_appdata("Claude"),
                 _windows_program_files("Claude"),
-                _home(
-                    "Library",
-                    "Application Support",
-                    "Claude",
+                DesktopPath(
+                    env_vars=(),
+                    relative_parts=("/Applications", "Claude.app"),
                     platforms=("darwin",),
                 ),
-                _home(
-                    "Library",
-                    "Application Support",
-                    "Claude-3p",
-                    platforms=("darwin",),
-                ),
-                _home(".config", "Claude", platforms=("linux",)),
-                _home(".config", "Claude-3p", platforms=("linux",)),
+                # Not ``%LOCALAPPDATA%\\Claude-3p``, ``%APPDATA%\\Claude`` or
+                # their macOS and Linux twins, which were markers until 6.83.0:
+                # those are the app's *data* directories, and the first of them
+                # is the very configuration library MCC writes into -- so a
+                # library MCC had created would have proved the app installed.
             )
         ),
         # ``_meta.json`` is the library's index, and the only file here that is

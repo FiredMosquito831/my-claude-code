@@ -8732,6 +8732,28 @@ function desktopAppCard(app) {
     return card;
   }
 
+  if (stateId === "not_installed") {
+    // No buttons, the same as a managed card, and for the same reason: the
+    // server refuses the write, so a button here could only ever produce an
+    // error. It used to be offered and it used to succeed -- MCC wrote a
+    // provider into a file no program on the machine reads, and the card went
+    // green. What counts as installed is now the program itself, never a
+    // directory: two rows read "installed" from data directories MCC's own
+    // launchers had created.
+    const missing = document.createElement("p");
+    missing.className = "agent-unavailable-reason";
+    missing.textContent =
+      `MCC cannot find ${app.display_name} on this machine, so there is ` +
+      "nothing here that would read the file it would write. MCC looks for " +
+      "the program itself -- an executable on PATH, an installed " +
+      "application, an editor extension -- and not for a configuration " +
+      "directory, which anything that has ever run may have created. " +
+      "Install it, start it once, and this card becomes a button.";
+    card.append(missing);
+    card.append(desktopAppNotes(app));
+    return card;
+  }
+
   if (stateId === "drifted") {
     const drift = document.createElement("p");
     drift.className = "desktop-drift-note";

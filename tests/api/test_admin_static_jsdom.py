@@ -2919,6 +2919,24 @@ def test_an_unconfigured_card_offers_configure_but_no_undo(rendered: dict) -> No
     assert card["undoModes"] == []
 
 
+def test_a_not_installed_card_says_so_and_offers_no_button(rendered: dict) -> None:
+    """The server refuses the write, so a button could only produce an error.
+
+    It used to be offered, and it used to *succeed*: MCC wrote a provider into
+    a file no program on the machine reads and the card went green. Crush is
+    the row that proved it -- its marker was ``%LOCALAPPDATA%\\crush``, a
+    directory MCC's own ``mcc-crush.exe`` launcher had created.
+    """
+
+    card = _desktop_card(rendered, "crush_desktop")
+
+    assert card["badge"] == "Not installed"
+    assert card["hasConfigure"] is False
+    assert card["hasUndo"] is False
+    assert "cannot find" in card["unavailableReason"]
+    assert "the program itself" in card["unavailableReason"]
+
+
 def test_a_not_routable_card_states_the_reason_and_offers_no_buttons(
     rendered: dict,
 ) -> None:
