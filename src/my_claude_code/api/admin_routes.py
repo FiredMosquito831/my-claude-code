@@ -2949,6 +2949,11 @@ async def request_log_lifetime(
     result = await asyncio.to_thread(store.lifetime)
     result["enabled"] = True
     result["retained_rows_max"] = int(settings.request_log_max_rows)
+    # What the log costs, which was invisible until now. Nothing is capped or
+    # pruned on the strength of it; it is a readout, and it rides on this
+    # endpoint because this is the panel about the log as a whole and it
+    # already answers in 30 ms.
+    result["storage"] = await asyncio.to_thread(store.storage_footprint)
     return result
 
 

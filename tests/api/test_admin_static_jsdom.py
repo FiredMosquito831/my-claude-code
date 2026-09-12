@@ -3086,3 +3086,29 @@ def test_analytics_paints_while_the_cost_breakdown_is_still_loading(rendered) ->
     # Started with the others, not after them: the wait moved, not the request.
     assert panel["costRequested"] >= 1
     assert panel["noteAfterCostLands"] != panel["noteWhileCostPending"]
+
+
+def test_the_lifetime_panel_says_what_the_log_costs(rendered) -> None:
+    """No capping was the decision; showing the size is what replaced it.
+
+    A four-gigabyte log reached that size unremarked because nothing on the
+    page ever mentioned it. This is that number, in the panel that is already
+    about the log as a whole.
+    """
+
+    span = rendered["logReadout"]["lifetimeSpan"]
+
+    assert "333,838 rows kept" in span
+    assert "4.19 GB on disk" in span
+    # And it did not replace what was there.
+    assert "2026-08-01 to 2026-09-12" in span
+
+
+def test_the_cost_card_ships_the_denominator_behind_its_totals(rendered) -> None:
+    """A window where most models are unpriced must not read as a cheap week."""
+
+    note = rendered["logReadout"]["costNote"]
+
+    assert "Priced: 179,897 of 333,838 requests (53.9%)" in note
+    # The provenance line it has always carried is still there.
+    assert "Priced by" in note

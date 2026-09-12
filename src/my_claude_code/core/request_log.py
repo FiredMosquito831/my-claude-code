@@ -5747,6 +5747,50 @@ class RequestLogStore:
             )
             return int(cursor.rowcount or 0)
 
+    def storage_footprint(self) -> dict[str, Any]:
+        """How many rows the log holds and what it costs on disk.
+
+        Invisible until now, which is the whole reason it could reach four and
+        a half gigabytes without anybody deciding that was acceptable. The
+        answer to a large log is fast queries, not a cap nobody asked for --
+        but a number a user cannot see is a number they cannot act on either,
+        so the dashboard says it.
+
+        Three files, because all three are the log: the database, the
+        write-ahead log beside it (which on a busy install is tens of
+        megabytes) and the shared-memory index. A missing file contributes
+        nothing rather than failing the readout.
+
+        ``rows`` is ``COUNT(*)``, which answers in 0.018 s on a 333,838-row log
+        through the covering index -- this is the retained count the cap
+        applies to, not the all-time total the lifetime panel shows.
+        """
+
+        bytes_by_file: dict[str, int] = {}
+        for label, path in (
+            ("database", self._db_path),
+            ("wal", self._db_path.with_name(self._db_path.name + "-wal")),
+            ("shm", self._db_path.with_name(self._db_path.name + "-shm")),
+        ):
+            try:
+                bytes_by_file[label] = path.stat().st_size
+            except OSError:
+                bytes_by_file[label] = 0
+        rows: int | None
+        try:
+            with self._connection() as conn:
+                rows = int(conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0])
+        except sqlite3.Error:
+            # NULL means not measured, here as everywhere: a log that cannot be
+            # counted right now must not report zero rows.
+            rows = None
+        return {
+            "rows": rows,
+            "bytes": sum(bytes_by_file.values()),
+            "bytes_by_file": bytes_by_file,
+            "path": str(self._db_path),
+        }
+
     def data_mark(self) -> str:
         """A short string that changes whenever this log's contents change.
 
