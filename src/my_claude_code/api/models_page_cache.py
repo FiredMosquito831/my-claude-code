@@ -34,7 +34,10 @@ from my_claude_code.api.model_admin import (
     learned_key,
     models_dev_cache_mark,
 )
-from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.application.model_metadata import (
+    ProviderModelInfo,
+    canonical_model_info,
+)
 from my_claude_code.config.model_overrides import ModelParameterOverrides
 from my_claude_code.config.model_refs import (
     ConfiguredChatModelRef,
@@ -65,6 +68,13 @@ def capability_half_key(
     model's context length without changing how many models it publishes has
     changed this payload, and a key that could not see that would serve the old
     number forever.
+
+    It goes in through :func:`canonical_model_info` rather than ``repr``.
+    ``ProviderModelInfo`` carries two ``frozenset``s of strings, a set's
+    ``repr`` lists its members in hash order, and CPython salts string hashing
+    per process -- so a ``repr``-based key named a different catalogue on every
+    start and this cache, whose entire purpose is to survive a restart, missed
+    on every one of them.
     """
 
     digest = hashlib.sha256()
@@ -73,7 +83,7 @@ def capability_half_key(
     digest.update(models_dev_cache_mark().encode("utf-8"))
     digest.update(b"\x00catalogue\x00")
     for info in model_infos:
-        digest.update(repr(info).encode("utf-8"))
+        digest.update(canonical_model_info(info).encode("utf-8"))
         digest.update(b"\x00")
     digest.update(b"\x00configured\x00")
     for ref in configured:
