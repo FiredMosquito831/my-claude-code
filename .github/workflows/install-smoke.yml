@@ -524,14 +524,15 @@ jobs:
             Write-Host "::error::the receipt does not record the restart"
             exit 1
           }
-          # 6.82.0: the whole sequence reaches the receipt. V1 wrote
-          # `installing` then `verifying` then `stopping`, and the monotonic
-          # guard threw the `stopping` record away, so no restart run has ever
-          # recorded one.
+          # 6.82.0: the staged sequence reaches the receipt. `stopping` is NOT
+          # asserted here -- the step before this one was `-NoStart`, so there
+          # is no server to stop and a `stopping` record would be a lie. The
+          # step after this one runs `-Restart` against the server this one
+          # left behind, which is where the stop belongs.
           $markers = @($lines | Select-String -Pattern '"stage":"episode"' -SimpleMatch)
           $start = $lines.IndexOf($markers[-1].Line)
           $episode = $lines[$start..($lines.Count - 1)] -join "`n"
-          foreach ($stage in @("staging", "stopping", "verifying", "swapping", "starting")) {
+          foreach ($stage in @("staging", "verifying", "swapping", "starting")) {
             if ($episode -notmatch [regex]::Escape("`"stage`":`"$stage`"")) {
               Write-Host "::error::the last episode never recorded $stage"
               Write-Host $episode
@@ -548,6 +549,55 @@ jobs:
           if (Get-ChildItem -LiteralPath $tools -Filter ".mcc-*" -ErrorAction SilentlyContinue) {
             Write-Host "::error::a dot-directory was left inside uv's tools root"
             exit 1
+          }
+
+      # The stop, which needs something to stop: this runs against the server
+      # the step above left answering. It is also the only place in this
+      # workflow that proves 6.82.0's stage ORDER on Windows -- V1 wrote
+      # `installing` then `verifying` then `stopping`, and the monotonic guard
+      # threw the `stopping` record away, so no restart run has ever recorded
+      # one.
+      - name: A second -Restart stops the running server and records it
+        shell: pwsh
+        run: |
+          $config = Join-Path $env:RUNNER_TEMP "cmd-smoke\config"
+          $before = @(Get-Content -LiteralPath (Join-Path $config "updates\progress.json") | Where-Object { $_.Trim() }).Count
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Restart
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::install failed"; exit 1 }
+          $deadline = (Get-Date).AddSeconds(60)
+          $ok = $false
+          while ((Get-Date) -lt $deadline) {
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:8391/health" -UseBasicParsing -TimeoutSec 3
+              if ([int] $response.StatusCode -eq 200) { $ok = $true; break }
+            } catch { }
+            Start-Sleep -Milliseconds 750
+          }
+          if (-not $ok) { Write-Host "::error::no listener answered /health on 8391"; exit 1 }
+          $lines = @(Get-Content -LiteralPath (Join-Path $config "updates\progress.json") | Where-Object { $_.Trim() })
+          $episode = ($lines[$before..($lines.Count - 1)]) -join "`n"
+          Write-Host $episode
+          foreach ($stage in @("staging", "stopping", "verifying", "swapping", "starting", "done")) {
+            if ($episode -notmatch [regex]::Escape("`"stage`":`"$stage`"")) {
+              Write-Host "::error::the last episode never recorded $stage"
+              exit 1
+            }
+          }
+          # Monotonic: the ranks only ever rise, which is what makes the
+          # receipt a timeline a window can draw.
+          $order = @{ staging = 2; stopping = 3; verifying = 5; swapping = 6; starting = 7; done = 9 }
+          $seen = 0
+          foreach ($line in $lines[$before..($lines.Count - 1)]) {
+            if ($line -match '"stage":"([a-z-]+)"') {
+              $stage = $Matches[1]
+              if ($order.ContainsKey($stage)) {
+                if ($order[$stage] -lt $seen) {
+                  Write-Host "::error::the receipt went backwards at $stage"
+                  exit 1
+                }
+                $seen = $order[$stage]
+              }
+            }
           }
 
       # 6.82.0 (F1): install.cmd no longer hard-codes `main`. It builds the raw
