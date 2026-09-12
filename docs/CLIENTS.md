@@ -2,7 +2,7 @@
 
 Editor integrations and any OpenAI-, Anthropic- or Gemini-shaped client. Moved out of the README in 6.57.0; nothing here changed.
 
-For terminal use, start `mcc-server`, then run `mcc-claude`, `mcc-codex`, or `mcc-pi` (legacy `fcc-*` aliases work too). Use the guides below for editor integrations.
+For terminal use, start `mcc-server`, then run `mcc-claude`, `mcc-codex`, or `mcc-pi`. (The legacy `fcc-*` names were retired in 7.0.0: each prints the `mcc-*` name that replaced it and exits 1.) Use the guides below for editor integrations.
 
 <details>
 <summary><strong>Claude Code in VS Code</strong></summary>
@@ -58,7 +58,7 @@ model = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
 [model_providers.fcc]
 name = "My Claude Code"
 base_url = "http://127.0.0.1:8082/v1"
-env_key = "FCC_CODEX_API_KEY"
+env_key = "MCC_CODEX_API_KEY"
 wire_api = "responses"
 ```
 

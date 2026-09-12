@@ -24,7 +24,7 @@ from tests.api.support import (
     runtime_for_app,
 )
 
-_ENV_KEYS = ("FCC_ENV_FILE",)
+_ENV_KEYS = ("FCC_ENV_FILE", "MCC_ENV_FILE")
 
 
 def _registry(tmp_path: Path) -> ProviderRegistry:

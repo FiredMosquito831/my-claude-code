@@ -529,8 +529,10 @@
                 </li>
               </ul>
               <p class="claude-launcher-note">
-                The <code>fcc-</code> spellings of every command still work, so
-                existing scripts and muscle memory keep working.
+                The old <code>fcc-</code> spellings were retired in 7.0.0: each
+                one now prints the <code>mcc-</code> name that replaced it and
+                exits, so a script that still uses one fails loudly instead of
+                quietly. They are removed entirely in 8.0.0.
                 Run <code>mcc-help</code> for the full command reference.
               </p>
             </section>
@@ -2427,7 +2429,7 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   shell session, without touching any file. Add <code>--discover-models</code>
                   to also enable the picker above (an extra request to the proxy on every
                   launch, so it is opt-in): <code>mcc-claude --discover-models</code>.
-                  The legacy <code>fcc-claude</code> alias behaves identically.
+                  The legacy <code>fcc-claude</code> alias was retired in 7.0.0.
                 </p>
                 <details class="guide-note">
                   <summary>Editing the file by hand instead</summary>
@@ -3907,8 +3909,8 @@ mcc-rtk apply               # re-apply the stored state</code></pre>
                   <strong>Store prompts and replies</strong> is the setting that
                   decides whether content search works at all, and
                   <strong>Compress stored text</strong> applies to new rows —
-                  run <code>mcc-compact-log</code> (legacy alias
-                  <code>fcc-compact-log</code>) to convert existing history.
+                  run <code>mcc-compact-log</code> to convert existing history.
+
                 </p>
 
                 <h3 id="guide-limits">Limits &amp; resilience</h3>

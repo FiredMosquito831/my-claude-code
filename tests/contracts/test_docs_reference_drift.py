@@ -445,22 +445,27 @@ _MCC_CONFIG_DIR_PATTERNS = (
 )
 
 
-def _is_legacy_context(text: str, position: int) -> bool:
-    """A ``~/.fcc`` mention sitting inside the legacy subsection is deliberate."""
+def _is_migration_context(text: str, position: int) -> bool:
+    """A ``~/.fcc`` mention is deliberate only inside the migration story.
+
+    Inverted in 7.0.0. Until then the rule was "some legacy-ish word must appear
+    nearby", and the vocabulary was wide enough (``legacy``, ``older``,
+    ``previously``, ``formerly``, ``retired``...) that almost any sentence
+    mentioning the old home passed -- so ``~/.fcc`` kept drifting back into
+    ordinary prose with a "legacy" sprinkled next to it. The only place the old
+    home may still be named is where the *migration* is being described, so that
+    is now the only word that licenses it.
+    """
     window = text[max(0, position - 260) : position + 80]
-    return bool(_LEGACY_CONTEXT.search(window))
+    return bool(_MIGRATION_CONTEXT.search(window))
 
 
-_LEGACY_CONTEXT = re.compile(
-    r"\b(legacy|older|migrated|pre[- ]6\.40|mcc[- ]migrate|move (it|your data) "
-    r"to|formerly|previous(ly)?|retired|was the old)\b",
-    re.I,
-)
+_MIGRATION_CONTEXT = re.compile(r"\b(migrat\w+|mcc[- ]migrate)\b", re.I)
 
 
 @pytest.mark.parametrize("doc_name", sorted(_doc_surfaces()))
 def test_docs_default_to_dot_mcc_not_dot_fcc(doc_name: str) -> None:
-    """An ``~/.fcc`` reference outside the legacy subsection is drift.
+    """An ``~/.fcc`` reference outside the migration story is drift.
 
     This is the fifth check the rename needs: the new default is ``~/.mcc``,
     so the docs should say ``~/.mcc`` everywhere the legacy home is not being
@@ -473,14 +478,14 @@ def test_docs_default_to_dot_mcc_not_dot_fcc(doc_name: str) -> None:
     drifted: set[str] = set()
     for pattern in _MCC_CONFIG_DIR_PATTERNS:
         for match in pattern.finditer(text):
-            if _is_legacy_context(text, match.start()):
+            if _is_migration_context(text, match.start()):
                 continue
             drifted.add(match.group(0))
 
     assert not drifted, (
-        f"{doc_name} quotes {sorted(drifted)} outside the legacy subsection; "
-        f"the new default is ~/.mcc. Move the mention into a Legacy ~/.fcc "
-        f"subsection, or update it to ~/.mcc."
+        f"{doc_name} quotes {sorted(drifted)} outside the migration story; "
+        f"the config home is ~/.mcc. Move the mention into the migration "
+        f"section, or update it to ~/.mcc."
     )
 
 

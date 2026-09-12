@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "6.84.0"
+version = "7.0.0"
 description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
 readme = "README.md"
 license = "AGPL-3.0-or-later AND MIT"
@@ -61,26 +61,30 @@ mcc-rtk = "my_claude_code.cli.entrypoints:rtk"
 mcc-apps = "my_claude_code.cli.entrypoints:apps"
 mcc-help = "my_claude_code.cli.entrypoints:help_command"
 mcc-migrate = "my_claude_code.cli.entrypoints:migrate_config_dir"
-# Legacy command family (free-claude-code owner) — preserved as aliases that
-# resolve through the canonical my_claude_code implementation (or the
-# free_claude_code compatibility shim that re-exports it).
-fcc-server = "my_claude_code.cli.entrypoints:serve"
-free-claude-code = "my_claude_code.cli.entrypoints:serve"
-fcc-init = "my_claude_code.cli.entrypoints:init"
-fcc-claude = "my_claude_code.cli.launchers.claude:launch"
-fcc-claude-old = "my_claude_code.cli.launchers.claude:launch_legacy"
-fcc-codex = "my_claude_code.cli.launchers.codex:launch"
-fcc-pi = "my_claude_code.cli.launchers.pi:launch"
-fcc-chatgpt-oauth-login = "my_claude_code.cli.entrypoints:chatgpt_oauth_login"
-fcc-anthropic-oauth-login = "my_claude_code.cli.entrypoints:anthropic_oauth_login"
-fcc-compact-log = "my_claude_code.cli.entrypoints:compact_log"
-fcc-rtk = "my_claude_code.cli.entrypoints:rtk"
-fcc-help = "my_claude_code.cli.entrypoints:help_command"
-fcc-migrate = "my_claude_code.cli.entrypoints:migrate_config_dir"
+# Retired command family (the pre-5.0.0 free-claude-code owner). 7.0.0 removed
+# the legacy surface: these names are still installed, but every one of them is
+# a tombstone that prints the mcc-* name that replaced it and exits 1. They are
+# removed entirely in 8.0.0. See src/my_claude_code/cli/legacy_stubs.py.
+fcc-server = "my_claude_code.cli.legacy_stubs:main"
+free-claude-code = "my_claude_code.cli.legacy_stubs:main"
+fcc-init = "my_claude_code.cli.legacy_stubs:main"
+fcc-claude = "my_claude_code.cli.legacy_stubs:main"
+fcc-claude-old = "my_claude_code.cli.legacy_stubs:main"
+fcc-codex = "my_claude_code.cli.legacy_stubs:main"
+fcc-pi = "my_claude_code.cli.legacy_stubs:main"
+fcc-chatgpt-oauth-login = "my_claude_code.cli.legacy_stubs:main"
+fcc-anthropic-oauth-login = "my_claude_code.cli.legacy_stubs:main"
+fcc-compact-log = "my_claude_code.cli.legacy_stubs:main"
+fcc-rtk = "my_claude_code.cli.legacy_stubs:main"
+fcc-help = "my_claude_code.cli.legacy_stubs:main"
+fcc-migrate = "my_claude_code.cli.legacy_stubs:main"
+# ``fcc-desktop`` was a gui-script (no console on Windows). A tombstone that
+# writes one line to stderr needs a console to be seen at all, so it moves to
+# [project.scripts] for its last release.
+fcc-desktop = "my_claude_code.cli.legacy_stubs:main"
 
 [project.gui-scripts]
 mcc-desktop = "my_claude_code.cli.desktop_entrypoint:launch"
-fcc-desktop = "my_claude_code.cli.desktop_entrypoint:launch"
 
 [project.optional-dependencies]
 voice = [
@@ -96,7 +100,7 @@ voice_local = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/my_claude_code", "src/free_claude_code"]
+packages = ["src/my_claude_code"]
 
 [tool.hatch.build.targets.wheel.force-include]
 ".env.example" = "my_claude_code/config/env.example"
@@ -200,7 +204,7 @@ markers = [
     "clients: client compatibility checks",
     "voice: voice transcription checks",
     "contract: deterministic feature contract checks",
-    "smoke_target(name): route a smoke test behind FCC_SMOKE_TARGETS",
+    "smoke_target(name): route a smoke test behind MCC_SMOKE_TARGETS",
     "xdist_group(name): group smoke provider items under pytest-xdist --dist=loadgroup",
     "touches_registry: the test writes to the (in-memory, faked) Windows registry",
     "spawns_process: the test may launch an executable the hermeticity guard denies",

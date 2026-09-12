@@ -98,7 +98,7 @@ def _launch(harness_id: str, argv: Sequence[str] | None) -> None:
             f"My Claude Code proxy is not reachable at {proxy_root_url}: {error}",
             file=sys.stderr,
         )
-        print("Start it in another terminal with: fcc-server", file=sys.stderr)
+        print("Start it in another terminal with: mcc-server", file=sys.stderr)
         raise SystemExit(1)
 
     config_path = write_harness_config(spec, proxy_root_url, settings)

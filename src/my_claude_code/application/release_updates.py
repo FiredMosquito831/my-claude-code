@@ -625,10 +625,10 @@ def _server_launcher(uv_executable: str | None = None) -> Path | None:
     """Resolve the launcher which survives replacement of the tool environment."""
     bin_dir = _uv_tool_bin_dir(uv_executable)
     if bin_dir is not None:
-        candidate = bin_dir / ("fcc-server.exe" if os.name == "nt" else "fcc-server")
+        candidate = bin_dir / ("mcc-server.exe" if os.name == "nt" else "mcc-server")
         if candidate.is_file():
             return candidate
-    found = shutil.which("fcc-server")
+    found = shutil.which("mcc-server")
     return Path(found) if found else None
 
 

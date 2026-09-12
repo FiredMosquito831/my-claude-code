@@ -1,4 +1,4 @@
-"""FCC_SMOKE_* fields were retired from the admin manifest.
+"""MCC_SMOKE_* fields were retired from the admin manifest.
 
 They never rendered anywhere (no dashboard view claimed the "smoke"
 section), yet `render_env_file` wrote all 54 of them into every user's
@@ -22,23 +22,23 @@ def test_no_smoke_section_in_the_manifest() -> None:
 
 
 def test_no_smoke_fields_in_the_manifest() -> None:
-    assert not any(field.key.startswith("FCC_SMOKE_") for field in FIELDS)
+    assert not any(field.key.startswith("MCC_SMOKE_") for field in FIELDS)
 
 
 def test_render_env_file_emits_no_smoke_keys_or_header() -> None:
     rendered = render_env_file({}, preserved={})
-    assert "FCC_SMOKE" not in rendered
+    assert "MCC_SMOKE" not in rendered
     assert "# Smoke Tests" not in rendered
 
 
 _OLD_FORMAT_ENV = """\
 MODEL=nvidia_nim/old-model
 LOG_RAW_API_PAYLOADS=true
-FCC_SMOKE_MODEL_OPENAI=gpt-4o-mini
-FCC_SMOKE_MODEL_NVIDIA_NIM=
-FCC_SMOKE_MODEL_DEEPSEEK=
-FCC_SMOKE_NIM_MODELS=
-FCC_SMOKE_OPENROUTER_FREE_MODELS=
+MCC_SMOKE_MODEL_OPENAI=gpt-4o-mini
+MCC_SMOKE_MODEL_NVIDIA_NIM=
+MCC_SMOKE_MODEL_DEEPSEEK=
+MCC_SMOKE_NIM_MODELS=
+MCC_SMOKE_OPENROUTER_FREE_MODELS=
 """
 
 
@@ -56,22 +56,22 @@ def test_round_trip_preserves_populated_smoke_key_drops_empty_ones(
 
     preserved = unmanaged_env_values(env)
 
-    assert preserved.get("FCC_SMOKE_MODEL_OPENAI") == "gpt-4o-mini"
-    assert "FCC_SMOKE_MODEL_NVIDIA_NIM" not in preserved
-    assert "FCC_SMOKE_MODEL_DEEPSEEK" not in preserved
-    assert "FCC_SMOKE_NIM_MODELS" not in preserved
-    assert "FCC_SMOKE_OPENROUTER_FREE_MODELS" not in preserved
+    assert preserved.get("MCC_SMOKE_MODEL_OPENAI") == "gpt-4o-mini"
+    assert "MCC_SMOKE_MODEL_NVIDIA_NIM" not in preserved
+    assert "MCC_SMOKE_MODEL_DEEPSEEK" not in preserved
+    assert "MCC_SMOKE_NIM_MODELS" not in preserved
+    assert "MCC_SMOKE_OPENROUTER_FREE_MODELS" not in preserved
 
     rendered = render_env_file(
         {"MODEL": "nvidia_nim/old-model", "LOG_RAW_API_PAYLOADS": "true"},
         preserved=preserved,
     )
 
-    assert "FCC_SMOKE_MODEL_OPENAI=gpt-4o-mini" in rendered
-    assert "FCC_SMOKE_MODEL_NVIDIA_NIM" not in rendered
-    assert "FCC_SMOKE_MODEL_DEEPSEEK" not in rendered
-    assert "FCC_SMOKE_NIM_MODELS" not in rendered
-    assert "FCC_SMOKE_OPENROUTER_FREE_MODELS" not in rendered
+    assert "MCC_SMOKE_MODEL_OPENAI=gpt-4o-mini" in rendered
+    assert "MCC_SMOKE_MODEL_NVIDIA_NIM" not in rendered
+    assert "MCC_SMOKE_MODEL_DEEPSEEK" not in rendered
+    assert "MCC_SMOKE_NIM_MODELS" not in rendered
+    assert "MCC_SMOKE_OPENROUTER_FREE_MODELS" not in rendered
     assert "MODEL=nvidia_nim/old-model" in rendered
     assert "LOG_RAW_API_PAYLOADS=true" in rendered
 
@@ -100,7 +100,7 @@ def test_old_format_env_shrinks_by_the_expected_line_count(tmp_path) -> None:
         preserved=preserved,
     )
     rendered_smoke_lines = [
-        line for line in rendered.splitlines() if line.startswith("FCC_SMOKE")
+        line for line in rendered.splitlines() if line.startswith("MCC_SMOKE")
     ]
 
     assert len(rendered_smoke_lines) == 1

@@ -31,17 +31,17 @@ set -eu
 # macOS the .dmg needs nothing. --desktop below only writes a launcher entry
 # for the mcc-desktop command that this install already provides.
 
-FCC_REPO="FiredMosquito831/my-claude-code"
-FCC_LATEST_RELEASE_URL="https://api.github.com/repos/${FCC_REPO}/releases/latest"
+MCC_REPO="FiredMosquito831/my-claude-code"
+MCC_LATEST_RELEASE_URL="https://api.github.com/repos/${MCC_REPO}/releases/latest"
 PYTHON_VERSION="3.14.0"
 MIN_UV_VERSION="0.11.0"
 UV_INSTALL_URL="https://astral.sh/uv/install.sh"
 
 # Resolved from the release feed at run time (or from --version).
-FCC_VERSION=""
-FCC_WHEEL_NAME=""
-FCC_WHEEL_URL=""
-FCC_WHEEL_SHA256=""
+MCC_VERSION=""
+MCC_WHEEL_NAME=""
+MCC_WHEEL_URL=""
+MCC_WHEEL_SHA256=""
 
 dry_run=0
 requested_version=""
@@ -90,7 +90,7 @@ show_usage() {
     cat <<'USAGE'
 Usage: install.sh [options]
 
-Installs or updates Free Claude Code to the latest published release.
+Installs or updates My Claude Code to the latest published release.
 
 Installs a compatible uv if one is missing. It does not install Claude Code,
 Codex, or Pi -- install whichever of those you use yourself.
@@ -377,7 +377,7 @@ download_and_run() {
         return 0
     fi
 
-    temporary_script=$(mktemp "${TMPDIR:-/tmp}/fcc-install.XXXXXX") || fail "Unable to create a temporary file for $label."
+    temporary_script=$(mktemp "${TMPDIR:-/tmp}/mcc-install.XXXXXX") || fail "Unable to create a temporary file for $label."
     print_command curl -fsSL "$url" -o "$temporary_script"
     if curl -fsSL "$url" -o "$temporary_script"; then
         :
@@ -604,7 +604,7 @@ extract_wheel_digest() {
     # without a digest yields nothing instead of borrowing a sibling's, and
     # release-body prose can never be mistaken for the asset's digest.
     printf '%s\n' "$1" |
-        awk -v wheel_name="$FCC_WHEEL_NAME" '
+        awk -v wheel_name="$MCC_WHEEL_NAME" '
             /"name":[[:space:]]*"/ {
                 name = $0
                 sub(/^.*"name":[[:space:]]*"/, "", name)
@@ -625,32 +625,32 @@ extract_wheel_digest() {
 resolve_release() {
     digest_known=1
     if [ -n "$requested_version" ]; then
-        FCC_VERSION=$requested_version
-        FCC_WHEEL_NAME="my_claude_code-${FCC_VERSION}-py3-none-any.whl"
+        MCC_VERSION=$requested_version
+        MCC_WHEEL_NAME="my_claude_code-${MCC_VERSION}-py3-none-any.whl"
         # A pinned install stays verified whenever the tag-scoped feed publishes
         # a digest for the wheel. Only an unreachable feed downgrades to an
         # explicitly reported unverified download; a readable feed that omits
         # the asset's own digest is refused below rather than trusted.
-        tag_feed_url="https://api.github.com/repos/${FCC_REPO}/releases/tags/v${FCC_VERSION}"
+        tag_feed_url="https://api.github.com/repos/${MCC_REPO}/releases/tags/v${MCC_VERSION}"
         print_command curl -fsSL "$tag_feed_url"
         if release_json=$(curl -fsSL -H "Accept: application/vnd.github+json" "$tag_feed_url" 2>/dev/null); then
             :
         else
-            printf 'warning: could not reach the release feed to verify v%s -- proceeding unverified.\n' "$FCC_VERSION" >&2
+            printf 'warning: could not reach the release feed to verify v%s -- proceeding unverified.\n' "$MCC_VERSION" >&2
             digest_known=0
         fi
     else
         # Read even during a dry run: it is a GET that changes nothing, and it
         # is the only way to report the version that would actually install.
-        print_command curl -fsSL "$FCC_LATEST_RELEASE_URL"
-        release_json=$(curl -fsSL -H "Accept: application/vnd.github+json" "$FCC_LATEST_RELEASE_URL" 2>/dev/null) ||
+        print_command curl -fsSL "$MCC_LATEST_RELEASE_URL"
+        release_json=$(curl -fsSL -H "Accept: application/vnd.github+json" "$MCC_LATEST_RELEASE_URL" 2>/dev/null) ||
             fail "Could not reach the release feed to find the latest version."
-        FCC_VERSION=$(printf '%s\n' "$release_json" |
+        MCC_VERSION=$(printf '%s\n' "$release_json" |
             grep -m1 '"tag_name"' |
             sed -e 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//' -e 's/".*//' -e 's/^v//')
-        [ -n "$FCC_VERSION" ] ||
+        [ -n "$MCC_VERSION" ] ||
             fail "Could not read the latest release version from the release feed."
-        FCC_WHEEL_NAME="my_claude_code-${FCC_VERSION}-py3-none-any.whl"
+        MCC_WHEEL_NAME="my_claude_code-${MCC_VERSION}-py3-none-any.whl"
     fi
 
     if [ "$digest_known" -eq 1 ]; then
@@ -660,18 +660,18 @@ resolve_release() {
         # digest as prose, so the digest is taken only from the asset object
         # whose name matches the wheel; an asset without one refuses loudly
         # rather than borrowing a sibling's.
-        FCC_WHEEL_SHA256=$(extract_wheel_digest "$release_json")
-        [ -n "$FCC_WHEEL_SHA256" ] ||
-            fail "No digest published for this asset (${FCC_WHEEL_NAME} in release v${FCC_VERSION}); refusing to install."
+        MCC_WHEEL_SHA256=$(extract_wheel_digest "$release_json")
+        [ -n "$MCC_WHEEL_SHA256" ] ||
+            fail "No digest published for this asset (${MCC_WHEEL_NAME} in release v${MCC_VERSION}); refusing to install."
     fi
-    FCC_WHEEL_URL="https://github.com/${FCC_REPO}/releases/download/v${FCC_VERSION}/${FCC_WHEEL_NAME}"
+    MCC_WHEEL_URL="https://github.com/${MCC_REPO}/releases/download/v${MCC_VERSION}/${MCC_WHEEL_NAME}"
 }
 
 download_verified_release_wheel() {
     if [ "$dry_run" -eq 1 ]; then
-        print_command curl -fsSL "$FCC_WHEEL_URL" -o "<temporary-wheel>"
-        if [ -n "$FCC_WHEEL_SHA256" ]; then
-            printf '+ verify SHA-256 %s for <temporary-wheel>\n' "$FCC_WHEEL_SHA256"
+        print_command curl -fsSL "$MCC_WHEEL_URL" -o "<temporary-wheel>"
+        if [ -n "$MCC_WHEEL_SHA256" ]; then
+            printf '+ verify SHA-256 %s for <temporary-wheel>\n' "$MCC_WHEEL_SHA256"
         else
             printf '+ verify the SHA-256 published for this release\n'
         fi
@@ -679,22 +679,22 @@ download_verified_release_wheel() {
         return 0
     fi
 
-    temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/fcc-wheel.XXXXXX") ||
+    temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/mcc-wheel.XXXXXX") ||
         fail "Unable to create a temporary directory for the FCC release wheel."
-    release_wheel_path="$temporary_directory/$FCC_WHEEL_NAME"
-    print_command curl -fsSL "$FCC_WHEEL_URL" -o "$release_wheel_path"
-    if ! curl -fsSL "$FCC_WHEEL_URL" -o "$release_wheel_path"; then
-        fail "Could not download the FCC v$FCC_VERSION release wheel."
+    release_wheel_path="$temporary_directory/$MCC_WHEEL_NAME"
+    print_command curl -fsSL "$MCC_WHEEL_URL" -o "$release_wheel_path"
+    if ! curl -fsSL "$MCC_WHEEL_URL" -o "$release_wheel_path"; then
+        fail "Could not download the My Claude Code v$MCC_VERSION release wheel."
     fi
     [ -s "$release_wheel_path" ] ||
         fail "The downloaded FCC release wheel was empty."
 
-    if [ -z "$FCC_WHEEL_SHA256" ]; then
+    if [ -z "$MCC_WHEEL_SHA256" ]; then
         # Reachable only when a --version install could not read the tag feed;
         # resolve_release refuses a missing digest in every other case. The
         # fail-open was announced there and is repeated here so the user sees
         # it immediately before the install happens.
-        printf 'warning: installing FCC v%s WITHOUT checksum verification.\n' "$FCC_VERSION" >&2
+        printf 'warning: installing My Claude Code v%s WITHOUT checksum verification.\n' "$MCC_VERSION" >&2
         return 0
     fi
 
@@ -706,9 +706,9 @@ download_verified_release_wheel() {
         fail "sha256sum or shasum is required to verify the FCC release wheel."
     fi
     actual_sha256=${actual_sha256%% *}
-    [ "$actual_sha256" = "$FCC_WHEEL_SHA256" ] ||
+    [ "$actual_sha256" = "$MCC_WHEEL_SHA256" ] ||
         fail "FCC release wheel checksum mismatch; refusing to install."
-    printf 'Verified FCC v%s release wheel SHA-256.\n' "$FCC_VERSION"
+    printf 'Verified My Claude Code v%s release wheel SHA-256.\n' "$MCC_VERSION"
 }
 
 package_spec() {
@@ -857,8 +857,10 @@ verify_staged_environment() {
     # This runs BEFORE the stop, so a wheel that cannot run costs a download
     # instead of an outage.
     verify_reason="The staged version could not be run."
+    # mcc-server and nothing else. The legacy bin/fcc-server was accepted as a
+    # fallback until 7.0.0; it is now a tombstone that exits 1, so falling back
+    # to it would turn a healthy install into a failed verification.
     staged_server="$staging_env/bin/mcc-server"
-    [ -x "$staged_server" ] || staged_server="$staging_env/bin/fcc-server"
     staged_python="$staging_env/bin/python"
     if [ ! -x "$staged_server" ] || [ ! -x "$staged_python" ]; then
         verify_reason="The staged install produced no runnable launcher."
@@ -875,9 +877,9 @@ verify_staged_environment() {
     }
     write_install_log "Staged import succeeded."
     case "$verify_version_output" in
-        *"$FCC_VERSION"*) ;;
+        *"$MCC_VERSION"*) ;;
         *)
-            verify_reason="The staged version reported \"$verify_version_output\" rather than $FCC_VERSION."
+            verify_reason="The staged version reported \"$verify_version_output\" rather than $MCC_VERSION."
             return 1
             ;;
     esac
@@ -1247,9 +1249,10 @@ configure_and_verify_my_claude_code() {
     hash -r 2>/dev/null || true
 
     # Verify the native my-claude-code command family (mcc-*) plus the package
-    # name shim, exactly as the post-install reference leads with. The legacy
-    # fcc-* aliases resolve through the same distribution, so they exist as soon
-    # as these do.
+    # name shim, exactly as the post-install reference leads with. The retired
+    # fcc-* names ship from the same distribution as tombstones, so they exist
+    # as soon as these do -- and are never verified by running them, because
+    # running one is defined to exit 1.
     # Report EVERY missing command at once, not just the first. The Windows
     # installer used to stop at the first miss (and, worse, skip the check
     # altogether in one branch) and so reported "verified" for commands that did
@@ -1298,8 +1301,8 @@ configure_and_verify_my_claude_code() {
         status=$?
         fail "My Claude Code version verification failed with exit code $status."
     fi
-    [ "$installed_version" = "my-claude-code $FCC_VERSION" ] ||
-        fail "Expected my-claude-code $FCC_VERSION; found: $installed_version"
+    [ "$installed_version" = "my-claude-code $MCC_VERSION" ] ||
+        fail "Expected my-claude-code $MCC_VERSION; found: $installed_version"
 }
 
 warn_about_shadowing_programs() {
@@ -1848,7 +1851,7 @@ restart_after_install() {
     # On this path the build that answers --report-holder is the one that was
     # just installed, because nothing was swapped and the old environment is
     # gone.
-    stop_configured_server "$restart_launcher" "${FCC_VERSION:-}"
+    stop_configured_server "$restart_launcher" "${MCC_VERSION:-}"
     case "$stop_outcome" in
         stopped) ;;
         nothing-listening)
@@ -1893,7 +1896,7 @@ start_restarted_server() {
     # is a second the machine has no server; run beside it, it costs nothing,
     # because the server spends that time booting anyway.
     restart_launcher=$1
-    write_install_progress starting "Starting My Claude Code $FCC_VERSION."
+    write_install_progress starting "Starting My Claude Code $MCC_VERSION."
     restart_updates_dir="$(mcc_config_dir)/updates"
     mkdir -p "$restart_updates_dir" 2>/dev/null || true
     restart_start_log="$restart_updates_dir/server-start-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || printf 'unknown').log"
@@ -1923,7 +1926,7 @@ confirm_restarted_server() {
 
     if wait_for_server_health "$restart_health_url" "$(server_start_budget_seconds)"; then
         install_progress_restarted=true
-        restart_message="My Claude Code $FCC_VERSION is installed and answering on port $server_port."
+        restart_message="My Claude Code $MCC_VERSION is installed and answering on port $server_port."
         printf '%s\n' "$restart_message"
         write_install_log "$restart_message"
         write_install_progress done "$restart_message"
@@ -2062,7 +2065,7 @@ write_install_progress() {
         done|failed|recovered) helper_done=true ;;
     esac
     printf '{"stage":"%s","message":"%s","at":"%s","parent":0,"helper_pid":%s,"started_at":%s,"elapsed_seconds":%s,"helper_done":%s,"version":"%s","log":"%s","source":"install.sh","restarted":%s,"holder":"%s"}
-'         "$stage"         "$message"         "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '')"         "$$"         "${install_progress_started:-0}"         "$elapsed"         "$helper_done"         "${FCC_VERSION:-}"         "$install_progress_log"         "${install_progress_restarted:-null}"         "${install_progress_holder:-}"         >> "$install_progress_path" 2>/dev/null || true
+'         "$stage"         "$message"         "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '')"         "$$"         "${install_progress_started:-0}"         "$elapsed"         "$helper_done"         "${MCC_VERSION:-}"         "$install_progress_log"         "${install_progress_restarted:-null}"         "${install_progress_holder:-}"         >> "$install_progress_path" 2>/dev/null || true
     return 0
 }
 
@@ -2134,7 +2137,7 @@ if [ "$dry_run" -ne 1 ]; then
     staged_bin_dir=$("$uv_bin" tool dir --bin 2>/dev/null | head -n 1) || staged_bin_dir=""
     if [ -n "$staged_tool_dir" ] && [ -d "$staged_tool_dir" ] && [ -n "$staged_bin_dir" ] && [ -d "$staged_bin_dir" ]; then
         write_install_progress staging "Building the new version beside the running one."
-        printf 'Building My Claude Code %s beside the running one; nothing is replaced until it is proved.\n' "$FCC_VERSION"
+        printf 'Building My Claude Code %s beside the running one; nothing is replaced until it is proved.\n' "$MCC_VERSION"
         stage_new_environment "$staged_tools_root" || true
         if [ "$staged_ok" -ne 1 ] && [ "$staged_reason" = "disk-full" ]; then
             # A staging directory is one more copy of the same files on the
@@ -2261,7 +2264,7 @@ create_desktop_shortcut
 if [ "$dry_run" -eq 1 ]; then
     printf '\nDry run complete. No changes were made.\n'
 else
-    printf '\nMy Claude Code %s is installed and verified.\n' "$FCC_VERSION"
+    printf '\nMy Claude Code %s is installed and verified.\n' "$MCC_VERSION"
     printf '\nStart the proxy:\n'
     printf '  mcc-server              Start the local proxy and admin dashboard\n'
     printf '\nUse a coding agent through the proxy:\n'
@@ -2294,7 +2297,8 @@ else
             printf '\nThe desktop launcher was not created: %s.\n' "$desktop_launcher_error"
         fi
     fi
-    printf '\nThe legacy fcc-* commands (fcc-server, fcc-claude, ...) remain as aliases.\n'
+    printf '\nThe legacy fcc-* commands were retired in 7.0.0: each one now prints the\n'
+    printf 'mcc-* name that replaced it and exits 1. They go away entirely in 8.0.0.\n'
     printf '\nIf mcc-server is not found, open a new terminal: this install may have added\n'
     printf 'a directory to PATH that shells started earlier cannot see.\n'
     printf '\nTo use an update installed while the server is running, restart the proxy\n'
@@ -2322,7 +2326,7 @@ elif [ "$staged_swapped" -eq 1 ]; then
     # swapped the environment. What is left is the start, the health gate, and
     # the rollback the previous environment was kept for.
     if [ "$stage_may_start" -ne 1 ]; then
-        restart_message=${stop_message:-"My Claude Code $FCC_VERSION is installed. Start the server with: mcc-server"}
+        restart_message=${stop_message:-"My Claude Code $MCC_VERSION is installed. Start the server with: mcc-server"}
         printf '\n%s\n' "$restart_message"
         install_progress_restarted=false
         write_install_progress done "$restart_message"

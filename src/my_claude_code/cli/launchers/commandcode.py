@@ -101,7 +101,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
             f"My Claude Code proxy is not reachable at {proxy_root_url}: {error}",
             file=sys.stderr,
         )
-        print("Start it in another terminal with: fcc-server", file=sys.stderr)
+        print("Start it in another terminal with: mcc-server", file=sys.stderr)
         raise SystemExit(1)
 
     merged = merge_provider_block(spec, proxy_root_url, settings.anthropic_auth_token)

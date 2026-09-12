@@ -33,7 +33,7 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-from my_claude_code.config.atomic_json import FCC_TEMP_SUFFIX
+from my_claude_code.config.atomic_json import ATOMIC_TEMP_SUFFIX
 from my_claude_code.config.harnesses import (
     KIMI_API_KEY_SENTINEL,
     KIMI_BASE_URL_SENTINEL,
@@ -70,7 +70,7 @@ def write_toml_document_atomically(path: Path, data: Mapping[str, object]) -> No
     """Write ``data`` as TOML to ``path``, creating parent directories as needed."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(path.name + FCC_TEMP_SUFFIX)
+    tmp_path = path.with_name(path.name + ATOMIC_TEMP_SUFFIX)
     try:
         # Bytes, not text, so Windows does not translate "\n" to CRLF and
         # defeat the content compare below.

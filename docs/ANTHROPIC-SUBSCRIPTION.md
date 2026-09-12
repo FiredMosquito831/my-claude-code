@@ -230,7 +230,7 @@ and MCC do not share a `localhost`.
 MCC can see up to two credentials, and picks between them **on viability, not
 on existence**:
 
-1. **MCC's own store** (`~/.mcc/anthropic_oauth.json`, or `~/.fcc/anthropic_oauth.json`
+1. **MCC's own store** (`~/.mcc/anthropic_oauth.json`; an install that has not yet been migrated has it under `~/.fcc/anthropic_oauth.json`
    on a legacy install that has not run `mcc-migrate`) — preferred *while it is
    usable*: either the access token has not expired, or it has expired but the
    refresh token is not itself past a stated expiry.
@@ -330,7 +330,7 @@ that is expected rather than a bug. Sign in directly instead.
 
 - MCC's own credential lives at `~/.mcc/anthropic_oauth.json`, mode `0600` — in
   whichever config directory this install resolved, so a legacy install that has
-  not run `mcc-migrate` has it under `~/.fcc/` instead.
+  not yet been migrated has it under `~/.fcc/` instead.
 - Claude Code's file (`~/.claude/.credentials.json`) is **read-only** to MCC and
   never refreshed in place — rotating it would log out your real client.
 - Tokens are never written to the request log, an HTTP response, or a log line.

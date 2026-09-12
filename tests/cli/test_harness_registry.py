@@ -58,16 +58,18 @@ def test_every_spec_has_a_console_script_entry() -> None:
     for command in harness_commands():
         assert scripts.get(command.command) == command.target, command.command
         if command.legacy_command is not None:
-            assert scripts.get(command.legacy_command) == command.target
+            # 7.0.0: the fcc- name is still registered so it can say what it was
+            # renamed to, but it points at the tombstone, never at the launcher.
+            assert (
+                scripts.get(command.legacy_command)
+                == "my_claude_code.cli.legacy_stubs:main"
+            ), command.legacy_command
 
 
 def test_every_launcher_console_script_belongs_to_a_registered_harness() -> None:
+    # Only the ``mcc-`` names: since 7.0.0 a registered ``fcc-`` alias points at
+    # the tombstone, not at ``cli.launchers.*``, so it is not a launcher script.
     registered = {command.command for command in harness_commands()}
-    registered |= {
-        command.legacy_command
-        for command in harness_commands()
-        if command.legacy_command is not None
-    }
     launcher_scripts = {
         name
         for name, target in _pyproject_scripts().items()
@@ -246,7 +248,7 @@ def test_codex_spec_builds_the_same_argv_as_before() -> None:
         "-c",
         'model_providers.fcc.base_url="http://127.0.0.1:8082/v1"',
         "-c",
-        'model_providers.fcc.env_key="FCC_CODEX_API_KEY"',
+        'model_providers.fcc.env_key="MCC_CODEX_API_KEY"',
         "-c",
         'model_providers.fcc.wire_api="responses"',
         # MCC's attribution header, as a TOML inline table -- ``=`` between the
@@ -259,7 +261,7 @@ def test_codex_spec_builds_the_same_argv_as_before() -> None:
         auth_token="token",
         base_env={"OPENAI_API_KEY": "x", "CODEX_HOME": "keep", "PATH": "p"},
     )
-    assert env == {"CODEX_HOME": "keep", "PATH": "p", "FCC_CODEX_API_KEY": "token"}
+    assert env == {"CODEX_HOME": "keep", "PATH": "p", "MCC_CODEX_API_KEY": "token"}
 
 
 def test_pi_spec_builds_the_same_command_and_env_as_before() -> None:
@@ -281,12 +283,12 @@ def test_pi_spec_builds_the_same_command_and_env_as_before() -> None:
     env = build_pi_launcher_env(
         proxy_root_url="http://127.0.0.1:8082/",
         auth_token="token",
-        base_env={"FCC_PI_STALE": "x", "PATH": "p"},
+        base_env={"MCC_PI_STALE": "x", "PATH": "p"},
     )
     assert env == {
         "PATH": "p",
-        "FCC_PI_BASE_URL": "http://127.0.0.1:8082",
-        "FCC_PI_API_KEY": "token",
+        "MCC_PI_BASE_URL": "http://127.0.0.1:8082",
+        "MCC_PI_API_KEY": "token",
     }
     for command in ("config", "install", "list", "remove", "uninstall", "update"):
         assert is_pi_passthrough([command])

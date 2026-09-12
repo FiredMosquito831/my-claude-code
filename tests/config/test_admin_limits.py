@@ -32,6 +32,7 @@ def isolated_config(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.delenv("FCC_ENV_FILE", raising=False)
+    monkeypatch.delenv("MCC_ENV_FILE", raising=False)
     for key in FIELD_BY_KEY:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.chdir(tmp_path)

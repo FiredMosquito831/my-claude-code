@@ -58,7 +58,7 @@ def test_start_server_disables_cli_admin_browser(monkeypatch, tmp_path: Path) ->
     env_obj = captured["env"]
     assert isinstance(env_obj, dict)
     env = {str(key): value for key, value in env_obj.items()}
-    assert env["FCC_OPEN_BROWSER"] == "0"
+    assert env["MCC_OPEN_BROWSER"] == "0"
     assert env["HOST"] == "127.0.0.1"
     assert env["PORT"] == "4567"
 

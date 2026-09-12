@@ -1,4 +1,4 @@
-"""Installed `fcc-pi` launcher."""
+"""Installed `mcc-pi` launcher."""
 
 import os
 import subprocess
@@ -18,8 +18,8 @@ from my_claude_code.config.settings import get_settings
 from .common import preflight_proxy, run_client_process
 
 HARNESS_ID = "pi"
-_API_KEY_ENV = "FCC_PI_API_KEY"
-_BASE_URL_ENV = "FCC_PI_BASE_URL"
+_API_KEY_ENV = "MCC_PI_API_KEY"
+_BASE_URL_ENV = "MCC_PI_BASE_URL"
 _HELP_TIMEOUT_SECONDS = 5.0
 _MODEL_SCOPE = "free-claude-code/**"
 
@@ -56,7 +56,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
             f"My Claude Code proxy is not reachable at {proxy_root_url}: {error}",
             file=sys.stderr,
         )
-        print("Start it in another terminal with: fcc-server", file=sys.stderr)
+        print("Start it in another terminal with: mcc-server", file=sys.stderr)
         raise SystemExit(1)
 
     extension_path = pi_extension_path()
@@ -111,7 +111,7 @@ def build_pi_launcher_env(
     """Return a Pi environment containing only FCC-owned proxy variables."""
 
     env = {
-        key: value for key, value in base_env.items() if not key.startswith("FCC_PI_")
+        key: value for key, value in base_env.items() if not key.startswith("MCC_PI_")
     }
     env[_BASE_URL_ENV] = proxy_root_url.rstrip("/")
     env[_API_KEY_ENV] = proxy_auth_token(auth_token)

@@ -73,9 +73,8 @@ ACTIVATION_FILENAME = "desktop.activate"
 
 #: The server's own "open the dashboard when I am healthy" switch, spelled as
 #: the environment variable ``Settings.open_admin_browser`` reads
-#: (``AliasChoices("MCC_OPEN_BROWSER", "FCC_OPEN_BROWSER")`` -- the canonical
-#: name is the first choice, so setting it wins over a legacy value in a
-#: ``.env``).
+#: (the only name since 7.0.0 -- the ``FCC_OPEN_BROWSER`` alias went with the
+#: rest of the legacy env surface).
 OPEN_BROWSER_ENV = "MCC_OPEN_BROWSER"
 
 #: How often the close watcher samples ``window.is_open`` (seconds).

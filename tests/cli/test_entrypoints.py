@@ -203,21 +203,32 @@ def test_cli_scripts_are_registered() -> None:
     )
 
     scripts = pyproject["project"]["scripts"]
-    assert scripts["fcc-server"] == "my_claude_code.cli.entrypoints:serve"
-    assert scripts["free-claude-code"] == "my_claude_code.cli.entrypoints:serve"
-    assert scripts["fcc-claude"] == "my_claude_code.cli.launchers.claude:launch"
+    assert scripts["mcc-server"] == "my_claude_code.cli.entrypoints:serve"
+    assert scripts["my-claude-code"] == "my_claude_code.cli.entrypoints:serve"
+    assert scripts["mcc-claude"] == "my_claude_code.cli.launchers.claude:launch"
     assert (
-        scripts["fcc-claude-old"] == "my_claude_code.cli.launchers.claude:launch_legacy"
+        scripts["mcc-claude-old"] == "my_claude_code.cli.launchers.claude:launch_legacy"
     )
-    assert scripts["fcc-codex"] == "my_claude_code.cli.launchers.codex:launch"
-    assert scripts["fcc-pi"] == "my_claude_code.cli.launchers.pi:launch"
+    assert scripts["mcc-codex"] == "my_claude_code.cli.launchers.codex:launch"
+    assert scripts["mcc-pi"] == "my_claude_code.cli.launchers.pi:launch"
     assert scripts["mcc-help"] == "my_claude_code.cli.entrypoints:help_command"
-    assert scripts["fcc-help"] == "my_claude_code.cli.entrypoints:help_command"
     assert scripts["mcc-rtk"] == "my_claude_code.cli.entrypoints:rtk"
+
+    # 7.0.0: every retired name is a tombstone, not an alias. A name that ever
+    # shipped must still be registered (so the shim exists and the message is
+    # seen instead of "command not found"), and it must point at nothing that
+    # runs.
+    from my_claude_code.cli.legacy_stubs import LEGACY_COMMAND_REPLACEMENTS
+
+    for legacy, replacement in LEGACY_COMMAND_REPLACEMENTS.items():
+        assert scripts[legacy] == "my_claude_code.cli.legacy_stubs:main", legacy
+        assert replacement in scripts or replacement == "mcc-desktop", replacement
 
     gui_scripts = pyproject["project"]["gui-scripts"]
     assert gui_scripts["mcc-desktop"] == "my_claude_code.cli.desktop_entrypoint:launch"
-    assert gui_scripts["fcc-desktop"] == "my_claude_code.cli.desktop_entrypoint:launch"
+    assert gui_scripts == {
+        "mcc-desktop": "my_claude_code.cli.desktop_entrypoint:launch"
+    }
 
 
 def test_help_command_documents_every_mcc_command(
@@ -244,9 +255,9 @@ def test_help_command_documents_every_mcc_command(
         "mcc-help",
     ):
         assert command in out
-    # The legacy family is acknowledged as aliases, not advertised first.
+    # The legacy family is named as retired, not advertised as working.
     assert "fcc-*" in out
-    assert "aliases" in out
+    assert "retired in 7.0.0" in out
     # The install-while-running / restart note is present.
     assert "restart" in out
 
@@ -474,19 +485,19 @@ def test_process_replacement_flushes_logs_and_execs_stable_launcher() -> None:
     with (
         patch.object(commands, "_WINDOWS", False),
         patch.object(commands, "external_upgrade_helper_pending", return_value=False),
-        patch.object(commands, "_server_launcher", return_value="/stable/fcc-server"),
+        patch.object(commands, "_server_launcher", return_value="/stable/mcc-server"),
         patch.object(commands.logger, "complete") as complete,
         patch.object(commands, "kill_all_best_effort") as kill_all,
         patch.object(commands, "wait_for_port_free", return_value=True),
         patch.object(commands.os, "execv") as execv,
-        patch.object(commands.sys, "argv", ["fcc-server", "--example"]),
+        patch.object(commands.sys, "argv", ["mcc-server", "--example"]),
     ):
         commands._replace_server_process(_launcher_settings())
 
     complete.assert_called_once()
     kill_all.assert_called_once()
     execv.assert_called_once_with(
-        "/stable/fcc-server", ["/stable/fcc-server", "--example"]
+        "/stable/mcc-server", ["/stable/mcc-server", "--example"]
     )
 
 
@@ -656,7 +667,7 @@ def test_config_env_key_migration_warns_for_explicit_env_file(
     explicit = tmp_path / "custom.env"
     explicit.write_text("HF_TOKEN=legacy-hf\n", encoding="utf-8")
 
-    with patch.dict(commands.os.environ, {"FCC_ENV_FILE": str(explicit)}):
+    with patch.dict(commands.os.environ, {"MCC_ENV_FILE": str(explicit)}):
         migrated = commands._migrate_config_env_keys()
 
     assert migrated == ()
@@ -1228,7 +1239,7 @@ def test_launch_codex_passes_responses_config_and_child_env(
     )
     assert "MCC_CATALOGUE_VERBOSE=1" in error_output
     child_env = popen.call_args.kwargs["env"]
-    assert child_env["FCC_CODEX_API_KEY"] == "proxy-token"
+    assert child_env["MCC_CODEX_API_KEY"] == "proxy-token"
     assert child_env["CODEX_HOME"] == "keep-home"
     assert "CODEX_INTERNAL_ORIGINATOR_OVERRIDE" not in child_env
     assert "CODEX_PERMISSION_PROFILE" not in child_env
@@ -1302,8 +1313,8 @@ def test_pi_launcher_builds_scoped_session_command_and_proxy_env(
         base_env={
             "PATH": "keep",
             "ANTHROPIC_API_KEY": "native-pi-credential",
-            "FCC_PI_API_KEY": "stale-key",
-            "FCC_PI_BASE_URL": "https://stale.invalid",
+            "MCC_PI_API_KEY": "stale-key",
+            "MCC_PI_BASE_URL": "https://stale.invalid",
         },
     )
 
@@ -1323,8 +1334,8 @@ def test_pi_launcher_builds_scoped_session_command_and_proxy_env(
     assert env == {
         "PATH": "keep",
         "ANTHROPIC_API_KEY": "native-pi-credential",
-        "FCC_PI_BASE_URL": "http://127.0.0.1:9191",
-        "FCC_PI_API_KEY": "proxy-token",
+        "MCC_PI_BASE_URL": "http://127.0.0.1:9191",
+        "MCC_PI_API_KEY": "proxy-token",
     }
 
 
@@ -1337,7 +1348,7 @@ def test_pi_launcher_uses_no_auth_sentinel_for_blank_token() -> None:
         base_env={},
     )
 
-    assert env["FCC_PI_API_KEY"] == "fcc-no-auth"
+    assert env["MCC_PI_API_KEY"] == "fcc-no-auth"
 
 
 def test_launch_pi_registers_bundled_extension_for_sessions(
@@ -1347,7 +1358,7 @@ def test_launch_pi_registers_bundled_extension_for_sessions(
     from my_claude_code.cli.launchers.pi import launch
 
     monkeypatch.setenv("KEEP_ME", "yes")
-    monkeypatch.setenv("FCC_PI_API_KEY", "stale-key")
+    monkeypatch.setenv("MCC_PI_API_KEY", "stale-key")
     extension = tmp_path / "pi_extension.ts"
     extension.write_text("export default () => {};", encoding="utf-8")
     settings = _launcher_settings(port=9191, token="proxy-token")
@@ -1388,8 +1399,8 @@ def test_launch_pi_registers_bundled_extension_for_sessions(
         "hello",
     ]
     child_env = popen.call_args.kwargs["env"]
-    assert child_env["FCC_PI_BASE_URL"] == "http://127.0.0.1:9191"
-    assert child_env["FCC_PI_API_KEY"] == "proxy-token"
+    assert child_env["MCC_PI_BASE_URL"] == "http://127.0.0.1:9191"
+    assert child_env["MCC_PI_API_KEY"] == "proxy-token"
     assert child_env["KEEP_ME"] == "yes"
 
 
@@ -1607,7 +1618,7 @@ def test_launch_claude_unreachable_proxy_exits_with_hint(
     popen.assert_not_called()
     captured = capsys.readouterr()
     assert "http://127.0.0.1:9393" in captured.err
-    assert "fcc-server" in captured.err
+    assert "mcc-server" in captured.err
 
 
 def test_compact_log_entrypoint_is_registered_and_reports_version() -> None:
@@ -1619,7 +1630,7 @@ def test_compact_log_entrypoint_is_registered_and_reports_version() -> None:
     root = Path(__file__).resolve().parents[2]
     manifest = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     scripts = manifest["project"]["scripts"]
-    assert scripts["fcc-compact-log"] == ("my_claude_code.cli.entrypoints:compact_log")
+    assert scripts["mcc-compact-log"] == ("my_claude_code.cli.entrypoints:compact_log")
     assert callable(entrypoints.compact_log)
 
 
@@ -1913,21 +1924,21 @@ def test_process_replacement_logs_recovery_command_when_execv_fails() -> None:
     with (
         patch.object(commands, "_WINDOWS", False),
         patch.object(commands, "external_upgrade_helper_pending", return_value=False),
-        patch.object(commands, "_server_launcher", return_value="/stable/fcc-server"),
+        patch.object(commands, "_server_launcher", return_value="/stable/mcc-server"),
         patch.object(commands.logger, "complete"),
         patch.object(commands, "kill_all_best_effort"),
         patch.object(commands, "wait_for_port_free", return_value=True),
         patch.object(
             commands.os, "execv", side_effect=OSError(13, "Permission denied")
         ),
-        patch.object(commands.sys, "argv", ["fcc-server", "--example"]),
+        patch.object(commands.sys, "argv", ["mcc-server", "--example"]),
         patch.object(commands.logger, "error") as error,
     ):
         commands._replace_server_process(_launcher_settings())
 
     error.assert_called_once()
     recovery = " ".join(str(arg) for arg in error.call_args.args)
-    assert "/stable/fcc-server --example" in recovery
+    assert "/stable/mcc-server --example" in recovery
 
 
 def test_bind_failure_surfaces_the_port_owner() -> None:

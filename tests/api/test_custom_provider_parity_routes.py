@@ -36,6 +36,7 @@ def _app(monkeypatch, tmp_path: Path, registry: ProviderRegistry):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("FCC_ENV_FILE", raising=False)
+    monkeypatch.delenv("MCC_ENV_FILE", raising=False)
     app = create_test_app()
     runtime = runtime_for_app(app)
     monkeypatch.setattr(runtime, "reload_providers", AsyncMock(return_value={}))

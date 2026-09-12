@@ -7,33 +7,15 @@ from threading import Lock
 from typing import Any
 
 from dotenv import dotenv_values
-from loguru import logger
 
 from .paths import managed_env_path
 
 ANTHROPIC_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
-# The explicit dotenv override. ``MCC_ENV_FILE`` is the canonical name; the
-# pre-6.40.0 ``FCC_ENV_FILE`` is accepted as a working alias and logs one
-# deprecation line per process when it is the one that is set.
+# The explicit dotenv override. ``MCC_ENV_FILE`` is the only name; the
+# pre-6.40.0 ``FCC_ENV_FILE`` alias was removed in 7.0.0. A process that still
+# exports it gets the warning ``config.settings`` logs for every leftover
+# ``FCC_*`` name, so the override being ignored is never silent.
 DOTENV_FILE_ENV = "MCC_ENV_FILE"
-LEGACY_DOTENV_FILE_ENV = "FCC_ENV_FILE"
-
-_legacy_env_warnings: set[str] = set()
-
-
-def _log_legacy_env_name_once(legacy_name: str, canonical_name: str) -> None:
-    """Log one deprecation line per legacy env name, once per process."""
-
-    if legacy_name in _legacy_env_warnings:
-        return
-    _legacy_env_warnings.add(legacy_name)
-    logger.warning(
-        "The {} environment variable is deprecated; use {} instead. It still "
-        "works and will keep working, but the canonical name is {}.",
-        legacy_name,
-        canonical_name,
-        canonical_name,
-    )
 
 
 def repo_env_path() -> Path:
@@ -43,17 +25,10 @@ def repo_env_path() -> Path:
 
 
 def explicit_env_path(env: Mapping[str, str] | None = None) -> Path | None:
-    """Return the explicit ``MCC_ENV_FILE`` path, when configured.
-
-    The pre-6.40.0 ``FCC_ENV_FILE`` is accepted as a working alias; when it is
-    the name that is set, a single deprecation line is logged for the process.
-    """
+    """Return the explicit ``MCC_ENV_FILE`` path, when configured."""
 
     source = env if env is not None else os.environ
     if explicit := source.get(DOTENV_FILE_ENV):
-        return Path(explicit)
-    if explicit := source.get(LEGACY_DOTENV_FILE_ENV):
-        _log_legacy_env_name_once(LEGACY_DOTENV_FILE_ENV, DOTENV_FILE_ENV)
         return Path(explicit)
     return None
 

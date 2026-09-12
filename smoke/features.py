@@ -78,7 +78,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         ("api", "cli", "clients", "nvidia_nim_cli", "openrouter_free_cli"),
         (
             "configured provider",
-            "FCC_SMOKE_CLAUDE_BIN for real Claude CLI",
+            "MCC_SMOKE_CLAUDE_BIN for real Claude CLI",
             "NVIDIA_NIM_API_KEY",
             "OPENROUTER_API_KEY",
         ),
@@ -137,7 +137,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         ("test_configured_provider_models_stream_successfully",),
         ("test_provider_matrix_presence_e2e", "test_provider_text_multiturn_e2e"),
         ("providers",),
-        ("configured provider credentials/endpoints", "optional FCC_SMOKE_MODEL_*"),
+        ("configured provider credentials/endpoints", "optional MCC_SMOKE_MODEL_*"),
         "selected providers missing credentials are failing missing_env",
     ),
     FeatureCoverage(
@@ -342,7 +342,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
             "test_voice_nim_backend_e2e",
         ),
         ("messaging", "voice"),
-        ("VOICE_NOTE_ENABLED", "FCC_SMOKE_RUN_VOICE", "WHISPER_DEVICE"),
+        ("VOICE_NOTE_ENABLED", "MCC_SMOKE_RUN_VOICE", "WHISPER_DEVICE"),
         "fake cancellation is required; backend transcription is opt-in",
     ),
     FeatureCoverage(
@@ -460,7 +460,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         ),
         ("cli", "nvidia_nim_cli", "openrouter_free_cli"),
         (
-            "FCC_SMOKE_CLAUDE_BIN",
+            "MCC_SMOKE_CLAUDE_BIN",
             "configured provider",
             "NVIDIA_NIM_API_KEY",
             "OPENROUTER_API_KEY",

@@ -719,7 +719,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "boolean",
         settings_attr="open_admin_browser",
         default="true",
-        description="Open the Admin UI after the next fcc-server launch becomes healthy.",
+        description="Open the Admin UI after the next mcc-server launch becomes healthy.",
     ),
     ConfigFieldSpec(
         "MESSAGING_PLATFORM",
@@ -1937,7 +1937,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Compresses bodies against a dictionary trained on your own "
             "traffic and stores a repeated prompt once. Applies to new rows; "
-            "run fcc-compact-log to convert existing history."
+            "run mcc-compact-log to convert existing history."
         ),
     ),
     ConfigFieldSpec(

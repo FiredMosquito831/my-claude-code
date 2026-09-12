@@ -84,7 +84,7 @@ curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/ma
 - **Windows SmartScreen** flags the unsigned installer: **More info → Run anyway**. Machines with Smart App Control on cannot run it at all — use the PowerShell server one-liner instead.
 - **macOS quarantines** the unsigned `.dmg`. After dragging the app across, run `xattr -d com.apple.quarantine "/Applications/My Claude Code.app"` once. Or take the server one-liner and let `mcc-desktop` fetch the same binary, which is never quarantined.
 - **WSL has no tray.** `mcc-desktop` says so and refuses rather than pretending; install the server there and reach the dashboard in a Windows browser.
-- **A pre-6.40.0 install lives in the legacy `~/.fcc` home.** Stop the server (and quit the tray) first, then run `mcc-migrate` to move it to `~/.mcc`; it refuses while it can see a live server.
+- **A pre-6.40.0 install lives in the legacy `~/.fcc` home.** The first start of 6.65.0 or later migrates it to `~/.mcc` for you — one atomic rename, nothing copied or merged — provided nothing is holding the directory open. Stop the server and quit the tray first; `mcc-migrate` runs the same move by hand, and it refuses while it can see a live server.
 
 Longer versions of all of these, per platform: [Usage Guide → Install](docs/USAGE.md#2-install).
 
@@ -204,7 +204,7 @@ Every agent MCC can launch is declared in one registry, and the **Coding agents*
 | Codex desktop, Goose desktop, OpenCode desktop, Crush, Kimi desktop, Qwen desktop | **Configure** button | each app's own |
 | VS Code (Copilot custom endpoint), Roo Code, Antigravity (`agy`), Command Code, LM Studio, Warp | **Configure** button | each app's own |
 
-Legacy `fcc-claude`, `fcc-claude-old`, `fcc-codex`, `fcc-pi` and `fcc-server` aliases still work. Per-agent walkthroughs live in the [Usage Guide](docs/USAGE.md#7-tutorial-connect-another-cli); anything MCC cannot launch or configure is covered in [Clients](docs/CLIENTS.md).
+The legacy `fcc-*` names were retired in 7.0.0: `fcc-claude`, `fcc-codex`, `fcc-server` and the rest are still installed for this major version, but each one prints the `mcc-*` name that replaced it and exits 1. They are removed entirely in 8.0.0. Per-agent walkthroughs live in the [Usage Guide](docs/USAGE.md#7-tutorial-connect-another-cli); anything MCC cannot launch or configure is covered in [Clients](docs/CLIENTS.md).
 
 ## Model Providers
 

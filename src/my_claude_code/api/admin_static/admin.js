@@ -280,7 +280,7 @@ function sourceLabel(source) {
     template: "template",
     repo_env: "repo .env",
     managed_env: "set here",
-    explicit_env_file: "FCC_ENV_FILE",
+    explicit_env_file: "MCC_ENV_FILE",
     process: "process env",
   };
   return Object.prototype.hasOwnProperty.call(labels, source) ? labels[source] : source;
@@ -9415,7 +9415,7 @@ async function toggleHarnessTierPause(parsed, modelKey, ref, paused, button) {
 }
 
 // Every command line this agent answers to, generated server-side from the
-// registry: the launcher, its documented arguments, the legacy fcc- alias and
+// registry: the launcher, its documented arguments, its retired fcc- name and
 // the RTK toggles. The list is the reason the page exists -- "what can I
 // actually type" used to be answerable only by reading three doc pages that
 // disagreed. Each row copies itself, so the answer is one click from useful.

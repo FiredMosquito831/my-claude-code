@@ -77,7 +77,7 @@ class ManagedStreamingResponse(StreamingResponse):
         if task is None:
             task = asyncio.create_task(
                 self._cleanup(preserved_error=preserved_error),
-                name="fcc-api-response-cleanup",
+                name="mcc-api-response-cleanup",
             )
             self._cleanup_task = task
         await _wait_for_cleanup(task)
@@ -340,7 +340,7 @@ async def _close_pre_start_body(
             source="api",
             preserved_error=preserved_error,
         ),
-        name="fcc-api-pre-start-stream-cleanup",
+        name="mcc-api-pre-start-stream-cleanup",
     )
     await _wait_for_cleanup(task)
 

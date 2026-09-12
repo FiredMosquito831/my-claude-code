@@ -5,10 +5,11 @@ landed AND that the published legacy contracts the rebrand must NOT break are
 still intact:
 
 Kept contracts (must not change):
-  - FCC_* environment variables (e.g. FCC_OPEN_BROWSER)
+  - RETIRED in 7.0.0: the FCC_* environment variables (rewritten once in a
+    managed .env) and the working fcc-* command family (now tombstones)
   - Release repository FiredMosquito831/my-claude-code (RELEASE_REPO)
   - Config dir ".fcc" (still read, and migrated once on a first start)
-  - Legacy fcc-* command family (preserved as aliases)
+  - Legacy fcc-* names still REGISTERED, so a retired name says what replaced it
   - LEGACY_DISPLAY_NAME = "Free Claude Code"
 
 Rebrand (must be present):
@@ -49,15 +50,16 @@ def test_pyproject_package_and_dual_commands():
 def test_brand_doc_is_source_of_truth():
     brand = _read("docs/BRAND.md")
     assert "My Claude Code" in brand
-    assert "FCC_*" in brand  # documents the preserved legacy contract
+    assert "FCC_*" in brand  # documents what 7.0.0 retired
 
 
 # â”€â”€ Kept contracts intact â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
-def test_kept_fcc_env_vars():
+def test_the_template_ships_only_canonical_env_names():
     env = _read(".env.example")
-    assert "FCC_OPEN_BROWSER" in env  # FCC_* env var must stay
+    assert "MCC_OPEN_BROWSER" in env  # the canonical name, not the FCC_* alias
+    assert "FCC_OPEN_BROWSER" not in env  # retired in 7.0.0
 
 
 def test_the_shipped_template_never_carries_a_published_password():
@@ -122,10 +124,16 @@ def test_my_claude_code_imports():
     assert my_claude_code.__name__ == "my_claude_code"
 
 
-def test_legacy_shim_package_present():
-    # The free_claude_code compatibility shim is still shipped (re-exports
-    # my_claude_code); its absence would break the fcc-* aliases.
-    assert (REPO / "src" / "free_claude_code" / "__init__.py").exists()
+def test_legacy_shim_package_is_gone():
+    # 7.0.0 removed the free_claude_code compatibility namespace. Nothing in
+    # the product ever imported it; it existed for third-party code that never
+    # materialised, and shipping a second importable name for one package is
+    # exactly the kind of surface this release removes.
+    assert not (REPO / "src" / "free_claude_code").exists()
+
+    pyproject = _read("pyproject.toml")
+    assert 'packages = ["src/my_claude_code"]' in pyproject
+    assert "free_claude_code" not in pyproject
 
 
 # -- The dashboard wears the real mark ---------------------------------------

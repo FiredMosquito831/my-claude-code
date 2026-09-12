@@ -15,11 +15,13 @@ $PackageName = "my-claude-code"
 # Installs older than 5.14 were published under the free-claude-code name;
 # kept as best-effort cleanup. Absence of either tool is acceptable.
 $LegacyPackageName = "free-claude-code"
-$FccHomeDirname = ".fcc"
+$LegacyHomeDirname = ".fcc"
+# The note the one-time ~/.fcc -> ~/.mcc migration leaves behind (6.65.0).
+$MigratedPointerFilename = ".fcc-migrated.txt"
 # Must mirror every entry in [project.scripts] + [project.gui-scripts] (the
 # same list as Get-LauncherCommands in scripts/install.ps1); pinned by
 # tests/contracts/test_uninstaller_parity.py.
-$FccCommands = @(
+$AllCommands = @(
     "fcc-server", "fcc-claude", "fcc-claude-old", "fcc-codex", "fcc-pi",
     "fcc-init", "fcc-chatgpt-oauth-login", "fcc-compact-log",
     "free-claude-code",
@@ -47,7 +49,7 @@ $GuardProcessImages = @("pythonw")
 #   * the HKCU Run value is written by _apply_windows_start_at_login in
 #     src/my_claude_code/config/desktop.py (WINDOWS_RUN_VALUE).
 # The exported icon (~/.mcc/app-icon.ico) is inside the config directory and
-# is removed by Purge-FccHome. Every pairing here is pinned by
+# is removed by Purge-ConfigHomes. Every pairing here is pinned by
 # tests/contracts/test_uninstaller_parity.py.
 $StartMenuRelativeDir = "Microsoft\Windows\Start Menu\Programs"
 $StartMenuShortcutName = "My Claude Code.lnk"
@@ -164,7 +166,7 @@ function Assert-NoMccProcessesRunning {
     # Shim-name checks cannot see gui-script processes (pythonw.exe out of the
     # tool environment), hence the extra interpreter-image list.
     $running = @()
-    foreach ($commandName in ($FccCommands + $GuardProcessImages)) {
+    foreach ($commandName in ($AllCommands + $GuardProcessImages)) {
         $processes = @(Get-Process -Name $commandName -ErrorAction SilentlyContinue)
         if ($processes.Count -gt 0) {
             $running += $commandName
@@ -185,7 +187,7 @@ function Initialize-UvContext {
 
     $uvCommand = Get-ApplicationCommand "uv"
     if (-not $uvCommand) {
-        throw "uv is required to remove the My Claude Code tool. Install uv, then rerun this uninstaller; ~/.fcc was not deleted."
+        throw "uv is required to remove the My Claude Code tool. Install uv, then rerun this uninstaller; ~/.mcc was not deleted."
     }
     $script:UvPath = $uvCommand.Source
 
@@ -196,11 +198,11 @@ function Initialize-UvContext {
         if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
             [Console]::Error.WriteLine($result.Output)
         }
-        throw "Could not determine the uv tool bin directory (exit code $($result.ExitCode)); ~/.fcc was not deleted."
+        throw "Could not determine the uv tool bin directory (exit code $($result.ExitCode)); ~/.mcc was not deleted."
     }
     $script:UvToolBin = $result.Output.Trim()
     if ([string]::IsNullOrWhiteSpace($script:UvToolBin)) {
-        throw "uv returned an empty tool bin directory; ~/.fcc was not deleted."
+        throw "uv returned an empty tool bin directory; ~/.mcc was not deleted."
     }
 }
 
@@ -230,10 +232,10 @@ function Uninstall-MccTool {
     if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
         [Console]::Error.WriteLine($result.Output)
     }
-    throw "uv tool uninstall $ToolName failed with exit code $($result.ExitCode); ~/.fcc was not deleted."
+    throw "uv tool uninstall $ToolName failed with exit code $($result.ExitCode); ~/.mcc was not deleted."
 }
 
-function Confirm-FccCommandsRemoved {
+function Confirm-CommandsRemoved {
     if ($DryRun) {
         Write-Host "+ verify all My Claude Code entry points are absent from the uv tool bin directory"
         return
@@ -241,7 +243,7 @@ function Confirm-FccCommandsRemoved {
 
     $remaining = @()
     $extensions = @("", ".exe", ".cmd", ".bat", ".ps1")
-    foreach ($commandName in $FccCommands) {
+    foreach ($commandName in $AllCommands) {
         foreach ($extension in $extensions) {
             $commandPath = Join-Path $script:UvToolBin "$commandName$extension"
             if (Test-Path -LiteralPath $commandPath) {
@@ -250,7 +252,7 @@ function Confirm-FccCommandsRemoved {
         }
     }
     if ($remaining.Count -gt 0) {
-        throw "My Claude Code entry points remain after uv uninstall: $($remaining -join ', '); ~/.fcc was not deleted."
+        throw "My Claude Code entry points remain after uv uninstall: $($remaining -join ', '); ~/.mcc was not deleted."
     }
 }
 
@@ -382,11 +384,15 @@ function Purge-ConfigDir {
     }
 }
 
-function Purge-FccHome {
-    # The new default (~/.mcc) and, if still present, the legacy home (~/.fcc).
+function Purge-ConfigHomes {
+    # The config home (~/.mcc) and, if still present, the legacy home (~/.fcc).
     # ~/.fcc-old is left untouched: it holds the user's rollback note.
     Purge-ConfigDir -DirName ".mcc"
-    Purge-ConfigDir -DirName $FccHomeDirname
+    Purge-ConfigDir -DirName $LegacyHomeDirname
+    # The pointer the one-time migration left where ~/.fcc used to be. It says
+    # "your configuration moved to ~/.mcc" -- and ~/.mcc has just been deleted,
+    # so leaving it behind would be a note pointing at nothing.
+    Purge-ConfigDir -DirName $MigratedPointerFilename
     Purge-ConfigDir -DirName ".fcc-old" -LeaveAlone
 }
 
@@ -413,13 +419,13 @@ Uninstall-MccTool -ToolName $PackageName
 Uninstall-MccTool -ToolName $LegacyPackageName
 
 Write-Step "Verifying My Claude Code entry points were removed"
-Confirm-FccCommandsRemoved
+Confirm-CommandsRemoved
 
 Write-Step "Removing the Start Menu shortcut and the start-at-login registration"
 Remove-DesktopArtifacts
 
-Write-Step "Purging FCC config and data from ~/.fcc"
-Purge-FccHome
+Write-Step "Purging My Claude Code config and data from ~/.mcc"
+Purge-ConfigHomes
 
 Write-Host ""
 if ($DryRun) {

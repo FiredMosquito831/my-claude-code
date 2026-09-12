@@ -7,16 +7,16 @@ this file wins.
 > Rebrand context: the product was "Free Claude Code" (FCC). The package was
 > renamed `free_claude_code` → `my_claude_code` and the product rebranded to
 > **My Claude Code**. A dual command family is preserved (`mcc-*` primary,
-> `fcc-*` legacy aliases) so existing installs and muscle memory keep working.
+> `fcc-*` legacy aliases) until 7.0.0, which retired the legacy half.
 
 ## 1. Name & abbreviation
 
 - **Name:** My Claude Code
 - **Abbreviation:** MCC
 - **Package:** `my-claude-code` (PyPI / wheel)
-- **Server command:** `mcc-server` (legacy alias: `fcc-server`)
+- **Server command:** `mcc-server` (`fcc-server` retired in 7.0.0)
 - **Launchers:** `mcc-claude`, `mcc-codex`, `mcc-pi`, `mcc-claude-old`
-  (legacy aliases: `fcc-claude`, `fcc-codex`, `fcc-pi`, `fcc-claude-old`)
+  (`fcc-claude`, `fcc-codex`, `fcc-pi`, `fcc-claude-old` retired in 7.0.0)
 
 ## 2. Positioning
 
@@ -162,17 +162,30 @@ Subtle only. 300–400ms, `power1.out` easing. Respect
 These published contracts stay exactly as they are, for backward
 compatibility, even though the product is now My Claude Code:
 
-- `FCC_*` environment variables (e.g. `FCC_ENV_FILE`, `FCC_OPEN_BROWSER`,
-  `FCC_SMOKE_TARGETS`).
 - Release repository `FiredMosquito831/my-claude-code` (RELEASE_REPO).
 - Local proxy port `:8082`.
 - Proxy auth token: generated per machine on first start (the literal `freecc` was retired in 6.65.0; it was a password printed in a public repository).
 - Model ids `claude-3-freecc-*`.
 - Codex provider id `fcc`.
 - Pi scope `free-claude-code/**`.
-- Config directory `.fcc`.
-- Legacy command names `fcc-*` (kept as aliases).
 - Display-name constant `LEGACY_DISPLAY_NAME = "Free Claude Code"`.
 
-When writing docs or UI, prefer the new `mcc-*` names but note that the `fcc-*`
-aliases still work.
+### Retired in 7.0.0
+
+7.0.0 is the MAJOR that ends the dual surface. What went, and what replaced it:
+
+| Retired | Replacement | How an existing install is carried across |
+| --- | --- | --- |
+| `FCC_*` environment variables (`FCC_ENV_FILE`, `FCC_OPEN_BROWSER`, `FCC_SMOKE_*`, `FCC_CODEX_API_KEY`, `FCC_PI_API_KEY`, `FCC_PI_BASE_URL`) | the `MCC_*` name of each | a managed `.env` is rewritten once on the first 7.x start, with a `.env.bak-<stamp>` beside it and one log line per key; a name still exported by a shell is named in a warning and ignored |
+| the working `fcc-*` command family and `free-claude-code` | `mcc-*` and `my-claude-code` | the names stay installed for this MAJOR as tombstones: each prints its replacement and exits 1. Removed in 8.0.0 |
+| the `free_claude_code` importable package | `my_claude_code` | nothing in the product ever imported it |
+| config directory `.fcc` | `.mcc` | migrated once, atomically, on the first start since 6.65.0 |
+
+Strings that look like the retired surface but are **values on users' disks**
+keep their spelling for ever, because changing one breaks an existing install:
+the `.fcc-tmp` atomic staging suffix, the `.fcc-backup` Claude settings backup,
+the `fcc-managed`/`fcc-managed-oauth`/`fcc-managed-anthropic-oauth` credential
+markers, the `fcc-no-auth` proxy sentinel, and the Codex provider id `fcc`.
+
+When writing docs or UI, use the `mcc-*` names. Name an `fcc-*` name only to say
+what replaced it.

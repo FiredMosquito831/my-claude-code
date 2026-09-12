@@ -16,7 +16,7 @@ The user's requirement: **both modes must coexist without stepping on each other
 
 We adopt a **three-way server-ownership mode** on the desktop app, and make startup-at-login **per-platform and user-configurable**.
 
-### 1. Server-ownership mode (new `server_mode` field in `~/.fcc/desktop.json`)
+### 1. Server-ownership mode (new `server_mode` field in `~/.mcc/desktop.json`)
 
 | Value | Meaning |
 |---|---|

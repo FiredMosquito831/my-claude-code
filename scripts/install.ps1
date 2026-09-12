@@ -1601,10 +1601,10 @@ function Test-StagedEnvironment {
         code: a wheel that resolves, installs and then cannot import itself is
         a real failure mode, and it used to be discovered by the user.
 
-        `mcc-server --version` first and `fcc-server --version` only as a
-        fallback: both are published, but the legacy launcher prints the LEGACY
-        distribution name ("free-claude-code 6.81.0"), and a version check that
-        reads the wrong product name is a check waiting to be misread.
+        `mcc-server --version` and nothing else. The legacy `fcc-server` was
+        accepted as a fallback until 7.0.0; it is now a tombstone that prints a
+        rename line and exits 1, so falling back to it would turn a healthy
+        install into a failed verification.
 
         This runs BEFORE the stop rather than after it (the helper's order),
         which is the one deliberate difference from 6.72.0: a wheel that cannot
@@ -1617,9 +1617,6 @@ function Test-StagedEnvironment {
 
     $verdict = [pscustomobject]@{ Ok = $false; Reason = "The staged version could not be run." }
     $stagedServer = Join-Path $StagingEnv "Scripts\mcc-server.exe"
-    if (-not (Test-Path -LiteralPath $stagedServer -PathType Leaf)) {
-        $stagedServer = Join-Path $StagingEnv "Scripts\fcc-server.exe"
-    }
     $stagedPython = Join-Path $StagingEnv "Scripts\python.exe"
     if (-not ((Test-Path -LiteralPath $stagedServer -PathType Leaf) -and (Test-Path -LiteralPath $stagedPython -PathType Leaf))) {
         $verdict.Reason = "The staged install produced no runnable launcher."
@@ -3454,7 +3451,8 @@ function Write-MccCommandReference {
         }
     }
     Write-Host ""
-    Write-Host "The legacy fcc-* commands (fcc-server, fcc-claude, ...) remain as aliases."
+    Write-Host "The legacy fcc-* commands were retired in 7.0.0: each one now prints the"
+    Write-Host "mcc-* name that replaced it and exits 1. They go away entirely in 8.0.0."
     Write-Host ""
     Write-Host "If mcc-server is not found, open a new terminal: this install may have added"
     Write-Host "a directory to PATH that shells started earlier cannot see."
