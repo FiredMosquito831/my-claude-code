@@ -124,14 +124,14 @@ def _clear_process_config(monkeypatch) -> None:
         "OLLAMA_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "TELEGRAM_PROXY_URL",
-        "FCC_ENV_FILE",
+        "MCC_ENV_FILE",
         "CLOUDFLARE_API_TOKEN",
         "CLOUDFLARE_ACCOUNT_ID",
         "GITHUB_MODELS_TOKEN",
         "SAMBANOVA_API_KEY",
         "HOST",
         "PORT",
-        "FCC_OPEN_BROWSER",
+        "MCC_OPEN_BROWSER",
         "VOICE_NOTE_ENABLED",
         "WHISPER_DEVICE",
         "LOG_FILE",
@@ -1401,7 +1401,7 @@ def test_admin_apply_preserves_hidden_diagnostics_and_smoke_values(
             [
                 "MODEL=nvidia_nim/old-model",
                 "LOG_RAW_API_PAYLOADS=true",
-                "FCC_SMOKE_MODEL_ZAI=zai/smoke-model",
+                "MCC_SMOKE_MODEL_ZAI=zai/smoke-model",
                 "",
             ]
         ),
@@ -1420,7 +1420,7 @@ def test_admin_apply_preserves_hidden_diagnostics_and_smoke_values(
     text = env_file.read_text("utf-8")
     assert "MODEL=open_router/test-model" in text
     assert "LOG_RAW_API_PAYLOADS=true" in text
-    assert "FCC_SMOKE_MODEL_ZAI=zai/smoke-model" in text
+    assert "MCC_SMOKE_MODEL_ZAI=zai/smoke-model" in text
 
 
 def test_admin_apply_omits_stale_zai_base_url(monkeypatch, tmp_path):

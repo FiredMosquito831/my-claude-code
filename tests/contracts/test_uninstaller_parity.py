@@ -126,7 +126,7 @@ ARTEFACTS: tuple[Artefact, ...] = (
         location="~/.mcc/app-icon.ico (inside the config directory)",
         creator=INSTALL_PS1,
         creator_markers=('$iconPath = Join-Path $configDir "app-icon.ico"',),
-        # Not removed on its own: it lives inside ~/.mcc, which Purge-FccHome
+        # Not removed on its own: it lives inside ~/.mcc, which Purge-ConfigHomes
         # deletes whole. This row exists so a future icon written OUTSIDE the
         # config directory cannot slip through unnoticed.
         remover=UNINSTALL_PS1,
@@ -302,14 +302,14 @@ ARTEFACTS: tuple[Artefact, ...] = (
 )
 
 _SH_VARIABLE = re.compile(
-    r'^(?P<name>PACKAGE_NAME|LEGACY_PACKAGE_NAME|FCC_COMMANDS)="(?P<body>[^"]*)"$',
+    r'^(?P<name>PACKAGE_NAME|LEGACY_PACKAGE_NAME|ALL_COMMANDS)="(?P<body>[^"]*)"$',
     re.MULTILINE,
 )
 _PS1_STRING = re.compile(
     r'\$(?P<name>PackageName|LegacyPackageName)\s*=\s*"(?P<body>[^"]*)"'
 )
 _PS1_ARRAY = re.compile(
-    r"\$(?P<name>FccCommands|GuardProcessImages)\s*=\s*@\((?P<body>.*?)\)",
+    r"\$(?P<name>AllCommands|GuardProcessImages)\s*=\s*@\((?P<body>.*?)\)",
     re.DOTALL,
 )
 _QUOTED = re.compile(r'"([A-Za-z0-9_-]+)"')
@@ -346,11 +346,11 @@ def _ps1_values() -> dict[str, str]:
 
 
 def _sh_commands(variables: dict[str, str]) -> set[str]:
-    return set(variables["FCC_COMMANDS"].split())
+    return set(variables["ALL_COMMANDS"].split())
 
 
 def _ps1_commands(values: dict[str, str]) -> set[str]:
-    return set(_QUOTED.findall(values["FccCommands"]))
+    return set(_QUOTED.findall(values["AllCommands"]))
 
 
 def test_the_embedded_lists_are_parsable() -> None:
@@ -359,15 +359,15 @@ def test_the_embedded_lists_are_parsable() -> None:
     sh_variables = _sh_variables()
     ps1_values = _ps1_values()
 
-    assert "FCC_COMMANDS" in sh_variables, (
-        "could not parse FCC_COMMANDS from scripts/uninstall.sh -- if the declaration moved or changed shape, update this parser rather than deleting the guard"
+    assert "ALL_COMMANDS" in sh_variables, (
+        "could not parse ALL_COMMANDS from scripts/uninstall.sh -- if the declaration moved or changed shape, update this parser rather than deleting the guard"
     )
     sh_commands = _sh_commands(sh_variables)
     assert sh_commands, "parsed no commands out of uninstall.sh"
     assert "mcc-server" in sh_commands
 
-    assert "FccCommands" in ps1_values, (
-        "could not parse $FccCommands from scripts/uninstall.ps1 -- if the declaration moved or changed shape, update this parser rather than deleting the guard"
+    assert "AllCommands" in ps1_values, (
+        "could not parse $AllCommands from scripts/uninstall.ps1 -- if the declaration moved or changed shape, update this parser rather than deleting the guard"
     )
     ps1_commands = _ps1_commands(ps1_values)
     assert ps1_commands, "parsed no commands out of uninstall.ps1"
@@ -378,7 +378,7 @@ def test_the_embedded_lists_are_parsable() -> None:
 def test_every_published_command_appears_in_both_uninstallers() -> None:
     """A command an uninstaller cannot see keeps its shim behind.
 
-    The entry-point verification then aborts and ~/.fcc is left standing --
+    The entry-point verification then aborts and ~/.mcc is left standing --
     the exact failure that made v5 uninstalls impossible.
     """
 
@@ -389,15 +389,15 @@ def test_every_published_command_appears_in_both_uninstallers() -> None:
 
     assert not missing_from_shell, (
         "these commands are published in pyproject.toml but are not in "
-        f"FCC_COMMANDS in scripts/uninstall.sh: {missing_from_shell}. Their "
-        "shims survive the tool uninstall, verification aborts, and ~/.fcc "
+        f"ALL_COMMANDS in scripts/uninstall.sh: {missing_from_shell}. Their "
+        "shims survive the tool uninstall, verification aborts, and ~/.mcc "
         "is never removed. Add each name to that list."
     )
     assert not missing_from_powershell, (
         "these commands are published in pyproject.toml but are not in "
-        f"$FccCommands in scripts/uninstall.ps1: {missing_from_powershell}. "
+        f"$AllCommands in scripts/uninstall.ps1: {missing_from_powershell}. "
         "Their shims survive the tool uninstall, verification aborts, and "
-        "~/.fcc is never removed. Add each name to that array."
+        "~/.mcc is never removed. Add each name to that array."
     )
 
 
@@ -410,12 +410,12 @@ def test_the_uninstaller_lists_name_no_command_pyproject_does_not_publish() -> N
     unknown_in_powershell = sorted(_ps1_commands(_ps1_values()) - published)
 
     assert not unknown_in_shell, (
-        "FCC_COMMANDS in scripts/uninstall.sh lists commands pyproject.toml "
+        "ALL_COMMANDS in scripts/uninstall.sh lists commands pyproject.toml "
         f"no longer publishes: {unknown_in_shell}. Remove them, or restore "
         "the entry point if the removal was accidental."
     )
     assert not unknown_in_powershell, (
-        "$FccCommands in scripts/uninstall.ps1 lists commands pyproject.toml "
+        "$AllCommands in scripts/uninstall.ps1 lists commands pyproject.toml "
         f"no longer publishes: {unknown_in_powershell}. Remove them, or "
         "restore the entry point if the removal was accidental."
     )
@@ -467,7 +467,7 @@ def test_windows_guard_covers_gui_script_process_images() -> None:
     Get-Process -Name mcc-desktop can never see such a process, so the
     guard must also look at interpreter image names -- otherwise a running
     desktop app holds the tool directory open while the uninstaller deletes
-    shims out from under it and purges ~/.fcc anyway.
+    shims out from under it and purges ~/.mcc anyway.
     """
 
     published = _published_commands()
@@ -480,7 +480,7 @@ def test_windows_guard_covers_gui_script_process_images() -> None:
     )
     assert images.isdisjoint(published), (
         "GuardProcessImages duplicates launcher names already covered by "
-        f"FccCommands: {sorted(images & published)}. Keep interpreter image "
+        f"AllCommands: {sorted(images & published)}. Keep interpreter image "
         "names separate from the parity-checked launcher list."
     )
 

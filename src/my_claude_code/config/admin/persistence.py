@@ -271,15 +271,20 @@ def quote_env_value(value: str) -> str:
     return value
 
 
-# Project-owned env prefixes. Keys under these prefixes (e.g. MCC_SMOKE_* and
-# the pre-6.40.0 FCC_SMOKE_*) are real, settable environment variables that
-# belong to this project even when no admin field or Settings alias reads them
-# -- developer tooling such as smoke/ reads them straight from os.environ. A
-# populated value here is a deliberate user choice and must survive a save the
-# same way an admin-managed field would; an empty value configures nothing and
-# is safe to drop. Both prefixes are accepted so MCC_* keys do not silently
-# stop being persisted the moment the canonical name is used.
-_OWNED_ENV_PREFIXES = ("MCC_", "FCC_")
+# Project-owned env prefixes. Keys under this prefix (e.g. MCC_SMOKE_*) are
+# real, settable environment variables that belong to this project even when no
+# admin field or Settings alias reads them -- developer tooling such as smoke/
+# reads them straight from os.environ. A populated value here is a deliberate
+# user choice and must survive a save the same way an admin-managed field
+# would; an empty value configures nothing and is safe to drop.
+#
+# ``FCC_`` was recognised alongside it until 7.0.0. It is gone: nothing in the
+# product reads an ``FCC_*`` name any more, so persisting one would preserve a
+# line that configures nothing. A managed ``.env`` that still carries such keys
+# is rewritten to the ``MCC_*`` names ONCE, before anything reads the file, by
+# ``config.legacy_env_rewrite`` -- so no configured value reaches this function
+# under the old name and is dropped.
+_OWNED_ENV_PREFIXES = ("MCC_",)
 
 
 def settings_env_aliases() -> frozenset[str]:
@@ -311,13 +316,18 @@ def settings_env_aliases() -> frozenset[str]:
 def superseded_env_aliases() -> frozenset[str]:
     """Legacy env names that a canonical name on the same field replaces.
 
-    ``open_admin_browser`` reads ``AliasChoices("MCC_OPEN_BROWSER",
-    "FCC_OPEN_BROWSER")`` and the canonical name wins whenever both are set.
-    ``settings_env_aliases`` keys on the first choice, so ``FCC_OPEN_BROWSER``
-    is not in the managed set and survived a Save only because it matches the
-    ``FCC_`` owned prefix -- leaving the file carrying both lines, with the one
-    the user last edited in the dashboard silently overriding the one they may
-    still be reading. Writing the canonical key retires the legacy one.
+    When a field declares ``AliasChoices(canonical, older...)`` the canonical
+    name wins whenever both are set, and ``settings_env_aliases`` keys on the
+    first choice -- so an older name is not in the managed set and would survive
+    a Save on the owned-prefix rule alone, leaving the file carrying two lines
+    for one setting with the one the user last edited in the dashboard silently
+    overriding the one they may still be reading. Writing the canonical key
+    retires the older one.
+
+    Empty since 7.0.0: the last multi-choice alias on any field was
+    ``FCC_OPEN_BROWSER``, removed with the rest of the ``FCC_*`` surface. The
+    rule stays because it is the contract for the next alias anyone adds, and
+    ``tests/config/test_env_aliases.py`` proves it still fires.
     """
 
     from pydantic import AliasChoices

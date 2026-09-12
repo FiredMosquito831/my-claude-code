@@ -94,10 +94,10 @@ def _server_launcher() -> str | None:
     """Return the stable launcher outside the uv-managed tool environment."""
     bin_dir = _uv_tool_bin_dir()
     if bin_dir is not None:
-        candidate = bin_dir / ("fcc-server.exe" if os.name == "nt" else "fcc-server")
+        candidate = bin_dir / ("mcc-server.exe" if os.name == "nt" else "mcc-server")
         if candidate.is_file():
             return str(candidate)
-    return shutil.which("fcc-server")
+    return shutil.which("mcc-server")
 
 
 def _uv_tool_bin_dir() -> Path | None:
@@ -132,7 +132,7 @@ def _replace_server_process(settings: Settings) -> None:
 
     launcher = _server_launcher()
     if launcher is None:
-        logger.error("Updated successfully, but fcc-server could not be found on PATH.")
+        logger.error("Updated successfully, but mcc-server could not be found on PATH.")
         return
     # The graceful drain already finished (server.run() returned), but the OS can
     # still hold the listening socket for a beat afterward -- especially under
@@ -309,7 +309,7 @@ def _survey_other_servers(settings: Settings) -> None:
             observations = [item for item in observations if item.pids not in stopped]
         write_survey(survey_path, observations)
 
-    threading.Thread(target=survey, name="fcc-server-survey", daemon=True).start()
+    threading.Thread(target=survey, name="mcc-server-survey", daemon=True).start()
 
 
 def _bootstrap_request_log_path() -> None:
@@ -443,7 +443,7 @@ def _schedule_open_admin_browser(settings: Settings) -> None:
             time.sleep(0.15)
 
     threading.Thread(
-        target=open_when_ready, name="fcc-open-admin-browser", daemon=True
+        target=open_when_ready, name="mcc-open-admin-browser", daemon=True
     ).start()
 
 

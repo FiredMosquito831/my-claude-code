@@ -794,7 +794,11 @@ def test_desktop_gui_scripts_are_registered() -> None:
 
     gui_scripts = manifest["project"]["gui-scripts"]
     assert gui_scripts["mcc-desktop"] == "my_claude_code.cli.desktop_entrypoint:launch"
-    assert gui_scripts["fcc-desktop"] == "my_claude_code.cli.desktop_entrypoint:launch"
+    # fcc-desktop moved to [project.scripts] in 7.0.0 as a console tombstone:
+    # a gui-script has no console on Windows, so its one line would be unseen.
+    assert "fcc-desktop" not in gui_scripts
+    scripts = manifest["project"]["scripts"]
+    assert scripts["fcc-desktop"] == "my_claude_code.cli.legacy_stubs:main"
 
 
 def test_desktop_entrypoint_is_callable() -> None:

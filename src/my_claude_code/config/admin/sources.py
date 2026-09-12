@@ -37,7 +37,7 @@ def repo_env_path() -> Path:
 
 
 def explicit_env_path() -> Path | None:
-    """Return the explicit FCC_ENV_FILE path, when configured."""
+    """Return the explicit MCC_ENV_FILE path, when configured."""
 
     return configured_explicit_env_path(os.environ)
 

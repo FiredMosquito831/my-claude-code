@@ -20,12 +20,12 @@ def test_telegram_live_permissions_e2e(smoke_config: SmokeConfig) -> None:
     assert get_me.status_code == 200, get_me.text
     assert get_me.json()["ok"] is True
 
-    chat_id = os.getenv("FCC_SMOKE_TELEGRAM_CHAT_ID") or (
+    chat_id = os.getenv("MCC_SMOKE_TELEGRAM_CHAT_ID") or (
         smoke_config.settings.allowed_telegram_user_id or ""
     )
     if not chat_id:
         pytest.skip(
-            "missing_env: FCC_SMOKE_TELEGRAM_CHAT_ID or "
+            "missing_env: MCC_SMOKE_TELEGRAM_CHAT_ID or "
             "ALLOWED_TELEGRAM_USER_ID required"
         )
 
@@ -56,14 +56,14 @@ def test_telegram_live_permissions_e2e(smoke_config: SmokeConfig) -> None:
 @pytest.mark.smoke_target("discord")
 def test_discord_live_permissions_e2e(smoke_config: SmokeConfig) -> None:
     token = smoke_config.settings.discord_bot_token
-    channel_id = os.getenv("FCC_SMOKE_DISCORD_CHANNEL_ID")
+    channel_id = os.getenv("MCC_SMOKE_DISCORD_CHANNEL_ID")
     if not channel_id and smoke_config.settings.allowed_discord_channels:
         channel_id = smoke_config.settings.allowed_discord_channels.split(",", 1)[0]
     if not token:
         pytest.skip("missing_env: DISCORD_BOT_TOKEN is not configured")
     if not channel_id:
         pytest.skip(
-            "missing_env: FCC_SMOKE_DISCORD_CHANNEL_ID or "
+            "missing_env: MCC_SMOKE_DISCORD_CHANNEL_ID or "
             "ALLOWED_DISCORD_CHANNELS required"
         )
 
@@ -106,7 +106,7 @@ def test_discord_live_permissions_e2e(smoke_config: SmokeConfig) -> None:
 @pytest.mark.smoke_target("telegram")
 def test_telegram_live_manual_inbound_e2e(smoke_config: SmokeConfig) -> None:
     if not smoke_config.interactive:
-        pytest.skip("missing_env: set FCC_SMOKE_INTERACTIVE=1 for manual inbound smoke")
+        pytest.skip("missing_env: set MCC_SMOKE_INTERACTIVE=1 for manual inbound smoke")
     pytest.skip(
         "manual product smoke: send the printed nonce to Telegram and verify "
         "progress edits, final transcript, /stop, /clear, /stats, and voice note "
@@ -117,7 +117,7 @@ def test_telegram_live_manual_inbound_e2e(smoke_config: SmokeConfig) -> None:
 @pytest.mark.smoke_target("discord")
 def test_discord_live_manual_inbound_e2e(smoke_config: SmokeConfig) -> None:
     if not smoke_config.interactive:
-        pytest.skip("missing_env: set FCC_SMOKE_INTERACTIVE=1 for manual inbound smoke")
+        pytest.skip("missing_env: set MCC_SMOKE_INTERACTIVE=1 for manual inbound smoke")
     pytest.skip(
         "manual product smoke: send the printed nonce to Discord and verify "
         "progress edits, final transcript, /stop, /clear, /stats, and voice note "

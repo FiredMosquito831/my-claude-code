@@ -1,4 +1,4 @@
-"""``mcc-rtk`` / ``fcc-rtk`` command: manage the RTK token optimizer."""
+"""``mcc-rtk`` command: manage the RTK token optimizer."""
 
 import sys
 from collections.abc import Mapping, Sequence
@@ -21,7 +21,7 @@ _AGENT_LIST = ", ".join(_ALL_AGENTS)
 
 
 def rtk_command(argv: Sequence[str] | None = None) -> None:
-    """Dispatch ``mcc-rtk`` / ``fcc-rtk`` subcommands."""
+    """Dispatch ``mcc-rtk`` subcommands."""
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
         _print_usage()
@@ -113,5 +113,5 @@ Subcommands:
   apply                   Re-reconcile the machine from the stored state.
   help                    Show this help text.
 
-The legacy fcc-rtk command is an alias and behaves identically."""
+The legacy fcc-rtk command was retired in 7.0.0; it prints this name and exits 1."""
     )

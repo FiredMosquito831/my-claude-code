@@ -1435,9 +1435,13 @@ class Settings(BaseSettings):
     # ``config.proxy_auth`` refuses the first half without the second.
     host: str = "127.0.0.1"
     port: int = 8082
+    # ``FCC_OPEN_BROWSER`` was the last surviving legacy alias on any field; it
+    # was removed in 7.0.0 together with the rest of the ``FCC_*`` surface. A
+    # managed ``.env`` still carrying the old key is rewritten once on the first
+    # 7.x start (``config.legacy_env_rewrite``), so no configured value is lost.
     open_admin_browser: bool = Field(
         default=True,
-        validation_alias=AliasChoices("MCC_OPEN_BROWSER", "FCC_OPEN_BROWSER"),
+        validation_alias=AliasChoices("MCC_OPEN_BROWSER"),
     )
     # Optional proxy bearer token protecting public API endpoints.
     # Set via env `ANTHROPIC_AUTH_TOKEN`. When empty, no auth is required.
@@ -2103,7 +2107,7 @@ class Settings(BaseSettings):
         dotenv_value = env_file_override(self.model_config, ANTHROPIC_AUTH_TOKEN_ENV)
         if dotenv_value is not None:
             self.anthropic_auth_token = dotenv_value
-        _log_legacy_fcc_env_names_once()
+        _log_ignored_fcc_env_names_once()
         return self
 
     # Not a Field: it is derived from the resolved config directory, and a Field
@@ -2147,13 +2151,16 @@ class Settings(BaseSettings):
 _LEGACY_FCC_ENV_LOGGED = False
 
 
-def _log_legacy_fcc_env_names_once() -> None:
-    """Log one line per process listing every legacy ``FCC_*`` env name in use.
+def _log_ignored_fcc_env_names_once() -> None:
+    """Log one line per process naming every ``FCC_*`` env name still exported.
 
-    The new canonical names are ``MCC_*``; the pre-6.40.0 ``FCC_*`` names are
-    still accepted as working aliases (see ``env_files`` and the
-    ``AliasChoices`` on the fields). This surfaces the rename for anyone still
-    setting the old names without breaking them.
+    7.0.0 removed the ``FCC_*`` alias surface: nothing reads these names any
+    more. A ``.env`` that still carries them is rewritten once
+    (``config.legacy_env_rewrite``), but a variable exported by a shell profile, a
+    service unit or a shortcut is outside this process's reach -- so the one
+    thing left to do is say, loudly, that it is being ignored and what to
+    rename it to. Silence here is how a user spends an afternoon wondering why
+    a setting stopped taking effect.
     """
 
     import os
@@ -2162,16 +2169,14 @@ def _log_legacy_fcc_env_names_once() -> None:
     if _LEGACY_FCC_ENV_LOGGED:
         return
     _LEGACY_FCC_ENV_LOGGED = True
-    legacy = sorted(
-        name
-        for name in os.environ
-        if name.startswith("FCC_") and name != "FCC_ENV_FILE"
-    )
+    legacy = sorted(name for name in os.environ if name.startswith("FCC_"))
     if not legacy:
         return
     logger.warning(
-        "Legacy FCC_* environment variables detected ({}). They still work, "
-        "but the canonical names are now MCC_*; consider renaming them.",
+        "Ignoring {} legacy FCC_* environment variable(s): {}. The FCC_* names "
+        "were removed in 7.0.0; rename each one to its MCC_* equivalent (for "
+        "example FCC_OPEN_BROWSER -> MCC_OPEN_BROWSER) wherever it is exported.",
+        len(legacy),
         ", ".join(legacy),
     )
 

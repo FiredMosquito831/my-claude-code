@@ -11,15 +11,15 @@
 | Package | `free_claude_code` â†’ `my_claude_code` (rename done in v5.0.0) |
 | Product name | Free Claude Code â†’ **My Claude Code** (MCC) |
 | PyPI / wheel name | `my-claude-code` |
-| Server command | `mcc-server` (primary); `fcc-server` kept as alias |
-| Launchers | `mcc-claude`/`mcc-codex`/`mcc-pi`/`mcc-claude-old` (primary); `fcc-*` kept |
+| Server command | `mcc-server` (primary); `fcc-server` retired in 7.0.0 (tombstone) |
+| Launchers | `mcc-claude`/`mcc-codex`/`mcc-pi`/`mcc-claude-old` (primary); `fcc-*` retired in 7.0.0 |
 | **GitHub repo slug** | **UNCHANGED** â€” `free-claude-code` (do not rename) |
 | **Release repo** | **UNCHANGED** â€” `FiredMosquito831/my-claude-code` (`RELEASE_REPO`) |
-| **FCC_* env vars** | **UNCHANGED** (`FCC_ENV_FILE`, `FCC_OPEN_BROWSER`, `FCC_SMOKE_TARGETS`â€¦) |
+| **FCC_* env vars** | **RETIRED in 7.0.0** — `FCC_ENV_FILE`, `FCC_OPEN_BROWSER`, `FCC_SMOKE_*`, `FCC_CODEX_API_KEY`, `FCC_PI_*` all became `MCC_*`; a managed `.env` is rewritten once on the first 7.x start, with a `.env.bak-<stamp>` |
 | **Proxy port** | **UNCHANGED** â€” `:8082` |
 | **Proxy token** | **CHANGED in 6.65.0** - no shipped value; generated per machine on the first start (`freecc` was a password printed in a public repository). Existing `.env` files are never rewritten. |
 | **Model ids / provider ids** | **UNCHANGED** â€” `claude-3-freecc-*`, Codex id `fcc`, Pi scope `free-claude-code/**` |
-| **Config dir** | **UNCHANGED** â€” `.fcc` |
+| **Config dir** | **`.mcc`** — `.fcc` is migrated once, atomically, on a first start (6.65.0) |
 | **Display name constant** | **UNCHANGED** â€” `LEGACY_DISPLAY_NAME = "Free Claude Code"` |
 
 ## 2. Dual-repo mirroring plan
@@ -51,11 +51,13 @@ Cutover steps (run at release time, NOT now):
    scripts already fetch from `FiredMosquito831/my-claude-code/main`, so the
    published wheel there is what end users receive â€” repo URL needs no change.
 
-> Do **not** rename the repo or migrate issues/PRs. The `FCC_*` env vars,
-> `:8082` and the `fcc-*` aliases are published contracts; renaming
-> the repo would force a breaking change for every existing install.
-> (The `freecc` proxy token was retired in 6.65.0 - a shared password in a
-> public repository is not a contract worth keeping.)
+> Do **not** rename the repo or migrate issues/PRs. `:8082` is a published
+> contract; renaming the repo would force a breaking change for every existing
+> install. (The `FCC_*` env vars and the `fcc-*` aliases were published
+> contracts too, and 7.0.0 retired them deliberately, as a MAJOR, with a
+> one-time `.env` rewrite and one-line tombstones. The `freecc` proxy token
+> was retired in 6.65.0 - a shared password in a public repository is not a
+> contract worth keeping.)
 
 ## 3. Building both wheels (release helper note)
 
@@ -63,13 +65,13 @@ Cutover steps (run at release time, NOT now):
 
 ```toml
 [tool.hatch.build.targets.wheel]
-packages = ["src/my_claude_code", "src/free_claude_code"]
+packages = ["src/my_claude_code"]
 ```
 
 - `src/my_claude_code` â€” the canonical implementation.
-- `src/free_claude_code` â€” the compatibility shim that re-exports
-  `my_claude_code`, so the legacy `fcc-*` command family and `free-claude-code`
-  entry point keep resolving.
+- `src/free_claude_code` was the compatibility shim that re-exported
+  `my_claude_code`. Removed in 7.0.0: nothing in the product imported it, and
+  the `fcc-*` entry points now resolve to `cli.legacy_stubs` instead.
 
 Build sequence (release time):
 
@@ -159,13 +161,13 @@ at a rebrand. **This is a manual step** — capture from a locally running
 `mcc-server` in a browser. Do **not** point any automated screenshot tool at
 the live WSL `:8082` instance.
 
-**Capture against an isolated scratch instance, never your own `~/.fcc`.** The
+**Capture against an isolated scratch instance, never your own `~/.mcc`.** The
 6.39.1 docs pass used this recipe and it is the one to repeat:
 
-1. Build a scratch `HOME`: copy `~/.fcc/.env` key-by-key, replacing every
+1. Build a scratch `HOME`: copy `~/.mcc/.env` key-by-key, replacing every
    secret with a fake of the same shape (nothing beginning `sk-`), and copy
    `custom_providers.json` with its keys faked the same way.
-2. `VACUUM INTO` a copy of `~/.fcc/logs/requests.db` — safe against the live
+2. `VACUUM INTO` a copy of `~/.mcc/logs/requests.db` — safe against the live
    writer, read-only on the source — so Analytics, Models and Coding agents
    render real-looking data.
 3. Copy the `models-dev.json` cache read-only so the resolution ladder resolves
@@ -258,9 +260,9 @@ when that vendor changes its UI, not when MCC does.
 - [ ] `uv run ruff format --check && uv run ruff check && uv run ty check`
 - [ ] `uv run pytest` green
 - [ ] Both remotes mirrored, tags pushed
-- ] Wheel contains `my_claude_code/` and `free_claude_code/`
+- [ ] Wheel contains `my_claude_code/` and NOT `free_claude_code/` (removed in 7.0.0)
 - [ ] Dashboard screenshots refreshed from a scratch `mcc-server` (§4), written to **both** image directories, and scanned for `sk-`
-- [ ] README quickstart uses `mcc-server`; `fcc-server` still documented as alias
+- [ ] README quickstart uses `mcc-server`; `fcc-server` documented as retired
 - [ ] After publishing: the **Desktop shell release** workflow (`shell-release.yml`) ran automatically on `release: published`. Check all four legs are green and that the six assets appear on the release within about 15 minutes (§7)
 - [ ] Windows installer smoked by hand from the published file: digest checked, `/VERYSILENT` install, launched from the Start Menu, uninstalled from Apps & Features, and `mcc-server` still working afterwards (§7)
 

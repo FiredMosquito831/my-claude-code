@@ -26,13 +26,11 @@ MIGRATED_POINTER_FILENAME = ".fcc-migrated.txt"
 # Absolute override. There was never an ``FCC_CONFIG_DIR``, so there is no
 # legacy alias to honour here.
 CONFIG_DIR_ENV = "MCC_CONFIG_DIR"
-# Kept for importers of the pre-6.40.0 name; it always meant the legacy home.
-FCC_CONFIG_DIRNAME = LEGACY_CONFIG_DIRNAME
-FCC_ENV_FILENAME = ".env"
+ENV_FILENAME = ".env"
 LEGACY_REPO_DIRNAME = "free-claude-code"
 LEGACY_XDG_CONFIG_DIRNAME = ".config"
 MESSAGING_STATE_DIRNAME = "agent_workspace"
-FCC_LOGS_DIRNAME = "logs"
+LOGS_DIRNAME = "logs"
 SERVER_LOG_FILENAME = "server.log"
 REQUEST_LOG_FILENAME = "requests.db"
 # Owned by ``config.provider_registry``; ``paths`` cannot import it (that module
@@ -174,7 +172,7 @@ def _check_readable(path: Path) -> LegacyHomeHealth:
 
 
 def _check_env(path: Path) -> LegacyHomeHealth:
-    env_path = path / FCC_ENV_FILENAME
+    env_path = path / ENV_FILENAME
     if not env_path.is_file():
         return LegacyHomeHealth(False, "env", f"{env_path} is missing")
     # ``config.settings`` imports this module, so a top-level ``from
@@ -233,7 +231,7 @@ def _check_env(path: Path) -> LegacyHomeHealth:
 
 
 def _check_request_log(path: Path) -> LegacyHomeHealth:
-    db_path = path / FCC_LOGS_DIRNAME / REQUEST_LOG_FILENAME
+    db_path = path / LOGS_DIRNAME / REQUEST_LOG_FILENAME
     if not db_path.exists():
         return LegacyHomeHealth(True)
     uri = f"file:{db_path.as_posix()}?mode=ro"
@@ -515,7 +513,7 @@ def migrated_pointer_path() -> Path:
 def request_log_path() -> Path:
     """Return the request log database path under the resolved config directory."""
 
-    return config_dir_path() / FCC_LOGS_DIRNAME / REQUEST_LOG_FILENAME
+    return config_dir_path() / LOGS_DIRNAME / REQUEST_LOG_FILENAME
 
 
 def other_servers_path() -> Path:
@@ -531,7 +529,7 @@ def other_servers_path() -> Path:
 def managed_env_path() -> Path:
     """Return the default user-managed env file path."""
 
-    return config_dir_path() / FCC_ENV_FILENAME
+    return config_dir_path() / ENV_FILENAME
 
 
 def model_overrides_path() -> Path:
@@ -563,8 +561,8 @@ def legacy_env_paths() -> tuple[Path, ...]:
 
     home = Path.home()
     return (
-        home / LEGACY_REPO_DIRNAME / FCC_ENV_FILENAME,
-        home / LEGACY_XDG_CONFIG_DIRNAME / LEGACY_REPO_DIRNAME / FCC_ENV_FILENAME,
+        home / LEGACY_REPO_DIRNAME / ENV_FILENAME,
+        home / LEGACY_XDG_CONFIG_DIRNAME / LEGACY_REPO_DIRNAME / ENV_FILENAME,
     )
 
 
@@ -577,7 +575,7 @@ def messaging_state_dir_path() -> Path:
 def server_log_path() -> Path:
     """Return the canonical server log path."""
 
-    return config_dir_path() / FCC_LOGS_DIRNAME / SERVER_LOG_FILENAME
+    return config_dir_path() / LOGS_DIRNAME / SERVER_LOG_FILENAME
 
 
 def codex_model_catalog_path() -> Path:

@@ -64,7 +64,7 @@ order by the `auto` preference:
    available; `focus()` returns `False` because a tab we do not own cannot be
    raised.
 
-The preference is persisted as `window` in `~/.fcc/desktop.json`
+The preference is persisted as `window` in `~/.mcc/desktop.json`
 (`auto | app-mode | pywebview | browser`) and set with
 `mcc-desktop --window <value>`. An explicit pin that turns out to be
 unavailable **degrades through the rest of the chain with a logged warning**

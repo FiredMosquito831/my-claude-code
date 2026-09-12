@@ -8,11 +8,13 @@ PACKAGE_NAME="my-claude-code"
 # Installs older than 5.14 were published under the free-claude-code name;
 # kept as best-effort cleanup. Absence of either tool is acceptable.
 LEGACY_PACKAGE_NAME="free-claude-code"
-FCC_HOME_DIRNAME=".fcc"
+LEGACY_HOME_DIRNAME=".fcc"
 # The new default config directory. On uninstall we purge this and, if still
 # present, the legacy ~/.fcc; ~/.fcc-old (the rollback-note dir) is left alone.
 MCC_HOME_DIRNAME=".mcc"
 RETIRED_HOME_DIRNAME=".fcc-old"
+# The note the one-time ~/.fcc -> ~/.mcc migration leaves behind (6.65.0).
+MIGRATED_POINTER_FILENAME=".fcc-migrated.txt"
 # Desktop integration artefacts, all relative to $HOME. They live OUTSIDE the
 # config directory, so purging ~/.mcc and ~/.fcc never reached them: an
 # uninstall used to leave a launcher pointing at a deleted shim and an
@@ -24,7 +26,7 @@ RETIRED_HOME_DIRNAME=".fcc-old"
 #   * the LaunchAgent plist, the XDG autostart entry and the systemd user unit
 #     are written by _apply_macos_start_at_login / _apply_linux_start_at_login
 #     in src/my_claude_code/config/desktop.py.
-# The exported icons inside ~/.mcc are removed by purge_fcc_home. Every pairing
+# The exported icons inside ~/.mcc are removed by purge_config_homes. Every pairing
 # here is pinned by tests/contracts/test_uninstaller_parity.py.
 LINUX_DESKTOP_ENTRY=".local/share/applications/my-claude-code.desktop"
 LINUX_DESKTOP_ICON=".local/share/icons/hicolor/256x256/apps/my-claude-code.png"
@@ -68,7 +70,7 @@ DESKTOP_APP_DEB_PACKAGE="my-claude-code-desktop"
 # Must mirror every entry in [project.scripts] + [project.gui-scripts] (the
 # same list as Get-LauncherCommands in scripts/install.ps1); pinned by
 # tests/contracts/test_uninstaller_parity.py.
-FCC_COMMANDS="fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init fcc-chatgpt-oauth-login fcc-compact-log free-claude-code fcc-anthropic-oauth-login fcc-rtk fcc-help fcc-migrate fcc-desktop mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi mcc-qwen mcc-crush mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-anthropic-oauth-login mcc-rtk mcc-help mcc-migrate mcc-apps mcc-desktop my-claude-code"
+ALL_COMMANDS="fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init fcc-chatgpt-oauth-login fcc-compact-log free-claude-code fcc-anthropic-oauth-login fcc-rtk fcc-help fcc-migrate fcc-desktop mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi mcc-qwen mcc-crush mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-anthropic-oauth-login mcc-rtk mcc-help mcc-migrate mcc-apps mcc-desktop my-claude-code"
 
 dry_run=0
 uv_tool_bin=""
@@ -180,7 +182,7 @@ is_fcc_command_running() {
 
 assert_no_fcc_processes_running() {
     running=""
-    for command_name in $FCC_COMMANDS; do
+    for command_name in $ALL_COMMANDS; do
         if is_fcc_command_running "$command_name"; then
             running="${running} ${command_name}"
         fi
@@ -200,7 +202,7 @@ initialize_uv_context() {
     fi
 
     if ! command -v uv >/dev/null 2>&1; then
-        fail "uv is required to remove the My Claude Code tool. Install uv, then rerun this uninstaller; ~/.fcc was not deleted."
+        fail "uv is required to remove the My Claude Code tool. Install uv, then rerun this uninstaller; ~/.mcc was not deleted."
     fi
 
     print_command uv tool dir --bin
@@ -208,9 +210,9 @@ initialize_uv_context() {
         :
     else
         status=$?
-        fail "Could not determine the uv tool bin directory (exit code $status); ~/.fcc was not deleted."
+        fail "Could not determine the uv tool bin directory (exit code $status); ~/.mcc was not deleted."
     fi
-    [ -n "$uv_tool_bin" ] || fail "uv returned an empty tool bin directory; ~/.fcc was not deleted."
+    [ -n "$uv_tool_bin" ] || fail "uv returned an empty tool bin directory; ~/.mcc was not deleted."
 }
 
 uninstall_uv_tool() {
@@ -237,7 +239,7 @@ uninstall_uv_tool() {
     if [ -n "$output" ]; then
         printf '%s\n' "$output" >&2
     fi
-    fail "uv tool uninstall $tool_name failed with exit code $status; ~/.fcc was not deleted."
+    fail "uv tool uninstall $tool_name failed with exit code $status; ~/.mcc was not deleted."
 }
 
 verify_fcc_commands_removed() {
@@ -247,14 +249,14 @@ verify_fcc_commands_removed() {
     fi
 
     remaining=""
-    for command_name in $FCC_COMMANDS; do
+    for command_name in $ALL_COMMANDS; do
         command_path="$uv_tool_bin/$command_name"
         if [ -e "$command_path" ] || [ -L "$command_path" ]; then
             remaining="${remaining} ${command_path}"
         fi
     done
     if [ -n "$remaining" ]; then
-        fail "My Claude Code entry points remain after uv uninstall:${remaining}; ~/.fcc was not deleted."
+        fail "My Claude Code entry points remain after uv uninstall:${remaining}; ~/.mcc was not deleted."
     fi
 }
 
@@ -409,9 +411,12 @@ purge_config_dir() {
     fi
 }
 
-purge_fcc_home() {
+purge_config_homes() {
     purge_config_dir "$MCC_HOME_DIRNAME"
-    purge_config_dir "$FCC_HOME_DIRNAME"
+    purge_config_dir "$LEGACY_HOME_DIRNAME"
+    # The pointer the migration left where ~/.fcc used to be: it points at
+    # ~/.mcc, which has just been deleted.
+    purge_config_dir "$MIGRATED_POINTER_FILENAME"
     purge_config_dir "$RETIRED_HOME_DIRNAME"
 }
 
@@ -453,8 +458,8 @@ verify_fcc_commands_removed
 step "Removing the desktop launcher, the desktop app and the start-at-login registration"
 remove_desktop_artifacts
 
-step "Purging FCC config and data from ~/.fcc"
-purge_fcc_home
+step "Purging My Claude Code config and data from ~/.mcc"
+purge_config_homes
 
 if [ "$dry_run" -eq 1 ]; then
     printf '\nDry run complete. No changes were made.\n'

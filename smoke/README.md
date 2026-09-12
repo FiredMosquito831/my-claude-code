@@ -36,14 +36,14 @@ sequential execution within each provider:
 
 ```powershell
 $env:FCC_LIVE_SMOKE = "1"
-$env:FCC_SMOKE_TARGETS = "providers"
+$env:MCC_SMOKE_TARGETS = "providers"
 uv run pytest smoke -n auto --dist=loadgroup -s --tb=short
 ```
 
 Provider product E2E runs once per configured provider, independent of `MODEL`,
 `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, and `MODEL_HAIKU`. Defaults come from the provider
-catalog/docs and can be overridden with `FCC_SMOKE_MODEL_<PROVIDER>`, for example
-`FCC_SMOKE_MODEL_DEEPSEEK=deepseek-v4-pro` (or `deepseek-v4-flash`). If no provider smoke model is
+catalog/docs and can be overridden with `MCC_SMOKE_MODEL_<PROVIDER>`, for example
+`MCC_SMOKE_MODEL_DEEPSEEK=deepseek-v4-pro` (or `deepseek-v4-flash`). If no provider smoke model is
 configured, live product smoke fails as `missing_env` unless you explicitly set
 `FCC_ALLOW_NO_PROVIDER_SMOKE=1`.
 
@@ -60,7 +60,7 @@ Default targets do not send real bot messages or load voice backends:
 | `config` | env precedence, removed-env migration, proxy/timeouts | none |
 | `extensibility` | provider runtime and platform factory construction | none |
 | `messaging` | fake Discord/Telegram full flow, literal clear scopes, trees, persistence, voice cancel | none |
-| `providers` | multi-turn text, adaptive thinking history, tools, disconnect, errors | configured providers, optional `FCC_SMOKE_MODEL_*` |
+| `providers` | multi-turn text, adaptive thinking history, tools, disconnect, errors | configured providers, optional `MCC_SMOKE_MODEL_*` |
 | `tools` | forced tool_use and tool_result continuation | tool-capable configured provider |
 | `rate_limit` | disconnect cleanup and follow-up request | configured provider |
 | `lmstudio` | local `/models` plus OpenAI-chat-backed Messages through proxy | running LM Studio server |
@@ -75,47 +75,47 @@ Heavy/side-effectful targets are opt-in:
 | `openrouter_free_cli` | Claude Code CLI feature matrix across OpenRouter free models | `OPENROUTER_API_KEY`, Claude CLI |
 | `telegram` | getMe, send, edit, delete, optional manual inbound | token and chat/user ID |
 | `discord` | channel access, send, edit, delete, optional manual inbound | token and channel ID |
-| `voice` | generated WAV through local Whisper or NVIDIA NIM transcription | `VOICE_NOTE_ENABLED=true`, `FCC_SMOKE_RUN_VOICE=1` |
+| `voice` | generated WAV through local Whisper or NVIDIA NIM transcription | `VOICE_NOTE_ENABLED=true`, `MCC_SMOKE_RUN_VOICE=1` |
 
 ## Examples
 
 ```powershell
 $env:FCC_LIVE_SMOKE = "1"
-$env:FCC_SMOKE_PROVIDER_MATRIX = "open_router,nvidia_nim,deepseek,lmstudio,llamacpp,ollama"
+$env:MCC_SMOKE_PROVIDER_MATRIX = "open_router,nvidia_nim,deepseek,lmstudio,llamacpp,ollama"
 uv run pytest smoke/product -n 0 -s --tb=short
 ```
 
 ```powershell
 $env:FCC_LIVE_SMOKE = "1"
-$env:FCC_SMOKE_TARGETS = "ollama"
+$env:MCC_SMOKE_TARGETS = "ollama"
 $env:OLLAMA_BASE_URL = "http://localhost:11434"
 uv run pytest smoke/prereq smoke/product -n 0 -s --tb=short
 ```
 
 ```powershell
 $env:FCC_LIVE_SMOKE = "1"
-$env:FCC_SMOKE_TARGETS = "telegram,discord,voice"
-$env:FCC_SMOKE_RUN_VOICE = "1"
+$env:MCC_SMOKE_TARGETS = "telegram,discord,voice"
+$env:MCC_SMOKE_RUN_VOICE = "1"
 uv run pytest smoke/product -n 0 -s --tb=short
 ```
 
 ```powershell
 $env:FCC_LIVE_SMOKE = "1"
-$env:FCC_SMOKE_TARGETS = "nvidia_nim_cli"
-$env:FCC_SMOKE_NIM_MODELS = "z-ai/glm-5.2,moonshotai/kimi-k2.6,minimaxai/minimax-m2.7,nvidia/nemotron-3-super-120b-a12b,deepseek-ai/deepseek-v4-pro,deepseek-ai/deepseek-v4-flash"
+$env:MCC_SMOKE_TARGETS = "nvidia_nim_cli"
+$env:MCC_SMOKE_NIM_MODELS = "z-ai/glm-5.2,moonshotai/kimi-k2.6,minimaxai/minimax-m2.7,nvidia/nemotron-3-super-120b-a12b,deepseek-ai/deepseek-v4-pro,deepseek-ai/deepseek-v4-flash"
 uv run pytest smoke/product -n 0 -s --tb=short
 ```
 
 ```powershell
 $env:FCC_LIVE_SMOKE = "1"
-$env:FCC_SMOKE_TARGETS = "openrouter_free_cli"
-$env:FCC_SMOKE_OPENROUTER_FREE_MODELS = "nvidia/nemotron-3-super-120b-a12b:free,openai/gpt-oss-120b:free,poolside/laguna-m.1:free"
+$env:MCC_SMOKE_TARGETS = "openrouter_free_cli"
+$env:MCC_SMOKE_OPENROUTER_FREE_MODELS = "nvidia/nemotron-3-super-120b-a12b:free,openai/gpt-oss-120b:free,poolside/laguna-m.1:free"
 uv run pytest smoke/product -n 0 -s --tb=short
 ```
 
 ```powershell
 $env:FCC_LIVE_SMOKE = "1"
-$env:FCC_SMOKE_TARGETS = "messaging,config,extensibility"
+$env:MCC_SMOKE_TARGETS = "messaging,config,extensibility"
 uv run pytest smoke/product -n 0 -s --tb=short
 ```
 
@@ -124,36 +124,36 @@ uv run pytest smoke/product -n 0 -s --tb=short
 - `FCC_ENV_FILE`: explicit dotenv path for startup/config scenarios.
 - `FCC_LIVE_SMOKE=1`: enables live smoke execution.
 - `FCC_ALLOW_NO_PROVIDER_SMOKE=1`: permits no-provider live smoke for harness work.
-- `FCC_SMOKE_TARGETS`: comma-separated targets, or `all`.
-- `FCC_SMOKE_PROVIDER_MATRIX`: comma-separated provider prefixes to require.
-- `FCC_SMOKE_MODEL_NVIDIA_NIM`, `FCC_SMOKE_MODEL_OPEN_ROUTER`,
-  `FCC_SMOKE_MODEL_MISTRAL`, `FCC_SMOKE_MODEL_MISTRAL_REASONING`,
-  `FCC_SMOKE_MODEL_MISTRAL_CODESTRAL`,
-  `FCC_SMOKE_MODEL_DEEPSEEK`, `FCC_SMOKE_MODEL_KIMI`,
-  `FCC_SMOKE_MODEL_WAFER`, `FCC_SMOKE_MODEL_MINIMAX`,
-  `FCC_SMOKE_MODEL_OPENCODE`, `FCC_SMOKE_MODEL_OPENCODE_GO`,
-  `FCC_SMOKE_MODEL_ZAI`, `FCC_SMOKE_MODEL_FIREWORKS`, `FCC_SMOKE_MODEL_CLOUDFLARE`,
-  `FCC_SMOKE_MODEL_GEMINI`, `FCC_SMOKE_MODEL_GROQ`, `FCC_SMOKE_MODEL_CEREBRAS`,
-  `FCC_SMOKE_MODEL_OLLAMA_CLOUD`, `FCC_SMOKE_MODEL_LMSTUDIO`,
-  `FCC_SMOKE_MODEL_LLAMACPP`, `FCC_SMOKE_MODEL_OLLAMA`: optional per-provider
+- `MCC_SMOKE_TARGETS`: comma-separated targets, or `all`.
+- `MCC_SMOKE_PROVIDER_MATRIX`: comma-separated provider prefixes to require.
+- `MCC_SMOKE_MODEL_NVIDIA_NIM`, `MCC_SMOKE_MODEL_OPEN_ROUTER`,
+  `MCC_SMOKE_MODEL_MISTRAL`, `MCC_SMOKE_MODEL_MISTRAL_REASONING`,
+  `MCC_SMOKE_MODEL_MISTRAL_CODESTRAL`,
+  `MCC_SMOKE_MODEL_DEEPSEEK`, `MCC_SMOKE_MODEL_KIMI`,
+  `MCC_SMOKE_MODEL_WAFER`, `MCC_SMOKE_MODEL_MINIMAX`,
+  `MCC_SMOKE_MODEL_OPENCODE`, `MCC_SMOKE_MODEL_OPENCODE_GO`,
+  `MCC_SMOKE_MODEL_ZAI`, `MCC_SMOKE_MODEL_FIREWORKS`, `MCC_SMOKE_MODEL_CLOUDFLARE`,
+  `MCC_SMOKE_MODEL_GEMINI`, `MCC_SMOKE_MODEL_GROQ`, `MCC_SMOKE_MODEL_CEREBRAS`,
+  `MCC_SMOKE_MODEL_OLLAMA_CLOUD`, `MCC_SMOKE_MODEL_LMSTUDIO`,
+  `MCC_SMOKE_MODEL_LLAMACPP`, `MCC_SMOKE_MODEL_OLLAMA`: optional per-provider
   smoke model overrides. Values may include the provider prefix or just the model
   name for that provider.
-- `FCC_SMOKE_MODEL_MISTRAL_REASONING`: optional override for the dedicated
+- `MCC_SMOKE_MODEL_MISTRAL_REASONING`: optional override for the dedicated
   Mistral native reasoning smoke, default `mistral/mistral-medium-3-5`.
-- `FCC_SMOKE_NIM_MODELS`: optional comma-separated NVIDIA NIM CLI matrix models
+- `MCC_SMOKE_NIM_MODELS`: optional comma-separated NVIDIA NIM CLI matrix models
   that replace the default characterization set.
-- `FCC_SMOKE_NIM_EXTRA_MODELS`: optional comma-separated NVIDIA NIM CLI matrix
+- `MCC_SMOKE_NIM_EXTRA_MODELS`: optional comma-separated NVIDIA NIM CLI matrix
   models appended to the default or replacement set.
-- `FCC_SMOKE_OPENROUTER_FREE_MODELS`: optional comma-separated OpenRouter free
+- `MCC_SMOKE_OPENROUTER_FREE_MODELS`: optional comma-separated OpenRouter free
   CLI matrix models that replace the default characterization set.
-- `FCC_SMOKE_OPENROUTER_FREE_EXTRA_MODELS`: optional comma-separated OpenRouter
+- `MCC_SMOKE_OPENROUTER_FREE_EXTRA_MODELS`: optional comma-separated OpenRouter
   free CLI matrix models appended to the default or replacement set.
-- `FCC_SMOKE_TIMEOUT_S`: per-request/subprocess timeout, default `45`.
-- `FCC_SMOKE_CLAUDE_BIN`: Claude CLI executable name, default `claude`.
-- `FCC_SMOKE_TELEGRAM_CHAT_ID`: Telegram chat/user ID for send/edit/delete.
-- `FCC_SMOKE_DISCORD_CHANNEL_ID`: Discord channel ID for send/edit/delete.
-- `FCC_SMOKE_INTERACTIVE=1`: enables manual inbound Telegram/Discord checks.
-- `FCC_SMOKE_RUN_VOICE=1`: allows voice transcription backends to load/run.
+- `MCC_SMOKE_TIMEOUT_S`: per-request/subprocess timeout, default `45`.
+- `MCC_SMOKE_CLAUDE_BIN`: Claude CLI executable name, default `claude`.
+- `MCC_SMOKE_TELEGRAM_CHAT_ID`: Telegram chat/user ID for send/edit/delete.
+- `MCC_SMOKE_DISCORD_CHANNEL_ID`: Discord channel ID for send/edit/delete.
+- `MCC_SMOKE_INTERACTIVE=1`: enables manual inbound Telegram/Discord checks.
+- `MCC_SMOKE_RUN_VOICE=1`: allows voice transcription backends to load/run.
 
 ## Windows / nested `uv run`
 
@@ -175,10 +175,10 @@ names contain `KEY`, `TOKEN`, `SECRET`, `WEBHOOK`, or `AUTH`.
 - `product_failure`: the app accepted the scenario but returned the wrong shape,
   crashed, leaked state, or violated the product contract.
 - `harness_bug`: the smoke test or driver made an invalid assumption.
-- `target_disabled`: skipped because `FCC_SMOKE_TARGETS` intentionally selected
+- `target_disabled`: skipped because `MCC_SMOKE_TARGETS` intentionally selected
   a different target.
 
 `product_failure` and `harness_bug` are failures. `missing_env`,
 `upstream_unavailable`, and `probe_timeout` are skips except when the user
-explicitly selected a provider in `FCC_SMOKE_PROVIDER_MATRIX`;
+explicitly selected a provider in `MCC_SMOKE_PROVIDER_MATRIX`;
 selected-but-missing providers fail.

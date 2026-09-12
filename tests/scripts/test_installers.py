@@ -348,8 +348,11 @@ echo "$name:$*" >> "$CALL_LOG"
 if [ "$FAIL_STEP" = "fcc-verify" ]; then
     exit 36
 fi
-if [ "$name" = "fcc-server" ] && [ "${{1:-}}" = "--version" ]; then
-    echo "free-claude-code {FCC_VERSION}"
+# 7.0.0: every fcc-* shim is a tombstone. The fake behaves like one so an
+# installer that ever falls back to it fails the test instead of passing.
+if [ "${{name#fcc-}}" != "$name" ] || [ "$name" = "free-claude-code" ]; then
+    echo "$name was renamed in My Claude Code 7.0.0." >&2
+    exit 1
 fi
 if [ "$name" = "mcc-server" ] && [ "${{1:-}}" = "--version" ]; then
     echo "my-claude-code {FCC_VERSION}"
@@ -448,7 +451,7 @@ def test_install_sh_pinned_version_installs_verified_from_tag_feed(
     result = posix_harness.run("--version", FCC_VERSION)
 
     assert result.returncode == 0, result.stderr
-    assert "Verified FCC v" in result.stdout
+    assert "Verified My Claude Code v" in result.stdout
     assert "is installed and verified." in result.stdout
     calls = posix_harness.calls()
     assert f"download:{PINNED_FEED_URL}" in calls
@@ -965,7 +968,8 @@ def powershell_harness(
 for %%I in ("%~f0") do set "FCC_NAME=%%~nI"
 echo %FCC_NAME%:%*>>"%CALL_LOG%"
 if "%FAIL_STEP%"=="fcc-verify" exit /b 55
-if "%FCC_NAME%"=="fcc-server" if "%1"=="--version" echo free-claude-code {FCC_VERSION}
+echo %FCC_NAME% | findstr /b "fcc-" >nul && (echo %FCC_NAME% was renamed in My Claude Code 7.0.0.&exit /b 1)
+if "%FCC_NAME%"=="free-claude-code" (echo free-claude-code was renamed in My Claude Code 7.0.0.&exit /b 1)
 if "%FCC_NAME%"=="mcc-server" if "%1"=="--version" echo my-claude-code {FCC_VERSION}
 exit /b 0
 """,

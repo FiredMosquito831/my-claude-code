@@ -26,7 +26,7 @@ from typing import Any
 
 from loguru import logger
 
-from my_claude_code.config.paths import FCC_LOGS_DIRNAME, config_dir_path
+from my_claude_code.config.paths import LOGS_DIRNAME, config_dir_path
 from my_claude_code.config.settings import Settings
 
 from .registry import SearchOutcome, SearchRouteOutcome
@@ -181,7 +181,7 @@ _ROUTE_COLUMNS = (
 def default_websearch_db_path() -> Path:
     """Default analytics database path: ``~/.mcc/logs/websearch.db``."""
 
-    return config_dir_path() / FCC_LOGS_DIRNAME / WEBSEARCH_DB_FILENAME
+    return config_dir_path() / LOGS_DIRNAME / WEBSEARCH_DB_FILENAME
 
 
 class _Control:

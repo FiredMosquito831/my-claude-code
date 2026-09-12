@@ -296,7 +296,7 @@ def test_uv_tool_paths_come_from_uv_not_a_posix_home_assumption(
 ) -> None:
     tool_dir = tmp_path / "platform" / "uv" / "tools"
     bin_dir = tmp_path / "platform" / "uv" / "bin"
-    launcher = bin_dir / ("fcc-server.exe" if os.name == "nt" else "fcc-server")
+    launcher = bin_dir / ("mcc-server.exe" if os.name == "nt" else "mcc-server")
     launcher.parent.mkdir(parents=True)
     launcher.write_text("launcher", encoding="utf-8")
 

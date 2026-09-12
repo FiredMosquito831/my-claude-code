@@ -1,4 +1,4 @@
-"""Installed `fcc-claude` and `fcc-claude-old` launchers."""
+"""Installed `mcc-claude` and `mcc-claude-old` launchers."""
 
 import os
 import sys
@@ -92,7 +92,7 @@ def _launch_claude(
             f"My Claude Code proxy is not reachable at {proxy_root_url}: {error}",
             file=sys.stderr,
         )
-        print("Start it in another terminal with: fcc-server", file=sys.stderr)
+        print("Start it in another terminal with: mcc-server", file=sys.stderr)
         raise SystemExit(1)
 
     spec = spec_for(HARNESS_ID)

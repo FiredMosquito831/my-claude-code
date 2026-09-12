@@ -19,8 +19,8 @@ async def test_voice_transcription_backend_when_explicitly_enabled(
 ) -> None:
     if not smoke_config.settings.voice_note_enabled:
         pytest.skip("VOICE_NOTE_ENABLED is false")
-    if os.getenv("FCC_SMOKE_RUN_VOICE") != "1":
-        pytest.skip("set FCC_SMOKE_RUN_VOICE=1 to run transcription smoke")
+    if os.getenv("MCC_SMOKE_RUN_VOICE") != "1":
+        pytest.skip("set MCC_SMOKE_RUN_VOICE=1 to run transcription smoke")
 
     wav_path = tmp_path / "smoke-tone.wav"
     _write_tone_wav(wav_path)

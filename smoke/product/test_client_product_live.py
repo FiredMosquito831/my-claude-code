@@ -86,7 +86,7 @@ def test_pi_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
             {
                 "HOST": "127.0.0.1",
                 "PORT": str(server.port),
-                "FCC_OPEN_BROWSER": "0",
+                "MCC_OPEN_BROWSER": "0",
                 "ANTHROPIC_AUTH_TOKEN": auth_token,
                 "PI_CODING_AGENT_DIR": str(tmp_path / "pi-agent"),
             }
@@ -102,7 +102,7 @@ def test_pi_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
                 "--no-session",
                 "--no-approve",
                 "--print",
-                "Reply with exactly FCC_SMOKE_PI",
+                "Reply with exactly MCC_SMOKE_PI",
             ],
             cwd=tmp_path,
             env=env,
@@ -114,7 +114,7 @@ def test_pi_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
         server_log = server.log_path.read_text(encoding="utf-8", errors="replace")
 
     assert result.returncode == 0, result.stderr or result.stdout
-    assert "FCC_SMOKE_PI" in result.stdout
+    assert "MCC_SMOKE_PI" in result.stdout
     assert "POST /v1/messages" in server_log
 
 
@@ -140,7 +140,7 @@ def test_claude_cli_adaptive_thinking_e2e(
             server=server,
             config=smoke_config,
             cwd=tmp_path,
-            prompt="think hard, then reply with exactly FCC_SMOKE_CLI",
+            prompt="think hard, then reply with exactly MCC_SMOKE_CLI",
         )
         server_log = server.log_path.read_text(encoding="utf-8", errors="replace")
 
@@ -149,7 +149,7 @@ def test_claude_cli_adaptive_thinking_e2e(
     assert " 422 " not in server_log
     assert 'HTTP/1.1" 422' not in server_log
     assert "400 Bad Request" not in result.stdout
-    assert "FCC_SMOKE_CLI" in result.stdout
+    assert "MCC_SMOKE_CLI" in result.stdout
 
 
 @pytest.mark.smoke_target("cli")
@@ -185,7 +185,7 @@ def test_claude_cli_provider_error_e2e(
             server=server,
             config=smoke_config,
             cwd=tmp_path,
-            prompt="Reply with exactly FCC_SMOKE_UNREACHABLE.",
+            prompt="Reply with exactly MCC_SMOKE_UNREACHABLE.",
             model="claude-sonnet-4-5-20250929",
         )
         server_log = server.log_path.read_text(encoding="utf-8", errors="replace")

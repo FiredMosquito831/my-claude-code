@@ -19,11 +19,11 @@ def test_telegram_bot_api_permissions(smoke_config: SmokeConfig) -> None:
     assert get_me.status_code == 200, get_me.text
     assert get_me.json()["ok"] is True
 
-    chat_id = os.getenv("FCC_SMOKE_TELEGRAM_CHAT_ID") or (
+    chat_id = os.getenv("MCC_SMOKE_TELEGRAM_CHAT_ID") or (
         smoke_config.settings.allowed_telegram_user_id or ""
     )
     if not chat_id:
-        pytest.skip("FCC_SMOKE_TELEGRAM_CHAT_ID or ALLOWED_TELEGRAM_USER_ID required")
+        pytest.skip("MCC_SMOKE_TELEGRAM_CHAT_ID or ALLOWED_TELEGRAM_USER_ID required")
 
     marker = f"FCC smoke {int(time.time())}"
     sent = httpx.post(
@@ -53,13 +53,13 @@ def test_telegram_bot_api_permissions(smoke_config: SmokeConfig) -> None:
 @pytest.mark.smoke_target("discord")
 def test_discord_bot_api_permissions(smoke_config: SmokeConfig) -> None:
     token = smoke_config.settings.discord_bot_token
-    channel_id = os.getenv("FCC_SMOKE_DISCORD_CHANNEL_ID")
+    channel_id = os.getenv("MCC_SMOKE_DISCORD_CHANNEL_ID")
     if not channel_id and smoke_config.settings.allowed_discord_channels:
         channel_id = smoke_config.settings.allowed_discord_channels.split(",", 1)[0]
     if not token:
         pytest.skip("DISCORD_BOT_TOKEN is not configured")
     if not channel_id:
-        pytest.skip("FCC_SMOKE_DISCORD_CHANNEL_ID or ALLOWED_DISCORD_CHANNELS required")
+        pytest.skip("MCC_SMOKE_DISCORD_CHANNEL_ID or ALLOWED_DISCORD_CHANNELS required")
 
     headers = {"authorization": f"Bot {token}"}
     base_url = "https://discord.com/api/v10"
@@ -104,7 +104,7 @@ def test_interactive_inbound_messaging_requires_explicit_mode(
     smoke_config: SmokeConfig,
 ) -> None:
     if not smoke_config.interactive:
-        pytest.skip("set FCC_SMOKE_INTERACTIVE=1 for manual inbound messaging checks")
+        pytest.skip("set MCC_SMOKE_INTERACTIVE=1 for manual inbound messaging checks")
     pytest.skip(
         "manual inbound check: start the server, send a nonce from the real client, "
         "and verify threaded progress plus /stop, /clear, and /stats"

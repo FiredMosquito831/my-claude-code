@@ -12,7 +12,7 @@ The [README](../README.md) is the map: what My Claude Code is, how to install it
 | [Web search](./WEB-SEARCH.md) | The `web_search` server tool, fulfilled at the proxy by 14 search providers instead of by Anthropic. |
 | [Claude Code config](./CLAUDE-CODE-CONFIG.md) | Pointing Claude Code at this proxy, per session or permanently. |
 | [Anthropic subscription](./ANTHROPIC-SUBSCRIPTION.md) | What signing in with a Claude subscription costs you, and why Anthropic does not permit it. |
-| [Brand](./BRAND.md) | Naming, the preserved `FCC_*` contracts, and what may not change. |
+| [Brand](./BRAND.md) | Naming, what the 7.0.0 rename retired, and what may not change. |
 | [Release checklist](./RELEASE-CHECKLIST.md) | What a release has to satisfy before it is published. |
 | [Architecture](../ARCHITECTURE.md) | How a request travels through the proxy, and who owns what. |
 | [Contributing](../CONTRIBUTING.md) | Local checks, versioning rules, and how changes get merged. |

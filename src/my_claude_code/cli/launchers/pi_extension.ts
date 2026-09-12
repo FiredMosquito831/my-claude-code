@@ -8,8 +8,8 @@ import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-codin
 // thing to a shared constant a language boundary allows.
 const HARNESS_HEADER = "x-mcc-harness";
 const HARNESS_ID = "pi";
-const API_KEY_ENV = "FCC_PI_API_KEY";
-const BASE_URL_ENV = "FCC_PI_BASE_URL";
+const API_KEY_ENV = "MCC_PI_API_KEY";
+const BASE_URL_ENV = "MCC_PI_BASE_URL";
 const CATALOG_TIMEOUT_MS = 3000;
 const CATALOGUE_MODELS_PATH = "/admin/api/catalogue-models";
 // Only reached when the proxy is older than this extension and has no

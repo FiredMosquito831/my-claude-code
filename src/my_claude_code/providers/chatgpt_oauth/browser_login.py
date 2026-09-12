@@ -508,7 +508,7 @@ def perform_browser_login(
 
 
 def chatgpt_oauth_login_command() -> None:
-    """CLI entry point for ``fcc-chatgpt-oauth-login``.
+    """CLI entry point for ``mcc-chatgpt-oauth-login``.
 
     Uses the browser PKCE flow by default on a local machine and falls back to
     device-code login when the callback may be remote or unavailable.

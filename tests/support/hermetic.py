@@ -864,6 +864,7 @@ def isolate_the_machine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.delenv("MCC_CONFIG_DIR", raising=False)
     monkeypatch.delenv("FCC_CONFIG_DIR", raising=False)
     monkeypatch.delenv("FCC_ENV_FILE", raising=False)
+    monkeypatch.delenv("MCC_ENV_FILE", raising=False)
     yield home
 
 

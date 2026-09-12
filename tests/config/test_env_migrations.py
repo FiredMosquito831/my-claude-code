@@ -86,7 +86,7 @@ def test_explicit_env_file_migration_warning_does_not_rewrite(
     explicit = tmp_path / "custom.env"
     explicit.write_text("HF_TOKEN=explicit-token\n", encoding="utf-8")
 
-    warning = explicit_env_file_migration_warning({"FCC_ENV_FILE": str(explicit)})
+    warning = explicit_env_file_migration_warning({"MCC_ENV_FILE": str(explicit)})
 
     assert warning is not None
     assert str(explicit) in warning

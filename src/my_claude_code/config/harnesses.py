@@ -355,7 +355,7 @@ class HarnessCommandLine:
     command: str
     help_text: str
     #: ``primary`` is the headline command, ``flag`` a documented argument
-    #: form, ``legacy`` the ``fcc-`` alias, ``rtk`` a token-optimizer toggle.
+    #: form, ``legacy`` the retired ``fcc-`` name, ``rtk`` a token-optimizer toggle.
     kind: str = "primary"
 
 
@@ -363,14 +363,15 @@ class HarnessCommandLine:
 class HarnessCommand:
     """One installed console script that launches a harness."""
 
-    #: Suffix after ``mcc-`` / ``fcc-``; ``"codex"`` gives ``mcc-codex``.
+    #: Suffix after ``mcc-``; ``"codex"`` gives ``mcc-codex``.
     suffix: str
     #: ``module:function`` target, exactly as ``pyproject.toml`` spells it.
     target: str
-    #: Whether a legacy ``fcc-<suffix>`` alias exists. Only the harnesses that
+    #: Whether a retired ``fcc-<suffix>`` name exists. Only the harnesses that
     #: shipped before this registry have one: no install in the world carries
-    #: an ``fcc-`` alias for a harness added later, so inventing one would
-    #: publish a command that never had users.
+    #: an ``fcc-`` name for a harness added later, so inventing one would
+    #: publish a tombstone nobody ever needed. Since 7.0.0 the name is
+    #: registered only so that typing it prints what replaced it.
     legacy_alias: bool = True
     #: Whether this is the harness's headline command in generated help.
     primary: bool = True
@@ -389,7 +390,7 @@ class HarnessCommand:
 
     @property
     def legacy_command(self) -> str | None:
-        """Return the legacy ``fcc-`` alias, when this command has one."""
+        """Return the retired ``fcc-`` name, when this command has one."""
 
         return f"fcc-{self.suffix}" if self.legacy_alias else None
 

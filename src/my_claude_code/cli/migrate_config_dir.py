@@ -44,7 +44,7 @@ from loguru import logger
 
 from my_claude_code.config.paths import (
     DESKTOP_LOCK_FILENAME,
-    FCC_ENV_FILENAME,
+    ENV_FILENAME,
     legacy_config_dir_path,
     migrated_pointer_path,
     new_config_dir_path,
@@ -248,7 +248,7 @@ def _configured_port(legacy_home: Path) -> int | None:
             return int(override)
         except ValueError:
             logger.debug("Ignoring unparseable PORT={} in the environment", override)
-    raw = _read_env_setting(legacy_home / FCC_ENV_FILENAME, "PORT")
+    raw = _read_env_setting(legacy_home / ENV_FILENAME, "PORT")
     if raw is not None:
         try:
             return int(raw)

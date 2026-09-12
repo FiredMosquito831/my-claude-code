@@ -16,7 +16,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [The macOS desktop-app disk image](#the-macos-desktop-app-disk-image)
 - [3. First run](#3-first-run)
   - [Where your configuration lives](#where-your-configuration-lives)
-  - [Legacy `~/.fcc`: migrating with `mcc-migrate`](#legacy-fcc-migrating-with-mcc-migrate)
+  - [Migrating from `~/.fcc`](#migrating-from-fcc)
   - [Pinning a directory with `MCC_CONFIG_DIR`](#pinning-a-directory-with-mcc_config_dir)
   - [Running the server with the desktop tray](#running-the-server-with-the-desktop-tray)
   - [The desktop app: fetched, verified, installed](#the-desktop-app-fetched-verified-installed)
@@ -142,7 +142,7 @@ in `SHA256SUMS-desktop-shell.txt` beside it — and run it.
 
 | Uninstaller | Removes |
 | --- | --- |
-| **"My Claude Code (desktop app)"** (Apps & Features) | The executable, its icon, the Start Menu and desktop shortcuts, and its own `HKCU` uninstall key. It asks — defaulting to *no* — whether to also forget the window's remembered size and position. It never touches `~/.local/bin`, `~/.mcc`, `~/.fcc`, or the start-at-login value. |
+| **"My Claude Code (desktop app)"** (Apps & Features) | The executable, its icon, the Start Menu and desktop shortcuts, and its own `HKCU` uninstall key. It asks — defaulting to *no* — whether to also forget the window's remembered size and position. It never touches `~/.local/bin`, `~/.mcc`, or the start-at-login value. |
 | [`scripts/uninstall.ps1`](../scripts/uninstall.ps1) | Everything else: the shims, the configuration directory, the shortcut `install.ps1 -Desktop` made, and the start-at-login value. See [What the uninstaller removes](#what-the-uninstaller-removes). |
 
 Removing the window is not removing My Claude Code, and the Apps & Features entry says
@@ -351,7 +351,7 @@ mcc-server --version
 
 1. Installs `uv` (the Python tool runner) if missing or too old.
 2. Looks up the **latest** release, downloads its wheel, and **verifies the SHA-256 that GitHub publishes for that asset**. A mismatch aborts rather than running unverified code.
-3. Installs the package and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex` and `mcc-pi` on your `PATH` (the legacy `fcc-*` spellings remain as aliases).
+3. Installs the package and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex` and `mcc-pi` on your `PATH` (the legacy `fcc-*` spellings were retired in 7.0.0 and now only say what replaced them).
 
 **It does not install Claude Code, Codex, or Pi.** Those are separate third-party tools and the proxy doesn't need any of them to run. Install whichever you actually use, yourself — the `mcc-*` launchers simply point an agent you already have at the proxy.
 
@@ -371,7 +371,7 @@ Add `--dry-run` (`-DryRun`) to print what it would do without changing anything.
 mcc-server
 ```
 
-Keep this process running. Once healthy, the Admin UI opens in your browser automatically (disable with `FCC_OPEN_BROWSER=0`). The address is always printed in the startup log — by default:
+Keep this process running. Once healthy, the Admin UI opens in your browser automatically (disable with `MCC_OPEN_BROWSER=0`). The address is always printed in the startup log — by default:
 
 ```text
 http://127.0.0.1:8082/admin
@@ -452,36 +452,38 @@ database).
 | Install | Directory |
 | --- | --- |
 | A new install | `~/.mcc` — on Windows, `C:\Users\<you>\.mcc` |
-| Installed before 6.40.0 | `~/.fcc`, the legacy directory, still used exactly as it always was |
+| Installed before 6.40.0 | `~/.mcc`, migrated from `~/.fcc` on the first start of 6.65.0 or later |
 | `MCC_CONFIG_DIR` set | whatever absolute path you gave it, override everything else |
 
 The server prints which directory it chose on the first line of its startup
 log, and the Get Started page repeats it. If you are ever unsure which config
 you are editing, that is the authoritative answer.
 
-The rule is short and it never moves anything:
+The rule is short:
 
-1. `MCC_CONFIG_DIR` wins whenever it is set.
-2. Otherwise `~/.mcc`, if it exists. If a legacy `~/.fcc` exists too, `~/.mcc`
-   wins, the startup log names both, and the legacy one is left completely
-   untouched — the two are never merged.
-3. Otherwise the legacy `~/.fcc`, if it exists.
-4. Otherwise a fresh `~/.mcc` is created.
+1. `MCC_CONFIG_DIR` wins whenever it is set, and no migration is ever
+   considered.
+2. Otherwise `~/.mcc`, if it exists. If `~/.fcc` exists too, `~/.mcc` wins, the
+   startup log names both, and the other one is left completely untouched — the
+   two are never merged and nothing is ever deleted.
+3. Otherwise, if `~/.fcc` exists, it is migrated to `~/.mcc` (see below).
+4. Otherwise a fresh `~/.mcc` is created, with a `.env` written from the shipped
+   template and a proxy token generated on this machine.
 
-**Nothing is ever migrated for you.** If you have been running MCC since before
-6.40.0 your data stays in the legacy `~/.fcc` for as long as you like; the
-directory is fully supported and there is no deadline. The *only* thing that
-turns `~/.fcc` into `~/.mcc` is you running `mcc-migrate` yourself. There is no
-dashboard button and no HTTP route for it, on purpose: relocating your keys and
-your request history is not an action a web page you happen to have open should
-be able to take.
+#### Migrating from `~/.fcc`
 
-#### Legacy `~/.fcc`: migrating with `mcc-migrate`
+Since 6.65.0 the first start of the server does this for you. It is a single
+atomic rename: nothing is copied, nothing is deleted, nothing is merged — the
+whole tree moves at once, or nothing moves and the server refuses to start and
+names the processes holding the directory open. A note saying how to move it
+back is written to `~/.fcc-migrated.txt`, and `~/.fcc-old/RESTORE.txt` records
+the exact command.
 
-`mcc-migrate` (`fcc-migrate` is the same command) renames `~/.fcc` to `~/.mcc`
-in a single atomic step. Nothing is copied, nothing is deleted, and nothing is
-merged — it either relocates the whole tree at once or it refuses and leaves
-everything as it was.
+**Quit the desktop app first.** It holds `desktop.lock` inside the config home
+for its whole lifetime, and a held directory is the one case the migration
+refuses. Stop the server, quit the tray, then start the server again.
+
+`mcc-migrate` runs exactly the same move by hand, before any server starts:
 
 **Stop the server and the tray first.** This is not optional. A server that is
 still running cached its log path at startup; it goes on writing to the old
@@ -523,11 +525,11 @@ Reasons the command will refuse, all of which leave every file where it is:
 | `Refusing to migrate: … already exists` | Both directories are present. Only you know which holds the data you want — move the unwanted one aside, or just keep using `~/.mcc`. |
 | `Refusing to migrate: an MCC server is answering …` | Stop the server, then re-run. |
 | `Refusing to migrate: the desktop tray still holds …` | Quit the tray from its menu, then re-run. |
-| `Could not move …: a file inside the legacy home is still open` | Windows only. The message lists the `mcc-*`/`fcc-*` processes holding files; close them and re-run. |
+| `Could not move …: a file inside the legacy home is still open` | Windows only. The message lists the `mcc-*` processes holding files; close them and re-run. |
 
-If you would rather not move anything, you do not have to. Setting
-`MCC_CONFIG_DIR=C:\Users\you\.fcc` (or `~/.fcc`) pins the legacy directory
-explicitly and silences the startup notice.
+If you would rather keep your data where it is, you can. Setting
+`MCC_CONFIG_DIR=C:\Users\you\.fcc` (or `~/.fcc`) pins that directory
+explicitly, and no migration is ever considered.
 
 #### Pinning a directory with `MCC_CONFIG_DIR`
 
@@ -543,8 +545,9 @@ $env:MCC_CONFIG_DIR = "D:\mcc\config"      # PowerShell, current session
 
 It has to be set for the launchers too, not just the server — an `mcc-claude`
 started in a shell without it reads a different directory than the server does.
-There is no legacy FCC_-prefixed spelling of it; the variable was introduced
-with the `MCC_` name and has only ever had that one.
+The variable was introduced
+with the `MCC_` name and has only ever had that one; the `FCC_*` spellings of
+the other variables were retired in 7.0.0.
 
 #### Server logs under `logs/`
 
@@ -764,7 +767,8 @@ report. `reconnect_timeout_seconds` and `health_failure_threshold` are the two n
 window must use rather than invent: together they are what stops a routine self-update
 restart being drawn as a dead server.
 
-The `fcc-desktop` alias accepts every one of these flags identically.
+The retired `fcc-desktop` name accepts none of these flags: it prints the
+rename line and exits 1.
 
 <a id="the-desktop-app-fetched-verified-installed"></a>
 
@@ -871,7 +875,7 @@ This writes a Start Menu `.lnk` on Windows, a `.desktop` entry on Linux, and a m
 | Artefact | Path or key | Created by |
 | --- | --- | --- |
 | Command shims | the uv tool bin directory | `uv tool install` |
-| Config, logs, data and the exported icon | `~/.mcc/` and a legacy `~/.fcc/` | normal use |
+| Config, logs, data and the exported icon | `~/.mcc/` (and `~/.fcc/` on a machine that was never migrated) | normal use |
 | Start Menu shortcut | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\My Claude Code.lnk` | `install.ps1 -Desktop` |
 | Start-at-login value | `HKCU:\Software\Microsoft\Windows\CurrentVersion\Run\MyClaudeCodeDesktop` | **Start at Login** |
 | Desktop entry and icon | `~/.local/share/applications/my-claude-code.desktop`, `~/.local/share/icons/hicolor/256x256/apps/my-claude-code.png` | `install.sh --desktop` |
@@ -880,7 +884,7 @@ This writes a Start Menu `.lnk` on Windows, a `.desktop` entry on Linux, and a m
 | systemd user unit | `~/.config/systemd/user/mcc-server.service` — `systemctl --user disable --now` runs first | **Start at Login** (Linux/WSL) |
 | XDG autostart entry | `~/.config/autostart/mcc-server.desktop` | **Start at Login** (Linux/WSL, no systemd) |
 
-**Kept:** uv, the uv-managed Python runtime, Claude Code, Codex, Pi, shared `PATH` entries, the shared XDG directories the entry and icon lived in, and the retired `~/.fcc-old/` (the legacy directory holding your rollback note). `~/.claude/` is never touched.
+**Kept:** uv, the uv-managed Python runtime, Claude Code, Codex, Pi, shared `PATH` entries, the shared XDG directories the entry and icon lived in, and `~/.fcc-old/` (the directory holding the migration rollback note). `~/.claude/` is never touched.
 
 Ordering and safety are unchanged: the desktop artefacts are removed only **after** every shim is verified gone, so a failed or unverified tool removal leaves your config *and* your shortcut alone. A shortcut or registry value that cannot be deleted (a file the shell has open, a locked key) is reported as a warning rather than aborting an uninstall that has already removed the tool. `--dry-run` / `-DryRun` prints every removal without performing it.
 
@@ -1295,8 +1299,8 @@ If you want the previous `mcc-claude` behavior — gateway model discovery
 enabled, the auto-compact window set, telemetry/autoupdate disabled, and
 inherited `ANTHROPIC_*` variables cleared — run `mcc-claude-old` instead.
 
-The legacy `fcc-claude`, `fcc-claude-old`, `fcc-codex` and `fcc-pi` aliases
-behave identically.
+The legacy `fcc-claude`, `fcc-claude-old`, `fcc-codex` and `fcc-pi` names were
+retired in 7.0.0: each prints the `mcc-*` name that replaced it and exits 1.
 
 Official references: [Claude Code LLM gateway docs](https://code.claude.com/docs/en/llm-gateway-connect) · [settings.json reference](https://code.claude.com/docs/en/settings)
 
@@ -1694,7 +1698,7 @@ mcc-codex      # Codex CLI against the local MCC Responses provider
 mcc-pi         # Pi
 ```
 
-(The legacy `fcc-codex` and `fcc-pi` aliases behave identically.)
+(The legacy `fcc-codex` and `fcc-pi` names were retired in 7.0.0.)
 
 Neither rewrites your own configuration. Codex is configured with ephemeral
 `-c` assignments on the command line, and Pi is registered by a bundled
@@ -3019,7 +3023,7 @@ model = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
 [model_providers.fcc]
 name = "My Claude Code"
 base_url = "http://127.0.0.1:8082/v1"
-env_key = "FCC_CODEX_API_KEY"
+env_key = "MCC_CODEX_API_KEY"
 wire_api = "responses"
 ```
 
@@ -3470,7 +3474,7 @@ Two things not to worry about: the dictionary trains itself once the log has see
 
 Compression only ever applies to **newly written** requests, so a database carried across the upgrade keeps paying the old price for its whole history. On a real 1.7 GB log that meant every one of its 50,000 rows.
 
-`mcc-compact-log` (legacy alias `fcc-compact-log`) rewrites them in place:
+`mcc-compact-log` rewrites them in place (the retired `fcc-compact-log` name only says what replaced it):
 
 ```bash
 # stop the server first, or the final vacuum cannot reclaim the space
@@ -3777,7 +3781,7 @@ The rule behind the table is "judge a key only on signals about the key". The sa
 
 ### The RTK token optimizer
 
-RTK (the Rust Token Killer, v0.45.0) is an optional third-party binary that filters noisy terminal output before it reaches the model — trimming the token cost of long, chatty agent sessions without changing what the agent does. MCC manages the binary and its per-agent hooks through one command, `mcc-rtk` (legacy alias `fcc-rtk`):
+RTK (the Rust Token Killer, v0.45.0) is an optional third-party binary that filters noisy terminal output before it reaches the model — trimming the token cost of long, chatty agent sessions without changing what the agent does. MCC manages the binary and its per-agent hooks through one command, `mcc-rtk`:
 
 ```bash
 mcc-rtk status              # installed binary + enabled agents
@@ -4260,7 +4264,7 @@ Provider API keys are never sent to your agent, never written to the analytics s
 Close and reopen your terminal. The installer extends `PATH`; an existing shell won't see it. This is the single most common install issue.
 
 **Windows: installing while MCC is running.**
-Supported, and it is the normal path. The installer renames the old tool environment *and* every `mcc-*` / `fcc-*` launcher aside, then lets uv write a complete new set. Running sessions — the server, the tray, an open `mcc-claude` window — keep the old version until they are restarted; anything started afterwards uses the new one. Nothing needs to be closed.
+Supported, and it is the normal path. The installer renames the old tool environment *and* every `mcc-*` / `fcc-*` launcher aside (the retired names still have shims to move), then lets uv write a complete new set. Running sessions — the server, the tray, an open `mcc-claude` window — keep the old version until they are restarted; anything started afterwards uses the new one. Nothing needs to be closed.
 
 If Windows refuses to move a launcher aside (an antivirus scan, the search indexer, or the shell can hold an `.exe` for a moment), the installer does not give up: it re-runs uv with `UV_TOOL_BIN_DIR` pointed at a staging directory, so uv writes every shim and a complete receipt somewhere nothing is holding, then places the shims one at a time. A shim that still cannot be replaced keeps the file it had and is listed by name as *"these keep working and will refresh on the next install"* — that is not a failure. A uv launcher is a version-agnostic stub that runs the interpreter inside the tool directory, and that directory now holds the new install, so the old stub already runs the new code.
 

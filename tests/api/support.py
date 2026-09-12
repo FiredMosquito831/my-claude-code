@@ -84,6 +84,7 @@ def create_custom_provider_app(
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("FCC_ENV_FILE", raising=False)
+    monkeypatch.delenv("MCC_ENV_FILE", raising=False)
     registry = ProviderRegistry(tmp_path / "custom_providers.json")
     monkeypatch.setattr("my_claude_code.config.provider_registry._registry", registry)
     return create_test_app(Settings(), providers=providers), registry

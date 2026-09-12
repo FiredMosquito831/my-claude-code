@@ -22,7 +22,7 @@ from pathlib import Path
 # the old name leaves a ``.fcc-tmp`` orphan that new code would no longer
 # recognise or clean up. The string is internal plumbing, visible only in the
 # half-second a write is in flight, so the churn buys nothing.
-FCC_TEMP_SUFFIX = ".fcc-tmp"
+ATOMIC_TEMP_SUFFIX = ".fcc-tmp"
 
 
 def json_document_bytes(data: object) -> bytes:
@@ -35,7 +35,7 @@ def write_json_document_atomically(path: Path, data: object) -> None:
     """Write ``data`` as JSON to ``path``, creating parent directories as needed."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(path.name + FCC_TEMP_SUFFIX)
+    tmp_path = path.with_name(path.name + ATOMIC_TEMP_SUFFIX)
     try:
         # Bytes, not text: `write_text` translates "\n" to CRLF on Windows, so
         # the same document would differ from itself byte for byte across

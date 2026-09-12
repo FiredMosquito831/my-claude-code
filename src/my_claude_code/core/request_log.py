@@ -1886,7 +1886,7 @@ class RequestLogStore:
         self._init_db()
         self._writer = threading.Thread(
             target=self._writer_loop,
-            name="fcc-request-log-writer",
+            name="mcc-request-log-writer",
             daemon=True,
         )
         self._writer.start()
@@ -2963,7 +2963,7 @@ class RequestLogStore:
 
         Rows keep ``input_sha`` NULL and their existing blob keeps carrying the
         prompt inside it, which reads correctly without any rewrite;
-        ``fcc-compact-log`` splits them when it runs.
+        ``mcc-compact-log`` splits them when it runs.
         """
         columns = {
             str(row[1]) for row in conn.execute("PRAGMA table_info(request_bodies)")

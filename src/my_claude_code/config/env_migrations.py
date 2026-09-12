@@ -92,7 +92,7 @@ def explicit_env_file_migration_warning(
         f"{migration.old_key} to {migration.new_key}" for migration in pending
     )
     return (
-        f"Explicit FCC_ENV_FILE {path} uses retired settings. Rename {renames}; "
+        f"Explicit MCC_ENV_FILE {path} uses retired settings. Rename {renames}; "
         "explicit env files are not rewritten automatically."
     )
 

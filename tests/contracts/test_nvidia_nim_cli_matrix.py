@@ -26,7 +26,7 @@ def _smoke_config(tmp_path: Path) -> SmokeConfig:
         targets=DEFAULT_TARGETS,
         provider_matrix=frozenset(),
         timeout_s=45.0,
-        prompt="Reply with exactly: FCC_SMOKE_PONG",
+        prompt="Reply with exactly: MCC_SMOKE_PONG",
         claude_bin="claude",
         worker_id="test-worker",
         settings=Settings.model_construct(anthropic_auth_token=""),

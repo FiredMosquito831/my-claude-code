@@ -41,10 +41,11 @@ from pathlib import Path
 from loguru import logger
 
 from my_claude_code.config.env_template import render_default_env
+from my_claude_code.config.legacy_env_rewrite import rewrite_legacy_env_keys
 from my_claude_code.config.logging_config import append_to_server_log
 from my_claude_code.config.paths import (
     CONFIG_DIR_ENV,
-    FCC_ENV_FILENAME,
+    ENV_FILENAME,
     display_path,
     legacy_config_dir_path,
     migrated_pointer_path,
@@ -148,9 +149,23 @@ def ensure_config_home() -> str:
         target.mkdir(parents=True, exist_ok=True)
         notices.append(f"Created the config directory {display_path(target)}.")
 
-    env_path = target / FCC_ENV_FILENAME
+    env_path = target / ENV_FILENAME
     if not env_path.exists():
         notices.append(_write_default_env(env_path))
+    else:
+        # 7.0.0: the ``FCC_*`` env names are gone. A managed ``.env`` that still
+        # spells a key the old way configures nothing from this release on, and
+        # the next Save in the dashboard would drop the line. Rewrite it here,
+        # once, before anything reads the file.
+        renamed = rewrite_legacy_env_keys(env_path)
+        if renamed:
+            notices.append(
+                f"Renamed {len(renamed)} legacy FCC_* key(s) in "
+                f"{display_path(env_path)} to their MCC_* names "
+                f"({', '.join(new for _, new in renamed)}); the values are "
+                f"unchanged and the file as it was is kept beside it as "
+                f"{env_path.name}.bak-<timestamp>."
+            )
 
     notice = " ".join(notices)
     if notice:

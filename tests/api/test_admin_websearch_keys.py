@@ -32,6 +32,7 @@ _WEBSEARCH_ENV_KEYS = (
     "SERPAPI_API_KEY",
     "SEARXNG_BASE_URL",
     "FCC_ENV_FILE",
+    "MCC_ENV_FILE",
 )
 
 

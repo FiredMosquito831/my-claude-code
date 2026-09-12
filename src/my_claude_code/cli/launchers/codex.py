@@ -1,4 +1,4 @@
-"""Installed `mcc-codex` / `fcc-codex` launcher."""
+"""Installed `mcc-codex` launcher."""
 
 import json
 import os
@@ -28,7 +28,7 @@ from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 from .common import preflight_proxy, run_client_process
 
 HARNESS_ID = "codex"
-_CODEX_AUTH_ENV_KEY = "FCC_CODEX_API_KEY"
+_CODEX_AUTH_ENV_KEY = "MCC_CODEX_API_KEY"
 # Preserve CODEX_HOME: it owns durable user configuration, not parent-task identity.
 _STRIPPED_CODEX_ENV_KEYS = frozenset(
     {
@@ -58,7 +58,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
             f"My Claude Code proxy is not reachable at {proxy_root_url}: {error}",
             file=sys.stderr,
         )
-        print("Start it in another terminal with: fcc-server", file=sys.stderr)
+        print("Start it in another terminal with: mcc-server", file=sys.stderr)
         raise SystemExit(1)
 
     binary_path = resolve_harness_binary(spec)
