@@ -1337,6 +1337,11 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
         status=DesktopAppStatus.SERVABLE,
         doc_url="https://claude.com/docs/third-party/claude-desktop/mdm",
         detect=DesktopDetect(
+            # Anthropic ships Windows and macOS builds; the community Linux
+            # packages install a ``claude-desktop`` executable. Deliberately
+            # **not** ``claude``, which on any machine with MCC on it is Claude
+            # Code's own CLI and says nothing at all about the desktop app.
+            binaries=("claude-desktop",),
             markers=(
                 # The Microsoft Store / MSIX install, which is the shape most
                 # Windows users get. A packaged app virtualises AppData, so its
@@ -1358,7 +1363,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
                 # those are the app's *data* directories, and the first of them
                 # is the very configuration library MCC writes into -- so a
                 # library MCC had created would have proved the app installed.
-            )
+            ),
         ),
         # ``_meta.json`` is the library's index, and the only file here that is
         # the user's: MCC merges ``appliedId`` (the document the app loads on

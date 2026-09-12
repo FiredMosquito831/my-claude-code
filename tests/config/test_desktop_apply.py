@@ -1160,10 +1160,11 @@ def test_the_claude_desktop_configuration_library_is_not_its_own_evidence(tmp_pa
     """The library MCC writes into used to be one of the app's markers."""
 
     env = env_for(tmp_path)
-    library = tmp_path / "AppData" / "Local" / "Claude-3p" / "configLibrary"
+    spec = desktop_app("claude_desktop")
+    # The library MCC itself writes into, wherever this platform keeps it.
+    library = document_path(spec, env).parent
     library.mkdir(parents=True, exist_ok=True)
     (library / "_meta.json").write_text("{}", encoding="utf-8", newline="")
-    spec = desktop_app("claude_desktop")
     assert not desktop_apply.is_installed(spec, env)
 
     make_marker(tmp_path, spec)

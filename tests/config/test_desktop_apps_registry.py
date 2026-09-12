@@ -422,3 +422,28 @@ def test_a_rendered_plan_for_every_app_hides_the_token(tmp_path):
                 mask_json_text(json.dumps(payload, indent=2), _SECRET_KEYS).count(token)
                 == 0
             ), spec.id
+
+
+@pytest.mark.parametrize("spec", SERVABLE, ids=ids(SERVABLE))
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+def test_every_servable_row_is_detectable_on_every_platform(
+    spec: DesktopAppSpec, platform: str
+):
+    """A row MCC will write for has to be a row MCC can *find* first.
+
+    Detection became a question about the program in 6.83.0, and the first cut
+    of it left Claude Desktop with Windows and macOS markers and nothing at all
+    for Linux -- which the tests could not see on Windows and CI found
+    immediately. Either an executable name, which is looked up on PATH wherever
+    the app runs, or a marker path this platform can resolve.
+    """
+
+    assert spec.detect is not None
+    if spec.detect.binaries:
+        return
+    applicable = [
+        marker
+        for marker in spec.detect.markers
+        if not marker.platforms or platform in marker.platforms
+    ]
+    assert applicable, f"{spec.id} cannot be detected on {platform}"

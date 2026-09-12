@@ -8,6 +8,7 @@ point inside ``tmp_path``.
 """
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,14 @@ def scratch(monkeypatch, tmp_path: Path):
     """A scratch home, an installed Codex, and the command wired to a test app."""
 
     home = tmp_path / "home"
-    (home / "AppData" / "Local" / "OpenAI" / "Codex").mkdir(parents=True)
+    # The program, not a directory it once wrote: since 6.83.0 a card reads
+    # "installed" only when the executable is on the PATH the app would be
+    # started from, or an install path exists.
+    binaries = home / "bin"
+    binaries.mkdir(parents=True)
+    executable = binaries / ("codex.exe" if sys.platform == "win32" else "codex")
+    executable.write_bytes(b"")
+    executable.chmod(0o755)
     (home / ".codex").mkdir(parents=True)
     document = home / ".codex" / "config.toml"
     document.write_text(CODEX_DOCUMENT, encoding="utf-8", newline="")
@@ -40,6 +48,7 @@ def scratch(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path / "mcc"))
+    monkeypatch.setenv("PATH", str(binaries))
     monkeypatch.delenv("CODEX_HOME", raising=False)
     monkeypatch.chdir(tmp_path)
 
