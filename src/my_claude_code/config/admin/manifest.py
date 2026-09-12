@@ -523,6 +523,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "still serves requests when a route or a fallback chain above "
             "names it."
         ),
+        # Hide-only, by contract (``core/model_visibility.py``: "Nothing here
+        # may affect routing"). Both consumers -- the /v1/models response and
+        # the catalogue documents -- read this off Settings when they build,
+        # never off a provider client, so re-querying every provider's /models
+        # after a Hide click cannot change what the click does. It only made
+        # the click cost a network sweep.
+        affects_providers=False,
     ),
     ConfigFieldSpec(
         "MODEL_VISIBILITY_DENY",
@@ -541,6 +548,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "answers, it is simply not listed. To stop using a model, take it "
             "out of the route that names it."
         ),
+        # Same reasoning as MODEL_VISIBILITY_ALLOW above.
+        affects_providers=False,
     ),
     ConfigFieldSpec(
         "HARNESS_TIER_ALIASES",
@@ -2392,11 +2401,13 @@ def update_affects_providers(updates: Iterable[str]) -> bool:
     later is classified where it is defined. A key the manifest does not own
     answers ``True`` -- the expensive answer is the safe one.
 
-    The six ``MODEL_*_PAUSED`` keys are the only fields that answer ``False``
-    today. A pause is read off ``Settings`` at plan time and never reaches
-    ``create_provider``, so rebuilding every provider and re-querying every
-    ``/models`` for one cannot change what the pause does; it only made the
-    click cost seconds.
+    The fields that answer ``False`` are the ones read off ``Settings`` where
+    they are used rather than baked into a provider client. A pause is read at
+    plan time and never reaches ``create_provider``; the two model-visibility
+    lists are read by the ``/v1/models`` response and the catalogue documents
+    when those are built. For either, rebuilding every provider and re-querying
+    every ``/models`` cannot change what the write does; it only made the click
+    cost a network sweep.
     """
 
     keys = tuple(updates)

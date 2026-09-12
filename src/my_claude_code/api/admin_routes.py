@@ -31,6 +31,7 @@ from my_claude_code.api.model_admin import (
     bulk_result_rows,
     hiding_pattern,
     migrate_exact_patterns_to_globs,
+    model_refs_by_provider,
     render_patterns,
     visibility_payload,
     with_override_row,
@@ -1144,6 +1145,28 @@ async def get_config_dir_status(request: Request):
     return _config_dir_status_payload().model_dump(by_alias=True)
 
 
+def _known_model_providers(services: ApiServices) -> dict[str, str]:
+    """The ref -> provider map the visibility write routes need.
+
+    Both of them used to build the whole Models page for this and throw the
+    rest away -- 1,189 capability ladders, a full visibility sweep and two
+    aggregates over a multi-gigabyte request log, measured at 10-13 seconds on
+    a copy of a real installation, to learn which provider owns a ref the
+    caller had already named.
+
+    The map is derived from the two cheap inputs the page itself starts from:
+    the cached catalogue and the configured route refs. No log query, no
+    capability resolution, no ``fnmatch`` pass -- and no thread, because there
+    is nothing left that blocks.
+    """
+
+    settings = services.requests.current_settings()
+    return model_refs_by_provider(
+        services.requests.cached_prefixed_model_infos(),
+        configured_chat_model_refs(settings),
+    )
+
+
 def _models_page_payload(services: ApiServices) -> dict[str, Any]:
     settings = services.requests.current_settings()
     # Runs on a worker thread (see the two ``to_thread`` call sites), so the
@@ -1433,11 +1456,7 @@ async def bulk_model_visibility(
         )
 
     whole_provider = payload.scope == "provider" and not payload.model_refs
-    page = await asyncio.to_thread(_models_page_payload, services)
-    known: dict[str, str] = {}
-    for provider in page.get("providers", []):
-        for model in provider.get("models", []):
-            known[str(model["model_ref"])] = str(provider["provider_id"])
+    known = _known_model_providers(services)
     if whole_provider:
         refs = [
             ref
@@ -1501,13 +1520,9 @@ async def migrate_model_visibility_globs(
     """
 
     require_loopback_admin(request)
-    page = await asyncio.to_thread(_models_page_payload, services)
-    provider_models = {
-        str(provider["provider_id"]): [
-            str(model["model_ref"]) for model in provider.get("models", [])
-        ]
-        for provider in page.get("providers", [])
-    }
+    provider_models: dict[str, list[str]] = {}
+    for model_ref, provider_id in _known_model_providers(services).items():
+        provider_models.setdefault(provider_id, []).append(model_ref)
     settings = services.requests.current_settings()
     base = settings_model_visibility(settings)
     if not payload.apply:

@@ -1135,6 +1135,43 @@ def _model_entry(
     }
 
 
+def model_refs_by_provider(
+    model_infos: Iterable[ProviderModelInfo],
+    configured: Iterable[ConfiguredChatModelRef],
+) -> dict[str, str]:
+    """Which provider each known model ref belongs to, and nothing else.
+
+    This is the first four lines of :func:`build_models_page_payload` -- the
+    union of the discovered catalogue with the configured route refs, keyed by
+    ``parse_provider_type`` -- lifted out on its own.
+
+    It exists because the visibility write routes needed exactly this map and
+    were building the *entire* Models page to get it: every capability ladder,
+    every visibility match, and two aggregate queries over a multi-gigabyte
+    request log, all discarded except for one dictionary. That is the 6.24.0
+    lesson (one write path, never re-derive the catalogue per tick) surviving
+    on the client and being paid on the server instead.
+
+    Iteration order matters and is deliberately the page's: refs sorted
+    case-insensitively, grouped by provider, providers in sorted order. The
+    bulk route turns this map into the list of refs it writes patterns for, so
+    a different order would be a different -- still correct, but different --
+    set of written patterns. ``test_the_bulk_map_equals_the_page_map`` holds
+    the two orders equal, not merely the two key sets.
+    """
+
+    by_ref: dict[str, str] = {}
+    refs = {info.model_id for info in model_infos}
+    refs.update(ref.model_ref for ref in configured)
+    grouped: dict[str, list[str]] = {}
+    for model_ref in sorted(refs, key=str.casefold):
+        grouped.setdefault(parse_provider_type(model_ref), []).append(model_ref)
+    for provider_id, provider_refs in sorted(grouped.items(), key=lambda item: item[0]):
+        for model_ref in provider_refs:
+            by_ref[model_ref] = provider_id
+    return by_ref
+
+
 def build_models_page_payload(
     model_infos: Iterable[ProviderModelInfo],
     configured: Iterable[ConfiguredChatModelRef],
