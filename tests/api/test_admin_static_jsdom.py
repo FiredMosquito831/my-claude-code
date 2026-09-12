@@ -2781,6 +2781,35 @@ def test_the_models_page_says_when_the_catalogue_was_last_refreshed(
     assert "next in" in readout
 
 
+def test_a_swept_catalogue_still_reads_as_a_sweep(rendered: dict) -> None:
+    readout = rendered["catalogueReadout"]["swept"]
+    assert "last refreshed" in readout
+    assert "next in" in readout
+    assert "as of" not in readout
+
+
+def test_a_catalogue_read_from_disk_does_not_claim_a_sweep(rendered: dict) -> None:
+    """ "as of 40 min ago", not "last refreshed 40 min ago".
+
+    The age is real -- it is when the stored catalogue was written -- but no
+    sweep has happened in this process yet, and a page that says otherwise is
+    claiming a network call it never made.
+    """
+    readout = rendered["catalogueReadout"]["stored"]
+    assert "as of" in readout
+    assert "last refreshed" not in readout
+    assert "refreshing now" in readout
+    # A sweep in flight is the next thing that happens; a countdown to the one
+    # after it is not what the reader is waiting for.
+    assert "next in" not in readout
+
+
+def test_the_readout_still_names_the_setting_when_the_sweep_is_off(
+    rendered: dict,
+) -> None:
+    assert "MODEL_DISCOVERY_REFRESH_SECONDS=0" in rendered["catalogueReadout"]["off"]
+
+
 # ---------------------------------------------------------------- theme picker
 
 

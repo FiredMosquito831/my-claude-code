@@ -16336,12 +16336,18 @@ function renderCatalogueRefreshReadout() {
   }
   const now = Date.now() / 1000;
   const parts = [];
+  /* "as of" rather than "last refreshed" when the catalogue on show is the one
+     a previous run wrote: the age is real, but no sweep has happened in this
+     process yet, and saying otherwise is how a page claims a network call it
+     never made. */
   parts.push(
     status.last_refreshed_at
-      ? `last refreshed ${learnedAgeText(now - status.last_refreshed_at)}`
+      ? `${status.from_stored_catalogue ? "as of" : "last refreshed"} ${learnedAgeText(now - status.last_refreshed_at)}`
       : "not refreshed yet in this process",
   );
-  if (status.next_refresh_at && status.next_refresh_at > now) {
+  if (status.refreshing) {
+    parts.push("refreshing now");
+  } else if (status.next_refresh_at && status.next_refresh_at > now) {
     parts.push(
       `next in ${Math.max(1, Math.round((status.next_refresh_at - now) / 60))} min`,
     );

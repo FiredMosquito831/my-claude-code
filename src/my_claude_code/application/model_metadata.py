@@ -352,3 +352,214 @@ def _canonical(value: object) -> str:
             + ")"
         )
     raise TypeError(f"No canonical encoding for {type(value).__name__}")
+
+
+#: Every field of the three records a stored catalogue entry is made of. The
+#: codec below is written out by hand rather than driven by type hints, because
+#: a hand-written one says what each field means on the wire; these tuples are
+#: what stops it drifting from the dataclasses, through
+#: ``test_every_field_is_carried_by_the_codec``. Adding a field to any of the
+#: three and not to its tuple fails that test rather than silently dropping the
+#: field from every restored catalogue.
+_MODEL_INFO_FIELDS: tuple[str, ...] = (
+    "model_id",
+    "supports_thinking",
+    "supports_vision",
+    "context_length",
+    "input_price",
+    "output_price",
+    "max_output_tokens",
+    "supported_parameters",
+    "default_parameters",
+    "reasoning_capability",
+    "listing",
+)
+_REASONING_FIELDS: tuple[str, ...] = (
+    "can_reason",
+    "supports_effort_control",
+    "supports_toggle_control",
+    "supports_budget_control",
+    "supported_efforts",
+    "mandatory",
+    "default_enabled",
+)
+_LISTING_FIELDS: tuple[str, ...] = (
+    "provenance",
+    "detail",
+    "retirement_at",
+    "replacement_model_id",
+    "offered_by_default",
+)
+
+
+def _sorted_or_none(values: frozenset[str] | None) -> list[str] | None:
+    """A set as a sorted list, and ``None`` as ``None``.
+
+    Sorted because a stored document is compared against the next sweep's to
+    decide whether anything changed, and set iteration order is not stable
+    between processes -- an unsorted list would rewrite twelve catalogue
+    documents every hour to say the same thing.
+    """
+
+    return None if values is None else sorted(values)
+
+
+def model_info_document(info: ProviderModelInfo) -> dict[str, object]:
+    """One catalogue entry as JSON-safe data, losing nothing.
+
+    ``None`` survives everywhere it appears, because every optional field here
+    distinguishes "the provider did not say" from "the provider said no", and a
+    codec that collapsed the two would quietly rewrite what a provider
+    published.
+    """
+
+    reasoning = info.reasoning_capability
+    listing = info.listing
+    return {
+        "model_id": info.model_id,
+        "supports_thinking": info.supports_thinking,
+        "supports_vision": info.supports_vision,
+        "context_length": info.context_length,
+        "input_price": info.input_price,
+        "output_price": info.output_price,
+        "max_output_tokens": info.max_output_tokens,
+        "supported_parameters": _sorted_or_none(info.supported_parameters),
+        "default_parameters": (
+            None
+            if info.default_parameters is None
+            else [[name, value] for name, value in info.default_parameters]
+        ),
+        "reasoning_capability": (
+            None
+            if reasoning is None
+            else {
+                "can_reason": reasoning.can_reason,
+                "supports_effort_control": reasoning.supports_effort_control,
+                "supports_toggle_control": reasoning.supports_toggle_control,
+                "supports_budget_control": reasoning.supports_budget_control,
+                "supported_efforts": (
+                    None
+                    if reasoning.supported_efforts is None
+                    else sorted(effort.value for effort in reasoning.supported_efforts)
+                ),
+                "mandatory": reasoning.mandatory,
+                "default_enabled": reasoning.default_enabled,
+            }
+        ),
+        "listing": (
+            None
+            if listing is None
+            else {
+                "provenance": listing.provenance.value,
+                "detail": listing.detail,
+                "retirement_at": listing.retirement_at,
+                "replacement_model_id": listing.replacement_model_id,
+                "offered_by_default": listing.offered_by_default,
+            }
+        ),
+    }
+
+
+def _bool_or_none(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _int_or_none(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _float_or_none(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    return float(value) if isinstance(value, int | float) else None
+
+
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _reasoning_from_document(value: object) -> ModelReasoningCapability | None:
+    if not isinstance(value, dict):
+        return None
+    raw_efforts = value.get("supported_efforts")
+    efforts: frozenset[ReasoningEffort] | None = None
+    if isinstance(raw_efforts, list):
+        known = {effort.value: effort for effort in ReasoningEffort}
+        efforts = frozenset(
+            known[item]
+            for item in raw_efforts
+            if isinstance(item, str) and item in known
+        )
+    return ModelReasoningCapability(
+        can_reason=_bool_or_none(value.get("can_reason")),
+        supports_effort_control=_bool_or_none(value.get("supports_effort_control")),
+        supports_toggle_control=_bool_or_none(value.get("supports_toggle_control")),
+        supports_budget_control=_bool_or_none(value.get("supports_budget_control")),
+        supported_efforts=efforts,
+        mandatory=_bool_or_none(value.get("mandatory")),
+        default_enabled=_bool_or_none(value.get("default_enabled")),
+    )
+
+
+def _listing_from_document(value: object) -> ModelListingEvidence | None:
+    if not isinstance(value, dict):
+        return None
+    raw = value.get("provenance")
+    known = {item.value: item for item in ModelListingProvenance}
+    if not isinstance(raw, str) or raw not in known:
+        # Provenance is the one field with no honest default: a listing that
+        # cannot say why the model is in the catalogue is not a listing.
+        return None
+    detail = value.get("detail")
+    return ModelListingEvidence(
+        provenance=known[raw],
+        detail=detail if isinstance(detail, str) else "",
+        retirement_at=_str_or_none(value.get("retirement_at")),
+        replacement_model_id=_str_or_none(value.get("replacement_model_id")),
+        offered_by_default=_bool_or_none(value.get("offered_by_default")),
+    )
+
+
+def model_info_from_document(document: object) -> ProviderModelInfo | None:
+    """Rebuild one catalogue entry, or ``None`` if the data is not one.
+
+    ``None`` rather than a raise for the same reason the derived cache returns
+    ``None`` on a half-written file: this is a cache, and the answer to an
+    unreadable one is to discover the catalogue again, never to fail a start.
+    """
+
+    if not isinstance(document, dict):
+        return None
+    model_id = document.get("model_id")
+    if not isinstance(model_id, str) or not model_id.strip():
+        return None
+    raw_parameters = document.get("supported_parameters")
+    parameters: frozenset[str] | None = None
+    if isinstance(raw_parameters, list):
+        parameters = frozenset(item for item in raw_parameters if isinstance(item, str))
+    raw_defaults = document.get("default_parameters")
+    defaults: ModelDefaultParameters | None = None
+    if isinstance(raw_defaults, list):
+        defaults = tuple(
+            (entry[0], entry[1])
+            for entry in raw_defaults
+            if isinstance(entry, list)
+            and len(entry) == 2
+            and isinstance(entry[0], str)
+            and isinstance(entry[1], str | int | float | bool)
+        )
+    return ProviderModelInfo(
+        model_id=model_id,
+        supports_thinking=_bool_or_none(document.get("supports_thinking")),
+        supports_vision=_bool_or_none(document.get("supports_vision")),
+        context_length=_int_or_none(document.get("context_length")),
+        input_price=_float_or_none(document.get("input_price")),
+        output_price=_float_or_none(document.get("output_price")),
+        max_output_tokens=_int_or_none(document.get("max_output_tokens")),
+        supported_parameters=parameters,
+        default_parameters=defaults,
+        reasoning_capability=_reasoning_from_document(
+            document.get("reasoning_capability")
+        ),
+        listing=_listing_from_document(document.get("listing")),
+    )
