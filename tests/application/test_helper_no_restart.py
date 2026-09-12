@@ -1,16 +1,21 @@
-"""GAP-3: the update helper stops being a second owner of "start the server".
+"""Decision Q2: the desktop app stops claiming the restart.
 
-The helper's restart is a single un-retried ``Start-Process`` whose failure is
-recorded in ``progress.json`` and then acted on by nothing at all, and the
-server it starts has no supervisor. Meanwhile the desktop window is sitting
-there with a ten-second tick, a health probe and a spawn -- and the whole of
-BUG-1 and BUG-3 existed because that window had been written to *defer* to the
-helper.
+GAP-3 (6.70.0) made the helper hand the restart to whichever window had asked
+for the update. The reasoning was sound -- the helper's restart was a single
+un-retried ``Start-Process`` with no supervisor, while the window had a
+ten-second tick, a health probe and a spawn of its own -- and on 2026-09-11 it
+cost the user a fifteen-minute outage: the window that had claimed the job was
+a v6.66.0 build that parked on its first failed status read, and because it had
+claimed the job, nobody else did it. Three owners of "start the server", no
+arbiter.
 
-So: when a window asked for the update, it owns the restart, and the helper
-installs and exits. When nothing is watching -- the dashboard in a browser tab,
-a headless machine -- the helper still restarts, because the alternative is an
-update that leaves the machine with no server. One flag, not two owners.
+6.82.0 settles it. There is exactly ONE owner and it is the installer, on every
+path, because the installer is the only participant that knows whether a
+listener is answering on the configured port. The flag survives with a smaller
+meaning: "a window is watching this, so there is no need to open a browser".
+The window is an observer -- it reads the receipt and the transcript and
+attaches when the server answers -- and its force-start remains only as U1's
+never-park safety net, for the case where the installer itself failed.
 """
 
 from pathlib import Path
@@ -20,72 +25,72 @@ import pytest
 from my_claude_code.application import release_updates
 
 
-def _script(*, no_restart: bool = False) -> str:
+def _script(*, no_restart: bool = False, no_start: bool = False) -> str:
     """Render the helper for a Windows install, with every path spelled out.
 
     Named arguments rather than a dict of them: the generator's signature is
-    the contract this test is about, and a `**kwargs` splat hides a renamed
+    the contract this test is about, and a ``**kwargs`` splat hides a renamed
     parameter behind a runtime failure instead of a type error.
     """
 
     return release_updates._deferred_helper_script(
-        uv_executable="uv.exe",
-        command=["uv.exe", "tool", "install", "my-claude-code"],
         result_path=Path("C:/stage/result.json"),
         stage_dir=Path("C:/stage"),
-        server_launcher=Path("C:/bin/fcc-server.exe"),
+        installer=Path("C:/env/installers/install.ps1"),
+        powershell="powershell.exe",
+        config_dir=Path("C:/config"),
         working_directory=Path("C:/work"),
-        commands=["mcc-server.exe"],
-        version="v9.9.9",
+        version="9.9.9",
         no_restart=no_restart,
+        no_start=no_start,
     )
 
 
-def test_by_default_the_helper_still_starts_the_server():
-    """The browser-tab path, unchanged. This is the compatibility half."""
+def test_the_installer_restarts_the_server_whether_or_not_a_window_is_watching():
+    """The whole of decision Q2, in one assertion each way."""
 
-    script = _script()
-    assert "$noRestart = $false" in script
-    assert "Start-Process -FilePath" in script
-    assert "Write-Stage 'starting' 'Starting the updated server.'" in script
-
-
-def test_with_no_restart_the_helper_installs_and_exits():
-    script = _script(no_restart=True)
-    assert "$noRestart = $true" in script
-    # The Start-Process is still in the file -- it is inside `if (-not
-    # $noRestart)`, because one script serves both callers and a second script
-    # would be a second thing to keep correct.
-    assert "if (-not $noRestart) {" in script
-    assert "Handing the restart to the desktop app." in script
-    assert "The desktop app starts it." in script
+    for script in (_script(), _script(no_restart=True)):
+        assert "'-Restart'" in script
+        assert "'-NoStart'" not in script
 
 
-def test_the_terminal_stage_is_still_written_on_both_paths():
-    """The window's ``RestartPending`` waits for exactly this.
+def test_the_watching_flag_only_changes_what_the_transcript_says():
+    """It is a fact about the machine, not a delegation of work."""
 
-    ``done`` / ``recovered`` is the fact the controller's post-update tick
-    keys on: the installer is finished, one way or the other, so whatever is
-    watching may start a server. A no-restart helper that stopped writing it
-    would turn the fix into a hang.
+    watched = _script(no_restart=True)
+    assert "$noRestart = $true" in watched
+    assert "$noRestart = $false" in _script()
+    assert "A desktop window ' + $(if ($noRestart)" in watched
+    # The two sentences that promised somebody else would act are gone.
+    assert "Handing the restart to the desktop app." not in watched
+    assert "The desktop app starts it." not in watched
+    assert "within ten seconds" not in watched
+
+
+def test_only_no_start_stops_a_server_from_being_started():
+    """MCC_INSTALL_NO_START is the real opt-out, and it is the only one."""
+
+    script = _script(no_start=True)
+    assert "'-NoStart'" in script
+    assert "'-Restart'" not in script
+
+
+def test_the_episode_still_ends_on_every_path():
+    """The window's post-update tick keys on a terminal record.
+
+    The installer writes it in the ordinary case; the helper writes one when
+    the installer never got far enough to. A path that wrote none would turn
+    a fix into a hang.
     """
 
     for script in (_script(), _script(no_restart=True)):
-        assert "Write-Stage 'done'" in script
-        assert "Write-Stage 'recovered'" in script
-
-
-def test_a_failed_install_says_who_will_start_the_old_version():
-    script = _script(no_restart=True)
-    assert "The desktop app starts the previous version again within ten seconds." in (
-        script
-    )
+        assert "Write-Stage 'failed'" in script
+        assert '"helper_done":true' in script
 
 
 @pytest.mark.asyncio
 async def test_the_flag_reaches_the_installer_from_the_dashboard(monkeypatch):
-    """The whole chain, because a flag dropped in the middle is worse than no
-    flag: the helper would not restart and neither would anyone else."""
+    """The whole chain, because a flag dropped in the middle is invisible."""
 
     seen: dict[str, object] = {}
 
@@ -116,24 +121,23 @@ def test_the_spawner_hands_the_flag_to_the_script(monkeypatch, tmp_path):
         seen.update(kwargs)
         return "# script"
 
+    installer = tmp_path / "install.ps1"
+    installer.write_text("param()\n", encoding="utf-8")
     monkeypatch.setattr(release_updates, "_deferred_helper_script", fake_script)
     monkeypatch.setattr(release_updates.shutil, "which", lambda _n: "powershell.exe")
     monkeypatch.setattr(release_updates, "_stage_dir", lambda: tmp_path)
-    monkeypatch.setattr(
-        release_updates, "_server_launcher", lambda *_a: tmp_path / "fcc-server.exe"
-    )
-    monkeypatch.setattr(release_updates, "_installed_tool_dir", lambda *_a: tmp_path)
+    monkeypatch.setattr(release_updates, "_bundled_installer", lambda _n: installer)
     monkeypatch.setattr(release_updates.subprocess, "Popen", lambda *a, **k: object())
     monkeypatch.setattr(
         release_updates, "set_external_upgrade_helper_pending", lambda _v: None
     )
     result = release_updates._spawn_deferred_upgrade(
-        uv_executable="uv.exe",
-        command=["uv.exe", "tool", "install", "x"],
-        tag="v9.9.9",
-        log=[],
-        no_restart=True,
+        tag="9.9.9", log=[], no_restart=True
     )
     assert result.ok
     assert seen["no_restart"] is True
-    assert "the desktop app starts the updated server" in result.message
+    assert seen["installer"] == installer
+    # And the message no longer tells the user that something else will start
+    # their server.
+    assert "desktop app starts" not in result.message
+    assert "started again" in result.message

@@ -8,8 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from my_claude_code.application.release_updates import _deferred_helper_script
-
 FCC_VERSION = "9.9.9"
 FCC_WHEEL_NAME = f"my_claude_code-{FCC_VERSION}-py3-none-any.whl"
 FCC_WHEEL_URL = (
@@ -2022,109 +2020,6 @@ def test_installer_reports_kept_shims_as_refreshing_not_as_failures() -> None:
     assert "Installed, but these commands are missing:" in powershell
 
 
-def test_updater_helper_matches_the_installer_rename_and_staged_fallback() -> None:
-    """The dashboard/tray updater gets the same mechanism, not a lesser one."""
-    updater = _release_updates_py()
-
-    # Family-wide discovery: pattern, receipt, entry points.
-    assert "^(mcc|fcc)-.+" in updater
-    assert "install-path" in updater
-    assert "$commandNames" in updater
-    # A refused rename is recorded rather than swallowed.
-    assert "$refused" in updater
-    # Staged fallback with the same shape as the installer's.
-    assert "UV_TOOL_BIN_DIR" in updater
-    assert "mcc-stage-bin-" in updater
-    # Honest receipt: which shims kept the file they had.
-    assert "kept_shims" in updater
-    assert "will refresh on the next install" in updater
-    # And the receipt is repointed at the real bin directory.
-    assert "uv-receipt.toml" in updater
-
-
-def test_neither_installer_skips_its_fast_path_over_a_refused_rename() -> None:
-    """The 6.58.3 lockstep, in the one place the two scripts can drift.
-
-    Both had the same guard and the same bug: a rename that a live launcher
-    refused took the install off its cheap path entirely. The user keeps
-    `mcc-claude` windows open for hours, so that refusal is the normal case,
-    not the edge one -- and the staged fallback behind the fast path was
-    already written to survive exactly this lock.
-    """
-
-    powershell = _install_ps1()
-    updater = _release_updates_py()
-
-    # The installer: the direct run is no longer inside a refusal guard.
-    assert "if (($refusedShims.Count -eq 0) -or (-not $canStage))" not in powershell
-    assert "The direct install ALWAYS runs." in powershell
-    # A refusal is still reported, and still routes to the staged install.
-    assert "Could not move $(Split-Path -Leaf $move.Original) aside" in powershell
-    assert "Installing through a staging directory instead" in powershell
-
-    # The updater helper: same change, same reason.
-    assert "if ($refused.Count -eq 0) {\n    foreach" not in updater
-    assert "$fastDelays" in updater
-    assert "The fast loop ALWAYS runs." in updater
-
-
-def test_neither_installer_moves_the_desktop_shells_own_launcher_aside() -> None:
-    """`mcc-desktop` is what the running window asks; moving it starts a race.
-
-    The window reads `NotInstalled` from a missing shim and, by design, runs
-    the installer itself -- into the tool directory the helper is writing.
-    """
-
-    updater = _release_updates_py()
-    assert "$neverRename" in updater
-    # Rendered through `_powershell_literal`, so the source spells the names as
-    # a Python tuple rather than as PowerShell literals.
-    assert '"mcc-desktop.exe", "fcc-desktop.exe", "MyClaudeCode.exe"' in updater
-    assert "$neverRename -contains $fileName" in updater
-
-
-def test_the_updater_helper_always_leaves_a_server_running() -> None:
-    """A failed update used to end with no server and no recovery."""
-
-    updater = _release_updates_py()
-    # Four starts, one per branch that can end an episode, because every one of
-    # them has to end with a server running:
-    #   1. the staged version refused verification  -> start what is installed
-    #   2. the staged version was swapped in        -> start the new one
-    #   3. the cutover was rolled back              -> start the previous one
-    #   4. the in-place fallback, success or not    -> start whatever is there
-    # Before 6.58.3 there was one, under `if ($ok)`, which is how a failed
-    # update left a machine with no server at all and nothing to start one.
-    assert updater.count("Start-Process -FilePath") == 4
-    assert "$result['restarted'] = $restarted" in updater
-    assert "The previous version was restarted." in updater
-    assert "Write-Stage 'recovered'" in updater
-    # Every terminal branch that is not `done` leaves `recovered` behind, so a
-    # reader never has to infer whether anything is running.
-    assert updater.count("Write-Stage 'recovered'") == 3
-
-
-def test_updater_helper_script_is_valid_powershell_after_rendering() -> None:
-    """The helper is generated from an f-string; a bad escape would ship."""
-    script = _deferred_helper_script(
-        uv_executable="C:/uv.exe",
-        command=["uv", "tool", "install", "--force", "pkg"],
-        result_path=Path("C:/stage/result.json"),
-        stage_dir=Path("C:/stage"),
-        server_launcher=Path("C:/bin/fcc-server.exe"),
-        working_directory=Path("C:/work"),
-        bin_dir=Path("C:/bin"),
-        tool_dir=Path("C:/tools/my-claude-code"),
-        commands=["mcc-server", "mcc-desktop"],
-    )
-
-    # The regex literals must survive the f-string as PowerShell, not as
-    # Python escapes: "\\.exe$" in the source has to render as "\.exe$".
-    assert "'^(mcc|fcc)-.+\\.exe$'" in script
-    assert '\'install-path\\s*=\\s*"([^"]+)"\'' in script
-    assert "Test-Path Env:\\UV_TOOL_BIN_DIR" in script
-
-
 @pytest.mark.parametrize("powershell", _powershells())
 def test_shim_rename_reports_a_lock_it_cannot_break(
     tmp_path: Path,
@@ -3278,12 +3173,35 @@ def test_install_cmd_downloads_the_same_script_the_readme_publishes() -> None:
     raw = (
         "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts"
     )
-    assert f"{raw}/install.ps1" in batch
+    # 6.82.0: the batch file builds the URL from a ref rather than hard-coding
+    # `main`, so `--version X` fetches the installer that shipped with X and
+    # MCC_INSTALL_REF can prove a branch's installer before it is merged. The
+    # default is still main, and still the URL the README publishes.
+    assert 'set "MCC_REF=main"' in batch
+    assert (
+        "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/"
+        "%MCC_REF%/scripts/install.ps1" in batch
+    )
     assert f'REPO_RAW = "{raw}"' in runtime
     assert f"{raw}/install.ps1" in readme, "the README still publishes this URL"
     assert f"{raw}/install.cmd" in readme, (
         "the README must publish the CMD route it now leads with"
     )
+
+
+def test_install_cmd_pins_the_installer_to_the_release_it_was_asked_for() -> None:
+    """F1. `--version 6.63.0` used to fetch TODAY's installer and ask it to
+    install last week's release -- a combination nobody has ever tested -- and
+    there was no way at all to prove a branch's installer before merging it,
+    because the only thing this file would ever run was main's.
+    """
+
+    batch = _install_cmd()
+    version_block = batch.split(":arg_version", 1)[1].split("\n:", 1)[0]
+    assert 'set "MCC_REF=v%~2"' in version_block
+    # An explicitly named ref wins: whoever set it is proving that ref.
+    assert 'if not "%MCC_INSTALL_REF%"=="" set "MCC_REF=%MCC_INSTALL_REF%"' in batch
+    assert batch.index("MCC_INSTALL_REF") < batch.index('set "MCC_RAW=')
 
 
 def test_install_cmd_keeps_the_downloaded_script_when_a_run_fails() -> None:
@@ -3382,3 +3300,223 @@ def test_install_ps1_behaves_the_same_under_scriptblock_and_file(
         "the two invocation shapes ran different steps\n"
         f"scriptblock:\n{scriptblock.stdout}\n-File:\n{file_form.stdout}"
     )
+
+
+# -- 6.82.0: the staged swap lives in the INSTALLERS -------------------------
+#
+# The five tests that used to stand here pinned the same mechanism inside the
+# thousand-line PowerShell template in release_updates.py. That template is
+# gone (decision Q4/C1): the helper is a launcher, and everything an update
+# does happens in the two files below, which are also what a user gets when
+# they type the install command. These pin it where it now lives, in both
+# scripts at once, because the whole point is that they cannot drift apart.
+
+
+def test_both_installers_build_the_new_version_beside_the_running_one() -> None:
+    """Decision Q1. `uv tool install --force` empties a tool environment IN
+    PLACE before it resolves a single new byte: measured on 2026-09-11,
+    `mcc-server` answered at t=0 and `ModuleNotFoundError: my_claude_code`
+    arrived at +7.99 s, with the whole run taking 45-102 s. For all of it there
+    was no server and no way back.
+    """
+
+    powershell = _install_ps1()
+    shell = _install_sh()
+
+    for text in (powershell, shell):
+        # The staging and previous roots are SIBLINGS of uv's tools root. A
+        # child of it whose name does not normalise to a valid package name
+        # makes `uv tool list` fail outright and list nothing at all.
+        assert ".mcc-staging" in text
+        assert ".mcc-previous" in text
+        assert "UV_TOOL_DIR" in text
+        assert "UV_TOOL_BIN_DIR" in text
+
+    # And the staged call must not carry --force: it exists to overwrite a live
+    # environment, which is exactly what this path is built never to do.
+    staging = powershell[
+        powershell.index("function New-StagedEnvironment") : powershell.index(
+            "function Test-StagedEnvironment"
+        )
+    ]
+    assert '$_ -ne "--force"' in staging
+    staged_uv_calls = [
+        line
+        for line in _install_sh_function("stage_new_environment").splitlines()
+        if "tool install" in line
+    ]
+    assert staged_uv_calls, "the staging function must actually call uv"
+    assert all("--force" not in line for line in staged_uv_calls)
+
+
+def _install_sh_function(name: str) -> str:
+    text = _install_sh()
+    start = text.index(f"{name}() {{")
+    return text[start : text.index("\n}\n", start)]
+
+
+def test_both_installers_run_the_new_version_before_they_replace_anything() -> None:
+    """Caddy's rule: the gate is EXECUTING the new thing, not an exit code.
+
+    A wheel that resolves, installs and then cannot import itself is a real
+    failure mode, and it used to be discovered by the user.
+    """
+
+    powershell = _install_ps1()
+    shell = _install_sh()
+    assert "import my_claude_code" in powershell
+    assert "import my_claude_code" in shell
+    # And the verification WORK happens BEFORE the stop, so a wheel that cannot
+    # run costs a download rather than an outage. (6.72.0's helper verified
+    # after the stop, because its parent WAS the server.)
+    #
+    # Its RECORD is written after the stop, and that is not an inconsistency:
+    # stage ranks are monotonic (`stopping` is 3, `verifying` is 5), so a
+    # `verifying` record written first would make the guard drop the `stopping`
+    # record -- which is exactly what V1 did, and why no restart run has ever
+    # recorded a stop.
+    assert powershell.index("Test-StagedEnvironment -StagingEnv") < powershell.index(
+        "stop exactly the one server this install is for"
+    )
+    assert powershell.index(
+        "Write-InstallProgress -Stage 'verifying' -Message 'The new version was run"
+    ) > powershell.index("Write-InstallProgress -Stage 'stopping'")
+    # The sh script defines its functions long before the main body calls them,
+    # so the comparison has to be inside the main body.
+    body = shell[shell.index('parse_args "$@"') :]
+    assert body.index("verify_staged_environment") < body.index(
+        "stop_configured_server "
+    )
+    assert body.index("write_install_progress verifying") > body.index(
+        "stop_configured_server "
+    )
+
+
+def test_both_installers_swap_by_rename_and_never_touch_a_launcher() -> None:
+    """Invariant 9. Every bin entry is a version-agnostic trampoline naming
+    `<tools root>/my-claude-code/...`; it does not care WHICH environment is at
+    that path, so the rename alone cuts over and no locked .exe can abort it.
+    """
+
+    assert "[System.IO.Directory]::Move" in _install_ps1()
+    assert 'mv "$swap_tool_dir" "$swap_aside_env"' in _install_sh()
+    # The one exception, and it is explicitly a fall-through rather than a
+    # rewrite: a release that ADDS a command has no trampoline for it anywhere.
+    assert "Get-MissingLauncherShim" in _install_ps1()
+    assert "missing_launcher_shims" in _install_sh()
+
+
+def test_both_installers_keep_the_previous_version_until_health_answers() -> None:
+    """A failed update used to end with no server and no recovery."""
+
+    powershell = _install_ps1()
+    shell = _install_sh()
+    assert "Restore-PreviousEnvironment" in powershell
+    assert "restore_previous_environment" in shell
+    # And the server is started BEFORE the post-install work rather than after
+    # it: everything between the swap and the start is outage, and none of that
+    # work is needed to run the new server. Measured on 2026-09-12: it took the
+    # window from 27.0 s to 8.6 s.
+    assert powershell.index("Start-RestartedServer `") < powershell.index(
+        "Complete-EnvironmentSwap -ToolDir"
+    )
+    body = shell[shell.index('parse_args "$@"') :]
+    assert body.index("start_restarted_server ") < body.index(
+        "complete_environment_swap "
+    )
+    assert "Write-InstallProgress -Stage 'rolling-back'" in powershell
+    assert "write_install_progress rolling-back" in shell
+    assert "Write-InstallProgress -Stage 'recovered'" in powershell
+    assert "write_install_progress recovered" in shell
+    # Nothing is deleted until the new server answers, so the copy being swept
+    # is never the one a rollback would have needed -- and the sweep itself is
+    # out of the outage window.
+    assert powershell.index("Confirm-RestartedServer -Child") < powershell.index(
+        "Remove-StalePreviousEnvironment -Root"
+    )
+    assert shell.index("confirm_restarted_server") < shell.index(
+        'remove_stale_previous_environment "$(update_aside_root'
+    )
+
+
+def test_the_stages_an_installer_writes_are_monotonic() -> None:
+    """The receipt is a timeline, and a writer that goes backwards is dropped.
+
+    V1's order was `installing` (4) -> `verifying` (5) -> `stopping` (3), so
+    the monotonic guard silently threw the `stopping` record away and no
+    restart run has ever recorded one. 6.82.0's order is the helper's:
+    staging (2) -> stopping (3) -> verifying (5) -> swapping (6) ->
+    starting (7) -> done (9).
+    """
+
+    from my_claude_code.config.update_progress import UPDATE_PROGRESS_STAGE_ORDER
+
+    powershell = _install_ps1()
+    order = [
+        ("staging", "Write-InstallProgress -Stage 'staging'"),
+        ("stopping", "Write-InstallProgress -Stage 'stopping'"),
+        ("verifying", "Write-InstallProgress -Stage 'verifying'"),
+        ("swapping", "Write-InstallProgress -Stage 'swapping'"),
+        ("starting", "Write-InstallProgress -Stage 'starting'"),
+    ]
+    positions = [powershell.index(marker) for _stage, marker in order]
+    ranks = [UPDATE_PROGRESS_STAGE_ORDER[stage] for stage, _marker in order]
+    assert ranks == sorted(ranks), "the stage table itself must be in this order"
+    # `stopping` is written from Stop-ConfiguredServer, which is defined after
+    # the staging helpers, so the source positions are not the run order --
+    # what must hold is that the RANKS never go backwards along the run.
+    assert positions[0] < positions[2] < positions[3]
+
+
+def test_the_wheel_digest_does_not_depend_on_a_module_being_loadable() -> None:
+    """Measured on 2026-09-12: `Get-FileHash` was simply not there.
+
+    It lives in `Microsoft.PowerShell.Utility`, which Windows PowerShell 5.1
+    autoloads off `$env:PSModulePath` -- and a 5.1 process started by a
+    PowerShell 7 process inherits PowerShell 7's module path, whose copy of
+    that module 5.1 cannot load. The real update flow died on the checksum
+    step with:
+
+        Get-FileHash : The term 'Get-FileHash' is not recognized ...
+        At install.ps1:833
+
+    The digest check is the one step of an install that must never be skipped
+    or fail for an unrelated reason, so it falls back to the base class
+    library. `Get-Command` rather than a try/catch: under
+    `$ErrorActionPreference = 'Stop'` an unresolved name is a TERMINATING
+    error, and a catch around the hash would be a silently skipped checksum.
+    """
+
+    powershell = _install_ps1()
+    assert "function Get-FileSha256" in powershell
+    assert "Get-FileSha256 -Path $wheelPath" in powershell
+    body = powershell[
+        powershell.index("function Get-FileSha256") : powershell.index(
+            "function Get-UvToolsRoot"
+        )
+    ]
+    assert "Get-Command Get-FileHash -ErrorAction SilentlyContinue" in body
+    assert "[System.Security.Cryptography.SHA256]::Create()" in body
+    # And nothing OUTSIDE that function calls the cmdlet any more: the digest
+    # goes through one place, so the fallback cannot be half-applied.
+    outside = [
+        line
+        for line in powershell.replace(body, "").splitlines()
+        if "Get-FileHash" in line
+    ]
+    assert not outside, outside
+
+
+def test_the_in_place_install_is_now_the_repair_not_the_ordinary_path() -> None:
+    """It still has to exist -- a first install has nothing to swap, and a
+    release that adds a launcher needs uv to write it -- but it is no longer
+    what an update does.
+    """
+
+    powershell = _install_ps1()
+    assert "this is the REPAIR path" in powershell
+    assert "REPAIR path" in _install_sh()
+    # The plan (release, verified wheel, uv arguments) is resolved once and
+    # shared, so the repair path never downloads the wheel a second time.
+    assert "function Get-InstallPlan" in powershell
+    assert "resolve_install_plan()" in _install_sh()

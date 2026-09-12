@@ -77,3 +77,8 @@ PROVIDER_API_KEY
 # about quoting (install.cmd, the npm wrapper). It never reaches Settings:
 # nothing in the server reads it, and the scripts exit before one exists.
 MCC_INSTALL_NO_START
+# Which revision of install.ps1 scripts/install.cmd fetches (6.82.0). A branch,
+# tag or commit, so a change to the installer can be proven before it is
+# merged; `--version X` sets it to the tag vX on its own. Read by the batch
+# file only -- the server never sees it.
+MCC_INSTALL_REF

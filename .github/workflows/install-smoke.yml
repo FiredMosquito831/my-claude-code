@@ -315,6 +315,37 @@ jobs:
           [ "$episodes" -ge 3 ] \
             || { echo "::error::expected at least three episodes, got $episodes"; exit 1; }
 
+      # ---------------------------------------------------------------
+      # 6.82.0: one update path. The installer builds the new version BESIDE
+      # the running one, runs it once, and exchanges the two by rename.
+      # ---------------------------------------------------------------
+      - name: The install was staged beside the running one and swapped in
+        run: |
+          set -eu
+          scratch="${RUNNER_TEMP}/fresh-machine"
+          receipt="${scratch}/config/updates/progress.json"
+          episode="$(awk '/"stage":"episode"/ { last = NR } END { print last }' "$receipt")"
+          tail -n "+${episode}" "$receipt"
+          for stage in staging verifying swapping starting; do
+            tail -n "+${episode}" "$receipt" | grep -q "\"stage\":\"${stage}\"" \
+              || { echo "::error::the last episode never recorded ${stage}"; exit 1; }
+          done
+
+          # The spare copies are SIBLINGS of uv's tools root, never children of
+          # it: a child whose name does not normalise to a valid package name
+          # makes `uv tool list` fail outright and list nothing at all
+          # (measured on uv 0.11.21).
+          test -d "${scratch}/.mcc-previous" \
+            || { echo "::error::no previous environment was kept for rollback"; exit 1; }
+          if ls -d "${scratch}/uv-tools/".mcc-* >/dev/null 2>&1; then
+            echo "::error::a dot-directory was left inside uv's tools root"
+            exit 1
+          fi
+          echo "--- uv tool list ---"
+          uv tool list
+          uv tool list | grep -q "my-claude-code" \
+            || { echo "::error::uv can no longer see the tool"; exit 1; }
+
       - name: A second installer finds the lock held and watches instead
         run: |
           set -eu
@@ -486,12 +517,75 @@ jobs:
             Get-ChildItem (Join-Path $config "updates") | ForEach-Object { Write-Host $_.Name }
             exit 1
           }
-          $last = (Get-Content -LiteralPath (Join-Path $config "updates\progress.json") | Where-Object { $_.Trim() })[-1]
+          $lines = @(Get-Content -LiteralPath (Join-Path $config "updates\progress.json") | Where-Object { $_.Trim() })
+          $last = $lines[-1]
           Write-Host $last
           if ($last -notmatch '"restarted"\s*:\s*true') {
             Write-Host "::error::the receipt does not record the restart"
             exit 1
           }
+          # 6.82.0: the whole sequence reaches the receipt. V1 wrote
+          # `installing` then `verifying` then `stopping`, and the monotonic
+          # guard threw the `stopping` record away, so no restart run has ever
+          # recorded one.
+          $markers = @($lines | Select-String -Pattern '"stage":"episode"' -SimpleMatch)
+          $start = $lines.IndexOf($markers[-1].Line)
+          $episode = $lines[$start..($lines.Count - 1)] -join "`n"
+          foreach ($stage in @("staging", "stopping", "verifying", "swapping", "starting")) {
+            if ($episode -notmatch [regex]::Escape("`"stage`":`"$stage`"")) {
+              Write-Host "::error::the last episode never recorded $stage"
+              Write-Host $episode
+              exit 1
+            }
+          }
+          # The spare copies are siblings of uv's tools root, never children.
+          $tools = Join-Path $env:RUNNER_TEMP "cmd-smoke\uv-tools"
+          $previous = Join-Path $env:RUNNER_TEMP "cmd-smoke\.mcc-previous"
+          if (-not (Test-Path -LiteralPath $previous)) {
+            Write-Host "::error::no previous environment was kept for rollback"
+            exit 1
+          }
+          if (Get-ChildItem -LiteralPath $tools -Filter ".mcc-*" -ErrorAction SilentlyContinue) {
+            Write-Host "::error::a dot-directory was left inside uv's tools root"
+            exit 1
+          }
+
+      # 6.82.0 (F1): install.cmd no longer hard-codes `main`. It builds the raw
+      # URL from a ref, so `--version X` fetches the installer that shipped
+      # with X and MCC_INSTALL_REF fetches a branch's. That closes the
+      # asymmetry named in this file's header: the cmd route can now be proven
+      # against THIS branch's install.ps1 before it is merged, which until now
+      # was impossible.
+      - name: install.cmd fetches THIS branch's install.ps1 when told to
+        shell: pwsh
+        run: |
+          $ref = if ($env:GITHUB_EVENT_NAME -eq "pull_request") {
+            $env:PR_HEAD_SHA
+          } else {
+            $env:GITHUB_SHA
+          }
+          Write-Host "fetching the installer from $ref"
+          $env:MCC_INSTALL_REF = $ref
+          cmd /c "call scripts\install.cmd --dry-run"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::install.cmd could not run this branch's installer"
+            exit 1
+          }
+          # And what it downloaded really is this branch's file: the dry run
+          # keeps nothing, so compare the URL's bytes with the checkout's.
+          $url = "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/$ref/scripts/install.ps1"
+          $fetched = Join-Path $env:RUNNER_TEMP "fetched-install.ps1"
+          Invoke-WebRequest -Uri $url -OutFile $fetched -UseBasicParsing
+          $mine = (Get-FileHash -Algorithm SHA256 -LiteralPath "scripts\install.ps1").Hash
+          $theirs = (Get-FileHash -Algorithm SHA256 -LiteralPath $fetched).Hash
+          Write-Host "checkout $mine"
+          Write-Host "fetched  $theirs"
+          if ($mine -ne $theirs) {
+            Write-Host "::error::the pinned ref did not serve this branch's install.ps1"
+            exit 1
+          }
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
       - name: An unknown flag is refused before anything is downloaded
         run: |
