@@ -542,7 +542,13 @@ def test_install_sh_stops_without_success_on_each_failure(
         "fcc-download": "sha256sum:",
         "fcc-checksum": "uv:tool install",
         "fcc-install": "uv:tool update-shell",
-        "path-update": "uv:tool dir --bin",
+        # `mcc-server --version`, not `uv tool dir --bin`: since 6.82.0 the
+        # staged install asks uv for the bin directory BEFORE it installs
+        # anything (it has to know where the launchers live to swap beside
+        # them), so that call is no longer downstream of the PATH step. The
+        # verification run is, and it is the same marker the Windows table
+        # below has always used for this step.
+        "path-update": "mcc-server:--version",
         "fcc-missing": "mcc-server:--version",
     }.get(failure)
     if forbidden is not None:
@@ -3202,6 +3208,14 @@ def test_install_cmd_pins_the_installer_to_the_release_it_was_asked_for() -> Non
     # An explicitly named ref wins: whoever set it is proving that ref.
     assert 'if not "%MCC_INSTALL_REF%"=="" set "MCC_REF=%MCC_INSTALL_REF%"' in batch
     assert batch.index("MCC_INSTALL_REF") < batch.index('set "MCC_RAW=')
+    # And a pin that does not resolve is not a dead end: a tag can be missing,
+    # and one old enough can predate scripts/install.ps1 itself. The pin is an
+    # improvement on the default, not a new way to fail.
+    assert ":ref_fallback" in batch
+    fallback = batch.split(":ref_fallback", 1)[1].split("\n:", 1)[0]
+    assert 'if "%MCC_REF%"=="main" goto download_failed' in fallback
+    assert "falling back to main" in fallback
+    assert "/main/scripts/install.ps1" in fallback
 
 
 def test_install_cmd_keeps_the_downloaded_script_when_a_run_fails() -> None:

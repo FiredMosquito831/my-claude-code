@@ -165,8 +165,25 @@ if errorlevel 1 goto no_curl
 
 echo Downloading the My Claude Code installer (%MCC_REF%)...
 curl.exe -fsSL -o "%MCC_SCRIPT%" "%MCC_RAW%"
+if errorlevel 1 goto ref_fallback
+if not exist "%MCC_SCRIPT%" goto ref_fallback
+goto downloaded
+
+rem A pin that does not resolve must not be a dead end. A tag can be missing
+rem (a release that does not exist), and a tag old enough can predate
+rem scripts/install.ps1 itself. Say so and fall back to main, which is what
+rem this file did unconditionally before 6.82.0 -- the pin is an improvement on
+rem the default, not a new way to fail.
+:ref_fallback
+if "%MCC_REF%"=="main" goto download_failed
+echo install.cmd: no installer at %MCC_REF%; falling back to main.
+set "MCC_REF=main"
+set "MCC_RAW=https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.ps1"
+curl.exe -fsSL -o "%MCC_SCRIPT%" "%MCC_RAW%"
 if errorlevel 1 goto download_failed
 if not exist "%MCC_SCRIPT%" goto download_failed
+
+:downloaded
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%MCC_SCRIPT%"%MCC_PSARGS%
 set "MCC_EXIT=%ERRORLEVEL%"

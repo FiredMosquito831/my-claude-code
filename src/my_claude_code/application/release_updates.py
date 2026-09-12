@@ -720,6 +720,12 @@ def _sha256_of(path: Path) -> str:
 
 
 def _stage_dir() -> Path:
+    """``<config dir>/updates``. Naming it creates nothing; see below."""
+
+    return config_dir_path() / _STAGE_DIRNAME
+
+
+def _prepared_stage_dir() -> Path:
     """``<config dir>/updates``, created if it is not there yet.
 
     It used to be created as a side effect of the wheel download
@@ -729,9 +735,15 @@ def _stage_dir() -> Path:
     the update failed with ``[Errno 2] No such file or directory``. Found by
     running the real dashboard path against a scratch install, which is the
     only place it could have been found.
+
+    Separate from ``_stage_dir`` because that one is called by READERS -- the
+    start-up sweep, the progress reader -- and a reader that creates a
+    directory is a reader that writes. Putting the ``mkdir`` there made the
+    post-readiness sweep create ``~/.mcc/updates`` on a machine that had never
+    updated, which the test suite's hermeticity guard caught at once.
     """
 
-    stage = config_dir_path() / _STAGE_DIRNAME
+    stage = _stage_dir()
     with suppress(OSError):
         stage.mkdir(parents=True, exist_ok=True)
     return stage
@@ -1185,7 +1197,7 @@ def _spawn_deferred_upgrade(
             ),
             log=log,
         )
-    stage_dir = _stage_dir()
+    stage_dir = _prepared_stage_dir()
     result_path = stage_dir / _PENDING_RESULT_FILENAME
     # One episode, one transcript, named before the helper starts so the
     # response that triggers the update can hand the path to a browser tab
@@ -1309,7 +1321,7 @@ def _spawn_posix_upgrade(
             message="No POSIX shell was found; re-run the install command instead.",
             log=log,
         )
-    stage_dir = _stage_dir()
+    stage_dir = _prepared_stage_dir()
     install_log = stage_dir / (
         f"{INSTALL_LOG_PREFIX}{time.strftime('%Y%m%d-%H%M%S')}{INSTALL_LOG_SUFFIX}"
     )
