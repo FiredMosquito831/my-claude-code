@@ -1496,7 +1496,40 @@ const ROUTES = {
     counts: { opencode: 12480, claude: 3120, codex: 0 },
     labels: { opencode: "OpenCode", claude: "Claude Code", codex: "Codex CLI" },
   },
-  "/admin/api/requests/lifetime": { enabled: true, by_model: [], by_provider: [] },
+  "/admin/api/requests/lifetime": {
+    enabled: true,
+    by_model: [],
+    by_provider: [],
+    requests: 333838,
+    first_day: "2026-08-01",
+    last_day: "2026-09-12",
+    // What the log costs: a readout, never a cap.
+    storage: {
+      rows: 333838,
+      bytes: 4502450176,
+      bytes_by_file: { database: 4501643264, wal: 774144, shm: 32768 },
+      path: "/home/user/.mcc/logs/requests.db",
+    },
+  },
+  "/admin/api/requests/cost": {
+    enabled: true,
+    cost_estimation_enabled: true,
+    cost_estimation_mode: "auto",
+    cost_source_litellm_enabled: false,
+    // Every sum ships its denominator: 179,897 of 333,838 priced.
+    totals: {
+      reported_usd: 1.5,
+      estimated_usd: 240.25,
+      priced: 179897,
+      requests: 333838,
+    },
+    by_source: [{ key: "models_dev", cost_usd: 240.25, requests: 179877 }],
+    by_provider: [],
+    by_model: [],
+    by_harness: [],
+    by_day: [],
+    harness_labels: {},
+  },
   "/admin/api/requests/pulse": { enabled: true, total: 0, latest: null },
   "/admin/api/websearch/analytics/stats": { enabled: false },
   "/admin/api/websearch/analytics": { enabled: false, rows: [], total: 0 },
@@ -3326,6 +3359,19 @@ const analytics = {};
   analytics.loadsAfterEnterAndPause = statsCalls().length;
 }
 
+// ------------------------------------------------------- the log's own size
+/* The user's decision was "no capping -- show me the size". So the lifetime
+   panel has to say how much of the disk the log is using, and the cost card has
+   to ship the denominator behind its totals. */
+const logReadout = {};
+{
+  const requestsLink = navLinks.find((link) => link.dataset.view === "requests");
+  requestsLink.click();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  logReadout.lifetimeSpan = doc.getElementById("reqLifetimeSpan").textContent;
+  logReadout.costNote = doc.getElementById("reqCostNote").textContent;
+}
+
 // ------------------------------------------------------- cost panel timing
 /* The Analytics page must paint from the three fast answers while the cost
    breakdown -- measured at 9 s on a real 4.5 GB log against 0.11 s for stats --
@@ -4564,6 +4610,7 @@ console.log(
       describedImages,
       analytics,
       costPanel,
+      logReadout,
       harnessAttr,
       optimizer: {
         present: Boolean(optimizer),

@@ -1,6 +1,6 @@
 {
   "name": "@firedmosquito831/my-claude-code",
-  "version": "6.77.0",
+  "version": "6.78.0",
   "description": "My Claude Code (MCC): route Claude Code and other coding agents to any model provider through one local proxy with a dashboard. This npm package installs and launches the Python server.",
   "license": "AGPL-3.0-or-later",
   "author": "FiredMosquito831",

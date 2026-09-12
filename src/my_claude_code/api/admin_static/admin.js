@@ -11367,9 +11367,23 @@ function costPanelNote(cost) {
       : ` Mode: ${cost.cost_estimation_mode}.`;
   const litellm = cost.cost_source_litellm_enabled ? "" : " LiteLLM source off.";
   const asOf = costAsOfNote(cost);
+  const priced = pricedDenominatorNote(cost);
   return sources
-    ? `Priced by — ${sources}.${mode}${litellm}${asOf}`
-    : `Nothing in this range could be priced.${mode}${litellm}${asOf}`;
+    ? `Priced by — ${sources}.${priced}${mode}${litellm}${asOf}`
+    : `Nothing in this range could be priced.${priced}${mode}${litellm}${asOf}`;
+}
+
+// Every sum ships with its denominator. The store has carried `priced` beside
+// `requests` since costing was added, for exactly this reason -- a window where
+// nine models in ten are unpriced looks like a cheap week until you can see how
+// much of it was priced at all -- and the header never said it.
+function pricedDenominatorNote(cost) {
+  const totals = cost.totals || {};
+  const requests = Number(totals.requests || 0);
+  const priced = Number(totals.priced || 0);
+  if (!requests) return "";
+  const share = ((priced / requests) * 100).toFixed(1);
+  return ` Priced: ${formatAnalyticsNumber(priced)} of ${formatAnalyticsNumber(requests)} requests (${share}%).`;
 }
 
 // A stored answer says when it was true. Silence would be the dishonest
@@ -11407,6 +11421,31 @@ function renderRequestRetentionNote(stats) {
     `7 KB instead of 41 KB.`;
 }
 
+// Binary units, because this is a file on a disk and that is what the operating
+// system will tell you it is. NULL rows means "could not be counted", never 0.
+function formatLogBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let index = 0;
+  let scaled = value;
+  while (scaled >= 1024 && index < units.length - 1) {
+    scaled /= 1024;
+    index += 1;
+  }
+  const digits = index === 0 || scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+  return `${scaled.toFixed(digits)} ${units[index]}`;
+}
+
+function logSizeNote(storage) {
+  if (!storage) return "";
+  const size = formatLogBytes(storage.bytes);
+  const rows = storage.rows == null ? null : Number(storage.rows);
+  if (!size && rows == null) return "";
+  if (rows == null) return ` · ${size} on disk`;
+  return ` · ${formatAnalyticsNumber(rows)} rows kept, ${size} on disk`;
+}
+
 function renderRequestLifetime(lifetime) {
   const cards = byId("reqLifetimeCards");
   const span = byId("reqLifetimeSpan");
@@ -11417,10 +11456,16 @@ function renderRequestLifetime(lifetime) {
     return;
   }
   const requests = Number(lifetime.requests || 0);
-  span.textContent =
+  const period =
     lifetime.first_day && lifetime.last_day
       ? `${lifetime.first_day} to ${lifetime.last_day}`
       : "nothing recorded yet";
+  // What the log costs, said out loud. It was invisible, which is how it
+  // reached four and a half gigabytes without anybody deciding that was fine.
+  // Nothing is capped on the strength of it -- the answer to a large log is
+  // fast queries, not a limit nobody asked for -- but an invisible number is
+  // one a reader cannot act on.
+  span.textContent = `${period}${logSizeNote(lifetime.storage)}`;
   const successRate = requests
     ? ((Number(lifetime.success || 0) / requests) * 100).toFixed(1)
     : "0.0";
