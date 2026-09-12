@@ -64,6 +64,7 @@ from my_claude_code.providers.runtime.models_dev import (
     model_reasoning_capability_tiered,
     model_tool_call_tiered,
     model_vision_tiered,
+    models_dev_cache_path,
     models_dev_describes_provider,
 )
 
@@ -361,6 +362,23 @@ def dialect_payload(dialect: ReasoningDialect | None) -> dict[str, Any]:
             for field, since in dialect.learned_rejections
         ],
     }
+
+
+def models_dev_cache_mark() -> str:
+    """The models.dev cache file's identity: the pair its own parser keys on.
+
+    ``(mtime_ns, size)`` rather than a digest of 4.9 MB of JSON -- the file is
+    replaced atomically, and this is the same pair ``models_dev.py`` already
+    uses for its in-process parse cache. It lives here, beside the other
+    models.dev reads, because this module is the one the import policy names as
+    the owner of that edge.
+    """
+
+    try:
+        stat = models_dev_cache_path().stat()
+    except OSError:
+        return "absent"
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
 
 
 def learned_key(provider_id: str, model_id: str) -> str:

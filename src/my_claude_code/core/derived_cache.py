@@ -106,11 +106,25 @@ class DerivedCache:
             key=key, computed_at=float(computed_at), payload=document["payload"]
         )
 
-    def write(self, name: str, *, key: str, payload: Any, computed_at: float) -> bool:
+    def write(
+        self,
+        name: str,
+        *,
+        key: str,
+        payload: Any,
+        computed_at: float,
+        compact: bool = False,
+    ) -> bool:
         """Store ``payload`` under ``name``. Returns whether it landed.
 
         Atomic: written to a temporary file in the same directory and renamed,
         so a reader never sees half a document and a crash never leaves one.
+
+        ``compact`` drops the indentation. These documents live in the user's
+        config directory and being readable there is worth two bytes per line
+        -- until the payload is megabytes, at which point the indentation is
+        half the file and half the parse. The Models page's capability half is
+        5.5 MB of JSON; pretty-printed it is 11 MB.
         """
 
         try:
@@ -124,7 +138,12 @@ class DerivedCache:
             "payload": payload,
         }
         try:
-            content = (json.dumps(document, indent=2) + "\n").encode("utf-8")
+            rendered = (
+                json.dumps(document, separators=(",", ":"))
+                if compact
+                else json.dumps(document, indent=2)
+            )
+            content = (rendered + "\n").encode("utf-8")
         except TypeError, ValueError:
             # A payload that cannot be serialised is a programming error in the
             # caller, but it must not take the page down with it.
