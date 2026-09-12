@@ -626,8 +626,20 @@ jobs:
           $url = "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/$ref/scripts/install.ps1"
           $fetched = Join-Path $env:RUNNER_TEMP "fetched-install.ps1"
           Invoke-WebRequest -Uri $url -OutFile $fetched -UseBasicParsing
-          $mine = (Get-FileHash -Algorithm SHA256 -LiteralPath "scripts\install.ps1").Hash
-          $theirs = (Get-FileHash -Algorithm SHA256 -LiteralPath $fetched).Hash
+          # Line endings, not content: git checks this file out with CRLF on
+          # Windows and raw.githubusercontent serves the LF it stores, so a
+          # byte-for-byte hash compares the checkout rule rather than the ref.
+          $normalise = {
+            param($path)
+            $text = [IO.File]::ReadAllText($path).Replace("`r`n", "`n")
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            try {
+              $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text))
+            } finally { $sha.Dispose() }
+            (($bytes | ForEach-Object { $_.ToString("x2") }) -join "")
+          }
+          $mine = & $normalise (Resolve-Path "scripts\install.ps1").Path
+          $theirs = & $normalise $fetched
           Write-Host "checkout $mine"
           Write-Host "fetched  $theirs"
           if ($mine -ne $theirs) {
