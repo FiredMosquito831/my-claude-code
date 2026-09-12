@@ -451,7 +451,7 @@ def test_install_sh_pinned_version_installs_verified_from_tag_feed(
     result = posix_harness.run("--version", FCC_VERSION)
 
     assert result.returncode == 0, result.stderr
-    assert "Verified FCC v" in result.stdout
+    assert "Verified My Claude Code v" in result.stdout
     assert "is installed and verified." in result.stdout
     calls = posix_harness.calls()
     assert f"download:{PINNED_FEED_URL}" in calls

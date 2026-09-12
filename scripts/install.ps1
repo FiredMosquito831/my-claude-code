@@ -830,20 +830,20 @@ function Get-VerifiedReleaseWheel {
             (-not (Test-Path -LiteralPath $wheelPath -PathType Leaf)) -or
             ((Get-Item -LiteralPath $wheelPath).Length -eq 0)
         ) {
-            throw "The downloaded FCC release wheel was empty."
+            throw "The downloaded My Claude Code release wheel was empty."
         }
 
         $actualSha256 = Get-FileSha256 -Path $wheelPath
         if ($($Release.Sha256)) {
             if ($actualSha256 -ne $($Release.Sha256)) {
-                throw "FCC release wheel checksum mismatch; refusing to install."
+                throw "My Claude Code release wheel checksum mismatch; refusing to install."
             }
-            Write-Host "Verified FCC v$($Release.Version) release wheel SHA-256."
+            Write-Host "Verified My Claude Code v$($Release.Version) release wheel SHA-256."
         }
         else {
             # Only reachable with -Version, where the release feed was not read
             # and no published digest is available to compare against.
-            Write-Host "FCC v$($Release.Version) release wheel SHA-256: $actualSha256"
+            Write-Host "My Claude Code v$($Release.Version) release wheel SHA-256: $actualSha256"
         }
         return $wheelPath
     }

@@ -60,6 +60,13 @@ def test_no_legacy_name_still_resolves_to_a_working_implementation() -> None:
 def test_invoked_name_strips_the_shim_path_and_suffix(
     argv0: str, expected: str
 ) -> None:
+    """Both separators, on both platforms.
+
+    The Windows case is not skipped off Windows on purpose: CI runs Linux, and
+    ``os.path.basename`` there does not split on ``\\`` -- which is how the
+    first version of this shipped green locally and failed on the runner.
+    """
+
     assert legacy_stubs.invoked_name(argv0) == expected
 
 

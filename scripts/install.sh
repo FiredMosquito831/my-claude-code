@@ -680,14 +680,14 @@ download_verified_release_wheel() {
     fi
 
     temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/mcc-wheel.XXXXXX") ||
-        fail "Unable to create a temporary directory for the FCC release wheel."
+        fail "Unable to create a temporary directory for the My Claude Code release wheel."
     release_wheel_path="$temporary_directory/$MCC_WHEEL_NAME"
     print_command curl -fsSL "$MCC_WHEEL_URL" -o "$release_wheel_path"
     if ! curl -fsSL "$MCC_WHEEL_URL" -o "$release_wheel_path"; then
         fail "Could not download the My Claude Code v$MCC_VERSION release wheel."
     fi
     [ -s "$release_wheel_path" ] ||
-        fail "The downloaded FCC release wheel was empty."
+        fail "The downloaded My Claude Code release wheel was empty."
 
     if [ -z "$MCC_WHEEL_SHA256" ]; then
         # Reachable only when a --version install could not read the tag feed;
@@ -703,11 +703,11 @@ download_verified_release_wheel() {
     elif command -v shasum >/dev/null 2>&1; then
         actual_sha256=$(shasum -a 256 "$release_wheel_path")
     else
-        fail "sha256sum or shasum is required to verify the FCC release wheel."
+        fail "sha256sum or shasum is required to verify the My Claude Code release wheel."
     fi
     actual_sha256=${actual_sha256%% *}
     [ "$actual_sha256" = "$MCC_WHEEL_SHA256" ] ||
-        fail "FCC release wheel checksum mismatch; refusing to install."
+        fail "My Claude Code release wheel checksum mismatch; refusing to install."
     printf 'Verified My Claude Code v%s release wheel SHA-256.\n' "$MCC_VERSION"
 }
 

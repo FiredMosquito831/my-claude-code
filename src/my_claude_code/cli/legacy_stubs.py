@@ -51,7 +51,10 @@ def invoked_name(argv0: str | None = None) -> str:
     """
 
     raw = sys.argv[0] if argv0 is None else argv0
-    name = os.path.basename(raw)
+    # Both separators, explicitly: ``os.path.basename`` splits on ``\`` only on
+    # Windows, and this module's whole job is to be readable about a name that
+    # came from somewhere else. No command this table knows contains either.
+    name = raw.replace("\\", "/").rsplit("/", 1)[-1]
     root, extension = os.path.splitext(name)
     if extension.lower() in (".exe", ".py", ".cmd", ".bat"):
         name = root
