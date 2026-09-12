@@ -1434,15 +1434,54 @@ user who had it pointed at another gateway lost it. It is remembered now.
 | App | Configure button | Notes |
 |---|---|---|
 | **Codex desktop** | yes | Also writes `model = "mcc/best"`, by necessity: with a custom `model_provider` the app has no UI to pick a model. |
-| **OpenCode desktop** | yes | Token stays a `{env:...}` reference. |
+| **OpenCode desktop** | yes | The token is written into `opencode.json` as `options.apiKey`, at mode 0600 where the OS allows it: OpenCode does expand `{env:...}`, but nothing sets the variable MCC used to name, so what went on the wire was the unexpanded string and a 401. No attribution header — `ProviderConfig.options` has no `headers` key and OpenCode dropped the one MCC wrote, silently. |
 | **Crush** | yes | Also the official client for Charm's Hyper/HyperCharm. |
 | **VS Code (Copilot custom endpoint)** | yes | MCC owns exactly one element of `chatLanguageModels.json`, matched by name; nothing else in the array is touched. |
 | **Goose desktop** | yes | Keys written into Goose's `config.yaml` are *ignored* by Goose, so MCC writes none: it owns a whole provider file and Goose reads the key from its keyring. |
 | **Antigravity (`agy`)** | yes | See below. |
-| **Roo Code** | yes | Uses Roo's own import hook, so MCC owns the settings file outright. |
+| **Roo Code** | yes | Uses Roo's own import hook. MCC writes a Roo *settings export* — `providerProfiles` with one `openai` profile, both required `openAiCustomModelInfo` fields — into a file it owns at mode 0600, and adds one key to your `settings.json`, `roo-cline.autoImportSettingsPath`, naming it. Reload the VS Code window: Roo reads that file at activation only. |
 | **Command Code** | status only | Already configured by `mcc-commandcode` since 6.27.0; the card reports and does not re-mechanise. |
 | **Claude Desktop** | yes | Anthropic's MDM documentation names the local configuration source, so MCC owns one document in `%LOCALAPPDATA%\Claude-3p\configLibrary\` (macOS `~/Library/Application Support/Claude-3p/configLibrary/`) and merges exactly one foreign key, `_meta.json`'s `appliedId`. It is the **lowest**-precedence source the app reads, so a managed profile under `HKLM`/`HKCU\SOFTWARE\Policies\Claude` (macOS: Managed Preferences) replaces it wholesale — MCC probes for one before every write and shows the card as *Managed by your organisation*, with no button, rather than writing a file the app ignores. The credential has no reference form in this store, so it goes into MCC's own document at mode 0600 and never into one you edit. Relaunch the app to load it. |
 | **Kimi desktop, Qwen desktop, LM Studio, Warp** | not routable | Each card carries the measured reason and its date. |
+
+### What counts as installed, and what Configure refuses
+
+**A card reads *installed* only when the program is here.** Until 6.83.0 the
+evidence was "a directory the app creates on first run", and on the machine
+this was written for that made two cards lie: `%LOCALAPPDATA%\crush` and
+`%APPDATA%\Block\goose` both existed, both cards offered Configure, and
+neither `crush.exe` nor `goose.exe` existed anywhere on the machine — both
+directories had been created by MCC's *own* `mcc-crush` and `mcc-goose`
+launchers the one time each was run. MCC was reading its own footprint as
+proof that somebody else's application was installed.
+
+What counts now is the program: an executable on your `PATH`, an installed
+application or package directory, or — for an editor extension, which has no
+binary of its own — the extension directory. A configuration directory never
+counts, including the very file MCC would write into.
+
+**Configure refuses when the app is not installed**, in the same shape as the
+refusal for a configuration your organisation manages. There was no such gate
+before 6.83.0: a scratch run wrote MCC's element into VS Code's
+`chatLanguageModels.json` while the probe on the same card said *not
+installed*. Nothing errored, the badge went green, and the configuration did
+nothing forever.
+
+If a card says *Not installed* for something you have, it is on `PATH` that
+MCC looks first — start the app once from a terminal where `crush`, `goose`,
+`codex`, `opencode`, `agy` or `commandcode` runs, and the card follows.
+
+### MCC does not reformat the JSON it does not change
+
+Since 6.83.0 JSON documents are edited as **text**, the way Codex's TOML and
+Goose's YAML already were: the lines MCC does not own come back byte for byte,
+comments and indentation included, and a re-apply of identical content leaves
+the file untouched rather than rewriting it. VS Code's `settings.json` is also
+read as **JSONC** — with the comments VS Code itself ships in it — so a
+Configure no longer fails with *cannot parse* on an ordinary settings file.
+
+Before this, a Roo Code Configure against a four-space `settings.json` rewrote
+all 32 lines of it while changing nothing at all.
 
 ### Antigravity
 

@@ -260,18 +260,14 @@ def sidecar_document(
             if spec.sidecar.models_format_id
             else None
         )
-        document: dict[str, Any] = {}
-        for key, value in spec.sidecar.fields.items():
-            if value == MODELS_TOKEN:
-                # The whole value is the token, so it is replaced rather than
-                # interpolated: what goes here is a list, not a string.
-                document[key] = entries if entries is not None else []
-            elif isinstance(value, str):
-                document[key] = value.replace("{base_url}", base_url).replace(
-                    "{token}", auth_token
-                )
-            else:
-                document[key] = value
+        document = _substitute(
+            dict(spec.sidecar.fields),
+            base_url=base_url,
+            auth_token=auth_token,
+            entries=entries,
+        )
+        if not isinstance(document, dict):  # pragma: no cover - fields is a mapping
+            return None
         if spec.sidecar.headers_key and spec.attribution_header_field:
             document[spec.sidecar.headers_key] = with_harness_id(
                 {HARNESS_HEADER: MCC_HARNESS_ID_SENTINEL}, spec.id
@@ -283,14 +279,62 @@ def sidecar_document(
     return owned_block(spec, models, proxy_root_url=proxy_root_url)
 
 
+def _substitute(
+    value: Any,
+    *,
+    base_url: str,
+    auth_token: str,
+    entries: object | None,
+) -> Any:
+    """Return a declared sidecar value with this install's values filled in.
+
+    Recursive, because a declared document is not always flat. Claude Desktop's
+    is six top-level keys; Roo Code's is the export format its own importer
+    parses, where the base URL and the credential sit three levels down in
+    ``providerProfiles.apiConfigs.<name>``. Walking the structure keeps that a
+    property of the registry row rather than of a branch in here -- the same
+    promise :class:`DesktopProvider` makes for the block.
+    """
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _substitute(
+                item, base_url=base_url, auth_token=auth_token, entries=entries
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _substitute(item, base_url=base_url, auth_token=auth_token, entries=entries)
+            for item in value
+        ]
+    if value == MODELS_TOKEN:
+        # The whole value is the token, so it is replaced rather than
+        # interpolated: what goes here is a list, not a string.
+        return entries if entries is not None else []
+    if isinstance(value, str):
+        return (
+            value.replace("{base_url}", base_url)
+            .replace("{token}", auth_token)
+            .replace("{default_model}", DEFAULT_MODEL_ID)
+        )
+    return value
+
+
 def overwritten_scalars(
-    spec: DesktopAppSpec, *, set_default_model: bool = False
+    spec: DesktopAppSpec, *, set_default_model: bool = False, sidecar_path: str = ""
 ) -> dict[str, object]:
     """Return the top-level values Configure replaces, keyed as the spec names them.
 
     ``set_default_model`` is the opt-in checkbox. It is ignored where the spec
     already declares ``sets_default_model``, which is Codex alone and by
     necessity rather than by preference.
+
+    ``sidecar_path`` is where the file MCC owns outright landed on *this*
+    machine, which only the caller can know. The spec names the key it belongs
+    in (:attr:`DesktopAppSpec.sidecar_path_key`); an app that declares one and
+    a caller that passes nothing leaves the key out entirely rather than
+    writing an empty path, because a hook pointing at "" is worse than no hook.
     """
 
     scalars: dict[str, object] = {}
@@ -299,6 +343,10 @@ def overwritten_scalars(
 
     for key_path in spec.document.overwritten_keys:
         label = ".".join(key_path)
+        if label and label == spec.sidecar_path_key:
+            if sidecar_path:
+                scalars[label] = sidecar_path
+            continue
         match label:
             case "model":
                 if spec.sets_default_model or set_default_model:
@@ -317,10 +365,6 @@ def overwritten_scalars(
                 # record at all: a user who had authored their own gateway
                 # configuration had it applied, and Undo puts that id back.
                 scalars[label] = CLAUDE_DESKTOP_CONFIG_ID
-            case "roo-cline.autoImportSettingsPath":
-                # Filled in by the caller, which is the only party that knows
-                # where the sidecar landed on this machine.
-                continue
             case _:
                 continue
     return scalars

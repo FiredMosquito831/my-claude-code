@@ -23,17 +23,22 @@ nothing here ever re-renders a table the user wrote.
 **What each format supports, and why that is enough.**
 
 ``JSON``
-    The shape Command Code, OpenCode and Crush use. There is no layout to
-    preserve that a canonical writer would lose in a way anyone notices, and
-    ``config/atomic_json.py`` has emitted the canonical shape since 6.27.0, so
-    JSON keeps the load-modify-dump path it already had. Changing it would
-    reformat the documents of every user MCC has already configured.
+    The shape Command Code, OpenCode, Crush and VS Code's ``settings.json``
+    use. Edited as text since 6.83.0, and read as **JSONC** -- comments and
+    trailing commas and all -- because ``json.loads`` is not the parser VS Code
+    uses for the file MCC has to merge one key into. The claim this module made
+    until then, that JSON has "no layout to preserve that anyone notices", was
+    measured wrong on both halves: a Configure against a four-space
+    ``settings.json`` rewrote all 32 lines of it while changing nothing, and a
+    ``settings.json`` with the comments VS Code ships in its own default file
+    could not be configured at all.
 
 ``JSON_ARRAY``
     VS Code's ``chatLanguageModels.json`` is a bare array with no key to own.
-    Ownership is instead "the one element whose ``name`` equals MCC's". The
-    array is rewritten canonically like JSON, but no other element is
-    reordered, rewritten or removed.
+    Ownership is instead "the one element whose ``name`` equals MCC's", which
+    no key-path edit can express, so this one format is still merged through
+    its object model and rewritten canonically -- no other element is
+    reordered, rewritten or removed. It is read as JSONC like the rest.
 
 ``TOML``
     Codex's ``config.toml``. Two kinds of edit: a whole table at a dotted path
@@ -54,7 +59,7 @@ corrupted config file for somebody who was not even using the feature.
 import json
 import re
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -108,7 +113,7 @@ def parse_document(text: str, document_format: DocumentFormat) -> object:
     try:
         match document_format:
             case DocumentFormat.JSON | DocumentFormat.JSON_ARRAY:
-                return json.loads(text)
+                return parse_jsonc(text)
             case DocumentFormat.TOML:
                 return tomllib.loads(text)
             case DocumentFormat.YAML:
@@ -135,6 +140,8 @@ def apply_edits(
             return _apply_toml_edits(text, edits)
         case DocumentFormat.YAML:
             return _apply_yaml_edits(text, edits)
+        case DocumentFormat.JSON:
+            return _apply_json_edits(text, edits)
         case _:
             raise DocumentFormatError(
                 f"{document_format} is edited through its object model, not its text"
@@ -460,3 +467,457 @@ def _yaml_render(value: object) -> str:
     if text == "" or text != text.strip() or text[0] in "&*!{[|>'\"%@`#":
         return json.dumps(text)
     return text
+
+
+# --------------------------------------------------------------------------
+# JSON
+# --------------------------------------------------------------------------
+#
+# Edited as text, for the same reason TOML and YAML are. Until 6.83.0 JSON was
+# the one format here that went round through its object model and back out
+# through ``json.dumps(indent=2)``, and the module docstring's argument for why
+# that was acceptable -- "there is no layout to preserve that a canonical
+# writer would lose in a way anyone notices" -- was measured wrong twice over.
+# A Roo Code Configure against a four-space ``settings.json`` rewrote all 32
+# lines of it and changed nothing else; and a ``settings.json`` carrying the
+# comments VS Code itself documents, ships in its own default file and parses
+# without complaint made Configure fail outright with "cannot parse", because
+# ``json.loads`` is not the parser VS Code uses.
+#
+# So JSON gets the two promises the other text formats already had: the lines
+# MCC does not own come back byte for byte, comments included, and a re-apply
+# of identical content does not touch the file at all.
+
+
+class _JsonValue:
+    """One value in a JSON document, with the span of text it occupies."""
+
+    __slots__ = ("end", "kind", "members", "start")
+
+    def __init__(self, start: int, end: int, kind: str) -> None:
+        self.start = start
+        self.end = end
+        #: ``object``, ``array`` or ``scalar``.
+        self.kind = kind
+        #: Members in document order, for an object.
+        self.members: dict[str, _JsonMember] = {}
+
+
+class _JsonMember:
+    """One ``"key": value`` pair, spanning from the first byte of the key."""
+
+    __slots__ = ("end", "key", "start", "value")
+
+    def __init__(self, key: str, start: int, value: _JsonValue) -> None:
+        self.key = key
+        self.start = start
+        self.end = value.end
+        self.value = value
+
+
+def _json_skip(text: str, index: int) -> int:
+    """Return the next index that is neither whitespace nor a comment.
+
+    The comments are JSONC's -- ``//`` to end of line and ``/* */`` -- which is
+    what a VS Code ``settings.json`` is written in. They are *skipped*, never
+    removed: the bytes carrying them are not MCC's to rewrite.
+    """
+
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char in " \t\r\n":
+            index += 1
+            continue
+        if char == "/" and index + 1 < length:
+            following = text[index + 1]
+            if following == "/":
+                end = text.find("\n", index)
+                index = length if end == -1 else end + 1
+                continue
+            if following == "*":
+                end = text.find("*/", index + 2)
+                if end == -1:
+                    return length
+                index = end + 2
+                continue
+        return index
+    return length
+
+
+def _json_scan_string(text: str, index: int) -> tuple[str, int]:
+    """Return the string literal at ``index`` and the index just after it."""
+
+    if index >= len(text) or text[index] != '"':
+        raise DocumentFormatError(f"expected a string at offset {index}")
+    cursor = index + 1
+    while cursor < len(text):
+        char = text[cursor]
+        if char == "\\":
+            cursor += 2
+            continue
+        if char == '"':
+            decoded = json.loads(text[index : cursor + 1])
+            return str(decoded), cursor + 1
+        cursor += 1
+    raise DocumentFormatError(f"unterminated string at offset {index}")
+
+
+def _json_scan_value(text: str, index: int) -> _JsonValue:
+    """Return the value starting at ``index``, spans and members filled in."""
+
+    index = _json_skip(text, index)
+    if index >= len(text):
+        raise DocumentFormatError("the document ended where a value was expected")
+    char = text[index]
+    if char == "{":
+        return _json_scan_object(text, index)
+    if char == "[":
+        return _json_scan_array(text, index)
+    if char == '"':
+        _value, end = _json_scan_string(text, index)
+        return _JsonValue(index, end, "scalar")
+    end = index
+    while end < len(text) and text[end] not in ",}] \t\r\n":
+        end += 1
+    if end == index:
+        raise DocumentFormatError(f"expected a value at offset {index}")
+    return _JsonValue(index, end, "scalar")
+
+
+def _json_scan_object(text: str, index: int) -> _JsonValue:
+    node = _JsonValue(index, index, "object")
+    cursor = _json_skip(text, index + 1)
+    while cursor < len(text) and text[cursor] != "}":
+        key, after_key = _json_scan_string(text, cursor)
+        colon = _json_skip(text, after_key)
+        if colon >= len(text) or text[colon] != ":":
+            raise DocumentFormatError(f"expected ':' at offset {colon}")
+        value = _json_scan_value(text, colon + 1)
+        node.members[key] = _JsonMember(key, cursor, value)
+        cursor = _json_skip(text, value.end)
+        if cursor < len(text) and text[cursor] == ",":
+            cursor = _json_skip(text, cursor + 1)
+    if cursor >= len(text):
+        raise DocumentFormatError("unterminated object")
+    node.end = cursor + 1
+    return node
+
+
+def _json_scan_array(text: str, index: int) -> _JsonValue:
+    node = _JsonValue(index, index, "array")
+    cursor = _json_skip(text, index + 1)
+    while cursor < len(text) and text[cursor] != "]":
+        element = _json_scan_value(text, cursor)
+        cursor = _json_skip(text, element.end)
+        if cursor < len(text) and text[cursor] == ",":
+            cursor = _json_skip(text, cursor + 1)
+    if cursor >= len(text):
+        raise DocumentFormatError("unterminated array")
+    node.end = cursor + 1
+    return node
+
+
+def parse_jsonc(text: str) -> object:
+    """Return a JSON document that may carry comments and trailing commas.
+
+    The scanner above already knows where every token is, so the value is
+    rebuilt from the spans rather than by stripping comments with a regex over
+    the whole document first. A regex cannot tell ``//`` inside a string from
+    the start of a comment, and the strings in these files are URLs.
+    """
+
+    root = _json_scan_value(text, 0)
+    trailing = _json_skip(text, root.end)
+    if trailing != len(text):
+        raise DocumentFormatError(f"trailing content at offset {trailing}")
+    return _json_node_value(text, root)
+
+
+def _json_node_value(text: str, node: _JsonValue) -> object:
+    if node.kind == "object":
+        return {
+            key: _json_node_value(text, member.value)
+            for key, member in node.members.items()
+        }
+    if node.kind == "array":
+        return [
+            _json_node_value(text, element)
+            for element in _json_array_elements(text, node)
+        ]
+    return json.loads(text[node.start : node.end])
+
+
+def _json_array_elements(text: str, node: _JsonValue) -> list[_JsonValue]:
+    elements: list[_JsonValue] = []
+    cursor = _json_skip(text, node.start + 1)
+    while cursor < node.end - 1 and text[cursor] != "]":
+        element = _json_scan_value(text, cursor)
+        elements.append(element)
+        cursor = _json_skip(text, element.end)
+        if cursor < len(text) and text[cursor] == ",":
+            cursor = _json_skip(text, cursor + 1)
+    return elements
+
+
+def mask_json_text(text: str, secret_keys: Collection[str]) -> str:
+    """Return the document with every credential-shaped value replaced by ``***``.
+
+    Masking a JSON document as *text* rather than as an object is what lets a
+    plan diff show the user's own bytes -- their comments, their indentation --
+    without showing their token. The line-based masker the text formats use
+    cannot do it: a JSON member is ``"apiKey": "sk-…",`` and rewriting that
+    line as ``apiKey : "***"`` costs the quotes around the key and the comma
+    after the value, leaving a preview that is not the JSON it claims to be.
+
+    ``secret_keys`` is a denylist of key names, normalised to lowercase with
+    ``-`` read as ``_``, and it is the caller's: this module has no opinion
+    about which field is a credential.
+    """
+
+    names = {key.lower().replace("-", "_") for key in secret_keys}
+    try:
+        root = _json_scan_value(text, 0)
+    except DocumentFormatError:
+        return text
+    spans: list[tuple[int, int]] = []
+    _json_secret_spans(text, root, names, spans)
+    for start, end in sorted(spans, reverse=True):
+        text = text[:start] + json.dumps(MASK) + text[end:]
+    return text
+
+
+#: What a masked value is rendered as. The same three characters
+#: ``config/desktop_apply`` shows, spelled here because this module is what
+#: writes them into a JSON document's text.
+MASK = "***"
+
+
+def _json_secret_spans(
+    text: str,
+    node: _JsonValue,
+    names: set[str],
+    spans: list[tuple[int, int]],
+) -> None:
+    if node.kind == "object":
+        for key, member in node.members.items():
+            if key.lower().replace("-", "_") in names:
+                spans.append((member.value.start, member.value.end))
+                continue
+            _json_secret_spans(text, member.value, names, spans)
+        return
+    if node.kind == "array":
+        for element in _json_array_elements(text, node):
+            _json_secret_spans(text, element, names, spans)
+
+
+_JSON_INDENT = re.compile(r"^([ \t]+)\S", re.MULTILINE)
+
+
+def _json_indent_unit(text: str) -> str:
+    """Return the document's own indentation step, or two spaces.
+
+    Read from the file rather than assumed, because the point of this path is
+    that a four-space document stays a four-space document. The first indented
+    line settles it: a tab-indented file and a four-space file differ on their
+    first nested key.
+    """
+
+    match = _JSON_INDENT.search(text)
+    return match.group(1) if match else "  "
+
+
+def _json_line_indent(text: str, index: int) -> str:
+    """Return the whitespace starting the line ``index`` sits on, or ""."""
+
+    start = text.rfind("\n", 0, index) + 1
+    prefix = text[start:index]
+    return prefix if prefix.strip() == "" else ""
+
+
+def _json_render(value: object, indent_unit: str, indent: str) -> str:
+    """Render one value as a member of an object whose members sit at ``indent``."""
+
+    rendered = json.dumps(value, indent=indent_unit)
+    return ("\n" + indent).join(rendered.split("\n"))
+
+
+def _apply_json_edits(text: str, edits: Sequence[Edit]) -> str:
+    for edit in edits:
+        match edit:
+            case SetTable(key_path=key_path, value=value):
+                text = _json_set(text, key_path, dict(value))
+            case SetScalar(key_path=key_path, value=value):
+                text = _json_set(text, key_path, value)
+            case DeleteKey(key_path=key_path):
+                text = _json_delete(text, key_path)
+    return text
+
+
+def _json_root_object(text: str) -> _JsonValue:
+    root = _json_scan_value(text, 0)
+    if root.kind != "object":
+        raise DocumentFormatError("MCC edits only the keys of a JSON object")
+    return root
+
+
+def _json_set(text: str, key_path: Sequence[str], value: object) -> str:
+    """Set one key, rewriting only the bytes of the value it replaces."""
+
+    if not key_path:
+        raise DocumentFormatError("a JSON edit needs a key")
+    node = _json_root_object(text)
+    for depth, key in enumerate(key_path[:-1]):
+        member = node.members.get(key)
+        if member is None or member.value.kind != "object":
+            # The chain of objects stops here, so the rest of the path is
+            # rendered as one nested value and set at this level. Replacing a
+            # non-object with the object MCC needs is what the object path
+            # does too.
+            nested: object = value
+            for part in reversed(key_path[depth + 1 :]):
+                nested = {part: nested}
+            return _json_set_member(text, node, key, nested)
+        node = member.value
+    return _json_set_member(text, node, key_path[-1], value)
+
+
+def _json_set_member(text: str, node: _JsonValue, key: str, value: object) -> str:
+    indent_unit = _json_indent_unit(text)
+    member = node.members.get(key)
+    if member is None:
+        return _json_insert_member(text, node, key, value, indent_unit)
+    if _json_node_value(text, member.value) == value:
+        # The byte-identical re-apply. Rendering an equal value again could
+        # still change the file -- the user may have written the same object
+        # with different spacing -- and a diff nobody asked for is exactly
+        # what this path exists to stop.
+        return text
+    indent = _json_line_indent(text, member.start)
+    rendered = _json_render(value, indent_unit, indent)
+    return text[: member.value.start] + rendered + text[member.value.end :]
+
+
+def _json_insert_member(
+    text: str, node: _JsonValue, key: str, value: object, indent_unit: str
+) -> str:
+    if node.members:
+        anchor = max(member.end for member in node.members.values())
+        member_indent = _json_line_indent(
+            text, min(member.start for member in node.members.values())
+        )
+        rendered = _json_render(value, indent_unit, member_indent)
+        member_text = f"{json.dumps(key)}: {rendered}"
+        cursor = _json_skip(text, anchor)
+        if cursor < len(text) and text[cursor] == ",":
+            # The document already ends its last member with a comma, which
+            # JSONC allows. Going in after it keeps that habit rather than
+            # producing two commas or moving the user's.
+            return (
+                text[: cursor + 1]
+                + f"\n{member_indent}{member_text},"
+                + text[cursor + 1 :]
+            )
+        return text[:anchor] + f",\n{member_indent}{member_text}" + text[anchor:]
+
+    base_indent = _json_line_indent(text, node.start)
+    member_indent = base_indent + indent_unit
+    rendered = _json_render(value, indent_unit, member_indent)
+    member_text = f"{json.dumps(key)}: {rendered}"
+    if text[node.start + 1 : node.end - 1].strip():
+        # An "empty" object that is not empty: it carries a comment. The
+        # comment stays and the member goes in after it.
+        return (
+            text[: node.end - 1]
+            + f"\n{member_indent}{member_text}\n{base_indent}"
+            + text[node.end - 1 :]
+        )
+    return (
+        text[: node.start]
+        + "{\n"
+        + f"{member_indent}{member_text}\n{base_indent}}}"
+        + text[node.end :]
+    )
+
+
+def _json_delete(text: str, key_path: Sequence[str]) -> str:
+    """Remove one key, and the ancestors MCC's departure left empty.
+
+    Pruning is the same promise ``config/desktop_apply._prune_empty_ancestors``
+    makes for the object path: ``provider.mcc`` in a file that had no
+    ``provider`` map means Configure created ``provider`` too, and leaving
+    ``"provider": {}`` behind is MCC's litter in a document it promised to
+    leave alone. An ancestor still holding somebody else's keys is theirs.
+    """
+
+    for depth in range(len(key_path), 0, -1):
+        path = key_path[:depth]
+        node = _json_root_object(text)
+        member: _JsonMember | None = None
+        for key in path:
+            if node.kind != "object":
+                member = None
+                break
+            member = node.members.get(key)
+            if member is None:
+                break
+            node = member.value
+        if member is None:
+            continue
+        if depth < len(key_path) and (
+            member.value.kind != "object" or member.value.members
+        ):
+            break
+        text = _json_cut_member(text, member)
+    return _json_collapse_empty_root(text)
+
+
+def _json_collapse_empty_root(text: str) -> str:
+    """Return ``{}`` where removing MCC's last key left an empty root.
+
+    Only the root, and only when what is left between the braces is whitespace:
+    every deeper container MCC emptied is pruned outright by :func:`_json_delete`
+    above, and a body with a comment in it is somebody's writing. Without this,
+    a Configure and an Undo against a file that was ``{}`` gave back ``{\\n}``
+    -- two bytes away from where it started, which is exactly the promise the
+    byte-preserving path exists to keep.
+    """
+
+    root = _json_root_object(text)
+    if root.members:
+        return text
+    body = text[root.start + 1 : root.end - 1]
+    if not body or body.strip():
+        return text
+    return text[: root.start] + "{}" + text[root.end :]
+
+
+def _json_cut_member(text: str, member: _JsonMember) -> str:
+    """Return the text with one member, its separator and its blank line gone."""
+
+    start, end = member.start, member.end
+    following = _json_skip(text, end)
+    if following < len(text) and text[following] == ",":
+        end = following + 1
+        # And the space the comma was followed by, so removing a member from a
+        # single-line object does not leave ``{ "other": 2}`` behind.
+        while end < len(text) and text[end] in " \t":
+            end += 1
+    else:
+        # The last member: take the comma that separated it from the one
+        # before instead, or the object is left with a dangling separator.
+        cursor = start - 1
+        while cursor >= 0 and text[cursor] in " \t\r\n":
+            cursor -= 1
+        if cursor >= 0 and text[cursor] == ",":
+            start = cursor
+    line_start = text.rfind("\n", 0, start) + 1
+    if text[line_start:start].strip() == "":
+        trailing = end
+        while trailing < len(text) and text[trailing] in " \t\r":
+            trailing += 1
+        if trailing < len(text) and text[trailing] == "\n":
+            # The member had its own line or lines: take the indentation
+            # before it and the newline after it, so no blank line is left.
+            start, end = line_start, trailing + 1
+    return text[:start] + text[end:]

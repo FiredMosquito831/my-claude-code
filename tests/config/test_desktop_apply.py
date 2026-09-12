@@ -16,6 +16,8 @@ undo modes that are new in 6.55.0:
 
 import json
 import re
+import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,7 @@ from my_claude_code.config.desktop_apps import (
     DesktopAppState,
     desktop_app,
 )
+from my_claude_code.config.document_codecs import DocumentFormat, parse_document
 from my_claude_code.config.restore_record import UndoMode
 
 #: Claude Desktop 1.46388.4.0's own validator for a configuration-library id,
@@ -61,16 +64,30 @@ def document_path(spec, env) -> Path:
 
 
 def env_for(home) -> dict[str, str]:
+    """Return a scratch environment, PATH included.
+
+    ``PATH`` is part of it since 6.83.0 because detection is now a question
+    about the *program*: a row whose marker is an executable is satisfied by
+    :func:`make_marker` putting one in ``<home>/bin``, and a row whose markers
+    are all paths is unaffected by the variable being present.
+    """
+
     return {
         "HOME": str(home),
         "USERPROFILE": str(home),
         "APPDATA": str(home / "AppData" / "Roaming"),
         "LOCALAPPDATA": str(home / "AppData" / "Local"),
+        "PATH": str(home / "bin"),
     }
 
 
 def make_marker(home, spec) -> Path:
-    """Create one directory that makes this app read as installed.
+    """Create the one thing that makes this app read as installed.
+
+    Since 6.83.0 that is a *program*: an executable on the PATH the app would
+    be started from, or a declared install path. Both are exercised here --
+    binaries first, because a row that declares one is a row whose real
+    evidence is the binary.
 
     A glob marker cannot be resolved before it exists -- that is the whole
     point of it, and why ``resolve_path`` answers ``None`` for one that matches
@@ -80,22 +97,40 @@ def make_marker(home, spec) -> Path:
     """
 
     env = env_for(home)
+    if spec.detect.binaries:
+        directory = Path(env["PATH"])
+        directory.mkdir(parents=True, exist_ok=True)
+        suffix = ".exe" if sys.platform == "win32" else ""
+        executable = directory / f"{spec.detect.binaries[0]}{suffix}"
+        executable.write_bytes(b"")
+        executable.chmod(0o755)
+        return executable
     for candidate in spec.detect.markers:
-        if candidate.platforms and "win32" not in candidate.platforms:
+        if candidate.platforms and sys.platform not in candidate.platforms:
             continue
         if not candidate.glob:
             resolved = desktop_apply.resolve_path((candidate,), env)
             if resolved is None:
                 continue
-            resolved.mkdir(parents=True, exist_ok=True)
+            _make_marker_node(resolved)
             return resolved
         base, _directed = desktop_apply._base_directory(candidate, env)
         assert base is not None
         parts = [part.replace("*", "0test0") for part in candidate.relative_parts]
         resolved = base.joinpath(*parts)
-        resolved.mkdir(parents=True, exist_ok=True)
+        _make_marker_node(resolved)
         return resolved
     raise AssertionError(f"{spec.id} declares no marker for this platform")
+
+
+def _make_marker_node(path: Path) -> None:
+    """Create a marker, as a file where the marker names one and a directory else."""
+
+    if path.suffix:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+        return
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def prepare(home, spec, contents: str | None) -> None:
@@ -1058,3 +1093,357 @@ def test_an_untouched_configuration_library_reads_as_installed_not_drifted(tmp_p
     )
 
     assert probe.state is DesktopAppState.INSTALLED
+
+
+# ------------------------------------------- the install gate (spec §3 fix 5)
+
+
+def test_configure_refuses_when_the_app_is_not_installed(tmp_path):
+    """A provider written into a file no program here reads is worse than none.
+
+    There was no gate at all until 6.83.0: a scratch run wrote MCC's element
+    into ``chatLanguageModels.json`` while the very same probe reported
+    ``not_installed``. Nothing errored, the card went green, and the
+    configuration did nothing forever.
+    """
+
+    spec = desktop_app("codex_desktop")
+    env = env_for(tmp_path)
+    # No marker: the document exists, the app does not.
+    path = document_path(spec, env)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(CODEX_DOCUMENT, encoding="utf-8", newline="")
+
+    with pytest.raises(desktop_apply.DesktopApplyError) as raised:
+        desktop_apply.apply(
+            spec,
+            env=env,
+            block=BLOCK,
+            scalars={"model_provider": "mcc"},
+            record_path=tmp_path / "record.json",
+        )
+
+    assert "not installed" in str(raised.value)
+    assert path.read_text(encoding="utf-8", newline=None) == CODEX_DOCUMENT
+    assert not (tmp_path / "record.json").exists()
+
+
+def test_a_data_directory_mcc_created_itself_is_not_proof_of_an_install(tmp_path):
+    """Detection proves the program (spec §3 fix 15).
+
+    ``%LOCALAPPDATA%\\crush`` and ``%APPDATA%\\Block\\goose`` both read
+    *installed* on the machine this was written for, and neither machine had a
+    ``crush.exe`` or a ``goose.exe`` anywhere: both directories had been
+    created by MCC's own ``mcc-crush.exe`` and ``mcc-goose.exe`` launchers.
+    MCC was reading its own footprint as evidence that somebody else's
+    application was installed.
+    """
+
+    env = env_for(tmp_path)
+    for app_id, data_directory in (
+        ("crush_desktop", tmp_path / "AppData" / "Local" / "crush"),
+        ("goose_desktop", tmp_path / "AppData" / "Roaming" / "Block" / "goose"),
+        ("opencode_desktop", tmp_path / ".config" / "opencode"),
+        ("commandcode", tmp_path / ".commandcode"),
+    ):
+        data_directory.mkdir(parents=True, exist_ok=True)
+        spec = desktop_app(app_id)
+        assert not desktop_apply.is_installed(spec, env), app_id
+
+    # And the program itself still counts.
+    crush = desktop_app("crush_desktop")
+    make_marker(tmp_path, crush)
+    assert desktop_apply.is_installed(crush, env)
+
+
+def test_the_claude_desktop_configuration_library_is_not_its_own_evidence(tmp_path):
+    """The library MCC writes into used to be one of the app's markers."""
+
+    env = env_for(tmp_path)
+    spec = desktop_app("claude_desktop")
+    # The library MCC itself writes into, wherever this platform keeps it.
+    library = document_path(spec, env).parent
+    library.mkdir(parents=True, exist_ok=True)
+    (library / "_meta.json").write_text("{}", encoding="utf-8", newline="")
+    assert not desktop_apply.is_installed(spec, env)
+
+    make_marker(tmp_path, spec)
+    assert desktop_apply.is_installed(spec, env)
+
+
+# ------------------------------- byte-preserving JSON edits (spec §3 fix 6)
+
+
+SETTINGS_JSON = """{
+    // Roo's debug proxy is a capture proxy, not a model endpoint.
+    "roo-cline.debugProxy.serverUrl": "http://127.0.0.1:9999",
+    "editor.fontSize": 13,
+    /* four spaces, the way this user writes JSON */
+    "files.exclude": {
+        "**/.git": true
+    }
+}
+"""
+
+
+def test_settings_json_with_comments_is_not_destroyed(tmp_path):
+    """VS Code's own settings file is JSONC, and MCC has to merge one key into it."""
+
+    spec = desktop_app("roo_code")
+    prepare(tmp_path, spec, SETTINGS_JSON)
+    env = env_for(tmp_path)
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=None,
+        scalars={"roo-cline.autoImportSettingsPath": "C:/mcc/roo-code-settings.json"},
+        sidecar_document={"providerProfiles": {"currentApiConfigName": "MCC"}},
+        record_path=tmp_path / "record.json",
+    )
+
+    text = document_path(spec, env).read_text(encoding="utf-8", newline=None)
+    assert "// Roo's debug proxy is a capture proxy" in text
+    assert "/* four spaces, the way this user writes JSON */" in text
+    assert '"roo-cline.autoImportSettingsPath": "C:/mcc/roo-code-settings.json"' in text
+
+
+def test_json_documents_keep_their_own_indentation(tmp_path):
+    """Every line MCC does not own comes back byte for byte."""
+
+    spec = desktop_app("roo_code")
+    prepare(tmp_path, spec, SETTINGS_JSON)
+    env = env_for(tmp_path)
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=None,
+        scalars={"roo-cline.autoImportSettingsPath": "C:/mcc/roo-code-settings.json"},
+        record_path=tmp_path / "record.json",
+    )
+
+    text = document_path(spec, env).read_text(encoding="utf-8", newline=None)
+    untouched = [line for line in SETTINGS_JSON.splitlines() if line.strip()]
+    after = text.splitlines()
+    for line in untouched:
+        if line.strip() == "}":
+            continue
+        assert line in after, line
+    assert '    "editor.fontSize": 13,' in after
+
+
+def test_a_reapply_of_identical_json_leaves_the_file_byte_identical(tmp_path):
+    """The idempotence promise, now measured on the bytes and not on a subtree."""
+
+    spec = desktop_app("roo_code")
+    prepare(tmp_path, spec, SETTINGS_JSON)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+    scalars = {"roo-cline.autoImportSettingsPath": "C:/mcc/roo-code-settings.json"}
+
+    desktop_apply.apply(spec, env=env, block=None, scalars=scalars, record_path=record)
+    path = document_path(spec, env)
+    first = path.read_bytes()
+
+    again = desktop_apply.apply(
+        spec, env=env, block=None, scalars=scalars, record_path=record
+    )
+    assert not again.changed
+    assert path.read_bytes() == first
+
+    plan = desktop_apply.plan(spec, env=env, block=None, scalars=scalars)
+    assert plan.no_op
+    assert plan.diff == ""
+
+
+def test_a_json_configure_and_undo_return_the_file_to_its_bytes(tmp_path):
+    spec = desktop_app("roo_code")
+    prepare(tmp_path, spec, SETTINGS_JSON)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=None,
+        scalars={"roo-cline.autoImportSettingsPath": "C:/mcc/roo-code-settings.json"},
+        record_path=record,
+    )
+    desktop_apply.undo(spec, env=env, record_path=record)
+
+    path = document_path(spec, env)
+    assert path.read_text(encoding="utf-8", newline=None) == SETTINGS_JSON
+
+
+OPENCODE_JSON = """{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "exa": {
+      "type": "local",
+      "enabled": true
+    }
+  }
+}
+"""
+
+
+def test_an_opencode_configure_leaves_every_other_key_untouched(tmp_path):
+    spec = desktop_app("opencode_desktop")
+    prepare(tmp_path, spec, OPENCODE_JSON)
+    env = env_for(tmp_path)
+    block = {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "My Claude Code",
+        "options": {
+            "baseURL": "http://127.0.0.1:8299/v1",
+            "apiKey": "scratch-token",
+        },
+        "models": {"mcc/best": {"name": "MCC best"}},
+    }
+
+    desktop_apply.apply(
+        spec, env=env, block=block, record_path=tmp_path / "record.json"
+    )
+    path = document_path(spec, env)
+    text = path.read_text(encoding="utf-8", newline=None)
+    assert '"$schema": "https://opencode.ai/config.json",' in text
+    assert '      "enabled": true' in text
+    assert json.loads(text)["provider"]["mcc"] == block
+
+    desktop_apply.undo(spec, env=env, record_path=tmp_path / "record.json")
+    assert path.read_text(encoding="utf-8", newline=None) == OPENCODE_JSON
+
+
+def test_a_json_plan_masks_the_credential_and_stays_valid_json(tmp_path):
+    spec = desktop_app("opencode_desktop")
+    prepare(tmp_path, spec, OPENCODE_JSON)
+    env = env_for(tmp_path)
+    block = {
+        "name": "My Claude Code",
+        "options": {"baseURL": "http://x/v1", "apiKey": "super-secret-value"},
+    }
+
+    plan = desktop_apply.plan(spec, env=env, block=block)
+    assert "super-secret-value" not in plan.diff
+    assert '"apiKey": "***"' in plan.diff
+
+
+# ---------------------------- Roo Code writes a real document (spec §3 fix 4)
+
+
+def test_roo_code_configure_writes_the_sidecar_and_the_import_key(tmp_path):
+    """Both halves, which is what "no-op plus collateral damage" was missing.
+
+    Before 6.83.0 this Configure wrote neither the settings key nor the file it
+    names; its only effect on disk was to re-indent the user's settings.json.
+    """
+
+    spec = desktop_app("roo_code")
+    prepare(tmp_path, spec, SETTINGS_JSON)
+    env = env_for(tmp_path)
+    sidecar = desktop_apply.sidecar_path_for(spec, env)
+    assert sidecar is not None
+    document = {
+        "providerProfiles": {
+            "currentApiConfigName": "My Claude Code",
+            "apiConfigs": {"My Claude Code": {"apiProvider": "openai"}},
+        }
+    }
+
+    result = desktop_apply.apply(
+        spec,
+        env=env,
+        block=None,
+        scalars={"roo-cline.autoImportSettingsPath": str(sidecar)},
+        sidecar_document=document,
+        record_path=tmp_path / "record.json",
+    )
+
+    assert result.changed
+    assert sidecar.exists()
+    assert json.loads(sidecar.read_text(encoding="utf-8")) == document
+    # The document is JSONC; parse it the way VS Code does.
+    settings = parse_document(
+        document_path(spec, env).read_text(encoding="utf-8", newline=None),
+        DocumentFormat.JSON,
+    )
+    assert isinstance(settings, Mapping)
+    assert settings.get("roo-cline.autoImportSettingsPath") == str(sidecar)
+
+    undone = desktop_apply.undo(spec, env=env, record_path=tmp_path / "record.json")
+    assert undone.removed_sidecar
+    assert not sidecar.exists()
+
+
+# ------------------------ the sidecar is compared unmasked (spec §3 fix 7)
+
+
+def test_a_reapply_is_a_no_op_for_the_app_whose_settings_live_in_a_sidecar(tmp_path):
+    """Claude Desktop's preview claimed a change on every single re-apply.
+
+    ``plan`` rendered the sidecar as ``json.dumps(_mask(document))`` and
+    compared *that* to the unmasked bytes on disk, so the two could never be
+    equal. The drift badge means nothing if a re-apply of identical content is
+    a change (spec §4.5).
+    """
+
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+    scalars = {"appliedId": CLAUDE_DESKTOP_CONFIG_ID}
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars=scalars,
+        sidecar_document=CLAUDE_SIDECAR,
+        record_path=record,
+    )
+
+    plan = desktop_apply.plan(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars=scalars,
+        sidecar_document=CLAUDE_SIDECAR,
+    )
+    assert plan.sidecar_diff == ""
+    assert plan.no_op
+
+    again = desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars=scalars,
+        sidecar_document=CLAUDE_SIDECAR,
+        record_path=record,
+    )
+    assert not again.changed
+
+
+def test_a_changed_sidecar_still_shows_a_diff_with_the_credential_masked(tmp_path):
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+    scalars = {"appliedId": CLAUDE_DESKTOP_CONFIG_ID}
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars=scalars,
+        sidecar_document=CLAUDE_SIDECAR,
+        record_path=tmp_path / "record.json",
+    )
+    changed = dict(CLAUDE_SIDECAR) | {"inferenceGatewayBaseUrl": "http://127.0.0.1:9/"}
+
+    plan = desktop_apply.plan(
+        spec, env=env, block=CLAUDE_BLOCK, scalars=scalars, sidecar_document=changed
+    )
+    assert plan.sidecar_diff
+    assert not plan.no_op
+    assert str(CLAUDE_SIDECAR["inferenceGatewayApiKey"]) not in plan.sidecar_diff
+    assert "***" in plan.sidecar_diff

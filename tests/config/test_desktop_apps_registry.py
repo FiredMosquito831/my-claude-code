@@ -5,6 +5,9 @@ of them is a row that would have needed a branch in the writer, and the point
 of the registry is that there are no branches in the writer.
 """
 
+import json
+from collections.abc import Mapping
+
 import pytest
 
 from my_claude_code.application.catalogue_model import CatalogueModel
@@ -15,6 +18,7 @@ from my_claude_code.application.desktop_documents import (
     sidecar_document,
     token_reference,
 )
+from my_claude_code.config.desktop_apply import _SECRET_KEYS, _mask
 from my_claude_code.config.desktop_apps import (
     CLAUDE_DESKTOP_GATEWAY_KEYS,
     DESKTOP_APPS,
@@ -23,7 +27,7 @@ from my_claude_code.config.desktop_apps import (
     DesktopAppStatus,
     TokenForm,
 )
-from my_claude_code.config.document_codecs import DocumentFormat
+from my_claude_code.config.document_codecs import DocumentFormat, mask_json_text
 from my_claude_code.config.harnesses import (
     COMMANDCODE_API_KEY_ENV,
     HARNESSES_WITHOUT_ATTRIBUTION_HEADER,
@@ -77,7 +81,8 @@ def test_a_not_routable_spec_states_a_dated_reason(spec: DesktopAppSpec):
 @pytest.mark.parametrize("spec", SERVABLE, ids=ids(SERVABLE))
 def test_a_servable_spec_declares_a_document_and_a_detector(spec: DesktopAppSpec):
     assert spec.document is not None, spec.id
-    assert spec.detect is not None and spec.detect.markers, spec.id
+    assert spec.detect is not None, spec.id
+    assert spec.detect.markers or spec.detect.binaries, spec.id
 
 
 #: Variables MCC itself sets somewhere a client can see them. There are
@@ -348,3 +353,97 @@ def test_opencode_targets_the_only_path_opencode_documents():
     assert opencode.document is not None
     assert opencode.document.display_path == "~/.config/opencode/opencode.json"
     assert not any("APPDATA" in path.env_vars for path in opencode.document.paths)
+
+
+def _credential_keys(spec: DesktopAppSpec) -> set[str]:
+    """Return the key names this row can put a real credential under.
+
+    Derived from the row rather than listed by hand, which is the whole point:
+    a denylist of secret-looking names is only ever as good as its last entry,
+    and the entry that was missing was found by looking at a rendered plan.
+    """
+
+    keys: set[str] = set()
+    if spec.provider.api_key_key and spec.token_form in {
+        TokenForm.LITERAL_IN_APP_FILE,
+        TokenForm.ENV_REFERENCE,
+    }:
+        keys.add(spec.provider.api_key_key.split(".")[-1])
+    if spec.sidecar is not None and spec.sidecar.holds_credential:
+        keys |= _token_fields(spec.sidecar.fields)
+    return keys
+
+
+def _token_fields(node: object) -> set[str]:
+    keys: set[str] = set()
+    if isinstance(node, Mapping):
+        for key, value in node.items():
+            if value == "{token}":
+                keys.add(str(key))
+                continue
+            keys |= _token_fields(value)
+    elif isinstance(node, list):
+        for item in node:
+            keys |= _token_fields(item)
+    return keys
+
+
+@pytest.mark.parametrize("spec", SERVABLE, ids=ids(SERVABLE))
+def test_every_key_that_can_hold_a_credential_is_masked(spec: DesktopAppSpec):
+    """A missed mask is a leaked key, in a diff rendered into a browser.
+
+    The one that was missed: Roo Code's ``openAiApiKey``, which is not
+    ``apikey`` as a whole-key match, so the plan preview for a real Configure
+    rendered MCC's proxy token in full. Deriving the set from the registry
+    means the next row to declare a credential field cannot ship without it.
+    """
+
+    for key in _credential_keys(spec):
+        assert key.lower().replace("-", "_") in _SECRET_KEYS, f"{spec.id}: {key}"
+
+
+def test_a_rendered_plan_for_every_app_hides_the_token(tmp_path):
+    """The same property, end to end, through the masker the card renders."""
+
+    token = "a-token-that-must-not-appear-anywhere"
+    for spec in SERVABLE:
+        document = sidecar_document(
+            spec, MODELS, proxy_root_url="http://127.0.0.1:8299", auth_token=token
+        )
+        block = owned_block(
+            spec, MODELS, proxy_root_url="http://127.0.0.1:8299", auth_token=token
+        )
+        for payload in (document, block):
+            if payload is None:
+                continue
+            rendered = json.dumps(_mask(payload), indent=2)
+            assert token not in rendered, spec.id
+            assert (
+                mask_json_text(json.dumps(payload, indent=2), _SECRET_KEYS).count(token)
+                == 0
+            ), spec.id
+
+
+@pytest.mark.parametrize("spec", SERVABLE, ids=ids(SERVABLE))
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+def test_every_servable_row_is_detectable_on_every_platform(
+    spec: DesktopAppSpec, platform: str
+):
+    """A row MCC will write for has to be a row MCC can *find* first.
+
+    Detection became a question about the program in 6.83.0, and the first cut
+    of it left Claude Desktop with Windows and macOS markers and nothing at all
+    for Linux -- which the tests could not see on Windows and CI found
+    immediately. Either an executable name, which is looked up on PATH wherever
+    the app runs, or a marker path this platform can resolve.
+    """
+
+    assert spec.detect is not None
+    if spec.detect.binaries:
+        return
+    applicable = [
+        marker
+        for marker in spec.detect.markers
+        if not marker.platforms or platform in marker.platforms
+    ]
+    assert applicable, f"{spec.id} cannot be detected on {platform}"

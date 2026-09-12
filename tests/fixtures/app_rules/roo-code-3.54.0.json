@@ -1,0 +1,113 @@
+{
+  "app_id": "roo_code",
+  "display_name": "Roo Code (VS Code)",
+  "app_version": "3.54.0",
+  "extracted": "2026-09-12",
+  "source_file": "~/.vscode/extensions/rooveterinaryinc.roo-cline-3.54.0/dist/extension.js",
+  "note": "A rule, not a schema. Every entry below is a fact read out of the shipped bundle, with the identifier it was read from, so a reader can re-run the grep in versions.txt and check it.",
+
+  "settings_key": "roo-cline.autoImportSettingsPath",
+  "settings_key_evidence": "package.json contributes.configuration; read at activation by the auto-import routine that logs '[AutoImport] Checking for settings file at: ...'",
+
+  "import_document": {
+    "required_keys": ["providerProfiles"],
+    "optional_keys": ["globalSettings"],
+    "evidence": "z.object({providerProfiles: o, globalSettings: eT.optional()}) parsed from JSON.parse(readFile(path)) -- so the document must be strict JSON, not JSONC"
+  },
+
+  "provider_profiles": {
+    "required_keys": ["currentApiConfigName", "apiConfigs"],
+    "optional_keys": ["modeApiConfigs", "migrations"],
+    "current_name_must_name_an_api_config": true,
+    "evidence": "currentApiConfigName: z.string(), apiConfigs: z.record(z.string(), z6)"
+  },
+
+  "api_provider_values": [
+    "openrouter",
+    "vercel-ai-gateway",
+    "litellm",
+    "requesty",
+    "unbound",
+    "poe",
+    "ollama",
+    "lmstudio",
+    "vscode-lm",
+    "openai",
+    "fake-ai",
+    "anthropic",
+    "bedrock",
+    "baseten",
+    "deepseek",
+    "fireworks",
+    "gemini",
+    "gemini-cli",
+    "mistral",
+    "moonshot",
+    "minimax",
+    "openai-codex",
+    "openai-native",
+    "qwen-code",
+    "sambanova",
+    "vertex",
+    "xai",
+    "zai",
+    "cerebras",
+    "chutes",
+    "deepinfra",
+    "doubao",
+    "featherless",
+    "groq",
+    "huggingface",
+    "io-intelligence",
+    "roo"
+  ],
+  "api_provider_evidence": "Htr = [...Qtr, ...Btr, ...uNi, ...cNi, ...dNi, 'anthropic', ...]; Mtr is the second half of the union; z.union([z.enum(Htr), z.enum(Mtr)])",
+
+  "openai_compatible_profile": {
+    "api_provider": "openai",
+    "keys_mcc_must_write": [
+      "apiProvider",
+      "openAiBaseUrl",
+      "openAiApiKey",
+      "openAiModelId",
+      "openAiCustomModelInfo"
+    ],
+    "known_keys": [
+      "apiProvider",
+      "openAiBaseUrl",
+      "openAiApiKey",
+      "openAiR1FormatEnabled",
+      "openAiModelId",
+      "openAiCustomModelInfo",
+      "openAiUseAzure",
+      "azureApiVersion",
+      "openAiStreamingEnabled",
+      "openAiHostHeader",
+      "openAiHeaders",
+      "includeMaxTokens",
+      "todoListEnabled",
+      "modelTemperature",
+      "rateLimitSeconds",
+      "consecutiveMistakeLimit",
+      "enableReasoningEffort",
+      "reasoningEffort",
+      "modelMaxTokens",
+      "modelMaxThinkingTokens",
+      "verbosity",
+      "apiModelId",
+      "id"
+    ],
+    "base_url_must_end_with": "/v1",
+    "base_url_evidence": "createOpenAICompatible builds new URL(baseURL + '/chat/completions'); an unset openAiApiKey is sent as the literal 'not-provided'",
+    "evidence": "openAiBaseUrl: z.string().optional(), openAiApiKey: z.string().optional(), openAiModelId: z.string().optional(), openAiCustomModelInfo: AP.nullish(), openAiStreamingEnabled: z.boolean().optional()"
+  },
+
+  "openai_custom_model_info": {
+    "required_keys": ["contextWindow", "supportsPromptCache"],
+    "types": {
+      "contextWindow": "number",
+      "supportsPromptCache": "boolean"
+    },
+    "evidence": "AP = z.object({maxTokens: z.number().nullish(), maxThinkingTokens: z.number().nullish(), contextWindow: z.number(), supportsImages: z.boolean().optional(), supportsPromptCache: z.boolean(), ...}) -- contextWindow and supportsPromptCache are the only two members with no .optional()/.nullish(), and a profile missing either is dropped silently rather than reported"
+  }
+}

@@ -1,0 +1,48 @@
+Rules extracted from the applications themselves, not from their documentation.
+
+Each file in this directory records what one installed application accepts, the
+version it was read from, and the exact command that read it, so the claim can
+be re-checked rather than believed. The rule that makes them load-bearing is
+spec section 5 of specs/PR-DESKTOP-APPS-CONFIGURE-SPEC.md: a desktop app keeps
+its Configure button only where MCC's generated document is validated in CI
+against a rule extracted from that app's own shipped code or published schema.
+
+The precedent is tests/fixtures/schemas/, which vendors OpenCode's and Crush's
+own published JSON Schemas. This directory is for the apps that publish none.
+
+--------------------------------------------------------------------------
+roo-code-3.54.0.json
+--------------------------------------------------------------------------
+App:        Roo Code (VS Code extension, publisher rooveterinaryinc)
+Version:    3.54.0, from its package.json "version"
+Read from:  %USERPROFILE%\.vscode\extensions\rooveterinaryinc.roo-cline-3.54.0
+Date:       2026-09-12
+Platform:   Windows 11, VS Code 1.136.1
+
+Extraction (Git Bash; the bundle is one 14.8 MB minified line, so every read is
+a grep for the identifier rather than a line number):
+
+    EXT=~/.vscode/extensions/rooveterinaryinc.roo-cline-3.54.0
+
+    # the settings key the extension reads at activation
+    grep -o 'autoImportSettingsPath.\{0,220\}' "$EXT/dist/extension.js"
+    grep -o 'roo-cline\.autoImportSettingsPath' "$EXT/package.json"
+
+    # the shape of the document that key names
+    grep -o 'providerProfiles:.\{0,160\}globalSettings:.\{0,120\}' "$EXT/dist/extension.js"
+    grep -o 'currentApiConfigName:.\{0,200\}' "$EXT/dist/extension.js"
+
+    # the apiProvider enum, in the five parts the bundle splits it into
+    grep -o 'Htr=.\{0,700\}' "$EXT/dist/extension.js"
+    for v in Qtr Btr uNi cNi dNi; do grep -o "$v=\[[^]]\{0,300\}" "$EXT/dist/extension.js"; done
+
+    # the OpenAI-compatible profile's own keys
+    grep -o 'openAiBaseUrl:.\{0,500\}' "$EXT/dist/extension.js"
+
+    # openAiCustomModelInfo, and which of its members are required
+    grep -o 'AP=[a-zA-Z0-9_$]*\.object({[^}]\{0,600\}' "$EXT/dist/extension.js"
+
+Not extracted, and so not asserted: what Roo does with the profile *after* the
+import. The import itself was not run -- that would write the user's own VS Code
+SecretStorage -- so this rule says what the document has to look like to be
+accepted, and nothing about what the extension then sends on the wire.

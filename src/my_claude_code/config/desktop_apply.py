@@ -78,6 +78,7 @@ from my_claude_code.config.document_codecs import (
     SetScalar,
     SetTable,
     apply_edits,
+    mask_json_text,
     parse_document,
 )
 from my_claude_code.config.paths import config_dir_path
@@ -186,6 +187,15 @@ _SECRET_KEYS: frozenset[str] = frozenset(
         # goes in ~/.codex/config.toml -- a TOML document, so it is the
         # line-based masker in ``_mask_text`` that has to catch it too.
         "experimental_bearer_token",
+        # Roo Code's own name for the key in the settings export MCC owns.
+        # Caught by the browser proof of 6.83.0 and not by any test: the plan
+        # preview for Roo Code rendered the literal token, because
+        # ``openAiApiKey`` does not equal ``apikey`` as a whole-key match. A
+        # denylist of key names is only as good as its last entry, so
+        # ``tests/config/test_desktop_apps_registry.py`` now derives the set of
+        # credential-bearing keys from the registry itself and asserts every
+        # one of them is in here.
+        "openaiapikey",
     }
 )
 
@@ -307,16 +317,23 @@ def sidecar_path_for(spec: DesktopAppSpec, env: Mapping[str, str]) -> Path | Non
 
 
 def is_installed(spec: DesktopAppSpec, env: Mapping[str, str]) -> bool:
-    """Return whether any of the app's marker paths exists.
+    """Return whether the *program* is on this machine.
 
-    A marker is a directory the app creates on first run, never its config
-    file: an app that has run but has never been configured has to read as
-    installed, or Configure would refuse the one case it exists for.
+    Either an executable the app ships, looked up on the PATH it would be
+    started with, or one of the declared marker paths -- an install directory,
+    an application bundle, a package directory, an editor extension. See
+    :class:`~my_claude_code.config.desktop_apps.DesktopDetect` for why a data
+    directory is no longer one of them: two rows read "installed" from
+    directories MCC's own launchers had created.
     """
 
     if spec.detect is None:
         return False
     platform = _platform()
+    path_value = env.get("PATH") or env.get("Path") or ""
+    for name in spec.detect.binaries:
+        if path_value and shutil.which(name, path=path_value):
+            return True
     for marker in spec.detect.markers:
         if marker.platforms and platform not in marker.platforms:
             continue
@@ -884,6 +901,33 @@ def _render(document: object, document_format: DocumentFormat) -> str:
     return json.dumps(_mask(document), indent=2, sort_keys=False) + "\n"
 
 
+def edits_the_text(document_spec: DesktopDocument, before_text: str) -> bool:
+    """Return whether this document's edits go through its bytes.
+
+    TOML and YAML always have: they carry comments and layout no round trip
+    could promise to give back. JSON joined them in 6.83.0, under two
+    conditions that are about what the edit *is* rather than about which app it
+    belongs to:
+
+    * there has to be text to preserve. A missing or blank file has no bytes of
+      anybody's to keep, and the canonical writer produces a cleaner document
+      than an edit into ``{}`` would.
+    * the ownership has to be expressible as a key path. Claude Desktop's
+      ``_meta.json`` is owned as *one element of a list*, which no
+      ``SetTable``/``SetScalar`` can name, so it stays on the object model --
+      the one JSON document here that is still normalised on write, and a small
+      index MCC is adding to rather than a file of the user's prose.
+    """
+
+    if document_spec.document_format in {DocumentFormat.TOML, DocumentFormat.YAML}:
+        return True
+    if document_spec.document_format is not DocumentFormat.JSON:
+        return False
+    if not before_text.strip():
+        return False
+    return not document_spec.owned_element_path
+
+
 def _edits_for(
     document_spec: DesktopDocument,
     block: Mapping[str, object] | None,
@@ -1083,6 +1127,18 @@ def _json_text(document: object, before_text: str) -> str:
     return text + "\n"
 
 
+def _sidecar_text(document: Mapping[str, object]) -> str:
+    """Return the exact bytes a file MCC owns outright is written with.
+
+    One function so that what :func:`plan` compares against the file on disk
+    and what :func:`apply` writes to it cannot drift apart -- which they did:
+    the plan compared a *masked* rendering to the real bytes, so the answer was
+    "changed" whatever the file held.
+    """
+
+    return json.dumps(document, indent=2) + "\n"
+
+
 def _diff(before: str, after: str, path: Path) -> str:
     return "".join(
         unified_diff(
@@ -1120,7 +1176,8 @@ def plan(
     if document is None:
         raise DesktopApplyError(f"cannot parse {path}: {error}")
 
-    if document_format is DocumentFormat.TOML or document_format is DocumentFormat.YAML:
+    text_edits = edits_the_text(spec.document, before_text)
+    if text_edits:
         after_text = apply_edits(
             before_text, document_format, _edits_for(spec.document, block, scalars)
         )
@@ -1138,14 +1195,30 @@ def plan(
         if sidecar is not None:
             sidecar_display = str(sidecar)
             sidecar_before = _read_text(sidecar) or ""
-            sidecar_after = json.dumps(_mask(sidecar_document), indent=2) + "\n"
-            sidecar_diff = _diff(sidecar_before, sidecar_after, sidecar)
+            # Compared unmasked and rendered masked. Until 6.83.0 the
+            # comparison was against ``json.dumps(_mask(...))``, so a sidecar
+            # holding a credential could never equal the bytes on disk and
+            # Claude Desktop's preview claimed a change on every re-apply --
+            # which also made ``no_op`` permanently false for the one app whose
+            # real settings live in a sidecar, and took the meaning out of the
+            # drift badge (spec §4.5).
+            sidecar_after = _sidecar_text(sidecar_document)
+            if sidecar_after != sidecar_before:
+                sidecar_diff = _diff(
+                    mask_json_text(sidecar_before, _SECRET_KEYS),
+                    mask_json_text(sidecar_after, _SECRET_KEYS),
+                    sidecar,
+                )
 
-    # The object formats are masked structurally before rendering, so masking
-    # their text again would only damage it -- it strips the trailing comma
-    # and leaves a preview that is not the JSON it claims to be. The text
-    # formats are rendered from the user's own bytes and have no other chance.
-    if document_format in {DocumentFormat.TOML, DocumentFormat.YAML}:
+    # The object model is masked structurally before rendering; the text path
+    # is the user's own bytes and is masked in place, which for JSON means
+    # replacing the value and nothing else -- the line-based masker would cost
+    # the quotes around the key and the comma after the value and leave a
+    # preview that is not the JSON it claims to be.
+    if text_edits and document_format is DocumentFormat.JSON:
+        rendered_before = mask_json_text(rendered_before, _SECRET_KEYS)
+        rendered_after = mask_json_text(rendered_after, _SECRET_KEYS)
+    elif document_format in {DocumentFormat.TOML, DocumentFormat.YAML}:
         rendered_before = _mask_text(rendered_before)
         rendered_after = _mask_text(rendered_after)
     diff = _diff(rendered_before, rendered_after, path)
@@ -1307,7 +1380,7 @@ def _write_owned_file(path: Path, document: Mapping[str, object]) -> None:
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(document, indent=2) + "\n"
+    text = _sidecar_text(document)
     temporary = path.with_name(path.name + ".mcc-tmp")
     temporary.write_text(text, encoding="utf-8", newline="")
     if sys.platform != "win32":
@@ -1339,6 +1412,23 @@ def apply(
             "this device, or remove the managed profile first."
         )
 
+    if not is_installed(spec, env):
+        # The install gate, in the shape the managed refusal above already
+        # uses. Until 6.83.0 there was none: a scratch run wrote MCC's element
+        # into ``chatLanguageModels.json`` while the very same probe reported
+        # ``not_installed``, because ``apply`` asked about the managed source
+        # and about ``create_if_missing`` and never about whether the
+        # application was there. Writing a provider into a file no program on
+        # this machine reads is the invisible failure this module exists to
+        # prevent, one layer further out: nothing errors, the card goes green,
+        # and the configuration does nothing forever.
+        raise DesktopApplyError(
+            f"{spec.display_name} is not installed on this machine, so MCC "
+            "will not write a configuration file nothing is going to read. "
+            f"Install {spec.display_name} and start it once, then press "
+            "Configure again."
+        )
+
     path = document_path_for(spec, env)
     if path is None:
         raise DesktopApplyError(f"{spec.id} declares no path for this platform")
@@ -1360,7 +1450,7 @@ def apply(
 
     overwritten = capture_overwritten(document, spec.document.overwritten_keys)
 
-    if document_format in {DocumentFormat.TOML, DocumentFormat.YAML}:
+    if edits_the_text(spec.document, before_text):
         after_text = apply_edits(
             before_text, document_format, _edits_for(spec.document, block, scalars)
         )
@@ -1374,7 +1464,7 @@ def apply(
         sidecar = sidecar_path_for(spec, env)
         if sidecar is not None:
             sidecar_display = str(sidecar)
-            desired = json.dumps(sidecar_document, indent=2) + "\n"
+            desired = _sidecar_text(sidecar_document)
             if (_read_text(sidecar) or "") != desired:
                 _write_owned_file(sidecar, sidecar_document)
                 sidecar_changed = True
@@ -1491,7 +1581,7 @@ def undo(
                 restore[".".join(value.key_path)] = value.prior_value
                 restored_keys.append(".".join(value.key_path))
 
-    if document_format in {DocumentFormat.TOML, DocumentFormat.YAML}:
+    if edits_the_text(spec.document, before_text):
         edits: list[SetTable | SetScalar | DeleteKey] = []
         if spec.document.owned_key_path:
             edits.append(DeleteKey(spec.document.owned_key_path))

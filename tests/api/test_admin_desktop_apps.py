@@ -6,6 +6,7 @@ application's configuration file even by accident.
 """
 
 import json
+import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -31,14 +32,25 @@ def _scratch_home(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path / "mcc"))
     monkeypatch.delenv("CODEX_HOME", raising=False)
+    # And the PATH, since 6.83.0: "installed" means the program is here, and
+    # the routes read ``os.environ``. Without this the real machine's PATH
+    # decided whether a card in a scratch home was installed -- which is how a
+    # local run of these tests passed while CI's did not.
+    binaries = home / "bin"
+    binaries.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("PATH", str(binaries))
     monkeypatch.chdir(tmp_path)
     return home
 
 
 def _install_codex(home: Path, contents: str | None = CODEX_DOCUMENT) -> Path:
-    """Create Codex's marker directory, and its document when one is wanted."""
+    """Install the Codex *program*, and write its document when one is wanted."""
 
-    (home / "AppData" / "Local" / "OpenAI" / "Codex").mkdir(parents=True, exist_ok=True)
+    suffix = ".exe" if sys.platform == "win32" else ""
+    executable = home / "bin" / f"codex{suffix}"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_bytes(b"")
+    executable.chmod(0o755)
     (home / ".codex").mkdir(parents=True, exist_ok=True)
     path = home / ".codex" / "config.toml"
     if contents is not None:
