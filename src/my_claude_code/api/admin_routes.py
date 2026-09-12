@@ -27,7 +27,6 @@ from my_claude_code.api.model_admin import (
     GlobMigration,
     apply_visibility_bulk,
     apply_visibility_toggle,
-    build_models_page_payload,
     bulk_result_rows,
     hiding_pattern,
     migrate_exact_patterns_to_globs,
@@ -37,6 +36,12 @@ from my_claude_code.api.model_admin import (
     with_override_row,
 )
 from my_claude_code.api.model_catalog import settings_model_visibility
+from my_claude_code.api.models_page_cache import (
+    MODELS_PAGE_ENTRY,
+    build_capability_half,
+    capability_half_key,
+    merge_moving_parts,
+)
 from my_claude_code.api.optimization_handlers import OPTIMIZATION_RULE_SPECS
 from my_claude_code.application.derived_payloads import (
     cached_payload,
@@ -1192,17 +1197,45 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
             str(row["provider"]): row
             for row in store.image_estimate_by_provider(since=window)
         }
-    return build_models_page_payload(
-        services.requests.cached_prefixed_model_infos(),
-        configured_chat_model_refs(settings),
-        settings_model_visibility(settings),
-        current_model_overrides(),
-        dialect_lookup=services.requests.model_reasoning_dialect,
+    # The expensive half -- the capability ladder over every model -- is
+    # computed with the four moving parts left out and stored under a key made
+    # of its own inputs, so a restart with an unchanged catalogue serves it
+    # from a file. The four are merged back here, by the same functions the
+    # one-shot build uses, on every request.
+    model_infos = services.requests.cached_prefixed_model_infos()
+    configured = tuple(configured_chat_model_refs(settings))
+    visibility = settings_model_visibility(settings)
+    overrides = current_model_overrides()
+    payload = cached_payload(
+        MODELS_PAGE_ENTRY,
+        key=capability_half_key(model_infos, configured, visibility, overrides),
+        compute=lambda: build_capability_half(
+            model_infos,
+            configured,
+            visibility,
+            overrides,
+            dialect_lookup=services.requests.model_reasoning_dialect,
+            measured_days=REASONING_MEASUREMENT_DAYS,
+        ),
+        # 5.5 MB of JSON: indented it would be 11 MB, and half the read would
+        # be whitespace.
+        compact=True,
+        # Never stale. A reader who just wrote an override or a hide pattern
+        # would otherwise be shown the payload from before their write, which
+        # looks exactly like the write failing. The key covers every input, so
+        # a changed one recomputes; an unchanged one -- the restart case this
+        # is for -- still costs a file read.
+        serve_stale=False,
+    )
+    # `stale` and `computed_at` describe the *capability half*, which is what
+    # can be served from an earlier computation. The measurements merged in
+    # below are always current.
+    return merge_moving_parts(
+        payload,
         measured=measured,
-        measured_days=REASONING_MEASUREMENT_DAYS,
+        image_estimates=image_estimates,
         learned=services.admin.learned_facts_by_model(),
         catalogue_refresh=services.admin.catalogue_refresh_status(),
-        image_estimates=image_estimates,
     )
 
 

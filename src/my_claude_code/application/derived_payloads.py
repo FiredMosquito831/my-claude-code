@@ -81,6 +81,7 @@ def _start_refresh(
     key: str,
     compute: Callable[[], dict[str, Any]],
     cache: DerivedCache,
+    compact: bool,
 ) -> None:
     """Recompute ``name`` on a worker thread, at most one at a time.
 
@@ -97,7 +98,13 @@ def _start_refresh(
     def run() -> None:
         try:
             payload = compute()
-            cache.write(name, key=key, payload=payload, computed_at=time.time())
+            cache.write(
+                name,
+                key=key,
+                payload=payload,
+                computed_at=time.time(),
+                compact=compact,
+            )
         except Exception as exc:
             logger.warning("Derived payload {} could not be refreshed: {}", name, exc)
         finally:
@@ -113,28 +120,39 @@ def cached_payload(
     key: str,
     compute: Callable[[], dict[str, Any]],
     cache: DerivedCache | None = None,
+    compact: bool = False,
+    serve_stale: bool = True,
 ) -> dict[str, Any]:
     """Answer from the stored payload where possible, never by waiting.
 
     Returns a payload carrying two extra fields, and only those two: ``stale``
     and ``computed_at``. Everything else is exactly what ``compute`` produced,
     on this call or on an earlier one under the same key.
+
+    ``serve_stale=False`` for a payload that must never lag its inputs. The
+    cost breakdown may show figures from a minute ago and say so; a page that
+    renders a setting the reader just changed may not, because the stale answer
+    would look like the write failed. Such an entry still skips the whole
+    computation whenever the key matches -- which is the restart case this
+    exists for -- and simply recomputes when it does not.
     """
 
     store = derived_cache() if cache is None else cache
     entry = store.read(name)
     if entry is not None and entry.matches(key) and isinstance(entry.payload, dict):
         return _mark_fresh(dict(entry.payload), entry)
-    if entry is not None and isinstance(entry.payload, dict):
+    if serve_stale and entry is not None and isinstance(entry.payload, dict):
         # Something changed. The stored answer is still an answer -- it was
         # true at ``computed_at`` -- and the page says so rather than making
         # the reader wait twelve seconds for a number that moved by one
         # request.
-        _start_refresh(name, key, compute, store)
+        _start_refresh(name, key, compute, store, compact)
         return _mark_stale(dict(entry.payload), entry)
     payload = compute()
     computed_at = time.time()
-    store.write(name, key=key, payload=payload, computed_at=computed_at)
+    store.write(
+        name, key=key, payload=payload, computed_at=computed_at, compact=compact
+    )
     result = dict(payload)
     result["stale"] = False
     result["computed_at"] = computed_at
