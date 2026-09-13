@@ -162,6 +162,47 @@ def owned_block_present(path: Path, owned_key_path: Sequence[str]) -> bool:
     return isinstance(node, Mapping)
 
 
+def owned_block_names(
+    path: Path, owned_key_path: Sequence[str], proxy_root_url: str
+) -> bool:
+    """Whether MCC's block in the user's document already names *this* server.
+
+    The merge target is the only file outside MCC's own directory that MCC
+    writes into, and its path follows ``HOME`` -- so every MCC server on a
+    machine resolves the same file. The background fan-out's only gate used to
+    be :func:`owned_block_present`, "is MCC's key already there", and the write
+    substitutes the writing server's own proxy root into ``baseURL``. Two
+    servers therefore ping-ponged the ``baseURL`` on every publish, which is
+    how a scratch server rewrote a user's real ``~/.commandcode/providers.json``
+    on 2026-09-12.
+
+    The file has one owner, and the file itself says who: the ``baseURL``
+    already in MCC's block. A server that does not find its own address there
+    is not the owner and leaves the bytes alone. Claiming -- and re-claiming,
+    after a ``PORT`` change -- stays with the explicit ``mcc-<harness>``
+    launcher, which is a thing the user ran on purpose.
+
+    The comparison is against the value :func:`with_base_url` would write, so a
+    block MCC wrote matches itself exactly.
+    """
+
+    document = read_document(path)
+    if document is None:
+        return False
+    node: object = document
+    for key in owned_key_path:
+        if not isinstance(node, Mapping):
+            return False
+        node = node.get(key)
+    if not isinstance(node, Mapping):
+        return False
+    current = node.get("baseURL")
+    if not isinstance(current, str):
+        return False
+    ours = with_base_url({"baseURL": COMMANDCODE_BASE_URL_SENTINEL}, proxy_root_url)
+    return current.rstrip("/") == str(ours["baseURL"]).rstrip("/")
+
+
 def merge_owned_block(
     *,
     path: Path,
