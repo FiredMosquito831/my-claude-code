@@ -222,6 +222,11 @@ _REQUEST_ALWAYS_COLUMNS: tuple[str, ...] = (
     "tokens_out",
     "duration_ms",
     "ttft_ms",
+    # Beside ``ttft_ms``, which is unchanged: that one is what the client
+    # waited, fallbacks included, and this one is what the model that answered
+    # took on its own. Their difference is the time the chain lost to models
+    # that did not answer. Empty on every row written before 7.4.0.
+    "ttft_winner_ms",
     "route_attempt",
     # Always present rather than gated by a field group. A column named in
     # ``_REQUEST_COLUMN_ORDER`` that belongs to no group is unreachable -- the
@@ -314,6 +319,7 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "tool_call_count",
     "input_image_count",
     "ttft_ms",
+    "ttft_winner_ms",
     "duration_ms",
     "route_attempt",
     "route_primary_model",
@@ -364,6 +370,7 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "tool_call_count": "Tool calls",
     "input_image_count": "Images in",
     "ttft_ms": "TTFT (ms)",
+    "ttft_winner_ms": "Winner TTFT (ms)",
     "duration_ms": "Duration (ms)",
     "route_attempt": "Route attempt",
     "route_primary_model": "Route primary",

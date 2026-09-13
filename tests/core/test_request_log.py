@@ -3760,3 +3760,258 @@ def test_the_versioned_rollup_marker_cannot_be_satisfied_by_an_old_one(
     stats = upgraded.stats()
     assert stats["served_from"] == "rollup"
     assert [row["key"] for row in stats["by_harness"]] == ["claude"]
+
+
+# ------------------------------------------------------------------ 7.4.0 --
+#
+# Per-attempt latency. The facts under test: an attempt's own clocks survive the
+# round trip, a legacy database gains the columns without losing its rows, the
+# per-model question is answered from ``request_attempts`` and not from the
+# rollup (which cannot answer it), and the request-level winner average agrees
+# between the scan path and the rollup path.
+
+
+def _latency_attempt(**overrides) -> RouteAttempt:
+    defaults: dict[str, Any] = {
+        "attempt": 0,
+        "provider": "nvidia_nim",
+        "model_ref": "nvidia_nim/fast",
+        "outcome": RouteAttemptOutcome.SUCCEEDED,
+        "duration_ms": 1_000.0,
+        "ttft_ms": 200.0,
+        "first_reasoning_ms": 50.0,
+        "tokens_out": 400,
+    }
+    defaults.update(overrides)
+    return RouteAttempt(**defaults)
+
+
+def test_attempt_insert_column_arity(store) -> None:
+    """The width guard in ``_store_attempts``, asserted rather than trusted.
+
+    A hand-written INSERT whose marker count drifted from its column list once
+    broke every write; the guard that catches it is only useful if something
+    proves every named column also survives the round trip back out.
+    """
+    from my_claude_code.core.request_log import _ATTEMPT_INSERT_COLUMNS
+
+    store.enqueue(_record("req_arity", attempts=(_latency_attempt(),)))
+    store.close()
+    with sqlite3.connect(store.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM request_attempts").fetchone()
+    for column in _ATTEMPT_INSERT_COLUMNS:
+        assert column in set(row.keys())
+    assert row["ttft_ms"] == 200.0
+    assert row["first_reasoning_ms"] == 50.0
+
+
+def test_attempt_latency_survives_the_round_trip(store) -> None:
+    store.enqueue(
+        _record(
+            "req_rt",
+            ttft_winner_ms=200.0,
+            attempts=(
+                _latency_attempt(
+                    attempt=0,
+                    model_ref="nvidia_nim/slow",
+                    outcome=RouteAttemptOutcome.FAILED,
+                    ttft_ms=None,
+                    first_reasoning_ms=None,
+                    tokens_out=None,
+                ),
+                _latency_attempt(attempt=1),
+            ),
+        )
+    )
+    store.close()
+    data = store.get_request("req_rt")
+    assert data is not None
+    attempts = data["route_attempts"]
+    # NULL is "not measured" and reaches the reader as None, never as zero.
+    assert attempts[0]["ttft_ms"] is None
+    assert attempts[0]["first_reasoning_ms"] is None
+    assert attempts[1]["ttft_ms"] == 200.0
+    assert attempts[1]["first_reasoning_ms"] == 50.0
+    assert data["ttft_winner_ms"] == 200.0
+
+
+def test_ttft_columns_added_to_legacy_database(tmp_path) -> None:
+    """A database written before 7.4.0 gains the columns and keeps its rows.
+
+    The ALTER pass is guarded by ``PRAGMA table_info``; this drops the three
+    columns back out of an existing file to prove the guard adds them again and
+    that the pre-existing rows read NULL rather than zero.
+    """
+    path = tmp_path / "legacy.db"
+    seed = RequestLogStore(path, max_rows=100)
+    seed.enqueue(_record("old", attempts=(_latency_attempt(),)))
+    seed.close()
+    with sqlite3.connect(path) as conn:
+        conn.execute("ALTER TABLE requests DROP COLUMN ttft_winner_ms")
+        conn.execute("ALTER TABLE request_attempts DROP COLUMN ttft_ms")
+        conn.execute("ALTER TABLE request_attempts DROP COLUMN first_reasoning_ms")
+
+    upgraded = RequestLogStore(path, max_rows=100)
+    try:
+        data = upgraded.get_request("old")
+        assert data is not None
+        assert data["ttft_winner_ms"] is None
+        assert data["route_attempts"][0]["ttft_ms"] is None
+        assert data["route_attempts"][0]["first_reasoning_ms"] is None
+    finally:
+        upgraded.close()
+
+
+def test_latency_by_model_groups_by_attempt_model_not_request_model(store) -> None:
+    """The misattribution regression, in one assertion.
+
+    The request row names only the model that answered. A rollup keyed on it
+    would file the model that stalled under the model that rescued the request
+    -- which is the whole reason this question is asked of ``request_attempts``.
+    """
+    store.enqueue(
+        _record(
+            "req_chain",
+            resolved_model="fast",
+            ttft_winner_ms=200.0,
+            attempts=(
+                _latency_attempt(
+                    attempt=0,
+                    model_ref="nvidia_nim/slow",
+                    outcome=RouteAttemptOutcome.FAILED,
+                    duration_ms=30_000.0,
+                    ttft_ms=20_000.0,
+                    first_reasoning_ms=None,
+                    tokens_out=None,
+                ),
+                _latency_attempt(attempt=1),
+            ),
+        )
+    )
+    store.close()
+    rows = {(row["model_ref"], row["outcome"]): row for row in store.latency_by_model()}
+    assert set(rows) == {
+        ("nvidia_nim/slow", "failed"),
+        ("nvidia_nim/fast", "succeeded"),
+    }
+    assert rows[("nvidia_nim/slow", "failed")]["avg_ttft_ms"] == 20_000.0
+    assert rows[("nvidia_nim/fast", "succeeded")]["avg_ttft_ms"] == 200.0
+    # Generating time is duration minus TTFT, per group.
+    assert rows[("nvidia_nim/fast", "succeeded")]["avg_generating_ms"] == 800.0
+    # Only the winner counted tokens; a failure has none and says so with NULL.
+    assert rows[("nvidia_nim/fast", "succeeded")]["tokens_out"] == 400
+    assert rows[("nvidia_nim/slow", "failed")]["tokens_out"] is None
+
+
+def test_latency_by_model_reports_failed_attempts_separately(store) -> None:
+    """Fast when it works and a minute when it does not is the fact, not an average."""
+    store.enqueue(
+        _record(
+            "req_a",
+            attempts=(
+                _latency_attempt(attempt=0, ttft_ms=100.0),
+                _latency_attempt(
+                    attempt=1,
+                    outcome=RouteAttemptOutcome.FAILED,
+                    ttft_ms=60_000.0,
+                    tokens_out=None,
+                ),
+            ),
+        )
+    )
+    store.close()
+    rows = {row["outcome"]: row for row in store.latency_by_model()}
+    assert rows["succeeded"]["avg_ttft_ms"] == 100.0
+    assert rows["failed"]["avg_ttft_ms"] == 60_000.0
+
+
+def test_latency_by_model_skips_attempts_that_never_ran(store) -> None:
+    store.enqueue(
+        _record(
+            "req_skip",
+            attempts=(
+                _latency_attempt(attempt=0),
+                _latency_attempt(
+                    attempt=1,
+                    model_ref="nvidia_nim/never",
+                    outcome=RouteAttemptOutcome.SKIPPED,
+                    duration_ms=None,
+                    ttft_ms=None,
+                    first_reasoning_ms=None,
+                    tokens_out=None,
+                ),
+            ),
+        )
+    )
+    store.close()
+    assert [row["model_ref"] for row in store.latency_by_model()] == ["nvidia_nim/fast"]
+
+
+def test_latency_by_model_counts_measured_attempts_apart(store) -> None:
+    """An average over one row must not be reported as if it described two."""
+    store.enqueue(
+        _record(
+            "req_mixed",
+            attempts=(
+                _latency_attempt(attempt=0, ttft_ms=300.0),
+                _latency_attempt(attempt=1, ttft_ms=None, first_reasoning_ms=None),
+            ),
+        )
+    )
+    store.close()
+    row = store.latency_by_model()[0]
+    assert row["attempts"] == 2
+    assert row["ttft_measured"] == 1
+    assert row["avg_ttft_ms"] == 300.0
+    assert row["p50_ttft_ms"] == 300.0
+    assert row["p95_ttft_ms"] == 300.0
+    assert row["p50_source"] == "exact"
+
+
+def test_latency_by_model_is_empty_when_nothing_ran(store) -> None:
+    """A log with no attempt rows at all answers nothing, which is not an error."""
+    store.enqueue(_record("req_plain"))
+    store.close()
+    assert store.latency_by_model() == []
+
+
+def test_avg_ttft_winner_matches_between_scan_and_rollup_paths(tmp_path) -> None:
+    """The counter needed no rebuild marker, and this is why.
+
+    ``ttft_winner_ms`` is NULL on every row written before 7.4.0, so a bucket
+    rolled up before the counter existed carries 0/0 -- and ``_mean(0, 0)`` is
+    None, which is exactly what ``AVG()`` answers over those same rows on the
+    scan path. The two agree without anything being rebuilt.
+    """
+    path = tmp_path / "agree.db"
+    store = RequestLogStore(path, max_rows=100)
+    store.enqueue(_record("w1", ttft_winner_ms=100.0))
+    store.enqueue(_record("w2", ttft_winner_ms=300.0))
+    store.enqueue(_record("w3", ttft_winner_ms=None))
+    store.close()
+    rollup = store.stats()
+    scan = store.stats(q="hello")
+    assert rollup["served_from"] == "rollup"
+    assert scan["served_from"] != "rollup"
+    assert rollup["avg_ttft_winner_ms"] == 200.0
+    assert scan["avg_ttft_winner_ms"] == 200.0
+
+
+def test_rollup_counter_added_to_an_existing_rollup_reads_none_not_zero(
+    tmp_path,
+) -> None:
+    """An hour rolled up before the counter existed must not report a confident 0."""
+    path = tmp_path / "older.db"
+    seed = RequestLogStore(path, max_rows=100)
+    seed.enqueue(_record("r1"))
+    seed.close()
+    with sqlite3.connect(path) as conn:
+        conn.execute("ALTER TABLE request_stats_rollup DROP COLUMN ttft_winner_sum")
+        conn.execute("ALTER TABLE request_stats_rollup DROP COLUMN ttft_winner_count")
+
+    upgraded = RequestLogStore(path, max_rows=100)
+    upgraded.close()
+    stats = upgraded.stats()
+    assert stats["served_from"] == "rollup"
+    assert stats["avg_ttft_winner_ms"] is None

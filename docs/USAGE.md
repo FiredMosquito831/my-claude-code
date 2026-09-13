@@ -3442,6 +3442,25 @@ Two panels summarise it across the window: **Failover** pairs each failing prima
 
 Requests logged before v4.42.0 have no chain recorded, so the panel is hidden for them rather than inventing one.
 
+#### The three time-to-first-token numbers, and which one to trust
+
+From **7.4.0** the log stores a first-token time per *attempt*, not only per request. There are three numbers and they answer three different questions:
+
+| Number | Clock starts | Answers |
+| --- | --- | --- |
+| **TTFT** (`ttft_ms`, unchanged) | when your request arrived | how long *you* waited for the first byte — every failed fallback's stall included |
+| **Winner TTFT** (`ttft_winner_ms`, new) | when the model that answered was asked | how fast that model actually is |
+| **Attempt TTFT** (per row in the chain, new) | when *that* model was asked | how long each model took, including the ones that then failed |
+
+`TTFT − Winner TTFT` is the time the chain lost to models that did not answer. It is not a small number: across a 290,074-request log the mean TTFT is **8.6 s** when the first model answered and **25.2 s** when a fallback did — about 16.5 s of somebody else's stall, charged until now to the model that rescued the request.
+
+Two more things worth knowing:
+
+- **Reasoning does not count as a first token.** A model that thinks for 40 s and then answers in 200 ms has an attempt TTFT of 200 ms and a separate **first reasoning** time of ~0 ms. One number cannot say both, and folding them together makes every reasoning model read as either instant or catastrophic.
+- **Nothing is backfilled.** Every request logged before 7.4.0 shows `—` in the two new columns and always will: the log never recorded when each attempt's own stream began, so there is nothing to recover. A dash is "not measured"; it is never zero.
+
+**Winner TTFT (ms)** is also a column in the request export.
+
 Every row's dialog also shows the full request and response, the resolved configuration, and timing. It's usually the fastest way to see what actually happened.
 
 #### Exporting
