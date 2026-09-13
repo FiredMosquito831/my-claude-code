@@ -10971,6 +10971,10 @@ async function loadRequestsView() {
   // one. The request still starts here, at the same moment as the other three;
   // only the *wait* has moved, to after the page has painted.
   loadRequestCostPanel(loadId, params);
+  // Off the paint path for the same reason the cost panel is: it is the one
+  // Analytics query that scans `request_attempts`, measured at 3.3 s cold on
+  // a 4.5 GB log against 0.11 s for the stats it sits beside.
+  loadRequestLatencyPanel(loadId, params);
   try {
     [stats, list, lifetime] = await Promise.all([
       api(`/admin/api/requests/stats?${params}`),
@@ -11001,6 +11005,7 @@ async function loadRequestsView() {
     reqState.total = 0;
     byId("reqBreakdownTruncatedNote").hidden = true;
     renderRequestCost(null);
+    renderRequestModelLatency(null);
     byId("reqBodiesIndicator").textContent = "Request log disabled (REQUEST_LOG_ENABLED=false)";
     renderReqPager();
     byId("reqLastUpdated").textContent = "Logging disabled";
@@ -11345,7 +11350,20 @@ function renderRequestStatsCards(stats) {
     ["Avg duration", stats.avg_duration_ms != null ? `${stats.avg_duration_ms} ms` : "—"],
     ["p50 duration", stats.p50_duration_ms != null ? `${stats.p50_duration_ms} ms` : "—"],
     ["p95 duration", stats.p95_duration_ms != null ? `${stats.p95_duration_ms} ms` : "—"],
-    ["Avg TTFT", stats.avg_ttft_ms != null ? `${stats.avg_ttft_ms} ms` : "—"],
+    // Two averages, because they answer different questions and were one
+    // number until now: the first is what clients waited, fallbacks included;
+    // the second is what the models that answered actually took. Their gap is
+    // the cost of the routing, and it is large -- 8.6 s at route attempt 0
+    // against 25.2 s above it on the log this was measured on.
+    [
+      "Avg TTFT (incl. fallbacks)",
+      stats.avg_ttft_ms != null ? `${stats.avg_ttft_ms} ms` : "—",
+    ],
+    [
+      "Avg TTFT (winner)",
+      stats.avg_ttft_winner_ms != null ? `${stats.avg_ttft_winner_ms} ms` : "—",
+      "the answering model's own first token; measured from 7.4.0 on",
+    ],
   ];
   renderStatCards(byId("reqStatsCards"), cards);
 }
@@ -11641,6 +11659,186 @@ function renderStatCards(container, cards) {
   });
 }
 
+/* How long each model took to say anything, per outcome.
+ *
+ * Read off `request_attempts` rather than off the rollup, and that is the
+ * whole design decision worth knowing about this panel: a rollup bucket's
+ * dimensions come from the `requests` row, and a model that *failed* never
+ * reaches one. Summing attempt latency into those buckets would file every
+ * failed model's time under the model that rescued the request -- the exact
+ * misattribution the panel exists to end.
+ *
+ * Failed attempts are their own outcome row for the same reason. "Quick when
+ * it works and a minute when it does not" is the fact the question is about,
+ * and one merged average hides it.
+ */
+async function loadRequestLatencyPanel(loadId, params) {
+  const note = byId("reqModelLatencyNote");
+  note.textContent = "Measuring what each model took to say anything...";
+  // Only the window travels. The store groups attempts, and an attempt has no
+  // provider filter, no key and no status of its own -- the row it belongs to
+  // may not exist. Answering a filtered question with unfiltered numbers is
+  // the failure this whole feature is about, so the panel says which question
+  // it answered instead.
+  const query = new URLSearchParams();
+  const since = params.get("since");
+  if (since) query.set("since", since);
+  else query.set("days", "0");
+  let latency;
+  try {
+    latency = await api(`/admin/api/requests/latency?${query}`);
+  } catch (error) {
+    // Not rethrown: this promise is not awaited on the paint path, and an
+    // unhandled rejection would be a console error for a panel that can say
+    // so itself.
+    if (loadId !== reqState.loadId) return;
+    note.textContent = `The model latency breakdown could not be loaded: ${error.message}`;
+    return;
+  }
+  if (loadId !== reqState.loadId) return;
+  renderRequestModelLatency(latency);
+}
+
+/** p50 as the headline with p95 in the title: one 120 s stall moves a mean by
+ *  seconds, and the median is what a request usually feels like. */
+function latencyPercentileCell(row) {
+  const cell = document.createElement("span");
+  cell.className = "req-latency-p50";
+  cell.textContent =
+    row.p50_ttft_ms == null ? NOT_MEASURED : formatChainDuration(row.p50_ttft_ms);
+  cell.title =
+    row.p95_ttft_ms == null
+      ? "No first-token time was measured for this group."
+      : `p95 ${formatChainDuration(row.p95_ttft_ms)} — one attempt in twenty` +
+        ` waited at least this long. Median shown; ${row.ttft_measured} of` +
+        ` ${row.attempts} attempts carry a measurement.`;
+  return cell;
+}
+
+/** Group tokens per second, or a dash whenever the two halves disagree.
+ *
+ * `tokens_out` sums every attempt in the group; `avg_generating_ms` averages
+ * only those that carry both a duration and a first-token time. Multiplying
+ * one by the other's count when the two sets differ produces a number no
+ * model ever achieved, so the rate is refused unless every attempt in the
+ * group was measured.
+ */
+function formatGroupRate(row) {
+  const attempts = Number(row.attempts || 0);
+  const measured = Number(row.ttft_measured || 0);
+  const generating = row.avg_generating_ms;
+  if (row.tokens_out == null || generating == null) return NOT_MEASURED;
+  if (!attempts || measured !== attempts) return NOT_MEASURED;
+  const seconds = (Number(generating) * attempts) / 1000;
+  if (seconds <= 0) return NOT_MEASURED;
+  return `${(Number(row.tokens_out) / seconds).toFixed(1)} tok/s`;
+}
+
+function renderRequestModelLatency(latency) {
+  const container = byId("reqModelLatency");
+  const note = byId("reqModelLatencyNote");
+  container.innerHTML = "";
+  if (!latency || latency.enabled === false) {
+    note.textContent = "The request log is off, so nothing is being measured.";
+    container.appendChild(
+      analyticsTable(["Model"], [], "The request log is off."),
+    );
+    return;
+  }
+  const rows = latency.rows || [];
+  // Each model's own total, so an outcome row can say what share of that
+  // model's attempts it was -- which is the failure share, read off the
+  // failed row, without a column that means nothing on the other rows.
+  const perModel = new Map();
+  rows.forEach((row) => {
+    const ref = String(row.model_ref);
+    perModel.set(ref, (perModel.get(ref) || 0) + Number(row.attempts || 0));
+  });
+  note.textContent = latencyPanelNote(latency);
+  container.appendChild(
+    analyticsTable(
+      [
+        "Model",
+        "Outcome",
+        "Attempts",
+        "Share",
+        "TTFT measured",
+        "p50 TTFT",
+        "Avg first reasoning",
+        "Avg generating",
+        "Tokens out",
+        "tok/s",
+      ],
+      rows.map((row) => {
+        const attempts = Number(row.attempts || 0);
+        const total = perModel.get(String(row.model_ref)) || 0;
+        return [
+          row.model_ref || NOT_MEASURED,
+          CHAIN_OUTCOME_LABELS[row.outcome] || row.outcome || NOT_MEASURED,
+          formatAnalyticsNumber(attempts),
+          total ? `${((attempts / total) * 100).toFixed(1)}%` : "—",
+          formatAnalyticsNumber(Number(row.ttft_measured || 0)),
+          latencyPercentileCell(row),
+          row.avg_first_reasoning_ms == null
+            ? NOT_MEASURED
+            : formatChainDuration(row.avg_first_reasoning_ms),
+          row.avg_generating_ms == null
+            ? NOT_MEASURED
+            : formatChainDuration(row.avg_generating_ms),
+          row.tokens_out == null
+            ? NOT_MEASURED
+            : formatAnalyticsNumber(Number(row.tokens_out)),
+          formatGroupRate(row),
+        ];
+      }),
+      "No attempts in this range.",
+    ),
+  );
+}
+
+/* Why the panel says what it says, in the panel. "Nothing measured" and
+   "nothing happened" are different answers and an empty table says neither --
+   and on any log that predates 7.4.0 the first one is the true one for every
+   row in it, because there is no backfill. */
+function latencyPanelNote(latency) {
+  const attempts = Number(latency.attempts || 0);
+  const measured = Number(latency.ttft_measured || 0);
+  const scope =
+    "Every route attempt in the window, including the ones whose request row" +
+    " names a different model. Not narrowed by the filters above.";
+  if (!attempts) {
+    return `No route attempts in this range. ${scope}`;
+  }
+  if (!measured) {
+    return (
+      `Nothing measured yet: none of the ${formatAnalyticsNumber(attempts)}` +
+      " attempts in this range carries a first-token time. Attempts recorded" +
+      " before 7.4.0 never had one and cannot be given one; the next requests" +
+      ` this server handles will fill this in. ${scope}`
+    );
+  }
+  const source =
+    latency.p50_source === "sampled"
+      ? " Percentiles are over the newest measured attempts rather than all of" +
+        " them, so they are close rather than exact."
+      : " Percentiles are exact over the measured attempts.";
+  const asOf = latencyAsOfNote(latency);
+  return (
+    `${formatAnalyticsNumber(measured)} of ${formatAnalyticsNumber(attempts)}` +
+    ` attempts carry a first-token time.${source} ${scope}${asOf}`
+  );
+}
+
+/* The same "as of / refreshing" sentence the cost panel uses, and for the
+   same reason: the stored answer is still an answer, and a reader owed a
+   number in a tenth of a second should not wait three seconds for one that
+   moved by a single attempt. */
+function latencyAsOfNote(latency) {
+  if (!latency.stale || !latency.computed_at) return "";
+  const when = new Date(Number(latency.computed_at) * 1000).toLocaleTimeString();
+  return ` Measured at ${when}; refreshing.`;
+}
+
 /* Same as the key breakdown: COALESCE-d sums, so a zero here was counted. */
 function renderRequestProviderBreakdown(rows) {
   const container = byId("reqProviderBreakdown");
@@ -11925,6 +12123,68 @@ function buildCostCell(row) {
   return td;
 }
 
+/* Below this, the two numbers are the same number: the winner's own first
+   token arrives a frame after the request's, and calling a millisecond a
+   "fallback loss" would put a `+0 s` on nearly every row. */
+const FALLBACK_LOSS_FLOOR_MS = 250;
+
+/** The time this request lost to models that did not answer, or null. */
+function fallbackLossMs(row) {
+  if (row.ttft_winner_ms == null || row.ttft_ms == null) return null;
+  const lost = Number(row.ttft_ms) - Number(row.ttft_winner_ms);
+  return lost > FALLBACK_LOSS_FLOOR_MS ? lost : null;
+}
+
+/* The request row's TTFT cell: the *winning* model's own first-token time,
+   with the time the chain lost to its predecessors as a suffix.
+
+   The cell used to show `ttft_ms`, which is what the client waited --
+   fallbacks included -- so a model that answered in 300 ms after two dead
+   models was recorded in the list as having taken 4.7 seconds. Measured over
+   the real log: mean TTFT is 8.6 s at route attempt 0 and 25.2 s above it, so
+   roughly 16.5 s of predecessor time was being charged to whichever model
+   rescued the request. Both numbers are still true and both are in the title;
+   only which one is the headline has changed.
+
+   A row written before 7.4.0 has no winner time at all and falls back to the
+   client-facing number, which is exactly what it showed before. */
+function buildTtftCell(row) {
+  const td = document.createElement("td");
+  td.className = "req-ttft-cell";
+  const measured = row.ttft_winner_ms != null;
+  const shown = measured ? row.ttft_winner_ms : row.ttft_ms;
+  if (shown == null) {
+    td.textContent = NOT_MEASURED;
+    td.title = "No first-token time was recorded for this request.";
+    return td;
+  }
+  td.appendChild(document.createTextNode(`${Math.round(shown)} ms`));
+  const lost = fallbackLossMs(row);
+  if (lost != null) {
+    const suffix = document.createElement("span");
+    suffix.className = "req-ttft-lost";
+    suffix.textContent = ` +${(lost / 1000).toFixed(1)} s`;
+    td.appendChild(suffix);
+  }
+  const client = row.ttft_ms == null ? null : `${Math.round(row.ttft_ms)} ms`;
+  td.title = measured
+    ? [
+        `The model that answered took ${Math.round(shown)} ms to its first token.`,
+        client === null
+          ? ""
+          : `The client waited ${client}${
+              lost == null
+                ? "."
+                : `, because ${(lost / 1000).toFixed(1)} s went to models that did not answer.`
+            }`,
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : "What the client waited, fallbacks included. This request predates" +
+      " per-attempt measurement, so the answering model's own time is not known.";
+  return td;
+}
+
 function renderRequestsTable(rows) {
   const body = byId("reqTableBody");
   body.innerHTML = "";
@@ -11958,7 +12218,7 @@ function renderRequestsTable(rows) {
     tr.appendChild(buildTurnShapeCell(row));
     addText(`${row.tokens_in ?? "—"}/${row.tokens_out ?? "—"}`);
     tr.appendChild(buildCostCell(row));
-    addText(row.ttft_ms != null ? `${Math.round(row.ttft_ms)} ms` : "—");
+    tr.appendChild(buildTtftCell(row));
     addText(row.duration_ms != null ? `${Math.round(row.duration_ms)} ms` : "—");
     const actionCell = document.createElement("td");
     const detailButton = document.createElement("button");
@@ -12276,7 +12536,13 @@ async function openRequestDetail(requestId) {
     ["+ adapter (in/out)", formatAdapterTokens(row)],
     ["Estimated input", formatEstimatedInput(row)],
     ["Output rate", formatOutputRate(row)],
-    ["TTFT", row.ttft_ms != null ? `${Math.round(row.ttft_ms)} ms` : "—"],
+    // Three numbers where there was one, because one could not tell them
+    // apart: what the answering model took, what the client waited, and the
+    // difference -- which is the chain's own cost and belongs to neither
+    // model. The third row is omitted entirely when there is nothing to say.
+    ["TTFT (winner)", formatMilliseconds(row.ttft_winner_ms)],
+    ["TTFT (incl. fallbacks)", formatMilliseconds(row.ttft_ms)],
+    ["Lost to fallbacks", formatFallbackLoss(row)],
     ["Duration", row.duration_ms != null ? `${Math.round(row.duration_ms)} ms` : "—"],
     ["Turn", formatTurnSummary(row)],
     ["Image input", formatImageSummary(row)],
@@ -12462,13 +12728,87 @@ function formatRowCacheHit(row) {
   return `${((Number(row.cache_read_tokens) / total) * 100).toFixed(1)}%`;
 }
 
-/** Output tokens per second, excluding the wait before the first one. */
+function formatMilliseconds(value) {
+  return value == null ? NOT_MEASURED : `${Math.round(Number(value))} ms`;
+}
+
+/* The time the chain spent on models that did not answer, as a modal row.
+   Empty -- so the row is not drawn at all -- when there is no fallback to
+   account for, when the two numbers are a frame apart, or when either is
+   unmeasured. A "0 ms lost" row on every single-model request would be noise
+   in front of the reader on the 86% of requests that never fell back. */
+function formatFallbackLoss(row) {
+  const lost = fallbackLossMs(row);
+  if (lost == null) return "";
+  return `${Math.round(lost)} ms (charged to models that did not answer)`;
+}
+
+/** The first-token time of the model that actually answered, or null.
+ *
+ * Falls back to the request's own figure for rows written before per-attempt
+ * measurement: on those the two are the same claim, because there is nothing
+ * finer to say.
+ */
+function winnerTtftMs(row) {
+  if (row.ttft_winner_ms != null) return Number(row.ttft_winner_ms);
+  return row.ttft_ms == null ? null : Number(row.ttft_ms);
+}
+
+/** Output tokens per second, excluding the wait before the first one.
+ *
+ * Measured on the *answering attempt* wherever the log has one, because both
+ * halves of the sum have to come from the same model. The old form subtracted
+ * the request's TTFT from the request's duration, and on a fallback request
+ * that is one model's clock minus another's: the predecessors' stall was
+ * taken out of the denominator and the rate came out too high, the worse the
+ * fallback the better it looked. Taking the winner's TTFT out of the
+ * *request's* duration is the same mistake the other way round -- the
+ * predecessors' 4.5 s would stay in the denominator and a model producing
+ * 9,900 tok/s would be reported at 1.1.
+ *
+ * The request-level arithmetic is still the fallback, for rows written before
+ * per-attempt measurement, and it uses the winner's TTFT where there is one.
+ *
+ * Refuses to compute rather than guessing: an unmeasured first token is not a
+ * first token at zero, so a row with no TTFT gets a dash where it used to get
+ * ``tokens / duration`` presented as a generating rate.
+ */
 function formatOutputRate(row) {
+  const answered = answeringAttempt(row);
+  if (answered && answered.outcome === "succeeded" && answered.ttft_ms != null) {
+    // The winner's own token count is filled from 7.4.0 on; before that the
+    // request's is the only one there is, and on the attempt that answered
+    // the client they are the same tokens.
+    const rate = formatAttemptRate({
+      duration_ms: answered.duration_ms,
+      ttft_ms: answered.ttft_ms,
+      tokens_out: answered.tokens_out ?? row.tokens_out,
+    });
+    if (rate !== NOT_MEASURED) return rate;
+  }
   const tokens = Number(row.tokens_out || 0);
   const duration = Number(row.duration_ms || 0);
-  const ttft = Number(row.ttft_ms || 0);
+  const ttft = winnerTtftMs(row);
+  if (!tokens || !duration || ttft == null) return NOT_MEASURED;
   const generating = duration - ttft;
-  if (!tokens || generating <= 0) return "—";
+  if (generating <= 0) return NOT_MEASURED;
+  return `${(tokens / (generating / 1000)).toFixed(1)} tok/s`;
+}
+
+/** The same arithmetic for one attempt, from the attempt's own numbers.
+ *
+ * The winning attempt is the only one that carries a token count -- a failed
+ * attempt produced no answer to count -- so every other row is a dash here
+ * rather than a rate computed from the request's tokens, which belong to
+ * whichever model answered.
+ */
+function formatAttemptRate(attempt) {
+  const tokens = Number(attempt.tokens_out || 0);
+  const duration = Number(attempt.duration_ms || 0);
+  const ttft = attempt.ttft_ms == null ? null : Number(attempt.ttft_ms);
+  if (!tokens || !duration || ttft == null) return NOT_MEASURED;
+  const generating = duration - ttft;
+  if (generating <= 0) return NOT_MEASURED;
   return `${(tokens / (generating / 1000)).toFixed(1)} tok/s`;
 }
 
@@ -12786,6 +13126,85 @@ function appendBenchReason(item, bench) {
   item.appendChild(why);
 }
 
+/** What ended this attempt, in two or three words rather than a sentence.
+ *
+ * The prose underneath stays where it is -- it carries the host's own message
+ * and a reader needs it -- but the timeline is a list of five attempts and
+ * "what ended it" has to be scannable beside the numbers rather than read.
+ */
+function attemptEndedBy(attempt) {
+  const bench = benchOf(attempt);
+  if (bench) return bench.last_kind ? `benched (${bench.last_kind})` : "benched";
+  if (attempt.error_kind) return String(attempt.error_kind);
+  const ladder = ladderOf(attempt);
+  if (ladder && ladder.root_cause) return String(ladder.root_cause);
+  return CHAIN_OUTCOME_LABELS[attempt.outcome] || attempt.outcome || NOT_MEASURED;
+}
+
+/* The per-attempt latency line, under the attempt's own head row.
+ *
+ * Each of these was previously only ever visible as the request's single
+ * number, which is the *chain's* figure: on a request that fell back twice,
+ * the answering model's 300 ms was invisible and the 4.7 s the reader saw
+ * belonged to two models that never answered. A dash is a measurement that
+ * was never taken -- every attempt written before 7.4.0 is unmeasured and
+ * there is no backfill -- and is never a zero.
+ *
+ * A skipped attempt is drawn with the same row, all dashes: it has no latency
+ * because it was never asked, and its bench reason is the sentence below.
+ * Dropping the row for skipped attempts would reintroduce "the fallback was
+ * never tried" as something the panel does not mention.
+ */
+function appendAttemptMetrics(item, attempt) {
+  const row = document.createElement("div");
+  row.className = "req-chain-metrics";
+  const ttft = attempt.ttft_ms == null ? null : Number(attempt.ttft_ms);
+  const duration = attempt.duration_ms == null ? null : Number(attempt.duration_ms);
+  // NULL whenever either input is, and refused when the subtraction would be
+  // negative: a generating time of "-40 ms" is a measurement error, not a
+  // measurement.
+  const generating =
+    ttft == null || duration == null || duration - ttft < 0 ? null : duration - ttft;
+  const cells = [
+    ["TTFT", ttft == null ? NOT_MEASURED : formatChainDuration(ttft)],
+    [
+      "first reasoning",
+      attempt.first_reasoning_ms == null
+        ? NOT_MEASURED
+        : formatChainDuration(attempt.first_reasoning_ms),
+    ],
+    [
+      "generating",
+      generating == null ? NOT_MEASURED : formatChainDuration(generating),
+    ],
+    [
+      "tokens out",
+      attempt.tokens_out == null
+        ? NOT_MEASURED
+        : Number(attempt.tokens_out).toLocaleString(),
+    ],
+    ["rate", formatAttemptRate(attempt)],
+    ["ended", attemptEndedBy(attempt)],
+  ];
+  cells.forEach(([label, value]) => {
+    const cell = document.createElement("span");
+    cell.className = "req-chain-metric";
+    const name = document.createElement("span");
+    name.className = "req-chain-metric-label";
+    name.textContent = label;
+    const shown = document.createElement("span");
+    shown.className = "req-chain-metric-value";
+    shown.textContent = value;
+    cell.append(name, shown);
+    row.appendChild(cell);
+  });
+  row.title =
+    "Measured on this attempt alone. A dash is a measurement that was never" +
+    " taken: attempts recorded before 7.4.0 carry no first-token time, and a" +
+    " model that was never asked has no latency at all.";
+  item.appendChild(row);
+}
+
 function renderRequestChain(row) {
   const container = byId("reqDetailChain");
   if (!container) return;
@@ -12927,6 +13346,7 @@ function renderRequestChain(row) {
     }
     head.appendChild(credential);
     item.appendChild(head);
+    appendAttemptMetrics(item, attempt);
 
     // The reason, which is the entire point of the panel.
     const reason = attempt.error_message || "";
@@ -15265,6 +15685,10 @@ initThemeSwitch();
 
 const modelsState = {
   data: null,
+  // model_ref -> the latency rollup its chip is drawn from, or null when the
+  // endpoint was unreachable. Kept beside `data` rather than in it: it comes
+  // from a different endpoint on purpose (see loadModelsView).
+  latency: null,
   loading: false,
   filter: "",
   // Which provider/model rows are unfolded, so a re-render after a save does
@@ -15302,7 +15726,18 @@ async function loadModelsView(force = false) {
   modelsState.loading = true;
   setModelsStatus("Loading models...");
   try {
-    modelsState.data = await api("/admin/api/model-admin");
+    // Fetched beside the page rather than folded into its payload. The
+    // latency question is a scan of `request_attempts` -- 3.3 s cold on a
+    // 4.5 GB log -- and the Models page spent 6.75.0 through 6.81.0 getting
+    // off exactly that kind of critical path. Started at the same moment, so
+    // it costs nothing in wall clock, and a failure leaves the page intact
+    // with no chips rather than no page.
+    const [data, latency] = await Promise.all([
+      api("/admin/api/model-admin"),
+      api("/admin/api/requests/latency").catch(() => null),
+    ]);
+    modelsState.data = data;
+    modelsState.latency = indexLatencyByModel(latency);
     renderModelsPage();
     setModelsStatus("");
   } catch (error) {
@@ -16214,6 +16649,7 @@ function buildModelSummary(model) {
       "reply contained thinking text. Succeeded attempts only.";
     second.appendChild(chip);
   }
+  appendLatencyChip(second, model.model_ref);
   // What this deployment taught MCC about itself, with its age and whether it
   // is still being applied. Blank for the common case: most models have never
   // said anything about themselves.
@@ -16222,6 +16658,89 @@ function buildModelSummary(model) {
   // readout, which is drawn whether or not the summary is on screen.
   if (second.childElementCount) summary.appendChild(second);
   return summary;
+}
+
+/** Fold the latency endpoint's (model, outcome) rows into one entry per model.
+ *
+ * The outcome groups are kept, not summed: "answered in 300 ms, failed after
+ * 90 s" is two facts and averaging them together produces a third that is
+ * neither. The chip's headline is the answering group, because that is what
+ * "how fast is this model" means; the tooltip lists the rest.
+ */
+function indexLatencyByModel(latency) {
+  if (!latency || latency.enabled === false || !Array.isArray(latency.rows)) {
+    return null;
+  }
+  const index = new Map();
+  latency.rows.forEach((row) => {
+    const ref = String(row.model_ref || "");
+    if (!ref) return;
+    const entry = index.get(ref) || { attempts: 0, ttft_measured: 0, outcomes: [] };
+    entry.attempts += Number(row.attempts || 0);
+    entry.ttft_measured += Number(row.ttft_measured || 0);
+    entry.outcomes.push(row);
+    index.set(ref, entry);
+  });
+  return index;
+}
+
+/** The group whose percentiles the chip leads with: the answering one where
+ *  there is one, otherwise whichever group was actually measured. */
+function headlineLatencyOutcome(entry) {
+  const measured = entry.outcomes.filter(
+    (row) => Number(row.ttft_measured || 0) > 0 && row.p50_ttft_ms != null,
+  );
+  if (!measured.length) return null;
+  return (
+    measured.find((row) => row.outcome === "succeeded") ||
+    measured.reduce((best, row) =>
+      Number(row.ttft_measured || 0) > Number(best.ttft_measured || 0) ? row : best,
+    )
+  );
+}
+
+/* Measured, not declared, and absent rather than zeroed: a model that served
+   no measured attempt gets no chip at all. Every attempt written before 7.4.0
+   is unmeasured and cannot be backfilled, so on an installed log this chip
+   appears one model at a time as traffic arrives -- which is the honest
+   picture, and a "p50 0 ms" chip on 1,189 models would not be. */
+function appendLatencyChip(row, modelRef) {
+  const index = modelsState.latency;
+  if (!index) return;
+  const entry = index.get(String(modelRef || ""));
+  if (!entry || !entry.ttft_measured) return;
+  const headline = headlineLatencyOutcome(entry);
+  if (!headline) return;
+  const days = (modelsState.data && modelsState.data.measured_days) || 7;
+  const p95 =
+    headline.p95_ttft_ms == null
+      ? ""
+      : `, p95 ${formatChainDuration(headline.p95_ttft_ms)}`;
+  const chip = buildModelsChip(
+    "latency",
+    `last ${days}d: p50 TTFT ${formatChainDuration(headline.p50_ttft_ms)}${p95}` +
+      ` over ${entry.ttft_measured} of ${entry.attempts} attempts`,
+  );
+  chip.title = [
+    `Median time to this model's first token when it ${
+      CHAIN_OUTCOME_LABELS[headline.outcome] || headline.outcome
+    }.`,
+    "The denominator counts every attempt this model served in the window," +
+      " failed ones included; only attempts recorded from 7.4.0 on carry a" +
+      " first-token time.",
+    entry.outcomes
+      .map(
+        (item) =>
+          `${CHAIN_OUTCOME_LABELS[item.outcome] || item.outcome}: ${item.attempts}` +
+          ` attempts, p50 ${
+            item.p50_ttft_ms == null
+              ? NOT_MEASURED
+              : formatChainDuration(item.p50_ttft_ms)
+          }`,
+      )
+      .join(" · "),
+  ].join(" ");
+  row.appendChild(chip);
 }
 
 /* "3 d ago" beats an ISO timestamp in a chip that has to fit beside four

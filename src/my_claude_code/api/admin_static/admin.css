@@ -5601,6 +5601,34 @@ details.turn-pane > summary:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* The per-attempt latency line, under .req-chain-head. Tabular numerals so
+   five attempts' figures line up as a column the eye can run down, and dim
+   because it is the detail under the row rather than the row. */
+.req-chain-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.req-chain-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.req-chain-metric-label {
+  opacity: 0.75;
+}
+
+.req-chain-metric-value {
+  color: var(--text);
+}
+
 .req-chain-reason {
   margin: 6px 0 0;
   color: var(--muted);
@@ -6816,6 +6844,33 @@ details.turn-pane > summary:focus-visible {
 .models-chip-measured {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* Measured latency, beside the measured reasoning chip and quieter than it:
+   it is a timing, not a capability, and it must not read as the louder fact
+   of the two. */
+.models-chip-latency {
+  border-color: var(--neutral-border);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The request row's TTFT cell: the winner's number, then the time the chain
+   lost to models that did not answer. */
+.req-ttft-cell {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.req-ttft-lost {
+  color: var(--warn, var(--accent));
+}
+
+/* The median is the headline; the p95 is in the cell's title, so the cell
+   carries a hint that there is something to hover. */
+.req-latency-p50 {
+  border-bottom: 1px dotted var(--line);
+  font-variant-numeric: tabular-nums;
 }
 
 .req-wire-unmeasured,

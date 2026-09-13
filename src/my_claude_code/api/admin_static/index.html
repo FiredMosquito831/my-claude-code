@@ -1002,6 +1002,11 @@
                 </section>
               </div>
             </section>
+            <section class="analytics-panel">
+              <h4>Model latency</h4>
+              <p id="reqModelLatencyNote" class="analytics-footnote"></p>
+              <div id="reqModelLatency"></div>
+            </section>
             <div class="requests-breakdowns">
               <section class="analytics-panel">
                 <h4>Provider performance</h4>
@@ -3350,6 +3355,49 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   message that survived a whole ladder. Attempts recorded before
                   6.12.0 show no ladder &mdash; not measured, not &ldquo;there were no
                   retries&rdquo;.
+                </p>
+                <h4>How long each model took to say anything</h4>
+                <p>
+                  A request that fell back waited for every model ahead of the one
+                  that answered, and until 7.5.0 the whole of that wait was printed
+                  against the model that rescued it. The Requests row now shows the
+                  <strong>winner&rsquo;s</strong> own first-token time, with a
+                  <code>+N s</code> suffix for the time the chain lost &mdash;
+                  <code>300 ms +4.4 s</code> reads &ldquo;the model that answered took
+                  300 ms; you waited 4.7 s&rdquo;. Both numbers are in the
+                  cell&rsquo;s tooltip. The gap is not small: across a
+                  290,074-request log the mean is <strong>8.6 s</strong> when the
+                  first model answered and <strong>25.2 s</strong> when a fallback
+                  did.
+                </p>
+                <p>
+                  <strong>View</strong> breaks the same request into its attempts:
+                  each row of <em>Route attempts</em> carries its own TTFT, first
+                  reasoning time, generating time, tokens out, tok/s and what ended
+                  it. <em>Output rate</em> is measured from the winner&rsquo;s first
+                  token, so a fallback request no longer reports a rate that is too
+                  high. A model that was never asked keeps its row with dashes and
+                  its bench reason underneath.
+                </p>
+                <p>
+                  <strong>Analytics &rarr; Model latency</strong> groups every route
+                  attempt by model <em>and outcome</em>: a model that answers in
+                  300 ms and fails after 90 s is one model and two facts, and one
+                  average would hide both. Each row leads with its median
+                  (<code>p50</code>), keeps the p95 in the tooltip, and states how
+                  many of its attempts were actually measured &mdash; a panel may
+                  never report a percentile over twelve attempts as if it described
+                  4,431. The panel answers over the window only, not the filters
+                  above it: a failed attempt has no request row to filter on. The
+                  Models page carries the same median per model as a chip, and no
+                  chip at all for a model nothing has measured.
+                </p>
+                <p class="guide-note">
+                  <strong>Nothing before 7.4.0 is measured, and none of it can be.</strong>
+                  The log never recorded when each attempt&rsquo;s own stream began,
+                  so there is nothing to recover: those rows show dashes for ever,
+                  and the panel says so in words rather than leaving a blank column.
+                  New requests fill it in as they arrive.
                 </p>
                 <h4>When the numbers stop moving</h4>
                 <p>

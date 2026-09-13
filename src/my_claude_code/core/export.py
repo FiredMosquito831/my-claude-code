@@ -280,6 +280,16 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
     "ladder": (),
 }
 
+# Derived detail columns present on every request export, gated by no field.
+#
+# ``ttft_lost_to_fallbacks_ms`` is ``ttft_ms - ttft_winner_ms``: the part of
+# what the client waited that belongs to models which did not answer. Both its
+# inputs are in ``_REQUEST_ALWAYS_COLUMNS``, so like them it is a structural
+# fact about the row rather than one of the metrics the checklist selects --
+# and a reader who exports TTFT without it has the misattributed number and no
+# way to see that it is misattributed.
+_REQUEST_ALWAYS_DERIVED: tuple[str, ...] = ("ttft_lost_to_fallbacks_ms",)
+
 # Derived detail columns computed per row (not raw SQL columns).
 _REQUEST_DETAIL_DERIVED: dict[str, tuple[str, ...]] = {
     "cache_hit": ("cache_hit_rate",),
@@ -320,6 +330,7 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "input_image_count",
     "ttft_ms",
     "ttft_winner_ms",
+    "ttft_lost_to_fallbacks_ms",
     "duration_ms",
     "route_attempt",
     "route_primary_model",
@@ -371,6 +382,7 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "input_image_count": "Images in",
     "ttft_ms": "TTFT (ms)",
     "ttft_winner_ms": "Winner TTFT (ms)",
+    "ttft_lost_to_fallbacks_ms": "Lost to fallbacks (ms)",
     "duration_ms": "Duration (ms)",
     "route_attempt": "Route attempt",
     "route_primary_model": "Route primary",
@@ -421,6 +433,7 @@ def request_detail_columns(field_ids: Iterable[str]) -> list[str]:
     chosen: list[str] = []
     chosen_set: set[str] = set()
     derived = {item for group in _REQUEST_DETAIL_DERIVED.values() for item in group}
+    derived.update(_REQUEST_ALWAYS_DERIVED)
     # Always-columns that are not part of the display-order list (keyset
     # pagination needs ``ts_epoch``; row shaping needs ``stream``) come first.
     for column in _REQUEST_ALWAYS_COLUMNS:
@@ -443,10 +456,14 @@ def request_detail_columns(field_ids: Iterable[str]) -> list[str]:
 
 
 def request_detail_derived_columns(field_ids: Iterable[str]) -> list[str]:
-    """Return the derived (computed) columns for the selected fields."""
+    """Return the derived (computed) columns for the selected fields.
+
+    The always-derived ones come first, beside the always-present SQL columns
+    they are computed from.
+    """
     selected = set(field_ids)
-    result: list[str] = []
-    seen: set[str] = set()
+    result: list[str] = list(_REQUEST_ALWAYS_DERIVED)
+    seen: set[str] = set(result)
     for field_id in REQUEST_FIELD_IDS:
         if field_id in selected:
             for derived in _REQUEST_DETAIL_DERIVED.get(field_id, ()):
@@ -465,8 +482,26 @@ def compute_request_detail_derived(
 ) -> None:
     """Mutate ``row`` in place, filling derived columns for selected fields."""
     selected = set(field_ids)
+    if "ttft_lost_to_fallbacks_ms" not in row:
+        row["ttft_lost_to_fallbacks_ms"] = _ttft_lost_to_fallbacks(row)
     if "cache_hit" in selected and "cache_hit_rate" not in row:
         row["cache_hit_rate"] = _cache_hit_ratio(row)
+
+
+def _ttft_lost_to_fallbacks(row: dict[str, Any]) -> Any:
+    """``ttft_ms - ttft_winner_ms``, or None when either was never measured.
+
+    Empty rather than zero on a row that predates per-attempt measurement:
+    "this request lost nothing to fallbacks" and "we cannot say what it lost"
+    are different claims, and a column of zeroes would make the second read as
+    the first for every row written before 7.4.0.
+    """
+
+    client = row.get("ttft_ms")
+    winner = row.get("ttft_winner_ms")
+    if client is None or winner is None:
+        return None
+    return round(float(client) - float(winner), 3)
 
 
 def _cache_hit_ratio(row: dict[str, Any]) -> Any:

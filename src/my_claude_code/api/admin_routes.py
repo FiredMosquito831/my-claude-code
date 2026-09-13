@@ -44,9 +44,12 @@ from my_claude_code.api.models_page_cache import (
 )
 from my_claude_code.api.optimization_handlers import OPTIMIZATION_RULE_SPECS
 from my_claude_code.application.derived_payloads import (
+    LATENCY_ALL_TIME_ENTRY,
+    LATENCY_DEFAULT_ENTRY,
     cached_payload,
     cost_breakdown_cache_key,
     cost_breakdown_entry_name,
+    latency_by_model_cache_key,
 )
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.release_updates import (
@@ -3118,6 +3121,112 @@ async def request_log_pulse(
         harness=harness,
     )
     result["enabled"] = True
+    return result
+
+
+def _latency_window(days: int, since: float | None) -> tuple[float | None, str | None]:
+    """Resolve the latency window, and which document it may be stored under.
+
+    ``since`` is what the Analytics view sends: it has a window selector of
+    its own and the panel must answer the same question as the cards above it.
+    ``days`` is what the Models page sends -- nothing at all, in fact, because
+    its default *is* the window the reasoning chips already measure over, and
+    the two agreeing by construction is the point. ``days`` of zero or less
+    means all time, which is the Analytics view's own opening selection.
+
+    Only those two openings are stored on disk. A window a reader picked by
+    hand is answered live, exactly as the cost breakdown decides it.
+    """
+
+    if since is not None:
+        return (since, None)
+    if days <= 0:
+        return (None, LATENCY_ALL_TIME_ENTRY)
+    window_days = min(days, 365)
+    # Floored to the minute so two page loads seconds apart share a key --
+    # the same reason the Models page floors its own reasoning window.
+    return (
+        float(int(time.time() - window_days * 86_400) // 60 * 60),
+        LATENCY_DEFAULT_ENTRY if window_days == REASONING_MEASUREMENT_DAYS else None,
+    )
+
+
+def _latency_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """The denominators a latency card may never be read without.
+
+    ``attempts`` is every attempt in the window; ``ttft_measured`` is how many
+    of them carry a first-token time at all. Every row written before 7.4.0
+    carries none and there is no backfill, so a card that showed only the
+    percentiles would imply it had measured hundreds of thousands of attempts
+    when it had measured twelve.
+    """
+
+    return {
+        "models": len({str(row["model_ref"]) for row in rows}),
+        "attempts": sum(int(row["attempts"] or 0) for row in rows),
+        "ttft_measured": sum(int(row["ttft_measured"] or 0) for row in rows),
+        # One "sampled" row makes the whole readout sampled: the cap is on the
+        # single pull every group's percentiles are bucketed out of.
+        "p50_source": (
+            "sampled"
+            if any(row.get("p50_source") == "sampled" for row in rows)
+            else "exact"
+        ),
+    }
+
+
+@router.get("/admin/api/requests/latency")
+async def request_log_latency(
+    request: Request,
+    days: int = REASONING_MEASUREMENT_DAYS,
+    since: float | None = None,
+    settings: Settings = Depends(get_settings),
+):
+    """Per model and outcome: how long it took to say anything.
+
+    Asked of ``request_attempts`` rather than of the rollup, because a model
+    that *failed* never reaches a ``requests`` row and summing its latency
+    into the rollup's buckets would file its time under the model that rescued
+    the request. Failed attempts are their own outcome group here for the same
+    reason -- "quick when it works, a minute when it does not" is the fact the
+    question is about.
+
+    Declared above ``/admin/api/requests/{request_id}`` and it has to stay
+    there: FastAPI matches in declaration order, so the path-parameter route
+    would otherwise answer this one with a 404 for a request id of "latency".
+
+    Measured at 3.3 s cold on a 4.5 GB log whose every attempt row predates
+    the measurement, so the two windows the dashboard opens with are kept on
+    disk the way the cost breakdown is: answered instantly from the stored
+    document, marked ``stale`` while a fresh one is computed off the request
+    path.
+    """
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    window, entry = _latency_window(days, since)
+    if store is None:
+        return {
+            "enabled": False,
+            "rows": [],
+            "window_since": window,
+            **_latency_totals([]),
+        }
+
+    def compute() -> dict[str, Any]:
+        rows = store.latency_by_model(since=window)
+        return {"rows": rows, **_latency_totals(rows)}
+
+    if entry is None:
+        result = await asyncio.to_thread(compute)
+        result["stale"] = False
+    else:
+        key = await asyncio.to_thread(latency_by_model_cache_key, store, since=window)
+        result = await asyncio.to_thread(
+            cached_payload, entry, key=key, compute=compute
+        )
+    result["enabled"] = True
+    result["window_since"] = window
     return result
 
 

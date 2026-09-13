@@ -3213,3 +3213,173 @@ def test_the_cost_card_ships_the_denominator_behind_its_totals(rendered) -> None
     assert "Priced: 179,897 of 333,838 requests (53.9%)" in note
     # The provenance line it has always carried is still there.
     assert "Priced by" in note
+
+
+# ---------------------------------------------------------------------------
+# Per-model latency: the winner's number, and the time the chain lost
+# ---------------------------------------------------------------------------
+
+
+def test_jsdom_request_row_shows_winner_ttft_and_fallback_loss(rendered) -> None:
+    """The row must report the answering model, not its predecessors' stalls.
+
+    The fixture is the regression in one line: the winner's first token came
+    in 300 ms and the client waited 4,712 ms because two models ahead of it
+    did not answer. The row used to print 4,712 ms against the model that
+    rescued the request.
+    """
+
+    fallback, frame, legacy, unmeasured = rendered["latencyViews"]["rowCells"]
+
+    assert fallback["text"] == "300 ms +4.4 s"
+    assert fallback["lost"] == [" +4.4 s"]
+    assert "took 300 ms" in fallback["title"]
+    assert "4712 ms" in fallback["title"]
+    # A millisecond apart is the ordinary single-model request: the winner's
+    # own clock starts one frame after the request's, and a `+0.0 s` on every
+    # row would make the suffix meaningless where it matters.
+    assert frame["text"] == "305 ms"
+    assert frame["lost"] == []
+    # Written before 7.4.0: no winner time exists, so the row is exactly what
+    # it has always been, and the title says which number it is.
+    assert legacy["text"] == "410 ms"
+    assert "predates per-attempt measurement" in legacy["title"]
+    assert unmeasured["text"] == "\u2014"
+
+
+def test_jsdom_output_rate_uses_the_winner_ttft(rendered) -> None:
+    """Both halves of the rate must come from the same model.
+
+    The winner produced 340 tokens over (2,100 - 300) ms: 188.9 tok/s. The old
+    form -- the request's 6,812 ms minus the request's 4,712 ms TTFT -- read
+    161.9 because the predecessors' stall had been taken out of the
+    denominator; putting the winner's TTFT into the request's duration would
+    read 52.2 for the same reason in reverse. Neither is a rate any model
+    achieved.
+    """
+
+    pairs = dict(rendered["latencyViews"]["detailPairs"])
+
+    assert pairs["Output rate"] == "188.9 tok/s"
+    assert pairs["Duration"] == "6812 ms"
+    assert pairs["TTFT (winner)"] == "300 ms"
+    assert pairs["TTFT (incl. fallbacks)"] == "4712 ms"
+    assert pairs["Lost to fallbacks"].startswith("4412 ms")
+
+
+def test_jsdom_request_chain_renders_per_attempt_latency(rendered) -> None:
+    """Each attempt's own clock, on the attempt's own row."""
+
+    views = rendered["latencyViews"]
+    assert views["chainHidden"] is False
+    first, second, winner, _skipped = views["attemptMetrics"]
+
+    # The model that timed out never produced a first token, and a dash is the
+    # only honest thing to print for one.
+    assert dict(first)["TTFT"] == "\u2014"
+    assert dict(first)["ended"] == "upstream_timeout"
+    assert dict(second)["TTFT"] == "1.4s"
+    assert dict(winner) == {
+        "TTFT": "300 ms",
+        "first reasoning": "460 ms",
+        "generating": "1.8s",
+        "tokens out": "340",
+        "rate": "188.9 tok/s",
+        "ended": "answered",
+    }
+    # A failed attempt produced no answer to count, so its rate is refused
+    # rather than computed from the request's tokens -- those belong to
+    # whichever model answered.
+    assert dict(second)["rate"] == "\u2014"
+    assert dict(second)["tokens out"] == "\u2014"
+
+
+def test_jsdom_skipped_attempt_renders_dashes_and_its_bench_reason(rendered) -> None:
+    """A model that was never asked has no latency, and says why it was not."""
+
+    views = rendered["latencyViews"]
+    skipped = dict(views["attemptMetrics"][3])
+
+    assert [skipped[name] for name in ("TTFT", "first reasoning", "generating")] == [
+        "\u2014",
+        "\u2014",
+        "\u2014",
+    ]
+    assert skipped["ended"] == "benched (upstream_status)"
+    # The sentence underneath survives: the row scans, the reason still reads.
+    assert views["benchReasons"]
+    assert "12 counted failures" in views["benchReasons"][0]
+    assert views["chainModels"][3] == "commandcode/benched-four"
+
+
+def test_jsdom_model_latency_breakdown_keeps_failures_apart(rendered) -> None:
+    """One model, two outcomes, two rows: the separation is the feature."""
+
+    panel = rendered["latencyViews"]["panel"]
+
+    assert panel["headers"] == [
+        "Model",
+        "Outcome",
+        "Attempts",
+        "Share",
+        "TTFT measured",
+        "p50 TTFT",
+        "Avg first reasoning",
+        "Avg generating",
+        "Tokens out",
+        "tok/s",
+    ]
+    answered = next(row for row in panel["rows"] if row[1] == "answered")
+    failed = next(
+        row
+        for row in panel["rows"]
+        if row[0] == "alpha/model-02" and row[1] == "failed"
+    )
+    assert answered[5] == "312 ms"
+    assert failed[5] == "9.0s"
+    # p50 leads, p95 is in the title: one 120 s stall moves a mean by seconds.
+    assert "p95 1.4s" in panel["p50Titles"][1]
+    # The denominator travels with the number, always.
+    assert answered[4] == "12"
+    assert "12 of 12 attempts carry a measurement" in panel["p50Titles"][1]
+    # Sums over a group only part of which was measured are not a rate.
+    assert failed[9] == "\u2014"
+    assert answered[9] == "212.5 tok/s"
+
+
+def test_jsdom_unmeasured_latency_renders_dashes_not_zeroes(rendered) -> None:
+    """Every attempt written before 7.4.0 is unmeasured and unbackfillable."""
+
+    views = rendered["latencyViews"]
+    unmeasured = next(
+        row for row in views["panel"]["rows"] if row[0] == "beta/model-07"
+    )
+
+    assert unmeasured[2] == "4,416"
+    assert unmeasured[4] == "0"
+    assert unmeasured[5:] == ["\u2014"] * 5
+    # And the panel says so in words rather than leaving an empty column.
+    note = views["notMeasured"]["note"]
+    assert note.startswith("Nothing measured yet")
+    assert "cannot be given one" in note
+    # The panel also names the question it answered, which is not the one the
+    # filters above it ask.
+    assert "Not narrowed by the filters above." in views["panel"]["note"]
+    assert "close rather than exact" in views["panel"]["note"]
+
+
+def test_jsdom_models_page_latency_chip_is_absent_when_unmeasured(rendered) -> None:
+    """A chip for a model with 4,416 unmeasured attempts would be a fiction."""
+
+    chips = rendered["latencyViews"]["modelChips"]
+
+    assert len(chips) == 1
+    assert chips[0]["text"] == (
+        "last 7d: p50 TTFT 312 ms, p95 1.4s over 14 of 15 attempts"
+    )
+    assert "failed ones included" in chips[0]["title"]
+    # Both outcomes in the tooltip: the headline is the answering group, and
+    # the chip never pretends the failures did not happen.
+    assert "failed: 3 attempts" in chips[0]["title"]
+    # Fetched beside the Models page rather than folded into its payload.
+    assert rendered["latencyViews"]["latencyFetches"] >= 1

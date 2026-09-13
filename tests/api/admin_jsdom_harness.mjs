@@ -1595,6 +1595,169 @@ const ROUTES = {
     by_day: [],
     harness_labels: {},
   },
+  /* Per-model latency, with the awkward cases on purpose: one model measured
+     on both outcomes (so the failed group cannot be merged into the answered
+     one), one model whose thousands of attempts carry no measurement at all
+     (every row written before 7.4.0), and a `sampled` p50 source so the note
+     has to say the percentiles are close rather than exact. */
+  "/admin/api/requests/latency": {
+    enabled: true,
+    window_since: null,
+    models: 2,
+    attempts: 4431,
+    ttft_measured: 14,
+    p50_source: "sampled",
+    stale: true,
+    computed_at: 1788500000,
+    rows: [
+      {
+        model_ref: "beta/model-07",
+        outcome: "failed",
+        attempts: 4416,
+        ttft_measured: 0,
+        avg_ttft_ms: null,
+        avg_first_reasoning_ms: null,
+        avg_generating_ms: null,
+        tokens_out: null,
+        p50_ttft_ms: null,
+        p95_ttft_ms: null,
+        p50_source: "sampled",
+      },
+      {
+        model_ref: "alpha/model-02",
+        outcome: "succeeded",
+        attempts: 12,
+        ttft_measured: 12,
+        avg_ttft_ms: 340.0,
+        avg_first_reasoning_ms: 520.0,
+        avg_generating_ms: 1600.0,
+        tokens_out: 4080,
+        p50_ttft_ms: 312.0,
+        p95_ttft_ms: 1400.0,
+        p50_source: "sampled",
+      },
+      {
+        model_ref: "alpha/model-02",
+        outcome: "failed",
+        attempts: 3,
+        ttft_measured: 2,
+        avg_ttft_ms: 9100.0,
+        avg_first_reasoning_ms: null,
+        avg_generating_ms: 41000.0,
+        tokens_out: null,
+        p50_ttft_ms: 9000.0,
+        p95_ttft_ms: 12000.0,
+        p50_source: "sampled",
+      },
+    ],
+  },
+  /* The fallback request the whole feature is about: two models that did not
+     answer, one that did in 300 ms, and a fourth that was benched out before
+     the request began. The request waited 4,712 ms; the winner took 300. */
+  "/admin/api/requests/req-fallback": {
+    id: "req-fallback",
+    harness: "claude",
+    headers: {},
+    ts_iso: "2026-09-13T10:00:00Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic_messages",
+    provider: "commandcode",
+    key_label: "CC_API_KEY",
+    requested_model: "claude-sonnet-4",
+    resolved_model: "commandcode/kimi-k3",
+    status: "success",
+    tokens_in: 120,
+    tokens_out: 340,
+    ttft_ms: 4712,
+    ttft_winner_ms: 300,
+    // The whole request, predecessors included -- deliberately NOT the
+    // winner's 2,100 ms, so a rate computed from the request's duration and
+    // the winner's TTFT is visibly the wrong number (52.2 tok/s against the
+    // 188.9 the model actually produced).
+    duration_ms: 6812,
+    route_attempt: 2,
+    route_attempts: [
+      {
+        attempt: 0,
+        provider: "commandcode",
+        model_ref: "commandcode/alpha-one",
+        outcome: "failed",
+        duration_ms: 3000,
+        ttft_ms: null,
+        first_reasoning_ms: null,
+        tokens_out: null,
+        error_kind: "upstream_timeout",
+        error_message: "no first token in 3s",
+        params: null,
+        wire_body: null,
+        reasoning_emitted: null,
+        key_index: 0,
+        key_label: "CC_API_KEY",
+      },
+      {
+        attempt: 1,
+        provider: "commandcode",
+        model_ref: "commandcode/beta-two",
+        outcome: "failed",
+        duration_ms: 1500,
+        ttft_ms: 1412,
+        first_reasoning_ms: null,
+        tokens_out: null,
+        error_kind: "upstream_status",
+        error_message: "503 from the host",
+        params: null,
+        wire_body: null,
+        reasoning_emitted: null,
+        key_index: 0,
+        key_label: "CC_API_KEY",
+      },
+      {
+        attempt: 2,
+        provider: "commandcode",
+        model_ref: "commandcode/kimi-k3",
+        outcome: "succeeded",
+        duration_ms: 2100,
+        ttft_ms: 300,
+        first_reasoning_ms: 460,
+        tokens_out: 340,
+        error_kind: null,
+        error_message: null,
+        params: null,
+        wire_body: null,
+        reasoning_emitted: 1,
+        key_index: 0,
+        key_label: "CC_API_KEY",
+      },
+      {
+        attempt: 3,
+        provider: "commandcode",
+        model_ref: "commandcode/benched-four",
+        outcome: "skipped",
+        duration_ms: null,
+        ttft_ms: null,
+        first_reasoning_ms: null,
+        tokens_out: null,
+        error_kind: null,
+        error_message: null,
+        params: {
+          bench: {
+            mode: "rate_based",
+            window: 20,
+            rate: 0.5,
+            failures: 12,
+            last_kind: "upstream_status",
+            last_status: 429,
+            remaining_seconds: 240,
+            since: 600,
+          },
+        },
+        wire_body: null,
+        reasoning_emitted: null,
+        key_index: 0,
+        key_label: "CC_API_KEY",
+      },
+    ],
+  },
   "/admin/api/requests/pulse": { enabled: true, total: 0, latest: null },
   "/admin/api/websearch/analytics/stats": { enabled: false },
   "/admin/api/websearch/analytics": { enabled: false, rows: [], total: 0 },
@@ -4688,10 +4851,140 @@ const catalogueReadout = {};
   }
 }
 
+/* ------------------------------------------------------- latency views
+   The four surfaces the per-model latency work added, each driven through the
+   real renderer: the request row's winner TTFT and its fallback-loss suffix,
+   the modal's three TTFT rows and per-attempt timeline, the Analytics
+   breakdown in both its measured and never-measured states, and the Models
+   page chip that must be absent rather than zeroed. */
+const latencyViews = {};
+{
+  const body = doc.getElementById("reqTableBody");
+  const baseRow = {
+    ts_iso: "2026-09-13T10:00:00Z",
+    endpoint: "/v1/messages",
+    provider: "commandcode",
+    key_label: "CC_API_KEY",
+    resolved_model: "commandcode/kimi-k3",
+    status: "success",
+    tokens_in: 120,
+    tokens_out: 340,
+    duration_ms: 2100,
+  };
+  window.eval(
+    `renderRequestsTable(${JSON.stringify([
+      // The regression this feature exists for: the winner answered in 300 ms
+      // and the row must say so, not 4.7 s.
+      { ...baseRow, id: "r-fallback", ttft_ms: 4712, ttft_winner_ms: 300 },
+      // A frame apart is not a fallback loss.
+      { ...baseRow, id: "r-frame", ttft_ms: 306, ttft_winner_ms: 305 },
+      // Written before 7.4.0: no winner time exists, so the row shows exactly
+      // what it always showed.
+      { ...baseRow, id: "r-legacy", ttft_ms: 410, ttft_winner_ms: null },
+      { ...baseRow, id: "r-none", ttft_ms: null, ttft_winner_ms: null },
+    ])})`,
+  );
+  latencyViews.rowCells = Array.from(body.querySelectorAll(".req-ttft-cell")).map(
+    (td) => ({
+      text: td.textContent,
+      title: td.title,
+      lost: Array.from(td.querySelectorAll(".req-ttft-lost")).map(
+        (el) => el.textContent,
+      ),
+    }),
+  );
+
+  // --- the modal, opened on the fallback request through the real loader
+  await window.eval('openRequestDetail("req-fallback")');
+  await settle();
+  const meta = Array.from(doc.getElementById("reqDetailMeta").children);
+  latencyViews.detailPairs = meta
+    .map((el, index) =>
+      el.tagName === "DT" ? [el.textContent, (meta[index + 1] || {}).textContent] : null,
+    )
+    .filter(Boolean);
+  const chain = doc.getElementById("reqDetailChain");
+  latencyViews.chainHidden = chain.hidden;
+  latencyViews.attemptMetrics = Array.from(
+    chain.querySelectorAll(".req-chain-metrics"),
+  ).map((row) =>
+    Array.from(row.querySelectorAll(".req-chain-metric")).map((cell) => [
+      cell.querySelector(".req-chain-metric-label").textContent,
+      cell.querySelector(".req-chain-metric-value").textContent,
+    ]),
+  );
+  latencyViews.chainModels = Array.from(
+    chain.querySelectorAll(".req-chain-model"),
+  ).map((el) => el.textContent);
+  latencyViews.benchReasons = Array.from(
+    chain.querySelectorAll(".req-chain-bench"),
+  ).map((el) => el.textContent);
+  window.eval("closeRequestDetail()");
+
+  // --- the Analytics breakdown, measured and not
+  const readPanel = () => ({
+    headers: Array.from(
+      doc.querySelectorAll("#reqModelLatency thead th"),
+    ).map((th) => th.textContent),
+    rows: Array.from(doc.querySelectorAll("#reqModelLatency tbody tr")).map((tr) =>
+      Array.from(tr.children).map((td) => td.textContent),
+    ),
+    p50Titles: Array.from(
+      doc.querySelectorAll("#reqModelLatency .req-latency-p50"),
+    ).map((el) => el.title),
+    note: doc.getElementById("reqModelLatencyNote").textContent,
+  });
+  window.eval(
+    `renderRequestModelLatency(${JSON.stringify(ROUTES["/admin/api/requests/latency"])})`,
+  );
+  latencyViews.panel = readPanel();
+  window.eval(
+    `renderRequestModelLatency(${JSON.stringify({
+      enabled: true,
+      models: 1,
+      attempts: 4416,
+      ttft_measured: 0,
+      p50_source: "exact",
+      stale: false,
+      rows: [
+        {
+          model_ref: "beta/model-07",
+          outcome: "failed",
+          attempts: 4416,
+          ttft_measured: 0,
+          avg_ttft_ms: null,
+          avg_first_reasoning_ms: null,
+          avg_generating_ms: null,
+          tokens_out: null,
+          p50_ttft_ms: null,
+          p95_ttft_ms: null,
+          p50_source: "exact",
+        },
+      ],
+    })})`,
+  );
+  latencyViews.notMeasured = readPanel();
+  window.eval("renderRequestModelLatency(null)");
+  latencyViews.disabled = readPanel();
+
+  // --- the Models page chip: present for the measured model, absent for the
+  // one whose 4,416 attempts carry no measurement.
+  await window.eval("loadModelsView(true)");
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const modelsTree = doc.getElementById("modelsTree");
+  latencyViews.modelChips = Array.from(
+    modelsTree.querySelectorAll(".models-chip-latency"),
+  ).map((chip) => ({ text: chip.textContent, title: chip.title }));
+  latencyViews.latencyFetches = fetchCalls.filter(
+    (path) => path === "/admin/api/requests/latency",
+  ).length;
+}
+
 console.log(
   JSON.stringify(
     {
       fatal: null,
+      latencyViews,
       catalogueReadout,
       desktopAppBanner,
       guideLinks,
