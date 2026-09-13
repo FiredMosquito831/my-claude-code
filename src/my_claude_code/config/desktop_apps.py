@@ -629,6 +629,37 @@ CLAUDE_DESKTOP_GATEWAY_KEYS: tuple[str, ...] = (
     "inferenceModels",
 )
 
+#: The app's own preference keys MCC ships as defaults in the document it
+#: owns, with the values from the configuration the user built by hand and
+#: proved working on 2026-09-09 (specs/CLAUDE-DESKTOP-CONFIG-REFERENCE.md
+#: section 1.3). Every one of them is a real ``flatKey`` of the same document,
+#: declared in the shipped bundle with ``scopes: ["3p"]`` -- read out of the
+#: installed 1.52386.0.0 ``app.asar`` and vendored, offset by offset, in
+#: ``tests/fixtures/app_rules/claude-desktop-1.52386.0.0.json``.
+#:
+#: These are *defaults for a document MCC creates*, not edits to a document
+#: the user owns. MCC's entry is its own file under its own id; the user's own
+#: entry is never read, never written and never compared against this. Undo
+#: deletes MCC's file whole, so Undo owes the user nothing here either.
+#:
+#: ``banner`` is a real key of the same group and is deliberately **not**
+#: here. It carries an organisation's own name and colours -- on this machine,
+#: "Danube Labs" -- and a router writing someone's branding into their app is
+#: a different product.
+CLAUDE_DESKTOP_APP_DEFAULTS: Mapping[str, object] = {
+    "isDesktopExtensionEnabled": True,
+    "modelPrefer1mContext": True,
+    "disableEssentialTelemetry": True,
+    "disableNonessentialTelemetry": True,
+    "autoModeEnabled": True,
+    "skipWebFetchPreflight": True,
+    "claudeAiImport": {
+        "enabled": True,
+        "automatic3pImport": True,
+        "exportEnabled": True,
+    },
+}
+
 
 #: Why ``antigravity`` is now a servable desktop app rather than a refusal.
 #:
@@ -1587,7 +1618,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             ),
             document_format=DocumentFormat.JSON,
             holds_credential=True,
-            # Six keys, and every one of them is now a key the *working*
+            # Thirteen keys, and every one of them is a key the *working*
             # configuration on a real machine carries. The list used to come
             # from https://claude.com/docs/third-party/claude-desktop/configuration
             # alone; it is now reconciled key-for-key against the entry the user
@@ -1615,8 +1646,15 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             # ``static`` and ``gateway`` are the documentation's own enum
             # members and match the working entry exactly.
             # ``inferenceGatewayAuthScheme`` is still not written: the
-            # documented default is ``bearer``, the app applies it at
-            # ``:83456``, and the working entry omits it too.
+            # documented default is ``bearer``, the app applies it, and the
+            # working entry omits it too.
+            #
+            # 7.3.0 closed the last gap between this document and the entry
+            # that was proven to work: the seven app preference keys in
+            # ``CLAUDE_DESKTOP_APP_DEFAULTS`` are now shipped defaults of the
+            # file MCC creates, and ``inferenceModels`` names the five
+            # ``claude-*`` models rather than five ``mcc/*`` aliases the app's
+            # own name filter rejects. ``banner`` stays out; see the constant.
             fields={
                 "inferenceProvider": "gateway",
                 "inferenceGatewayBaseUrl": "{base_url}",
@@ -1624,6 +1662,7 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
                 "inferenceCredentialKind": "static",
                 "modelDiscoveryEnabled": False,
                 "inferenceModels": "{models}",
+                **CLAUDE_DESKTOP_APP_DEFAULTS,
             },
             headers_key="",
             models_format_id="claude_desktop",
@@ -1712,10 +1751,22 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             "The desktop app does not honour ANTHROPIC_BASE_URL. Its Code tab "
             "reads ~/.claude/settings.json, which Configure Claude Code "
             "already covers.",
-            "The model picker is filled from the five routes MCC names in the "
-            "configuration (Best, Good, Medium, Cheap, Vision) rather than "
-            "from a discovery call: model discovery is written off, so the "
-            "picker cannot come up empty because a request was slow.",
+            "The model picker is filled from five models MCC names in the "
+            "configuration -- Mythos 5.1, Fable 5.1, Opus 5, Sonnet 5 and "
+            "Haiku 4.5 -- rather than from a discovery call: model discovery "
+            "is written off, so the picker cannot come up empty because a "
+            "request was slow. Each name is a display alias MCC resolves "
+            "itself: claude-mythos-5.1 goes to mcc/cyber, claude-fable-5.1 to "
+            "mcc/best, claude-opus-5 to mcc/good, claude-sonnet-5 to "
+            "mcc/medium and claude-haiku-4.5 to mcc/cheap. Claude Desktop "
+            "accepts only names that look like Claude models, which is why "
+            "they are not spelled mcc/best.",
+            "MCC's own document also carries this app's preference keys "
+            "(desktop extensions, 1M context, telemetry off, Auto mode, the "
+            "WebFetch preflight, Claude.ai import) at the values a working "
+            "configuration uses. They are defaults of a file MCC creates, not "
+            "edits to yours, and Undo deletes the file whole. Your "
+            "organisation banner is never written.",
             "Before its first edit MCC copies the whole configuration library "
             "into a timestamped folder under MCC's own configuration "
             "directory. The library is a directory of documents and the file "
@@ -1743,8 +1794,10 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             ("Credential kind", "Static API key"),
             (
                 "Model discovery",
-                "Off, and name mcc/cyber, mcc/best, mcc/good, "
-                "mcc/medium, mcc/cheap and mcc/vision as the models",
+                "Off, and name claude-mythos-5.1, claude-fable-5.1, "
+                "claude-opus-5, claude-sonnet-5 and claude-haiku-4.5 as the "
+                "models -- with tier aliases mythos, fable, opus, sonnet and "
+                "haiku respectively, each marked the default for its tier",
             ),
         ),
     ),

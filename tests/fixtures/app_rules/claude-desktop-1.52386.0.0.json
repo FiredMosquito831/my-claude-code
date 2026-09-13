@@ -1,0 +1,112 @@
+{
+  "app_id": "claude_desktop",
+  "display_name": "Claude Desktop",
+  "app_version": "1.52386.0.0",
+  "extracted": "2026-09-13",
+  "source_file": "C:\\Program Files\\WindowsApps\\Claude_1.52386.0.0_x64__pzs8sxrjxfjjc\\app\\resources\\app.asar (37,880,121 bytes), scanned in place -- never extracted, never launched. Offsets below are byte offsets into that file as decoded UTF-8, printed by the scan script in versions.txt.",
+  "note": "A rule, not a schema. Supersedes claude-desktop-1.46388.4.0.json, which is kept beside it so the rule's history shows what changed between app versions. Every identifier the 1.46 fixture cites has been renamed (Ga->ES/mo, Ka->MS, BCe->FI/qTe, vAe->_Me/PW); the behaviour is the same except for the bare-alias check, which is new here.",
+  "entry_id_regex": "^[a-f0-9-]{36}$",
+  "entry_id_evidence": "var _Me=/^[a-f0-9-]{36}$/ (offset 11432686) and a second copy PW (offset 17976230), both immediately above the configLibrary path helpers El/Dl/Ol and FW/IW/LW. Unchanged from 1.46388.4.0, so MCC's post-6.67.0 id still boots.",
+  "meta_document": {
+    "applied_id_key": "appliedId",
+    "entries_key": "entries",
+    "entry_match_field": "id",
+    "evidence": "the loader reads appliedId out of _meta.json and resolves configLibrary/<id>.json; the picker lists 'entries', each carrying the id the loader resolves."
+  },
+  "inference_provider_values": [
+    "gateway",
+    "anthropic",
+    "bedrock",
+    "mantle",
+    "vertex",
+    "foundry"
+  ],
+  "inference_provider_evidence": "Oo={gateway:\"Gateway\",anthropic:\"Claude API\",bedrock:\"Bedrock\",mantle:\"Bedrock Mantle\",vertex:\"Vertex AI\",foundry:\"Foundry\"}, ko=Object.keys(Oo) at offset 11076615.",
+  "inference_credential_kind_values": [
+    "static",
+    "helper-script",
+    "interactive",
+    "vendor-profile",
+    "workforce"
+  ],
+  "inference_credential_kind_evidence": "mbe=[\"static\",\"helper-script\",\"interactive\",\"vendor-profile\",\"workforce\"] at offset 11076821.",
+  "gateway_auth_scheme": {
+    "values": [
+      "bearer",
+      "x-api-key"
+    ],
+    "default": "bearer",
+    "evidence": "Nwe=zo(...Ln([\"bearer\",\"x-api-key\"]).optional(), {flatKey:\"inferenceGatewayAuthScheme\", ... default:\"bearer\"}) at offset 11168909. MCC omits the key and takes the default, as the working configuration on a real machine does."
+  },
+  "gateway_keys": [
+    "inferenceProvider",
+    "inferenceGatewayBaseUrl",
+    "inferenceGatewayApiKey",
+    "inferenceCredentialKind",
+    "inferenceGatewayAuthScheme",
+    "inferenceGatewayOidc",
+    "inferenceGatewayOidcAuthFlow",
+    "inferenceCustomHeaders",
+    "inferenceModels",
+    "modelDiscoveryEnabled",
+    "modelPrefer1mContext"
+  ],
+  "gateway_keys_evidence": "every flatKey:\"...\" literal in the bundle beginning 'inference' or 'model', filtered to the ones whose group applies to inferenceProvider 'gateway' (150 flat keys in total; the Bedrock/Vertex/Foundry families are excluded). inferenceGatewayHeaders, listed in the 1.46 rule, is gone at 1.52386.0.0.",
+  "app_internal_keys": [
+    "isDesktopExtensionEnabled",
+    "modelPrefer1mContext",
+    "disableEssentialTelemetry",
+    "disableNonessentialTelemetry",
+    "autoModeEnabled",
+    "skipWebFetchPreflight",
+    "claudeAiImport"
+  ],
+  "app_internal_keys_evidence": "each is a flatKey of the same configuration document, declared with support.enabled.scopes containing \"3p\": isDesktopExtensionEnabled (offset 11222769, \"Allow desktop extensions\"), modelPrefer1mContext (11244668), disableEssentialTelemetry (11272478), disableNonessentialTelemetry (11273818), autoModeEnabled (11302412), skipWebFetchPreflight (11307297), claudeAiImport (11348835, an object whose members include enabled, automatic3pImport and exportEnabled (11347519)). 'banner' (11349563) is a real key too and is deliberately NOT here: it carries an organisation's own name and colours.",
+  "credential": {
+    "field": "inferenceGatewayApiKey",
+    "resolves_references": false,
+    "evidence": "the gateway credential is a plain redacted string; the only indirection the app offers is inferenceCredentialKind 'helper-script', which runs a command rather than expanding a variable -- so the literal has to go in a file, and MCC owns that file outright at mode 0600."
+  },
+  "base_url_shape": "root",
+  "base_url_evidence": "discovery is `${a}/v1/models?limit=1000` where `a=e.replace(/\\/+$/,\"\")` (offset 12815818) and the messages call is the bundled Anthropic SDK's baseURL + '/v1/messages', so the value written is the proxy root with no path suffix.",
+  "gateway_model_name_rule": {
+    "accepts_regex": "^(sonnet|opus|haiku|fable|mythos)(-[\\d.]+)?$",
+    "accepts_substrings": [
+      "claude",
+      "sonnet",
+      "opus",
+      "haiku",
+      "fable",
+      "mythos",
+      "anthropic"
+    ],
+    "denylist_regex": "ark-code|astron|command-r|deepseek|doubao|gemini|gemma|glm|gpt|grok|hermes|hy3|kimi|lfm|\\bling\\b|llama|longcat|mimo|minimax|mistral|mixtral|moonshot|nemotron|openai|phi-|qianfan|qwen|tc-code|\\bunic\\b|yi-|stepfun|step-3|seed-|bytedance|hunyuan|granite|amazon\\.nova|nova-|devstral|ministral|ernie|codex|arcee|trinity|abab|phi\\d|\\bk2\\.|\\bm2\\.|jamba|arctic|solar|mercury|zamba|kat-coder|\\bds-|dpsk",
+    "filter_is_all_or_nothing": true,
+    "asserted_here": "ASSERTED since 7.3.0. Every inferenceModels[].name MCC generates is run through accepts_regex / accepts_substrings / denylist_regex by tests/contracts/test_desktop_document_matches_app_rule.py. The 1.46 fixture recorded this filter and explicitly did not enforce it, because changing what MCC lists was a routing decision; 7.2.0 and 7.3.0 are that decision.",
+    "evidence": "function ES(e){let t=e.toLowerCase();return TS.test(t)?!1:CS.test(t)||wS.some((e=>t.includes(e)))} at offset 17443104, where CS=RegExp(`^(${SS.join(\"|\")})(-[\\d.]+)?$`), wS=[\"claude\",...SS,\"anthropic\"] and TS is the foreign-vendor denylist above. MS(provider,name) dispatches 'gateway' and 'mantle' to it. FI(e,t,n) (offset 17692035) filters inferenceModels by MS and reports each rejection as `inferenceModels: \"<name>\" is not an Anthropic model and was removed from the list`, but only replaces the list when at least one entry survived (`a.length!==i.length&&a.length>0`), so a list in which every entry fails is passed through unchanged after every entry has been reported as an error."
+  },
+  "family_tier_enum": [
+    "sonnet",
+    "opus",
+    "haiku",
+    "fable",
+    "mythos"
+  ],
+  "family_tier_evidence": "SS=[\"sonnet\",\"opus\",\"haiku\",\"fable\",\"mythos\"] (offset 17442586; a second copy fo at 11067510), and anthropicFamilyTier is schema'd as Bn(e=>e.trim().toLowerCase(), Ln(fo)).optional().catch(void 0) at offset 11241444 -- a lower-cased closed enum. A value outside it is dropped silently.",
+  "model_entry_keys": [
+    "name",
+    "labelOverride",
+    "supports1m",
+    "prefer1m",
+    "anthropicFamilyTier",
+    "isFamilyDefault"
+  ],
+  "model_entry_evidence": "the inferenceModels element schema at offset 11241444: labelOverride (\"Shown in the model picker. Leave blank to auto-format from the ID.\"), supports1m (\"Adds a 1M-context variant of this model to the picker\"), prefer1m (shown only when supports1m is truthy), anthropicFamilyTier (the enum above), isFamilyDefault (shown only when anthropicFamilyTier is set).",
+  "family_default_pin": {
+    "env_var_template": "ANTHROPIC_DEFAULT_{TIER}_MODEL",
+    "one_default_per_tier": true,
+    "evidence": "pIt(e)=`ANTHROPIC_DEFAULT_${e.toUpperCase()}_MODEL`, mIt=Object.fromEntries(fo.map(e=>[pIt(e),\"\"])) and _It(e,t) at offset 12867750: it filters the model list by anthropicFamilyTier===tier, then by isFamilyDefault, and warns `${i.length} inferenceModels entries for tier \"${e}\" set isFamilyDefault; using the first flagged` when more than one is flagged. vIt additionally warns when isFamilyDefault is set on an entry with no anthropicFamilyTier."
+  },
+  "bare_alias_rejected_when_discovery_off": true,
+  "bare_alias_evidence": "i.modelDiscoveryEnabled===!1 && i.inferenceModels?.some(e=>typeof e?.name==\"string\" && SS.some(t=>t===e.name.toLowerCase())) && r(\"inferenceModels\",\"Aliases like 'sonnet' are resolved via model discovery. Use the full model ID.\") at offset 11385584 (second copy 17819750). NEW in 1.52386.0.0: the 1.46 rule could not have asserted it. It is why MCC lists claude-mythos-5.1 rather than a bare 'mythos'."
+}

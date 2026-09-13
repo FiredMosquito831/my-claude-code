@@ -120,7 +120,17 @@ def test_the_claude_desktop_card_carries_the_gateway_values(monkeypatch, tmp_pat
         "inferenceCredentialKind",
         "modelDiscoveryEnabled",
         "inferenceModels",
+        # 7.3.0: the app's own preference keys, at the values the working
+        # configuration uses. Never ``banner``.
+        "isDesktopExtensionEnabled",
+        "modelPrefer1mContext",
+        "disableEssentialTelemetry",
+        "disableNonessentialTelemetry",
+        "autoModeEnabled",
+        "skipWebFetchPreflight",
+        "claudeAiImport",
     ]
+    assert "banner" not in card["sidecar_keys"]
     # The proxy ROOT: Claude Desktop appends /v1/messages itself.
     assert card["base_url"].startswith("http://")
     assert not card["base_url"].endswith("/v1")

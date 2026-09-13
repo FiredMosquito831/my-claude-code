@@ -18,7 +18,12 @@ from my_claude_code.application.routing import ModelRouter
 from my_claude_code.config.harness_tiers import HarnessTierOverride, HarnessTiers
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import Message, MessagesRequest
-from my_claude_code.core.tier_refs import is_tier_ref
+from my_claude_code.core.tier_refs import (
+    CLAUDE_DESKTOP_TIER_MODELS,
+    ModelTier,
+    is_tier_ref,
+    tier_ref,
+)
 from tests.application.test_catalogue_model import FakeRuntime
 
 PRIMARY = "nvidia_nim/primary"
@@ -113,6 +118,48 @@ def test_a_mythos_name_reaches_the_mythos_route_and_moves_nothing_else() -> None
     assert router.resolve("claude-opus-5").provider_model_ref == OPUS
     assert router.resolve("claude-sonnet-5").provider_model_ref == SONNET
     assert router.resolve("claude-haiku-4-5-20251001").provider_model_ref == HAIKU
+
+
+def test_every_name_claude_desktop_is_told_to_list_reaches_its_own_tier() -> None:
+    """The acceptance test for 7.3.0's Claude Desktop document.
+
+    MCC's Configure writes five ``claude-*`` model names into Claude Desktop's
+    picker and claims each one stands in for a tier. The claim is only true if
+    the *router* agrees: the app sends the name it was given, and if the name
+    matched no route keyword it would be served silently by ``MODEL`` -- which
+    is exactly what ``claude-mythos-5.1`` did before 7.2.0.
+
+    Note ``claude-mythos-5.1`` and ``claude-fable-5.1``: neither is a
+    models.dev id, and both reach their rail through the substring keyword
+    rather than through any catalogue.
+    """
+
+    routes = {
+        ModelTier.CYBER: "groq/mythos",
+        ModelTier.BEST: "groq/fable",
+        ModelTier.GOOD: OPUS,
+        ModelTier.MEDIUM: SONNET,
+        ModelTier.CHEAP: HAIKU,
+    }
+    router = ModelRouter(
+        _settings(
+            MODEL_MYTHOS=routes[ModelTier.CYBER], MODEL_FABLE=routes[ModelTier.BEST]
+        ),
+        harness_tiers=HarnessTiers,
+    )
+
+    for tier, entry in CLAUDE_DESKTOP_TIER_MODELS.items():
+        resolved = router.resolve(entry.name, harness="claude_desktop")
+        assert resolved.provider_model_ref == routes[tier], (
+            f"{entry.name} is listed as the {entry.family_tier} entry but "
+            f"resolves to {resolved.provider_model_ref}"
+        )
+        # And the tier alias for the same rail lands in the same place, so the
+        # picker entry and the documented ``mcc/*`` name cannot diverge.
+        assert (
+            router.resolve(tier_ref(tier), harness="claude_desktop").provider_model_ref
+            == routes[tier]
+        )
 
 
 def test_the_probe_auto_response_echoes_the_resolved_model_for_a_tier_too() -> None:
