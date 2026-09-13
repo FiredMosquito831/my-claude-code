@@ -172,7 +172,9 @@ def test_the_hook_runs_once_per_server_start(monkeypatch):
 
     asgi.reset_desktop_shell_auto_update_for_tests()
     runs: list[int] = []
-    monkeypatch.setattr(asgi, "_desktop_shell_auto_update", lambda: runs.append(1))
+    monkeypatch.setattr(
+        asgi, "_desktop_shell_auto_update", lambda inputs: runs.append(1)
+    )
     asgi.start_desktop_shell_auto_update()
     asgi.start_desktop_shell_auto_update()
     asgi.start_desktop_shell_auto_update()

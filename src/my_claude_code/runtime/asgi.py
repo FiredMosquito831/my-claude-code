@@ -117,7 +117,7 @@ SERVING_WAIT_SECONDS = 10.0
 _SHELL_AUTO_UPDATE_RUN = False
 
 
-def _desktop_shell_auto_update() -> None:
+def _desktop_shell_auto_update(inputs: tuple[bool, bool] | None) -> None:
     """Bring a stale desktop app up to the release this wheel pins.
 
     Runs on a thread, after the server is ready, never on a request path, and
@@ -126,6 +126,12 @@ def _desktop_shell_auto_update() -> None:
     launches the app from the Start Menu and never opens a terminal stayed on
     whatever build they first received. Updating the server now updates the app
     too.
+
+    ``inputs`` are the two answers that come from the config directory, and
+    they are read by :func:`_housekeeping_inputs` on the thread that starts
+    this one. Nothing reached from here resolves that directory: the shell
+    locations come from ``HOME``/``LOCALAPPDATA`` and the receipts beside the
+    binaries. See ``start_desktop_shell_auto_update``.
 
     Everything real happens in ``config.desktop_shell``: the same
     ``stage_desktop_shell`` that ``mcc-desktop --ensure-shell`` calls, which
@@ -138,14 +144,15 @@ def _desktop_shell_auto_update() -> None:
     on a post-readiness thread keeps that true.
     """
 
+    if inputs is None:
+        return
+    enabled, helper_is_installing = inputs
     try:
         from my_claude_code.config.desktop_shell import auto_update_desktop_shells
-        from my_claude_code.config.settings import get_settings
-        from my_claude_code.config.update_progress import active_update
 
         result = auto_update_desktop_shells(
-            enabled=bool(get_settings().desktop_shell_auto_update),
-            helper_is_installing=active_update() is not None,
+            enabled=enabled,
+            helper_is_installing=helper_is_installing,
         )
     except Exception:
         # One line, and the next server start is the retry. A desktop app that
@@ -154,6 +161,31 @@ def _desktop_shell_auto_update() -> None:
         return
     if result.message:
         logger.info(result.message)
+
+
+def _housekeeping_inputs() -> tuple[bool, bool] | None:
+    """Read the post-readiness thread's config-directory answers, here.
+
+    Both of these go through ``config/paths.config_dir_path()``, which resolves
+    the config directory from the environment on first call and caches the
+    answer in a process-wide global -- so a daemon thread that asks for them
+    reads whatever the environment says at the instant it ticks and publishes
+    that answer to the whole process. Reading them on the caller's thread is
+    the same rule ``start_request_path_warmup`` follows, and it costs a cached
+    ``Settings`` lookup and one small JSON read at readiness.
+    """
+
+    try:
+        from my_claude_code.config.settings import get_settings
+        from my_claude_code.config.update_progress import active_update
+
+        return (
+            bool(get_settings().desktop_shell_auto_update),
+            active_update() is not None,
+        )
+    except Exception:
+        logger.debug("The desktop app update could not be prepared.")
+        return None
 
 
 def _sweep_superseded_environments() -> None:
@@ -188,7 +220,13 @@ def _sweep_superseded_environments() -> None:
 
 
 def start_desktop_shell_auto_update() -> None:
-    """Schedule :func:`_desktop_shell_auto_update`, once per server start."""
+    """Schedule :func:`_desktop_shell_auto_update`, once per server start.
+
+    Every answer the thread needs from the config directory is read *here*, on
+    the calling thread, and handed to it: a background worker binds no paths of
+    its own. The same rule, and the same reason, as
+    ``runtime/warmup.start_request_path_warmup``.
+    """
 
     global _SHELL_AUTO_UPDATE_RUN
     if _SHELL_AUTO_UPDATE_RUN:
@@ -196,15 +234,16 @@ def start_desktop_shell_auto_update() -> None:
     _SHELL_AUTO_UPDATE_RUN = True
     threading.Thread(
         target=_post_readiness_housekeeping,
+        args=(_housekeeping_inputs(),),
         name="mcc-desktop-shell-auto-update",
         daemon=True,
     ).start()
 
 
-def _post_readiness_housekeeping() -> None:
+def _post_readiness_housekeeping(inputs: tuple[bool, bool] | None) -> None:
     """Everything the server does once, after it is answering, off the loop."""
 
-    _desktop_shell_auto_update()
+    _desktop_shell_auto_update(inputs)
     _sweep_superseded_environments()
 
 

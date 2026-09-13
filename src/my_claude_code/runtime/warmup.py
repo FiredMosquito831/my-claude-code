@@ -16,6 +16,7 @@ the work itself and is correct; it simply stops being the common case.
 import importlib
 import threading
 import time
+from pathlib import Path
 
 from loguru import logger
 
@@ -51,21 +52,28 @@ def _warm_openai_sdk() -> None:
     )
 
 
-def _warm_models_dev_indexes() -> None:
+def _warm_models_dev_indexes(cache_path: Path | None) -> None:
     """Build the models.dev indexes from the on-disk cache, once.
+
+    ``cache_path`` is resolved by the caller, on the thread that starts this
+    one, and is never resolved here. See ``start_request_path_warmup``.
 
     Imported here rather than at module scope for the same reason the desktop
     updater is: a contract test asserts what building the ASGI app pulls in,
     and a post-readiness thread is not part of that answer.
     """
 
+    if cache_path is None:
+        # The path could not be resolved on the calling thread. Resolving it
+        # here is exactly what this function must never do.
+        return
     started = time.perf_counter()
     try:
         from my_claude_code.providers.runtime.models_dev import (
             prewarm_models_dev_indexes,
         )
 
-        built = prewarm_models_dev_indexes()
+        built = prewarm_models_dev_indexes(cache_path)
     except Exception as exc:
         logger.debug("The models.dev indexes could not be pre-built: {}", exc)
         return
@@ -79,26 +87,58 @@ def _warm_models_dev_indexes() -> None:
     )
 
 
-def _warm() -> None:
+def _warm(cache_path: Path | None) -> None:
     _warm_openai_sdk()
-    _warm_models_dev_indexes()
+    _warm_models_dev_indexes(cache_path)
 
 
-def _spawn() -> None:
+def _spawn(cache_path: Path | None) -> None:
     """Start the warmup thread. A seam, so a test need not really spawn one."""
 
-    threading.Thread(target=_warm, name="mcc-request-path-warmup", daemon=True).start()
+    threading.Thread(
+        target=_warm,
+        args=(cache_path,),
+        name="mcc-request-path-warmup",
+        daemon=True,
+    ).start()
+
+
+def _resolve_models_dev_cache_path() -> Path | None:
+    """Resolve the models.dev cache path, on the caller's thread.
+
+    ``models_dev_cache_path()`` goes through ``config/paths.config_dir_path``,
+    which resolves the config directory from the environment on first call and
+    then caches the answer in a process-wide global. A daemon thread that
+    resolves it is reading whatever ``HOME`` happens to be at the instant it
+    ticks, and writing that answer where the whole process will read it --
+    which is how an unjoined warmup thread poisoned an entire pytest worker
+    after a hermetic fixture had restored the real ``HOME``.
+    """
+
+    try:
+        from my_claude_code.providers.runtime.models_dev import models_dev_cache_path
+
+        return models_dev_cache_path()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("The models.dev cache path could not be resolved: {}", exc)
+        return None
 
 
 def start_request_path_warmup() -> None:
-    """Schedule the warmup on a daemon thread, once per server start."""
+    """Schedule the warmup on a daemon thread, once per server start.
+
+    Every path the thread needs is bound *here*, on the calling thread, and
+    handed to it. A background worker binds no paths of its own: the pattern
+    ``core/request_log.py`` has used since it was written (``self._db_path``
+    in ``__init__``) and the one 6.72.2 applied to the survey thread.
+    """
 
     global _STARTED
     with _lock:
         if _STARTED:
             return
         _STARTED = True
-    _spawn()
+    _spawn(_resolve_models_dev_cache_path())
 
 
 def reset_request_path_warmup_for_tests() -> None:
