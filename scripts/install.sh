@@ -1874,7 +1874,9 @@ no_stop_verdict() {
     #           machine without one".
     if port_is_occupied "$server_reachable_host" "$server_port"; then
         stop_outcome="left-running"
-        stop_message="A server is already answering on port $server_port and --no-restart was given, so it was left running and nothing was started. Restart it yourself to pick up this version."
+        # "Something", not "a server": nothing was classified, so nothing may be
+        # claimed about what is there. That is the whole promise of --no-restart.
+        stop_message="Something is already listening on port $server_port and --no-restart was given, so nothing was stopped and nothing was started. Restart your server yourself to pick up this version."
         return 0
     fi
     stop_outcome="nothing-listening"

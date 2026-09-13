@@ -3102,7 +3102,9 @@ function Get-NoStopVerdict {
     $verdict = [pscustomobject]@{ Outcome = "nothing-listening"; Message = "" }
     if (Test-PortIsOccupied -ReachableHost $Address.ReachableHost -Port $Address.Port) {
         $verdict.Outcome = "left-running"
-        $verdict.Message = "A server is already answering on port $($Address.Port) and -NoRestart was given, so it was left running and nothing was started. Restart it yourself to pick up this version."
+        # "Something", not "a server": nothing was classified, so nothing may be
+        # claimed about what is there. That is the whole promise of -NoRestart.
+        $verdict.Message = "Something is already listening on port $($Address.Port) and -NoRestart was given, so nothing was stopped and nothing was started. Restart your server yourself to pick up this version."
         return $verdict
     }
     $verdict.Message = "Nothing is listening on port $($Address.Port)."
