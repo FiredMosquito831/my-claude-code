@@ -7578,6 +7578,15 @@ details.turn-pane > summary:focus-visible {
   min-height: 1.2em;
 }
 
+.desktop-autostart-note {
+  /* Its own line: the container is a wrapping flex row of toggle pills, and a
+     sentence that explains one of them must not read as another pill. */
+  flex-basis: 100%;
+  margin: 0.1rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted, #8b93a1);
+}
+
 .desktop-instruction-row {
   display: flex;
   gap: 0.5rem;

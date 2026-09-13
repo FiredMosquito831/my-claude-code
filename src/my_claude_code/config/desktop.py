@@ -575,6 +575,105 @@ def _systemd_user_available() -> bool:
     return result.returncode == 0
 
 
+#: The switch that turns launch-time autostart reconciliation off.
+#:
+#: Any test, smoke or installer run that starts a real desktop host against a
+#: config directory that is not the user's own must set it: the registration is
+#: machine-global and the preference driving it is not, so a scratch run would
+#: otherwise delete the user's real autostart entry. It is an environment
+#: variable rather than a flag because it has to reach a child process nobody
+#: in the middle knows how to pass a flag to.
+#:
+#: Defined here rather than in ``cli`` because the admin route needs it too and
+#: ``api`` may not import ``cli``. ``cli.desktop`` re-exports it.
+SKIP_AUTOSTART_ENV = "MCC_DESKTOP_SKIP_AUTOSTART"
+
+
+def autostart_reconcile_enabled() -> bool:
+    """Return whether anything here may touch the OS autostart registration.
+
+    Only the exact value ``1`` disables it, so an empty or accidental value
+    keeps the normal behaviour.
+    """
+
+    return os.environ.get(SKIP_AUTOSTART_ENV, "").strip() != "1"
+
+
+def registration_wanted(state: DesktopState) -> bool:
+    """Whether this state asks the OS to start My Claude Code at login.
+
+    Registration is honoured only while the tray itself is enabled: a disabled
+    tray has nothing to start.
+    """
+
+    return bool(state.tray_enabled and state.start_at_login)
+
+
+def start_at_login_registered() -> bool | None:
+    """Whether the OS *actually* carries the registration, right now.
+
+    ``None`` when the answer cannot be read -- a platform this does not know,
+    or a registry call that failed -- because "cannot tell" and "no" are
+    different answers and only one of them justifies contradicting the user's
+    setting on screen.
+
+    This is the half that was missing. ``start_at_login`` in ``desktop.json``
+    is an *intent*: the admin route persisted it and left the OS alone, and the
+    registration was made later, by whichever ``mcc-desktop`` or tray launch
+    came next. A user who launches the app binary directly never runs that
+    code, so the setting said "Start at Login" while the Run key carried
+    nothing, for as long as they never opened a terminal.
+    """
+
+    origin = native_origin()
+    try:
+        if origin == "windows":
+            return _windows_start_at_login_registered()
+        if origin == "macos":
+            return _macos_launch_agent_path().exists()
+        return _linux_autostart_path().exists() or _linux_systemd_path().exists()
+    except OSError:
+        return None
+
+
+def _windows_start_at_login_registered() -> bool | None:
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _windows_run_key(), 0, winreg.KEY_READ
+        ) as key:
+            winreg.QueryValueEx(key, WINDOWS_RUN_VALUE)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    return True
+
+
+def reconcile_start_at_login(state: DesktopState) -> bool | None:
+    """Make the OS registration agree with ``state``, and report what it is.
+
+    Returns :func:`start_at_login_registered`'s answer afterwards, so a caller
+    can report the registry rather than its own intent. Never raises: a
+    registration that could not be written is reported as not written, and the
+    next launch is the retry.
+    """
+
+    if not autostart_reconcile_enabled():
+        return start_at_login_registered()
+    try:
+        if registration_wanted(state):
+            apply_start_at_login()
+        else:
+            remove_start_at_login()
+    except Exception:
+        logger.warning(
+            "Could not reconcile the start-at-login registration.", exc_info=True
+        )
+    return start_at_login_registered()
+
+
 def apply_start_at_login(target: AutostartTarget | None = None) -> None:
     """Register the selected target, defaulting to the platform's ADR target."""
 

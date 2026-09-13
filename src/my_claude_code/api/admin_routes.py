@@ -89,8 +89,11 @@ from my_claude_code.config.desktop import (
     WINDOW_PREFERENCES,
     DesktopState,
     load_desktop_state,
+    reconcile_start_at_login,
+    registration_wanted,
     resolve_auto_window,
     save_desktop_state,
+    start_at_login_registered,
 )
 from my_claude_code.config.harnesses import (
     harness_display_name,
@@ -1749,6 +1752,10 @@ def _desktop_state_response(state: DesktopState) -> dict[str, Any]:
     return {
         "tray_enabled": state.tray_enabled,
         "start_at_login": state.start_at_login,
+        # What the OS actually carries, as opposed to what the file asks for.
+        # ``None`` means the answer could not be read, which is not the same as
+        # "no" and is the only case where the UI keeps showing the intent.
+        "start_at_login_registered": start_at_login_registered(),
         "minimize_to_tray": state.minimize_to_tray,
         "close_to_tray": state.close_to_tray,
         "server_mode": state.server_mode,
@@ -1790,10 +1797,17 @@ async def desktop_autostart_options(request: Request):
 async def update_desktop(payload: DesktopUpdatePayload, request: Request):
     """Update the desktop deployment preferences.
 
-    Only the JSON file is persisted here -- the server never applies the OS
-    autostart entry (it may be running headless, with no tray or desktop
-    session). The next ``mcc-desktop``/tray launch reconciles the file with
-    the OS via ``apply_start_at_login`` / ``remove_start_at_login``.
+    Until 7.6.5 only the JSON file was persisted here, on the reasoning that
+    the server may be running headless: the next ``mcc-desktop``/tray launch
+    reconciled the file with the OS. A user who launches the app binary
+    directly never runs that code, so the setting said "Start at Login" and the
+    Run key stayed empty -- indefinitely.
+
+    This route is loopback-only (``require_loopback_admin``), so the browser
+    that sent the toggle is on this machine and under this user, which is
+    exactly whose per-user registration is at stake. It is reconciled here,
+    off the loop, best-effort, and the response reports what the OS carries
+    afterwards rather than what the file asked for.
     """
     require_loopback_admin(request)
     current = await asyncio.to_thread(load_desktop_state)
@@ -1841,6 +1855,17 @@ async def update_desktop(payload: DesktopUpdatePayload, request: Request):
         last_applied_window_height=current.last_applied_window_height,
     )
     await asyncio.to_thread(save_desktop_state, updated)
+    # Only when the OS disagrees with what the file now asks for. Comparing
+    # against the *previous state* instead would miss the case this exists for
+    # -- a file that has said `start_at_login: true` since the shipped default
+    # while the machine carries no registration at all -- and comparing
+    # nothing at all would rewrite the Run value on a window-preference click.
+    # An unreadable registration (``None``) is treated as a disagreement, so
+    # the attempt is still made and its result still reported.
+    if await asyncio.to_thread(start_at_login_registered) != registration_wanted(
+        updated
+    ):
+        await asyncio.to_thread(reconcile_start_at_login, updated)
     return await asyncio.to_thread(_desktop_state_response, updated)
 
 

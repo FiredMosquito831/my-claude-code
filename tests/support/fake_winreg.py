@@ -22,6 +22,7 @@ class FakeWinreg:
 
     HKEY_CURRENT_USER = object()
     KEY_SET_VALUE = 1
+    KEY_READ = 2
     REG_SZ = 1
 
     def __init__(self) -> None:
@@ -32,6 +33,19 @@ class FakeWinreg:
         assert root is self.HKEY_CURRENT_USER
         assert subkey == r"Software\Microsoft\Windows\CurrentVersion\Run"
         return self
+
+    def QueryValueEx(self, key: Any, name: str) -> tuple[str, int]:
+        """Read one value back, raising what the real winreg raises.
+
+        ``FileNotFoundError`` is what ``winreg.QueryValueEx`` raises for a name
+        that is not in the key -- the reader's "not registered" branch depends
+        on that being the exception it sees, not a ``KeyError``.
+        """
+
+        assert key is self
+        if name not in self.values:
+            raise FileNotFoundError(2, "The system cannot find the file specified")
+        return self.values[name], self.REG_SZ
 
     def SetValueEx(
         self, key: Any, name: str, reserved: int, kind: int, value: str

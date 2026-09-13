@@ -19,6 +19,7 @@ from my_claude_code.cli.desktop import (
     probe_server_presence,
 )
 from my_claude_code.cli.launchers.common import PreflightResult
+from my_claude_code.config import desktop as desktop_config
 from my_claude_code.config.desktop import (
     DesktopState,
     ServerMode,
@@ -754,13 +755,15 @@ class TestLaunchReconciliation:
         )
         applied = []
         removed = []
+        # On ``config.desktop``: the writers and the reconciliation moved there
+        # in 7.6.5 so the admin route can use them too.
         monkeypatch.setattr(
-            desktop_module,
+            desktop_config,
             "apply_start_at_login",
             lambda: applied.append(True),
         )
         monkeypatch.setattr(
-            desktop_module,
+            desktop_config,
             "remove_start_at_login",
             lambda: removed.append(True),
         )
@@ -980,8 +983,6 @@ class TestCloseToTray:
     """Closing the window hides it; Quit in the tray is what ends the app."""
 
     def _state(self, monkeypatch, tmp_path, **fields):
-        from my_claude_code.config import desktop as desktop_config
-
         _set_home(monkeypatch, tmp_path)
         monkeypatch.setattr(desktop_module, "config_dir_path", lambda: tmp_path)
         monkeypatch.setattr(desktop_config, "config_dir_path", lambda: tmp_path)
@@ -1033,8 +1034,6 @@ class TestCloseToTray:
         old one -- which is what makes closing hide on every existing install.
         """
 
-        from my_claude_code.config import desktop as desktop_config
-
         _set_home(monkeypatch, tmp_path)
         monkeypatch.setattr(desktop_config, "config_dir_path", lambda: tmp_path)
         path = desktop_config.desktop_state_path()
@@ -1061,8 +1060,6 @@ class TestCloseToTray:
 
     def test_the_two_spellings_can_never_disagree(self, monkeypatch, tmp_path):
         """One button, one answer, whichever name a writer used."""
-
-        from my_claude_code.config import desktop as desktop_config
 
         _set_home(monkeypatch, tmp_path)
         monkeypatch.setattr(desktop_config, "config_dir_path", lambda: tmp_path)

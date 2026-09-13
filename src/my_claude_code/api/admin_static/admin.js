@@ -8309,7 +8309,13 @@ function renderDesktopAutostartOptions() {
   origin.textContent = options.origin || "this machine";
   originEl.append(origin);
 
-  const current = Boolean(state.desktop?.start_at_login);
+  const wanted = Boolean(state.desktop?.start_at_login);
+  // What the OS actually carries. `null`/undefined means it could not be read,
+  // and only then does the box fall back to showing the intent -- a checked
+  // box that the machine does not back up is the defect this replaced.
+  const registered = state.desktop?.start_at_login_registered;
+  const known = registered === true || registered === false;
+  const current = known ? registered : wanted;
   options.targets.forEach((target) => {
     const inputId = `desktopAutostart-${target}`;
     const input = document.createElement("input");
@@ -8322,11 +8328,21 @@ function renderDesktopAutostartOptions() {
     label.className = "toggle-control";
     label.htmlFor = inputId;
     label.append(input, ` Start at Login (${autostartTargetLabel(target)})`);
+    container.append(label);
+
+    if (known && registered !== wanted) {
+      const note = document.createElement("p");
+      note.className = "desktop-autostart-note";
+      note.setAttribute("role", "status");
+      note.textContent = wanted
+        ? "Saved, but this machine is not registered yet. The next desktop launch registers it."
+        : "Still registered on this machine. The next desktop launch removes it.";
+      container.append(note);
+    }
 
     input.addEventListener("change", () => {
       updateDesktop("start_at_login", input.checked, input);
     });
-    container.append(label);
   });
 }
 
@@ -8340,10 +8356,17 @@ async function updateDesktop(field, value, control) {
       body: JSON.stringify({ [field]: value }),
     });
     if (field === "start_at_login") {
-      showMessage(
-        `Start at Login ${value ? "enabled" : "disabled"} for the next launch`,
-        "ok",
-      );
+      // Say what the machine now carries, not what was asked for. The route
+      // reconciles the registration before it answers.
+      const registered = state.desktop?.start_at_login_registered;
+      if (registered === value) {
+        showMessage(`Start at Login ${value ? "enabled" : "disabled"}`, "ok");
+      } else {
+        showMessage(
+          `Start at Login ${value ? "enabled" : "disabled"} for the next launch`,
+          "ok",
+        );
+      }
     } else if (field === "server_mode") {
       showMessage(`Server mode set to ${value}.`, "ok");
     } else if (field === "window") {

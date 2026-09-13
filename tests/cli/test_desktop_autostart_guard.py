@@ -23,19 +23,25 @@ import logging
 import pytest
 
 from my_claude_code.cli import desktop as desktop_module
+from my_claude_code.config import desktop as desktop_config
 from my_claude_code.config.desktop import DesktopState
 
 
 @pytest.fixture
 def recorded(monkeypatch) -> list[str]:
-    """Replace both OS writers with recorders, so nothing real is touched."""
+    """Replace both OS writers with recorders, so nothing real is touched.
+
+    Patched on ``config.desktop``, which is where the writers and the
+    reconciliation live since 7.6.5: the admin route reconciles the
+    registration too, and ``api`` may not import ``cli``.
+    """
 
     calls: list[str] = []
     monkeypatch.setattr(
-        desktop_module, "apply_start_at_login", lambda: calls.append("apply")
+        desktop_config, "apply_start_at_login", lambda: calls.append("apply")
     )
     monkeypatch.setattr(
-        desktop_module, "remove_start_at_login", lambda: calls.append("remove")
+        desktop_config, "remove_start_at_login", lambda: calls.append("remove")
     )
     return calls
 
