@@ -4376,28 +4376,44 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   downloaded on a machine that has no desktop app installed.
                 </p>
                 <p class="guide-note">
-                  <strong>Pressing Update inside the desktop app hands it the
-                  restart.</strong> The installer then installs and exits, and the app's
-                  ten-second lifecycle tick starts the new server. In an ordinary
-                  browser tab nothing is watching, so the installer restarts the server
-                  itself, exactly as it always has. Two owners of &ldquo;restart the
-                  server&rdquo; is how one update came to start two of them.
+                  <strong>The installer owns the restart, wherever you pressed
+                  Update.</strong> Inside the desktop app the flag the window sends now
+                  means only &ldquo;a window is watching, so do not open a browser&rdquo;
+                  &mdash; not &ldquo;I will start the server&rdquo;. Two owners of
+                  &ldquo;restart the server&rdquo; is how one update came to start two of
+                  them, and how another started none.
                 </p>
                 <p class="guide-note">
-                  <strong>The install command can restart the server itself
-                  (6.73.0).</strong> Run it with <code>-Restart</code> (PowerShell) or
-                  <code>--restart</code> (<code>install.cmd</code>,
-                  <code>install.sh</code>) and it finishes the job rather than printing a
-                  hint: it reads <code>PORT</code> and <code>HOST</code> from the
-                  configuration directory it installed for, asks the product what holds
-                  that port, stops that one server by its exact process ids inside the
+                  <strong>The install command restarts the server &mdash; by default,
+                  since 7.1.0.</strong> Every install and every update finishes the job
+                  rather than printing a hint: it reads <code>PORT</code> and
+                  <code>HOST</code> from the configuration directory it installed for,
+                  asks the product what holds that port, stops that one server by its
+                  exact process ids inside the
                   <a href="#guide-limits">graceful shutdown budget</a>, starts
                   <code>mcc-server</code> detached, and waits for <code>/health</code> to
                   answer. <strong>A listener answering is what counts as success</strong>
-                  &mdash; not an install that exited 0. Before this, nothing in the
-                  product would start a server after a hand-run install, and on
+                  &mdash; not an install that exited 0. 6.73.0 made this possible behind
+                  a <code>-Restart</code> switch, which is still accepted and now does
+                  nothing; shipping it opt-in kept the failure it was built to close. On
                   2026-09-11 two installs finished cleanly fifteen minutes apart with no
-                  server running through either of them.
+                  server running through either of them, because nobody had typed the
+                  flag. <code>-NoRestart</code> / <code>--no-restart</code> never stops a
+                  running server, and <code>-NoStart</code> / <code>--no-start</code>
+                  (or <code>MCC_INSTALL_NO_START=1</code>) stops and starts nothing.
+                </p>
+                <p class="guide-note">
+                  <strong>&hellip;and it opens the desktop app (7.1.0).</strong> When the
+                  installer starts <code>mcc-server</code> it also starts
+                  <code>mcc-desktop</code>, so an update ends with a working window
+                  rather than a working port. Only when the app is installed on this
+                  machine &mdash; the binary and the install receipt this product writes
+                  beside it &mdash; only when it is not <em>already</em> running (during
+                  an update driven from the app it is running and watching, and a second
+                  launch would be handed straight back to it), never on a headless box
+                  and never in CI. It is found by executable path, never by a process
+                  name. <code>-NoDesktop</code> / <code>--no-desktop</code> (or
+                  <code>MCC_INSTALL_NO_DESKTOP=1</code>) turns it off.
                 </p>
                 <p class="guide-note">
                   <strong>Exactly one server, and never anyone else's.</strong> The

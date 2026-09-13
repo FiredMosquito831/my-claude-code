@@ -2,11 +2,17 @@
 
 **One update path (6.82.0).** This module no longer installs anything. Pressing
 Update runs the same command a user would type by hand --
-``scripts/install.ps1 -Restart`` on Windows, ``scripts/install.sh --restart``
-on Linux and macOS, from the copy of each that ships inside this wheel. What is
-left here is the one job only the running server can do: it knows its own
-process id, so it writes a short detached helper that waits for itself to exit
-and then starts the installer.
+``scripts/install.ps1`` on Windows, ``scripts/install.sh`` on Linux and macOS,
+from the copy of each that ships inside this wheel. What is left here is the
+one job only the running server can do: it knows its own process id, so it
+writes a short detached helper that waits for itself to exit and then starts
+the installer.
+
+**The restart is the default (7.1.0).** Those installers stop the server on the
+configured port, install, start ``mcc-server`` again and wait for /health
+without being asked; ``-Restart``/``--restart`` is still accepted and is now a
+no-op alias. This helper keeps passing it, so what the dashboard's Update
+button does is byte-for-byte what it did in 7.0.0.
 
 Until 6.82.0 there were two implementations of "install an update". The
 dashboard's lived in a thousand-line PowerShell template in this file; the
@@ -935,6 +941,12 @@ def _deferred_helper_script(
     wait_budget = (
         _helper_wait_seconds() if wait_seconds is None else float(wait_seconds)
     )
+    # ``-Restart`` is what this helper has passed since 6.82.0 and it keeps
+    # passing it. Since 7.1.0 restarting is the installer's DEFAULT and the
+    # switch is a no-op alias kept for compatibility, so the desktop-driven
+    # update does exactly what it did before -- the app watches, the installer
+    # restarts -- and the flag going through this path every time is what keeps
+    # the alias exercised rather than merely documented.
     installer_args = ["-Restart"]
     if no_start:
         installer_args = ["-NoStart"]
@@ -1390,7 +1402,11 @@ def upgrade_to_latest(
     ``shutil.which`` touch the filesystem.
 
     ``no_restart`` says a desktop window is watching. It no longer says anyone
-    else owns the restart (decision Q2) -- the installer always restarts.
+    else owns the restart (decision Q2) -- the installer always restarts, and
+    since 7.1.0 it does so by default rather than on a switch. It also starts
+    the desktop app when one is installed and is not already running; on this
+    path one always IS running, which is exactly the case that check exists
+    for, so a helper-driven update never opens a second window.
     """
 
     log: list[str] = []
