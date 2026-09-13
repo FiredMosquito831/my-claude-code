@@ -148,6 +148,50 @@ def is_quota_error(exc: BaseException) -> bool:
     return status in _QUOTA_PHRASE_STATUSES and quota_phrase(exc) is not None
 
 
+#: A body that names a model outranks a status code that names nothing.
+#:
+#: Measured wordings, both from this repository's own captures: a gateway
+#: answering ``401`` with ``Model qwen3.7-max is not supported for format
+#: oa-compat`` (``tests/providers/test_failure_policy.py``), and the ``400``
+#: family ``docs/USAGE.md:2751`` records across 274,375 live requests, of which
+#: ``Model "stealth/ox-alpha" is not supported on this endpoint.`` is the one
+#: that names a model.
+#:
+#: Deliberately narrow, and for the same reason ``QUOTA_PHRASES`` is: the word
+#: ``model`` has to appear *before* the refusal and on the same line, so that a
+#: body saying ``stream_options.include_usage is not supported`` is not read as
+#: a model rejection. A phrase is added here only with a measured upstream body
+#: behind it.
+_MODEL_NOT_SUPPORTED_PATTERN = re.compile(
+    r"\bmodels?\b[^\n]{0,80}?"
+    r"\b(?:not\s+supported|not\s+available|does\s+not\s+exist)\b"
+    r"|\bunknown\s+model\b"
+    r"|\bmodel\s+not\s+found\b"
+    r"|\bno\s+such\s+model\b"
+)
+
+
+def is_model_not_supported_error(exc: BaseException) -> bool:
+    """Whether the upstream said, in words, that it does not serve this model.
+
+    The discriminator a ``401`` or ``403`` needs before it is allowed to blame
+    the credential. A host that answers "check your API key" to a request whose
+    only fault is the model name sends the user to rotate a key that is fine,
+    and benches that credential for every other model behind it.
+
+    Read through :func:`~my_claude_code.providers.recovery.complaint
+    .upstream_complaint` and nothing else, for the same reason
+    :func:`is_malformed_request_error` is: that reader prefers the structured
+    error body and prunes the ``input``/``body``/``ctx``/``value`` keys under
+    which a validation error echoes the submitted request straight back. A
+    prompt containing the words *model not found* is not a model rejection.
+    """
+
+    if not isinstance(exc, Exception):
+        return False
+    return _MODEL_NOT_SUPPORTED_PATTERN.search(upstream_complaint(exc)) is not None
+
+
 def quota_failure(
     exc: BaseException,
     cooldown_seconds: float = DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
@@ -539,6 +583,14 @@ def _classify_provider_failure(
         # 401/403 branch would otherwise do.
         return quota_failure(exc, cooldown_seconds)
     if isinstance(exc, openai.AuthenticationError):
+        if is_model_not_supported_error(exc):
+            # A 401 whose body names a model is this endpoint refusing that
+            # model, not the key being wrong. The 400 branch below has read
+            # exactly this situation as MODEL_REJECTED since 6.46.0; the status
+            # code was the only thing that differed.
+            return _failure(
+                FailureKind.MODEL_REJECTED, 401, _MODEL_REJECTED_MESSAGE, False
+            )
         return _failure(FailureKind.AUTHENTICATION, 401, _AUTHENTICATION_MESSAGE, False)
     if isinstance(exc, openai.RateLimitError):
         if mark_rate_limited_enabled:
@@ -611,6 +663,12 @@ def _classify_provider_failure(
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status in (401, 403):
+            if is_model_not_supported_error(exc):
+                # As above: the body names a model, so the credential is not
+                # what was refused. The status is kept as the host sent it.
+                return _failure(
+                    FailureKind.MODEL_REJECTED, status, _MODEL_REJECTED_MESSAGE, False
+                )
             return _failure(
                 FailureKind.AUTHENTICATION, 401, _AUTHENTICATION_MESSAGE, False
             )

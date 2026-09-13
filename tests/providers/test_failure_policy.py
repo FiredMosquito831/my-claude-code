@@ -21,6 +21,7 @@ from my_claude_code.core.openai_responses.errors import openai_error_type_for_fa
 from my_claude_code.providers.failure_policy import (
     QUOTA_PHRASES,
     classify_provider_failure,
+    is_model_not_supported_error,
     is_quota_error,
     quota_phrase,
 )
@@ -270,7 +271,16 @@ def test_classification_preserves_useful_body_while_redacting_credentials() -> N
     assert "SECRET" not in failure.message
 
 
-def test_auth_failure_preserves_model_error_body_instead_of_masking_it() -> None:
+def test_a_401_that_names_a_model_is_not_a_bad_api_key() -> None:
+    """The real body, from OpenCode Go's gateway, captured in production.
+
+    Before 7.6.2 this answered ``AUTHENTICATION`` and "Check API key" -- so a
+    request whose only fault was the model name told the user to rotate a
+    credential that was fine, and benched that credential for every other model
+    behind it. The 400 branch has read exactly this situation as
+    ``MODEL_REJECTED`` since 6.46.0; the status code was the only difference.
+    """
+
     error = _openai_status_error(
         openai.AuthenticationError,
         status_code=401,
@@ -292,12 +302,168 @@ def test_auth_failure_preserves_model_error_body_instead_of_masking_it() -> None
         mark_rate_limited=Mock(),
     )
 
-    assert failure.kind is FailureKind.AUTHENTICATION
+    assert failure.kind is FailureKind.MODEL_REJECTED
     assert failure.status_code == 401
+    assert not failure.retryable
     assert "Category: ModelError" in failure.message
-    assert "Provider authentication failed. Check API key." in failure.message
+    assert "Provider authentication failed. Check API key." not in failure.message
+    assert "This model rejected the request." in failure.message
+    # The words the host used survive, which is what made the old behaviour
+    # diagnosable at all.
     assert "Model qwen3.7-max is not supported for format oa-compat" in failure.message
     assert "Request ID: req_model" in failure.message
+
+
+def test_an_ordinary_401_still_means_the_credential() -> None:
+    """The guard on the discriminator: a body that names no model changes nothing."""
+
+    error = _openai_status_error(
+        openai.AuthenticationError,
+        status_code=401,
+        message="Incorrect API key provided.",
+    )
+
+    failure = classify_provider_failure(
+        error,
+        provider_name="LOCAL",
+        read_timeout_s=60.0,
+        request_id="req_key",
+        mark_rate_limited=Mock(),
+    )
+
+    assert failure.kind is FailureKind.AUTHENTICATION
+    assert failure.status_code == 401
+    assert "Provider authentication failed. Check API key." in failure.message
+
+
+def test_an_http_401_that_names_a_model_is_not_a_bad_api_key() -> None:
+    """The second branch, reached by every provider that is not OpenAI-shaped."""
+
+    request = httpx.Request("POST", "https://provider.test/v1/messages")
+    response = httpx.Response(
+        401,
+        request=request,
+        json={
+            "error": {
+                "message": 'Model "stealth/ox-alpha" is not supported on this endpoint.'
+            }
+        },
+    )
+    error = httpx.HTTPStatusError("Unauthorized", request=request, response=response)
+
+    failure = classify_provider_failure(
+        error,
+        provider_name="LOCAL",
+        read_timeout_s=60.0,
+        request_id="req_http_model",
+        mark_rate_limited=Mock(),
+    )
+
+    assert failure.kind is FailureKind.MODEL_REJECTED
+    assert failure.status_code == 401
+
+
+def test_an_http_403_that_names_a_model_keeps_the_status_the_host_sent() -> None:
+    request = httpx.Request("POST", "https://provider.test/v1/messages")
+    response = httpx.Response(
+        403,
+        request=request,
+        json={"error": {"message": "unknown model: vendor/does-not-exist"}},
+    )
+    error = httpx.HTTPStatusError("Forbidden", request=request, response=response)
+
+    failure = classify_provider_failure(
+        error,
+        provider_name="LOCAL",
+        read_timeout_s=60.0,
+        request_id="req_http_403",
+        mark_rate_limited=Mock(),
+    )
+
+    assert failure.kind is FailureKind.MODEL_REJECTED
+    assert failure.status_code == 403
+
+
+def test_an_ordinary_http_403_still_means_the_credential() -> None:
+    request = httpx.Request("POST", "https://provider.test/v1/messages")
+    response = httpx.Response(
+        403,
+        request=request,
+        json={"error": {"message": "Your account is not permitted to use this API."}},
+    )
+    error = httpx.HTTPStatusError("Forbidden", request=request, response=response)
+
+    failure = classify_provider_failure(
+        error,
+        provider_name="LOCAL",
+        read_timeout_s=60.0,
+        request_id="req_http_forbidden",
+        mark_rate_limited=Mock(),
+    )
+
+    assert failure.kind is FailureKind.AUTHENTICATION
+    assert failure.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Model qwen3.7-max is not supported for format oa-compat",
+        'Model "stealth/ox-alpha" is not supported on this endpoint.',
+        "unknown model: vendor/nope",
+        "model not found",
+        "no such model",
+        "The model gpt-9 does not exist or you do not have access to it.",
+        "models are not available on this plan",
+    ],
+)
+def test_the_discriminator_recognises_the_measured_wordings(message: str) -> None:
+    error = _openai_status_error(
+        openai.AuthenticationError, status_code=401, message=message
+    )
+    assert is_model_not_supported_error(error)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Incorrect API key provided.",
+        "stream_options.include_usage is not supported",
+        "reasoning_effort is not supported",
+        "Your account is not permitted to use this API.",
+        "chat_template is not supported for Mistral tokenizers.",
+    ],
+)
+def test_the_discriminator_refuses_everything_it_was_not_shown(message: str) -> None:
+    """A field name that is not supported is not a model that is not supported."""
+
+    error = _openai_status_error(
+        openai.AuthenticationError, status_code=401, message=message
+    )
+    assert not is_model_not_supported_error(error)
+
+
+def test_the_discriminator_does_not_read_the_echoed_request() -> None:
+    """A prompt that says "model not found" is not the host saying it.
+
+    The same footgun ``is_malformed_request_error`` documents: the reader
+    prunes the keys under which a validation error echoes the submitted body
+    back, and swapping it for ``transient_error_text`` would make a user's own
+    words end their own route.
+    """
+
+    error = _openai_status_error(
+        openai.AuthenticationError,
+        status_code=401,
+        message="Unauthorized",
+        body={
+            "error": {
+                "message": "Incorrect API key provided.",
+                "input": {"messages": [{"role": "user", "content": "model not found"}]},
+            }
+        },
+    )
+    assert not is_model_not_supported_error(error)
 
 
 def test_empty_http_error_body_is_reported_explicitly() -> None:
