@@ -3383,3 +3383,45 @@ def test_jsdom_models_page_latency_chip_is_absent_when_unmeasured(rendered) -> N
     assert "failed: 3 attempts" in chips[0]["title"]
     # Fetched beside the Models page rather than folded into its payload.
     assert rendered["latencyViews"]["latencyFetches"] >= 1
+
+
+def test_jsdom_export_attempts_button_opens_the_attempt_scope(rendered) -> None:
+    """The whole feature is one line of wiring, and it fails silently.
+
+    A button that opened the modal on the request scope would look exactly
+    like one that worked, so this drives the real click and reads back the
+    scope, the field list that scope renders, and the Group by control that
+    the attempt scope does not offer.
+    """
+
+    window = rendered["exportWindow"]
+
+    assert window["scopes"] == ["requests", "attempts", "websearch"]
+
+    attempts = window["attempts"]
+    assert attempts["scope"] == "attempts"
+    assert attempts["fields"] == [
+        "Failure and skip reason",
+        "Attempt tokens",
+        "Attempt cost",
+        "Upstream retry ladder",
+        "Wire surface and credential",
+        "Stream recovery counters",
+    ]
+    assert attempts["checkedFields"] == ["failure", "tokens", "cost", "ladder"]
+    # Detail-only: the control is gone rather than offering a shape the server
+    # answers with a 400.
+    assert attempts["groupByHidden"] is True
+
+
+def test_jsdom_the_request_export_button_still_opens_the_request_scope(
+    rendered,
+) -> None:
+    """Opened after the attempt scope, so it also proves the modal resets."""
+
+    requests = rendered["exportWindow"]["requests"]
+
+    assert requests["scope"] == "requests"
+    assert requests["groupByHidden"] is False
+    assert "Upstream retry ladder" in requests["fields"]
+    assert "Attempt tokens" not in requests["fields"]

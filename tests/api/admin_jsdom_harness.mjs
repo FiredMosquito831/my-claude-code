@@ -4707,6 +4707,39 @@ const describedImages = {};
   });
 }
 
+/* ------------------------------------------------- the export window's scopes
+   "Export attempts" is a second button onto the same modal, and the only thing
+   that makes it a different export is the scope it selects and the field list
+   that scope renders. Both are one line of wiring, and both fail silently:
+   a button that opens the modal on the request scope looks exactly like one
+   that works. Driven here rather than asserted structurally for that reason. */
+const exportWindow = (() => {
+  const read = (buttonId) => {
+    const button = doc.getElementById(buttonId);
+    if (!button) return null;
+    button.dispatchEvent(new window.Event("click", { bubbles: true }));
+    const checked = doc.querySelector('input[name="exportScope"]:checked');
+    const groupWrap = doc.getElementById("exportGroupByWrap");
+    return {
+      scope: checked ? checked.value : null,
+      groupByHidden: groupWrap ? groupWrap.hidden : null,
+      fields: Array.from(
+        doc.querySelectorAll("#exportFieldList .export-field span"),
+      ).map((span) => (span.textContent || "").trim()),
+      checkedFields: Array.from(
+        doc.querySelectorAll("#exportFieldList input:checked"),
+      ).map((input) => input.value),
+    };
+  };
+  return {
+    scopes: Array.from(doc.querySelectorAll('input[name="exportScope"]')).map(
+      (radio) => radio.value,
+    ),
+    attempts: read("reqExportAttemptsButton"),
+    requests: read("reqExportButton"),
+  };
+})();
+
 /* The segmented theme control. jsdom has no box model, so this cannot prove
    the fourth option stopped overflowing -- only that every option is a child
    of the pill, which is the structural half of the same guarantee and the
@@ -5032,6 +5065,7 @@ console.log(
           : "",
         dirtyAfterToggle,
       },
+      exportWindow,
       themePicker,
       customProviders,
       codingAgents,

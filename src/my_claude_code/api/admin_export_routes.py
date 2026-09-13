@@ -146,6 +146,23 @@ async def export_analytics(
     until_epoch = _parse_bound(until, "until")
     group_by_list = _split_csv(group_by)
 
+    if scp == export_engine.ATTEMPT_SCOPE:
+        return _attempt_export(
+            fmt,
+            fields,
+            group_by_list,
+            since_epoch=since_epoch,
+            until_epoch=until_epoch,
+            provider=provider,
+            model=model,
+            status=status,
+            endpoint=endpoint,
+            key=key,
+            q=q,
+            local=local,
+            harness=harness,
+            settings=settings,
+        )
     if scp == export_engine.REQUEST_SCOPE:
         return _request_export(
             fmt,
@@ -279,6 +296,78 @@ def _request_export(
             yield {column: row.get(column) for column in output_columns}
 
     return _stream(fmt, detail_rows(), output_columns, headers, filename, exported_at)
+
+
+def _attempt_export(
+    fmt: export_engine.Format,
+    fields: str | None,
+    group_by_list: list[str],
+    *,
+    since_epoch: float | None,
+    until_epoch: float | None,
+    provider: str | None,
+    model: str | None,
+    status: str | None,
+    endpoint: str | None,
+    key: str | None,
+    q: str | None,
+    local: str | None,
+    harness: str | None,
+    settings: Settings,
+) -> StreamingResponse:
+    """Stream one row per route attempt, joined to its request's dimensions.
+
+    Validated exactly like ``_request_export``: same status vocabulary, same
+    ``local`` vocabulary, same 400 on an unknown field. The filters mean the
+    same thing here because the store applies them to ``requests`` with the
+    same predicate builder -- an attempt is exported exactly when the request
+    it belongs to would have been.
+    """
+    store = _request_store(settings)
+    if store is None:
+        return _disabled_response()
+    if status is not None and status not in {"success", "error", "cancelled"}:
+        raise HTTPException(status_code=422, detail="Invalid status filter")
+    if local is not None and local not in request_log.LOCAL_FILTER_VALUES:
+        raise HTTPException(status_code=422, detail="Invalid local filter")
+    selected = (
+        _split_csv(fields)
+        if fields is not None
+        else list(export_engine.DEFAULT_ATTEMPT_FIELDS)
+    )
+    try:
+        export_engine.validate_fields(export_engine.ATTEMPT_SCOPE, selected)
+        export_engine.validate_group_by(export_engine.ATTEMPT_SCOPE, group_by_list)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    exported_at = datetime.now(UTC).isoformat()
+    filename = export_engine.export_filename(
+        export_engine.ATTEMPT_SCOPE, fmt, exported_at
+    )
+    output_columns = export_engine.attempt_output_columns(selected)
+    headers = export_engine.attempt_detail_headers(output_columns)
+    iterator = store.iter_export_attempt_rows(
+        provider=provider,
+        model=model,
+        status=status,
+        endpoint=endpoint,
+        key=key,
+        since=since_epoch,
+        until=until_epoch,
+        q=q,
+        local=local,
+        harness=harness,
+    )
+
+    def attempt_rows() -> Iterator[dict[str, Any]]:
+        for row in iterator:
+            export_engine.compute_attempt_detail_derived(row, selected)
+            # Projected to the output columns last, which is also what drops
+            # the private params blob the derived pass read.
+            yield {column: row.get(column) for column in output_columns}
+
+    return _stream(fmt, attempt_rows(), output_columns, headers, filename, exported_at)
 
 
 def _websearch_export(
