@@ -17,6 +17,7 @@ from my_claude_code.config.harness_config_merge import (
     merge_config_path,
     merge_owned_block,
     owned_block,
+    owned_block_names,
     owned_block_present,
     remove_owned_block,
     with_base_url,
@@ -196,6 +197,86 @@ def test_presence_is_tested_on_mccs_key_never_on_the_file(tmp_path: Path) -> Non
     assert owned_block_present(path, OWNED) is False
     _merge(path, {"models": {"a/b": {}}})
     assert owned_block_present(path, OWNED) is True
+
+
+class TestOwnershipIsReadOffTheFile:
+    """Claim-on-match: which server, if any, this block already belongs to.
+
+    The merge target's path follows ``HOME``, so every MCC server on a machine
+    resolves the same file. Presence of MCC's key says a server was invited;
+    the ``baseURL`` in it says *which* server, and that is the only evidence
+    the background fan-out is allowed to act on.
+    """
+
+    ROOT = "http://127.0.0.1:8082"
+
+    def _write_block(self, path: Path, block: dict[str, Any]) -> None:
+        _write(path, {"provider": {"mcc": block}, "theme": "dark"})
+
+    def test_our_own_base_url_is_our_claim(self, tmp_path: Path) -> None:
+        path = tmp_path / "providers.json"
+        self._write_block(path, {"baseURL": f"{self.ROOT}/v1"})
+
+        assert owned_block_names(path, OWNED, self.ROOT) is True
+
+    def test_another_servers_port_is_not(self, tmp_path: Path) -> None:
+        path = tmp_path / "providers.json"
+        self._write_block(path, {"baseURL": "http://127.0.0.1:8299/v1"})
+
+        assert owned_block_names(path, OWNED, self.ROOT) is False
+
+    def test_a_trailing_slash_is_still_the_same_address(self, tmp_path: Path) -> None:
+        """The launcher and the server both write through ``with_base_url``;
+        a hand-edited trailing slash must not cost the owner its file."""
+
+        path = tmp_path / "providers.json"
+        self._write_block(path, {"baseURL": f"{self.ROOT}/v1/"})
+
+        assert owned_block_names(path, OWNED, self.ROOT) is True
+
+    def test_the_root_without_v1_is_not_what_mcc_writes(self, tmp_path: Path) -> None:
+        path = tmp_path / "providers.json"
+        self._write_block(path, {"baseURL": self.ROOT})
+
+        assert owned_block_names(path, OWNED, self.ROOT) is False
+
+    def test_a_block_with_no_base_url_claims_nothing(self, tmp_path: Path) -> None:
+        path = tmp_path / "providers.json"
+        self._write_block(path, {"models": {"a/b": {}}})
+
+        assert owned_block_names(path, OWNED, self.ROOT) is False
+
+    def test_an_absent_file_claims_nothing(self, tmp_path: Path) -> None:
+        assert owned_block_names(tmp_path / "nope.json", OWNED, self.ROOT) is False
+
+    def test_a_user_document_with_no_mcc_key_claims_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "providers.json"
+        _write(path, USER_DOCUMENT)
+
+        assert owned_block_names(path, OWNED, self.ROOT) is False
+
+    def test_what_the_launcher_writes_is_what_the_reader_recognises(
+        self, tmp_path: Path
+    ) -> None:
+        """The claim path and the match test have to agree byte for byte.
+
+        ``mcc-commandcode`` is the only path that may claim or re-claim, so a
+        file it just wrote must read back as this server's -- otherwise a
+        deliberate ``PORT`` change would leave the fan-out permanently locked
+        out of a file the user just handed it.
+        """
+
+        path = tmp_path / "providers.json"
+        _write(path, USER_DOCUMENT)
+        block = with_base_url(
+            {"baseURL": COMMANDCODE_BASE_URL_SENTINEL, "models": {}}, self.ROOT
+        )
+        _merge(path, block)
+
+        assert owned_block_names(path, OWNED, self.ROOT) is True
+        assert owned_block_names(path, OWNED, "http://127.0.0.1:8299") is False
 
 
 def test_the_defaulted_record_is_folded_inside_the_owned_key() -> None:

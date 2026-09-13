@@ -66,7 +66,7 @@ from my_claude_code.config.harness_config_merge import (
     merge_config_path,
     merge_owned_block,
     owned_block,
-    owned_block_present,
+    owned_block_names,
     with_base_url,
 )
 from my_claude_code.config.harness_tiers import current_harness_tiers
@@ -106,16 +106,20 @@ class HarnessCatalogueFanoutPublisher:
         self._publish(runtime)
 
     def _publish(self, runtime: RequestRuntimePort) -> None:
+        # Settings first: a merge target's write is gated on whether the file
+        # already names *this* server, which cannot be asked without knowing
+        # this server's own proxy root.
+        settings = runtime.current_settings()
+        proxy_root_url = local_proxy_root_url(settings)
         targets = [
             (spec, path)
             for spec in harness_specs()
             if (path := self._path_for(spec)) is not None
-            and self._is_writable_target(spec, path)
+            and self._is_writable_target(spec, path, proxy_root_url)
         ]
         if not targets:
             return
 
-        settings = runtime.current_settings()
         harness_tiers = current_harness_tiers()
         models = build_catalogue_models(settings, runtime, harness_tiers=harness_tiers)
         if not models:
@@ -123,7 +127,6 @@ class HarnessCatalogueFanoutPublisher:
             # with an empty picker during a provider outage.
             raise ValueError("Harness catalogues contain no routable models.")
 
-        proxy_root_url = local_proxy_root_url(settings)
         for spec, path in targets:
             # One shared build for the common case, a second one only for an
             # agent that actually has tier overrides. Thirteen full builds would
@@ -142,7 +145,9 @@ class HarnessCatalogueFanoutPublisher:
             )
             self._publish_one(spec, path, per_harness, proxy_root_url, settings)
 
-    def _is_writable_target(self, spec: HarnessSpec, path: Path) -> bool:
+    def _is_writable_target(
+        self, spec: HarnessSpec, path: Path, proxy_root_url: str
+    ) -> bool:
         """Return whether this publisher may write this harness's document.
 
         For a document MCC owns under ``~/.mcc`` the answer is always yes: the
@@ -153,13 +158,35 @@ class HarnessCatalogueFanoutPublisher:
         ``providers.json``, and finding a ``provider.mcc`` block appear in it
         because an unrelated provider key rotated on a server they left running
         is exactly the behaviour this asymmetry exists to prevent.
+
+        Presence of MCC's key is necessary and no longer sufficient. The merge
+        target's path follows ``HOME``, so every MCC server on a machine
+        resolves the same file, and the write substitutes the *writing*
+        server's proxy root into ``baseURL`` -- so two servers ping-ponged that
+        value on every publish, and a scratch server rewrote a user's real
+        ``~/.commandcode/providers.json`` on 2026-09-12. The file has one
+        owner and the file itself says who: a server that does not already find
+        its own address in MCC's block is not the owner, leaves the bytes alone
+        and says so in the log. Claiming and re-claiming stay with the explicit
+        ``mcc-<harness>`` launcher, which is a thing the user ran on purpose,
+        so a deliberate ``PORT`` change still works with one command.
         """
 
         catalogue = spec.catalogue
         if catalogue is None:
             return False
         if catalogue.merge is not None:
-            return owned_block_present(path, catalogue.merge.owned_key_path)
+            if owned_block_names(path, catalogue.merge.owned_key_path, proxy_root_url):
+                return True
+            logger.debug(
+                "{} catalogue at {} names another server, not {}; leaving it "
+                "untouched. Run `{}` to claim it for this one.",
+                spec.display_name,
+                path,
+                proxy_root_url,
+                spec.command or f"mcc-{spec.id}",
+            )
+            return False
         return catalogue.filename is not None
 
     def _publish_one(

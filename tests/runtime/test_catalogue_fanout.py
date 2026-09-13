@@ -15,6 +15,7 @@ from my_claude_code.application.model_metadata import (
 from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
 from my_claude_code.config.harnesses import MCC_HARNESS_ID_SENTINEL, harness_specs
 from my_claude_code.config.proxy_auth import PROXY_NO_AUTH_SENTINEL
+from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 from my_claude_code.core.model_ids import ResolutionTier
@@ -407,16 +408,26 @@ def test_a_users_own_config_is_not_written_into_until_mcc_is_invited(
     assert path.read_bytes() == before
 
 
+def _this_servers_base_url(runtime: FakeRuntime) -> str:
+    """The ``baseURL`` this runtime's own server writes into the owned block."""
+
+    return f"{local_proxy_root_url(runtime.current_settings())}/v1"
+
+
 def test_an_invited_merge_target_is_refreshed_and_keeps_every_other_key(
     tmp_path: Path,
 ) -> None:
+    runtime = _runtime({"nvidia_nim/configured": 300_000})
     path = tmp_path / "providers.json"
     path.write_text(
         json.dumps(
             {
                 "provider": {
                     "ollama": {"baseURL": "http://x/v1"},
-                    "mcc": {"models": {"stale/model": {}}},
+                    "mcc": {
+                        "baseURL": _this_servers_base_url(runtime),
+                        "models": {"stale/model": {}},
+                    },
                 },
                 "theme": "dark",
             }
@@ -424,7 +435,7 @@ def test_an_invited_merge_target_is_refreshed_and_keeps_every_other_key(
         encoding="utf-8",
     )
 
-    _merge_publisher(path).publish(_runtime({"nvidia_nim/configured": 300_000}))
+    _merge_publisher(path).publish(runtime)
 
     document = json.loads(path.read_text(encoding="utf-8"))
     assert document["theme"] == "dark"
@@ -448,6 +459,78 @@ def test_an_invited_merge_target_is_refreshed_and_keeps_every_other_key(
     # the token is still only a reference the launcher expands.
     assert document["provider"]["mcc"]["baseURL"].endswith("/v1")
     assert document["provider"]["mcc"]["apiKey"] == "$MCC_COMMANDCODE_API_KEY"
+
+
+def test_a_second_server_changes_no_bytes_in_the_first_ones_file(
+    tmp_path: Path,
+) -> None:
+    """Two servers, one machine, one file -- and the file has one owner.
+
+    The merge target's path follows ``HOME``, so every MCC server on a machine
+    resolves the same ``~/.commandcode/providers.json``, and the write
+    substitutes the *writing* server's proxy root into ``baseURL``. Until
+    7.6.4 the only gate was "is MCC's key already there", so two servers
+    ping-ponged that value on every publish -- which is how a scratch server
+    rewrote a user's real file on 2026-09-12.
+
+    Claim-on-match: a server writes only when the block already names its own
+    proxy root.
+    """
+
+    owner = _runtime()
+    path = tmp_path / "providers.json"
+    path.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "mcc": {
+                        "baseURL": _this_servers_base_url(owner),
+                        "models": {"mcc/best": {}},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    intruder = _runtime()
+    intruder._settings = intruder._settings.model_copy(
+        update={"port": owner.current_settings().port + 1}
+    )
+    assert _this_servers_base_url(intruder) != _this_servers_base_url(owner)
+
+    before = path.read_bytes()
+    _merge_publisher(path).publish(intruder)
+
+    assert path.read_bytes() == before, (
+        "the second server rewrote the first server's providers.json"
+    )
+
+    # And the owner is not locked out by its own rule.
+    _merge_publisher(path).publish(owner)
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["provider"]["mcc"]["baseURL"] == _this_servers_base_url(owner)
+    assert "nvidia_nim/configured" in document["provider"]["mcc"]["models"]
+
+
+def test_a_block_with_no_base_url_is_not_a_claim(tmp_path: Path) -> None:
+    """A half-written block is nobody's claim, and is left where it is.
+
+    ``baseURL`` is the evidence. A block without one names no server, so no
+    server may treat it as its own -- the explicit launcher writes a complete
+    block and is the path that claims.
+    """
+
+    path = tmp_path / "providers.json"
+    path.write_text(
+        json.dumps({"provider": {"mcc": {"models": {"stale/model": {}}}}}),
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+
+    _merge_publisher(path).publish(_runtime())
+
+    assert path.read_bytes() == before
 
 
 def test_a_merge_target_is_never_created_at_startup(tmp_path: Path) -> None:
@@ -571,13 +654,23 @@ def test_every_published_document_resolves_the_harness_id_sentinel(
 def test_a_merged_block_carries_the_resolved_harness_id(tmp_path: Path) -> None:
     """The merge path resolves it too -- the substitution is before the branch."""
 
+    runtime = _runtime()
     path = tmp_path / "providers.json"
     path.write_text(
-        json.dumps({"provider": {"mcc": {"models": {"stale/model": {}}}}}),
+        json.dumps(
+            {
+                "provider": {
+                    "mcc": {
+                        "baseURL": _this_servers_base_url(runtime),
+                        "models": {"stale/model": {}},
+                    }
+                }
+            }
+        ),
         encoding="utf-8",
     )
 
-    _merge_publisher(path).publish(_runtime())
+    _merge_publisher(path).publish(runtime)
 
     document = json.loads(path.read_text(encoding="utf-8"))
     assert document["provider"]["mcc"]["headers"] == {HARNESS_HEADER: "commandcode_cli"}
