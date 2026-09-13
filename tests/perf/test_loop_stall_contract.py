@@ -185,7 +185,7 @@ async def test_the_warmup_runs_once_per_process(
 
     warmup.reset_request_path_warmup_for_tests()
     spawned: list[int] = []
-    monkeypatch.setattr(warmup, "_spawn", lambda: spawned.append(1))
+    monkeypatch.setattr(warmup, "_spawn", lambda cache_path: spawned.append(1))
 
     warmup.start_request_path_warmup()
     warmup.start_request_path_warmup()
