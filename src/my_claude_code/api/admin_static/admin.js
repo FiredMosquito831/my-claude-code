@@ -9016,22 +9016,12 @@ function desktopAppActions(app) {
   const row = document.createElement("div");
   row.className = "desktop-action-row";
 
-  // The opt-in checkbox. Codex's card does not show it: there, not writing a
-  // model leaves a provider its own UI cannot select, so it is not a choice.
-  let defaultModel = null;
-  if (!app.sets_default_model && app.status === "servable") {
-    const label = document.createElement("label");
-    label.className = "desktop-default-model";
-    defaultModel = document.createElement("input");
-    defaultModel.type = "checkbox";
-    defaultModel.dataset.role = "default-model";
-    label.append(defaultModel, document.createTextNode(" Also set its default model to mcc/best"));
-    wrapper.append(label);
-  }
-
-  const wants = () => ({
-    set_default_model: defaultModel ? defaultModel.checked : false,
-  });
+  // 7.6.6 removed an "Also set its default model to mcc/best" checkbox from
+  // here. It rendered on every servable row that was not Codex, and the only
+  // spec whose document has a `model` key is Codex -- which sets it
+  // unconditionally, and therefore hid the box. It could not change a byte on
+  // any row it appeared on. A control that cannot change anything is not shown.
+  const wants = () => ({});
 
   const previewButton = document.createElement("button");
   previewButton.type = "button";

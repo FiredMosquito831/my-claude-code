@@ -3068,13 +3068,18 @@ def test_a_card_reports_whether_the_token_variable_is_exported(rendered: dict) -
     assert any("not exported yet" in v for v in missing["metaValues"])
 
 
-def test_the_default_model_checkbox_is_offered_only_where_it_is_a_choice(
-    rendered: dict,
-) -> None:
-    """Codex writes one by necessity; everywhere else it is opt-in."""
+def test_no_card_offers_the_default_model_checkbox(rendered: dict) -> None:
+    """Removed in 7.6.6, and the assertion is inverted rather than deleted.
 
-    assert _desktop_card(rendered, "codex_desktop")["hasDefaultModelCheckbox"] is False
-    assert _desktop_card(rendered, "goose_desktop")["hasDefaultModelCheckbox"] is True
+    It rendered on every servable card that was not Codex -- and Codex is the
+    only spec whose document declares a ``model`` key, which it writes
+    unconditionally. So the box appeared on six rows and could not change a
+    byte on any of them.
+    """
+
+    cards = rendered["desktopApps"]["cards"]
+    assert cards, "no desktop cards rendered at all"
+    assert [card["id"] for card in cards if card["hasDefaultModelCheckbox"]] == []
 
 
 def test_the_preview_shows_the_real_diff_and_no_credential(rendered: dict) -> None:
