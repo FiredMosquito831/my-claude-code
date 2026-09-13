@@ -897,6 +897,134 @@ def test_an_already_repaired_claude_desktop_library_is_left_alone(tmp_path):
     assert not sidecar.exists()
 
 
+#: The document 6.67.0 - 7.2.0 wrote: the tier aliases, every one of which
+#: Claude Desktop's own name filter rejects, and none of the app's own
+#: preference keys. Kept verbatim so the repair path is tested against what is
+#: really on disk on a machine that ran one of those releases rather than
+#: against a hand-made approximation.
+CLAUDE_SIDECAR_7_2_0: dict[str, object] = {
+    "inferenceProvider": "gateway",
+    "inferenceGatewayBaseUrl": "http://127.0.0.1:8082",
+    "inferenceGatewayApiKey": "scratch-token",
+    "inferenceCredentialKind": "static",
+    "modelDiscoveryEnabled": False,
+    "inferenceModels": [
+        {
+            "name": f"mcc/{tier}",
+            "labelOverride": label,
+            "supports1m": False,
+            "prefer1m": False,
+            "anthropicFamilyTier": family,
+            "isFamilyDefault": True,
+        }
+        for tier, label, family in (
+            ("cyber", "Mythos", "mythos"),
+            ("best", "Fable", "fable"),
+            ("good", "Opus", "opus"),
+            ("medium", "Sonnet", "sonnet"),
+            ("cheap", "Haiku", "haiku"),
+            ("vision", "Vision", "sonnet"),
+        )
+    ],
+}
+
+
+def _claude_desktop_document() -> dict[str, object]:
+    """What a re-apply writes today: the real generated document, not a copy."""
+
+    document = sidecar_document(
+        desktop_app("claude_desktop"),
+        (),
+        proxy_root_url="http://127.0.0.1:8082",
+        auth_token="scratch-token",
+    )
+    assert document is not None
+    return document
+
+
+def test_a_claude_desktop_entry_from_an_older_release_reads_as_drifted(tmp_path):
+    """7.3.0's repair path, and it needs no new machinery.
+
+    A library holding the six ``mcc/*`` entries 7.2.0 wrote is not a library
+    with a *changed id* -- ``DesktopLegacyEntry`` is the wrong tool -- it is a
+    library whose sidecar no longer equals what a re-apply would write. That
+    is what ``drifted`` means and what the badge is for, and the repair is the
+    Configure button the card already offers.
+    """
+
+    spec = desktop_app("claude_desktop")
+    prepare(tmp_path, spec, CLAUDE_META)
+    env = env_for(tmp_path)
+    record = tmp_path / "record.json"
+    expected = _claude_desktop_document()
+
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
+        sidecar_document=CLAUDE_SIDECAR_7_2_0,
+        record_path=record,
+    )
+    drifted = desktop_apply.probe(
+        spec,
+        env=env,
+        expected_block=CLAUDE_BLOCK,
+        expected_scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
+        expected_sidecar=expected,
+        record_path=record,
+    )
+    assert drifted.state is DesktopAppState.DRIFTED
+
+    # The repair: one Configure, and the document is the declared shape.
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
+        sidecar_document=expected,
+        record_path=record,
+    )
+    sidecar = desktop_apply.sidecar_path_for(spec, env)
+    assert sidecar is not None
+    repaired = sidecar.read_bytes()
+    assert json.loads(repaired.decode("utf-8")) == expected
+    assert b"mcc/" not in repaired
+
+    after = desktop_apply.probe(
+        spec,
+        env=env,
+        expected_block=CLAUDE_BLOCK,
+        expected_scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
+        expected_sidecar=expected,
+        record_path=record,
+    )
+    assert after.state is DesktopAppState.CONFIGURED
+
+    # And a re-apply of the same content changes nothing at all.
+    desktop_apply.apply(
+        spec,
+        env=env,
+        block=CLAUDE_BLOCK,
+        scalars={"appliedId": CLAUDE_DESKTOP_CONFIG_ID},
+        sidecar_document=expected,
+        record_path=record,
+    )
+    assert sidecar.read_bytes() == repaired
+
+    # The user's own entry is never read, written or compared against: it
+    # keeps its id, its name and its place in the index.
+    meta = json.loads(document_path(spec, env).read_text(encoding="utf-8"))
+    theirs = [
+        entry
+        for entry in meta["entries"]
+        if entry["id"] == "3fd258a0-0379-416e-b3b5-0b72a6ac5392"
+    ]
+    assert theirs == [
+        {"id": "3fd258a0-0379-416e-b3b5-0b72a6ac5392", "name": "My own gateway"}
+    ]
+
+
 def test_the_whole_library_is_backed_up_before_the_first_edit(tmp_path, monkeypatch):
     """A per-file backup of an index cannot restore a directory of documents."""
 

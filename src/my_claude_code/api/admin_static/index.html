@@ -2492,7 +2492,26 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                     <tr><td>Gateway API key</td><td>your <code>ANTHROPIC_AUTH_TOKEN</code> (Providers &rarr; Runtime)</td></tr>
                     <tr><td>Gateway auth scheme</td><td><code>bearer</code></td></tr>
                     <tr><td>Credential kind</td><td><code>Static API key</code></td></tr>
-                    <tr><td>Model discovery</td><td>on</td></tr>
+                    <tr><td>Model discovery</td><td>off</td></tr>
+                  </tbody>
+                </table>
+                <p>
+                  Then fill in the model list with the five entries Configure writes
+                  for you. Claude Desktop accepts a model name only if it looks like a
+                  Claude model, so these are display names MCC resolves itself &mdash;
+                  <code>mcc/best</code> and its siblings are rejected by the app&rsquo;s
+                  own filter. Tick <em>Offer 1M-context variant</em> and <em>Default to
+                  1M context</em> on each, and never use a bare tier name such as
+                  <code>sonnet</code>: with discovery off the app flags it.
+                </p>
+                <table class="guide-table">
+                  <thead><tr><th>Model ID</th><th>Display label</th><th>Tier alias</th><th>Routes to</th></tr></thead>
+                  <tbody>
+                    <tr><td><code>claude-mythos-5.1</code></td><td>Mythos 5.1</td><td><code>mythos</code></td><td><code>MODEL_MYTHOS</code> (<code>mcc/cyber</code>)</td></tr>
+                    <tr><td><code>claude-fable-5.1</code></td><td>Fable 5.1</td><td><code>fable</code></td><td><code>MODEL_FABLE</code> (<code>mcc/best</code>)</td></tr>
+                    <tr><td><code>claude-opus-5</code></td><td>Opus 5</td><td><code>opus</code></td><td><code>MODEL_OPUS</code> (<code>mcc/good</code>)</td></tr>
+                    <tr><td><code>claude-sonnet-5</code></td><td>Sonnet 5</td><td><code>sonnet</code></td><td><code>MODEL_SONNET</code> (<code>mcc/medium</code>)</td></tr>
+                    <tr><td><code>claude-haiku-4.5</code></td><td>Haiku 4.5</td><td><code>haiku</code></td><td><code>MODEL_HAIKU</code> (<code>mcc/cheap</code>)</td></tr>
                   </tbody>
                 </table>
                 <img class="guide-shot" src="/admin/img/claude-desktop-gateway-config.png"
@@ -2503,10 +2522,12 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   to be running.
                 </p>
                 <p>
-                  <strong>5.</strong> Restart the app. With model discovery on, the picker
-                  fills itself from <code>/v1/models</code>, so you can leave the model list
-                  empty. The initial warning dialog is safe to ignore. With a gateway
-                  active the app runs <strong>local sessions only</strong>.
+                  <strong>5.</strong> Restart the app. With model discovery off and the
+                  five models named above, the picker is filled from your own list at
+                  launch rather than from a <code>/v1/models</code> call, so it cannot
+                  come up empty because a request was slow. The initial warning dialog
+                  is safe to ignore. With a gateway active the app runs
+                  <strong>local sessions only</strong>.
                 </p>
 
                 <h3 id="guide-desktop-apps">Point a desktop app here</h3>
@@ -2591,7 +2612,7 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                     <tr><td>Roo Code</td><td>VS Code extension; its provider profile is written the same way.</td></tr>
                     <tr><td>Antigravity (<code>agy</code>)</td><td>Routable since 6.55.0 through the <a href="#guide-gemini-clients">Gemini surface</a>: with <code>modelProvider</code> set to <code>gemini</code>, <code>agy</code> speaks the public Gemini API MCC already serves at <code>/v1beta</code>. Two limits: it must be given <code>GEMINI_API_KEY</code> and <code>GOOGLE_GEMINI_BASE_URL</code> as exports before it starts, and it rejects <code>mcc/*</code> names before sending anything, so models are named with <code>agy</code>'s own ids. The Antigravity <em>IDE</em> lists custom endpoints as unsupported; this card is the CLI only.</td></tr>
                     <tr><td>Command Code</td><td>A status card. It has been configured by <code>mcc-commandcode</code> since 6.27.0 and this adds no new mechanism &mdash; it reports the state and how to open it. Command Code ships no desktop application.</td></tr>
-                    <tr><td>Claude Desktop</td><td>A button since 6.56.0. Anthropic&rsquo;s MDM documentation names the local configuration source &mdash; <code>%LOCALAPPDATA%\Claude-3p\configLibrary\</code>, and <code>~/Library/Application Support/Claude-3p/configLibrary/</code> on macOS &mdash; so MCC owns one document there, points the library&rsquo;s <code>appliedId</code> at it, and leaves every configuration you authored alone. That library is the <em>lowest</em>-precedence source the app reads: a managed profile under <code>HKLM</code>/<code>HKCU\SOFTWARE\Policies\Claude</code> (macOS: Managed Preferences) replaces it wholesale, so MCC probes for one first and refuses to write rather than leave you a file the app ignores. Relaunch the app to load it. See <a href="#guide-desktop">Point Claude Desktop here</a> for the manual route.</td></tr>
+                    <tr><td>Claude Desktop</td><td>A button since 6.56.0. Anthropic&rsquo;s MDM documentation names the local configuration source &mdash; <code>%LOCALAPPDATA%\Claude-3p\configLibrary\</code>, and <code>~/Library/Application Support/Claude-3p/configLibrary/</code> on macOS &mdash; so MCC owns one document there, points the library&rsquo;s <code>appliedId</code> at it, and leaves every configuration you authored alone. That library is the <em>lowest</em>-precedence source the app reads: a managed profile under <code>HKLM</code>/<code>HKCU\SOFTWARE\Policies\Claude</code> (macOS: Managed Preferences) replaces it wholesale, so MCC probes for one first and refuses to write rather than leave you a file the app ignores. Since 7.3.0 the document MCC owns is the full working shape: model discovery off, five <code>claude-*</code> models with their tier aliases and 1M-context flags, and this app&rsquo;s own preference keys at the values a proven-working configuration uses &mdash; never your organisation banner. Relaunch the app to load it. See <a href="#guide-desktop">Point Claude Desktop here</a> for the manual route.</td></tr>
                   </tbody>
                 </table>
                 <p class="guide-note">

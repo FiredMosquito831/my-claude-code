@@ -42,12 +42,22 @@ from my_claude_code.config.desktop_apps import (
     desktop_app,
 )
 from my_claude_code.config.harnesses import CRUSH_BASE_URL_SENTINEL
+from my_claude_code.core.tier_refs import (
+    CLAUDE_DESKTOP_TIER_MODELS,
+    TIER_FAMILY_TIERS,
+    ModelTier,
+)
 from tests.fixtures.live_catalogue import live_catalogue_models
 
 RULES = Path(__file__).resolve().parents[1] / "fixtures" / "app_rules"
 
 PROXY_ROOT = "http://127.0.0.1:8299"
 TOKEN = "scratch-token-not-a-real-one"
+
+#: The rule CI asserts against for Claude Desktop. Re-extracted from the build
+#: installed on the machine this was written on; ``claude-desktop-1.46388.4.0
+#: .json`` is kept beside it, unasserted, so the rule's history is readable.
+CLAUDE_DESKTOP_RULE = "claude-desktop-1.52386.0.0.json"
 
 MODELS: tuple[CatalogueModel, ...] = (
     CatalogueModel(
@@ -243,7 +253,7 @@ RULE_FOR_APP: dict[str, str] = {
     "crush_desktop": "crush-0.92.0.json",
     "roo_code": "roo-code-3.54.0.json",
     "commandcode": "command-code-1.50.0.json",
-    "claude_desktop": "claude-desktop-1.46388.4.0.json",
+    "claude_desktop": CLAUDE_DESKTOP_RULE,
 }
 
 
@@ -362,7 +372,7 @@ def test_claude_desktop_entry_id_matches_the_app_regex():
     local configuration tier.
     """
 
-    rule = load_rule("claude-desktop-1.46388.4.0.json")
+    rule = load_rule(CLAUDE_DESKTOP_RULE)
     spec = desktop_app("claude_desktop")
     assert spec.document is not None
     assert re.match(rule["entry_id_regex"], spec.document.match_value), (
@@ -377,10 +387,15 @@ def test_claude_desktop_entry_id_matches_the_app_regex():
 
 
 def test_claude_desktop_document_uses_only_keys_the_bundle_reads():
-    rule = load_rule("claude-desktop-1.46388.4.0.json")
+    rule = load_rule(CLAUDE_DESKTOP_RULE)
     document = generated_sidecar("claude_desktop")
-    unknown = set(document) - set(rule["gateway_keys"])
+    declared = set(rule["gateway_keys"]) | set(rule["app_internal_keys"])
+    unknown = set(document) - declared
     assert not unknown, f"keys the app's reader would drop: {sorted(unknown)}"
+    assert "banner" not in document, (
+        "the banner carries an organisation's own name and colours -- MCC "
+        "writes the routing configuration, not someone's branding"
+    )
     assert document["inferenceProvider"] in rule["inference_provider_values"]
     assert (
         document["inferenceCredentialKind"] in rule["inference_credential_kind_values"]
@@ -392,12 +407,179 @@ def test_claude_desktop_document_uses_only_keys_the_bundle_reads():
 
 
 def test_claude_desktop_gets_the_literal_credential_and_the_root_url():
-    rule = load_rule("claude-desktop-1.46388.4.0.json")
+    rule = load_rule(CLAUDE_DESKTOP_RULE)
     document = generated_sidecar("claude_desktop")
     assert document[rule["credential"]["field"]] == TOKEN
     assert rule["credential"]["resolves_references"] is False
     assert document["inferenceGatewayBaseUrl"] == PROXY_ROOT, (
         "the app builds ${base}/v1/messages itself"
+    )
+
+
+def claude_desktop_entries() -> list[dict[str, Any]]:
+    entries = generated_sidecar("claude_desktop")["inferenceModels"]
+    assert isinstance(entries, list) and entries, "the model picker would be empty"
+    return entries
+
+
+def name_is_accepted(rule: dict[str, Any], name: str) -> bool:
+    """Whether Claude Desktop's own ``ES`` would accept this model name.
+
+    The three literals come out of the shipped bundle verbatim; this is the
+    function they are used by, transcribed from
+    ``function ES(e){let t=e.toLowerCase();return TS.test(t)?!1:CS.test(t)||
+    wS.some(e=>t.includes(e))}``.
+    """
+
+    gateway = rule["gateway_model_name_rule"]
+    lowered = name.lower()
+    if re.search(gateway["denylist_regex"], lowered) is not None:
+        return False
+    if re.match(gateway["accepts_regex"], lowered) is not None:
+        return True
+    return any(needle in lowered for needle in gateway["accepts_substrings"])
+
+
+def test_every_model_name_mcc_lists_passes_the_apps_own_name_filter():
+    """The assertion the 1.46 rule recorded and deliberately did not make.
+
+    Until 7.3.0 MCC listed ``mcc/best`` .. ``mcc/vision``, and **every one of
+    the five failed this filter**: each was reported to the app's validation
+    UI as *"is not an Anthropic model and was removed from the list"*, and the
+    list survived only because ``FI`` refuses to replace a list when nothing
+    at all survived. Five errors about a list that happened to still work.
+    """
+
+    rule = load_rule(CLAUDE_DESKTOP_RULE)
+    assert rule["gateway_model_name_rule"]["filter_is_all_or_nothing"] is True
+    for entry in claude_desktop_entries():
+        name = entry["name"]
+        assert name_is_accepted(rule, name), (
+            f"{name} is not a name Claude Desktop accepts for a gateway route"
+        )
+        assert (
+            re.search(rule["gateway_model_name_rule"]["denylist_regex"], name.lower())
+            is None
+        ), f"{name} matches the app's foreign-vendor denylist"
+    # And the guard that this test cannot pass vacuously: the names MCC used
+    # to write really are rejected by the same function.
+    for old in ("mcc/cyber", "mcc/best", "mcc/good", "mcc/medium", "mcc/cheap"):
+        assert not name_is_accepted(rule, old)
+
+
+def test_no_listed_model_is_a_bare_tier_alias():
+    """New in 1.52386.0.0, and the reason the names carry versions.
+
+    With ``modelDiscoveryEnabled: false`` the app flags a bare ``"mythos"`` or
+    ``"sonnet"``: *"Aliases like 'sonnet' are resolved via model discovery.
+    Use the full model ID."* -- and MCC writes discovery off.
+    """
+
+    rule = load_rule(CLAUDE_DESKTOP_RULE)
+    assert rule["bare_alias_rejected_when_discovery_off"] is True
+    document = generated_sidecar("claude_desktop")
+    assert document["modelDiscoveryEnabled"] is False
+    tiers = {tier.lower() for tier in rule["family_tier_enum"]}
+    for entry in claude_desktop_entries():
+        assert entry["name"].lower() not in tiers, entry["name"]
+
+
+def test_every_family_tier_is_in_the_apps_closed_enum_with_one_default_each():
+    """``anthropicFamilyTier`` is a closed enum and the pin reads it.
+
+    The app fills ``ANTHROPIC_DEFAULT_<TIER>_MODEL`` for its Code sessions
+    from the entry of that tier flagged ``isFamilyDefault``, warns when two
+    entries share a tier, and warns again when ``isFamilyDefault`` is set on
+    an entry with no tier at all. Until 7.2.0 MCC put *two* entries on
+    ``opus`` and none on ``fable`` or ``mythos``, both of which have been
+    valid values all along.
+    """
+
+    rule = load_rule(CLAUDE_DESKTOP_RULE)
+    assert rule["family_default_pin"]["one_default_per_tier"] is True
+    enum = set(rule["family_tier_enum"])
+    defaults: dict[str, int] = {}
+    for entry in claude_desktop_entries():
+        assert set(entry) == set(rule["model_entry_keys"]), entry["name"]
+        tier = entry["anthropicFamilyTier"]
+        assert tier in enum, f"{tier} is outside {sorted(enum)} and is dropped"
+        assert entry["isFamilyDefault"] is True
+        assert entry["anthropicFamilyTier"], (
+            "isFamilyDefault on an entry with no tier makes the app warn and "
+            "ignore the flag"
+        )
+        defaults[tier] = defaults.get(tier, 0) + 1
+    assert all(count == 1 for count in defaults.values()), defaults
+    assert len(defaults) == len(claude_desktop_entries())
+
+
+def test_the_model_list_does_not_depend_on_the_live_catalogue():
+    """The regression 6.67.0 moved rather than removed.
+
+    The array used to be built by walking ``build_catalogue_models``, which
+    returns nothing when ``harness_tier_aliases`` is off or the provider cache
+    is cold -- so a picker configured with discovery *off* could still come up
+    empty. Five constants are written as five constants.
+    """
+
+    spec = desktop_app("claude_desktop")
+    empty = sidecar_document(spec, (), proxy_root_url=PROXY_ROOT, auth_token=TOKEN)
+    assert empty is not None
+    assert empty["inferenceModels"] == claude_desktop_entries()
+
+
+def test_the_claude_desktop_document_is_the_users_proven_working_shape():
+    """Key for key against the entry read from the 2026-09-10 backup.
+
+    ``specs/CLAUDE-DESKTOP-CONFIG-REFERENCE.md`` sections 1.1 and 1.3. The two
+    deliberate differences are the ``banner`` (personal branding) and the base
+    URL, which comes from this install's own HOST/PORT rather than a literal.
+    """
+
+    rule = load_rule(CLAUDE_DESKTOP_RULE)
+    document = generated_sidecar("claude_desktop")
+    assert [
+        (
+            entry["name"],
+            entry["labelOverride"],
+            entry["anthropicFamilyTier"],
+            entry["supports1m"],
+            entry["prefer1m"],
+        )
+        for entry in claude_desktop_entries()
+    ] == [
+        ("claude-mythos-5.1", "Mythos 5.1", "mythos", True, True),
+        ("claude-fable-5.1", "Fable 5.1", "fable", True, True),
+        ("claude-opus-5", "Opus 5", "opus", True, True),
+        ("claude-sonnet-5", "Sonnet 5", "sonnet", True, True),
+        ("claude-haiku-4.5", "Haiku 4.5", "haiku", True, True),
+    ]
+    for key in rule["app_internal_keys"]:
+        if key == "modelPrefer1mContext":
+            assert document[key] is True
+            continue
+        assert key in document, f"{key} is part of the shape that was proven"
+    assert document["claudeAiImport"] == {
+        "enabled": True,
+        "automatic3pImport": True,
+        "exportEnabled": True,
+    }
+
+
+def test_the_declared_table_agrees_with_what_v1_models_advertises():
+    """One tier, one Claude family, in one place.
+
+    ``TIER_FAMILY_TIERS`` is what ``GET /v1/models`` answers with and
+    ``CLAUDE_DESKTOP_TIER_MODELS`` is what the picker is written from. Two
+    tables disagreeing would mean the app's own Code sessions pinned one model
+    and the gateway advertised another.
+    """
+
+    for tier, entry in CLAUDE_DESKTOP_TIER_MODELS.items():
+        assert entry.family_tier == TIER_FAMILY_TIERS[tier][0], tier
+        assert TIER_FAMILY_TIERS[tier][1] is True, tier
+    assert ModelTier.VISION not in CLAUDE_DESKTOP_TIER_MODELS, (
+        "the vision route is a server-side diversion, not a picker entry"
     )
 
 

@@ -20,6 +20,7 @@ from my_claude_code.application.desktop_documents import (
 )
 from my_claude_code.config.desktop_apply import _SECRET_KEYS, _mask
 from my_claude_code.config.desktop_apps import (
+    CLAUDE_DESKTOP_APP_DEFAULTS,
     CLAUDE_DESKTOP_GATEWAY_KEYS,
     DESKTOP_APPS,
     DESKTOP_APPS_BY_ID,
@@ -288,17 +289,19 @@ def test_claude_desktop_writes_the_keys_the_working_configuration_carries():
     Every expectation below is a key-for-key comparison with the entry the user
     built by hand and confirmed working on 2026-09-09, read from a backup on
     2026-09-10 (``specs/CLAUDE-DESKTOP-CONFIG-REFERENCE.md``). That comparison
-    is what turned up the three defects this release fixes on this card:
-    ``inferenceModels`` missing entirely, ``modelDiscoveryEnabled`` hard-coded
-    the other way, and an ``inferenceCustomHeaders`` value no run of the app
-    has ever been watched accepting.
+    is what turned up the three defects 6.67.0 fixed on this card
+    (``inferenceModels`` missing entirely, ``modelDiscoveryEnabled`` hard-coded
+    the other way, an ``inferenceCustomHeaders`` value no run of the app has
+    ever been watched accepting) -- and the two 7.3.0 closes: the model names
+    were MCC's ``mcc/*`` aliases, every one of which the app's own filter
+    rejects, and the app's seven preference keys were not written at all.
+
+    The one key of that entry MCC still does not write is ``banner``.
     """
 
     claude = DESKTOP_APPS_BY_ID["claude_desktop"]
-    # The tier aliases, which is what ``build_catalogue_models`` appends to
-    # every catalogue and what Claude Desktop's picker is filled from. A
-    # ``provider/model`` ref is deliberately in the list too and deliberately
-    # not in the output.
+    # The catalogue is passed and deliberately ignored: the array is a
+    # constant, so a cold provider cache cannot empty the picker.
     models = (
         *MODELS,
         CatalogueModel(
@@ -312,7 +315,9 @@ def test_claude_desktop_writes_the_keys_the_working_configuration_carries():
         claude, models, proxy_root_url="http://127.0.0.1:8082", auth_token="scratch"
     )
     assert document is not None
-    assert set(document) == set(CLAUDE_DESKTOP_GATEWAY_KEYS)
+    assert set(document) == set(CLAUDE_DESKTOP_GATEWAY_KEYS) | set(
+        CLAUDE_DESKTOP_APP_DEFAULTS
+    )
     assert document["inferenceProvider"] == "gateway"
     # The proxy ROOT: the gateway must serve POST /v1/messages, which the app
     # appends itself.
@@ -324,9 +329,22 @@ def test_claude_desktop_writes_the_keys_the_working_configuration_carries():
     # ``settings.harness_tier_aliases`` being set.
     assert document["modelDiscoveryEnabled"] is False
     assert "inferenceCustomHeaders" not in document
-    models = document["inferenceModels"]
-    assert isinstance(models, list) and models
-    for entry in models:
+    assert "banner" not in document, (
+        "the banner carries an organisation's own name and colours; MCC does "
+        "not write someone's branding into their app"
+    )
+    for key, value in CLAUDE_DESKTOP_APP_DEFAULTS.items():
+        assert document[key] == value, key
+    entries = document["inferenceModels"]
+    assert isinstance(entries, list)
+    assert [entry["name"] for entry in entries] == [
+        "claude-mythos-5.1",
+        "claude-fable-5.1",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-haiku-4.5",
+    ]
+    for entry in entries:
         assert set(entry) == {
             "name",
             "labelOverride",
@@ -335,8 +353,12 @@ def test_claude_desktop_writes_the_keys_the_working_configuration_carries():
             "anthropicFamilyTier",
             "isFamilyDefault",
         }
-        # The wire ids MCC really routes, not a display name MCC invented.
-        assert entry["name"].startswith("mcc/")
+        # A display name the app accepts, resolved to a route server-side.
+        # ``mcc/best`` and its siblings are rejected by the app's own filter.
+        assert not entry["name"].startswith("mcc/")
+        assert entry["supports1m"] is True
+        assert entry["prefer1m"] is True
+        assert entry["isFamilyDefault"] is True
 
 
 def test_claude_desktops_instruction_fallback_uses_the_dialogs_own_labels():

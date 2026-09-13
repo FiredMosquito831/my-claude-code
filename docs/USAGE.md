@@ -1339,7 +1339,24 @@ The app restarts and gains a **Developer** menu.
 | **Gateway API key** | your `ANTHROPIC_AUTH_TOKEN` (dashboard: Providers -> Runtime) |
 | **Gateway auth scheme** | `bearer` |
 | **Credential kind** | `Static API key` |
-| **Model discovery** | on |
+| **Model discovery** | off |
+
+Then fill in **Model list** with the five entries MCC's own Configure writes.
+Claude Desktop accepts a model name only if it looks like a Claude model, so
+these are display names MCC resolves itself — `mcc/best` and its siblings are
+rejected by the app's own filter:
+
+| Model ID | Display label | Tier alias | Default for tier | Routes to |
+| --- | --- | --- | --- | --- |
+| `claude-mythos-5.1` | Mythos 5.1 | `mythos` | yes | `MODEL_MYTHOS` (`mcc/cyber`) |
+| `claude-fable-5.1` | Fable 5.1 | `fable` | yes | `MODEL_FABLE` (`mcc/best`) |
+| `claude-opus-5` | Opus 5 | `opus` | yes | `MODEL_OPUS` (`mcc/good`) |
+| `claude-sonnet-5` | Sonnet 5 | `sonnet` | yes | `MODEL_SONNET` (`mcc/medium`) |
+| `claude-haiku-4.5` | Haiku 4.5 | `haiku` | yes | `MODEL_HAIKU` (`mcc/cheap`) |
+
+Tick **Offer 1M-context variant** and **Default to 1M context** on each. Do not
+use a bare tier name such as `sonnet` or `mythos` as a model ID: with discovery
+off the app flags it, because bare aliases are what discovery resolves.
 
 <div align="center">
   <img src="../assets/claude-desktop-gateway-config.png" alt="Claude Desktop third-party inference settings filled in for My Claude Code" width="780">
@@ -1355,11 +1372,13 @@ The dialog has **Test connection** and **Test model discovery**. Both hit your r
 
 ### Step 5 — restart the app
 
-With **Model discovery** on, the app populates its picker from MCC's `/v1/models` at launch, so you can leave **Model list** empty.
+With **Model discovery** off and the five models named above, the picker is
+filled from your own list at launch rather than from a `/v1/models` call, so it
+cannot come up empty because a request was slow.
 
 **Two things to expect:**
 
-- The **initial warning dialog can be safely ignored.** The picker fills in once discovery completes.
+- The **initial warning dialog can be safely ignored.**
 - With a gateway active, the desktop app runs **local sessions only** — no Anthropic-hosted cloud environments.
 
 ---
@@ -1445,7 +1464,7 @@ user who had it pointed at another gateway lost it. It is remembered now.
 | **Antigravity (`agy`)** | **no — instructions only** | Demoted in 6.84.0, and the file is the reason. `agy` takes its key from `GEMINI_API_KEY` and its endpoint from `GOOGLE_GEMINI_BASE_URL`; the only thing a file can carry is `modelProvider`, and `agy`'s own error message is that `modelProvider` set with the variable unset stops it using the backend it was signed in to. A Configure that wrote the one key it can write would leave `agy` worse than it found it. See below. |
 | **Roo Code** | yes | Uses Roo's own import hook. MCC writes a Roo *settings export* — `providerProfiles` with one `openai` profile, both required `openAiCustomModelInfo` fields — into a file it owns at mode 0600, and adds one key to your `settings.json`, `roo-cline.autoImportSettingsPath`, naming it. Reload the VS Code window: Roo reads that file at activation only. |
 | **Command Code** | status only | Already configured by `mcc-commandcode` since 6.27.0; the card reports and does not re-mechanise. Declaring a provider is not selecting one: open Command Code and pick a My Claude Code model, or set `"modelProvider": "mcc"` **and** `"model"` together in `~/.commandcode/config.json` — its own config merge deletes `modelProvider` from any layer that sets `model` without it, so one of the two on its own does nothing. |
-| **Claude Desktop** | yes | Anthropic's MDM documentation names the local configuration source, so MCC owns one document in `%LOCALAPPDATA%\Claude-3p\configLibrary\` (macOS `~/Library/Application Support/Claude-3p/configLibrary/`) and merges exactly one foreign key, `_meta.json`'s `appliedId`. It is the **lowest**-precedence source the app reads, so a managed profile under `HKLM`/`HKCU\SOFTWARE\Policies\Claude` (macOS: Managed Preferences) replaces it wholesale — MCC probes for one before every write and shows the card as *Managed by your organisation*, with no button, rather than writing a file the app ignores. The credential has no reference form in this store, so it goes into MCC's own document at mode 0600 and never into one you edit. Relaunch the app to load it. |
+| **Claude Desktop** | yes | Anthropic's MDM documentation names the local configuration source, so MCC owns one document in `%LOCALAPPDATA%\Claude-3p\configLibrary\` (macOS `~/Library/Application Support/Claude-3p/configLibrary/`) and merges exactly one foreign key, `_meta.json`'s `appliedId`. It is the **lowest**-precedence source the app reads, so a managed profile under `HKLM`/`HKCU\SOFTWARE\Policies\Claude` (macOS: Managed Preferences) replaces it wholesale — MCC probes for one before every write and shows the card as *Managed by your organisation*, with no button, rather than writing a file the app ignores. The credential has no reference form in this store, so it goes into MCC's own document at mode 0600 and never into one you edit. Since 7.3.0 that document is the full working shape: model discovery off, the five `claude-*` models above with their tier aliases and 1M-context flags, and this app's own preference keys (desktop extensions, telemetry off, Auto mode, the WebFetch preflight, Claude.ai import) at the values a proven-working configuration uses — never your organisation banner. Relaunch the app to load it. |
 | **Kimi desktop, Qwen desktop, LM Studio, Warp** | not routable | Each card carries the measured reason and its date. |
 
 ### Why some cards lost their button in 6.84.0

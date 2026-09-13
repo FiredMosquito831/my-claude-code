@@ -39,6 +39,7 @@ argument ``core/catalogue_refs.py`` makes for itself.
 """
 
 from enum import StrEnum
+from typing import NamedTuple
 
 from my_claude_code.core.gateway_model_ids import decode_gateway_model_id
 
@@ -253,6 +254,59 @@ TIER_FAMILY_TIERS: dict[ModelTier, tuple[str, bool]] = {
 }
 
 
+class ClaudeDesktopModel(NamedTuple):
+    """One row of Claude Desktop's ``inferenceModels`` array, declared."""
+
+    #: The ``name`` the app sends on the wire and MCC's router resolves.
+    name: str
+    #: ``labelOverride`` -- what the model picker shows. Display only.
+    label: str
+    #: ``anthropicFamilyTier``. Must be a member of the app's closed enum
+    #: ``["sonnet","opus","haiku","fable","mythos"]`` and must agree with
+    #: :data:`TIER_FAMILY_TIERS`, which is what ``GET /v1/models`` answers.
+    family_tier: str
+
+
+#: How each tier is named to an Anthropic-shaped desktop app that lists its
+#: models explicitly, rather than discovering them.
+#:
+#: **Why these names and not the ``mcc/*`` aliases.** Claude Desktop
+#: 1.52386.0.0 runs every ``inferenceModels[].name`` through a filter
+#: (``ES``/``MS`` in the shipped bundle, vendored as
+#: ``tests/fixtures/app_rules/claude-desktop-1.52386.0.0.json``): a name is
+#: accepted only if it matches ``^(sonnet|opus|haiku|fable|mythos)(-[\d.]+)?$``
+#: or contains one of ``claude``/``sonnet``/``opus``/``haiku``/``fable``/
+#: ``mythos``/``anthropic``, and is not in a sixty-term foreign-vendor
+#: denylist. ``mcc/best`` and its four siblings satisfy none of that, so until
+#: 7.3.0 every entry MCC wrote was reported in the app's validation UI as
+#: *"is not an Anthropic model and was removed from the list"* -- the list
+#: survived only because the filter refuses to empty a list entirely. These
+#: five names all pass, and they are the five the user's own proven-working
+#: entry carries.
+#:
+#: **Why the full ids and not the bare tier aliases.** With
+#: ``modelDiscoveryEnabled: false`` the app flags a bare ``"mythos"`` or
+#: ``"sonnet"`` with *"Aliases like 'sonnet' are resolved via model discovery.
+#: Use the full model ID."* -- a check that is new in 1.52386.0.0.
+#:
+#: The names are display aliases MCC resolves itself: the app never checks
+#: them against a catalogue, only against the filter above, and each one
+#: reaches its own tier through ``application/routing``'s keyword table
+#: (``mythos``, ``fable``, ``opus``, ``sonnet``, ``haiku``).
+#:
+#: Vision is deliberately absent. ``MODEL_VISION`` is a server-side diversion
+#: MCC applies when a chain carries images its model cannot take; offering it
+#: in a picker asks the user to choose an adapter MCC chooses for them, and
+#: the working entry on a real machine has no vision row.
+CLAUDE_DESKTOP_TIER_MODELS: dict[ModelTier, ClaudeDesktopModel] = {
+    ModelTier.CYBER: ClaudeDesktopModel("claude-mythos-5.1", "Mythos 5.1", "mythos"),
+    ModelTier.BEST: ClaudeDesktopModel("claude-fable-5.1", "Fable 5.1", "fable"),
+    ModelTier.GOOD: ClaudeDesktopModel("claude-opus-5", "Opus 5", "opus"),
+    ModelTier.MEDIUM: ClaudeDesktopModel("claude-sonnet-5", "Sonnet 5", "sonnet"),
+    ModelTier.CHEAP: ClaudeDesktopModel("claude-haiku-4.5", "Haiku 4.5", "haiku"),
+}
+
+
 def tier_ref(tier: ModelTier) -> str:
     """Return the wire id for one tier, e.g. ``mcc/best``."""
 
@@ -321,6 +375,7 @@ def is_tier_ref(model_name: str | None) -> bool:
 
 
 __all__ = [
+    "CLAUDE_DESKTOP_TIER_MODELS",
     "DEFAULT_TIER",
     "GLOBAL_TIER_SETTINGS",
     "TIER_FAMILY_TIERS",
@@ -328,6 +383,7 @@ __all__ = [
     "TIER_NAMESPACE",
     "TIER_ORDER",
     "TIER_REASONING_SETTINGS",
+    "ClaudeDesktopModel",
     "GlobalTierSettings",
     "ModelTier",
     "is_tier_ref",
