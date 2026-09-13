@@ -302,6 +302,11 @@ class RequestCapture:
                 error_kind=attempt.error_kind,
                 error_message=attempt.error_message,
                 duration_ms=attempt.duration_ms,
+                # A describe hop is a real upstream call with a real first
+                # token, measured on its own executor run's clock, so it
+                # carries the same two latencies every other attempt does.
+                ttft_ms=attempt.ttft_ms,
+                first_reasoning_ms=attempt.first_reasoning_ms,
                 params={
                     "kind": "describe",
                     "image_sha": image_sha,
@@ -336,6 +341,15 @@ class RequestCapture:
                 error_kind=attempt.error_kind,
                 error_message=attempt.error_message,
                 duration_ms=attempt.duration_ms,
+                # This attempt's own clock, not the client's. ``record.ttft_ms``
+                # is measured from the moment the request arrived and therefore
+                # includes every predecessor's stall; these two start when this
+                # model was asked. A failed attempt keeps whatever it streamed
+                # before it died, which is the case the existing per-attempt
+                # first-token number (``params.response_shape.first_chunk_ms``,
+                # success path only) has never covered.
+                ttft_ms=attempt.ttft_ms,
+                first_reasoning_ms=attempt.first_reasoning_ms,
                 params=self._attempt_params(
                     attempt.attempt,
                     wire,
@@ -926,11 +940,20 @@ class RequestCapture:
     def _price_attempts(self) -> None:
         """Price every attempt that reported usage of its own.
 
-        Only a describe hop does today: the request row's counters come from
-        the client-facing stream, and an ordinary attempt that repeated them
-        here would double every total that ever joined the two tables.
+        Only a describe hop does: the request row's counters come from the
+        client-facing stream, and an ordinary attempt that repeated them here
+        would double every total that ever joined the two tables.
+
+        The describe test is explicit rather than "has tokens" as it used to
+        be, because since 7.4.0 the *winning* attempt carries the request's own
+        ``tokens_in``/``tokens_out`` -- so that per-attempt tok/s can be
+        computed at all -- and "has tokens" would have started pricing it. That
+        fill happens in ``_commit_finalize``, after this runs, so this gate is
+        the second of two locks on the same door rather than the only one.
         """
         for index, attempt in enumerate(self._attempts):
+            if not _is_describe(attempt):
+                continue
             if attempt.tokens_in is None and attempt.tokens_out is None:
                 continue
             cost, source = self._price(
@@ -1099,8 +1122,59 @@ class RequestCapture:
             return
         record.key_index = self._credential.index
         record.key_label = self._credential.label
+        self._attribute_winner(record)
         record.attempts = tuple(self._attempts)
         store.enqueue(record)
+
+    def _attribute_winner(self, record: RequestRecord) -> None:
+        """Give the attempt that answered the request's usage, and the request its TTFT.
+
+        Two facts, one winner, and both of them exist so that a per-model
+        latency question can be asked of ``request_attempts`` at all.
+
+        ``tokens_out`` on the succeeded attempt is what makes per-attempt tok/s
+        derivable: the column has been nullable and general since 6.53.0 but
+        only describe hops ever filled it, so the table recorded how long every
+        attempt took and never how much it produced. The counters come from the
+        client-facing stream -- the same ones the request row carries -- because
+        that stream *is* the winner's output. Every other attempt stays NULL:
+        a model that failed produced nothing anybody counted, and inventing a
+        zero would make it look free rather than unmeasured.
+
+        ``ttft_winner_ms`` is the winner's own first-token time lifted onto the
+        request row, beside the untouched ``ttft_ms``. The pair is the whole
+        point: ``ttft_ms`` is what the client waited, fallbacks included, and
+        the difference between the two is the time the chain lost to models
+        that did not answer.
+
+        Runs last, after ``_price_attempts``, so the usage written here is
+        never priced onto an attempt row: an ordinary attempt's cost is the
+        request row's, and a second copy would double every joined total.
+        """
+        winner = next(
+            (
+                index
+                for index, attempt in enumerate(self._attempts)
+                if attempt.outcome is RouteAttemptOutcome.SUCCEEDED
+                and not _is_describe(attempt)
+            ),
+            None,
+        )
+        if winner is None:
+            return
+        attempt = self._attempts[winner]
+        record.ttft_winner_ms = attempt.ttft_ms
+        self._attempts[winner] = replace(
+            attempt,
+            tokens_in=attempt.tokens_in
+            if attempt.tokens_in is not None
+            else record.tokens_in,
+            tokens_out=(
+                attempt.tokens_out
+                if attempt.tokens_out is not None
+                else record.tokens_out
+            ),
+        )
 
 
 def build_capture(

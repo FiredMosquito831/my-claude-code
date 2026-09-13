@@ -141,6 +141,14 @@ _STATS_CACHE_MAX_ENTRIES = 64
 # distinct models does not return hundreds of rows on every poll.
 _BREAKDOWN_LIMIT = 50
 
+# Newest measured attempts pulled per ``latency_by_model`` call so its p50/p95
+# can be taken in Python. SQLite has no percentile function here and the
+# duration percentiles elsewhere use a bucket histogram this column has no
+# equivalent of. The cap is what keeps the call bounded on a log that grows
+# without limit; when it bites, the payload says ``p50_source = "sampled"``
+# rather than presenting a truncated answer as a complete one.
+_LATENCY_SAMPLE_ROWS = 20_000
+
 # ------------------------------------------------------------ stats rollup --
 #
 # ``stats()`` used to scan ``requests`` (and ``request_attempts``) once per
@@ -366,6 +374,11 @@ _LIST_METADATA_COLUMNS = (
     "cache_read_tokens",
     "cache_write_tokens",
     "ttft_ms",
+    # Beside it, never instead of it: ``ttft_ms`` is what the client waited,
+    # fallbacks included, and this is what the model that answered actually
+    # took. A list row can show both, and their difference is the time the
+    # chain lost. NULL on every row written before 7.4.0.
+    "ttft_winner_ms",
     "duration_ms",
     "status",
     "error_kind",
@@ -634,6 +647,28 @@ _ROLLUP_COUNTERS: tuple[tuple[str, str, str], ...] = (
         "ttft_count",
         "INTEGER",
         "SUM(CASE WHEN ttft_ms IS NOT NULL THEN 1 ELSE 0 END)",
+    ),
+    # Added in 7.4.0, and the *request-level* half of per-attempt latency only.
+    # A rollup bucket's dimensions are read from the ``requests`` row, so the
+    # winner's model genuinely is this bucket's model -- which is exactly why
+    # per-*attempt* latency is not here: a model that failed never appears in a
+    # ``requests`` row at all, so folding its TTFT into these tables would file
+    # it under the model that rescued the request, which is the misattribution
+    # the whole feature exists to end. That question is served live by
+    # ``latency_by_model()`` over ``request_attempts`` instead.
+    #
+    # No rebuild marker, deliberately. ``_ensure_rollup_counter_columns`` adds a
+    # counter with ``DEFAULT 0``, and its docstring's argument holds here
+    # exactly: ``ttft_winner_ms`` is NULL on 100% of the rows written before
+    # this release, so an already-rolled-up hour reporting sum 0 / count 0 is
+    # the truth, and ``_mean(0, 0)`` is None -- the same answer ``AVG()`` over
+    # those rows gives on the scan path. The two paths agree row for row, which
+    # a contract test asserts.
+    ("ttft_winner_sum", "REAL", "COALESCE(SUM(ttft_winner_ms), 0)"),
+    (
+        "ttft_winner_count",
+        "INTEGER",
+        "SUM(CASE WHEN ttft_winner_ms IS NOT NULL THEN 1 ELSE 0 END)",
     ),
     # Attempt-derived, so the ``requests`` pass leaves them at zero and a
     # second pass over ``request_attempts`` adds them in the same transaction.
@@ -1254,6 +1289,13 @@ _ADDED_COLUMNS = (
     # that was never anybody's bill.
     ("cost_usd", "ALTER TABLE requests ADD COLUMN cost_usd REAL"),
     ("cost_source", "ALTER TABLE requests ADD COLUMN cost_source TEXT"),
+    # Added in 7.4.0. The winning attempt's own first-token time, beside the
+    # untouched ``ttft_ms``; the difference between them is what the chain lost
+    # to models that did not answer. Deliberately NOT backfilled and not
+    # backfillable: nothing in the log records when each attempt's own stream
+    # started, so every row written before this column stays NULL forever, and
+    # NULL keeps meaning "not measured" rather than "the fallback cost nothing".
+    ("ttft_winner_ms", "ALTER TABLE requests ADD COLUMN ttft_winner_ms REAL"),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -1296,6 +1338,25 @@ _ATTEMPT_ADDED_COLUMNS = (
     # ``reasoning_by_model`` keeps using the old query until the backfill marker
     # is set: a time filter against NULL would silently drop history.
     ("ts_epoch", "ALTER TABLE request_attempts ADD COLUMN ts_epoch REAL"),
+    # Added in 7.4.0. How long this attempt took to produce its first answer
+    # content, and its first sign of thinking, on its own clock.
+    #
+    # The only per-attempt first-token number that existed before was
+    # ``params.response_shape.first_chunk_ms``, installed in three provider
+    # modules and only on the success path: present on 16,362 attempt rows,
+    # which is exactly the number of succeeded ones. The attempts that burn the
+    # time are the failures, and they had nothing. These two are measured in
+    # the executor's own chunk loop instead -- one place every provider family
+    # passes through -- and are written whatever the verdict.
+    #
+    # NULL is "not measured": an attempt that never produced answer content, a
+    # model that gave no reasoning signal, or a row that predates the columns.
+    # Not backfillable, for the same reason ``requests.ttft_winner_ms`` is not.
+    ("ttft_ms", "ALTER TABLE request_attempts ADD COLUMN ttft_ms REAL"),
+    (
+        "first_reasoning_ms",
+        "ALTER TABLE request_attempts ADD COLUMN first_reasoning_ms REAL",
+    ),
 )
 
 # Written in this order by ``_record_to_row``. The INSERT's column list, its
@@ -1359,6 +1420,7 @@ _REQUEST_INSERT_COLUMNS = (
     "image_bytes_out",
     "cost_usd",
     "cost_source",
+    "ttft_winner_ms",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -1415,6 +1477,8 @@ _ATTEMPT_INSERT_COLUMNS = (
     "cost_usd",
     "cost_source",
     "ts_epoch",
+    "ttft_ms",
+    "first_reasoning_ms",
 )
 
 # Blank, not zero: a request whose attempts predate the ladder measured
@@ -1586,6 +1650,25 @@ class RouteAttemptOutcome(StrEnum):
     SKIPPED = "skipped"
 
 
+#: The outcomes ``latency_by_model`` measures, as a literal ``IN`` list.
+#:
+#: Written as ``IN (...)`` rather than the ``!= 'skipped'`` it is equivalent to,
+#: and derived from the enum so the two cannot drift. ``outcome`` leads
+#: ``idx_request_attempts_ts_v1``, and an inequality on a leading column cannot
+#: seek: SQLite abandoned that index entirely and walked
+#: ``idx_request_attempts_model_v1`` with a rowid lookup per attempt. Measured on
+#: the real 571,665-row table, byte-identical answers both ways: all time
+#: 1.772 s -> 0.871 s, a seven-day window 3.041 s -> 1.025 s. A dedicated
+#: covering index was built and measured too (35.3 MB, 3.6 s to build) and the
+#: planner ignored it, so it is not shipped.
+_LATENCY_OUTCOMES_SQL = "a.outcome IN ({})".format(
+    ", ".join(
+        f"'{outcome.value}'"
+        for outcome in (RouteAttemptOutcome.SUCCEEDED, RouteAttemptOutcome.FAILED)
+    )
+)
+
+
 @dataclass(frozen=True, slots=True)
 class RouteAttempt:
     """One model the chain reached, and what happened when it did."""
@@ -1634,6 +1717,23 @@ class RouteAttempt:
     # that ever joined the two tables.
     cost_usd: float | None = None
     cost_source: str | None = None
+    # This attempt's own time to first answer content, and to the first sign it
+    # was thinking, both in milliseconds from the moment this model was asked.
+    # None is "not measured, and not zero": no answer content ever arrived, no
+    # reasoning signal was ever seen, or the row predates the columns.
+    #
+    # Measured per attempt because ``requests.ttft_ms`` cannot be: that clock
+    # starts when the *client's* request arrived, so a fallback is charged with
+    # every predecessor's stall. Across the 290,074-row log that is a mean of
+    # 8.6 s at ``route_attempt = 0`` against 25.2 s above it -- roughly 16.5 s
+    # of somebody else's time, filed under the model that rescued the request.
+    #
+    # Reasoning is deliberately NOT first content. A model that thinks for 40 s
+    # and then answers in 200 ms is honestly slow on one axis and honestly fast
+    # on the other, and folding them together makes every reasoning model read
+    # as either instant or catastrophic.
+    ttft_ms: float | None = None
+    first_reasoning_ms: float | None = None
 
 
 # ---------------------------------------------------- recovery observability --
@@ -1777,6 +1877,19 @@ class RequestRecord:
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
     ttft_ms: float | None = None
+    # What the *winning* attempt's own first token cost, as opposed to what the
+    # client waited. ``ttft_ms`` above is unchanged and always will be -- it has
+    # meant "first byte the reader saw, fallbacks included" for 279,175 rows and
+    # rewriting it would silently rebase two years of history. The two side by
+    # side are the fact: ``ttft_ms - ttft_winner_ms`` is the time this request
+    # lost to models that did not answer, and for a clean single-model request
+    # they differ only by the one envelope frame the client-side clock counts
+    # and the attempt-side clock does not (``_observe`` stamps on the first SSE
+    # chunk of any kind, including ``message_start``; the attempt stamps on the
+    # first chunk carrying answer content).
+    #
+    # None is "no attempt won, or the row predates the column". Never zero.
+    ttft_winner_ms: float | None = None
     duration_ms: float | None = None
     status: RequestStatus = "success"
     error_kind: str | None = None
@@ -3513,6 +3626,7 @@ class RequestLogStore:
         """
         duration = record.duration_ms
         ttft = record.ttft_ms
+        ttft_winner = record.ttft_winner_ms
         tool_calls = record.tool_call_count or 0
         values: dict[str, float] = {
             "requests": 1,
@@ -3534,6 +3648,8 @@ class RequestLogStore:
             "duration_count": int(duration is not None),
             "ttft_sum": ttft if ttft is not None else 0.0,
             "ttft_count": int(ttft is not None),
+            "ttft_winner_sum": ttft_winner if ttft_winner is not None else 0.0,
+            "ttft_winner_count": int(ttft_winner is not None),
         }
         for name in _ROLLUP_RECOVERY_COUNTERS:
             values[name] = 0
@@ -3811,6 +3927,12 @@ class RequestLogStore:
                 # when its request did, and a second reading here would make
                 # the stored copy disagree with the row it was copied from.
                 record.ts_epoch,
+                # This attempt's own clocks. Written on every verdict, not just
+                # on the one that worked: an attempt that streamed a first
+                # token and then died is precisely the row that explains where
+                # a slow request's time went.
+                attempt.ttft_ms,
+                attempt.first_reasoning_ms,
             )
             for record in batch
             for attempt in record.attempts
@@ -3842,7 +3964,7 @@ class RequestLogStore:
             "SELECT attempt, provider, model_ref, outcome, error_kind,"
             " error_message, duration_ms, params, wire_body, reasoning_emitted,"
             " key_index, key_label, ladder_tries, tokens_in, tokens_out,"
-            " cost_usd, cost_source, ts_epoch"
+            " cost_usd, cost_source, ts_epoch, ttft_ms, first_reasoning_ms"
             " FROM request_attempts"
             " WHERE request_id = ? ORDER BY attempt",
             (request_id,),
@@ -3886,6 +4008,13 @@ class RequestLogStore:
                 # repeating it here would double every joined total.
                 "cost_usd": row["cost_usd"],
                 "cost_source": row["cost_source"],
+                # This attempt's own first-token clocks, in milliseconds from
+                # the moment this model was asked -- not from when the client
+                # asked, which is what the request row's ``ttft_ms`` measures.
+                # NULL is "not measured": no answer content, no reasoning
+                # signal, or a row written before 7.4.0. Drawn as a dash.
+                "ttft_ms": row["ttft_ms"],
+                "first_reasoning_ms": row["first_reasoning_ms"],
             }
             for row in rows
         ]
@@ -4148,6 +4277,7 @@ class RequestLogStore:
             record.image_bytes_out,
             record.cost_usd,
             record.cost_source,
+            record.ttft_winner_ms,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose
@@ -4916,7 +5046,22 @@ class RequestLogStore:
                        SUM(CASE WHEN input_image_count > 0 THEN 1 ELSE 0 END)
                            AS with_images,
                        AVG(duration_ms) AS avg_duration_ms,
-                       AVG(ttft_ms) AS avg_ttft_ms
+                       AVG(ttft_ms) AS avg_ttft_ms,
+                       -- ``ttft_winner_ms`` is NOT in ``idx_requests_stats_v4``
+                       -- and is deliberately not added to it. Measured on the
+                       -- real 343,389-row copy: this one average turns the
+                       -- totals query from COVERING INDEX into INDEX, 0.118 s
+                       -- -> 0.642 s. Widening the index to ``_v5`` restores the
+                       -- coverage (0.672 -> 0.239 s, 2.3 s to build, 42.2 MB)
+                       -- but makes the two other queries that share it *worse*
+                       -- -- the per-provider breakdown 0.463 -> 0.601 s and the
+                       -- latency buckets 0.077 -> 0.146 s -- which is exactly
+                       -- the planner regression ``_ensure_stats_index``
+                       -- warns about, for a net gain of 0.23 s across the
+                       -- three. So the half-second is paid here instead, on the
+                       -- path that only runs when a filter defeats the rollup
+                       -- (a ``q=`` search, which costs seconds on its own).
+                       AVG(ttft_winner_ms) AS avg_ttft_winner_ms
                 FROM requests{where}
                 """,
                 args,
@@ -5082,6 +5227,12 @@ class RequestLogStore:
             "p50_duration_ms": _rounded(percentiles[0.50]),
             "p95_duration_ms": _rounded(percentiles[0.95]),
             "avg_ttft_ms": _rounded(totals["avg_ttft_ms"]),
+            # What the reader waited, and what the model that answered actually
+            # took. ``avg_ttft_ms`` includes every fallback's stall, because it
+            # always has; this one does not. None when nothing in the window
+            # carried a winner -- every row written before 7.4.0 -- which the
+            # reader must render as a dash, never as zero.
+            "avg_ttft_winner_ms": _rounded(totals["avg_ttft_winner_ms"]),
             "by_provider": by_provider,
             "by_provider_truncated": by_provider_truncated,
             "by_model": by_model,
@@ -5355,6 +5506,13 @@ class RequestLogStore:
             "p95_duration_ms": _rounded(percentiles[0.95]),
             "avg_ttft_ms": _rounded(
                 _mean(counters["ttft_sum"], counters["ttft_count"])
+            ),
+            # The rollup twin of the scan path's ``avg_ttft_winner_ms``. A
+            # bucket rolled up before 7.4.0 carries 0/0 here, which ``_mean``
+            # turns into None -- the same answer ``AVG()`` gives over rows whose
+            # column is NULL, which is why this counter needed no rebuild.
+            "avg_ttft_winner_ms": _rounded(
+                _mean(counters["ttft_winner_sum"], counters["ttft_winner_count"])
             ),
             "by_provider": by_provider,
             "by_provider_truncated": by_provider_truncated,
@@ -5684,6 +5842,174 @@ class RequestLogStore:
             # Shares ``stats()``'s cache and its 5 s TTL. The key starts with a
             # string, so it can never collide with the 8-tuple ``stats`` uses,
             # and the value is wrapped in a dict because the cache stores one.
+            self._stats_cache[cache_key] = (now, {"rows": payload})
+            self._stats_cache.move_to_end(cache_key)
+            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
+                self._stats_cache.popitem(last=False)
+        return [dict(row) for row in payload]
+
+    def latency_by_model(
+        self, *, since: float | None = None, limit: int = _BREAKDOWN_LIMIT
+    ) -> list[dict[str, Any]]:
+        """Per model and outcome: how long it took to say anything, and to finish.
+
+        Asked of ``request_attempts`` and never of the rollup, and this is the
+        whole design decision worth knowing about this feature. A rollup
+        bucket's dimensions are read off the ``requests`` row -- its provider,
+        its resolved model, its key, its harness -- and a model that *failed*
+        never reaches a ``requests`` row at all. Summing attempt latency into
+        those buckets would therefore file every failed model's time under the
+        model that rescued the request, which is precisely the misattribution
+        this feature exists to end. The measured size of it: mean
+        ``requests.ttft_ms`` is 8.6 s at ``route_attempt = 0`` and 25.2 s above
+        it, so roughly 16.5 s of predecessor time is charged to fallbacks today.
+        A live attempt-grouped query is the only shape that can answer honestly,
+        and it is the shape ``reasoning_by_model`` already uses.
+
+        Failed attempts come back as their own ``outcome`` group rather than
+        being filtered out, because "this model is quick when it works and
+        takes a minute when it does not" is the fact the question is about.
+        ``skipped`` is excluded: a model that was never asked has no latency.
+
+        ``ttft_measured`` is the attempts in each group that actually carry a
+        first-token time, kept beside ``attempts`` so a caller can never report
+        an average over three rows as if it described three hundred. Every row
+        written before 7.4.0 is unmeasured, and is not backfillable: nothing in
+        the log records when each attempt's own stream began.
+
+        Percentiles are computed in Python over the ``ttft_ms`` column for the
+        window. SQLite has no percentile function here, and the existing
+        duration percentiles use a bucket histogram that this column has no
+        equivalent of. The pull is capped at ``_LATENCY_SAMPLE_ROWS`` newest
+        rows and the payload says which it did in ``p50_source``: ``exact``
+        when every measured attempt in the window was read, ``sampled`` when
+        the cap truncated it.
+        """
+
+        cache_key = ("latency_by_model", since, limit)
+        now = time.monotonic()
+        with self._stats_lock:
+            cached = self._stats_cache.get(cache_key)
+            if cached is not None:
+                if now - cached[0] < _STATS_CACHE_TTL_SECONDS:
+                    self._stats_cache.move_to_end(cache_key)
+                    return [dict(row) for row in cached[1]["rows"]]
+                del self._stats_cache[cache_key]
+        try:
+            with self._connection() as conn:
+                # The same dual shape ``reasoning_by_model`` uses, and for the
+                # same reason: the attempt's own ``ts_epoch`` is only a usable
+                # filter once every attempt carries one, and until the backfill
+                # marker is set ``a.ts_epoch >= ?`` would silently drop the
+                # history the question is about.
+                #
+                # Every column is qualified. ``request_attempts`` and
+                # ``requests`` now share four column names, and an unqualified
+                # reference in a join is ambiguous at best and silently the
+                # wrong table's at worst.
+                dated = (
+                    since is not None
+                    and self._meta_get(conn, _ATTEMPTS_TS_BACKFILL_KEY) is not None
+                )
+                join = (
+                    ""
+                    if since is None or dated
+                    else " JOIN requests r ON r.id = a.request_id"
+                )
+                since_clause = (
+                    ""
+                    if since is None
+                    else (" AND a.ts_epoch >= ?" if dated else " AND r.ts_epoch >= ?")
+                )
+                args: list[Any] = [] if since is None else [since]
+                rows = conn.execute(
+                    "SELECT a.model_ref AS model_ref, a.outcome AS outcome,"
+                    " COUNT(*) AS attempts,"
+                    " SUM(CASE WHEN a.ttft_ms IS NOT NULL THEN 1 ELSE 0 END)"
+                    " AS ttft_measured,"
+                    " AVG(a.ttft_ms) AS avg_ttft_ms,"
+                    " AVG(a.first_reasoning_ms) AS avg_first_reasoning_ms,"
+                    " AVG(a.duration_ms - a.ttft_ms) AS avg_generating_ms,"
+                    " SUM(a.tokens_out) AS tokens_out"
+                    " FROM request_attempts a"
+                    f"{join}"
+                    f" WHERE a.model_ref IS NOT NULL AND {_LATENCY_OUTCOMES_SQL}"
+                    f"{since_clause}"
+                    " GROUP BY a.model_ref, a.outcome"
+                    " ORDER BY attempts DESC"
+                    " LIMIT ?",
+                    [*args, limit],
+                ).fetchall()
+                # The percentile pull is skipped entirely when the aggregate
+                # above already said nothing in the window carries a
+                # first-token time. That is not an optimisation for the empty
+                # case, it is the *only* case that matters on an installed
+                # log: every row written before 7.4.0 is unmeasured, so
+                # ``ttft_ms IS NOT NULL`` matches nothing and this query
+                # degrades to a reverse scan of every attempt row -- 571,665 of
+                # them on the measured copy, each co-located with its stored
+                # wire body. Measured there: 4.15 s with the pull, 0.68 s
+                # without it, for a percentile block that could only ever have
+                # come back empty.
+                measured = any(int(row["ttft_measured"] or 0) for row in rows)
+                samples = (
+                    conn.execute(
+                        "SELECT a.model_ref AS model_ref, a.outcome AS outcome,"
+                        " a.ttft_ms AS ttft_ms"
+                        " FROM request_attempts a"
+                        f"{join}"
+                        f" WHERE a.model_ref IS NOT NULL AND {_LATENCY_OUTCOMES_SQL}"
+                        " AND a.ttft_ms IS NOT NULL"
+                        f"{since_clause}"
+                        " ORDER BY a.rowid DESC"
+                        " LIMIT ?",
+                        [*args, _LATENCY_SAMPLE_ROWS + 1],
+                    ).fetchall()
+                    if measured
+                    else []
+                )
+        except sqlite3.Error as exc:
+            # A readout, not a control: an unavailable log means "no
+            # measurement", never an error banner over the page that asked.
+            logger.warning("Latency breakdown unavailable: {}", exc)
+            return []
+        truncated = len(samples) > _LATENCY_SAMPLE_ROWS
+        buckets: dict[tuple[str, str], list[float]] = {}
+        for sample in samples[:_LATENCY_SAMPLE_ROWS]:
+            buckets.setdefault(
+                (str(sample["model_ref"]), str(sample["outcome"])), []
+            ).append(float(sample["ttft_ms"]))
+        payload: list[dict[str, Any]] = []
+        for row in rows:
+            key = (str(row["model_ref"]), str(row["outcome"]))
+            measured = sorted(buckets.get(key, ()))
+            payload.append(
+                {
+                    "model_ref": row["model_ref"],
+                    "outcome": row["outcome"],
+                    "attempts": int(row["attempts"] or 0),
+                    "ttft_measured": int(row["ttft_measured"] or 0),
+                    "avg_ttft_ms": _rounded(row["avg_ttft_ms"]),
+                    "avg_first_reasoning_ms": _rounded(row["avg_first_reasoning_ms"]),
+                    # ``duration_ms - ttft_ms``: the time this model spent
+                    # producing the rest of the answer once it had started. NULL
+                    # whenever either input is, which SQLite does for us.
+                    "avg_generating_ms": _rounded(row["avg_generating_ms"]),
+                    # NULL, not 0: only the attempt that answered carries token
+                    # counts, so a group of failures has nothing to sum and
+                    # "0 tokens out" would be a claim nobody can support.
+                    "tokens_out": (
+                        None if row["tokens_out"] is None else int(row["tokens_out"])
+                    ),
+                    "p50_ttft_ms": _rounded(_percentile(measured, 0.50)),
+                    "p95_ttft_ms": _rounded(_percentile(measured, 0.95)),
+                    "p50_source": "sampled" if truncated else "exact",
+                }
+            )
+        with self._stats_lock:
+            # Shares ``stats()``'s cache and its 5 s TTL, exactly as
+            # ``reasoning_by_model`` does; the string-led key cannot collide
+            # with the positional tuple ``stats`` uses.
             self._stats_cache[cache_key] = (now, {"rows": payload})
             self._stats_cache.move_to_end(cache_key)
             while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
@@ -6364,6 +6690,19 @@ class RequestLogStore:
 
 def _rounded(value: float | None) -> float | None:
     return round(value, 2) if value is not None else None
+
+
+def _percentile(ordered: list[float], fraction: float) -> float | None:
+    """Nearest-rank percentile of an already-sorted list; None when it is empty.
+
+    Nearest rank rather than interpolation on purpose: every value here is a
+    measurement that actually happened, and a p95 halfway between two real
+    attempts is a latency no request ever had.
+    """
+    if not ordered:
+        return None
+    rank = math.ceil(fraction * len(ordered))
+    return ordered[min(max(rank, 1), len(ordered)) - 1]
 
 
 def _mean(total: float | None, count: float | None) -> float | None:

@@ -278,3 +278,20 @@ def test_harness_is_a_group_by_dimension(tmp_path) -> None:
         )
     )
     assert [row["harness"] for row in only] == ["codex"]
+
+
+def test_request_export_carries_winner_ttft() -> None:
+    """Two TTFT columns, side by side, and the difference is the fallback loss.
+
+    ``ttft_ms`` is unchanged and still means "what the client waited, fallbacks
+    included". ``ttft_winner_ms`` is what the model that answered actually took.
+    Structural rather than gated by a field group, for the reason ``harness``
+    is: a column in the display order that belongs to no group is unreachable.
+    """
+    assert "ttft_winner_ms" in export_engine._REQUEST_ALWAYS_COLUMNS
+    assert "ttft_winner_ms" in export_engine._REQUEST_COLUMN_ORDER
+    assert export_engine._REQUEST_COLUMN_LABELS["ttft_winner_ms"] == "Winner TTFT (ms)"
+    columns = export_engine.request_detail_columns([])
+    assert "ttft_winner_ms" in columns
+    # Beside the old one, and after it, so a reader meets them in that order.
+    assert columns.index("ttft_ms") < columns.index("ttft_winner_ms")

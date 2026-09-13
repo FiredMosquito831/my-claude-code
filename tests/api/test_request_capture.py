@@ -1412,3 +1412,268 @@ def test_image_delivery_marker_says_none_without_a_picture(
     row = store.get_request("req_plain")
     assert row is not None
     assert row["image_delivery"] == "none"
+
+
+# ------------------------------------------------------------------ 7.4.0 --
+#
+# Per-attempt latency, at the capture boundary: what the executor measured must
+# reach the attempt row, the winner's usage must reach the winner's row without
+# being priced twice, and the request row must gain the winner's TTFT beside --
+# never instead of -- the one the client actually waited.
+
+
+def test_attempt_result_carries_ttft_and_first_reasoning(
+    store: RequestLogStore,
+) -> None:
+    capture = _make_capture(store, request_id="req_attempt_latency")
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/kimi-k3",
+            outcome="succeeded",
+            duration_ms=1_000.0,
+            ttft_ms=210.0,
+            first_reasoning_ms=40.0,
+        )
+    )
+    capture.finish_success("ok")
+    store.close()
+
+    row = store.get_request("req_attempt_latency")
+    assert row is not None
+    (attempt,) = row["route_attempts"]
+    assert attempt["ttft_ms"] == 210.0
+    assert attempt["first_reasoning_ms"] == 40.0
+
+
+def test_a_failed_attempt_keeps_the_ttft_it_measured(store: RequestLogStore) -> None:
+    """The row that burns the time is the one that had no first-token number."""
+    capture = _make_capture(store, request_id="req_failed_latency")
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/slow",
+            outcome="failed",
+            error_kind="upstream",
+            duration_ms=30_000.0,
+            ttft_ms=9_000.0,
+        )
+    )
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=1,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/fast",
+            outcome="succeeded",
+            duration_ms=900.0,
+            ttft_ms=180.0,
+        )
+    )
+    capture.finish_success("ok")
+    store.close()
+
+    row = store.get_request("req_failed_latency")
+    assert row is not None
+    first, second = row["route_attempts"]
+    assert first["ttft_ms"] == 9_000.0
+    assert second["ttft_ms"] == 180.0
+
+
+def test_ttft_winner_ms_matches_the_succeeded_attempt(store: RequestLogStore) -> None:
+    """The request row gains the winner's clock; its own ``ttft_ms`` is untouched."""
+    capture = _make_capture(store, request_id="req_winner")
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/slow",
+            outcome="failed",
+            error_kind="upstream",
+            duration_ms=4_000.0,
+        )
+    )
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=1,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/fast",
+            outcome="succeeded",
+            duration_ms=900.0,
+            ttft_ms=195.0,
+        )
+    )
+    capture.finish_success("ok")
+    store.close()
+
+    row = store.get_request("req_winner")
+    assert row is not None
+    assert row["ttft_winner_ms"] == 195.0
+
+
+def test_no_winner_leaves_ttft_winner_null(store: RequestLogStore) -> None:
+    """A chain where nothing answered has no winner latency, and says so."""
+    capture = _make_capture(store, request_id="req_nowinner")
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/slow",
+            outcome="failed",
+            error_kind="upstream",
+        )
+    )
+    capture.finish_error(RuntimeError("everything failed"))
+    store.close()
+
+    row = store.get_request("req_nowinner")
+    assert row is not None
+    assert row["ttft_winner_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_succeeded_attempt_carries_tokens_out(store: RequestLogStore) -> None:
+    """Per-attempt tok/s is underivable unless the winner records what it produced.
+
+    The counters come from the client-facing stream, which *is* the winner's
+    output; every other attempt stays NULL because nobody counted anything it
+    produced.
+    """
+    capture = _make_capture(store, request_id="req_winner_tokens")
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/slow",
+            outcome="failed",
+            error_kind="upstream",
+        )
+    )
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=1,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/fast",
+            outcome="succeeded",
+            duration_ms=900.0,
+            ttft_ms=195.0,
+        )
+    )
+
+    async def body() -> AsyncIterator[str]:
+        for chunk in _events(
+            (
+                "message_start",
+                {"type": "message_start", "message": {"usage": {"input_tokens": 11}}},
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": "hi"},
+                },
+            ),
+            (
+                "message_delta",
+                {"type": "message_delta", "usage": {"output_tokens": 37}},
+            ),
+            ("message_stop", {"type": "message_stop"}),
+        ):
+            yield chunk
+
+    await _collect(capture.wrap(body()))
+    store.close()
+
+    row = store.get_request("req_winner_tokens")
+    assert row is not None
+    assert row["tokens_out"] == 37
+    loser, winner = row["route_attempts"]
+    assert winner["tokens_out"] == 37
+    assert winner["tokens_in"] == 11
+    assert loser["tokens_out"] is None
+    assert loser["tokens_in"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_winners_usage_is_never_priced_onto_its_attempt_row(
+    store: RequestLogStore,
+) -> None:
+    """An ordinary attempt's cost is the request row's; a copy would double it.
+
+    ``_price_attempts`` used to price any attempt that carried tokens, which was
+    safe only because only describe hops ever did. Now the winner does, so the
+    describe test is explicit.
+    """
+    capture = _make_capture(store, request_id="req_winner_cost")
+    capture.record_attempt_result(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/fast",
+            outcome="succeeded",
+            duration_ms=900.0,
+            ttft_ms=195.0,
+        )
+    )
+
+    async def body() -> AsyncIterator[str]:
+        for chunk in _events(
+            (
+                "message_start",
+                {"type": "message_start", "message": {"usage": {"input_tokens": 11}}},
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": "hi"},
+                },
+            ),
+            (
+                "message_delta",
+                {"type": "message_delta", "usage": {"output_tokens": 37}},
+            ),
+            ("message_stop", {"type": "message_stop"}),
+        ):
+            yield chunk
+
+    await _collect(capture.wrap(body()))
+    store.close()
+
+    row = store.get_request("req_winner_cost")
+    assert row is not None
+    (winner,) = row["route_attempts"]
+    assert winner["tokens_out"] == 37
+    assert winner["cost_usd"] is None
+    assert winner["cost_source"] is None
+
+
+def test_describe_attempt_carries_its_own_ttft(store: RequestLogStore) -> None:
+    """A describe hop is a real upstream call with a real first token."""
+    capture = _make_capture(store, request_id="req_describe_latency")
+    capture.record_describe_attempt(
+        RouteAttemptRecord(
+            attempt=0,
+            provider_id="nvidia_nim",
+            model_ref="nvidia_nim/vision",
+            outcome="succeeded",
+            duration_ms=800.0,
+            ttft_ms=310.0,
+            first_reasoning_ms=90.0,
+        ),
+        image_sha="abc123",
+        image_index=0,
+        usage={"input_tokens": 5, "output_tokens": 9},
+    )
+    capture.finish_success("ok")
+    store.close()
+
+    row = store.get_request("req_describe_latency")
+    assert row is not None
+    (attempt,) = row["route_attempts"]
+    assert attempt["params"]["kind"] == "describe"
+    assert attempt["ttft_ms"] == 310.0
+    assert attempt["first_reasoning_ms"] == 90.0
+    # And its own usage is still its own, and still priced on its own row.
+    assert attempt["tokens_out"] == 9

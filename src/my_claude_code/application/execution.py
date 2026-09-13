@@ -36,6 +36,7 @@ from my_claude_code.core.anthropic import (
 from my_claude_code.core.anthropic.stream_contracts import (
     REASONING_HEARTBEAT,
     sse_carries_content,
+    sse_carries_reasoning,
 )
 from my_claude_code.core.anthropic.streaming.recovery import CONTINUATION_NUDGE
 from my_claude_code.core.anthropic.streaming.splice import (
@@ -162,6 +163,20 @@ class RouteAttemptRecord:
     #: output was actually usable. The row that *stalled* keeps its own
     #: failure verdict, so the pair reads as one story.
     continuation: dict[str, object] | None = None
+    #: Milliseconds from this attempt's own start to the first chunk carrying
+    #: answer content. ``None`` is "this attempt produced no answer content" --
+    #: it is never zero. Measured here, per attempt, because
+    #: ``requests.ttft_ms`` is measured from the *client's* first byte and so
+    #: charges a fallback model with every predecessor's stall: the live log
+    #: reports a mean of 8.6 s at ``route_attempt = 0`` against 25.2 s above it,
+    #: which is roughly 16.5 s of somebody else's time.
+    ttft_ms: float | None = None
+    #: Milliseconds to the first sign this attempt was thinking, from the same
+    #: clock. Kept apart from ``ttft_ms`` on purpose: a model that reasons for
+    #: 40 s and then answers in 200 ms is honestly slow on one axis and
+    #: honestly fast on the other, and one number cannot say both. ``None`` is
+    #: "no reasoning signal was seen", not "it did not think".
+    first_reasoning_ms: float | None = None
 
 
 # Reports what became of one attempt, as opposed to announcing that it started.
@@ -514,6 +529,16 @@ class _AttemptLedger:
         self._observer = observer
         self._records: dict[int, RouteAttemptRecord] = {}
         self._started: dict[int, float] = {}
+        # First-write-wins clocks, per attempt index: milliseconds from this
+        # attempt's own ``start()`` to its first answer chunk and to the first
+        # sign it was thinking. They live here rather than on the record
+        # because the record is frozen and rebuilt on every verdict, and
+        # because a *failed* attempt that streamed a first token must keep it:
+        # the attempts that burn the time are exactly the ones the only
+        # existing first-token number (``response_shape.first_chunk_ms``, three
+        # provider modules, success path only) has never covered.
+        self._ttft: dict[int, float] = {}
+        self._reasoning: dict[int, float] = {}
         self._current: int | None = None
         for index, ref in enumerate(model_refs):
             self._records[index] = RouteAttemptRecord(
@@ -592,6 +617,29 @@ class _AttemptLedger:
         started = self._started.get(index)
         return None if started is None else (time.monotonic() - started) * 1000.0
 
+    def note_content(self, index: int) -> None:
+        """Stamp the first chunk of answer content this attempt produced.
+
+        First write wins: the question is when the reader could first have read
+        something, and every later chunk is a different question. Called at
+        chunk *arrival*, before the buffering and splicing branches, because a
+        chunk held back by ``buffer_until_complete`` still arrived -- measuring
+        after the hold would report the proxy's policy as the model's latency.
+        """
+        if index in self._ttft:
+            return
+        elapsed = self._elapsed_ms(index)
+        if elapsed is not None:
+            self._ttft[index] = elapsed
+
+    def note_reasoning(self, index: int) -> None:
+        """Stamp the first sign this attempt was thinking rather than silent."""
+        if index in self._reasoning:
+            return
+        elapsed = self._elapsed_ms(index)
+        if elapsed is not None:
+            self._reasoning[index] = elapsed
+
     def _set(
         self,
         index: int,
@@ -616,6 +664,11 @@ class _AttemptLedger:
             bench=bench,
             truncated=current.truncated,
             continuation=current.continuation,
+            # Read off the ledger rather than threaded through every caller:
+            # a skipped or benched row has nothing in either dict and gets
+            # None, and a failed attempt keeps whatever it managed to stream.
+            ttft_ms=self._ttft.get(index),
+            first_reasoning_ms=self._reasoning.get(index),
         )
 
     def truncated_after_commit(self, index: int, truncation: StreamTruncation) -> None:
@@ -1044,9 +1097,33 @@ class ProviderExecutor:
                             # the guard that ends one is untouched.
                             if reasoning_since is None:
                                 reasoning_since = time.monotonic()
+                            # The deadline path has carried this instant as a
+                            # timeout argument since reasoning allowances
+                            # shipped; the ledger copy is what turns it into a
+                            # stored fact instead of a timer that expires.
+                            ledger.note_reasoning(index)
                             last_progress = time.monotonic()
                             continue
                         seen_chunk = True
+                        # Measured here, at arrival, and before the buffering
+                        # and splicing branches below: a chunk held back by
+                        # ``buffer_until_complete`` still arrived, and timing
+                        # the release would report this proxy's policy as the
+                        # model's latency.
+                        #
+                        # Reasoning is checked first and wins the chunk,
+                        # because a ``thinking_delta`` is a
+                        # ``content_block_delta`` too and answering "when did
+                        # the reader get a word" with the moment the model
+                        # started thinking is the collapse these two columns
+                        # exist to prevent. A chunk carrying both kinds of
+                        # delta -- which no adapter here emits, since every one
+                        # of them writes one frame per event -- would stamp
+                        # reasoning now and content on the next chunk.
+                        if sse_carries_reasoning(chunk):
+                            ledger.note_reasoning(index)
+                        elif sse_carries_content(chunk):
+                            ledger.note_content(index)
                         # Only a chunk that moves the answer forward counts as
                         # progress. A keepalive resetting this clock is exactly
                         # how a dead stream would hold a request forever, which

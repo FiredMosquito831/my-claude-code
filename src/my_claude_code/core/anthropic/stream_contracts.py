@@ -315,3 +315,29 @@ def sse_carries_content(text: str) -> bool:
     anyway, so the one way this can be wrong is a way that cannot matter.
     """
     return "content_block_delta" in text
+
+
+def sse_carries_reasoning(text: str) -> bool:
+    """Whether an SSE fragment is the model thinking rather than answering.
+
+    The companion to :func:`sse_carries_content`, and answered the same way and
+    for the same reason: a substring scan rather than a JSON parse, because it
+    is asked once per chunk for the whole length of a stream.
+
+    It exists because "time to first token" has two honest answers for a model
+    that thinks before it speaks -- 40 s if the thinking counts, 40.2 s if only
+    the answer does -- and reporting one number collapses a reasoning model into
+    either instant or catastrophic. The two are measured apart: this marks the
+    first sign the model was working, ``sse_carries_content`` the first word the
+    reader could read.
+
+    The two delta types are the ones :data:`_REASONING_DELTA_TYPES` already
+    names -- spelled out here rather than iterated, because this is asked on the
+    hottest loop in the product and two ``in`` tests are cheaper than building a
+    generator per chunk. Every adapter in this codebase normalises to that shape
+    before a chunk reaches the executor -- the OpenAI-chat, Responses (and so
+    chatgpt-oauth), Gemini and Cloudflare assemblers all emit reasoning through
+    ``StreamLedger.emit_thinking_delta``. So this is exact rather than
+    approximate for the same reason its sibling is.
+    """
+    return "thinking_delta" in text or "signature_delta" in text
