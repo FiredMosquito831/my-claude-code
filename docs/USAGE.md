@@ -3473,7 +3473,19 @@ Every row's dialog also shows the full request and response, the resolved config
 
 #### Exporting
 
-**Export** opens the export window. It covers Model requests and Web Search, in four formats — JSON, CSV, XLSX and TXT — and streams the **entire** matching row set (it is not capped at the 500-row list page). Pick a period (last hour, 24 hours, 7 days, 30 days, or a custom from–to range), choose which fields to include, and optionally group the output by provider, period, model or key — with the grouping order selectable (e.g. Provider → Period → Model, or Period → Provider → Model). Selecting body-bearing fields (Input, Output, Tool calls, Thinking) includes the stored text for each row.
+**Export** opens the export window. It covers Model requests, **Route attempts** and Web Search, in four formats — JSON, CSV, XLSX and TXT — and streams the **entire** matching row set (it is not capped at the 500-row list page). Pick a period (last hour, 24 hours, 7 days, 30 days, or a custom from–to range), choose which fields to include, and optionally group the output by provider, period, model or key — with the grouping order selectable (e.g. Provider → Period → Model, or Period → Provider → Model). Selecting body-bearing fields (Input, Output, Tool calls, Thinking) includes the stored text for each row.
+
+##### Route attempts: one row per model tried
+
+**Export attempts**, beside **Export** on the Requests toolbar, opens the same window on the **Route attempts** scope. Model requests gives you one row per request, which means one provider, one model and one verdict — so on a request that fell back twice, the two models that burned the time are simply not in the file. Route attempts gives you one row per attempt instead.
+
+Each row carries the attempt's own facts — its provider and model, its outcome (`succeeded`, `failed`, `skipped`), the key it used, its own TTFT, first-reasoning time and duration, what ended it, and its failure kind or bench reason — beside the parent request's dimensions (time, harness, endpoint, requested model, resolved model, request status) so a row is still filterable and groupable after it leaves MCC. Optional groups add attempt tokens, attempt cost and source, the upstream retry ladder, the wire surface and credential index, and the stream recovery counters.
+
+Three things to know before you read the numbers:
+
+- **The filters are the request filters.** Period, provider, model, key, status, harness, search text and **Local answers** all select *requests*, exactly as they do for the Model requests export and for the table you took it from; every attempt of a selected request is in the file, including the ones that failed. That is the point — an attempt without its chain is not evidence.
+- **Empty means never measured, never zero.** `TTFT (ms)` and `First reasoning (ms)` did not exist before 7.4.0 and are not backfilled; `Attempt output tokens` is filled only on the winning attempt (and on a vision *describe* hop); `Attempt cost (USD)` only where an attempt reported its own usage. A skipped attempt has no latency at all — only a reason.
+- **It is detail only.** There is no Group by for this scope: averaging latency across attempts of different models inside one request is the number the per-model `p50 TTFT` cards already answer properly.
 
 #### Why the totals stop rising
 

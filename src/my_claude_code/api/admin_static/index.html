@@ -926,6 +926,7 @@
               <button id="reqApplyFilters" class="secondary-button" type="button">Apply</button>
               <button id="reqClearFilters" class="secondary-button" type="button">Clear filters</button>
               <button id="reqExportButton" class="secondary-button" type="button">Export</button>
+              <button id="reqExportAttemptsButton" class="secondary-button" type="button">Export attempts</button>
               <span id="reqBodiesIndicator" class="requests-indicator"></span>
               <button id="reqClearDescriptionsButton" class="secondary-button danger" type="button">Clear image descriptions</button>
               <button id="reqForgetLearnedButton" class="secondary-button danger" type="button">Forget all learned facts</button>
@@ -1140,6 +1141,10 @@
                     Model requests
                   </label>
                   <label class="export-radio">
+                    <input type="radio" name="exportScope" value="attempts" />
+                    Route attempts
+                  </label>
+                  <label class="export-radio">
                     <input type="radio" name="exportScope" value="websearch" />
                     Web Search
                   </label>
@@ -1179,7 +1184,7 @@
                   </span>
                 </div>
 
-                <div class="export-row">
+                <div class="export-row" id="exportGroupByWrap">
                   <label class="export-row-label" for="exportGroupBy">Group by</label>
                   <select id="exportGroupBy">
                     <option value="">None (flat detail)</option>
@@ -3280,10 +3285,33 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   back shows as one search and several attempts.
                 </p>
                 <p>
-                  <strong>Export</strong> opens the export window for Model requests or Web
-                  Search &mdash; JSON, CSV, XLSX or TXT, over a period of your choice,
-                  with selectable fields and optional grouping by provider, period, model
-                  or key. It streams the entire matching row set, not just the visible page.
+                  <strong>Export</strong> opens the export window for Model requests,
+                  Route attempts or Web Search &mdash; JSON, CSV, XLSX or TXT, over a
+                  period of your choice, with selectable fields and optional grouping by
+                  provider, period, model or key. It streams the entire matching row set,
+                  not just the visible page.
+                </p>
+                <p>
+                  <strong>Export attempts</strong>, beside it, opens the same window on
+                  the <em>Route attempts</em> scope: one row per model the chain tried,
+                  rather than one per request. A request that fell back twice is one row
+                  in the Model requests export &mdash; one provider, one model, one
+                  verdict &mdash; and the two models that spent the time are not in it at
+                  all. Each attempt row carries its own provider, model, outcome, key,
+                  TTFT, first-reasoning time, duration and what ended it, beside the
+                  parent request's time, harness, endpoint, models and status.
+                </p>
+                <p class="guide-note">
+                  <strong>The filters are the request filters, and empty means never
+                  measured.</strong> Period, provider, model, key, status, harness, search
+                  and Local answers all select requests, so every attempt of a selected
+                  request is in the file &mdash; including the failures, which is the
+                  point. The latency columns did not exist before 7.4.0 and are not
+                  backfilled, attempt tokens are filled only on the winning attempt, and a
+                  skipped attempt has no latency at all &mdash; only a reason. Those cells
+                  are blank rather than zero. The scope is detail-only: there is no Group
+                  by, because the per-model <em>p50 TTFT</em> cards already answer that
+                  question properly.
                 </p>
                 <h4>Finding a request again</h4>
                 <p>

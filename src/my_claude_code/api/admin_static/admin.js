@@ -14145,6 +14145,19 @@ const EXPORT_FIELDS = {
     { id: "turns_with_tools", label: "Turns with tools" },
     { id: "ladder", label: "Upstream retry ladder" },
   ],
+  /* One row per attempt rather than per request. Structural columns -- the
+     request's id, time, harness, endpoint, models and status, and the
+     attempt's own provider, model, outcome, key and three latencies -- are
+     always present; these are the groups on top of them. Mirrors
+     core/export.py::ATTEMPT_FIELD_IDS. */
+  attempts: [
+    { id: "failure", label: "Failure and skip reason" },
+    { id: "tokens", label: "Attempt tokens" },
+    { id: "cost", label: "Attempt cost" },
+    { id: "ladder", label: "Upstream retry ladder" },
+    { id: "wire", label: "Wire surface and credential" },
+    { id: "recovery", label: "Stream recovery counters" },
+  ],
   websearch: [
     { id: "provider", label: "Provider" },
     { id: "key_label", label: "Key" },
@@ -14176,10 +14189,11 @@ const EXPORT_DEFAULT_FIELDS = {
     "tokens_out",
     "turns_with_tools",
   ]),
+  attempts: new Set(["failure", "tokens", "cost", "ladder"]),
   websearch: new Set(["provider", "status", "results_count", "duration_ms", "cost_usd"]),
 };
 
-const EXPORT_DEFAULT_PERIOD = { requests: "86400", websearch: "604800" };
+const EXPORT_DEFAULT_PERIOD = { requests: "86400", attempts: "86400", websearch: "604800" };
 let exportReturnFocus = null;
 
 function exportScope() {
@@ -14229,12 +14243,25 @@ function syncExportFilterVisibility(scope) {
   // Web Search has no models; hide the model filter for that scope.
   const modelWrap = byId("exportModelFilterWrap");
   if (modelWrap) modelWrap.hidden = scope === "websearch";
+  /* Route attempts is detail-only. Grouping it would average latency across
+     attempts of different models inside one request, which is the number the
+     per-model cards already answer properly -- so the control goes away
+     rather than offering a shape the server rejects. */
+  const groupWrap = byId("exportGroupByWrap");
+  if (groupWrap) groupWrap.hidden = scope === "attempts";
+  if (scope === "attempts") byId("exportGroupBy").value = "";
 }
 
-function openExportModal() {
+function openExportModal(scopeOverride) {
   exportReturnFocus = document.activeElement;
-  // Default scope to the view the user opened from.
-  const initial = state.activeView === "web_search" ? "websearch" : "requests";
+  // Default scope to the view the user opened from, unless a button asked for
+  // a specific one.
+  const initial =
+    typeof scopeOverride === "string"
+      ? scopeOverride
+      : state.activeView === "web_search"
+        ? "websearch"
+        : "requests";
   const scopeRadios = document.querySelectorAll('input[name="exportScope"]');
   scopeRadios.forEach((radio) => {
     radio.checked = radio.value === initial;
@@ -14604,7 +14631,14 @@ byId("reqClearDescriptionsButton").addEventListener("click", () => {
     .catch((error) => showMessage(error.message, "error"));
 });
 
-byId("reqExportButton").addEventListener("click", openExportModal);
+byId("reqExportButton").addEventListener("click", () => openExportModal("requests"));
+/* The same window, opened on the attempt scope. A second button rather than
+   only a third radio: the models that did not answer are the reason this
+   export exists, and a reader who never opens the Scope row would never find
+   them. */
+byId("reqExportAttemptsButton").addEventListener("click", () =>
+  openExportModal("attempts"),
+);
 byId("reqClearButton").addEventListener("click", () => {
   if (
     !window.confirm(

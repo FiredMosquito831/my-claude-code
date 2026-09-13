@@ -15,12 +15,17 @@ import tempfile
 from collections.abc import Iterable, Iterator
 from typing import Any, Literal, cast
 
-from my_claude_code.core.request_log import PROVIDER_KEY_SQL
+from my_claude_code.core.request_log import ATTEMPT_PARAMS_KEY, PROVIDER_KEY_SQL
 
 Format = Literal["json", "csv", "xlsx", "txt"]
 REQUEST_SCOPE = "requests"
 WEBSEARCH_SCOPE = "websearch"
-Scope = Literal["requests", "websearch"]
+#: One row per *attempt* rather than per request. A request that fell back
+#: three times is one row in the request scope and four here, and the three
+#: models that did not answer -- the ones that spent the time -- have no row of
+#: their own anywhere else.
+ATTEMPT_SCOPE = "attempts"
+Scope = Literal["requests", "websearch", "attempts"]
 
 MEDIA_TYPES: dict[Format, str] = {
     "json": "application/json",
@@ -35,7 +40,7 @@ _EXTENSIONS: dict[Format, str] = {
     "txt": "txt",
 }
 _FORMAT_SET = frozenset(_EXTENSIONS)
-_SCOPE_SET = frozenset((REQUEST_SCOPE, WEBSEARCH_SCOPE))
+_SCOPE_SET = frozenset((REQUEST_SCOPE, WEBSEARCH_SCOPE, ATTEMPT_SCOPE))
 
 # Body-bearing request fields: selecting any of these means the store iterator
 # must decompress stored bodies for the export.
@@ -145,6 +150,44 @@ DEFAULT_WEBSEARCH_FIELDS: tuple[str, ...] = (
     "cost_usd",
 )
 
+# Selectable fields for the attempt scope, in display order.
+ATTEMPT_FIELD_IDS: tuple[str, ...] = (
+    "failure",
+    "tokens",
+    "cost",
+    "ladder",
+    "wire",
+    "recovery",
+)
+ATTEMPT_FIELD_LABELS: dict[str, str] = {
+    "failure": "Failure and skip reason",
+    "tokens": "Attempt tokens",
+    "cost": "Attempt cost",
+    "ladder": "Upstream retry ladder",
+    "wire": "Wire surface and credential",
+    "recovery": "Stream recovery counters",
+}
+DEFAULT_ATTEMPT_FIELDS: tuple[str, ...] = (
+    "failure",
+    "tokens",
+    "cost",
+    "ladder",
+)
+
+# The attempt scope is detail-only; see ``validate_group_by``.
+ATTEMPT_GROUP_DIMENSIONS: tuple[str, ...] = ()
+
+_SCOPE_FIELD_IDS: dict[str, tuple[str, ...]] = {
+    REQUEST_SCOPE: REQUEST_FIELD_IDS,
+    WEBSEARCH_SCOPE: WEBSEARCH_FIELD_IDS,
+    ATTEMPT_SCOPE: ATTEMPT_FIELD_IDS,
+}
+_SCOPE_GROUP_DIMENSIONS: dict[str, tuple[str, ...]] = {
+    REQUEST_SCOPE: REQUEST_GROUP_DIMENSIONS,
+    WEBSEARCH_SCOPE: WEBSEARCH_GROUP_DIMENSIONS,
+    ATTEMPT_SCOPE: ATTEMPT_GROUP_DIMENSIONS,
+}
+
 
 def validate_format(value: str) -> Format:
     if value not in _FORMAT_SET:
@@ -176,7 +219,7 @@ def requires_request_bodies(field_ids: Iterable[str]) -> bool:
 
 
 def validate_fields(scope: Scope, field_ids: Iterable[str]) -> list[str]:
-    known = REQUEST_FIELD_IDS if scope == REQUEST_SCOPE else WEBSEARCH_FIELD_IDS
+    known = _SCOPE_FIELD_IDS[scope]
     unknown = [field for field in field_ids if field not in known]
     if unknown:
         raise ValueError(f"unknown export field(s) for scope {scope!r}: {unknown!r}")
@@ -184,11 +227,14 @@ def validate_fields(scope: Scope, field_ids: Iterable[str]) -> list[str]:
 
 
 def validate_group_by(scope: Scope, group_by: Iterable[str]) -> list[str]:
-    valid = (
-        REQUEST_GROUP_DIMENSIONS
-        if scope == REQUEST_SCOPE
-        else WEBSEARCH_GROUP_DIMENSIONS
-    )
+    valid = _SCOPE_GROUP_DIMENSIONS[scope]
+    if group_by and not valid:
+        # The attempt scope is detail-only. Grouping it would mean averaging
+        # latency across attempts of different models inside one request, which
+        # is the number ``latency_by_model`` already answers properly -- and a
+        # silently ignored ``group_by`` would hand back a flat file the caller
+        # believes is grouped.
+        raise ValueError(f"scope {scope!r} cannot be grouped; clear Group by")
     ordered: list[str] = []
     for dimension in group_by:
         if dimension not in valid:
@@ -850,6 +896,280 @@ def compute_websearch_aggregate_derived(
 
 def websearch_detail_only_fields(field_ids: Iterable[str]) -> list[str]:
     return [field for field in field_ids if field in _WEBSEARCH_DETAIL_ONLY]
+
+
+# --------------------------------------------------------------------------
+# Attempt scope: one row per attempt, joined to its request's dimensions.
+# --------------------------------------------------------------------------
+#
+# Until 7.6.0 no export path read ``request_attempts`` at all except the
+# per-request ladder rollup, so the models that *did not* answer -- the ones a
+# fallback chain actually spends its time on -- were unexportable. The request
+# scope has one row per request and therefore exactly one provider, one model
+# and one verdict per row; a three-model chain's first two models are simply
+# not in it.
+#
+# Every column here is NULL-not-zero. The latency columns did not exist before
+# 7.4.0 and are not backfillable, ``tokens_out`` is filled only on the winning
+# attempt (and on a vision describe hop), and ``cost_usd`` is filled only where
+# an attempt reported its own usage. A zero in any of them would read as a
+# measurement.
+
+#: Parent-request dimensions carried onto every attempt row. A failed attempt
+#: has no endpoint, harness or requested model of its own -- those are facts
+#: about the request it belongs to -- and without them an attempt row cannot be
+#: filtered or grouped by the reader afterwards.
+_ATTEMPT_REQUEST_COLUMNS: tuple[str, ...] = (
+    "request_id",
+    "ts_iso",
+    "harness",
+    "endpoint",
+    "requested_model",
+    "resolved_model",
+    "request_status",
+)
+
+#: Attempt columns present on every attempt export, whatever the selection.
+_ATTEMPT_ALWAYS_COLUMNS: tuple[str, ...] = (
+    *_ATTEMPT_REQUEST_COLUMNS,
+    "attempt",
+    "attempt_provider",
+    "attempt_model",
+    "outcome",
+    "key_label",
+    "ttft_ms",
+    "first_reasoning_ms",
+    "duration_ms",
+)
+
+_ATTEMPT_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
+    "failure": ("error_kind", "error_message"),
+    "tokens": ("tokens_in", "tokens_out"),
+    "cost": ("cost_usd", "cost_source"),
+    "ladder": ("ladder_tries",),
+    "wire": ("reasoning_emitted", "key_index"),
+    "recovery": (),
+}
+
+#: Derived on every attempt export: the two or three words that say what ended
+#: this attempt, assembled the same way the request modal's timeline assembles
+#: them so a download and the page it came from cannot disagree.
+_ATTEMPT_ALWAYS_DERIVED: tuple[str, ...] = ("ended_by",)
+
+_ATTEMPT_DETAIL_DERIVED: dict[str, tuple[str, ...]] = {
+    # Why the router refused to try this model. A skipped attempt has no
+    # latency, no tokens and no error -- the reason is the whole row.
+    "failure": ("bench_reason",),
+    "ladder": ("ladder_root_cause",),
+    "wire": ("wire_surface",),
+    "recovery": ("early_retries", "midstream_recoveries", "salvages"),
+}
+
+_ATTEMPT_COLUMN_FIELD: dict[str, str] = {}
+for _field, _columns in _ATTEMPT_FIELD_COLUMNS.items():
+    for _column in _columns:
+        _ATTEMPT_COLUMN_FIELD[_column] = _field
+
+_ATTEMPT_COLUMN_ORDER: tuple[str, ...] = (
+    "request_id",
+    "ts_iso",
+    "attempt",
+    "harness",
+    "endpoint",
+    "requested_model",
+    "resolved_model",
+    "request_status",
+    "attempt_provider",
+    "attempt_model",
+    "outcome",
+    "ended_by",
+    "error_kind",
+    "error_message",
+    "bench_reason",
+    "key_label",
+    "key_index",
+    "ttft_ms",
+    "first_reasoning_ms",
+    "duration_ms",
+    "tokens_in",
+    "tokens_out",
+    "cost_usd",
+    "cost_source",
+    "ladder_tries",
+    "ladder_root_cause",
+    "wire_surface",
+    "reasoning_emitted",
+    "early_retries",
+    "midstream_recoveries",
+    "salvages",
+)
+
+_ATTEMPT_COLUMN_LABELS: dict[str, str] = {
+    "request_id": "Request ID",
+    "ts_iso": "Time",
+    "attempt": "Attempt #",
+    "harness": "Harness",
+    "endpoint": "Endpoint",
+    "requested_model": "Requested model",
+    "resolved_model": "Resolved model",
+    "request_status": "Request status",
+    "attempt_provider": "Attempt provider",
+    "attempt_model": "Attempt model",
+    "outcome": "Outcome",
+    "ended_by": "Ended by",
+    "error_kind": "Failure kind",
+    "error_message": "Failure or skip reason",
+    "bench_reason": "Bench reason",
+    "key_label": "Key",
+    "key_index": "Key index",
+    "ttft_ms": "TTFT (ms)",
+    "first_reasoning_ms": "First reasoning (ms)",
+    "duration_ms": "Duration (ms)",
+    "tokens_in": "Attempt input tokens",
+    "tokens_out": "Attempt output tokens",
+    "cost_usd": "Attempt cost (USD)",
+    "cost_source": "Attempt cost source",
+    "ladder_tries": "Upstream tries",
+    "ladder_root_cause": "Root cause",
+    "wire_surface": "Wire surface",
+    "reasoning_emitted": "Reasoning emitted",
+    "early_retries": "Early retries",
+    "midstream_recoveries": "Midstream recoveries",
+    "salvages": "Salvages",
+}
+
+
+def attempt_field_labels() -> list[tuple[str, str]]:
+    return [
+        (field_id, ATTEMPT_FIELD_LABELS[field_id]) for field_id in ATTEMPT_FIELD_IDS
+    ]
+
+
+def attempt_detail_columns(field_ids: Iterable[str]) -> list[str]:
+    """Return the non-derived attempt columns implied by the selected fields."""
+    selected = set(field_ids)
+    derived = {item for group in _ATTEMPT_DETAIL_DERIVED.values() for item in group}
+    derived.update(_ATTEMPT_ALWAYS_DERIVED)
+    chosen: list[str] = []
+    for column in _ATTEMPT_COLUMN_ORDER:
+        if column in derived or column in chosen:
+            continue
+        if column in _ATTEMPT_ALWAYS_COLUMNS:
+            chosen.append(column)
+            continue
+        field = _ATTEMPT_COLUMN_FIELD.get(column)
+        if field is not None and field in selected:
+            chosen.append(column)
+    return chosen
+
+
+def attempt_detail_derived_columns(field_ids: Iterable[str]) -> list[str]:
+    """Return the derived attempt columns for the selected fields."""
+    selected = set(field_ids)
+    result: list[str] = list(_ATTEMPT_ALWAYS_DERIVED)
+    seen: set[str] = set(result)
+    for field_id in ATTEMPT_FIELD_IDS:
+        if field_id in selected:
+            for derived in _ATTEMPT_DETAIL_DERIVED.get(field_id, ()):
+                if derived not in seen:
+                    seen.add(derived)
+                    result.append(derived)
+    return result
+
+
+def attempt_output_columns(field_ids: Iterable[str]) -> list[str]:
+    """Return every output column, in display order, for the selected fields."""
+    wanted = set(attempt_detail_columns(field_ids))
+    wanted.update(attempt_detail_derived_columns(field_ids))
+    return [column for column in _ATTEMPT_COLUMN_ORDER if column in wanted]
+
+
+def attempt_detail_headers(columns: Iterable[str]) -> list[str]:
+    return [_ATTEMPT_COLUMN_LABELS.get(column, column) for column in columns]
+
+
+def compute_attempt_detail_derived(
+    row: dict[str, Any], field_ids: Iterable[str]
+) -> None:
+    """Mutate ``row`` in place, filling the derived attempt columns.
+
+    Reads the parsed ``request_attempts.params`` object the store left under
+    :data:`ATTEMPT_PARAMS_KEY`. Everything it cannot find stays ``None``: an
+    attempt written before a given diagnostic existed did not record it, which
+    is not the same claim as "it was zero".
+    """
+    selected = set(field_ids)
+    params = row.get(ATTEMPT_PARAMS_KEY)
+    params = params if isinstance(params, dict) else {}
+    bench = params.get("bench")
+    bench = bench if isinstance(bench, dict) else None
+    ladder = params.get("ladder")
+    ladder = ladder if isinstance(ladder, dict) else None
+
+    row["ended_by"] = _attempt_ended_by(row, bench, ladder)
+    if "failure" in selected:
+        row["bench_reason"] = _bench_reason(bench)
+    if "ladder" in selected:
+        root_cause = ladder.get("root_cause") if ladder else None
+        row["ladder_root_cause"] = str(root_cause) if root_cause else None
+    if "wire" in selected:
+        wire = params.get("wire")
+        surface = wire.get("surface") if isinstance(wire, dict) else None
+        row["wire_surface"] = str(surface) if surface else None
+    if "recovery" in selected:
+        for counter in ("early_retries", "midstream_recoveries", "salvages"):
+            value = params.get(counter)
+            # Absent means the collector never counted anything for this
+            # attempt -- including every attempt written before recovery
+            # observability existed. Zero is what a row says when it was
+            # watched and nothing happened.
+            row[counter] = int(value) if isinstance(value, int) else None
+
+
+def _attempt_ended_by(
+    row: dict[str, Any],
+    bench: dict[str, Any] | None,
+    ladder: dict[str, Any] | None,
+) -> Any:
+    if bench is not None:
+        kind = bench.get("last_kind")
+        return f"benched ({kind})" if kind else "benched"
+    error_kind = row.get("error_kind")
+    if error_kind:
+        return str(error_kind)
+    if ladder is not None:
+        root_cause = ladder.get("root_cause")
+        if root_cause:
+            return str(root_cause)
+    outcome = row.get("outcome")
+    return str(outcome) if outcome else None
+
+
+def _bench_reason(bench: dict[str, Any] | None) -> Any:
+    """The registry's account of a bench, flattened into one cell.
+
+    The prose the router wrote is already in ``error_message``; this is the
+    structured half of the same fact, so a reader can sort and count benches
+    without parsing sentences. Keys follow ``route_health.BenchSnapshot``.
+    """
+    if bench is None:
+        return None
+    parts: list[str] = []
+    mode = bench.get("mode")
+    if mode:
+        parts.append(str(mode))
+    failures = bench.get("failures")
+    if isinstance(failures, int):
+        plural = "" if failures == 1 else "s"
+        parts.append(f"{failures} failure{plural}")
+    kind = bench.get("last_kind")
+    status = bench.get("last_status")
+    if kind:
+        parts.append(f"last {status} {kind}" if status is not None else f"last {kind}")
+    remaining = bench.get("remaining_seconds")
+    if isinstance(remaining, (int, float)):
+        parts.append(f"{remaining:g} s left")
+    return " · ".join(parts) if parts else "benched"
 
 
 # --------------------------------------------------------------------------

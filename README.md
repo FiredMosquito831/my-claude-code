@@ -154,6 +154,7 @@ Longer versions of all of these, per platform: [Usage Guide → Install](docs/US
 | Cost with provenance | Each request priced once as it is logged, with the rung of the pricing ladder that answered stored beside it | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Honest totals | Reported and estimated shown side by side, never summed; an unpriceable request shows a dash, every total an "N of M priced" denominator | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Exports | JSON export of anything the filters currently select | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
+| Attempt-level export | One row per model the chain tried, not per request, so the fallbacks that spent the time are in the file too | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Web search analytics | Separate route and attempt analytics with full captured input/output | **Web Search** page | [Guide](docs/USAGE.md#10-web-search) |
 
 ### Platform

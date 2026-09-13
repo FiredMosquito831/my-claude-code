@@ -1481,6 +1481,15 @@ _ATTEMPT_INSERT_COLUMNS = (
     "first_reasoning_ms",
 )
 
+#: Key under which the attempt export hands the parsed ``request_attempts.params``
+#: object to ``core.export``'s derived computations. Declared here rather than
+#: in ``core.export`` because ``export`` already imports from this module and
+#: the reverse import would be a cycle; ``export.ATTEMPT_PARAMS_KEY`` is this
+#: name. Leading underscore on purpose: it is never an output column. The
+#: params blob is a private diagnostic whose shape is not a contract, and the
+#: columns derived from it are.
+ATTEMPT_PARAMS_KEY = "_attempt_params"
+
 # Blank, not zero: a request whose attempts predate the ladder measured
 # nothing, and "0 tries" would be a claim the database cannot support.
 _EMPTY_LADDER_ROLLUP: dict[str, Any] = {
@@ -4749,6 +4758,145 @@ class RequestLogStore:
                 cursor = (rows[-1]["ts_epoch"], rows[-1]["id"])
         finally:
             conn.close()
+
+    def iter_export_attempt_rows(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        q: str | None = None,
+        local: str | None = None,
+        harness: str | None = None,
+        page_size: int = 1_000,
+    ) -> Generator[dict[str, Any]]:
+        """Yield one row per *attempt*, carrying its request's dimensions.
+
+        The filters are the request-log filters, applied to ``requests`` by the
+        same ``_where`` the request export uses: an attempt is in the export
+        exactly when the request it belongs to would have been. That is a
+        deliberate reuse rather than a second predicate -- ``provider``,
+        ``key_label``, ``ts_epoch``, ``tokens_in``, ``cost_usd``, ``error_kind``,
+        ``duration_ms`` and ``params`` all exist on *both* tables, so a literal
+        join would have made every clause in ``_where`` ambiguous, and a
+        hand-qualified copy of it would drift from the original on the first
+        filter either side gained.
+
+        Streams the same way ``iter_export_rows`` does: keyset pagination over
+        ``(ts_epoch, id)`` newest-first, one batched read of the attempt side
+        per page, one connection for the whole walk. Peak memory is a page of
+        requests and their attempts, never the table -- a real log has 571k of
+        them.
+
+        A request with no recorded attempts contributes no rows. Ordering is
+        newest request first, attempts in ascending chain order within it, so
+        a fallback chain reads top to bottom.
+        """
+        where, args = self._where(
+            provider=provider,
+            model=model,
+            status=status,
+            endpoint=endpoint,
+            key=key,
+            since=since,
+            until=until,
+            q=q,
+            local=local,
+            harness=harness,
+        )
+        conn = self._connect()
+        try:
+            cursor: Any = None
+            while True:
+                page_where = where
+                page_args: list[Any] = list(args)
+                if cursor is not None:
+                    last_ts, last_id = cursor
+                    page_where = f"{where}{' AND' if where else ' WHERE'}"
+                    page_where += " (ts_epoch, id) < (?, ?)"
+                    page_args.extend([last_ts, last_id])
+                page_sql = (
+                    "SELECT id, ts_epoch, ts_iso, harness, endpoint,"
+                    " requested_model, resolved_model, status"
+                    f" FROM requests{page_where}"
+                    " ORDER BY ts_epoch DESC, id DESC LIMIT ?"
+                )
+                rows = conn.execute(page_sql, [*page_args, page_size]).fetchall()
+                if not rows:
+                    return
+                parents = {str(row["id"]): row for row in rows}
+                for attempt in self._fetch_export_attempts(conn, list(parents)):
+                    parent = parents.get(str(attempt["request_id"]))
+                    if parent is None:  # pragma: no cover - defensive
+                        continue
+                    attempt["ts_iso"] = parent["ts_iso"]
+                    attempt["harness"] = parent["harness"]
+                    attempt["endpoint"] = parent["endpoint"]
+                    attempt["requested_model"] = parent["requested_model"]
+                    attempt["resolved_model"] = parent["resolved_model"]
+                    attempt["request_status"] = parent["status"]
+                    yield attempt
+                cursor = (rows[-1]["ts_epoch"], rows[-1]["id"])
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _fetch_export_attempts(
+        conn: sqlite3.Connection, request_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Read one page's attempts, newest request first, chain order within.
+
+        ``wire_body`` is deliberately not selected: it is the largest column on
+        the table and the only thing the export wants from it -- which of a
+        multi-surface gateway's endpoints the attempt was posted to -- is
+        already summarised in ``params.wire.surface``.
+        """
+        if not request_ids:
+            return []
+        order = {request_id: index for index, request_id in enumerate(request_ids)}
+        markers = ", ".join("?" * len(request_ids))
+        rows = conn.execute(
+            "SELECT request_id, attempt, provider, model_ref, outcome,"
+            " error_kind, error_message, duration_ms, params, reasoning_emitted,"
+            " key_index, key_label, ladder_tries, tokens_in, tokens_out,"
+            " cost_usd, cost_source, ttft_ms, first_reasoning_ms"
+            " FROM request_attempts"
+            f" WHERE request_id IN ({markers})",
+            request_ids,
+        ).fetchall()
+        out: list[dict[str, Any]] = [
+            {
+                "request_id": str(row["request_id"]),
+                "attempt": row["attempt"],
+                "attempt_provider": row["provider"],
+                "attempt_model": row["model_ref"],
+                "outcome": row["outcome"],
+                "error_kind": row["error_kind"],
+                "error_message": row["error_message"],
+                "duration_ms": row["duration_ms"],
+                "reasoning_emitted": row["reasoning_emitted"],
+                "key_index": row["key_index"],
+                "key_label": row["key_label"],
+                "ladder_tries": row["ladder_tries"],
+                "tokens_in": row["tokens_in"],
+                "tokens_out": row["tokens_out"],
+                "cost_usd": row["cost_usd"],
+                "cost_source": row["cost_source"],
+                "ttft_ms": row["ttft_ms"],
+                "first_reasoning_ms": row["first_reasoning_ms"],
+                ATTEMPT_PARAMS_KEY: _loads_or_none(row["params"]),
+            }
+            for row in rows
+        ]
+        # Sorted here rather than in SQL: the page's request order is the
+        # keyset order (``ts_epoch DESC, id DESC``), which ``ORDER BY
+        # request_id`` would not reproduce.
+        out.sort(key=lambda item: (order[item["request_id"]], item["attempt"]))
+        return out
 
     def iter_export_aggregates(
         self,
