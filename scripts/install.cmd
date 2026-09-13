@@ -18,9 +18,14 @@ rem
 rem   install.cmd                     server only
 rem   install.cmd --desktop           server plus the Start Menu shortcut
 rem   install.cmd --version 6.63.0    pin a release
-rem   install.cmd --restart           install, then restart the server on the
+rem   install.cmd                     install, then restart the server on the
 rem                                   port this configuration directory is for
+rem                                   and open the desktop app -- the DEFAULT
+rem                                   since 7.1.0
+rem   install.cmd --restart           accepted and ignored; it is the default
+rem   install.cmd --no-restart        install, leave a running server alone
 rem   install.cmd --no-start          install and start nothing
+rem   install.cmd --no-desktop        install and restart, but no desktop app
 rem   install.cmd --dry-run           print what it would do, change nothing
 rem
 rem   set MCC_INSTALL_REF=my-branch    fetch install.ps1 from that branch, tag
@@ -67,7 +72,9 @@ if "%~1"=="" goto parsed
 if /i "%~1"=="--desktop" goto arg_desktop
 if /i "%~1"=="--rtk" goto arg_rtk
 if /i "%~1"=="--restart" goto arg_restart
+if /i "%~1"=="--no-restart" goto arg_norestart
 if /i "%~1"=="--no-start" goto arg_nostart
+if /i "%~1"=="--no-desktop" goto arg_nodesktop
 if /i "%~1"=="--dry-run" goto arg_dryrun
 if /i "%~1"=="--help" goto arg_help
 if /i "%~1"=="-h" goto arg_help
@@ -95,17 +102,28 @@ set "MCC_PSARGS=%MCC_PSARGS% -DryRun"
 shift
 goto parse
 
-rem D5 shape kept: this file decides nothing about the install. --restart and
-rem --no-start are passed straight through to install.ps1, which owns what a
-rem restart means -- one server, the one on the port of the configuration
-rem directory this install is for.
+rem D5 shape kept: this file decides nothing about the install. Every one of
+rem these is passed straight through to install.ps1, which owns what a restart
+rem means -- one server, the one on the port of the configuration directory
+rem this install is for. Passing NOTHING is the default, and since 7.1.0 the
+rem default is to restart that server and open the desktop app.
 :arg_restart
 set "MCC_PSARGS=%MCC_PSARGS% -Restart"
 shift
 goto parse
 
+:arg_norestart
+set "MCC_PSARGS=%MCC_PSARGS% -NoRestart"
+shift
+goto parse
+
 :arg_nostart
 set "MCC_PSARGS=%MCC_PSARGS% -NoStart"
+shift
+goto parse
+
+:arg_nodesktop
+set "MCC_PSARGS=%MCC_PSARGS% -NoDesktop"
 shift
 goto parse
 

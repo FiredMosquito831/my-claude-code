@@ -21,6 +21,15 @@ name: install smoke
 # thing under test is the script, and the wheel it fetches is whatever GitHub
 # says is current. A release that has not happened yet cannot break this job.
 #
+# 7.1.0: THE RESTART IS THE DEFAULT. Every install and every update stops the
+# server on the configured port, installs, starts mcc-server again and waits
+# for /health. So the steps in this workflow that must NOT leave a server
+# behind -- the provisioning runs, whose job is to check what landed on disk --
+# now say `--no-start`/`-NoStart` explicitly, and the legs that prove the
+# restart pass no flag at all. `--restart`/`-Restart` is kept as a no-op alias
+# and is exercised here on purpose, because the dashboard's update helper still
+# passes it on every Windows update.
+#
 # ONE ASYMMETRY, and it decides where the 6.73.0 restart legs can live:
 # scripts/install.cmd downloads scripts/install.ps1 from **main**, by design
 # (it is the published route, and every decision about what to install stays
@@ -163,7 +172,13 @@ jobs:
         # install that had otherwise finished. No Linux machine a user installs
         # on has it, so the job drops it rather than the script working around
         # it.
-        run: env -u PSModulePath sh scripts/install.sh
+        #
+        # --no-start, and this is the job that must NOT start a server (7.1.0):
+        # every step between here and the restart legs below checks what landed
+        # on disk, and a listener on 8391 from this step would make the
+        # "--no-start starts nothing" assertion below meaningless. The DEFAULT
+        # -- which does start one -- is what the leg after it proves.
+        run: env -u PSModulePath sh scripts/install.sh --no-start
 
       - name: uv, Python 3.14 and MCC all landed in the scratch profile
         run: |
@@ -262,16 +277,19 @@ jobs:
           fi
           echo "nothing is listening on 8391, as asked"
 
-      - name: --restart ends with a listener answering /health
+      - name: The DEFAULT ends with a listener answering /health
+        # 7.1.0: no flag. This is the whole point of the release -- an install
+        # that is not asked for anything still ends with a server answering on
+        # the configured port.
         run: |
           set -u
-          env -u PSModulePath sh scripts/install.sh --restart
+          env -u PSModulePath sh scripts/install.sh
           status=$?
-          echo "install.sh --restart exited ${status}"
+          echo "install.sh (no flags) exited ${status}"
           echo "--- the receipt ---"
           cat "${RUNNER_TEMP}/fresh-machine/config/updates/progress.json" || true
           if [ "$status" -ne 0 ]; then
-            echo "::error::install.sh --restart exited ${status}"
+            echo "::error::install.sh exited ${status}"
             exit 1
           fi
           set -e
@@ -293,6 +311,27 @@ jobs:
             | grep -q '"restarted":true' \
             || { echo "::error::the receipt does not record the restart"; exit 1; }
 
+      - name: --no-restart leaves the running server alone
+        run: |
+          set -eu
+          scratch="${RUNNER_TEMP}/fresh-machine"
+          receipt="${scratch}/config/updates/progress.json"
+          before="$(wc -l < "$receipt")"
+          env -u PSModulePath sh scripts/install.sh --no-restart 2>&1 \
+            | tee "${RUNNER_TEMP}/no-restart.txt"
+          # The server that was there is still there, and it is the SAME one:
+          # nothing was stopped, so nothing had to come back.
+          curl -fsS -o /dev/null -m 5 http://127.0.0.1:8391/health \
+            || { echo "::error::--no-restart lost the running server"; exit 1; }
+          grep -q -- "--no-restart was given" "${RUNNER_TEMP}/no-restart.txt" \
+            || { echo "::error::--no-restart did not say it left the server alone"; exit 1; }
+          # And it never asked the product to stop anything.
+          tail -n "+$((before + 1))" "$receipt" | tee "${RUNNER_TEMP}/no-restart-records.txt"
+          if grep -q '"stage":"stopping"' "${RUNNER_TEMP}/no-restart-records.txt"; then
+            echo "::error::--no-restart recorded a stop"
+            exit 1
+          fi
+
       - name: An occupied port is reported and never taken by force
         run: |
           set -eu
@@ -300,6 +339,10 @@ jobs:
           # mcc-server can say about it, the one thing that must be true is that
           # the installer did not end up with a SECOND server on that socket and
           # did not kill anything it could not identify.
+          #
+          # `--restart` here on purpose: since 7.1.0 it is a no-op alias kept
+          # for compatibility, and this leg is what proves a caller that still
+          # passes it gets the default rather than an error.
           env -u PSModulePath sh scripts/install.sh --restart 2>&1 | tee "${RUNNER_TEMP}/second.txt"
           waited=0
           until curl -fsS -o /dev/null -m 3 http://127.0.0.1:8391/health; do
@@ -429,8 +472,15 @@ jobs:
       # transfers control and never comes back, so everything after the line
       # would silently not run -- which is exactly what the first version of
       # this job did.
+      #
+      # --no-start, and this is the job that must NOT start a server (7.1.0):
+      # the steps that follow check what landed on disk, and this one runs
+      # before the scratch .env names a port, so a server started here would
+      # come up on the default 8082 of a runner that has no business hosting
+      # one. The DEFAULT -- which does start one -- is proved further down,
+      # after the port is pinned.
       - name: Run scripts\install.cmd
-        run: call scripts\install.cmd
+        run: call scripts\install.cmd --no-start
 
       - name: mcc-server --version, through the shim in the scratch bin dir
         run: |
@@ -497,10 +547,11 @@ jobs:
             Write-Host "nothing is listening on 8391, as asked"
           }
 
-      - name: -Restart starts the server and /health answers
+      - name: The DEFAULT starts the server and /health answers
+        # 7.1.0: no switch. This is the whole point of the release.
         shell: pwsh
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Restart
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::install failed"; exit 1 }
           $config = Join-Path $env:RUNNER_TEMP "cmd-smoke\config"
           $deadline = (Get-Date).AddSeconds(60)
@@ -557,7 +608,12 @@ jobs:
       # `installing` then `verifying` then `stopping`, and the monotonic guard
       # threw the `stopping` record away, so no restart run has ever recorded
       # one.
-      - name: A second -Restart stops the running server and records it
+      #
+      # `-Restart` on purpose: since 7.1.0 it is a no-op alias kept for
+      # compatibility -- the update helper passes it on every Windows update --
+      # so this leg also proves a caller that still passes it gets the default
+      # rather than an error.
+      - name: A second run (via the -Restart alias) stops the server and records it
         shell: pwsh
         run: |
           $config = Join-Path $env:RUNNER_TEMP "cmd-smoke\config"
@@ -598,6 +654,40 @@ jobs:
                 $seen = $order[$stage]
               }
             }
+          }
+
+      # 7.1.0: the opt-out that is NOT "start nothing". --no-restart promises a
+      # running server is not touched; it is the flag for a machine whose
+      # server has agents waiting on it.
+      - name: -NoRestart leaves the running server alone, by process id
+        shell: pwsh
+        run: |
+          $config = Join-Path $env:RUNNER_TEMP "cmd-smoke\config"
+          $progress = Join-Path $config "updates\progress.json"
+          $before = @(Get-Content -LiteralPath $progress | Where-Object { $_.Trim() }).Count
+          $holder = (Get-NetTCPConnection -LocalPort 8391 -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -First 1).OwningProcess
+          if (-not $holder) { Write-Host "::error::nothing is listening on 8391"; exit 1 }
+          Write-Host "the server on 8391 is pid $holder"
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -NoRestart
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::install failed"; exit 1 }
+          $after = (Get-NetTCPConnection -LocalPort 8391 -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -First 1).OwningProcess
+          Write-Host "the server on 8391 is now pid $after"
+          if ($after -ne $holder) {
+            Write-Host "::error::-NoRestart replaced the running server (pid $holder -> $after)"
+            exit 1
+          }
+          $lines = @(Get-Content -LiteralPath $progress | Where-Object { $_.Trim() })
+          $episode = ($lines[$before..($lines.Count - 1)]) -join "`n"
+          Write-Host $episode
+          if ($episode -match '"stage":"stopping"') {
+            Write-Host "::error::-NoRestart recorded a stop"
+            exit 1
+          }
+          if ($episode -notmatch "-NoRestart was given") {
+            Write-Host "::error::-NoRestart did not say it left the server alone"
+            exit 1
           }
 
       # 6.82.0 (F1): install.cmd no longer hard-codes `main`. It builds the raw

@@ -51,16 +51,36 @@ voice_all=0
 torch_backend=""
 enable_rtk=0
 enable_desktop=0
-# What the caller asked for about the server (6.73.0). MCC_INSTALL_NO_START is
-# the environment form of --no-start, for a caller that cannot add a flag.
-restart_requested=0
+# What the caller asked for about the server. MCC_INSTALL_NO_START is the
+# environment form of --no-start, for a caller that cannot add a flag.
+#
+# 7.1.0: THE RESTART IS THE DEFAULT. 6.73.0 shipped it as `--restart`, opt-in,
+# and the consequence is the one this series exists to close: an install that
+# exits 0 and leaves the machine with no server. The user asked for the default
+# on 2026-09-10 and again, bindingly, on 2026-09-13 00:32.
+#
+#   (nothing)      stop the one server this configuration is for, install,
+#                  start mcc-server, wait for /health, then start the desktop
+#                  app
+#   --no-restart   never stop a running server; start one only if nothing
+#                  answers on the configured port
+#   --no-start     stop nothing, start nothing (also MCC_INSTALL_NO_START=1)
+#   --no-desktop   never start the desktop app (also MCC_INSTALL_NO_DESKTOP=1)
+#
+# `--restart` is still ACCEPTED and is now a no-op alias for the default, so
+# every script, helper and CI leg that passes it keeps working unchanged.
+restart_alias_used=0
+no_restart_requested=0
 no_start_requested=0
+no_desktop_requested=0
+desktop_app_started=0
 # The first release whose mcc-server understands --report-holder and
 # --stop-holder. Older builds do not REFUSE those flags: they ignore every
 # argument but --version and start a server.
 RESTART_AWARE_VERSION="6.73.0"
 restart_report_available=0
 [ "${MCC_INSTALL_NO_START:-}" = "1" ] && no_start_requested=1
+[ "${MCC_INSTALL_NO_DESKTOP:-}" = "1" ] && no_desktop_requested=1
 # The exclusive update lock (decision Q5). Until 6.73.0 a hand-run install and
 # a dashboard-triggered one shared nothing: they wrote the same receipt, into
 # the same tool directory, with no coordination at all.
@@ -95,6 +115,13 @@ Installs or updates My Claude Code to the latest published release.
 Installs a compatible uv if one is missing. It does not install Claude Code,
 Codex, or Pi -- install whichever of those you use yourself.
 
+By default this restarts the server. Every install and every update stops the
+My Claude Code server on the port this configuration directory is for, waits
+for it to close, installs, starts mcc-server again and waits until it answers
+/health -- and then opens the desktop app if it is installed here and is not
+already running. Every other My Claude Code server on this machine is listed
+and left alone. Use --no-restart or --no-start to opt out.
+
 Options:
   --version VALUE          Install this exact release instead of the latest.
   --voice-nim              Install NVIDIA NIM voice transcription support.
@@ -107,14 +134,16 @@ Options:
                            package declares it in Depends) and WebView2 on
                            Windows (the Setup .exe bootstraps it); macOS needs
                            nothing.
-  --restart                After a successful install, restart the My Claude
-                           Code server on the port this configuration directory
-                           is for: stop that one server by its exact process
-                           id, start mcc-server again, and wait until it
-                           answers /health. Every other My Claude Code server
-                           is listed and left running.
-  --no-start               Never start a server, whatever else was asked. Same
-                           as setting MCC_INSTALL_NO_START=1.
+  --restart                Accepted and ignored. Restarting is what this
+                           installer does by default since 7.1.0; the flag is
+                           kept so older scripts keep working.
+  --no-restart             Never stop a server that is already running. If
+                           nothing answers on the configured port a server is
+                           still started, unless --no-start is given too.
+  --no-start               Never stop and never start a server, whatever else
+                           was asked. Same as setting MCC_INSTALL_NO_START=1.
+  --no-desktop             Never start the desktop app. Same as setting
+                           MCC_INSTALL_NO_DESKTOP=1.
   --dry-run                Print commands without running them.
   --help                   Show this help text.
 USAGE
@@ -553,10 +582,16 @@ parse_args() {
                 enable_desktop=1
                 ;;
             --restart)
-                restart_requested=1
+                restart_alias_used=1
+                ;;
+            --no-restart)
+                no_restart_requested=1
                 ;;
             --no-start)
                 no_start_requested=1
+                ;;
+            --no-desktop)
+                no_desktop_requested=1
                 ;;
             --version)
                 shift
@@ -1821,6 +1856,184 @@ stop_configured_server() {
     return 0
 }
 
+no_stop_verdict() {
+    # What --no-restart does instead of stopping anything.
+    #
+    # --no-restart is a promise, and the promise is that no running server is
+    # touched: not classified, not asked to stop, not identified. So this asks
+    # the one question that requires touching nothing -- is the port busy? --
+    # with the same socket-table check stop_configured_server falls back to.
+    #
+    #   busy -> left-running: the server that is there keeps serving and
+    #           nothing is started. A swap underneath it is still fine: the
+    #           launcher shims are version-agnostic, so the running process
+    #           keeps its loaded modules and the next start picks up the new
+    #           version. That is exactly what every install did before 7.1.0.
+    #   free -> nothing-listening: there is nothing to leave running, so the
+    #           start still happens. "Do not stop my server" is not "leave this
+    #           machine without one".
+    if port_is_occupied "$server_reachable_host" "$server_port"; then
+        stop_outcome="left-running"
+        stop_message="A server is already answering on port $server_port and --no-restart was given, so it was left running and nothing was started. Restart it yourself to pick up this version."
+        return 0
+    fi
+    stop_outcome="nothing-listening"
+    stop_message="Nothing is listening on port $server_port."
+    return 0
+}
+
+desktop_shell_candidates() {
+    # Every place a desktop app THIS PRODUCT installed can live on this
+    # machine, one per line, whether or not anything is there. The same list as
+    # config/desktop_shell.desktop_shell_install_locations() and in the same
+    # order: the directory this wheel downloads into (MCC_DESKTOP_SHELL_DIR,
+    # else ~/.local/bin), then the native installer's directory.
+    if [ -n "${MCC_DESKTOP_SHELL_DIR:-}" ]; then
+        printf '%s/MyClaudeCode\n' "${MCC_DESKTOP_SHELL_DIR%/}"
+    else
+        printf '%s/.local/bin/MyClaudeCode\n' "$HOME"
+    fi
+    case "$(uname -s 2>/dev/null || printf 'unknown')" in
+        Darwin)
+            printf '/Applications/MyClaudeCode.app/Contents/MacOS/MyClaudeCode\n'
+            ;;
+        *)
+            printf '/usr/local/bin/MyClaudeCode\n'
+            printf '/usr/bin/MyClaudeCode\n'
+            ;;
+    esac
+}
+
+installed_desktop_shells() {
+    # The desktop app binaries installed here, one per line.
+    #
+    # "Installed" is the binary AND the MyClaudeCode.receipt.json this product
+    # writes beside it. The receipt is the proof we put the file there; a bare
+    # executable with a matching name is somebody else's and is never launched,
+    # never counted and never touched. Two file tests: no process started, and
+    # in particular NOT `mcc-desktop --print-status`, which costs seconds and
+    # cannot answer at all while the environment it runs out of is being
+    # replaced.
+    desktop_shell_candidates | while IFS= read -r shell_candidate; do
+        [ -f "$shell_candidate" ] || continue
+        [ -f "${shell_candidate%/*}/MyClaudeCode.receipt.json" ] || continue
+        printf '%s\n' "$shell_candidate"
+    done
+}
+
+desktop_shell_is_running() {
+    # Whether one of these exact binaries is already running, BY EXECUTABLE
+    # PATH, never by image name. The tool environment on this machine is
+    # literally called `my-claude-code` and the product ships twenty-six
+    # commands whose names all begin `mcc-`; an image-name or command-line
+    # substring match here would sooner or later match something that is not
+    # the desktop app.
+    #
+    # /proc/<pid>/exe is the path, and it is the kernel's answer rather than
+    # anything the process chose to call itself. Without /proc (macOS) `ps -o
+    # comm=` prints the executable's PATH on Darwin, which is the same fact.
+    # A non-empty capture is "found": a `while read` in a pipeline runs in a
+    # subshell, so its exit status cannot travel back and a sentinel on stdout
+    # is the portable way to carry the answer out.
+    desktop_running_hit=$(installed_desktop_shells | while IFS= read -r shell_binary; do
+        [ -n "$shell_binary" ] || continue
+        if [ -d /proc ]; then
+            for proc_entry in /proc/[0-9]*; do
+                [ -e "$proc_entry/exe" ] || continue
+                proc_exe=$(readlink "$proc_entry/exe" 2>/dev/null) || continue
+                if [ "$proc_exe" = "$shell_binary" ]; then
+                    printf 'yes'
+                    break
+                fi
+            done
+        elif ps -Ao comm= 2>/dev/null | grep -qxF "$shell_binary"; then
+            printf 'yes'
+        fi
+    done)
+    [ -n "$desktop_running_hit" ]
+}
+
+desktop_skip_reason() {
+    # Why the desktop app must not be started here, or nothing when it may be.
+    #
+    # The rule, in full (binding user addition, 2026-09-13 00:40). The desktop
+    # app is started when the installer starts mcc-server, and only when every
+    # one of these holds:
+    #
+    #   1. a server was actually started and answered /health (the caller only
+    #      calls this on that branch);
+    #   2. --no-start / MCC_INSTALL_NO_START was not given -- there is nothing
+    #      for a window to attach to;
+    #   3. --no-desktop / MCC_INSTALL_NO_DESKTOP was not given;
+    #   4. this is not CI and not a headless session (no DISPLAY and no
+    #      WAYLAND_DISPLAY on anything but macOS);
+    #   5. the desktop shell is installed here, proved by the binary AND the
+    #      receipt this product writes beside it;
+    #   6. it is NOT already running -- during a helper-driven update the app
+    #      is running and watching, and the single-instance plugin would hand a
+    #      second launch to the window that is already there.
+    if [ "$desktop_allowed" -ne 1 ]; then
+        printf 'no server was started or --no-desktop was given'
+        return 0
+    fi
+    case "${CI:-}" in
+        ""|0|false|False|FALSE) ;;
+        *) printf 'this is CI'; return 0 ;;
+    esac
+    if [ "$(uname -s 2>/dev/null || printf 'unknown')" != "Darwin" ]; then
+        if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+            printf 'this session has no display'
+            return 0
+        fi
+    fi
+    if [ -z "$(installed_desktop_shells)" ]; then
+        printf 'the desktop app is not installed here'
+        return 0
+    fi
+    if desktop_shell_is_running; then
+        printf 'it is already running'
+        return 0
+    fi
+    return 0
+}
+
+start_desktop_app_if_wanted() {
+    # Apply the desktop rule and act on it. Called only after a listener has
+    # answered /health on the configured port. Every failure is swallowed: a
+    # desktop app that did not open is a nuisance; an install that failed
+    # because of one would be a defect.
+    desktop_reason=$(desktop_skip_reason)
+    if [ -n "$desktop_reason" ]; then
+        write_install_log "The desktop app was not started: $desktop_reason."
+        return 0
+    fi
+    desktop_launcher=""
+    if [ -n "${tool_bin:-}" ] && [ -x "$tool_bin/mcc-desktop" ]; then
+        desktop_launcher="$tool_bin/mcc-desktop"
+    elif command -v mcc-desktop >/dev/null 2>&1; then
+        desktop_launcher=$(command -v mcc-desktop)
+    fi
+    if [ -z "$desktop_launcher" ]; then
+        write_install_log "The desktop app was not started: mcc-desktop was not found."
+        return 0
+    fi
+    desktop_updates_dir="$(mcc_config_dir)/updates"
+    mkdir -p "$desktop_updates_dir" 2>/dev/null || true
+    desktop_start_log="$desktop_updates_dir/desktop-start-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || printf 'unknown').log"
+    # setsid/nohup and </dev/null for the same reason the server start uses
+    # them: a child holding this script's stdin or stdout open holds its caller
+    # open too.
+    if command -v setsid >/dev/null 2>&1; then
+        setsid nohup "$desktop_launcher" < /dev/null > "$desktop_start_log" 2>&1 &
+    else
+        nohup "$desktop_launcher" < /dev/null > "$desktop_start_log" 2>&1 &
+    fi
+    desktop_app_started=1
+    printf 'Started the desktop app (pid %s).\n' "$!"
+    write_install_log "Started mcc-desktop, pid $!."
+    return 0
+}
+
 restart_after_install() {
     # Stop the one server this install is for, start the new one, prove it.
     # The path taken when nothing was swapped -- a first install, or the
@@ -1848,15 +2061,27 @@ restart_after_install() {
         return 1
     fi
 
-    # On this path the build that answers --report-holder is the one that was
-    # just installed, because nothing was swapped and the old environment is
-    # gone.
-    stop_configured_server "$restart_launcher" "${MCC_VERSION:-}"
+    if [ "$stop_allowed" -eq 1 ]; then
+        # On this path the build that answers --report-holder is the one that
+        # was just installed, because nothing was swapped and the old
+        # environment is gone.
+        stop_configured_server "$restart_launcher" "${MCC_VERSION:-}"
+    else
+        # --no-restart: nothing running is touched. See no_stop_verdict.
+        no_stop_verdict
+    fi
     case "$stop_outcome" in
         stopped) ;;
         nothing-listening)
             printf 'Nothing was listening on port %s; starting the server.\n' "$server_port"
             write_install_log "Nothing held the port; starting the server."
+            ;;
+        left-running)
+            printf '\n%s\n' "$stop_message"
+            write_install_log "$stop_message"
+            install_progress_restarted=false
+            write_install_progress done "$stop_message"
+            return 1
             ;;
         foreign)
             printf '\n%s\n' "$stop_message"
@@ -1929,6 +2154,12 @@ confirm_restarted_server() {
         restart_message="My Claude Code $MCC_VERSION is installed and answering on port $server_port."
         printf '%s\n' "$restart_message"
         write_install_log "$restart_message"
+        # The server is up. THIS is the moment the desktop app is started --
+        # after a listener has answered, never before, so the window has
+        # something to attach to on its first probe (binding user addition,
+        # 2026-09-13 00:40). The rule and every reason it refuses are in
+        # desktop_skip_reason.
+        start_desktop_app_if_wanted
         write_install_progress done "$restart_message"
         return 0
     fi
@@ -2073,12 +2304,39 @@ parse_args "$@"
 validate_args
 add_known_bin_directories
 
+# What this run will do about the server, derived once so no later branch has
+# to re-reason about three flags. --no-start is the strongest: it means stop
+# nothing and start nothing, so it implies --no-restart and --no-desktop.
+stop_allowed=1
+start_allowed=1
+desktop_allowed=1
+if [ "$no_restart_requested" -eq 1 ]; then stop_allowed=0; fi
+if [ "$no_start_requested" -eq 1 ]; then
+    stop_allowed=0
+    start_allowed=0
+fi
+if [ "$no_desktop_requested" -eq 1 ] || [ "$start_allowed" -eq 0 ]; then desktop_allowed=0; fi
+
 # ONE update at a time, whichever path started it (decision Q5). A second
 # installer does not queue and does not install: it names the owner, points at
 # the transcript that owner is writing, and exits 0.
 if ! enter_update_lock; then
     write_watching_instead_notice
     exit 0
+fi
+
+# What this run will do about the server, in one line, at the top of the
+# transcript -- so a reader never has to infer it from what did or did not
+# happen three hundred lines later.
+if [ "$no_start_requested" -eq 1 ]; then
+    write_install_log "Nothing will be stopped and nothing will be started (--no-start)."
+elif [ "$stop_allowed" -ne 1 ]; then
+    write_install_log "No running server will be stopped (--no-restart); one is started only if nothing answers."
+else
+    write_install_log "The server on the configured port will be restarted (the default since 7.1.0)."
+fi
+if [ "$restart_alias_used" -eq 1 ]; then
+    write_install_log "--restart was given; it is the default since 7.1.0 and was accepted as a no-op."
 fi
 
 step "Checking installation prerequisites"
@@ -2180,11 +2438,15 @@ if [ "$staged_ok" -eq 1 ]; then
 
     resolve_server_address
     restart_health_url="http://$server_reachable_host:$server_port/health"
-    if [ "$restart_requested" -eq 1 ] && [ "$no_start_requested" -ne 1 ] && find_server_launcher; then
+    if [ "$start_allowed" -eq 1 ] && find_server_launcher; then
         stage_may_start=1
         step "Restarting the My Claude Code server on port $server_port"
         write_install_log "Restart requested for the server on $server_reachable_host:$server_port."
-        stop_configured_server "$restart_launcher" "$(installed_server_version "$restart_launcher" || printf '')"
+        if [ "$stop_allowed" -eq 1 ]; then
+            stop_configured_server "$restart_launcher" "$(installed_server_version "$restart_launcher" || printf '')"
+        else
+            no_stop_verdict
+        fi
         case "$stop_outcome" in
             stopped|nothing-listening) ;;
             failed)
@@ -2203,6 +2465,8 @@ if [ "$staged_ok" -eq 1 ]; then
                 # Invariant 1: a foreign holder of the port is never killed, by
                 # any path. The install still happens -- it replaces files, not
                 # processes -- but nothing is stopped and nothing is started.
+                # The same is true of `left-running`, which is --no-restart's
+                # answer when a server is already there.
                 printf '\n%s\n' "$stop_message"
                 write_install_log "$stop_message"
                 stage_may_start=0
@@ -2301,8 +2565,12 @@ else
     printf 'mcc-* name that replaced it and exits 1. They go away entirely in 8.0.0.\n'
     printf '\nIf mcc-server is not found, open a new terminal: this install may have added\n'
     printf 'a directory to PATH that shells started earlier cannot see.\n'
-    printf '\nTo use an update installed while the server is running, restart the proxy\n'
-    printf 'with: mcc-server\n'
+    if [ "$start_allowed" -ne 1 ]; then
+        printf '\nNo server was started (--no-start). Start one with: mcc-server\n'
+    elif [ "$stop_allowed" -ne 1 ]; then
+        printf '\nA server that was already running was left alone (--no-restart). Restart it\n'
+        printf 'yourself to pick up this version: mcc-server\n'
+    fi
 fi
 
 # The terminal record. Whichever way the install went, the receipt stops
@@ -2315,11 +2583,8 @@ fi
 # exited 0 fifteen minutes apart with the user's server down through both.
 if [ "$no_start_requested" -eq 1 ]; then
     printf '\n'
-    if [ "$restart_requested" -eq 1 ]; then
-        printf 'No server was started: --no-start (or MCC_INSTALL_NO_START=1) overrides --restart.\n'
-    else
-        printf 'No server was started. Start one with: mcc-server\n'
-    fi
+    printf 'Nothing was stopped and no server was started: --no-start (or MCC_INSTALL_NO_START=1).\n'
+    printf 'Start one with: mcc-server\n'
     write_install_progress done "The new version is installed."
 elif [ "$staged_swapped" -eq 1 ]; then
     # The staged path already stopped the one server this install is for and
@@ -2367,7 +2632,10 @@ elif [ "$staged_swapped" -eq 1 ]; then
         write_install_log "$restart_message"
         write_install_progress recovered "$restart_message"
     fi
-elif [ "$restart_requested" -eq 1 ] && [ "$dry_run" -ne 1 ]; then
+elif [ "$dry_run" -ne 1 ]; then
+    # 7.1.0: no `--restart` test any more. Every install that installed
+    # something ends with a server answering on the configured port, unless the
+    # caller asked otherwise -- which is what the two branches above are.
     restart_after_install || true
 else
     write_install_progress done "The new version is installed."

@@ -4077,7 +4077,7 @@ Re-running the install command does exactly the same thing and always fetches th
 
 <a id="the-installer-restarts-the-server"></a>
 
-#### The installer can restart the server too (6.73.0)
+#### The installer restarts the server — by default (7.1.0)
 
 Until 6.73.0 nothing in the product would start a server after an update unless
 the desktop app did it, and on 2026-09-11 that produced the worst case it can
@@ -4086,22 +4086,30 @@ the app was a version that could not act, and the hand-run installer three
 minutes later was never allowed to act at all. **Two installs exited 0 and the
 machine had no server for a quarter of an hour.**
 
-Add `-Restart` (or `--restart`) and the install command finishes the job:
+6.73.0 gave the installer a `-Restart` switch. **7.1.0 makes it the default.**
+Every install and every update — from the dashboard, from the desktop app, from
+a terminal, from `npm` — now stops the server on the configured port, waits for
+it to close, installs, starts `mcc-server` again and waits until `/health`
+answers. There is no flag to remember and no combination of flags that leaves
+this machine with a dead server by accident:
 
 ```powershell
 # Windows, PowerShell
-& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.ps1"))) -Restart
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.ps1")))
 ```
 
 ```
 rem Windows, Command Prompt
-"%TEMP%\install-mcc.cmd" --restart
+"%TEMP%\install-mcc.cmd"
 ```
 
 ```bash
 # Linux, macOS, WSL
-curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh" | sh -s -- --restart
+curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh" | sh
 ```
+
+`-Restart` / `--restart` is still accepted and does nothing, so a script that
+passes it keeps working.
 
 **Exactly one server is restarted**, and this is the whole of the rule:
 
@@ -4121,6 +4129,41 @@ curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/ma
 4. `mcc-server` is started detached, so it outlives the installer.
 5. The installer waits for `/health` to answer on that port. **That** is success.
    An install that exited 0 is not.
+6. Once a listener has answered, the **desktop app** is started too — see below.
+
+<a id="the-installer-starts-the-desktop-app"></a>
+
+#### …and it opens the desktop app (7.1.0)
+
+When the installer starts `mcc-server` it also starts `mcc-desktop`, so an
+update ends with a working window rather than a working port. It is deliberately
+narrow. The app is started only when **every** one of these is true:
+
+1. a server was actually started by this run and answered `/health`;
+2. `-NoStart` / `--no-start` / `MCC_INSTALL_NO_START=1` was not given — there
+   would be nothing for a window to attach to;
+3. `-NoDesktop` / `--no-desktop` / `MCC_INSTALL_NO_DESKTOP=1` was not given;
+4. this is not CI (`CI` set to anything but `0`/`false`) and not a headless
+   session — on Linux and WSL that means `DISPLAY` or `WAYLAND_DISPLAY` must be
+   set, and on Windows the session must be interactive;
+5. **the desktop app is installed on this machine**, proved by the binary
+   (`MyClaudeCode.exe`, `MyClaudeCode`) *and* the `MyClaudeCode.receipt.json`
+   this product writes beside it — in `MCC_DESKTOP_SHELL_DIR`, in
+   `~/.local/bin`, or where the native installer put it
+   (`%LOCALAPPDATA%\Programs\My Claude Code`, `/Applications`, `/usr/bin`,
+   `/usr/local/bin`). A bare executable with a matching name and no receipt is
+   somebody else's file and is never launched;
+6. **it is not already running.** During an update driven from the desktop app
+   the app *is* running and watching; launching a second one would hand the
+   launch straight back to the window that is already there. Detected by
+   comparing the **executable path** of every running process against those
+   binaries — never by an image name or a command-line substring, because the
+   uv tool environment on every machine is a directory literally named
+   `my-claude-code`.
+
+If the app cannot be started the transcript says why in one line and the install
+is unaffected. A desktop app that did not open is a nuisance; an install that
+failed because of one would be a defect.
 
 <a id="one-update-path"></a>
 
@@ -4176,8 +4219,8 @@ Everything else on the machine is left alone, and said so in the transcript:
 > mcc-server.exe (pid 6764) -> pid 63484
 
 - **A server on another port, or another configuration directory, is never
-  stopped.** If you run several instances with agents waiting on them, `-Restart`
-  touches the one this install is for and lists the rest.
+  stopped.** If you run several instances with agents waiting on them, an
+  install touches the one this install is for and lists the rest.
 - **Something that is not ours on the configured port is never stopped either.**
   The installer names the holder, starts nothing, and finishes with
   `restarted: false`.
@@ -4190,12 +4233,31 @@ ordinary case since 6.82.0, see below), and `failed` with the child's exit code,
 the last lines it wrote and the path to its log when there was nothing to put
 back — a first install, or a machine with no tool environment to swap.
 
-#### Starting nothing
+#### Opting out (7.1.0)
 
-`-NoStart` / `--no-start`, or `MCC_INSTALL_NO_START=1` in the environment, means
-no server is started whatever else was asked — it overrides `-Restart`. The
-environment form exists for callers that pass arguments through a layer with its
-own opinions about quoting.
+Three ways out, and they mean three different things:
+
+| Flag | Stops a running server? | Starts one? | Opens the app? |
+| --- | --- | --- | --- |
+| *(nothing)* — the default | yes, the one on the configured port | yes | yes, per the rule above |
+| `-NoRestart` / `--no-restart` | **no, never** | only if nothing answers that port | only if it started one |
+| `-NoStart` / `--no-start` / `MCC_INSTALL_NO_START=1` | no | no | no |
+| `-NoDesktop` / `--no-desktop` / `MCC_INSTALL_NO_DESKTOP=1` | yes | yes | **no** |
+
+`-NoRestart` is the one to reach for when a server on this port is busy and must
+not be interrupted: the new version is installed around it, the old process
+keeps running the code it has already loaded, and the next time you restart it
+yourself it comes up on the new version. It is *not* "do not start a server" —
+if nothing answers the port, one is still started, because "do not stop mine" is
+not "leave this machine without one".
+
+`-NoStart` is the flag for a build machine or an image: nothing is stopped,
+nothing is started, nothing is opened. The environment form exists for callers
+that pass arguments through a layer with its own opinions about quoting —
+`install.cmd`, the npm wrapper, a CI `run:` step.
+
+`-Restart` / `--restart` is still accepted and is now a no-op alias for the
+default, so nothing that passes it has to change.
 
 #### One update at a time
 

@@ -77,6 +77,11 @@ PROVIDER_API_KEY
 # about quoting (install.cmd, the npm wrapper). It never reaches Settings:
 # nothing in the server reads it, and the scripts exit before one exists.
 MCC_INSTALL_NO_START
+# The environment form of install.ps1's -NoDesktop / install.sh's --no-desktop
+# (7.1.0). Since 7.1.0 the installer opens the desktop app once the server it
+# started answers /health; this is how a caller that cannot add a switch says
+# not to. Read by the scripts only.
+MCC_INSTALL_NO_DESKTOP
 # Which revision of install.ps1 scripts/install.cmd fetches (6.82.0). A branch,
 # tag or commit, so a change to the installer can be proven before it is
 # merged; `--version X` sets it to the tag vX on its own. Read by the batch

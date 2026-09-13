@@ -7,7 +7,9 @@ param(
     [switch] $Rtk,
     [switch] $Desktop,
     [switch] $Restart,
+    [switch] $NoRestart,
     [switch] $NoStart,
+    [switch] $NoDesktop,
     [switch] $DryRun,
     [switch] $Help,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -167,8 +169,35 @@ $script:UpdateLockOwner = $null
 # form of -NoStart, for a caller that cannot add a switch -- the npm wrapper
 # and install.cmd both pass arguments through a layer that has its own opinions
 # about quoting.
-$script:RestartRequested = $Restart.IsPresent
+#
+# 7.1.0: THE RESTART IS THE DEFAULT. 6.73.0 shipped it as `-Restart`, opt-in,
+# and the consequence is the one this whole series exists to close: an install
+# that exits 0 and leaves the machine with no server. On 2026-09-11 that
+# happened twice in fifteen minutes on the user's own machine. The user asked
+# for the default on 2026-09-10 and again, bindingly, on 2026-09-13 00:32.
+#
+#   (nothing)    stop the one server this configuration is for, install, start
+#                mcc-server, wait for /health, then start the desktop app
+#   -NoRestart   never stop a running server; start one only if nothing answers
+#   -NoStart     stop nothing, start nothing (also MCC_INSTALL_NO_START=1)
+#   -NoDesktop   never start the desktop app (also MCC_INSTALL_NO_DESKTOP=1)
+#
+# `-Restart` is still ACCEPTED and is now a no-op alias for the default, so
+# every script, helper and CI leg that passes it keeps working unchanged.
 $script:NoStartRequested = ($NoStart.IsPresent -or ($env:MCC_INSTALL_NO_START -eq "1"))
+$script:NoDesktopRequested = ($NoDesktop.IsPresent -or ($env:MCC_INSTALL_NO_DESKTOP -eq "1"))
+# May this run STOP a server that is already answering on the configured port?
+$script:StopAllowed = (-not $NoRestart.IsPresent) -and (-not $script:NoStartRequested)
+# May this run START a server at all?
+$script:StartAllowed = (-not $script:NoStartRequested)
+# May this run start the desktop app once a server is answering?
+$script:DesktopAllowed = $script:StartAllowed -and (-not $script:NoDesktopRequested)
+# Set by Start-MccDesktopApp so the closing message can say what happened.
+$script:DesktopAppStarted = $false
+# `-Restart` is kept only so a caller that passes it still works. Recorded so
+# the transcript can say it was accepted and ignored rather than leaving
+# someone to wonder whether it did anything.
+$script:RestartAliasUsed = $Restart.IsPresent
 # The first release whose `mcc-server` understands `--report-holder` and
 # `--stop-holder`. Older builds do not REFUSE those flags: they ignore every
 # argument but `--version` and start a server, which is why this gate exists at
@@ -190,6 +219,13 @@ Installs or updates Free Claude Code to the latest published release.
 Installs a compatible uv if one is missing. It does not install Claude Code,
 Codex, or Pi -- install whichever of those you use yourself.
 
+By default this restarts the server. Every install and every update stops the
+My Claude Code server on the port this configuration directory is for, waits
+for it to close, installs, starts mcc-server again and waits until it answers
+/health -- and then opens the desktop app if it is installed here and is not
+already running. Every other My Claude Code server on this machine is listed
+and left alone. Use -NoRestart or -NoStart to opt out.
+
 Options:
   -Version VALUE         Install this exact release instead of the latest.
   -VoiceNim              Install NVIDIA NIM voice transcription support.
@@ -200,14 +236,16 @@ Options:
   -Desktop               Create a Start Menu shortcut for mcc-desktop.
                          The tray app needs the WebView2 runtime, which the
                          desktop Setup .exe bootstraps; Windows 11 ships it.
-  -Restart               After a successful install, restart the My Claude
-                         Code server on the port this configuration directory
-                         is for: stop that one server by its exact process id,
-                         start mcc-server again, and wait until it answers
-                         /health. Every other My Claude Code server is listed
-                         and left running.
-  -NoStart               Never start a server, whatever else was asked. Same as
-                         setting MCC_INSTALL_NO_START=1.
+  -Restart               Accepted and ignored. Restarting is what this
+                         installer does by default since 7.1.0; the switch is
+                         kept so older scripts keep working.
+  -NoRestart             Never stop a server that is already running. If
+                         nothing answers on the configured port a server is
+                         still started, unless -NoStart is given too.
+  -NoStart               Never stop and never start a server, whatever else was
+                         asked. Same as setting MCC_INSTALL_NO_START=1.
+  -NoDesktop             Never start the desktop app. Same as setting
+                         MCC_INSTALL_NO_DESKTOP=1.
   -DryRun                Print commands without running them.
   -Help                  Show this help text.
 "@
@@ -2651,6 +2689,242 @@ function Get-ChildFailureDetail {
     }
 }
 
+function Get-DesktopShellBinaryCandidates {
+    <#
+        .SYNOPSIS
+        Every place a desktop app THIS PRODUCT installed can live on this
+        machine, whether or not anything is there.
+
+        .DESCRIPTION
+        The same list as `config/desktop_shell.desktop_shell_install_locations()`
+        and in the same order: the directory this wheel downloads into
+        (MCC_DESKTOP_SHELL_DIR, else ~/.local/bin), then the native installer's
+        directory. Existence and the receipt are checked by the caller.
+    #>
+
+    $names = @()
+    $override = ""
+    if ($env:MCC_DESKTOP_SHELL_DIR) { $override = $env:MCC_DESKTOP_SHELL_DIR.Trim() }
+    if ($override) {
+        $names += (Join-Path $override "MyClaudeCode.exe")
+    }
+    else {
+        $names += (Join-Path (Join-Path (Join-Path $HOME ".local") "bin") "MyClaudeCode.exe")
+    }
+    if ($env:LOCALAPPDATA) {
+        $names += (Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA "Programs") "My Claude Code") "MyClaudeCode.exe")
+    }
+    return $names
+}
+
+function Get-InstalledDesktopShells {
+    <#
+        .SYNOPSIS
+        The desktop app binaries installed on this machine, as full paths.
+
+        .DESCRIPTION
+        "Installed" is the binary AND the `MyClaudeCode.receipt.json` this
+        product writes beside it. The receipt is the proof we put the file
+        there; a bare executable with a matching name is somebody else's and is
+        never launched, never counted and never touched. This is the cheapest
+        truthful check available to a shell script: two file tests, no process
+        started, and in particular NOT `mcc-desktop --print-status`, which
+        costs seconds and cannot answer at all while the environment it runs
+        out of is being replaced.
+    #>
+
+    $found = @()
+    foreach ($candidate in (Get-DesktopShellBinaryCandidates)) {
+        try {
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+            $receipt = Join-Path (Split-Path -Parent $candidate) "MyClaudeCode.receipt.json"
+            if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) { continue }
+            $resolved = (Resolve-Path -LiteralPath $candidate).ProviderPath
+            if ($found -notcontains $resolved) { $found += $resolved }
+        }
+        catch {
+            continue
+        }
+    }
+    return $found
+}
+
+function Test-DesktopShellIsRunning {
+    <#
+        .SYNOPSIS
+        Whether one of these exact binaries is already running.
+
+        .DESCRIPTION
+        By EXECUTABLE PATH, never by image name. The tool environment on this
+        machine is literally called `my-claude-code` and the product ships
+        twenty-six commands whose names all begin `mcc-`; an image-name or
+        command-line substring match here would sooner or later match
+        something that is not the desktop app, and the one thing this function
+        must never do is report "already running" for a process that is not it
+        -- or, worse, be used to decide something is ours.
+
+        A `Get-Process` that cannot read a path (another user's process,
+        a protected one) is skipped rather than guessed at.
+    #>
+    param([string[]] $Binaries)
+
+    if (-not $Binaries -or $Binaries.Count -eq 0) { return $false }
+    $wanted = @{}
+    foreach ($binary in $Binaries) { $wanted[$binary.ToLowerInvariant()] = $true }
+    try {
+        foreach ($process in (Get-Process -ErrorAction SilentlyContinue)) {
+            $path = ""
+            try { $path = [string] $process.Path } catch { $path = "" }
+            if (-not $path) { continue }
+            if ($wanted.ContainsKey($path.ToLowerInvariant())) { return $true }
+        }
+    }
+    catch {
+        # Cannot enumerate processes: say "running" rather than risk a second
+        # window. A missing launch is a nuisance; two windows fighting over one
+        # server is the defect this check exists for.
+        return $true
+    }
+    return $false
+}
+
+function Get-DesktopSkipReason {
+    <#
+        .SYNOPSIS
+        Why the desktop app must not be started here, or "" when it may be.
+
+        .DESCRIPTION
+        The rule, in full (binding user addition, 2026-09-13 00:40). The
+        desktop app is started when the installer starts `mcc-server`, and only
+        when every one of these holds:
+
+          1. a server was actually started and answered /health (the caller
+             only calls this on that branch);
+          2. -NoStart / MCC_INSTALL_NO_START was not given -- there is nothing
+             for a window to attach to;
+          3. -NoDesktop / MCC_INSTALL_NO_DESKTOP was not given;
+          4. this is not CI and not a non-interactive session;
+          5. the desktop shell is installed here, proved by the binary AND the
+             receipt this product writes beside it;
+          6. it is not ALREADY running -- during a helper-driven update the app
+             is running and watching, and the single-instance plugin would hand
+             a second launch to the window that is already there. Detected by
+             executable path, never by image name.
+    #>
+
+    if (-not $script:StartAllowed) { return "no server was started" }
+    if ($script:NoDesktopRequested) { return "-NoDesktop was given" }
+    if ($env:CI -and ($env:CI -notin @("0", "false", "False", "FALSE"))) {
+        return "this is CI"
+    }
+    try {
+        if (-not [Environment]::UserInteractive) { return "this session has no desktop" }
+    }
+    catch {
+        # Cannot tell: treat it as a desktop, which is what Windows almost
+        # always is. The install does not depend on the answer.
+    }
+    $installed = @(Get-InstalledDesktopShells)
+    if ($installed.Count -eq 0) { return "the desktop app is not installed here" }
+    if (Test-DesktopShellIsRunning -Binaries $installed) { return "it is already running" }
+    return ""
+}
+
+function Start-MccDesktopApp {
+    <#
+        .SYNOPSIS
+        Start the desktop app detached, once, and never fail the install.
+
+        .DESCRIPTION
+        `mcc-desktop` -- the command, not the shell binary directly -- so the
+        product's own launch path runs: it is what decides which window
+        provider to use, it is what hands over to an already-running instance,
+        and it is what a user would type. The same detached shape as
+        Start-MccServerDetached, for the same reasons (a batch file so quoting
+        has no opinion, ShellExecute so the child inherits this environment and
+        none of this process's handles, MCC_CONFIG_DIR explicitly so the window
+        attaches to the server this install is for).
+
+        Every failure is swallowed. A desktop app that did not open is a
+        nuisance; an install that failed because of one would be a defect.
+    #>
+    param([Parameter(Mandatory = $true)][string] $Launcher)
+
+    try {
+        $configDir = Get-MccConfigDir
+        $updatesDir = Join-Path $configDir "updates"
+        if (-not (Test-Path -LiteralPath $updatesDir -PathType Container)) {
+            New-Item -ItemType Directory -Path $updatesDir -Force | Out-Null
+        }
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $outPath = Join-Path $updatesDir ("desktop-start-" + $stamp + ".log")
+        $errPath = Join-Path $updatesDir ("desktop-start-" + $stamp + ".err.log")
+        $runner = Join-Path $updatesDir ("start-desktop-" + $stamp + ".cmd")
+        $lines = @(
+            "@echo off",
+            ('set "MCC_CONFIG_DIR=' + $configDir + '"'),
+            ('"' + $Launcher + '" > "' + $outPath + '" 2> "' + $errPath + '"')
+        )
+        [System.IO.File]::WriteAllText($runner, ($lines -join "`r`n") + "`r`n", (New-Object System.Text.ASCIIEncoding))
+        $process = Start-Process `
+            -FilePath $runner `
+            -WorkingDirectory ([System.IO.Path]::GetTempPath()) `
+            -WindowStyle Hidden `
+            -PassThru
+        $script:DesktopAppStarted = $true
+        Write-Host "Started the desktop app (pid $($process.Id))."
+        Write-InstallLog ("Started mcc-desktop, pid " + $process.Id + ".")
+        return $true
+    }
+    catch {
+        Write-InstallLog ("The desktop app could not be started: " + $_.Exception.Message)
+        return $false
+    }
+}
+
+function Start-DesktopAppIfWanted {
+    <#
+        .SYNOPSIS
+        Apply the desktop rule and act on it. Called only after a listener has
+        answered /health on the configured port.
+    #>
+
+    $reason = Get-DesktopSkipReason
+    if ($reason) {
+        Write-InstallLog ("The desktop app was not started: " + $reason + ".")
+        return $false
+    }
+    $launcher = Get-MccDesktopLauncher
+    if (-not $launcher) {
+        Write-InstallLog "The desktop app was not started: mcc-desktop was not found."
+        return $false
+    }
+    return (Start-MccDesktopApp -Launcher $launcher)
+}
+
+function Get-MccDesktopLauncher {
+    <#
+        .SYNOPSIS
+        The `mcc-desktop` this machine runs, or $null. uv's bin directory
+        first, PATH second -- the same order as Get-MccServerLauncher.
+    #>
+
+    $binDir = ""
+    try {
+        $binDir = Invoke-NativeCapture -FilePath (Resolve-UvPath "the desktop app") -Arguments @("tool", "dir", "--bin")
+    }
+    catch {
+        $binDir = ""
+    }
+    if (-not [string]::IsNullOrWhiteSpace($binDir)) {
+        $launcher = Get-LauncherInBinDirectory -BinDir $binDir -Name "mcc-desktop"
+        if ($launcher) { return $launcher }
+    }
+    $command = Get-ApplicationCommand "mcc-desktop"
+    if ($command) { return $command.Source }
+    return $null
+}
+
 function Get-MccServerLauncher {
     <#
         .SYNOPSIS
@@ -2802,6 +3076,39 @@ function Stop-ConfiguredServer {
     return $verdict
 }
 
+function Get-NoStopVerdict {
+    <#
+        .SYNOPSIS
+        What -NoRestart does instead of stopping anything.
+
+        .DESCRIPTION
+        -NoRestart is a promise, and the promise is that no running server is
+        touched: not classified, not asked to stop, not identified. So this
+        asks the one question that requires touching nothing -- is the port
+        busy? -- with the same TCP connect Stop-ConfiguredServer falls back to.
+
+          busy  -> `left-running`: the server that is there keeps serving and
+                   nothing is started. A swap underneath it is still fine: the
+                   launcher shims are version-agnostic trampolines, so the
+                   running process keeps its loaded modules and the next start
+                   picks up the new version. That is exactly what every
+                   install did before 7.1.0.
+          free  -> `nothing-listening`: there is nothing to leave running, so
+                   the start still happens. "Do not stop my server" is not
+                   "leave this machine without one".
+    #>
+    param([Parameter(Mandatory = $true)][object] $Address)
+
+    $verdict = [pscustomobject]@{ Outcome = "nothing-listening"; Message = "" }
+    if (Test-PortIsOccupied -ReachableHost $Address.ReachableHost -Port $Address.Port) {
+        $verdict.Outcome = "left-running"
+        $verdict.Message = "A server is already answering on port $($Address.Port) and -NoRestart was given, so it was left running and nothing was started. Restart it yourself to pick up this version."
+        return $verdict
+    }
+    $verdict.Message = "Nothing is listening on port $($Address.Port)."
+    return $verdict
+}
+
 function Invoke-RestartAfterInstall {
     <#
         .SYNOPSIS
@@ -2823,8 +3130,16 @@ function Invoke-RestartAfterInstall {
           5. Wait for /health to answer 200. THIS is success.
 
         Returns $true when a listener is answering on the configured port.
+
+        `-NoStop` is -NoRestart: step 2 and 3 are skipped entirely. Nothing is
+        classified and nothing is stopped; the port is only asked whether it is
+        busy, by a TCP connect, and a busy port means the running server stays
+        and nothing is started.
     #>
-    param([Parameter(Mandatory = $true)][string] $InstalledVersion)
+    param(
+        [Parameter(Mandatory = $true)][string] $InstalledVersion,
+        [switch] $NoStop
+    )
 
     $address = Get-MccServerAddress
     $script:InstallProgressHolder = ""
@@ -2844,12 +3159,25 @@ function Invoke-RestartAfterInstall {
     # just installed, because nothing was swapped and the old environment is
     # gone. On the staged path the caller has already stopped the server with
     # the OLD build, which is the one that was on disk at the time.
-    $verdict = Stop-ConfiguredServer -Launcher $launcher -LauncherVersion $InstalledVersion -Address $address
+    if ($NoStop) {
+        $verdict = Get-NoStopVerdict -Address $address
+    }
+    else {
+        $verdict = Stop-ConfiguredServer -Launcher $launcher -LauncherVersion $InstalledVersion -Address $address
+    }
     switch ($verdict.Outcome) {
         'stopped' { }
         'nothing-listening' {
             Write-Host "Nothing was listening on port $($address.Port); starting the server."
             Write-InstallLog "Nothing held the port; starting the server."
+        }
+        'left-running' {
+            Write-Host ""
+            Write-Host $verdict.Message
+            Write-InstallLog $verdict.Message
+            $script:InstallProgressRestarted = $false
+            Write-InstallProgress -Stage 'done' -Message $verdict.Message
+            return $false
         }
         'foreign' {
             Write-Host ""
@@ -2969,6 +3297,12 @@ function Confirm-RestartedServer {
         $message = "My Claude Code $InstalledVersion is installed and answering on port $Port."
         Write-Host $message
         Write-InstallLog $message
+        # The server is up. THIS is the moment the desktop app is started --
+        # after a listener has answered, never before, so the window has
+        # something to attach to on its first probe (binding user addition,
+        # 2026-09-13 00:40). The rule and every reason it refuses are in
+        # Get-DesktopSkipReason.
+        $null = Start-DesktopAppIfWanted
         Write-InstallProgress -Stage 'done' -Message $message
         return $true
     }
@@ -3904,6 +4238,22 @@ if (-not (Enter-UpdateLock)) {
 # whitespace.
 try {
 
+# What this run will do about the server, in one line, at the top of the
+# transcript -- so a reader never has to infer it from what did or did not
+# happen three hundred lines later.
+if ($script:NoStartRequested) {
+    Write-InstallLog "Nothing will be stopped and nothing will be started (-NoStart)."
+}
+elseif (-not $script:StopAllowed) {
+    Write-InstallLog "No running server will be stopped (-NoRestart); one is started only if nothing answers."
+}
+else {
+    Write-InstallLog "The server on the configured port will be restarted (the default since 7.1.0)."
+}
+if ($script:RestartAliasUsed) {
+    Write-InstallLog "-Restart was given; it is the default since 7.1.0 and was accepted as a no-op."
+}
+
 Write-Step "Ensuring uv $MinUvVersion or newer is installed"
 Ensure-Uv
 
@@ -4043,15 +4393,22 @@ if ($null -ne $Staged) {
     $Address = Get-MccServerAddress
     $HealthUrl = "http://$($Address.ReachableHost):$($Address.Port)/health"
     $ServerLauncher = Get-MccServerLauncher
-    $MayStart = $script:RestartRequested -and (-not $script:NoStartRequested)
+    $MayStart = $script:StartAllowed
     if ($MayStart -and $ServerLauncher) {
         Write-Step "Restarting the My Claude Code server on port $($Address.Port)"
         Write-InstallLog ("Restart requested for the server on " + $Address.ReachableHost + ":" + $Address.Port + ".")
-        # The build that has to answer --report-holder is the one ON DISK now:
-        # the swap has not happened yet. Older builds do not refuse an unknown
-        # flag, they START A SERVER, so the version gate is not optional.
-        $installedNow = Get-InstalledServerVersion -Launcher $ServerLauncher
-        $stopVerdict = Stop-ConfiguredServer -Launcher $ServerLauncher -LauncherVersion $installedNow -Address $Address
+        if ($script:StopAllowed) {
+            # The build that has to answer --report-holder is the one ON DISK
+            # now: the swap has not happened yet. Older builds do not refuse an
+            # unknown flag, they START A SERVER, so the version gate is not
+            # optional.
+            $installedNow = Get-InstalledServerVersion -Launcher $ServerLauncher
+            $stopVerdict = Stop-ConfiguredServer -Launcher $ServerLauncher -LauncherVersion $installedNow -Address $Address
+        }
+        else {
+            # -NoRestart: nothing running is touched. See Get-NoStopVerdict.
+            $stopVerdict = Get-NoStopVerdict -Address $Address
+        }
         $StopOutcome = $stopVerdict.Outcome
         $StopMessage = $stopVerdict.Message
         if ($StopOutcome -eq "failed") {
@@ -4066,10 +4423,12 @@ if ($null -ne $Staged) {
             Write-InstallProgress -Stage 'failed' -Message $message
             exit 1
         }
-        if ($StopOutcome -in @("foreign", "unclassifiable")) {
+        if ($StopOutcome -in @("foreign", "unclassifiable", "left-running")) {
             # Invariant 1: a foreign holder of the port is never killed, by any
             # path. The install still happens -- it replaces files, not
-            # processes -- but nothing is stopped and nothing is started.
+            # processes -- but nothing is stopped and nothing is started. The
+            # same is true of `left-running`, which is -NoRestart's answer when
+            # a server is already there.
             Write-Host ""
             Write-Host $StopMessage
             Write-InstallLog $StopMessage
@@ -4229,12 +4588,8 @@ else {
 # exited 0 fifteen minutes apart with the user's server down through both.
 if ($script:NoStartRequested) {
     Write-Host ""
-    if ($script:RestartRequested) {
-        Write-Host "No server was started: -NoStart (or MCC_INSTALL_NO_START=1) overrides -Restart."
-    }
-    else {
-        Write-Host "No server was started. Start one with: mcc-server"
-    }
+    Write-Host "Nothing was stopped and no server was started: -NoStart (or MCC_INSTALL_NO_START=1)."
+    Write-Host "Start one with: mcc-server"
     Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'
 }
 elseif ($script:StagedSwapped) {
@@ -4302,8 +4657,11 @@ elseif ($script:StagedSwapped) {
         Write-InstallProgress -Stage 'recovered' -Message $message
     }
 }
-elseif ($script:RestartRequested -and (-not $DryRun) -and (-not $script:Deferred)) {
-    $null = Invoke-RestartAfterInstall -InstalledVersion $InstalledVersion
+elseif ((-not $DryRun) -and (-not $script:Deferred)) {
+    # 7.1.0: no `-Restart` test any more. Every install that installed
+    # something ends with a server answering on the configured port, unless the
+    # caller asked otherwise -- which is what the two branches above are.
+    $null = Invoke-RestartAfterInstall -InstalledVersion $InstalledVersion -NoStop:(-not $script:StopAllowed)
 }
 else {
     Write-InstallProgress -Stage 'done' -Message 'The new version is installed.'

@@ -49,7 +49,39 @@ const DESKTOP_ASSETS = {
   linux: { x64: { deb: "MyClaudeCode-linux-x86_64.deb", tarball: "MyClaudeCode-linux-x86_64.tar.gz" } },
 };
 
-const OVERRIDE_FLAGS = ["--server-only", "--desktop-only", "--no-desktop", "--yes-sudo"];
+const OVERRIDE_FLAGS = [
+  "--server-only",
+  "--desktop-only",
+  "--no-desktop",
+  "--yes-sudo",
+  // Passed straight through to the official installer. Since 7.1.0 that
+  // installer restarts the server by default and opens the desktop app, so a
+  // provisioning script that must not touch a running server needs a way to
+  // say so through this wrapper too. `MCC_INSTALL_NO_START=1` is the
+  // environment form and reaches the installer through the inherited
+  // environment without any help from here.
+  "--no-restart",
+  "--no-start",
+];
+
+/**
+ * The install.ps1 switch each installer flag becomes on Windows.
+ *
+ * The keys are the POSIX spellings install.sh accepts, because that is what
+ * the caller writes and what the POSIX branch passes through untouched.
+ *
+ * `--no-desktop` means two different things on the two sides of this file and
+ * the difference is deliberate: to THIS package it means "do not install the
+ * desktop application"; to the official installer it means "do not START the
+ * desktop app once the server is up". They meet in `decide()` below, where a
+ * run that is not installing a desktop app also tells the installer not to
+ * open one.
+ */
+const WINDOWS_SERVER_FLAGS = {
+  "--no-restart": "-NoRestart",
+  "--no-start": "-NoStart",
+  "--no-desktop": "-NoDesktop",
+};
 
 const HELP = `my-claude-code install -- install the latest MCC for this machine
 
@@ -63,7 +95,15 @@ without a display it installs the server only and says so.
   --desktop-only     install the desktop app, leave the server alone
   --no-desktop       alias for --server-only
   --yes-sudo         on Linux, run \`sudo dpkg -i\` instead of printing it
+  --no-restart       do not stop a My Claude Code server that is already
+                     running. One is still started if nothing answers.
+  --no-start         do not stop and do not start any server
   --help             this text
+
+The official installer restarts the server on the configured port by default
+since 7.1.0, and opens the desktop app when one is installed here and is not
+already running. \`--no-restart\`, \`--no-start\` and \`MCC_INSTALL_NO_START=1\`
+are the ways out; a run that is not installing a desktop app never opens one.
 
   MCC_NPM_INSTALL=server|desktop|both|none   the same choice as an environment
                      variable, for images and provisioning scripts
@@ -181,9 +221,19 @@ function decide(options) {
       : desktop
         ? "desktop app only"
         : "server only";
+  // What this run tells the official installer about the server and the app.
+  // Since 7.1.0 the installer restarts the server and opens the desktop app by
+  // default; a run that is not installing a desktop app has no business
+  // opening one, and a caller that said --no-restart/--no-start meant it.
+  const serverFlags = [];
+  if (flags.has("--no-start")) serverFlags.push("--no-start");
+  else if (flags.has("--no-restart")) serverFlags.push("--no-restart");
+  if (!desktop && !flags.has("--no-start")) serverFlags.push("--no-desktop");
+
   return {
     server,
     desktop,
+    serverFlags,
     // The server installer's `-Desktop`/`--desktop` flag adds the `mcc-desktop`
     // launcher and its shortcuts. A headless box has nowhere to put them.
     desktopFlag: desktop,
@@ -533,12 +583,16 @@ const REPO_RAW = "https://raw.githubusercontent.com/FiredMosquito831/my-claude-c
  * start: the script it fetches is the one that verifies the release wheel's
  * digest, installs `uv` and provisions Python.
  */
-function serverInstallerCommand(platform, withDesktop, script) {
+function serverInstallerCommand(platform, withDesktop, script, serverFlags) {
   const name = script ?? "install";
+  const extras = serverFlags ?? [];
   if (platform === "win32") {
     // The scriptblock form, not `irm … | iex`: only a scriptblock can bind
     // `-Desktop` to the script's own param() block.
-    const flag = withDesktop ? " -Desktop" : "";
+    const windows = (withDesktop ? ["-Desktop"] : []).concat(
+      extras.map((flag) => WINDOWS_SERVER_FLAGS[flag] ?? flag)
+    );
+    const flag = windows.length ? ` ${windows.join(" ")}` : "";
     return {
       command: "powershell",
       args: [
@@ -550,7 +604,8 @@ function serverInstallerCommand(platform, withDesktop, script) {
       ],
     };
   }
-  const flag = withDesktop ? " -s -- --desktop" : "";
+  const posix = (withDesktop ? ["--desktop"] : []).concat(extras);
+  const flag = posix.length ? ` -s -- ${posix.join(" ")}` : "";
   return { command: "sh", args: ["-c", `curl -fsSL "${REPO_RAW}/${name}.sh" | sh${flag}`] };
 }
 
@@ -591,7 +646,12 @@ async function performInstall(options) {
   }
 
   if (decision.server) {
-    const { command, args } = serverInstallerCommand(platform, decision.desktopFlag);
+    const { command, args } = serverInstallerCommand(
+      platform,
+      decision.desktopFlag,
+      undefined,
+      decision.serverFlags
+    );
     const logPath = options.logPath ?? installerLogPath();
     log(
       logPath
