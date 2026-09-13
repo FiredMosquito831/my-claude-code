@@ -606,6 +606,21 @@ class TestResolveAutoWindow:
 
 
 class TestAdminDesktopEndpoints:
+    @pytest.fixture(autouse=True)
+    def _no_os_registration(self, monkeypatch):
+        """Every desktop POST now reconciles the OS registration.
+
+        Since 7.6.5 the route makes the machine agree with the file rather than
+        leaving that to the next tray launch. These tests are about the *file*,
+        so both OS writers are replaced here -- on every platform, because
+        ``fake_winreg`` also fakes ``sys.platform`` and a faked ``win32`` breaks
+        ``shutil.which`` on a Linux runner. What the writers do is pinned in
+        ``tests/config/test_start_at_login_registration.py``.
+        """
+
+        monkeypatch.setattr(desktop_config, "apply_start_at_login", lambda *_a: None)
+        monkeypatch.setattr(desktop_config, "remove_start_at_login", lambda *_a: None)
+
     def _client(self, monkeypatch, tmp_path):
         _set_home(monkeypatch, tmp_path)
         app = create_test_app()

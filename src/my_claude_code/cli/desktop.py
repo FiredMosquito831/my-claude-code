@@ -36,10 +36,11 @@ from my_claude_code.cli.port_diagnostics import (
 from my_claude_code.cli.tool_paths import resolve_installed_command
 from my_claude_code.config.claude_discovery import native_origin
 from my_claude_code.config.desktop import (
+    SKIP_AUTOSTART_ENV,
     DesktopState,
-    apply_start_at_login,
+    autostart_reconcile_enabled,
     load_desktop_state,
-    remove_start_at_login,
+    reconcile_start_at_login,
     set_window_open,
 )
 from my_claude_code.config.desktop_shell import (
@@ -98,7 +99,10 @@ WINDOW_CLOSE_POLL_SECONDS = 1.0
 #: against a config directory that is not the user's own must set this. It is
 #: deliberately an environment variable and not a flag, because it has to
 #: reach a child process nobody in the middle knows how to pass a flag to.
-SKIP_AUTOSTART_ENV = "MCC_DESKTOP_SKIP_AUTOSTART"
+#:
+#: ``SKIP_AUTOSTART_ENV`` and ``autostart_reconcile_enabled`` moved to
+#: ``config.desktop`` in 7.6.5 and are imported above: the admin route
+#: reconciles the registration too, and ``api`` may not import ``cli``.
 
 #: Six distinguishable states of the configured host:port.
 #:
@@ -1128,17 +1132,6 @@ class WindowOnlyHost:
         self._stopped.set()
 
 
-def autostart_reconcile_enabled() -> bool:
-    """Return whether launch-time autostart reconciliation may touch the OS.
-
-    ``MCC_DESKTOP_SKIP_AUTOSTART=1`` turns it off. See ``SKIP_AUTOSTART_ENV``
-    for why that switch has to exist. Only the exact value ``1`` disables it,
-    so an empty or accidental value keeps the normal behaviour.
-    """
-
-    return os.environ.get(SKIP_AUTOSTART_ENV, "").strip() != "1"
-
-
 def _reconcile_start_at_login(state: DesktopState) -> None:
     """Make the OS registration match what the admin API persisted.
 
@@ -1159,15 +1152,7 @@ def _reconcile_start_at_login(state: DesktopState) -> None:
         )
         return
 
-    try:
-        if state.tray_enabled and state.start_at_login:
-            apply_start_at_login()
-        else:
-            remove_start_at_login()
-    except Exception:
-        logger.warning(
-            "Could not reconcile the start-at-login registration.", exc_info=True
-        )
+    reconcile_start_at_login(state)
 
 
 def launch_desktop(
