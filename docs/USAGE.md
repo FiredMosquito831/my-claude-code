@@ -2691,6 +2691,7 @@ Unlike everything else on this page, a pause is written the moment you click it:
 | Setting | Holds |
 | --- | --- |
 | `MODEL_PAUSED` | paused entries on the default route |
+| `MODEL_MYTHOS_PAUSED` | paused entries on Mythos |
 | `MODEL_FABLE_PAUSED` | paused entries on Fable |
 | `MODEL_OPUS_PAUSED` | paused entries on Opus |
 | `MODEL_SONNET_PAUSED` | paused entries on Sonnet |
@@ -2755,7 +2756,8 @@ an alias. A model id typed into OpenCode's config a month ago is still that
 model id today, however many times you have moved the route it should have been
 following.
 
-**New in 6.38.0**, five names close that gap. They sit at the top of the model
+**New in 6.38.0**, these names close that gap — `mcc/cyber` joined them in
+7.2.0. They sit at the top of the model
 picker MCC generates for each of the thirteen agents that carry a catalogue —
 Codex, Pi, OpenCode, OpenCode 2, Kilo, Command Code, Kimi Code, Qwen Code,
 Crush, Cline, Aider, Droid and Gemini CLI — and each one is a name for a route
@@ -2763,6 +2765,7 @@ on this page rather than a model of its own:
 
 | Name | The route it names | And therefore the chain it uses |
 | --- | --- | --- |
+| `mcc/cyber` | `MODEL_MYTHOS` | `MODEL_MYTHOS_FALLBACKS`, `MODEL_MYTHOS_PAUSED` |
 | `mcc/best` | `MODEL_FABLE` | `MODEL_FABLE_FALLBACKS`, `MODEL_FABLE_PAUSED` |
 | `mcc/good` | `MODEL_OPUS` | `MODEL_OPUS_FALLBACKS`, `MODEL_OPUS_PAUSED` |
 | `mcc/medium` | `MODEL_SONNET` | `MODEL_SONNET_FALLBACKS`, `MODEL_SONNET_PAUSED` |
@@ -2877,8 +2880,9 @@ Cline, Crush, Droid, Gemini CLI, Qwen Code and Aider put on it. The router
 answers the same way to both, and the tier segment is matched exactly — no name
 merely *containing* `cheap` lands on the cheap rail.
 
-**On a default install all five resolve to the same model, and the dashboard
-says so.** `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU` and
+**On a default install all six resolve to the same model, and the dashboard
+says so.** `MODEL_MYTHOS`, `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`,
+`MODEL_HAIKU` and
 `MODEL_VISION` ship unset, so every tier collapses onto `MODEL` — primary,
 fallbacks and pause list together — which is exactly what `claude-opus-5`
 already does today. That includes `mcc/best`, which names `MODEL_FABLE` since
@@ -2888,7 +2892,7 @@ every unset route falls back to the same setting, and an install that never set
 deliberately does not invent a different model for an unset tier, because
 choosing one would be MCC choosing a model for you; the Tiers section says *Same
 as global Opus — currently `<ref>`* instead of quietly picking something. Map
-Opus, Sonnet and Haiku the way section 8 recommends and the five names separate
+Opus, Sonnet and Haiku the way section 8 recommends and the names separate
 by themselves, with no further configuration.
 
 **Giving one agent its own tier.** Each card on the **Coding agents** page now
@@ -4408,7 +4412,7 @@ Only the keys whose value or meaning moved in 6.0.0–6.8.0. Everything else in 
 | `FALLBACK_END_CLEANLY_AFTER_COMMIT` | `true` | **New in 6.15.0.** A model that fails *after* it started answering ends the message cleanly (`stop_reason: max_tokens`) instead of returning an API error under a partial answer. `false` restores the error. |
 | `FALLBACK_RESUME_AFTER_COMMIT` | `true` | **New in 6.18.0.** Rather than only ending a half-written answer, hand the text already sent to the next model on the route and splice its continuation into the same message. Falls back to the row above whenever the continuation is unusable, so it can only lengthen an answer, never break one. `false` stops at the short message. |
 | `STREAM_COMMIT_HOLDBACK_CHARS` | `0` | **New in 6.18.0.** Visible characters that must arrive before output is released, on top of `STREAM_COMMIT_HOLDBACK_SECONDS`. Raising it means a model that writes a word and dies has shown you nothing, so the route restarts on the next model invisibly; the cost is that much time-to-first-visible-word on every request. `0` uses the clock alone. |
-| `HARNESS_TIER_ALIASES` | `true` | **New in 6.38.0.** Lists `mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` at the top of every coding agent's generated picker, each a name for one of MCC's own routes rather than a model of its own. Off keeps those pickers to concrete refs; the router still resolves an alias a client sends anyway, so an agent already configured on one keeps working. Per-agent chains live in `~/.mcc/harness_tiers.json`, written by the **Coding agents** page. See [Tiers for every other coding agent](#tiers-for-every-other-coding-agent). |
+| `HARNESS_TIER_ALIASES` | `true` | **New in 6.38.0.** Lists `mcc/cyber`, `mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` at the top of every coding agent's generated picker, each a name for one of MCC's own routes rather than a model of its own. Off keeps those pickers to concrete refs; the router still resolves an alias a client sends anyway, so an agent already configured on one keeps working. Per-agent chains live in `~/.mcc/harness_tiers.json`, written by the **Coding agents** page. See [Tiers for every other coding agent](#tiers-for-every-other-coding-agent). |
 | `OPENCODE_CLIENT_IDENTITY` | `opencode` | **New in 6.69.0.** Which client MCC identifies as to OpenCode Zen and OpenCode Go, both of which read identity headers off every request. `opencode` sends the official client's user-agent and client id, which is what the free tier's limiter recognises; `mcc` sends `my-claude-code` and this version instead. The conversation, request and project headers go either way. See [OpenCode Zen and OpenCode Go: what MCC sends about itself](#opencode-zen-and-opencode-go-what-mcc-sends-about-itself). |
 | `OPENCODE_CLIENT_VERSION` | *(empty)* | **New in 6.69.0.** Pins the OpenCode release named in that user-agent. Empty reads it from the `opencode-ai` package installed on this machine, and falls back to the release this build was verified against. Only used when `OPENCODE_CLIENT_IDENTITY` is `opencode`. |
 | `SERVER_STALE_SERVER_ACTION` | `report` | **New in 6.72.2.** What the server does about other My Claude Code servers it finds at start. `report` names each one in the server log — pid, session, recorded port, start time, last heartbeat, and the files it holds open — and stops nothing. `stop` also stops the ones this install can prove are finished: a heartbeat silent past `SERVER_STALE_SESSION_SECONDS` whose recorded port is now served by a different MCC, or a launcher whose server process is gone. A server is never stopped merely for owning no listening socket. |

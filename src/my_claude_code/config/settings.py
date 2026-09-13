@@ -127,18 +127,21 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "allowed_telegram_user_id",
     "discord_bot_token",
     "allowed_discord_channels",
+    "model_mythos",
     "model_fable",
     "model_opus",
     "model_sonnet",
     "model_haiku",
     "model_vision",
     "model_fallbacks",
+    "model_mythos_fallbacks",
     "model_fable_fallbacks",
     "model_opus_fallbacks",
     "model_sonnet_fallbacks",
     "model_haiku_fallbacks",
     "model_vision_fallbacks",
     "model_paused",
+    "model_mythos_paused",
     "model_fable_paused",
     "model_opus_paused",
     "model_sonnet_paused",
@@ -555,6 +558,12 @@ class Settings(BaseSettings):
 
     # Per-model overrides (optional, falls back to MODEL)
     # Each can use a different provider
+    # The Mythos route (alias ``mcc/cyber``). Unset by default like every other
+    # per-route override: MCC has no evidence about what a Mythos route should
+    # point at -- across 380k+ logged requests in two databases not one names a
+    # mythos model -- and inventing one would be MCC choosing a model for the
+    # operator. Unset, it collapses onto MODEL exactly as the other four do.
+    model_mythos: str | None = Field(default=None, validation_alias="MODEL_MYTHOS")
     model_fable: str | None = Field(default=None, validation_alias="MODEL_FABLE")
     model_opus: str | None = Field(default=None, validation_alias="MODEL_OPUS")
     model_sonnet: str | None = Field(default=None, validation_alias="MODEL_SONNET")
@@ -566,6 +575,9 @@ class Settings(BaseSettings):
     # exactly the primary plus the chain sitting next to it.
     model_fallbacks: str | None = Field(
         default=None, validation_alias="MODEL_FALLBACKS"
+    )
+    model_mythos_fallbacks: str | None = Field(
+        default=None, validation_alias="MODEL_MYTHOS_FALLBACKS"
     )
     model_fable_fallbacks: str | None = Field(
         default=None, validation_alias="MODEL_FABLE_FALLBACKS"
@@ -596,6 +608,9 @@ class Settings(BaseSettings):
     # attempted, so no budget and no attempt is spent on it. The scope is the
     # route, not the model -- the same ref paused on Opus keeps serving Sonnet.
     model_paused: str | None = Field(default=None, validation_alias="MODEL_PAUSED")
+    model_mythos_paused: str | None = Field(
+        default=None, validation_alias="MODEL_MYTHOS_PAUSED"
+    )
     model_fable_paused: str | None = Field(
         default=None, validation_alias="MODEL_FABLE_PAUSED"
     )
@@ -1055,6 +1070,10 @@ class Settings(BaseSettings):
     reasoning_policy: ReasoningPreference = Field(
         default=ReasoningPreference.CLIENT,
         validation_alias="REASONING_POLICY",
+    )
+    reasoning_mythos: ReasoningPreference = Field(
+        default=ReasoningPreference.INHERIT,
+        validation_alias="REASONING_MYTHOS",
     )
     reasoning_fable: ReasoningPreference = Field(
         default=ReasoningPreference.INHERIT,
@@ -1877,6 +1896,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "model",
+        "model_mythos",
         "model_fable",
         "model_opus",
         "model_sonnet",
@@ -1892,12 +1912,14 @@ class Settings(BaseSettings):
 
     @field_validator(
         "model_fallbacks",
+        "model_mythos_fallbacks",
         "model_fable_fallbacks",
         "model_opus_fallbacks",
         "model_sonnet_fallbacks",
         "model_haiku_fallbacks",
         "model_vision_fallbacks",
         "model_paused",
+        "model_mythos_paused",
         "model_fable_paused",
         "model_opus_paused",
         "model_sonnet_paused",

@@ -52,11 +52,13 @@ def store(tmp_path):
 def _settings(preference: ReasoningPreference) -> Settings:
     settings = Settings()
     settings.model = "nvidia_nim/a-model"
+    settings.model_mythos = None
     settings.model_fable = None
     settings.model_opus = None
     settings.model_sonnet = None
     settings.model_haiku = None
     settings.reasoning_policy = preference
+    settings.reasoning_mythos = ReasoningPreference.INHERIT
     settings.reasoning_fable = ReasoningPreference.INHERIT
     settings.reasoning_opus = ReasoningPreference.INHERIT
     settings.reasoning_sonnet = ReasoningPreference.INHERIT

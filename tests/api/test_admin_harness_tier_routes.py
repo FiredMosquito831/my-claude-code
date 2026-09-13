@@ -52,6 +52,7 @@ def test_the_get_reports_every_tier_and_what_it_resolves_to() -> None:
     payload = _client().get("/admin/api/harness-tiers").json()
 
     assert [tier["id"] for tier in payload["tiers"]] == [
+        "cyber",
         "best",
         "good",
         "medium",
@@ -59,6 +60,7 @@ def test_the_get_reports_every_tier_and_what_it_resolves_to() -> None:
         "vision",
     ]
     assert [tier["ref"] for tier in payload["tiers"]] == [
+        "mcc/cyber",
         "mcc/best",
         "mcc/good",
         "mcc/medium",

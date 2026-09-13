@@ -155,12 +155,12 @@ def test_the_aliases_sort_first() -> None:
     """The only discoverability lever this layer has.
 
     It puts the tiers at the top of OpenCode's and Qwen's pickers and gives them
-    priority 0-4 in Codex, whose ``priority`` is a bare enumeration index.
+    priority 0-5 in Codex, whose ``priority`` is a bare enumeration index.
     """
 
     refs = [model.provider_model_ref for model in _models()]
 
-    assert refs[:5] == [tier_ref(tier) for tier in TIER_ORDER]
+    assert refs[: len(TIER_ORDER)] == [tier_ref(tier) for tier in TIER_ORDER]
 
 
 def test_best_is_the_only_record_marked_as_the_primary_route() -> None:

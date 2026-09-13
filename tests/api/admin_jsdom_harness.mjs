@@ -128,6 +128,10 @@ const FIELDS = [
      Vision's primary is markup, which must render as text. */
   ...[
     ["MODEL_FALLBACKS", "", "model_chain"],
+    // Mythos (7.2.0) carries a primary and a one-entry chain, so the new rail
+    // is exercised as a configured route rather than as an empty one.
+    ["MODEL_MYTHOS", "p1/y0", "optional_model"],
+    ["MODEL_MYTHOS_FALLBACKS", "p1/y1", "model_chain"],
     ["MODEL_FABLE", "", "optional_model"],
     ["MODEL_FABLE_FALLBACKS", "", "model_chain"],
     ["MODEL_OPUS", "p1/o0", "optional_model"],
@@ -147,6 +151,7 @@ const FIELDS = [
     // are never rendered as controls -- but they are in the payload, which is
     // where the page reads which rows are switched off.
     ["MODEL_PAUSED", "", "text"],
+    ["MODEL_MYTHOS_PAUSED", "", "text"],
     ["MODEL_FABLE_PAUSED", "", "text"],
     ["MODEL_OPUS_PAUSED", "", "text"],
     ["MODEL_SONNET_PAUSED", "", "text"],
@@ -512,6 +517,7 @@ const ROUTES = {
        Claude alias, not a tier, and `mcc/best` follows MODEL. */
     route_tier_aliases: {
       MODEL: "mcc/best",
+      MODEL_MYTHOS: "mcc/cyber",
       MODEL_OPUS: "mcc/good",
       MODEL_SONNET: "mcc/medium",
       MODEL_HAIKU: "mcc/cheap",
@@ -1727,10 +1733,11 @@ window.Element.prototype.scrollIntoView = function scrollIntoViewStub() {
   scrolledTo.push(this.id || this.className || this.tagName);
 };
 const fetchCalls = [];
-// The pause write is emulated in the fetch stub below, so the six lists have
+// The pause write is emulated in the fetch stub below, so the seven lists have
 // to live somewhere the stub can read and update between calls.
 const PAUSE_KEY_BY_MODEL = {
   MODEL: "MODEL_PAUSED",
+  MODEL_MYTHOS: "MODEL_MYTHOS_PAUSED",
   MODEL_FABLE: "MODEL_FABLE_PAUSED",
   MODEL_OPUS: "MODEL_OPUS_PAUSED",
   MODEL_SONNET: "MODEL_SONNET_PAUSED",

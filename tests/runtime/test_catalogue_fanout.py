@@ -157,12 +157,13 @@ def test_the_fan_out_creates_a_missing_document(tmp_path: Path) -> None:
         entry["slug"]
         for entry in json.loads(codex_path.read_text(encoding="utf-8"))["models"]
     ]
-    # The five tier aliases lead every document: ordering is the only
-    # discoverability lever this layer has, and it gives them priority 0-4 in
-    # Codex's own picker. On this fixture every tier is unset, so all five
+    # The tier aliases lead every document: ordering is the only
+    # discoverability lever this layer has, and it gives them priority 0-5 in
+    # Codex's own picker. On this fixture every tier is unset, so all of them
     # resolve onto MODEL -- which is exactly the collapse the dashboard names
     # rather than hides.
     assert slugs == [
+        "mcc/cyber",
         "mcc/best",
         "mcc/good",
         "mcc/medium",
@@ -183,12 +184,13 @@ def test_an_existing_catalogue_is_refreshed_in_place(tmp_path: Path) -> None:
         entry["slug"]
         for entry in json.loads(codex_path.read_text(encoding="utf-8"))["models"]
     ]
-    # The five tier aliases lead every document: ordering is the only
-    # discoverability lever this layer has, and it gives them priority 0-4 in
-    # Codex's own picker. On this fixture every tier is unset, so all five
+    # The tier aliases lead every document: ordering is the only
+    # discoverability lever this layer has, and it gives them priority 0-5 in
+    # Codex's own picker. On this fixture every tier is unset, so all of them
     # resolve onto MODEL -- which is exactly the collapse the dashboard names
     # rather than hides.
     assert slugs == [
+        "mcc/cyber",
         "mcc/best",
         "mcc/good",
         "mcc/medium",
@@ -431,6 +433,7 @@ def test_an_invited_merge_target_is_refreshed_and_keeps_every_other_key(
     assert sorted(models) == [
         "mcc/best",
         "mcc/cheap",
+        "mcc/cyber",
         "mcc/good",
         "mcc/medium",
         "mcc/vision",
@@ -488,6 +491,7 @@ def test_a_toml_catalogue_is_written_as_toml_with_its_credentials_resolved(
     assert sorted(models) == [
         "mcc/mcc/best",
         "mcc/mcc/cheap",
+        "mcc/mcc/cyber",
         "mcc/mcc/good",
         "mcc/mcc/medium",
         "mcc/mcc/vision",

@@ -65,6 +65,23 @@ class ModelsListResponse(BaseModel):
 
 
 SUPPORTED_CLAUDE_MODELS = [
+    # Both spellings of the Mythos name. ``claude-mythos-5`` is the id
+    # models.dev carries; ``claude-mythos-5.1`` is the one a working Claude
+    # Desktop gateway entry names, and neither the desktop app nor Claude Code
+    # checks either against a catalogue -- they are display aliases MCC
+    # resolves itself, and the router matches both on the substring ``mythos``.
+    # Advertised so that the name MCC tells an operator to configure is a name
+    # MCC also lists.
+    ModelResponse(
+        id="claude-mythos-5.1",
+        display_name="Claude Mythos 5.1",
+        created_at="2026-06-09T00:00:00Z",
+    ),
+    ModelResponse(
+        id="claude-mythos-5",
+        display_name="Claude Mythos 5",
+        created_at="2026-06-09T00:00:00Z",
+    ),
     ModelResponse(
         id="claude-fable-5",
         display_name="Claude Fable 5",

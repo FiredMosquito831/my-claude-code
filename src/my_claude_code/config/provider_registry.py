@@ -345,8 +345,8 @@ class ProviderRegistry:
         if _slug(name) in RESERVED_PROVIDER_IDS:
             raise ValueError(
                 f"'{_slug(name)}' is reserved for MCC's own coding-agent tier "
-                f"aliases (mcc/best, mcc/good, mcc/medium, mcc/cheap, "
-                f"mcc/vision). Choose another name."
+                f"aliases (mcc/cyber, mcc/best, mcc/good, mcc/medium, "
+                f"mcc/cheap, mcc/vision). Choose another name."
             )
         url = base_url.strip()
         if not url:

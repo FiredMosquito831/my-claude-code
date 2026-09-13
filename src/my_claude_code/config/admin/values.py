@@ -92,6 +92,7 @@ def blank_is_accepted(field: ConfigFieldSpec) -> bool:
 # keeps serving Sonnet -- so every rail on Model Config owns its own list.
 ROUTE_PAUSE_KEYS: tuple[tuple[str, str, str], ...] = (
     ("MODEL", "MODEL_FALLBACKS", "MODEL_PAUSED"),
+    ("MODEL_MYTHOS", "MODEL_MYTHOS_FALLBACKS", "MODEL_MYTHOS_PAUSED"),
     ("MODEL_FABLE", "MODEL_FABLE_FALLBACKS", "MODEL_FABLE_PAUSED"),
     ("MODEL_OPUS", "MODEL_OPUS_FALLBACKS", "MODEL_OPUS_PAUSED"),
     ("MODEL_SONNET", "MODEL_SONNET_FALLBACKS", "MODEL_SONNET_PAUSED"),

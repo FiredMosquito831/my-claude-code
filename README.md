@@ -53,7 +53,7 @@ Those download links always resolve to the newest release. Each desktop download
 
 1. **Start it and open the dashboard.** `mcc-server`, then <http://127.0.0.1:8082/admin> (the desktop app does both for you).
 2. **Add a provider key.** On the **Providers** page, find your provider, click **Configure**, paste the key, then **Validate** and **Apply**.
-3. **Point the tiers at a model.** On the **Model Config** page set `MODEL` and, if you want per-tier routing, `MODEL_FABLE` / `MODEL_OPUS` / `MODEL_SONNET` / `MODEL_HAIKU`, each with a fallback chain.
+3. **Point the tiers at a model.** On the **Model Config** page set `MODEL` and, if you want per-tier routing, `MODEL_MYTHOS` / `MODEL_FABLE` / `MODEL_OPUS` / `MODEL_SONNET` / `MODEL_HAIKU`, each with a fallback chain.
 4. **Launch an agent.** `mcc-claude`, `mcc-codex`, `mcc-opencode`, `mcc-gemini` … or press **Configure** on the **Coding agents** page for a desktop app such as Claude Desktop.
 
 ### What the installer does, and what it cannot do
@@ -309,6 +309,7 @@ Every setting lives in [.env.example](.env.example) with inline comments and cos
 | `ANTHROPIC_AUTH_TOKEN` | The token clients present to this proxy, generated for this machine on the first start. Required once `HOST` is not loopback. |
 | `HOST` / `PORT` | Where the server listens. Defaults are loopback and `8082`. |
 | `MODEL` | The model used when nothing more specific matches. |
+| `MODEL_MYTHOS` | The model Mythos-tier traffic routes to (alias `mcc/cyber`). |
 | `MODEL_FABLE` | The model Fable-tier traffic routes to. |
 | `MODEL_OPUS` | The model Opus-tier traffic routes to. |
 | `MODEL_SONNET` | The model Sonnet-tier traffic routes to. |

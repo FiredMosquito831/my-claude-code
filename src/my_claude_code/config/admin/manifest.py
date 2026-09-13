@@ -226,6 +226,38 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         affects_providers=False,
     ),
     ConfigFieldSpec(
+        "MODEL_MYTHOS",
+        "Mythos Override",
+        "models",
+        "optional_model",
+        settings_attr="model_mythos",
+    ),
+    ConfigFieldSpec(
+        "MODEL_MYTHOS_FALLBACKS",
+        "Mythos Fallback Chain",
+        "models",
+        "model_chain",
+        settings_attr="model_mythos_fallbacks",
+    ),
+    ConfigFieldSpec(
+        "MODEL_MYTHOS_PAUSED",
+        "Mythos Paused Models",
+        "models",
+        "text",
+        settings_attr="model_mythos_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on this route that are "
+            "switched off. A paused model is never tried and costs no "
+            "attempt, but it keeps its place in the chain and still "
+            "appears in the request log as skipped. Pausing stops a model "
+            "being tried. Hiding (Models page) only removes it from "
+            "listings and never changes routing. Written by the Pause "
+            "button on Model Config rather than typed here."
+        ),
+        affects_providers=False,
+    ),
+    ConfigFieldSpec(
         "MODEL_FABLE",
         "Fable Override",
         "models",
@@ -559,9 +591,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="harness_tier_aliases",
         default="true",
         description=(
-            "Add mcc/best, mcc/good, mcc/medium, mcc/cheap and mcc/vision to "
-            "the top of every coding agent's model picker. They are names for "
-            "MCC's own routes, the way Claude Code asks for claude-sonnet-5 "
+            "Add mcc/cyber, mcc/best, mcc/good, mcc/medium, mcc/cheap and "
+            "mcc/vision to the top of every coding agent's model picker. "
+            "They are names for MCC's own routes, the way Claude Code asks "
+            "for claude-sonnet-5 "
             "and gets whatever MODEL_SONNET points at, so a session started on "
             "one follows the route when you move it instead of pinning a "
             "provider's model id inside the agent's config. Each agent can be "
@@ -647,6 +680,15 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "From client preserves CLI effort. Providers translate only the controls "
             "their API supports."
         ),
+    ),
+    ConfigFieldSpec(
+        "REASONING_MYTHOS",
+        "Mythos Reasoning",
+        "reasoning",
+        "select",
+        settings_attr="reasoning_mythos",
+        default="inherit",
+        options=_reasoning_options(ROUTE_REASONING_PREFERENCES),
     ),
     ConfigFieldSpec(
         "REASONING_FABLE",

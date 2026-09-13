@@ -1,6 +1,6 @@
 """The Model Config rail headings and the router answer to the same names.
 
-The five ``mcc/*`` aliases are the ids every coding agent other than Claude
+The ``mcc/*`` aliases are the ids every coding agent other than Claude
 Code puts on the wire, and ``core/tier_refs.py`` owns them. The dashboard shows
 them beside each routing rail, which is only useful if the alias shown and the
 alias the router resolves are the same fact -- so this pins the join in both
@@ -20,12 +20,22 @@ import re
 from pathlib import Path
 
 from my_claude_code.api.admin_routes import _config_response
+from my_claude_code.application.desktop_documents import DEFAULT_MODEL_ID
 from my_claude_code.core.tier_refs import (
+    DEFAULT_TIER,
     GLOBAL_TIER_SETTINGS,
+    TIER_FAMILY_TIERS,
     TIER_ORDER,
+    ModelTier,
     tier_alias_by_route_env_var,
     tier_ref,
 )
+
+#: ``var fo=[...]`` read out of the installed Claude Desktop 1.52386.0.0
+#: ``app.asar``: the closed enum ``anthropicFamilyTier`` is validated against,
+#: and the set of ``ANTHROPIC_DEFAULT_<TIER>_MODEL`` names the app exports into
+#: its Code sessions.
+CLAUDE_FAMILY_TIER_ENUM = frozenset({"sonnet", "opus", "haiku", "fable", "mythos"})
 
 _STATIC = (
     Path(__file__).resolve().parents[2]
@@ -40,6 +50,7 @@ def test_every_tier_reaches_the_page_under_the_route_it_names() -> None:
     aliases = tier_alias_by_route_env_var()
 
     assert aliases == {
+        "MODEL_MYTHOS": "mcc/cyber",
         "MODEL_FABLE": "mcc/best",
         "MODEL_OPUS": "mcc/good",
         "MODEL_SONNET": "mcc/medium",
@@ -95,3 +106,51 @@ def test_the_dashboard_script_holds_no_second_list_of_aliases() -> None:
         "the tier aliases must come from the config payload, which reads "
         f"core/tier_refs.py -- found hard-coded {sorted(literals)}"
     )
+
+
+def test_the_default_tier_is_stated_once_and_is_not_the_first_in_the_order() -> None:
+    """Ordering is a display fact; "which alias is the default" is a routing one.
+
+    They were the same line of code -- ``TIER_ORDER[0]`` -- until 7.2.0, so
+    putting a tier at the top of the picker would have re-pointed the primary
+    entry of all thirteen generated harness catalogues, and the default model
+    Configure writes into other applications' settings, at a route nobody has
+    filled in. ``mcc/cyber`` leads the picker; ``mcc/best`` is still the
+    default.
+    """
+
+    assert TIER_ORDER[0] is ModelTier.CYBER
+    assert DEFAULT_TIER is ModelTier.BEST
+    assert DEFAULT_TIER is not TIER_ORDER[0]
+    assert DEFAULT_MODEL_ID == tier_ref(DEFAULT_TIER) == "mcc/best"
+
+
+def test_every_family_tier_is_one_of_the_apps_own_enum_values() -> None:
+    """``anthropicFamilyTier`` is a closed enum in Claude Desktop's own bundle.
+
+    ``var fo=["sonnet","opus","haiku","fable","mythos"]`` at 1.52386.0.0; a
+    value outside it is dropped, and the tier's ``ANTHROPIC_DEFAULT_<TIER>_
+    MODEL`` pin goes unfilled.
+    """
+
+    for tier in TIER_ORDER:
+        family, _default = TIER_FAMILY_TIERS[tier]
+        assert family in CLAUDE_FAMILY_TIER_ENUM, tier
+
+
+def test_no_two_tiers_claim_the_same_family_default() -> None:
+    """The app warns and picks arbitrarily when two entries share a tier.
+
+    Until 7.2.0 both ``mcc/best`` and ``mcc/good`` were advertised as ``opus``
+    -- which fired that warning -- while ``fable`` and ``mythos``, valid tier
+    values all along, went unused.
+    """
+
+    defaults = [
+        family for family, is_default in TIER_FAMILY_TIERS.values() if is_default
+    ]
+
+    assert sorted(defaults) == sorted(set(defaults))
+    assert set(defaults) == {"mythos", "fable", "opus", "sonnet", "haiku"}
+    # And nothing is left un-advertised: every tier names a family.
+    assert set(TIER_FAMILY_TIERS) == set(TIER_ORDER)

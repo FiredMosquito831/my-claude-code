@@ -449,7 +449,7 @@ def test_a_route_with_no_model_of_its_own_is_not_counted(rendered) -> None:
     would double-count the Default route."""
     labels = [row[0] for row in rendered["limits"]["calcRows"][1:]]
     assert "Fable" not in labels
-    assert labels == ["Default", "Opus", "Sonnet", "Haiku", "Vision"]
+    assert labels == ["Default", "Mythos", "Opus", "Sonnet", "Haiku", "Vision"]
 
 
 def test_the_calculator_says_the_first_token_deadline_is_inert(rendered) -> None:
@@ -605,6 +605,7 @@ def test_the_calculator_never_interpolates_a_model_name_into_markup(rendered) ->
     assert "onerror" not in limits["calcTableHtml"]
     assert [row[0] for row in limits["calcRows"][1:]] == [
         "Default",
+        "Mythos",
         "Opus",
         "Sonnet",
         "Haiku",
@@ -2641,14 +2642,14 @@ def test_every_routing_rail_heading_carries_its_harness_alias(rendered) -> None:
 
     Claude Code never names a model -- it asks for ``claude-sonnet-5`` and gets
     whatever Sonnet points at. Every other agent had to name a concrete
-    ``provider/model`` ref, so the five ``mcc/*`` aliases exist to close that
+    ``provider/model`` ref, so the ``mcc/*`` aliases exist to close that
     gap; and until now the page where routes are edited did not say which alias
     named which rail, so a user who had just moved a model onto the Sonnet rail
     had no way to see that ``mcc/medium`` is what their Codex session must ask
     for.
 
     The map is joined onto the config payload from ``core/tier_refs.py``. There
-    is deliberately no second list of five aliases in ``admin.js``: the first
+    is deliberately no second list of aliases in ``admin.js``: the first
     thing a second copy would do is disagree with the first.
     """
 
@@ -2656,6 +2657,7 @@ def test_every_routing_rail_heading_carries_its_harness_alias(rendered) -> None:
 
     for expected in (
         "Default (mcc/best)",
+        "Mythos (mcc/cyber)",
         "Opus (mcc/good)",
         "Sonnet (mcc/medium)",
         "Haiku (mcc/cheap)",
@@ -2671,8 +2673,9 @@ def test_every_routing_rail_heading_carries_its_harness_alias(rendered) -> None:
     assert "Fable" in headings
     assert not any(heading.startswith("Fable (") for heading in headings)
 
-    # Exactly five aliases on the page: one per tier, no more.
-    assert len(rendered["routing"]["aliasChips"]) == 5
+    # One chip per alias the payload carries, no more. Mythos (7.2.0) is one
+    # of them: its rail is the newest and is rendered by exactly the same path.
+    assert len(rendered["routing"]["aliasChips"]) == 6
 
 
 # ------------------------------------------------- the vision adapter's mode

@@ -1743,8 +1743,8 @@ DESKTOP_APPS: tuple[DesktopAppSpec, ...] = (
             ("Credential kind", "Static API key"),
             (
                 "Model discovery",
-                "Off, and name mcc/best, mcc/good, mcc/medium, "
-                "mcc/cheap and mcc/vision as the models",
+                "Off, and name mcc/cyber, mcc/best, mcc/good, "
+                "mcc/medium, mcc/cheap and mcc/vision as the models",
             ),
         ),
     ),

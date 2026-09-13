@@ -42,6 +42,7 @@ _SECTION_FOR_ENV_VAR: dict[str, str] = {
     "FALLBACK_REASONING_ANSWER_TIMEOUT": "deadlines",
     "RATE_LIMIT_COOLDOWN_SECONDS": "credential_health",
     "MODEL_PAUSED": "models",
+    "MODEL_MYTHOS_PAUSED": "models",
     "MODEL_FABLE_PAUSED": "models",
     "MODEL_OPUS_PAUSED": "models",
     "MODEL_SONNET_PAUSED": "models",
