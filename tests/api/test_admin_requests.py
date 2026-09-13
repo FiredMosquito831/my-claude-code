@@ -823,3 +823,145 @@ def test_clear_image_descriptions_is_not_swallowed_by_the_detail_route(
     """FastAPI matches in declaration order; this path must not read as an id."""
     response = client.get("/admin/api/requests/image-descriptions")
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Per-model latency: the endpoint the Analytics panel and the Models chips read
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def latency_store(tmp_path):
+    """Two models, three outcomes, and one attempt nobody ever measured.
+
+    Deliberately awkward: the fast model both answered and failed, so the two
+    may not be averaged into one; the slow model's attempts carry no
+    first-token time at all, which is the state every row written before
+    7.4.0 is in and cannot be moved out of.
+    """
+
+    store = get_request_log_store(tmp_path / "requests.db")
+    assert store is not None
+    base = time.time()
+    store.enqueue(
+        RequestRecord(
+            id="fast",
+            endpoint="/v1/messages",
+            protocol="anthropic",
+            provider="p1",
+            resolved_model="p1/fast",
+            ts_epoch=base,
+            status="success",
+            duration_ms=2100.0,
+            ttft_ms=4712.0,
+            ttft_winner_ms=300.0,
+            tokens_out=340,
+            attempts=(
+                RouteAttempt(
+                    attempt=0,
+                    provider="p1",
+                    model_ref="p1/slow",
+                    outcome=RouteAttemptOutcome.FAILED,
+                    duration_ms=3000.0,
+                ),
+                RouteAttempt(
+                    attempt=1,
+                    provider="p1",
+                    model_ref="p1/fast",
+                    outcome=RouteAttemptOutcome.FAILED,
+                    duration_ms=1500.0,
+                    ttft_ms=1400.0,
+                ),
+                RouteAttempt(
+                    attempt=2,
+                    provider="p1",
+                    model_ref="p1/fast",
+                    outcome=RouteAttemptOutcome.SUCCEEDED,
+                    duration_ms=2100.0,
+                    ttft_ms=300.0,
+                    first_reasoning_ms=200.0,
+                    tokens_out=340,
+                ),
+                RouteAttempt(
+                    attempt=3,
+                    provider="p1",
+                    model_ref="p1/benched",
+                    outcome=RouteAttemptOutcome.SKIPPED,
+                ),
+            ),
+        )
+    )
+    store.close()
+    yield store
+
+
+def _latency_rows(payload):
+    return {(row["model_ref"], row["outcome"]): row for row in payload["rows"]}
+
+
+def test_latency_endpoint_keeps_failed_attempts_as_their_own_group(
+    client, latency_store
+) -> None:
+    """Merging them would hide "quick when it works, a minute when it does not"."""
+
+    payload = client.get("/admin/api/requests/latency", params={"days": 0}).json()
+
+    assert payload["enabled"] is True
+    rows = _latency_rows(payload)
+    assert ("p1/fast", "succeeded") in rows
+    assert ("p1/fast", "failed") in rows
+    assert rows[("p1/fast", "succeeded")]["p50_ttft_ms"] == 300.0
+    assert rows[("p1/fast", "failed")]["p50_ttft_ms"] == 1400.0
+    # A model that was never asked has no latency, so it is not a row here at
+    # all -- the modal's timeline is where a skipped attempt is accounted for.
+    assert ("p1/benched", "skipped") not in rows
+
+
+def test_latency_endpoint_counts_measured_attempts_beside_all_of_them(
+    client, latency_store
+) -> None:
+    """Without the denominator a card claims it measured what it did not."""
+
+    payload = client.get("/admin/api/requests/latency", params={"days": 0}).json()
+
+    rows = _latency_rows(payload)
+    unmeasured = rows[("p1/slow", "failed")]
+    assert unmeasured["attempts"] == 1
+    assert unmeasured["ttft_measured"] == 0
+    assert unmeasured["p50_ttft_ms"] is None
+    assert unmeasured["avg_ttft_ms"] is None
+    # Totals for the note over the panel: three measurable attempts, two of
+    # which carry a measurement.
+    assert payload["attempts"] == 3
+    assert payload["ttft_measured"] == 2
+    assert payload["p50_source"] == "exact"
+    assert payload["models"] == 2
+
+
+def test_latency_endpoint_windows_and_answers_a_disabled_log(
+    client, latency_store, tmp_path
+) -> None:
+    """The window is the question; a `since` in the future empties it."""
+
+    future = client.get(
+        "/admin/api/requests/latency", params={"since": time.time() + 3600}
+    ).json()
+
+    assert future["enabled"] is True
+    assert future["rows"] == []
+    assert future["ttft_measured"] == 0
+    # The default window is the one the Models page measures reasoning over,
+    # so the chip and the badge beside it cannot describe different weeks.
+    default = client.get("/admin/api/requests/latency").json()
+    assert default["window_since"] is not None
+    assert default["attempts"] == 3
+
+
+def test_latency_endpoint_is_not_swallowed_by_the_detail_route(
+    client, latency_store
+) -> None:
+    """FastAPI matches in declaration order; "latency" is not a request id."""
+
+    response = client.get("/admin/api/requests/latency")
+    assert response.status_code == 200
+    assert "rows" in response.json()

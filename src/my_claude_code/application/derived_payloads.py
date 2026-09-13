@@ -200,3 +200,25 @@ def cost_breakdown_entry_name(**filters: Any) -> str | None:
         if value is not None:
             return None
     return _CACHED_LOCAL_VALUES[local]
+
+
+#: The two per-model latency windows kept on disk, by the ``since`` the route
+#: resolved: the Models page's measurement window, and the Analytics view's
+#: own default of all time. Any other window a reader picks by hand is
+#: answered live -- the same rule the cost breakdown follows, and for the same
+#: reason: one stored document per window a reader visits once would fill the
+#: config directory with answers nobody asks for twice.
+LATENCY_DEFAULT_ENTRY = "latency-by-model"
+LATENCY_ALL_TIME_ENTRY = "latency-by-model-all"
+
+
+def latency_by_model_cache_key(store: RequestLogStore, *, since: float | None) -> str:
+    """The key for one per-model latency window.
+
+    The window is part of the key because it is the question, and the log's
+    data mark is the rest of it: a new attempt row changes the answer, and
+    ``data_mark`` changes with it.
+    """
+
+    window = "" if since is None else str(int(since))
+    return "|".join([store.data_mark(), f"since={window}"])

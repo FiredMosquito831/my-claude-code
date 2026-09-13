@@ -3459,7 +3459,15 @@ Two more things worth knowing:
 - **Reasoning does not count as a first token.** A model that thinks for 40 s and then answers in 200 ms has an attempt TTFT of 200 ms and a separate **first reasoning** time of ~0 ms. One number cannot say both, and folding them together makes every reasoning model read as either instant or catastrophic.
 - **Nothing is backfilled.** Every request logged before 7.4.0 shows `—` in the two new columns and always will: the log never recorded when each attempt's own stream began, so there is nothing to recover. A dash is "not measured"; it is never zero.
 
-**Winner TTFT (ms)** is also a column in the request export.
+From **7.5.0** those numbers are on the pages rather than only in the database:
+
+- **The Requests row** shows the *winner's* TTFT, with a `+N s` suffix when the chain lost time to models that did not answer — `300 ms +4.4 s` reads "the model that answered took 300 ms; you waited 4.7 s". The suffix appears only when the gap is more than 250 ms, because the winner's own clock starts a frame after the request's. Both numbers spelled out are in the cell's tooltip. A row logged before 7.4.0 shows what it always showed, and says so on hover.
+- **The request dialog** lists `TTFT (winner)`, `TTFT (incl. fallbacks)` and — only when there is one — `Lost to fallbacks`. **Output rate** is now measured on the answering attempt's own clock, so both halves of the rate come from the same model. The old form took the request's TTFT out of the request's duration, which on a fallback request removed the predecessors' stall from the denominator and reported a rate that was too high — the worse the fallback, the better it looked. (Rows logged before 7.4.0 have no attempt clock and still use the request's, with the winner's TTFT where there is one.)
+- **Route attempts** carries a line per attempt: TTFT · first reasoning · generating · tokens out · tok/s · what ended it. A model that was never asked keeps its row with dashes in every latency cell and its bench reason underneath — "the fallback was never tried" stays visible.
+- **Model latency** on the Analytics page groups every route attempt by model *and outcome*, because "quick when it works and a minute when it does not" is one model and two facts. Each row carries `p50 TTFT` with the p95 in its tooltip, how many of its attempts were actually measured, and a rate that is refused unless every attempt in the group carries a measurement. The panel is not narrowed by the filters above it — an attempt belongs to a model, and a failed one has no request row to filter on — and it says so.
+- **The Models page** grows a `p50 TTFT` chip per model, over the same window as the reasoning chip beside it. A model that served no measured attempt gets no chip at all rather than a zeroed one.
+
+**Winner TTFT (ms)** and **Lost to fallbacks (ms)** are both columns in the request export. The second is empty, never zero, on any row where either input was never measured.
 
 Every row's dialog also shows the full request and response, the resolved configuration, and timing. It's usually the fastest way to see what actually happened.
 

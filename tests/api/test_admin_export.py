@@ -647,7 +647,12 @@ class TestLadderColumns:
         assert export_engine.request_detail_columns(["ladder"]) == (
             export_engine.request_detail_columns([])
         )
+        # ``ttft_lost_to_fallbacks_ms`` leads because it is derived on every
+        # export rather than gated by a field: both its inputs are always
+        # present columns, and a TTFT exported without it is the
+        # misattributed number with nothing to say so.
         assert export_engine.request_detail_derived_columns(["ladder"]) == [
+            "ttft_lost_to_fallbacks_ms",
             "ladder_tries",
             "ladder_statuses",
             "ladder_root_cause",
@@ -897,3 +902,99 @@ class TestCostExport:
         assert row["cost_usd"] is None, "not 0.0 -- nobody priced these"
         assert row["cost_priced"] == 0
         assert row["cost_requests"] == 1
+
+
+class TestFallbackLossColumn:
+    """The export's two TTFT numbers, and the difference between them.
+
+    A reader who exports ``TTFT (ms)`` alone gets the client-facing figure,
+    which on a request that fell back belongs mostly to models that did not
+    answer. The winner's own time ships beside it, and this column is what
+    makes the gap visible without arithmetic in a spreadsheet.
+    """
+
+    @pytest.fixture
+    def fallback_store(self, tmp_path):
+        store = get_request_log_store(tmp_path / "requests.db")
+        assert store is not None
+        base = time.time() - 100
+        store.enqueue(
+            RequestRecord(
+                id="fell-back",
+                endpoint="/v1/messages",
+                protocol="anthropic",
+                provider="p1",
+                resolved_model="m1",
+                ts_epoch=base,
+                status="success",
+                duration_ms=2100.0,
+                ttft_ms=4712.0,
+                ttft_winner_ms=300.0,
+                attempts=(
+                    RouteAttempt(
+                        attempt=0,
+                        provider="p1",
+                        model_ref="p1/slow",
+                        outcome=RouteAttemptOutcome.FAILED,
+                    ),
+                    RouteAttempt(
+                        attempt=1,
+                        provider="p1",
+                        model_ref="p1/fast",
+                        outcome=RouteAttemptOutcome.SUCCEEDED,
+                        ttft_ms=300.0,
+                    ),
+                ),
+            )
+        )
+        # Written before 7.4.0: one TTFT, no winner, and nothing to subtract.
+        store.enqueue(
+            RequestRecord(
+                id="legacy",
+                endpoint="/v1/messages",
+                protocol="anthropic",
+                provider="p1",
+                resolved_model="m1",
+                ts_epoch=base + 1,
+                status="success",
+                duration_ms=900.0,
+                ttft_ms=410.0,
+            )
+        )
+        store.close()
+        yield store
+
+    def test_export_carries_winner_ttft_and_fallback_loss(
+        self, client, fallback_store
+    ) -> None:
+        rows = {
+            row["id"]: row
+            for row in _export(client, format="json", scope="requests").json()
+        }
+
+        assert rows["fell-back"]["ttft_ms"] == 4712.0
+        assert rows["fell-back"]["ttft_winner_ms"] == 300.0
+        assert rows["fell-back"]["ttft_lost_to_fallbacks_ms"] == 4412.0
+        # Empty, never zero: "lost nothing" and "cannot say" are different
+        # claims, and every row written before 7.4.0 is the second one.
+        assert rows["legacy"]["ttft_winner_ms"] is None
+        assert rows["legacy"]["ttft_lost_to_fallbacks_ms"] is None
+
+    def test_the_column_is_labelled_in_every_tabular_format(
+        self, client, fallback_store
+    ) -> None:
+        response = _export(client, format="csv", scope="requests")
+        headers = next(csv.reader(io.StringIO(response.content.decode("utf-8-sig"))))
+
+        assert "Winner TTFT (ms)" in headers
+        assert "Lost to fallbacks (ms)" in headers
+
+    def test_the_column_honours_the_scope_filters(self, client, fallback_store) -> None:
+        """It rides on the request row, so a filtered export still carries it."""
+
+        rows = _export(
+            client, format="json", scope="requests", status="success", local="all"
+        ).json()
+
+        assert len(rows) == 2
+        assert all("ttft_lost_to_fallbacks_ms" in row for row in rows)
