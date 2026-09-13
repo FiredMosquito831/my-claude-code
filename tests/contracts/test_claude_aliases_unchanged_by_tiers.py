@@ -1,9 +1,9 @@
 """Claude Code must not notice that the coding-agent tiers exist.
 
 It is the one harness with no generated catalogue: it self-discovers through
-``/v1/models`` and speaks the eight ``claude-*`` protocol names. Those names,
+``/v1/models`` and speaks the ``claude-*`` protocol names. Those names,
 what they resolve to, and the probe auto-response that echoes a resolved model
-back are all pinned here, because "we added five aliases and Claude Code started
+back are all pinned here, because "we added aliases and Claude Code started
 answering differently" is the failure this feature could most easily cause and
 least easily be blamed for.
 """
@@ -49,7 +49,14 @@ def test_claude_aliases_are_unchanged_by_the_harness_tiers() -> None:
     """
 
     tiers = HarnessTiers(
-        harnesses={"opencode": {"best": HarnessTierOverride(model=OVERRIDE)}}
+        harnesses={
+            "opencode": {
+                "best": HarnessTierOverride(model=OVERRIDE),
+                # 7.2.0: a ``cyber`` override loaded is the case where a leak
+                # from the new tier into the four existing aliases would show.
+                "cyber": HarnessTierOverride(model=OVERRIDE),
+            }
+        }
     )
     router = ModelRouter(_settings(), harness_tiers=lambda: tiers)
 
@@ -72,7 +79,7 @@ def test_claude_aliases_are_unchanged_by_the_harness_tiers() -> None:
         )
 
 
-def test_the_eight_claude_protocol_names_are_still_listed_verbatim() -> None:
+def test_the_claude_protocol_names_are_still_listed_verbatim() -> None:
     """Claude Code cannot name a model that is not in this list."""
 
     settings = _settings()
@@ -83,6 +90,29 @@ def test_the_eight_claude_protocol_names_are_still_listed_verbatim() -> None:
     for model in SUPPORTED_CLAUDE_MODELS:
         assert model.id in ids
     assert not any(is_tier_ref(model.id) for model in SUPPORTED_CLAUDE_MODELS)
+    # 7.2.0, Q6: the names MCC tells an operator to configure for the Mythos
+    # route are names MCC also advertises, so a harness that self-discovers
+    # through /v1/models can reach the rail the dashboard shows it.
+    assert {"claude-mythos-5.1", "claude-mythos-5"} <= ids
+
+
+def test_a_mythos_name_reaches_the_mythos_route_and_moves_nothing_else() -> None:
+    """The one behaviour change 7.2.0 makes to a self-discovering harness.
+
+    ``/model mythos`` in a Claude Code session used to land on ``MODEL``,
+    because no route keyword matched. It now lands on ``MODEL_MYTHOS`` -- and
+    the four older aliases answer exactly what they answered before.
+    """
+
+    mythos = "groq/mythos"
+    router = ModelRouter(_settings(MODEL_MYTHOS=mythos), harness_tiers=HarnessTiers)
+
+    for name in ("claude-mythos-5.1", "claude-mythos-5", "mythos"):
+        assert router.resolve(name).provider_model_ref == mythos
+    assert router.resolve("claude-fable-5").provider_model_ref == PRIMARY
+    assert router.resolve("claude-opus-5").provider_model_ref == OPUS
+    assert router.resolve("claude-sonnet-5").provider_model_ref == SONNET
+    assert router.resolve("claude-haiku-4-5-20251001").provider_model_ref == HAIKU
 
 
 def test_the_probe_auto_response_echoes_the_resolved_model_for_a_tier_too() -> None:

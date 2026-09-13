@@ -314,9 +314,9 @@ def build_state(
             description=(
                 "Pick which provider/model handles requests by default. "
                 "Per-tier overrides are optional and can be set later: the "
-                "Claude aliases (Opus, Sonnet, Haiku, Fable) for Claude Code, "
-                "and mcc/best, good, medium, cheap and vision for every other "
-                "coding agent."
+                "Claude aliases (Opus, Sonnet, Haiku, Fable, Mythos) for "
+                "Claude Code, and mcc/cyber, best, good, medium, cheap and "
+                "vision for every other coding agent."
             ),
             view="model_config",
             optional=False,
@@ -370,7 +370,8 @@ def build_state(
                 "real diff of your real file first, backs the file up once, "
                 "and Undo takes it back out.",
                 "Agents other than Claude Code pick models by tier, as "
-                "mcc/best, mcc/good, mcc/medium, mcc/cheap and mcc/vision.",
+                "mcc/cyber, mcc/best, mcc/good, mcc/medium, mcc/cheap and "
+                "mcc/vision.",
             ),
             target="#codingAgentsList",
             guide_anchors=("guide-cli", "guide-desktop-apps"),

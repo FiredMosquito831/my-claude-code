@@ -50,7 +50,12 @@ from my_claude_code.core.gateway_model_ids import (
     no_thinking_gateway_model_id,
 )
 from my_claude_code.core.model_visibility import ModelVisibility
-from my_claude_code.core.tier_refs import TIER_LABELS, TIER_ORDER, tier_ref
+from my_claude_code.core.tier_refs import (
+    DEFAULT_TIER,
+    TIER_LABELS,
+    TIER_ORDER,
+    tier_ref,
+)
 
 #: Request parameters whose presence in a gateway's published
 #: ``supported_parameters`` list means the model accepts tool calls. Derived,
@@ -222,7 +227,8 @@ def build_catalogue_models(
         return tuple(models)
     # Aliases first. Ordering is the only discoverability lever this layer has:
     # it puts the tiers at the top of OpenCode's and Qwen's pickers and gives
-    # them priority 0-4 in Codex. And Best carries ``is_primary_route``, so
+    # them priority 0-5 in Codex. And Best carries ``is_primary_route`` -- the
+    # DEFAULT_TIER, not whichever tier happens to lead TIER_ORDER -- so
     # ``select_starting_index`` -- unchanged -- seeds Cline's session model and
     # Crush's ``models.large`` on ``mcc/best``, which means those two open on
     # the route rather than on a ref that is frozen into their config file.
@@ -338,7 +344,12 @@ def _tier_alias_models(
                 provider_model_ref=tier_ref(tier),
                 display_name=f"{TIER_LABELS[tier]} ({primary_ref})",
                 force_no_thinking=False,
-                is_primary_route=tier is TIER_ORDER[0],
+                # DEFAULT_TIER, not TIER_ORDER[0]: the order the tiers are
+                # listed in is a display fact, and reading the first of them as
+                # "the default" meant that putting a new tier at the top of the
+                # picker would silently re-point all thirteen generated
+                # catalogues at a route nobody has configured.
+                is_primary_route=tier is DEFAULT_TIER,
             )
         )
     return tuple(aliases)

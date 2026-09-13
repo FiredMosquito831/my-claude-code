@@ -60,6 +60,12 @@ from .reasoning_gating import adapt_reasoning_policy
 from .tier_chains import TierChain, resolve_tier_chain
 
 _ROUTE_SETTINGS = (
+    # ``mythos`` and not ``cyber``: the alias is ``mcc/cyber``, but this table
+    # is a SUBSTRING match over the requested model name, and a keyword
+    # ``cyber`` would drag every model id containing those five letters onto
+    # this rail. ``mcc/cyber`` never comes through here -- it is parsed by
+    # ``parse_tier_ref``, which matches the tier segment exactly.
+    ("mythos", "model_mythos", "reasoning_mythos", "model_mythos_fallbacks"),
     ("fable", "model_fable", "reasoning_fable", "model_fable_fallbacks"),
     ("opus", "model_opus", "reasoning_opus", "model_opus_fallbacks"),
     ("haiku", "model_haiku", "reasoning_haiku", "model_haiku_fallbacks"),
@@ -71,6 +77,7 @@ _ROUTE_SETTINGS = (
 # on Opus keeps serving Sonnet -- so the plan carries the answer for the route
 # it was built from rather than the executor guessing from a model ref.
 _PAUSE_SETTINGS: dict[str, tuple[str, str]] = {
+    "mythos": ("model_mythos_paused", "MODEL_MYTHOS_PAUSED"),
     "fable": ("model_fable_paused", "MODEL_FABLE_PAUSED"),
     "opus": ("model_opus_paused", "MODEL_OPUS_PAUSED"),
     "haiku": ("model_haiku_paused", "MODEL_HAIKU_PAUSED"),
@@ -869,12 +876,12 @@ class ModelRouter:
     #: because it is the declared small/cheap model; the provider's ``/models``
     #: catalogue is never consulted, because that is where hidden models and
     #: paid-tier surprises live.
-    _PROBE_ROUTE_ORDER = ("haiku", "sonnet", "default", "fable", "opus")
+    _PROBE_ROUTE_ORDER = ("haiku", "sonnet", "default", "fable", "opus", "mythos")
 
     def _probe_candidates(self) -> dict[str, ResolvedModel]:
         """One configured model per provider, for the diagnostic probe.
 
-        Every entry comes from a route the operator wrote down -- the five
+        Every entry comes from a route the operator wrote down -- the six
         model settings and their fallback lists -- resolved through the same
         ``resolve_chain`` the request itself uses. The first model that lands
         on a provider wins; a provider named by no route gets no entry at all,

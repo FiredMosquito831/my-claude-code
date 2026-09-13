@@ -209,7 +209,14 @@ MODEL_VISIBILITY_DENY_DEFAULT = ""
 # tier never points at another tier, and the provider registry, which reserves
 # the namespace so a custom provider cannot shadow every alias.
 TIER_NAMESPACE = "mcc"
-MODEL_TIER_NAMES: tuple[str, ...] = ("best", "good", "medium", "cheap", "vision")
+MODEL_TIER_NAMES: tuple[str, ...] = (
+    "cyber",
+    "best",
+    "good",
+    "medium",
+    "cheap",
+    "vision",
+)
 
 # Mirrors core.failures.FailureKind. `config` is a leaf package by declared
 # policy -- it imports nothing, not even core -- so the names are repeated

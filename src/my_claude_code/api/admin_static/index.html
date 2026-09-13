@@ -1914,16 +1914,24 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
 
                 <h3 id="guide-models">Map model tiers</h3>
                 <p>
-                  Routing is by <strong>tier</strong>: Fable, Opus, Sonnet, Haiku and a
+                  Routing is by <strong>tier</strong>: Mythos, Fable, Opus, Sonnet, Haiku
+                  and a
                   fallback each map to a real model on your provider. That is what lets an
                   unmodified agent run on any backend. Each rail heading also carries the
                   id every <em>other</em> coding agent asks for to reach it &mdash;
+                  Mythos <code>(mcc/cyber)</code>,
                   Fable <code>(mcc/best)</code>, Opus <code>(mcc/good)</code>, Sonnet
                   <code>(mcc/medium)</code>, Haiku <code>(mcc/cheap)</code> and the Vision
                   adapter <code>(mcc/vision)</code>. The Default rail carries none, because
                   it is not a tier: it is the route every <em>unset</em> rail falls back
                   to, including Fable's. Before 6.51.0 <code>mcc/best</code> named the
                   Default rail; if you never filled Fable in, it still lands there.
+                  Mythos is new in 7.2.0 and ships unset, so
+                  <code>claude-mythos-5.1</code> and <code>mcc/cyber</code> follow
+                  <code>MODEL</code> until you fill the rail in &mdash; which is exactly
+                  where they went before 7.2.0, silently and with no rail to say so.
+                  Mythos leads the list but is never the default: apps that are told a
+                  default model are still told <code>mcc/best</code>.
                 </p>
                 <img class="guide-shot" src="/admin/img/admin-model-config.png"
                      alt="Model Config: tier mapping, fallback chains and reasoning controls"
@@ -1944,8 +1952,9 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <code>claude-sonnet-5</code> and gets whatever you mapped Sonnet to.
                   Every other agent had to name a real <code>provider/model</code> ref, so
                   a model id typed into its config a month ago is still that id today
-                  however many times you moved the route it should have followed. Five
+                  however many times you moved the route it should have followed. Six
                   names now sit at the top of every generated picker &mdash;
+                  <code>mcc/cyber</code> (Mythos),
                   <code>mcc/best</code> (Fable), <code>mcc/good</code>
                   (Opus), <code>mcc/medium</code> (Sonnet), <code>mcc/cheap</code>
                   (Haiku) and <code>mcc/vision</code> &mdash; each carrying that route's
@@ -2243,7 +2252,8 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                     <tr><th>Alias</th><th>Points at</th></tr>
                   </thead>
                   <tbody>
-                    <tr><td><code>mcc/best</code></td><td><code>MODEL_FABLE</code> &mdash; the Fable route, the strongest rung</td></tr>
+                    <tr><td><code>mcc/cyber</code></td><td><code>MODEL_MYTHOS</code> &mdash; the Mythos route, listed first, never the default</td></tr>
+                    <tr><td><code>mcc/best</code></td><td><code>MODEL_FABLE</code> &mdash; the Fable route, and the alias apps are given as their default model</td></tr>
                     <tr><td><code>mcc/good</code></td><td><code>MODEL_OPUS</code></td></tr>
                     <tr><td><code>mcc/medium</code></td><td><code>MODEL_SONNET</code></td></tr>
                     <tr><td><code>mcc/cheap</code></td><td><code>MODEL_HAIKU</code></td></tr>

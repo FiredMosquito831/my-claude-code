@@ -1174,6 +1174,7 @@ const ROUTE_TIERS = [
     chainKey: "MODEL_FALLBACKS",
     note: "Used by any tier without a route of its own.",
   },
+  { id: "mythos", label: "Mythos", modelKey: "MODEL_MYTHOS", chainKey: "MODEL_MYTHOS_FALLBACKS" },
   { id: "fable", label: "Fable", modelKey: "MODEL_FABLE", chainKey: "MODEL_FABLE_FALLBACKS" },
   { id: "opus", label: "Opus", modelKey: "MODEL_OPUS", chainKey: "MODEL_OPUS_FALLBACKS" },
   { id: "sonnet", label: "Sonnet", modelKey: "MODEL_SONNET", chainKey: "MODEL_SONNET_FALLBACKS" },
@@ -1202,6 +1203,7 @@ const ROUTE_TIERS = [
 // paused on Opus keeps serving Sonnet.
 const ROUTE_PAUSE_KEY = new Map([
   ["MODEL", "MODEL_PAUSED"],
+  ["MODEL_MYTHOS", "MODEL_MYTHOS_PAUSED"],
   ["MODEL_FABLE", "MODEL_FABLE_PAUSED"],
   ["MODEL_OPUS", "MODEL_OPUS_PAUSED"],
   ["MODEL_SONNET", "MODEL_SONNET_PAUSED"],
@@ -1217,7 +1219,7 @@ const ROUTE_PAUSE_KEY = new Map([
  * Codex or OpenCode session has to ask for to reach it.
  *
  * The map comes from the config payload, which reads `core/tier_refs.py`. It
- * is deliberately not a table in this file: a second list of five aliases is a
+ * is deliberately not a table in this file: a second list of the aliases is a
  * second source of truth, and the first thing it would do is disagree. A route
  * with no entry -- MODEL_FABLE, which is a Claude alias rather than a tier --
  * gets no suffix rather than a guessed one.

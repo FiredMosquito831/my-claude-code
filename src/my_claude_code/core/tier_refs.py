@@ -1,4 +1,4 @@
-"""The five tier names every coding agent's picker lists, in one place.
+"""The six tier names every coding agent's picker lists, in one place.
 
 Claude Code has never had to name a model. It asks for ``claude-sonnet-5`` and
 MCC maps that onto whatever ``MODEL_SONNET`` points at, so the operator moves a
@@ -10,6 +10,7 @@ logged requests, the number of non-Claude-Code requests naming an alias is zero.
 These are the alias names that close that gap:
 
 ===============  ==========================================================
+``mcc/cyber``    ``MODEL_MYTHOS``
 ``mcc/best``     ``MODEL_FABLE``
 ``mcc/good``     ``MODEL_OPUS``
 ``mcc/medium``   ``MODEL_SONNET``
@@ -50,6 +51,7 @@ TIER_NAMESPACE = "mcc"
 class ModelTier(StrEnum):
     """One tier name, as it appears on the wire after ``mcc/``."""
 
+    CYBER = "cyber"
     BEST = "best"
     GOOD = "good"
     MEDIUM = "medium"
@@ -58,8 +60,17 @@ class ModelTier(StrEnum):
 
 
 #: Picker order: strongest first, with vision at the end because it is a
-#: capability reservation rather than a rung on the same ladder.
+#: capability reservation rather than a rung on the same ladder. Cyber leads
+#: because Mythos is the tier above Fable in Anthropic's own family list.
+#:
+#: Ordering is a *display* fact. Which alias an app is told to default to is a
+#: *routing* fact, and the two were the same line of code by accident until
+#: 7.2.0: ``TIER_ORDER[0]`` was read as "the default" in two places, so moving a
+#: tier to the front of the picker would have silently re-pointed thirteen
+#: generated harness catalogues -- and some apps' written default model -- at a
+#: route nobody has set. :data:`DEFAULT_TIER` is that second fact, stated once.
 TIER_ORDER: tuple[ModelTier, ...] = (
+    ModelTier.CYBER,
     ModelTier.BEST,
     ModelTier.GOOD,
     ModelTier.MEDIUM,
@@ -67,8 +78,22 @@ TIER_ORDER: tuple[ModelTier, ...] = (
     ModelTier.VISION,
 )
 
+#: The tier every "the default" reader means: the catalogue entry marked
+#: ``is_primary_route``, and the model id Configure writes where an app's
+#: default model has to be named. It is ``BEST`` -- the Fable route, the rung
+#: an operator puts their strongest *configured* model on -- and it stays
+#: ``BEST`` regardless of what leads :data:`TIER_ORDER`.
+DEFAULT_TIER: ModelTier = ModelTier.BEST
+
 #: What a human calls each tier, in a picker and on the dashboard.
+#:
+#: Cyber's label is "Mythos", not "Cyber": the setting behind it is
+#: ``MODEL_MYTHOS`` and every other rail's label is its route's name, so a rail
+#: called "Cyber" would be the one place the page and the ``.env`` disagree.
+#: The alias chip beside the heading renders the wire name, so the rail reads
+#: ``Mythos (mcc/cyber)`` and neither half has to be memorised.
 TIER_LABELS: dict[ModelTier, str] = {
+    ModelTier.CYBER: "Mythos",
     ModelTier.BEST: "Best",
     ModelTier.GOOD: "Good",
     ModelTier.MEDIUM: "Medium",
@@ -118,15 +143,25 @@ class GlobalTierSettings:
 
 #: Which global route each tier points at.
 #:
-#: ``mcc/best`` names ``MODEL_FABLE``. The five tiers are one ladder and the top
-#: rung has to be the route an operator puts their strongest model on -- which
-#: is the Fable route, the one Claude Code's own ``claude-fable-*`` already
-#: reaches. ``MODEL`` is not a rung: it is the *default*, the thing every unset
+#: ``mcc/best`` names ``MODEL_FABLE``, and ``mcc/cyber`` names ``MODEL_MYTHOS``.
+#: The tiers are one ladder whose rungs are the routes an operator actually
+#: fills in -- the Fable route, the one Claude Code's own ``claude-fable-*``
+#: already reaches, and above it the Mythos route reached by ``claude-mythos-*``
+#: (7.2.0; before that, a mythos request matched no route keyword at all and was
+#: served silently by ``MODEL``).
+#: ``MODEL`` is not a rung: it is the *default*, the thing every unset
 #: route falls back to, and naming it "Best" made the ladder's top step and its
 #: floor the same setting. An install that never sets ``MODEL_FABLE`` sees no
 #: change at all -- the collapse in ``application/tier_chains`` sends
 #: ``mcc/best`` down ``MODEL``'s chain, exactly as it always did.
 GLOBAL_TIER_SETTINGS: dict[ModelTier, GlobalTierSettings] = {
+    ModelTier.CYBER: GlobalTierSettings(
+        model_attr="model_mythos",
+        fallbacks_attr="model_mythos_fallbacks",
+        paused_attr="model_mythos_paused",
+        env_var="MODEL_MYTHOS",
+        route_label="Mythos",
+    ),
     ModelTier.BEST: GlobalTierSettings(
         model_attr="model_fable",
         fallbacks_attr="model_fable_fallbacks",
@@ -165,13 +200,14 @@ GLOBAL_TIER_SETTINGS: dict[ModelTier, GlobalTierSettings] = {
 }
 
 #: Which per-route reasoning setting a tier inherits, where one exists. Vision
-#: has none -- ``settings.py`` defines exactly four ``REASONING_*`` route
+#: has none -- ``settings.py`` defines exactly five ``REASONING_*`` route
 #: overrides and none of them is the adapter's -- so it falls through to the
 #: global reasoning policy. Best inherits ``REASONING_FABLE``, because it is
 #: the Fable route: a tier that routed through a setting but ignored that
 #: setting's reasoning override would be two different answers to "where does
 #: mcc/best go".
 TIER_REASONING_SETTINGS: dict[ModelTier, str] = {
+    ModelTier.CYBER: "reasoning_mythos",
     ModelTier.BEST: "reasoning_fable",
     ModelTier.GOOD: "reasoning_opus",
     ModelTier.MEDIUM: "reasoning_sonnet",
@@ -194,13 +230,23 @@ TIER_REASONING_SETTINGS: dict[ModelTier, str] = {
 #:
 #: The mapping is the ladder's own, not an invention: ``mcc/good`` *is* the
 #: Opus route and ``mcc/medium`` the Sonnet route, so each alias is advertised
-#: as the family whose route it names. ``mcc/best`` is the Fable route, which
-#: is the strongest rung, and is advertised as ``opus`` and marked default
-#: because the two documented tier names do not include a stronger one. Vision
-#: is a capability reservation rather than a rung and rides on ``sonnet``.
+#: as the family whose route it names. ``mcc/best`` is the Fable route and is
+#: advertised as ``fable``; ``mcc/cyber`` is the Mythos route and is advertised
+#: as ``mythos``. Vision is a capability reservation rather than a rung and
+#: rides on ``sonnet``, un-defaulted.
+#:
+#: Until 7.2.0 ``mcc/best`` claimed ``opus`` with a comment saying "the two
+#: documented tier names do not include a stronger one". That was stale:
+#: Claude Desktop 1.52386.0.0 carries ``["sonnet","opus","haiku","fable",
+#: "mythos"]`` as a closed enum for ``anthropicFamilyTier`` and pins one
+#: ``ANTHROPIC_DEFAULT_<TIER>_MODEL`` per tier from the entry flagged
+#: ``isFamilyDefault``. Two entries claiming ``opus`` made the app warn and
+#: pick one of them arbitrarily, while ``fable`` and ``mythos`` -- both valid
+#: all along -- went unused. One tier per family, one default each.
 TIER_FAMILY_TIERS: dict[ModelTier, tuple[str, bool]] = {
-    ModelTier.BEST: ("opus", True),
-    ModelTier.GOOD: ("opus", False),
+    ModelTier.CYBER: ("mythos", True),
+    ModelTier.BEST: ("fable", True),
+    ModelTier.GOOD: ("opus", True),
     ModelTier.MEDIUM: ("sonnet", True),
     ModelTier.CHEAP: ("haiku", True),
     ModelTier.VISION: ("sonnet", False),
@@ -269,12 +315,13 @@ def parse_tier_ref(model_name: str | None) -> ModelTier | None:
 
 
 def is_tier_ref(model_name: str | None) -> bool:
-    """Whether a model name is one of the five tier aliases."""
+    """Whether a model name is one of the tier aliases."""
 
     return parse_tier_ref(model_name) is not None
 
 
 __all__ = [
+    "DEFAULT_TIER",
     "GLOBAL_TIER_SETTINGS",
     "TIER_FAMILY_TIERS",
     "TIER_LABELS",

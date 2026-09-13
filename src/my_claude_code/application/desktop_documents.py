@@ -53,6 +53,7 @@ from my_claude_code.config.harness_attribution import with_harness_id
 from my_claude_code.config.harness_base_url import root_base_url, v1_base_url
 from my_claude_code.config.harnesses import MCC_HARNESS_ID_SENTINEL
 from my_claude_code.core.client_fingerprint import HARNESS_HEADER
+from my_claude_code.core.tier_refs import DEFAULT_TIER, tier_ref
 
 #: The model id Configure writes where an app's default model has to be named.
 #: Only Codex takes it by necessity -- with a custom ``model_provider`` its
@@ -60,7 +61,12 @@ from my_claude_code.core.client_fingerprint import HARNESS_HEADER
 #: one would leave a provider the user cannot select. Everywhere else it is
 #: opt-in, because the default model is a preference MCC has no business
 #: overwriting and is the value most likely to already hold something.
-DEFAULT_MODEL_ID = "mcc/best"
+#:
+#: It is :data:`~my_claude_code.core.tier_refs.DEFAULT_TIER`'s alias rather
+#: than the first tier in the picker order, so that adding a tier above Fable
+#: cannot silently change what Configure writes into another application's
+#: settings file.
+DEFAULT_MODEL_ID = tier_ref(DEFAULT_TIER)
 
 #: The placeholder a ``DesktopSidecar.fields`` value uses to say "the model
 #: list goes here". Unlike ``{base_url}`` and ``{token}`` it is never

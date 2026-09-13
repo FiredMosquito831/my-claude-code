@@ -1,4 +1,4 @@
-"""The five coding-agent tier aliases, and how they resolve.
+"""The coding-agent tier aliases, and how they resolve.
 
 Every test here answers one question an operator can ask out loud: "if OpenCode
 picks Best, what actually serves it, and would Claude Code have got the same
@@ -19,6 +19,7 @@ from my_claude_code.config.harness_tiers import HarnessTierOverride, HarnessTier
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import Message, MessagesRequest
 from my_claude_code.core.tier_refs import (
+    DEFAULT_TIER,
     TIER_ORDER,
     ModelTier,
     parse_tier_ref,
@@ -27,6 +28,8 @@ from my_claude_code.core.tier_refs import (
 
 PRIMARY = "nvidia_nim/primary"
 PRIMARY_FALLBACK = "open_router/primary-fallback"
+MYTHOS = "groq/mythos"
+MYTHOS_FALLBACK = "groq/mythos-fallback"
 OPUS = "open_router/opus"
 SONNET = "open_router/sonnet"
 HAIKU = "open_router/haiku"
@@ -464,6 +467,7 @@ def test_the_request_log_row_names_the_alias_and_the_ref_it_served() -> None:
 @pytest.mark.parametrize(
     ("tier", "reasoning_key", "expected"),
     [
+        ("mcc/cyber", "REASONING_MYTHOS", "off"),
         ("mcc/best", "REASONING_FABLE", "off"),
         ("mcc/good", "REASONING_OPUS", "off"),
         ("mcc/medium", "REASONING_SONNET", "off"),
@@ -478,3 +482,138 @@ def test_a_tier_inherits_the_reasoning_of_the_route_it_names(
     router = _router(_settings(**{reasoning_key: expected}))
 
     assert router.resolve(tier).reasoning_preference.value == expected
+
+
+# --------------------------------------------------------------------------
+# Mythos (mcc/cyber), added 7.2.0. One more rail of exactly the same kind.
+# --------------------------------------------------------------------------
+
+MYTHOS_NAMES = ("claude-mythos-5.1", "claude-mythos-5", "mythos", "mcc/cyber")
+
+
+@pytest.mark.parametrize("name", MYTHOS_NAMES)
+def test_every_mythos_name_reaches_the_mythos_route_when_it_is_set(
+    name: str,
+) -> None:
+    """The keyword, both listed ids, and the alias are one route.
+
+    Before 7.2.0 none of these matched a route at all: ``_matched_route`` is a
+    substring table over ``fable/opus/haiku/sonnet``, so every one of them fell
+    through to ``MODEL`` and was served silently by the default route.
+    """
+
+    router = _router(
+        _settings(MODEL_MYTHOS=MYTHOS, MODEL_MYTHOS_FALLBACKS=MYTHOS_FALLBACK)
+    )
+
+    assert _refs(router, name) == [MYTHOS, MYTHOS_FALLBACK]
+
+
+@pytest.mark.parametrize("name", MYTHOS_NAMES)
+def test_an_unset_mythos_route_collapses_onto_model_with_its_chain(
+    name: str,
+) -> None:
+    """Q1: unset means ``MODEL``, exactly like the other four tiers."""
+
+    router = _router(_settings())
+
+    assert _refs(router, name) == [PRIMARY, PRIMARY_FALLBACK]
+
+
+def test_an_unset_mythos_route_carries_the_default_routes_pause_list() -> None:
+    """Not only the primary: the pause list has to collapse too.
+
+    Otherwise a ref switched off on the default route would keep being tried
+    the moment a client asked for it under a Mythos name.
+    """
+
+    router = _router(_settings(MODEL_PAUSED=PRIMARY_FALLBACK))
+
+    plan = router.resolve_messages_plan(_request("mcc/cyber"))
+
+    assert plan.paused_env_var == "MODEL_PAUSED"
+    assert plan.paused_refs == frozenset({PRIMARY_FALLBACK})
+
+
+def test_a_set_mythos_route_carries_its_own_pause_list() -> None:
+    """Pause on Mythos behaves exactly as pause on Fable does."""
+
+    router = _router(
+        _settings(
+            MODEL_MYTHOS=MYTHOS,
+            MODEL_MYTHOS_FALLBACKS=MYTHOS_FALLBACK,
+            MODEL_MYTHOS_PAUSED=MYTHOS_FALLBACK,
+        )
+    )
+
+    plan = router.resolve_messages_plan(_request("mcc/cyber"))
+
+    assert plan.paused_env_var == "MODEL_MYTHOS_PAUSED"
+    assert plan.paused_refs == frozenset({MYTHOS_FALLBACK})
+
+
+def test_a_ref_paused_on_mythos_still_serves_fable() -> None:
+    """Pause is a property of a route, never of a model."""
+
+    router = _router(
+        _settings(
+            MODEL_MYTHOS=MYTHOS,
+            MODEL_FABLE=MYTHOS,
+            MODEL_MYTHOS_PAUSED=MYTHOS,
+        )
+    )
+
+    mythos_plan = router.resolve_messages_plan(_request("mcc/cyber"))
+    fable_plan = router.resolve_messages_plan(_request("mcc/best"))
+
+    assert mythos_plan.paused_refs == frozenset({MYTHOS})
+    assert fable_plan.paused_refs == frozenset()
+
+
+@pytest.mark.parametrize(
+    "name",
+    ("nvidia_nim/cyberdyne-t800", "open_router/cyber-agent-1", "mcc/cybernetics"),
+)
+def test_cyber_is_not_a_router_keyword(name: str) -> None:
+    """A model id merely *containing* "cyber" must not land on this rail.
+
+    ``_ROUTE_SETTINGS`` is a substring table, which is why the keyword there is
+    ``mythos`` and not ``cyber``. The alias ``mcc/cyber`` never travels through
+    that table at all -- ``parse_tier_ref`` matches the tier segment exactly --
+    so ``mcc/cybernetics`` is not a tier either.
+    """
+
+    router = _router(_settings(MODEL_MYTHOS=MYTHOS))
+
+    assert parse_tier_ref(name) is not ModelTier.CYBER
+    assert router.resolve(name).provider_model_ref != MYTHOS
+
+
+def test_a_harness_can_point_its_own_mythos_tier_somewhere_else() -> None:
+    """The per-harness pointer works on cyber as it does on every other tier."""
+
+    tiers = HarnessTiers(
+        harnesses={
+            "opencode": {
+                "cyber": HarnessTierOverride(
+                    model=OVERRIDE, fallbacks=(OVERRIDE_FALLBACK,)
+                )
+            }
+        }
+    )
+    router = _router(_settings(MODEL_MYTHOS=MYTHOS), tiers)
+
+    assert _refs(router, "mcc/cyber", "opencode") == [OVERRIDE, OVERRIDE_FALLBACK]
+    assert _refs(router, "mcc/cyber", "crush") == [MYTHOS]
+
+    overridden = router.resolve_messages_plan(_request("mcc/cyber"), harness="opencode")
+    assert overridden.tier_route is not None
+    assert overridden.tier_route.source == TIER_SOURCE_OVERRIDE
+
+
+def test_cyber_leads_the_picker_but_best_is_still_the_default_tier() -> None:
+    """Q3: ordering is a display fact, the default is a routing fact."""
+
+    assert TIER_ORDER[0] is ModelTier.CYBER
+    assert DEFAULT_TIER is ModelTier.BEST
+    assert tier_ref(DEFAULT_TIER) == "mcc/best"

@@ -504,10 +504,10 @@ written as `~/.mcc`:
 Model routing configuration is tiered:
 
 - `MODEL` is the fallback provider-prefixed model ref.
-- `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, and `MODEL_HAIKU` override Claude model tiers.
+- `MODEL_MYTHOS`, `MODEL_FABLE`, `MODEL_OPUS`, `MODEL_SONNET`, and `MODEL_HAIKU` override Claude model tiers.
 - `REASONING_POLICY` selects `off`, `client`, `low`, `medium`, `high`, `xhigh`,
   or `max` for the fallback route.
-- `REASONING_FABLE`, `REASONING_OPUS`, `REASONING_SONNET`, and
+- `REASONING_MYTHOS`, `REASONING_FABLE`, `REASONING_OPUS`, `REASONING_SONNET`, and
   `REASONING_HAIKU` accept the same values plus `inherit`.
 
 [config/reasoning.py](src/my_claude_code/config/reasoning.py) owns the typed
@@ -757,7 +757,7 @@ alias.
 
 ### Coding-Agent Tier Aliases
 
-`mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` are protocol
+`mcc/cyber`, `mcc/best`, `mcc/good`, `mcc/medium`, `mcc/cheap` and `mcc/vision` are protocol
 names for MCC's own global routes, serving harnesses that have no `claude-*`
 vocabulary of their own. They are pointers, not models: each names one of
 `MODEL`, `MODEL_OPUS`, `MODEL_SONNET`, `MODEL_HAIKU`, `MODEL_VISION` together

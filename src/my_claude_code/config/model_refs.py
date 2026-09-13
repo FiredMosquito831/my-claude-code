@@ -18,11 +18,13 @@ class ConfiguredChatModelRef:
 
 class ChatModelConfig(Protocol):
     model: str
+    model_mythos: str | None
     model_fable: str | None
     model_opus: str | None
     model_sonnet: str | None
     model_haiku: str | None
     model_fallbacks: str | None
+    model_mythos_fallbacks: str | None
     model_fable_fallbacks: str | None
     model_opus_fallbacks: str | None
     model_sonnet_fallbacks: str | None
@@ -78,6 +80,7 @@ def configured_chat_model_refs(
 
     candidates: list[tuple[str, str | None]] = [
         ("MODEL", settings.model),
+        ("MODEL_MYTHOS", settings.model_mythos),
         ("MODEL_FABLE", settings.model_fable),
         ("MODEL_OPUS", settings.model_opus),
         ("MODEL_SONNET", settings.model_sonnet),
@@ -86,6 +89,7 @@ def configured_chat_model_refs(
     ]
     chains = (
         ("MODEL_FALLBACKS", settings.model_fallbacks),
+        ("MODEL_MYTHOS_FALLBACKS", settings.model_mythos_fallbacks),
         ("MODEL_FABLE_FALLBACKS", settings.model_fable_fallbacks),
         ("MODEL_OPUS_FALLBACKS", settings.model_opus_fallbacks),
         ("MODEL_SONNET_FALLBACKS", settings.model_sonnet_fallbacks),
