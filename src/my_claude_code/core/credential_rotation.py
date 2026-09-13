@@ -38,7 +38,7 @@ from typing import Literal
 from my_claude_code.core.rate_limit import (
     DEFAULT_MODEL_BENCH_ESCALATION,
     DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
-    MAX_RATE_LIMIT_COOLDOWN_SECONDS,
+    MAX_HOST_STATED_COOLDOWN_SECONDS,
 )
 
 POLICIES: frozenset[str] = frozenset(
@@ -108,14 +108,21 @@ class RotationTuning:
 
 #: The model-provider credential pool. A 429 benches the slot for exactly the
 #: window the provider published, falling back to the operator's
-#: ``RATE_LIMIT_COOLDOWN_SECONDS`` when it published none, under the same
-#: one-hour sanity cap the rest of the stack applies to a header. The
+#: ``RATE_LIMIT_COOLDOWN_SECONDS`` when it published none. The
 #: ``cooldown_tiers``/``circuit_threshold`` defaults are inherited but
 #: unreachable: nothing in the provider path classifies a failure as generic.
+#:
+#: The cap is the *day* bound, not the hour one, because every number that
+#: reaches here has already been capped by whoever read it: a header at
+#: :data:`MAX_RATE_LIMIT_COOLDOWN_SECONDS`, a JSON reset at
+#: :data:`MAX_HOST_STATED_COOLDOWN_SECONDS`. An hour here would undo the second
+#: of those one line after it was decided, and re-create the defect it was
+#: raised for -- a model retried all day against a host that already said it
+#: would refuse until midnight.
 PROVIDER_TUNING = RotationTuning(
     rate_limit_mode="fixed",
     rate_limit_seconds=DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
-    rate_limit_max_seconds=MAX_RATE_LIMIT_COOLDOWN_SECONDS,
+    rate_limit_max_seconds=MAX_HOST_STATED_COOLDOWN_SECONDS,
     model_bench_escalation=DEFAULT_MODEL_BENCH_ESCALATION,
 )
 

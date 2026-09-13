@@ -22,7 +22,10 @@ from my_claude_code.config.settings import (
 )
 from my_claude_code.core.credential_rotation import PROVIDER_TUNING
 from my_claude_code.core.failures import FailureKind
-from my_claude_code.core.rate_limit import MAX_RATE_LIMIT_COOLDOWN_SECONDS
+from my_claude_code.core.rate_limit import (
+    MAX_HOST_STATED_COOLDOWN_SECONDS,
+    MAX_RATE_LIMIT_COOLDOWN_SECONDS,
+)
 from my_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from my_claude_code.providers.runtime.config import build_provider_config
 from my_claude_code.providers.runtime.factory import create_provider
@@ -151,14 +154,22 @@ def test_the_attempt_share_floor_reaches_the_route_policy() -> None:
     )
 
 
-def test_the_429_bench_is_capped_by_the_same_bound_a_header_is() -> None:
-    """A hostile Retry-After cannot bench a key past the one-hour sanity cap.
+def test_the_429_bench_is_capped_by_the_bound_that_admits_a_stated_reset() -> None:
+    """A hostile number cannot bench a key past a day, and no longer past an hour.
 
-    The cap lives in ``core.rate_limit`` and is applied in two places -- when a
-    header is parsed and when the pool benches a slot. Pinning the identity
-    keeps the two from drifting into disagreeing about what "too long" means.
+    Until 7.6.3 this pinned the pool's cap to the *header* bound, because a
+    header was the only place MCC read a reset from. A host that publishes its
+    reset in JSON instead -- the OpenCode free tier states the seconds to the
+    next UTC midnight -- now reaches the pool with a value already capped at
+    :data:`MAX_HOST_STATED_COOLDOWN_SECONDS` by the reader, and an hour here
+    would clamp it back one line later and re-create the defect.
+
+    The two bounds still both apply, in the place each belongs: a header is
+    capped at an hour where it is parsed, a body-stated reset at a day. The
+    pool's job is only to refuse a number that got past both.
     """
-    assert PROVIDER_TUNING.rate_limit_max_seconds == MAX_RATE_LIMIT_COOLDOWN_SECONDS
+    assert PROVIDER_TUNING.rate_limit_max_seconds == MAX_HOST_STATED_COOLDOWN_SECONDS
+    assert MAX_RATE_LIMIT_COOLDOWN_SECONDS < MAX_HOST_STATED_COOLDOWN_SECONDS
 
 
 def test_a_removed_env_key_is_ignored_rather_than_fatal() -> None:

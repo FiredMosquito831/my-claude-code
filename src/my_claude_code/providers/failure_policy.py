@@ -23,6 +23,7 @@ from my_claude_code.core.failures import (
 from my_claude_code.core.rate_limit import (
     DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS,
     MAX_RATE_LIMIT_COOLDOWN_SECONDS,
+    retry_after_from_body,
     retry_after_seconds,
 )
 from my_claude_code.providers.recovery import upstream_complaint
@@ -477,14 +478,38 @@ def retry_after_from_error(exc: BaseException) -> float | None:
     always answers with a number, so a caller cannot tell "the server told us
     7s" from "we fell back to the configured default". Everything that benches
     a credential or a route needs that distinction -- the provider's number is
-    authoritative, ours is only a stand-in -- so this returns the header value
-    alone, capped at the one-hour sanity bound a single header may request.
+    authoritative, ours is only a stand-in.
+
+    Two places a host says when, and the header is read first because it is the
+    more precise of the two. A host that says it only in JSON -- the OpenCode
+    free tier publishes ``retryAfter`` as the seconds to the next UTC midnight
+    -- was previously not heard at all, so its model was retried on the
+    60-second default for the rest of that day. A header is capped at the
+    one-hour sanity bound a single header may request; a body-stated reset at
+    :data:`MAX_HOST_STATED_COOLDOWN_SECONDS`, for the reasons recorded there.
     """
     response = getattr(exc, "response", None)
     seconds = retry_after_seconds(getattr(response, "headers", None))
-    if seconds is None:
-        return None
-    return min(seconds, MAX_RATE_LIMIT_COOLDOWN_SECONDS)
+    if seconds is not None:
+        return min(seconds, MAX_RATE_LIMIT_COOLDOWN_SECONDS)
+    return retry_after_from_body(_upstream_body_document(exc))
+
+
+def _upstream_body_document(exc: BaseException) -> object:
+    """The parsed body of an upstream refusal, in whatever form it arrived.
+
+    ``openai`` puts the decoded document on ``.body``; an ``httpx`` error
+    carries only the response, whose ``.text`` this hands on for the reader to
+    parse. Nothing here reads a *prompt*: the fields consulted are numeric and
+    named, so an echoed request cannot supply one.
+    """
+
+    body = getattr(exc, "body", None)
+    if body is not None:
+        return body
+    response = getattr(exc, "response", None)
+    text = getattr(response, "text", None)
+    return text if isinstance(text, str) else None
 
 
 def is_context_length_error(exc: BaseException) -> bool:

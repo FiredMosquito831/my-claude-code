@@ -2,10 +2,11 @@
 
 import asyncio
 import contextlib
+import json
 import re
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
@@ -169,6 +170,33 @@ RATE_LIMIT_RESET_HEADERS: tuple[str, ...] = (
 
 DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 60.0
 MAX_RATE_LIMIT_COOLDOWN_SECONDS = 3600.0
+#: The bound on a reset the host published in its *body* rather than a header.
+#:
+#: One hour is the right sanity cap for a header: ``Retry-After`` is a
+#: per-request courtesy and a value beyond an hour is almost always a bug or a
+#: hostile number. A JSON reset is a different statement. The OpenCode free
+#: tier publishes ``retryAfter`` as the seconds remaining until the next UTC
+#: midnight -- its daily allowance, computed by the vendor's own limiter as
+#: ``ceil((86_400_000 - now % 86_400_000) / 1000)`` -- so clamping it to an
+#: hour means retrying a model the host has already said will refuse for the
+#: rest of the day.
+#:
+#: Still bounded, and bounded at a day: a value read out of a response body is
+#: somebody else's number controlling MCC's scheduler, and the semantics that
+#: justify reading it never exceed one day.
+MAX_HOST_STATED_COOLDOWN_SECONDS = 86_400.0
+
+#: The body fields a host uses to say when, in JSON rather than in a header.
+#: ``retryAfter`` is the one measured -- see ``providers/openai_chat/
+#: identity_enforcement.py``, which has parsed it into a diagnostic fact since
+#: 6.69.0 without anything acting on it. The snake_case spellings are the same
+#: field under the other naming convention.
+RETRY_AFTER_BODY_FIELDS: tuple[str, ...] = (
+    "retryafter",
+    "retry_after",
+    "retryafterseconds",
+    "retry_after_seconds",
+)
 #: Distinct models that must be rate-limited on one key at the same time before
 #: the key itself is benched. Mirrors ``CREDENTIAL_MODEL_BENCH_ESCALATION`` in
 #: the config layer, which core deliberately does not import.
@@ -234,3 +262,60 @@ def retry_after_seconds(headers: object) -> float | None:
         if seconds is not None and seconds >= 0:
             return min(seconds, MAX_RATE_LIMIT_COOLDOWN_SECONDS)
     return None
+
+
+def retry_after_from_body(body: object, depth: int = 0) -> float | None:
+    """Seconds the upstream published in its JSON body, or ``None``.
+
+    The counterpart to :func:`retry_after_seconds` for hosts that answer a 429
+    with a document instead of a header. Read only after the headers, so a host
+    that sends both keeps the header's precision.
+
+    Walks the small set of envelopes error bodies actually arrive in --
+    ``{"error": {...}}``, ``{"data": {...}}``, ``{"detail": {...}}`` -- to a
+    fixed depth, and accepts a number or a numeric string. A negative, a bool,
+    or anything else is not an answer, and the caller falls back to its
+    default rather than to a value it had to guess at.
+
+    The result is capped at :data:`MAX_HOST_STATED_COOLDOWN_SECONDS`.
+    """
+
+    if depth > 3:
+        return None
+    if isinstance(body, str | bytes):
+        try:
+            return retry_after_from_body(json.loads(body), depth + 1)
+        except ValueError:
+            return None
+    if not isinstance(body, Mapping):
+        return None
+    for key, value in body.items():
+        if str(key).strip().lower() not in RETRY_AFTER_BODY_FIELDS:
+            continue
+        seconds = _positive_seconds(value)
+        if seconds is not None:
+            return min(seconds, MAX_HOST_STATED_COOLDOWN_SECONDS)
+    for key in ("error", "data", "detail"):
+        nested = retry_after_from_body(body.get(key), depth + 1)
+        if nested is not None:
+            return nested
+    return None
+
+
+def _positive_seconds(value: object) -> float | None:
+    """A non-negative number of seconds, from a number or a numeric string."""
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        seconds = float(value)
+    elif isinstance(value, str):
+        try:
+            seconds = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    if seconds != seconds or seconds < 0:  # NaN or negative
+        return None
+    return seconds
