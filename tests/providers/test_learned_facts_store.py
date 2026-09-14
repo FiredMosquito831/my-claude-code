@@ -21,6 +21,7 @@ from my_claude_code.providers.recovery import (
     RecoveryMemory,
 )
 from my_claude_code.providers.recovery.facts import (
+    DOCUMENT_VERSION,
     MAX_FACT_ROWS,
     SOURCE_REJECTION,
     utc_now_iso,
@@ -116,7 +117,7 @@ def test_stale_facts_are_loaded_but_not_applied(
     """Each evidence class has its own clock, and stale never means deleted."""
 
     document = {
-        "version": 1,
+        "version": DOCUMENT_VERSION,
         "facts": [
             {
                 "provider_id": "custom_x",
@@ -217,7 +218,7 @@ def test_unknown_fact_kind_is_dropped_with_a_log_line(tmp_path) -> None:
     path.write_text(
         json.dumps(
             {
-                "version": 1,
+                "version": DOCUMENT_VERSION,
                 "facts": [
                     {
                         "provider_id": "custom_x",

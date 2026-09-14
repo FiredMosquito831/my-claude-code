@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .facts import (
+    FACT_EFFORT_VALUE_REJECTED,
     FACT_OUTPUT_CAP,
     FACT_REASONING_FIELD_REJECTED,
     FACT_STREAM_USAGE_UNSUPPORTED,
@@ -38,6 +39,15 @@ class RecoveryMemory:
     #: The date is what the Models page shows next to "learned from the host's
     #: own rejection".
     rejected_reasoning_fields: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    #: Bare model id -> {reasoning field: {refused values}}.
+    #:
+    #: The fine-grained sibling of :attr:`rejected_reasoning_fields`. That one
+    #: says "this model has no such knob"; this says "it has the knob and not
+    #: that setting", which is the smallest thing a 400 on ``xhigh`` proves.
+    #: Until 7.12.0 only the coarse one existed, so one 400 on ``xhigh`` cost
+    #: the model every effort it *would* have accepted, for the whole TTL.
+    rejected_effort_values: dict[str, dict[str, set[str]]] = field(default_factory=dict)
 
     #: Bare model ids whose host answered ``stream_options.include_usage``
     #: with a 400. Before 6.52.0 nothing recorded this at all, so every single
@@ -93,6 +103,45 @@ class RecoveryMemory:
                 FACT_REASONING_FIELD_REJECTED, model, True, rejected_field, evidence
             )
         return not already_known
+
+    def rejected_values_for(self, model: str) -> dict[str, set[str]] | None:
+        """Return the refused values per reasoning field for a model, if any."""
+
+        return self.rejected_effort_values.get(model)
+
+    def remember_rejected_values(
+        self, model: str, rejected_field: str, values: set[str], *, evidence: str = ""
+    ) -> bool:
+        """Record values this model refused; ``False`` when all were known.
+
+        Reached on the same proof the coarse rejection is -- only once the
+        rewritten body was accepted -- for the same reason: a 400 that merely
+        mentioned a word is not evidence that dropping it is what fixed the
+        request.
+
+        One fact per value, and the value is in the key
+        (``detail="<field>=<value>"``), so forgetting one word on the Models
+        page forgets exactly that word. A list under a single key could only be
+        forgotten wholesale.
+        """
+
+        if not values:
+            return False
+        known = self.rejected_effort_values.setdefault(model, {}).setdefault(
+            rejected_field, set()
+        )
+        learned = {value for value in values if value not in known}
+        known.update(values)
+        if self.sink is not None:
+            for value in sorted(values):
+                self.sink(
+                    FACT_EFFORT_VALUE_REJECTED,
+                    model,
+                    True,
+                    f"{rejected_field}={value}",
+                    evidence,
+                )
+        return bool(learned)
 
     def stream_usage_refused(self, model: str) -> bool:
         """Whether this host has been proven to reject streamed usage here."""

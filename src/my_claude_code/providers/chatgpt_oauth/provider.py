@@ -379,21 +379,57 @@ class ChatGPTOAuthProvider(BaseProvider):
         answers a ``reasoning`` block with a 400 has said so itself, and that
         outranks the declaration above for that model.
         """
-        rejections = self._recovery_memory.rejections_for(model_id)
-        if not rejections:
+        rejections = self._recovery_memory.rejections_for(model_id) or {}
+        value_rejections = self._recovery_memory.rejected_values_for(model_id)
+        if not rejections and not value_rejections:
             return CHATGPT_OAUTH_REASONING_DIALECT
-        return narrow_dialect_by_rejections(CHATGPT_OAUTH_REASONING_DIALECT, rejections)
+        return narrow_dialect_by_rejections(
+            CHATGPT_OAUTH_REASONING_DIALECT, rejections, value_rejections
+        )
 
     def _remember_reasoning_rejection(
-        self, body: dict[str, Any], field: str, evidence: str = ""
+        self,
+        body: dict[str, Any],
+        field: str,
+        evidence: str = "",
+        values: frozenset[str] = frozenset(),
     ) -> None:
-        """Record that this model refused a reasoning field, once it is proven.
+        """Record what this model refused, once the retry has proven it.
 
         Reached only after the stripped body was actually accepted, so the
         strip is what fixed it.
+
+        Two learnings share this one site because they share one proof. When
+        the 400 said something about a *value* -- and that is the common case
+        for an effort word -- the value is what is remembered and the channel
+        survives; only when the rejection proved nothing finer than the field
+        does the coarse fact get written, exactly as before 7.12.0. Writing
+        both would be writing a contradiction: the coarse fact drops the whole
+        channel, so it would swallow the fine one for the rest of the TTL.
         """
         model = body.get("model")
         if not isinstance(model, str):
+            return
+        if values:
+            if not self._recovery_memory.remember_rejected_values(
+                model, field, set(values), evidence=evidence
+            ):
+                return
+            spelled = ", ".join(sorted(values))
+            record_reasoning_adaptation(
+                ReasoningAdaptationKind.DROPPED,
+                f"CHATGPT_OAUTH refused effort {spelled} on {field!r} for {model}; "
+                f"later requests pick from the efforts that remain instead of "
+                f"losing {field!r} altogether.",
+            )
+            logger.warning(
+                "{}_STREAM: effort {} learned as rejected for {} on {!r} -- "
+                "the channel stays",
+                "CHATGPT_OAUTH",
+                spelled,
+                model,
+                field,
+            )
             return
         if not self._recovery_memory.remember_rejection(
             model, field, evidence=evidence
@@ -627,6 +663,8 @@ class ChatGPTOAuthProvider(BaseProvider):
                     used_retry_kinds: set[str] = set()
                     stripped_reasoning: str | None = None
                     stripped_evidence = ""
+                    # The effort words that same 400 proved refused, if any.
+                    stripped_values: frozenset[str] = frozenset()
                     # A local of this generator, not the enclosing function's
                     # body: a recovery rewrites what goes on the wire for this
                     # attempt only.
@@ -682,12 +720,16 @@ class ChatGPTOAuthProvider(BaseProvider):
                             if recovered.stripped_reasoning_field is not None:
                                 stripped_reasoning = recovered.stripped_reasoning_field
                                 stripped_evidence = recovered.evidence
+                                stripped_values = recovered.rejected_effort_values
                             attempt_body = recovered.body
                             continue
                         break
                     if stripped_reasoning is not None:
                         self._remember_reasoning_rejection(
-                            attempt_body, stripped_reasoning, stripped_evidence
+                            attempt_body,
+                            stripped_reasoning,
+                            stripped_evidence,
+                            stripped_values,
                         )
                     try:
                         if response.status_code >= 400:
