@@ -407,6 +407,7 @@ async function loadDashboardState() {
   await loadDesktopState();
   await loadHarnesses();
   await loadDesktopApps();
+  await loadOtherServers();
   await loadRtkState();
   await loadClaudeSettings();
   initClaudeConnectCopyButtons();
@@ -8394,6 +8395,180 @@ byId("desktopTrayEnabled").addEventListener("change", (event) => {
 });
 byId("desktopCloseToTray").addEventListener("change", (event) => {
   updateDesktop("close_to_tray", event.currentTarget.checked, event.currentTarget);
+});
+
+/* --------------------------------------------------------------------- */
+/* Other My Claude Code servers on this machine                            */
+/* --------------------------------------------------------------------- */
+
+async function loadOtherServers() {
+  try {
+    state.otherServers = await api("/admin/api/servers");
+  } catch (error) {
+    state.otherServers = { error: error.message };
+  }
+  renderOtherServers();
+}
+
+function formatStamp(seconds) {
+  if (typeof seconds !== "number") return "unknown";
+  return new Date(seconds * 1000).toLocaleString();
+}
+
+function formatAge(seconds) {
+  if (typeof seconds !== "number") return "never";
+  if (seconds < 90) return `${Math.round(seconds)}s ago`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)}m ago`;
+  return `${Math.round(seconds / 3600)}h ago`;
+}
+
+// Exactly the fields the decision needs, in the order 6.72.2 fixed them:
+// pid, session, port, started, last heartbeat. A dialog that offers to stop a
+// process and does not say which process is not a confirmation.
+function serverFacts(server) {
+  const where =
+    server.host && server.port
+      ? `${server.host}:${server.port}`
+      : server.port
+        ? `port ${server.port}`
+        : "no recorded address";
+  return [
+    ["pid", (server.pids || []).join(", ")],
+    ["session", server.session_id ? String(server.session_id) : "no session row"],
+    ["address", where],
+    ["started", formatStamp(server.started_at)],
+    ["last heartbeat", formatAge(server.heartbeat_age_seconds)],
+  ];
+}
+
+function renderOtherServers() {
+  const list = byId("otherServersList");
+  const statusLine = byId("otherServersStatus");
+  const stopButton = byId("otherServersStop");
+  if (!list || !statusLine || !stopButton) return;
+
+  list.textContent = "";
+  const payload = state.otherServers;
+  if (payload?.error) {
+    statusLine.textContent = `Could not read the server survey: ${payload.error}`;
+    stopButton.disabled = true;
+    stopButton.textContent = "No stale servers";
+    return;
+  }
+
+  const servers = Array.isArray(payload?.servers) ? payload.servers : [];
+  if (!servers.length) {
+    const empty = document.createElement("p");
+    empty.className = "other-servers-empty";
+    empty.textContent =
+      "No other My Claude Code server is running on this machine.";
+    list.append(empty);
+  }
+
+  servers.forEach((server) => {
+    const card = document.createElement("div");
+    card.className = "other-server-card";
+    card.dataset.pids = (server.pids || []).join(",");
+
+    const heading = document.createElement("div");
+    heading.className = "other-server-heading";
+    const badge = document.createElement("span");
+    badge.className = `other-server-status${server.actionable ? " is-stale" : ""}`;
+    badge.textContent = server.status || "unknown";
+    heading.append(badge, document.createTextNode(`pid ${(server.pids || []).join(", ")}`));
+    card.append(heading);
+
+    const facts = document.createElement("p");
+    facts.className = "other-server-facts";
+    serverFacts(server).forEach(([label, value]) => {
+      const item = document.createElement("span");
+      item.textContent = `${label}: ${value}`;
+      facts.append(item);
+    });
+    card.append(facts);
+
+    const reason = document.createElement("p");
+    reason.className = "other-server-reason";
+    reason.textContent = server.reason || "";
+    card.append(reason);
+
+    list.append(card);
+  });
+
+  const stale = servers.filter((server) => server.actionable);
+  stopButton.disabled = state.otherServersBusy || stale.length === 0;
+  stopButton.textContent = stale.length
+    ? `Stop ${stale.length} stale server${stale.length === 1 ? "" : "s"}...`
+    : "No stale servers";
+  if (!statusLine.textContent) {
+    statusLine.textContent = servers.length
+      ? `${servers.length} other server${servers.length === 1 ? "" : "s"} seen, ` +
+        `${stale.length} stale.`
+      : "";
+  }
+}
+
+function staleServerCandidates() {
+  const servers = Array.isArray(state.otherServers?.servers)
+    ? state.otherServers.servers
+    : [];
+  return servers.filter((server) => server.actionable);
+}
+
+async function stopStaleServers() {
+  if (state.otherServersBusy) return;
+  const candidates = staleServerCandidates();
+  if (!candidates.length) return;
+
+  // Every field, in the confirmation itself. The near-miss this feature is
+  // named after was an investigation deciding two live servers were
+  // "abandoned" from a single socket scan.
+  const lines = candidates.map((server) => {
+    const facts = serverFacts(server)
+      .map(([label, value]) => `    ${label}: ${value}`)
+      .join("\n");
+    return `  ${server.status}\n${facts}\n    why: ${server.reason}`;
+  });
+  const confirmed = window.confirm(
+    `Stop ${candidates.length} stale My Claude Code server` +
+      `${candidates.length === 1 ? "" : "s"}?\n\n${lines.join("\n\n")}\n\n` +
+      "Each is stopped by its exact pid, and only if it is still stale when " +
+      "the server looks again.",
+  );
+  if (!confirmed) return;
+
+  state.otherServersBusy = true;
+  renderOtherServers();
+  const statusLine = byId("otherServersStatus");
+  try {
+    const result = await api("/admin/api/servers/stop", {
+      method: "POST",
+      body: JSON.stringify({
+        pids: candidates.map((server) => server.pids || []),
+      }),
+    });
+    state.otherServers = result;
+    const stopped = (result.stopped || []).length;
+    const refused = (result.refused || []).length;
+    statusLine.textContent =
+      `Stopped ${stopped} server${stopped === 1 ? "" : "s"}` +
+      (refused ? `; ${refused} refused (no longer stale, or already gone).` : ".");
+  } catch (error) {
+    statusLine.textContent = `Could not stop: ${error.message}`;
+  } finally {
+    state.otherServersBusy = false;
+    renderOtherServers();
+  }
+}
+
+byId("otherServersRefresh")?.addEventListener("click", () => {
+  const statusLine = byId("otherServersStatus");
+  if (statusLine) statusLine.textContent = "";
+  loadOtherServers();
+});
+
+byId("otherServersStop")?.addEventListener("click", () => {
+  stopStaleServers();
 });
 
 /* --------------------------------------------------------------------- */
