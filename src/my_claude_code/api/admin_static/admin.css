@@ -7711,3 +7711,64 @@ details.turn-pane > summary:focus-visible {
   padding: 0.15rem 0.55rem;
   font-size: 0.75rem;
 }
+
+.other-servers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.other-server-card {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  padding: 0.6rem 0.75rem;
+}
+
+.other-server-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.other-server-status {
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--line-strong);
+}
+
+.other-server-status.is-stale {
+  border-color: var(--warn, #d08a30);
+  color: var(--warn, #d08a30);
+}
+
+.other-server-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.1rem;
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted, #8b93a1);
+}
+
+.other-server-reason {
+  margin: 0.3rem 0 0;
+  font-size: 0.85rem;
+}
+
+.other-servers-status {
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+  min-height: 1.2em;
+}
+
+.other-servers-empty {
+  margin: 0.75rem 0 0;
+  font-size: 0.9rem;
+  color: var(--muted, #8b93a1);
+}

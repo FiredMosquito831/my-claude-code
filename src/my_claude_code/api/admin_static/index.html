@@ -177,6 +177,31 @@
                 to make the window's close button end the app.
               </p>
             </section>
+            <section class="settings-section" id="otherServersPanel"
+                     aria-label="Other My Claude Code servers">
+              <div class="section-heading">
+                <div>
+                  <h3>Other servers on this machine</h3>
+                  <p>
+                    Every other <code>mcc-server</code> launch this machine can
+                    see, from the process table, the socket table and the
+                    session rows in the request log. Nothing here is stopped
+                    automatically: a server is only ever stopped by pid, by you,
+                    after you have been shown what it is.
+                  </p>
+                </div>
+                <div class="observability-actions">
+                  <button id="otherServersRefresh" class="secondary-button" type="button">
+                    Refresh
+                  </button>
+                  <button id="otherServersStop" class="secondary-button" type="button" disabled>
+                    No stale servers
+                  </button>
+                </div>
+              </div>
+              <div id="otherServersList" class="other-servers-list"></div>
+              <p id="otherServersStatus" class="other-servers-status" role="status"></p>
+            </section>
             <section class="settings-section" aria-label="Token optimizer">
               <div class="section-heading">
                 <div>
