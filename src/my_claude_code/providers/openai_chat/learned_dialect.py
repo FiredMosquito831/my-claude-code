@@ -20,6 +20,7 @@ import dataclasses
 
 from my_claude_code.config.reasoning_enum import (
     OFF_EFFORT_WORDS,
+    SUPER_EFFORT_WORDS,
     normalize_effort_words,
 )
 from my_claude_code.core.reasoning import (
@@ -55,10 +56,71 @@ def learned_effort_values(words: tuple[str, ...]) -> EffortValues:
     if len(known) == len(words):
         supported = frozenset(known.values())
         return tuple((rung, nearest_effort(rung, supported).value) for rung in rungs)
+    ladder = _ladder_with_super_rungs(words, known)
+    if ladder is not None:
+        return ladder
     count = len(words)
     return tuple(
         (rung, words[min(count - 1, index * count // len(rungs))])
         for index, rung in enumerate(rungs)
+    )
+
+
+def _ladder_with_super_rungs(
+    words: tuple[str, ...], known: dict[str, ReasoningEffort]
+) -> EffortValues | None:
+    """MCC's own scale, plus rungs the host publishes *above* it.
+
+    Codex CLI 0.154.0 spells ``minimal|low|medium|high|xhigh|max|ultra|
+    persistent``: MCC's six rungs and two more on top. The positional spread
+    below reads that as eight unknown words and scatters six rungs across them
+    by index -- ``high`` lands on ``xhigh`` and ``xhigh`` on ``max``, which is
+    a wrong answer for a vocabulary that contains MCC's own words verbatim.
+
+    So: every rung the host names maps to **itself**, and ``max`` -- the
+    client's word for "the most this model will do" -- becomes the host's own
+    word for that.
+
+    Which word, exactly, is decision Q7 of 2026-09-13: ``ultra`` when the
+    vocabulary carries it, and ``persistent`` only when it is the vocabulary's
+    **top** rung and there is no ``ultra``. ``ultra`` wins where both appear
+    because it is unambiguously "more effort", while ``persistent`` reads as a
+    mode rather than a rung -- and a client asking for the most effort has not
+    asked to change modes. A host that names neither keeps ``max`` exactly as
+    it always did.
+
+    ``None`` when this is not that shape -- a host with its own words
+    (``brief``, ``detailed``) has no shared scale and falls through to the
+    spread, which is still the only ranking on offer there.
+    """
+
+    supers = [word for word in words if word in SUPER_EFFORT_WORDS]
+    if not supers:
+        return None
+    if len(known) + len(supers) != len(words):
+        # Some third kind of word is in the list, so this is not MCC's scale
+        # with a top on it -- it is a vocabulary of the host's own that happens
+        # to contain one familiar word. Do not pretend to rank it.
+        return None
+    supported = frozenset(known.values())
+    if not supported:
+        return None
+    if "ultra" in supers:
+        top = "ultra"
+    elif supers[-1] == words[-1]:
+        top = supers[-1]
+    else:
+        # A super-rung the host named but did not put on top is not the answer
+        # to "the most this model will do", and MCC has no other use for it.
+        return None
+    return tuple(
+        (
+            rung,
+            top
+            if rung is ReasoningEffort.MAX
+            else nearest_effort(rung, supported).value,
+        )
+        for rung in tuple(ReasoningEffort)
     )
 
 
