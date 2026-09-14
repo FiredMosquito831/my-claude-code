@@ -284,10 +284,11 @@ class OpenAIChatProvider(BaseProvider):
         order.
         """
         dialect = self._profile.reasoning.dialect
-        rejections = self._recovery_memory.rejections_for(model_id)
-        if not rejections:
+        rejections = self._recovery_memory.rejections_for(model_id) or {}
+        value_rejections = self._recovery_memory.rejected_values_for(model_id)
+        if not rejections and not value_rejections:
             return dialect
-        return narrow_dialect_by_rejections(dialect, rejections)
+        return narrow_dialect_by_rejections(dialect, rejections, value_rejections)
 
     def throttle_remaining(self, model: str | None = None) -> float:
         """Seconds this credential is rate-limited for; 0 when free to serve."""
@@ -510,6 +511,8 @@ class OpenAIChatProvider(BaseProvider):
         # that provoked it. Both are only acted on once the retry is accepted:
         # a rewrite that did not fix anything is not evidence about the host.
         rewrite_evidence: dict[str, str] = {}
+        # The effort words that same 400 proved refused, if it proved any.
+        stripped_values: frozenset[str] = frozenset()
 
         while True:
             try:
@@ -555,6 +558,7 @@ class OpenAIChatProvider(BaseProvider):
                         body,
                         stripped_reasoning,
                         rewrite_evidence.get("reasoning_field", ""),
+                        stripped_values,
                     )
                 if "stream_usage" in used_retry_kinds:
                     self._remember_stream_usage_refusal(
@@ -579,6 +583,7 @@ class OpenAIChatProvider(BaseProvider):
                     rewrite_evidence[decision.kind] = decision.evidence
                 if decision.stripped_reasoning_field is not None:
                     stripped_reasoning = decision.stripped_reasoning_field
+                    stripped_values = decision.rejected_effort_values
                 body = decision.body
 
     def _rewrite_without_stream_usage(
@@ -635,17 +640,51 @@ class OpenAIChatProvider(BaseProvider):
         )
 
     def _remember_reasoning_rejection(
-        self, body: dict, field: str, evidence: str = ""
+        self,
+        body: dict,
+        field: str,
+        evidence: str = "",
+        values: frozenset[str] = frozenset(),
     ) -> None:
-        """Record that this model refused a reasoning field, once it is proven.
+        """Record what this model refused, once the retry has proven it.
 
         Reached only after the stripped body was accepted, so the strip is what
         fixed it. Later requests skip the field without paying the 400: the
         dialect this provider reports no longer claims it (see
         :meth:`reasoning_dialect`), so gating never asks the encoder for it.
+
+        Two learnings share this one site because they share one proof. When
+        the 400 said something about a *value* -- and that is the common case
+        for an effort word -- the value is what is remembered and the channel
+        survives; only when the rejection proved nothing finer than the field
+        does the coarse fact get written, exactly as before 7.12.0. Writing
+        both would be writing a contradiction: the coarse fact drops the whole
+        channel, so it would swallow the fine one for the rest of the TTL.
         """
         model = body.get("model")
         if not isinstance(model, str):
+            return
+        if values:
+            if not self._recovery_memory.remember_rejected_values(
+                model, field, set(values), evidence=evidence
+            ):
+                return
+            spelled = ", ".join(sorted(values))
+            record_reasoning_adaptation(
+                ReasoningAdaptationKind.DROPPED,
+                f"{self._provider_name} refused effort {spelled} on "
+                f"{field!r} for {model}; "
+                f"later requests pick from the efforts that remain instead of "
+                f"losing {field!r} altogether.",
+            )
+            logger.warning(
+                "{}_STREAM: effort {} learned as rejected for {} on {!r} -- "
+                "the channel stays",
+                self._provider_name,
+                spelled,
+                model,
+                field,
+            )
             return
         if not self._recovery_memory.remember_rejection(
             model, field, evidence=evidence

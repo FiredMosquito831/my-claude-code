@@ -47,6 +47,17 @@ FACT_MODEL_WITHHELD = "model_withheld"
 FACT_STREAM_USAGE_UNSUPPORTED = "stream_usage_unsupported"
 #: The effort words a host named in its own rejection. Value: ``list[str]``.
 FACT_EFFORT_ENUM = "effort_enum"
+#: One reasoning *value* a model refused, proven by a retry that succeeded
+#: without it. ``detail`` is ``"<field>=<value>"``; value: ``True``.
+#:
+#: Beside :data:`FACT_REASONING_FIELD_REJECTED`, not instead of it. That one
+#: says "this model has no such knob" and costs the whole channel; this one
+#: says "this model has the knob and not that setting", which is the smallest
+#: thing a 400 on ``xhigh`` actually proves. Before 7.12.0 there was only the
+#: first, so one 400 on ``xhigh`` pinned a model to the endpoint's own default
+#: for the rest of the TTL -- including the requests that only wanted
+#: ``medium``.
+FACT_EFFORT_VALUE_REJECTED = "effort_value_rejected"
 #: The host answered an image block with a modality 400. Value: ``True``.
 FACT_VISION_UNSUPPORTED = "vision_unsupported"
 #: The host answered a trivial tool definition with a 400. Value: ``True``.
@@ -87,6 +98,7 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_MODEL_WITHHELD,
         FACT_STREAM_USAGE_UNSUPPORTED,
         FACT_EFFORT_ENUM,
+        FACT_EFFORT_VALUE_REJECTED,
         FACT_VISION_UNSUPPORTED,
         FACT_TOOL_CALLS_UNSUPPORTED,
         FACT_MODELS_ETAG,
@@ -136,6 +148,10 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     # six weeks), so this sits on the weaker clock on purpose.
     FACT_RESPONSE_SURFACE: INFERRED_FACT_TTL_SECONDS,
     FACT_REASONING_FIELD_REJECTED: INFERRED_FACT_TTL_SECONDS,
+    # The same clock as the field rejection it narrows, deliberately: both are
+    # inferences proven by a retry, and a coarse fact that outlived the fine
+    # one would silently re-take the whole channel.
+    FACT_EFFORT_VALUE_REJECTED: INFERRED_FACT_TTL_SECONDS,
     FACT_STREAM_USAGE_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
     FACT_VISION_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
     FACT_TOOL_CALLS_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
@@ -152,9 +168,58 @@ MAX_EVIDENCE_CHARS = 160
 #: look exactly like the fact never being learned.
 MAX_FACT_ROWS = 5000
 
-DOCUMENT_VERSION = 1
+#: The shape of the stored document.
+#:
+#: ``2`` (7.12.0) is the first version whose reasoning learnings can be
+#: value-level. Every row a version-1 document holds is still readable --
+#: nothing about a row's *fields* changed -- but one **meaning** did: before
+#: 7.12.0 a :data:`FACT_REASONING_FIELD_REJECTED` row was the only thing a
+#: 400 on a single effort word could be written down as, so a version-1
+#: document cannot distinguish "this model has no reasoning knob" from "this
+#: model would not take ``xhigh`` that once". Carrying those rows forward
+#: would pin models to the endpoint default that 7.12.0 would have kept
+#: thinking on, and for the rest of a six-week TTL. See
+#: :data:`SUPERSEDED_KINDS_BEFORE_VERSION`.
+DOCUMENT_VERSION = 2
 FACTS_KEY = "facts"
 VERSION_KEY = "version"
+
+#: Fact kinds a document written before a given version cannot be trusted on,
+#: and which are therefore dropped when that document is adopted.
+#:
+#: Dropping costs at most one re-paid 400 per model -- the same price this
+#: store already declares acceptable for a file it cannot read at all -- and
+#: buys back every effort the coarse row was silently spending.
+SUPERSEDED_KINDS_BEFORE_VERSION: Mapping[int, frozenset[str]] = {
+    2: frozenset({FACT_REASONING_FIELD_REJECTED}),
+}
+
+
+def superseded_kinds(document_version: int) -> frozenset[str]:
+    """Fact kinds a document of this version must not be believed about."""
+
+    superseded: set[str] = set()
+    for version, kinds in SUPERSEDED_KINDS_BEFORE_VERSION.items():
+        if document_version < version:
+            superseded.update(kinds)
+    return frozenset(superseded)
+
+
+def document_version_of(document: Mapping[Any, Any]) -> int:
+    """The version a stored document declares; ``1`` when it declares none.
+
+    A missing marker means 6.51.0-era code wrote it, which is version 1 by
+    definition -- that release is what introduced the file. Anything
+    unreadable is treated the same way, because the conservative reading is
+    the older one: it can only cause a migration to run twice, never to be
+    skipped.
+    """
+
+    raw = document.get(VERSION_KEY)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return 1
+    return raw if raw >= 1 else 1
+
 
 #: What a :class:`RecoveryMemory` calls when it learns something worth keeping:
 #: ``(fact_kind, model_id, value, detail, evidence)``. The memory does not know

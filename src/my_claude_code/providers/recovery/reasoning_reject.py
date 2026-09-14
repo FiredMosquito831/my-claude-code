@@ -26,9 +26,77 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
+from my_claude_code.config.reasoning_enum import parse_effort_enum
+from my_claude_code.core.reasoning import ReasoningEffort
 from my_claude_code.core.wire_capture import is_reasoning_key
 
 from .complaint import is_bad_request, sampling_parameter_evidence, upstream_complaint
+
+
+def rejected_effort_values(
+    error: Exception, body: Mapping[str, Any], field: str
+) -> set[str]:
+    """The effort words this 400 proves the model will not take, if any.
+
+    An empty set means "nothing about a *value* was proven", and the caller
+    remembers the field rejection it always did. That is the answer for the
+    common ``Unsupported parameter: reasoning_effort`` -- a host that names
+    only the field is saying it has no such knob, and narrowing a vocabulary
+    would leave MCC sending a field this host will refuse every time.
+
+    Two readings do prove something finer, strongest first.
+
+    **The host named its own vocabulary.** ``parse_effort_enum`` is the parser
+    the *Probe capabilities* path has used since 6.52.0, and a 400 that lists
+    the words it does accept answers the whole question at once: everything
+    MCC can spell that is not in that list is refused. The value that was sent
+    is passed as ``sent`` so that a host echoing the invalid value back inside
+    its own list is not read as offering it as a rung.
+
+    **The host named the value it was sent.** Then exactly one word is proven
+    wrong, and one word is what is returned -- the smallest honest answer, and
+    the whole point of this function: before 7.12.0 the caller had to blame
+    the entire channel for it.
+    """
+
+    sent = effort_value_sent(body, field)
+    complaint = upstream_complaint(error)
+    named = parse_effort_enum(complaint, sent=sent)
+    if named:
+        accepted = {word.lower() for word in named}
+        refused = {
+            effort.value for effort in ReasoningEffort if effort.value not in accepted
+        }
+        if sent:
+            refused.add(sent)
+        return refused
+    if sent and re.search(rf"\b{re.escape(sent)}\b", complaint):
+        return {sent}
+    return set()
+
+
+def effort_value_sent(body: Mapping[str, Any], field: str) -> str:
+    """The effort word this body carried for ``field``, or ``""``.
+
+    Three shapes, all of them real: a bare string (``reasoning_effort``), a
+    mapping with an ``effort`` key (``reasoning``), and either of those inside
+    ``extra_body`` -- the same three places
+    :func:`rejected_reasoning_field` looks for the field itself.
+    """
+
+    for container in (body, body.get("extra_body")):
+        if not isinstance(container, Mapping):
+            continue
+        if field not in container:
+            continue
+        value = container[field]
+        if isinstance(value, str):
+            return value.strip().lower()
+        if isinstance(value, Mapping):
+            effort = value.get("effort")
+            if isinstance(effort, str):
+                return effort.strip().lower()
+    return ""
 
 
 def rejected_reasoning_field(error: Exception, body: Mapping[str, Any]) -> str | None:

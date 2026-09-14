@@ -39,6 +39,7 @@ from .output_cap import (
 )
 from .reasoning_reject import (
     clone_body_without_reasoning_field,
+    rejected_effort_values,
     rejected_reasoning_field,
 )
 
@@ -72,6 +73,18 @@ class RecoveryDecision:
     body: dict[str, Any] | None = None
     kind: str = ""
     stripped_reasoning_field: str | None = None
+    #: The effort words that same 400 proved this model will not take, when it
+    #: proved anything about a value at all. Empty means "nothing finer than
+    #: the field was shown", and the caller remembers the field as it always
+    #: did.
+    #:
+    #: Read here rather than returned by the rung: widening ``RungResult``
+    #: would change the arity every rung returns -- including the
+    #: provider-specific ones that know nothing about reasoning -- to carry a
+    #: value only one rung can ever produce. The ladder already holds the
+    #: error and the body, which is everything the reading needs, and it is
+    #: where :attr:`evidence` is read for exactly the same reason.
+    rejected_effort_values: frozenset[str] = frozenset()
     #: A bounded, redacted excerpt of the words that produced this decision,
     #: carried so the caller can store it beside the fact it eventually
     #: learns. Read here rather than at the rung, because every rung already
@@ -115,10 +128,16 @@ class RecoveryLadder:
             retry_body, stripped = result
             if rung.once:
                 used_kinds.add(rung.kind)
+            refused = (
+                frozenset(rejected_effort_values(error, body, stripped))
+                if stripped is not None
+                else frozenset()
+            )
             return RecoveryDecision(
                 body=retry_body,
                 kind=rung.kind,
                 stripped_reasoning_field=stripped,
+                rejected_effort_values=refused,
                 evidence=complaint_evidence_snippet(upstream_complaint(error)),
             )
         return GIVE_UP

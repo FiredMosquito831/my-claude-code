@@ -308,9 +308,22 @@ class ReasoningDialect:
 
 
 def narrow_dialect_by_rejections(
-    dialect: ReasoningDialect, rejections: Mapping[str, str]
+    dialect: ReasoningDialect,
+    rejections: Mapping[str, str],
+    value_rejections: Mapping[str, set[str]] | None = None,
 ) -> ReasoningDialect:
     """Remove from a dialect every channel whose wire field was refused.
+
+    ``value_rejections`` narrows the *smallest thing a rejection proves*: a
+    400 on ``reasoning.effort=xhigh`` says this model will not take ``xhigh``,
+    and says nothing at all about ``medium``. Those values leave the effort
+    vocabulary and the channel stays. Only when every value is gone does the
+    channel go with them -- an empty vocabulary is not a usable channel, and
+    the coarse answer is the right one once there is nothing left to send.
+    A refused word this dialect does not spell under that name narrows
+    nothing, and is answered with the coarse rejection rather than with a
+    vocabulary that still contains it: the alternative is re-sending the
+    refused word and paying a 400 on every request.
 
     A learned rejection outranks a declaration: the profile is a claim about
     the gateway, a 400 is the gateway itself, and where they disagree the
@@ -323,7 +336,7 @@ def narrow_dialect_by_rejections(
     a strip removes.
     """
 
-    if not rejections:
+    if not rejections and not value_rejections:
         return dialect
 
     def refers_to(field: str, declared: str) -> bool:
@@ -339,7 +352,35 @@ def narrow_dialect_by_rejections(
     budget = dialect.budget
     budget_field = dialect.budget_field
 
-    for field in rejections:
+    # A value-level rejection this function cannot act on has to become a
+    # field-level one, or the caller would keep sending the very word the host
+    # refused and pay a 400 for every request. ``coarse`` is therefore the
+    # stated rejections plus every value rejection that narrowed nothing.
+    coarse: dict[str, str] = dict(rejections)
+
+    for field, refused in (value_rejections or {}).items():
+        if not refers_to(field, effort_field) or effort_values is None:
+            coarse.setdefault(field, "")
+            continue
+        remaining = frozenset(
+            effort for effort in effort_values if effort.value not in refused
+        )
+        if not remaining:
+            # Nothing left to send through this channel, so it is not a
+            # channel any more. This is exactly the coarse answer, reached by
+            # the fine path rather than instead of it.
+            effort_values = None
+            effort_field = ""
+        elif remaining == effort_values:
+            # The host refused a word this vocabulary does not spell under
+            # that name -- a gateway whose rungs are "brief"/"detailed", for
+            # instance. Nothing was removed, so nothing was learned at this
+            # granularity, and the honest answer is the coarse one.
+            coarse.setdefault(field, "")
+        else:
+            effort_values = remaining
+
+    for field in coarse:
         if refers_to(field, effort_field):
             effort_values = None
             effort_field = ""
@@ -361,6 +402,11 @@ def narrow_dialect_by_rejections(
         budget=budget,
         budget_field=budget_field,
         origin=ReasoningDialectOrigin.LEARNED,
+        # Only the *stated* field rejections: each carries the date the
+        # Models page shows beside it, and a value rejection has no date
+        # of its own to show. A value rejection that fell back to the
+        # coarse answer above still narrows the dialect; what it does not
+        # do is invent a date for a list that is read as one.
         learned_rejections=tuple(sorted(rejections.items())),
     )
 

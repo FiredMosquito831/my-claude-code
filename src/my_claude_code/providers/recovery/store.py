@@ -41,6 +41,7 @@ from my_claude_code.config.paths import learned_facts_path
 from .facts import (
     ALLOWED_FACT_KINDS,
     DOCUMENT_VERSION,
+    FACT_EFFORT_VALUE_REJECTED,
     FACT_MODEL_WITHHELD,
     FACT_MODELS_ETAG,
     FACT_OUTPUT_CAP,
@@ -54,8 +55,10 @@ from .facts import (
     FactSink,
     LearnedFact,
     bounded_evidence,
+    document_version_of,
     fact_from_row,
     parse_timestamp,
+    superseded_kinds,
     utc_now_iso,
 )
 from .memory import RecoveryMemory
@@ -134,7 +137,13 @@ class LearnedFactStore:
         if not isinstance(rows, list):
             logger.warning("LEARNED FACTS: '{}' is not a list; ignoring it", FACTS_KEY)
             return
+        # The migration is a read-time drop, not a rewrite: the next flush
+        # writes the current version out, so an older document is upgraded by
+        # being adopted rather than by a separate pass that could half-finish.
+        stored_version = document_version_of(document)
+        superseded = superseded_kinds(stored_version)
         dropped = 0
+        superseded_rows = 0
         unknown_kinds: set[str] = set()
         for row in rows:
             fact = fact_from_row(row)
@@ -145,7 +154,20 @@ class LearnedFactStore:
                     if kind and kind not in ALLOWED_FACT_KINDS:
                         unknown_kinds.add(kind)
                 continue
+            if fact.fact_kind in superseded:
+                superseded_rows += 1
+                continue
             self._facts[fact.key] = fact
+        if superseded_rows:
+            logger.info(
+                "LEARNED FACTS: document is version {} (this build writes {}); "
+                "dropped {} row(s) of kind(s) {} that the older shape could not "
+                "state precisely -- they will be relearned at most once per model",
+                stored_version,
+                DOCUMENT_VERSION,
+                superseded_rows,
+                ", ".join(sorted(superseded)),
+            )
         if dropped:
             logger.warning(
                 "LEARNED FACTS: dropped {} unusable row(s){}",
@@ -463,6 +485,15 @@ class LearnedFactStore:
                 memory.rejected_reasoning_fields.setdefault(fact.model_id, {})[
                     fact.detail
                 ] = fact.last_confirmed_at[:10]
+            elif fact.fact_kind == FACT_EFFORT_VALUE_REJECTED and fact.detail:
+                # ``detail`` is ``"<field>=<value>"``. A detail without an
+                # ``=`` is from no version of this code and is skipped rather
+                # than guessed at.
+                field_name, separator, value = fact.detail.partition("=")
+                if separator and field_name and value:
+                    memory.rejected_effort_values.setdefault(
+                        fact.model_id, {}
+                    ).setdefault(field_name, set()).add(value)
             elif fact.fact_kind == FACT_STREAM_USAGE_UNSUPPORTED:
                 memory.stream_usage_unsupported.add(fact.model_id)
 
@@ -477,6 +508,7 @@ class LearnedFactStore:
         for provider_id, memory in self._memories.items():
             memory.output_caps.clear()
             memory.rejected_reasoning_fields.clear()
+            memory.rejected_effort_values.clear()
             memory.stream_usage_unsupported.clear()
             self._populate_memory(provider_id, memory)
 
