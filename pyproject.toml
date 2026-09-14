@@ -4,12 +4,28 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "7.13.0"
-description = "Local proxy connecting coding agents to OpenAI-compatible AI providers"
+version = "7.13.1"
+description = "Local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, OpenCode, Gemini CLI and other AI coding agents: 57 providers, fallback routing, credential health, a native web-search tool proxy, and analytics with cost provenance"
 readme = "README.md"
 license = "AGPL-3.0-or-later AND MIT"
 license-files = ["LICENSE", "COMMERCIAL-LICENSE.md"]
 requires-python = ">=3.14.0"
+keywords = [
+    "claude-code",
+    "claude-code-proxy",
+    "llm-proxy",
+    "llm-router",
+    "model-routing",
+    "ai-gateway",
+    "coding-agents",
+    "opencode",
+    "codex",
+    "gemini-cli",
+    "anthropic",
+    "openai",
+    "openrouter",
+    "local-first",
+]
 dependencies = [
     "fastapi[standard]>=0.139.0",
     "uvicorn>=0.50.0",
@@ -32,6 +48,13 @@ dependencies = [
     "pillow>=11.4.0",
     "pystray>=0.19.5; sys_platform == 'win32' or sys_platform == 'darwin'",
 ]
+
+[project.urls]
+Homepage = "https://github.com/FiredMosquito831/my-claude-code"
+Documentation = "https://github.com/FiredMosquito831/my-claude-code/blob/main/docs/README.md"
+Repository = "https://github.com/FiredMosquito831/my-claude-code"
+Changelog = "https://github.com/FiredMosquito831/my-claude-code/releases"
+Issues = "https://github.com/FiredMosquito831/my-claude-code/issues"
 
 [project.scripts]
 # Native command family (my-claude-code owner) — the canonical implementation.

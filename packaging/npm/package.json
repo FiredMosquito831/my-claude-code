@@ -1,7 +1,7 @@
 {
   "name": "@firedmosquito831/my-claude-code",
-  "version": "7.13.0",
-  "description": "My Claude Code (MCC): route Claude Code and other coding agents to any model provider through one local proxy with a dashboard. This npm package installs and launches the Python server.",
+  "version": "7.13.1",
+  "description": "My Claude Code (MCC): a local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, OpenCode, Gemini CLI and other AI coding agents, with 57 providers, fallback routing, credential health, a native web-search tool proxy, and analytics with cost provenance. This npm package installs and launches the Python server.",
   "license": "AGPL-3.0-or-later",
   "author": "FiredMosquito831",
   "homepage": "https://github.com/FiredMosquito831/my-claude-code#readme",
@@ -14,14 +14,19 @@
   },
   "keywords": [
     "claude-code",
+    "claude-code-proxy",
+    "llm-proxy",
+    "llm-router",
+    "model-routing",
+    "ai-gateway",
+    "coding-agents",
+    "opencode",
+    "codex",
+    "gemini-cli",
     "claude",
     "anthropic",
-    "llm",
-    "proxy",
-    "router",
     "openai",
     "openrouter",
-    "coding-agent",
     "mcc"
   ],
   "scripts": {
