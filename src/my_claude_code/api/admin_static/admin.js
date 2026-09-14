@@ -11115,6 +11115,11 @@ const reqState = {
   // is: the page fetches one row beyond itself to answer that without a count.
   countDeferred: false,
   hasMore: false,
+  // The overall TTFT percentiles, which arrive after the page has painted, and
+  // the stats payload the cards were last drawn from so they can be redrawn
+  // with them.
+  ttft: null,
+  lastStats: null,
   pageRows: 0,
   lastCaptureBodies: null,
 };
@@ -11170,6 +11175,10 @@ async function loadRequestsView() {
   // Analytics query that scans `request_attempts`, measured at 3.3 s cold on
   // a 4.5 GB log against 0.11 s for the stats it sits beside.
   loadRequestLatencyPanel(loadId, params);
+  // Off the paint path for the same reason as the two above: an exact scan of
+  // `requests.ttft_ms`, measured at 0.69-0.99 s over 331,086 rows on a 4.5 GB
+  // log against the tenth of a second the rollup-served stats cost.
+  loadRequestTtftPanel(loadId, params);
   // A free-text search is the one filter whose *counting* queries cannot use
   // an index: the predicate is substring matching over stored bodies, so the
   // count and the filtered stats both decompress a body per row. Measured on a
@@ -11234,6 +11243,7 @@ async function loadRequestsView() {
     stats.harness_labels && typeof stats.harness_labels === "object"
       ? stats.harness_labels
       : {};
+  reqState.lastStats = stats;
   renderRequestStatsCards(stats);
   renderRequestRetentionNote(stats);
   renderRequestLifetime(lifetime);
@@ -11310,6 +11320,7 @@ async function loadRequestDeferredStats(loadId, params) {
       stats.harness_labels && typeof stats.harness_labels === "object"
         ? stats.harness_labels
         : {};
+    reqState.lastStats = stats;
     renderRequestStatsCards(stats);
     renderRequestRetentionNote(stats);
     renderRequestCoverage(stats);
@@ -11638,6 +11649,14 @@ function renderRequestStatsCards(stats) {
     ["Avg duration", stats.avg_duration_ms != null ? `${stats.avg_duration_ms} ms` : "—"],
     ["p50 duration", stats.p50_duration_ms != null ? `${stats.p50_duration_ms} ms` : "—"],
     ["p95 duration", stats.p95_duration_ms != null ? `${stats.p95_duration_ms} ms` : "—"],
+    // TTFT percentiles, beside the duration ones they mirror. They arrive from
+    // their own request (an exact scan of `requests.ttft_ms`, ~0.8 s on a
+    // 4.5 GB log) rather than from `stats`, which is rollup-served in a tenth
+    // of that on the unfiltered load. Until it lands they say so; a window
+    // whose rows all predate TTFT instrumentation says that instead, because
+    // "not measured yet" and "instant" are different answers.
+    ["p50 TTFT", ttftPercentileText("p50_ttft_ms")],
+    ["p95 TTFT", ttftPercentileText("p95_ttft_ms")],
     // Two averages, because they answer different questions and were one
     // number until now: the first is what clients waited, fallbacks included;
     // the second is what the models that answered actually took. Their gap is
@@ -11663,6 +11682,39 @@ function renderRequestStatsCards(stats) {
     return;
   }
   renderStatCards(byId("reqStatsCards"), cards);
+}
+
+/** The text for one TTFT percentile card: a number, or why there is not one. */
+function ttftPercentileText(field) {
+  const panel = reqState.ttft;
+  if (!panel) return "measuring…";
+  if (panel.error) return "—";
+  if (panel.enabled === false) return "—";
+  if (!panel.measured) return "not measured yet";
+  const value = panel[field];
+  return value != null ? `${value} ms` : "—";
+}
+
+/** Fetch the overall TTFT percentiles and repaint the cards when they land.
+ *
+ * Fired at the same moment as the cost and latency panels and awaited by
+ * nobody, for the same reason: it is an exact scan, and the page must not wait
+ * for it. The store caches the answer per filter for 5 s, so a repaint inside
+ * that window costs nothing.
+ */
+async function loadRequestTtftPanel(loadId, params) {
+  reqState.ttft = null;
+  try {
+    const panel = await api(`/admin/api/requests/ttft?${params}`);
+    if (loadId !== reqState.loadId) return;
+    reqState.ttft = panel;
+  } catch (error) {
+    if (loadId !== reqState.loadId) return;
+    // Not rethrown: this promise is not on the paint path, and an unhandled
+    // rejection would be a console error for two cards that can say "—".
+    reqState.ttft = { error: error.message };
+  }
+  if (reqState.lastStats) renderRequestStatsCards(reqState.lastStats);
 }
 
 /* Reported and estimated are rendered as two numbers and are never added

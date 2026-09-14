@@ -428,6 +428,16 @@ _LIST_METADATA_COLUMNS = (
     "cost_source",
 )
 
+#: Columns :meth:`RequestLogStore._percentiles` may be asked for.
+#:
+#: A column name cannot be a bound parameter, so it is interpolated into the
+#: SQL -- and an allow-list, rather than a promise about callers, is what makes
+#: that safe to read years from now. Both members are latency in milliseconds
+#: on ``requests``; ``ttft_winner_ms`` is deliberately absent, because it is
+#: NULL on every row written before 7.4.0 and a percentile over the remainder
+#: would describe a different population from the one the card names.
+_PERCENTILE_COLUMNS: frozenset[str] = frozenset({"duration_ms", "ttft_ms"})
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
     id TEXT PRIMARY KEY,
@@ -6130,6 +6140,110 @@ class RequestLogStore:
                 self._stats_cache.popitem(last=False)
         return [dict(row) for row in payload]
 
+    def ttft_percentiles(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        q: str | None = None,
+        local: str | None = None,
+        harness: str | None = None,
+    ) -> dict[str, Any]:
+        """Overall p50/p95 time-to-first-token, over the same filters as stats.
+
+        An exact scan of ``requests.ttft_ms``, and deliberately so.
+
+        There are no ttft percentiles anywhere else: ``stats()`` only averages
+        it (``:5196-5212``) and the histogram writer buckets ``duration_ms``
+        alone (``:2932-2940``). 7.5.0's per-model view samples the 20,000
+        newest attempt rows and computes percentiles in Python, and those
+        per-model figures cannot be composed into an overall one -- percentiles
+        do not average.
+
+        The alternative was a ttft histogram beside ``request_stats_latency``,
+        with a backfill marker, a backfill walk and a reader change. Measured
+        against it: the exact scan is **0.69-0.99 s** over 331,086 measured
+        rows on a 4.5 GB log, the same cost class as the ``duration_ms`` scan
+        the dashboard already accepts (0.68-0.70 s on the same database), and
+        it needs no migration and no backfill because ``requests.ttft_ms`` has
+        existed for many releases.
+
+        **It is not inside ``stats()``.** The rollup-served path answers in
+        about a tenth of a second, and adding most of a second to it would
+        slow the most-used page on the install that has no filter at all. This
+        is its own call, fired beside the cost and latency panels and awaited
+        by nobody, and it shares ``stats()``'s cache and its 5 s TTL under a
+        key of its own arity.
+
+        ``measured`` is the denominator and is part of the answer: a window
+        whose rows all predate ttft instrumentation returns ``None`` for both
+        percentiles and ``0`` here, which a reader can tell apart from "the
+        requests were instant".
+        """
+
+        cache_key = (
+            "ttft_percentiles",
+            provider,
+            model,
+            status,
+            endpoint,
+            key,
+            since,
+            until,
+            q,
+            local,
+            harness,
+        )
+        now = time.monotonic()
+        with self._stats_lock:
+            cached = self._stats_cache.get(cache_key)
+            if cached is not None:
+                if now - cached[0] < _STATS_CACHE_TTL_SECONDS:
+                    self._stats_cache.move_to_end(cache_key)
+                    return dict(cached[1])
+                del self._stats_cache[cache_key]
+
+        where, args = self._where(
+            provider=provider,
+            model=model,
+            status=status,
+            endpoint=endpoint,
+            key=key,
+            since=since,
+            until=until,
+            q=q,
+            local=local,
+            harness=harness,
+        )
+        with self._connection() as conn:
+            percentiles = self._percentiles(
+                conn, where, args, (0.50, 0.95), column="ttft_ms"
+            )
+            connector = " AND" if where else " WHERE"
+            measured = conn.execute(
+                f"SELECT COUNT(*) FROM requests{where}{connector} ttft_ms IS NOT NULL",
+                args,
+            ).fetchone()[0]
+        payload: dict[str, Any] = {
+            "p50_ttft_ms": _rounded(percentiles[0.50]),
+            "p95_ttft_ms": _rounded(percentiles[0.95]),
+            "measured": int(measured or 0),
+        }
+        with self._stats_lock:
+            # Shares ``stats()``'s cache and its 5 s TTL. The key starts with a
+            # string and has its own arity, so it can never collide with the
+            # filter tuple ``stats()`` uses.
+            self._stats_cache[cache_key] = (now, payload)
+            self._stats_cache.move_to_end(cache_key)
+            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
+                self._stats_cache.popitem(last=False)
+        return dict(payload)
+
     def latency_by_model(
         self, *, since: float | None = None, limit: int = _BREAKDOWN_LIMIT
     ) -> list[dict[str, Any]]:
@@ -6498,8 +6612,14 @@ class RequestLogStore:
         where: str,
         args: list[Any],
         fractions: tuple[float, ...],
+        column: str = "duration_ms",
     ) -> dict[float, float | None]:
-        """Compute percentiles from one ordered pass over ``duration_ms``.
+        """Compute percentiles from one ordered pass over ``column``.
+
+        ``column`` is a literal from this module and never user input: the two
+        callers pass ``"duration_ms"`` and ``"ttft_ms"``. It is interpolated
+        into the SQL because a column name cannot be a bound parameter, and
+        :data:`_PERCENTILE_COLUMNS` is the allow-list that keeps that true.
 
         Two cleverer mechanisms were tried and measured, and both lost to this:
 
@@ -6522,12 +6642,14 @@ class RequestLogStore:
 
         Interpolation matches the removed helper's formula exactly.
         """
+        if column not in _PERCENTILE_COLUMNS:
+            raise ValueError(f"Not a percentile column: {column!r}")
         connector = " AND" if where else " WHERE"
         values = [
             row[0]
             for row in conn.execute(
-                f"SELECT duration_ms FROM requests{where}{connector}"
-                " duration_ms IS NOT NULL ORDER BY duration_ms",
+                f"SELECT {column} FROM requests{where}{connector}"
+                f" {column} IS NOT NULL ORDER BY {column}",
                 args,
             ).fetchall()
         ]
