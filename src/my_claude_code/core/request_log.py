@@ -1296,6 +1296,23 @@ _ADDED_COLUMNS = (
     # started, so every row written before this column stays NULL forever, and
     # NULL keeps meaning "not measured" rather than "the fallback cost nothing".
     ("ttft_winner_ms", "ALTER TABLE requests ADD COLUMN ttft_winner_ms REAL"),
+    # Added in 7.9.0. Reasoning tokens the host itself reported, parsed off
+    # ``completion_tokens_details.reasoning_tokens`` by
+    # ``core/reported_cost.py:48-65``. They were already *used*:
+    # ``api/request_capture.py`` hands them to ``_price()`` so a source with a
+    # reasoning rate charges them at it rather than at the output rate -- and
+    # then dropped the number. A number that changes a price is stored beside
+    # the price it changed.
+    #
+    # NULL is "not measured", and it covers three different things that are the
+    # same thing for a reader: a row written before this column, a host that
+    # does not report the field, and a request with no reasoning. It is
+    # emphatically not zero. Deliberately NOT backfilled: the counts were never
+    # written down, and nothing can recover them.
+    (
+        "reasoning_tokens",
+        "ALTER TABLE requests ADD COLUMN reasoning_tokens INTEGER",
+    ),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -1421,6 +1438,7 @@ _REQUEST_INSERT_COLUMNS = (
     "cost_usd",
     "cost_source",
     "ttft_winner_ms",
+    "reasoning_tokens",
 )
 
 _REQUEST_INSERT_SQL = (
@@ -1899,6 +1917,10 @@ class RequestRecord:
     #
     # None is "no attempt won, or the row predates the column". Never zero.
     ttft_winner_ms: float | None = None
+    #: Reasoning tokens the host reported for this request. Already priced at
+    #: the reasoning rate since 6.54.0 and discarded until 7.9.0; NULL means
+    #: not measured, never zero.
+    reasoning_tokens: int | None = None
     duration_ms: float | None = None
     status: RequestStatus = "success"
     error_kind: str | None = None
@@ -4287,6 +4309,7 @@ class RequestLogStore:
             record.cost_usd,
             record.cost_source,
             record.ttft_winner_ms,
+            record.reasoning_tokens,
         )
         # Placeholders are counted against the column list mechanically, the
         # same guard ``_store_attempts`` carries: a hand-written INSERT whose
