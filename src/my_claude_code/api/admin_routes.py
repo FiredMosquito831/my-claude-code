@@ -2881,6 +2881,56 @@ async def count_request_log(
     return {"enabled": True, "total": total}
 
 
+@router.get("/admin/api/requests/ttft")
+async def request_log_ttft(
+    request: Request,
+    provider: str | None = None,
+    model: str | None = None,
+    status: str | None = None,
+    endpoint: str | None = None,
+    key: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
+    q: str | None = None,
+    local: str | None = None,
+    harness: str | None = None,
+    settings: Settings = Depends(get_settings),
+):
+    """Overall p50/p95 time-to-first-token for the same filters as ``stats``.
+
+    Its own route, beside the cost and latency panels and for the same reason:
+    it is an exact scan of ``requests.ttft_ms``, measured at 0.69-0.99 s over
+    331,086 rows on a 4.5 GB log, and the rollup-served ``stats()`` answers in
+    about a tenth of a second. Folding it in would slow the most-used page on
+    exactly the install that has no filter at all.
+
+    ``measured`` is part of the answer, not a detail: a window whose rows all
+    predate ttft instrumentation returns ``null`` percentiles and ``0`` here,
+    which a reader can tell from "the requests were instant".
+    """
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {"enabled": False}
+    _validate_request_log_status(status)
+    _validate_request_log_local(local)
+    result = await asyncio.to_thread(
+        store.ttft_percentiles,
+        provider=provider,
+        model=model,
+        status=status,
+        endpoint=endpoint,
+        key=key,
+        since=since,
+        until=until,
+        q=q,
+        local=local,
+        harness=harness,
+    )
+    return {"enabled": True, **result}
+
+
 @router.get("/admin/api/requests/stats")
 async def request_log_stats(
     request: Request,
