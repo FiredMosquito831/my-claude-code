@@ -896,6 +896,13 @@ class RequestCapture:
         recorded as failed because arithmetic about it was -- the same rule
         ``_apply_estimate`` follows, for the same reason.
         """
+        # Before the pricing gate, on purpose: the reasoning-token count is a
+        # *measurement* the host made, not a price MCC computed, and it stays
+        # worth storing on an install that has priced nothing. NULL keeps
+        # meaning "not measured".
+        reported_usage = self._reported_cost
+        if reported_usage is not None:
+            record.reasoning_tokens = reported_usage.reasoning_tokens
         if not self._cost_enabled:
             return
         try:

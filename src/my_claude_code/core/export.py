@@ -298,7 +298,11 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
     "total_input": ("tokens_in", "cache_read_tokens", "cache_write_tokens"),
     "input_cached": ("cache_read_tokens",),
     "input_uncached": ("tokens_in",),
-    "tokens_out": ("tokens_out",),
+    # The reasoning count rides with both: a reader looking at output tokens
+    # wants to know how much of the bill was thinking, and a reader who asked
+    # for thinking wants the number as well as the transcript. A column may
+    # belong to several groups -- ``cache_read_tokens`` belongs to three.
+    "tokens_out": ("tokens_out", "reasoning_tokens"),
     "turns_with_tools": ("tool_call_count",),
     # Both columns, always together: an amount whose source is unknown is not
     # a number a reader may act on, and a source with no amount is the record
@@ -315,6 +319,7 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
     "thinking": (
         "thinking_text",
         "thinking_chars",
+        "reasoning_tokens",
         "reasoning",
         "requested_reasoning",
         "reasoning_adaptation",
@@ -378,6 +383,7 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "ttft_winner_ms",
     "ttft_lost_to_fallbacks_ms",
     "duration_ms",
+    "reasoning_tokens",
     "route_attempt",
     "route_primary_model",
     "route_chain",
@@ -430,6 +436,7 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "ttft_winner_ms": "Winner TTFT (ms)",
     "ttft_lost_to_fallbacks_ms": "Lost to fallbacks (ms)",
     "duration_ms": "Duration (ms)",
+    "reasoning_tokens": "Reasoning tokens",
     "route_attempt": "Route attempt",
     "route_primary_model": "Route primary",
     "route_chain": "Route chain",
