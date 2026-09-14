@@ -33,7 +33,7 @@ _ISS = _REPO_ROOT / "desktop-shell" / "installer" / "windows" / "MyClaudeCode.is
 #: read from ``desktop_shell.py``'s pin: a winget submission is a separate,
 #: slower act than moving the Path A pin, and the day those two versions differ
 #: this test should keep passing while saying which release it is checking.
-MANIFEST_TAG = "v6.45.2"
+MANIFEST_TAG = "v7.13.1"
 MANIFEST_VERSION = MANIFEST_TAG[1:]
 
 _SUMS = (
@@ -45,10 +45,10 @@ _SUMS = (
     / "SHA256SUMS-desktop-shell.txt"
 )
 
-#: The release's publication date, as ``gh release view v6.45.2 --json
+#: The release's publication date, as ``gh release view v7.13.1 --json
 #: publishedAt`` reports it. ``render.py`` reads this from the GitHub API when
 #: it is not given one; a test may not.
-RELEASE_DATE = "2026-09-04"
+RELEASE_DATE = "2026-09-14"
 
 
 def _render_module():
@@ -269,6 +269,50 @@ def test_the_scope_is_per_user() -> None:
     """``PrivilegesRequired=lowest``: there is no machine-wide installer."""
 
     assert "Scope: user" in _installer_manifest()
+
+
+def test_the_webview2_runtime_is_declared_as_a_dependency() -> None:
+    """The shell cannot start without WebView2, so the manifest must say so.
+
+    This is a regression pin, not a preference. The first submission
+    (``microsoft/winget-pkgs`` PR #430045) was rejected with
+    ``Validation-Executable-Error`` on 2026-09-11: the pipeline installed the
+    package on a clean validator VM, ran ``MyClaudeCode.exe`` and got
+    ``-1073741515`` -- ``0xC0000135``, ``STATUS_DLL_NOT_FOUND``, i.e. the Edge
+    WebView2 runtime the Tauri window is drawn by was not there. The installer's
+    own bootstrapper did not cover it because it fires only when an EdgeUpdate
+    registry probe reports the runtime missing.
+
+    A manifest that loses this line reproduces that failure, and the only place
+    it surfaces is a community-repository pipeline days later.
+    """
+
+    installer = _installer_manifest()
+    assert "Dependencies:" in installer
+    assert "PackageDependencies:" in installer
+    assert f"- PackageIdentifier: {render.WEBVIEW2_DEPENDENCY}" in installer
+
+
+def test_the_declared_dependency_is_the_runtime_and_not_the_browser() -> None:
+    """``Microsoft.EdgeWebView2Runtime``, the redistributable component.
+
+    ``Microsoft.Edge`` is the browser and installing it does not give an app an
+    embeddable WebView2, so the two are not interchangeable here.
+    """
+
+    assert render.WEBVIEW2_DEPENDENCY == "Microsoft.EdgeWebView2Runtime"
+
+
+def test_no_minimum_version_is_pinned_for_the_dependency() -> None:
+    """No floor we have not measured (Part IV section 1: no invented limits).
+
+    Every WebView2 runtime the community repository ships is far newer than the
+    one Tauri needs, so a ``MinimumVersion`` here would be a number chosen
+    rather than established -- and it would start failing installs the day the
+    community repository's oldest published version moves past it.
+    """
+
+    assert "MinimumVersion" not in _installer_manifest()
 
 
 def test_submission_instructions_exist_and_are_not_a_submission() -> None:

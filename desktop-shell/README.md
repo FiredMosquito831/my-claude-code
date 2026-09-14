@@ -524,9 +524,9 @@ version reproduces the committed bytes. So a change to the `AppId` — the one
 change that would silently stop winget recognising an installed copy — is a red
 test rather than a support thread.
 
-    uv run --offline python desktop-shell/installer/winget/render.py v6.45.2
+    uv run --offline python desktop-shell/installer/winget/render.py v7.13.1
 
-`winget validate --manifest desktop-shell/installer/winget/6.45.2` passes.
+`winget validate --manifest desktop-shell/installer/winget/7.13.1` passes.
 
 Three things are deliberately absent:
 

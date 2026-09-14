@@ -1,29 +1,72 @@
 # Submitting the manifest to `microsoft/winget-pkgs`
 
-**Nothing in this directory has been submitted.** Publishing My Claude Code to
-the Windows Package Manager community repository puts the project's name in a
-Microsoft-run index, under a package identifier that is claimed permanently and
-is awkward to rename. That is the owner's call, not an implementation detail, so
-the manifests, the validation and the install/uninstall proof are all done and
-this file is where it stops. Nothing under `microsoft/winget-pkgs` has been
-forked, branched or opened.
+**Status: submitted, open, and blocked on one technical fix that this directory
+now carries.** The earlier version of this file said nothing had been submitted.
+That stopped being true on 2026-09-05.
 
-When the answer is yes, everything below is ready to run.
+| | |
+| --- | --- |
+| Pull request | [`microsoft/winget-pkgs` #430045](https://github.com/microsoft/winget-pkgs/pull/430045), opened 2026-09-05, **open** |
+| Submitted version | `6.45.2` — superseded; this directory now renders **7.13.1** |
+| CLA | **Signed** (the `Needs-CLA` label cleared on 2026-09-15) |
+| Remaining label | `Validation-Executable-Error` |
 
----
+## 0. The two rejections, and what each one taught
 
-## 0. What already holds
+Both are worth reading before touching anything here, because each was a
+*plausible* mistake rather than a careless one.
+
+**1. `Manifest-Version-Error` (2026-09-05).** The manifests went out declaring
+`ManifestVersion: 1.28.0` — the newest schema published under
+`doc/manifest/schema/`, and one the client on the release machine (winget
+v1.29.290) validated happily. The bot answered that **1.12.0** is "the version
+currently approved for release". *The newest schema that exists is not the
+newest schema the repository accepts, and `winget validate` passing proves only
+that your local client understands the file.* Fixed; `render.py` pins 1.12.0
+with the reasoning written at the constant.
+
+**2. `Validation-Executable-Error` (2026-09-11).** The pipeline installed the
+package on a clean validator VM, ran `MyClaudeCode.exe`, and got
+`-1073741515` = `0xC0000135` = `STATUS_DLL_NOT_FOUND`:
+
+> Executable C:\Users\validator\AppData\Local\Programs\My Claude Code\MyClaudeCode.exe returned exit code: -1073741515
+
+The shell is a Tauri app, so its window is drawn by the **Edge WebView2
+runtime** — a system component we do not bundle. Without it the executable
+cannot resolve its imports and Windows kills it before any of our code runs.
+The installer *does* carry a WebView2 bootstrapper, but it runs it only when its
+EdgeUpdate `pv` registry probe reports the runtime absent, and that probe does
+not answer usefully inside the validation image.
+
+The fix is to declare the dependency rather than to add a second detection
+heuristic, so the installer manifest now carries:
+
+```yaml
+Dependencies:
+  PackageDependencies:
+    - PackageIdentifier: Microsoft.EdgeWebView2Runtime
+```
+
+winget installs that before this package — which is what the validator needs and
+also what a user on a fresh Windows install needs. No `MinimumVersion`: every
+runtime the community repository ships is newer than the one Tauri requires, and
+a floor nobody measured is an invented limit.
+
+## 1. What already holds
 
 These are not predictions. They were measured on Windows 11 26100 with winget
-v1.29.290 against the real `v6.45.2` release asset, and the three moderator
-requirements are exactly what they check:
+v1.29.290 against a real release asset, and the three moderator requirements are
+exactly what they check. The measurements were taken against `v6.45.2`'s
+installer; nothing about the Inno script, the `AppId`, the switch set or the
+uninstall path has changed since, and the rendered manifest is a pure function of
+the release plus `MyClaudeCode.iss`.
 
 | Moderator requirement | Evidence |
 | --- | --- |
 | The installer must install **silently**. | `MyClaudeCode-Setup-windows-x86_64.exe /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART` — the literal switch set winget supplies for `InstallerType: inno` (`winget-cli`, `src/AppInstallerCommonCore/Manifest/ManifestCommon.cpp`, `GetDefaultKnownSwitches`) — exits `0` with no prompt and no elevation. |
 | **Uninstall must work**, silently. | winget runs `QuietUninstallString`, which this installer registers as `"…\unins000.exe" /SILENT`. Running exactly that exits `0` and removes the program directory, the Start Menu shortcut and the Apps & Features key. |
-| The **`ProductCode` must match the Apps & Features entry**. | With the app installed, `winget list --name "My Claude Code"` reports its id as `ARP\User\X64\{5FC8D5C3-33F7-4366-AD8D-C844D21BC089}_is1` — which is `Scope: user` + `Architecture: x64` + the manifest's `ProductCode`, character for character. That is the correlation winget will make once the identifier exists in a source. |
-| `winget validate` passes. | `winget validate --manifest desktop-shell/installer/winget/6.45.2` → *Manifest validation succeeded.* |
+| The **`ProductCode` must match the Apps & Features entry**. | With the app installed, `winget list --name "My Claude Code"` reports its id as `ARP\User\X64\{5FC8D5C3-33F7-4366-AD8D-C844D21BC089}_is1` — which is `Scope: user` + `Architecture: x64` + the manifest's `ProductCode`, character for character. |
+| `winget validate` passes. | `winget validate --manifest desktop-shell/installer/winget/7.13.1` → *Manifest validation succeeded.* **This is necessary and not sufficient** — see §0, rejection 1. |
 | Uninstalling leaves nothing behind. | `HKCU\…\Uninstall`, `HKCU\…\Run`, both Start Menu Programs trees, `%LOCALAPPDATA%\Programs` and `~/.local/bin` were snapshotted before the install and diffed after the uninstall. All five diffs were empty. |
 
 One thing to say out loud in the pull request rather than let a moderator find:
@@ -31,13 +74,13 @@ One thing to say out loud in the pull request rather than let a moderator find:
 EV certificate no longer skips SmartScreen). winget-pkgs accepts unsigned
 installers; it does not accept ones that prompt.
 
-## 1. Where the files go
+## 2. Where the files go
 
-The three manifests in `6.45.2/` beside this file are the submission, unchanged.
+The three manifests in `7.13.1/` beside this file are the submission, unchanged.
 Copy them to:
 
 ```
-manifests/f/FiredMosquito831/MyClaudeCode/6.45.2/
+manifests/f/FiredMosquito831/MyClaudeCode/7.13.1/
     FiredMosquito831.MyClaudeCode.yaml
     FiredMosquito831.MyClaudeCode.installer.yaml
     FiredMosquito831.MyClaudeCode.locale.en-US.yaml
@@ -58,14 +101,49 @@ differs from `AppsAndFeaturesEntries.Publisher`, which is `My Claude Code`:
 that field is not a display name, it is the string Inno Setup writes into the
 registry, and winget compares it against what it reads back.
 
-## 2. Two ways to submit
+## 3. Updating the open pull request
 
-### 2a. `wingetcreate` (recommended, and what future versions should use)
+**#430045 already exists, the CLA is signed against it, and its history carries
+both rejections.** Update it rather than opening a second one — one package
+version per pull request is enforced, and a duplicate would be closed.
+
+1. On the existing branch, **delete** `manifests/f/FiredMosquito831/MyClaudeCode/6.45.2/`
+   and add the three files from `7.13.1/` at the path in §2.
+2. Retitle the pull request to `New package: FiredMosquito831.MyClaudeCode version 7.13.1`.
+3. Push. The pipeline re-runs from scratch on the new head.
+4. Add a comment saying what changed and why — the `Validation-Executable-Error`
+   label is cleared by a moderator or by a green run, not by the push itself.
+
+Suggested comment:
+
+```markdown
+Superseding 6.45.2 with 7.13.1 and fixing the executable validation failure.
+
+The `-1073741515` (`0xC0000135`, `STATUS_DLL_NOT_FOUND`) on the validator VM was
+the Edge WebView2 runtime: this is a Tauri app, so its window is drawn by
+WebView2, and the executable cannot start without it. The installer carries a
+WebView2 bootstrapper but only invokes it when its EdgeUpdate registry probe
+reports the runtime missing, which does not hold inside the validation image.
+
+The installer manifest now declares the dependency:
+
+    Dependencies:
+      PackageDependencies:
+        - PackageIdentifier: Microsoft.EdgeWebView2Runtime
+
+so the runtime is installed before the package on any machine that lacks it.
+Nothing else about the package changed; the version moves to the current release
+because 6.45.2 is many releases old by now.
+```
+
+## 4. Two ways to submit a *new* version
+
+### 4a. `wingetcreate` (recommended, and what future versions should use)
 
 ```powershell
 winget install Microsoft.WingetCreate
 wingetcreate submit --token <a GitHub PAT with public_repo> `
-    desktop-shell\installer\winget\6.45.2
+    desktop-shell\installer\winget\7.13.1
 ```
 
 `wingetcreate submit` forks `microsoft/winget-pkgs` into the token's account,
@@ -74,48 +152,49 @@ For every release *after* the first, `wingetcreate update` is one command:
 
 ```powershell
 wingetcreate update FiredMosquito831.MyClaudeCode `
-    --version 6.46.0 `
-    --urls https://github.com/FiredMosquito831/my-claude-code/releases/download/v6.46.0/MyClaudeCode-Setup-windows-x86_64.exe `
+    --version 7.14.0 `
+    --urls https://github.com/FiredMosquito831/my-claude-code/releases/download/v7.14.0/MyClaudeCode-Setup-windows-x86_64.exe `
     --submit --token <PAT>
 ```
 
 It downloads the installer, computes the hash itself and carries every other
-field forward. Run `render.py` anyway and diff, so the in-repo copy stays the
-source of truth.
+field forward — **including `Dependencies`**, which is why declaring it once in
+`render.py` is enough. Run `render.py` anyway and diff, so the in-repo copy stays
+the source of truth.
 
-`komac update FiredMosquito831.MyClaudeCode --version 6.46.0 --urls <url>
+`komac update FiredMosquito831.MyClaudeCode --version 7.14.0 --urls <url>
 --submit` does the same job and is the tool most community publishers have moved
 to; either is fine.
 
-### 2b. By hand
+### 4b. By hand
 
 1. Fork `microsoft/winget-pkgs` **to the submitter's own account** — never to
    this project's organisation, and never push to `microsoft/winget-pkgs`
    itself.
-2. `git checkout -b FiredMosquito831.MyClaudeCode-6.45.2`
-3. Copy the three files into the path in §1.
-4. Commit: `New package: FiredMosquito831.MyClaudeCode version 6.45.2`
+2. `git checkout -b FiredMosquito831.MyClaudeCode-7.13.1`
+3. Copy the three files into the path in §2.
+4. Commit: `New package: FiredMosquito831.MyClaudeCode version 7.13.1`
 5. Push and open one pull request. **One package version per pull request** —
    that rule is enforced.
 
-## 3. The pull request text, ready to paste
+## 5. The pull request text, ready to paste
 
 **Title**
 
 ```
-New package: FiredMosquito831.MyClaudeCode version 6.45.2
+New package: FiredMosquito831.MyClaudeCode version 7.13.1
 ```
 
 **Body**
 
 ```markdown
 ### Package
-`FiredMosquito831.MyClaudeCode` 6.45.2 — the My Claude Code desktop app, a
+`FiredMosquito831.MyClaudeCode` 7.13.1 — the My Claude Code desktop app, a
 small native window (~3.5 MB installed) onto the dashboard the project's local
 server already serves on 127.0.0.1.
 
 Homepage: https://github.com/FiredMosquito831/my-claude-code
-Installer: https://github.com/FiredMosquito831/my-claude-code/releases/download/v6.45.2/MyClaudeCode-Setup-windows-x86_64.exe
+Installer: https://github.com/FiredMosquito831/my-claude-code/releases/download/v7.13.1/MyClaudeCode-Setup-windows-x86_64.exe
 
 ### Checklist
 - [x] Have you signed the [Contributor License Agreement](https://cla.opensource.microsoft.com/microsoft/winget-pkgs)?
@@ -125,6 +204,11 @@ Installer: https://github.com/FiredMosquito831/my-claude-code/releases/download/
 - [x] Does your manifest conform to the [1.12 schema](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest/schema/1.12.0)?
 
 ### Notes for the reviewer
+- **Depends on `Microsoft.EdgeWebView2Runtime`.** This is a Tauri app: the window
+  is drawn by the WebView2 runtime, and the executable will not start without it
+  (`0xC0000135`). The dependency is declared rather than left to the installer's
+  own bootstrapper, which only fires when its registry probe reports the runtime
+  missing.
 - **Per-user Inno Setup installer**, `PrivilegesRequired=lowest`. `Scope: user`;
   there is no machine-scope installer to offer.
 - **Silent install and silent uninstall both verified**, using the default Inno
@@ -146,7 +230,7 @@ Installer: https://github.com/FiredMosquito831/my-claude-code/releases/download/
   byte-for-byte what it produces.
 ```
 
-## 4. After it is accepted
+## 6. After it is accepted
 
 1. Add the badge / one-liner to the README's Windows row — the text is already
    written there, gated on "once the manifest is accepted".
@@ -158,14 +242,17 @@ Installer: https://github.com/FiredMosquito831/my-claude-code/releases/download/
    `AppsAndFeaturesEntries.DisplayVersion` is the version Inno stamps, which is
    the tag without its `v`.
 
-## 5. What must not happen
+## 7. What must not happen
 
-- Do not fork, branch, push to or open anything under `microsoft/winget-pkgs`
-  without the owner saying so explicitly. This file exists so that when they do,
-  nothing has to be worked out under time pressure.
+- Do not push to anything under `microsoft/winget-pkgs` without the owner saying
+  so explicitly, and never to `microsoft/winget-pkgs` itself — only to a fork.
+- Do not open a second pull request while #430045 is open. One package version
+  per pull request is enforced and duplicates are closed.
 - Do not submit a version whose release assets are not final. The
   `InstallerSha256` is checked on every install; re-uploading an asset after
   submission breaks every install of that version, and the fix is a new
   manifest version, not an edit.
-- Do not hand-edit the files in `6.45.2/`. They are rendered; edit `render.py`
+- Do not hand-edit the files in `7.13.1/`. They are rendered; edit `render.py`
   and re-run it, or `tests/scripts/test_winget_manifest.py` fails.
+- Do not drop the `Dependencies` block when bumping a version by hand. It is
+  pinned by a test for exactly that reason.
