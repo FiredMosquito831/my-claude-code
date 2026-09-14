@@ -128,6 +128,35 @@ pub struct Status {
     /// python.exe from a stranger.
     #[serde(default)]
     pub holder: Option<Holder>,
+    /// The other My Claude Code servers this machine's last survey found.
+    ///
+    /// Written by `cli/desktop_status.py:349` from `other-servers.json` since
+    /// 6.72.2 and read by nobody until 7.7.1. Optional and defaulted, per C3:
+    /// a window must keep working against a wheel that does not send it, and
+    /// an empty list means "none found" and "no survey has run recently"
+    /// alike -- which is the honest answer for both and the only one this
+    /// binary is allowed to act on.
+    #[serde(default)]
+    pub other_servers: Vec<OtherServer>,
+}
+
+/// One entry of that survey. Only `status` is read here.
+///
+/// Deliberately not the whole `ServerObservation`: the tray does not decide
+/// anything about these processes and must not look as though it could. It
+/// counts the ones Python already called `stale` and raises the window, where
+/// the confirmation that names every pid lives.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OtherServer {
+    #[serde(default)]
+    pub status: String,
+}
+
+impl OtherServer {
+    /// The one word this binary is allowed to act on, spelled by Python.
+    pub fn is_stale(&self) -> bool {
+        self.status == "stale"
+    }
 }
 
 /// The port holder, as Python's `classify_port_holder` reports it.
@@ -249,6 +278,72 @@ mod tests {
         assert_eq!(status.server_presence, "healthy");
         assert_eq!(status.health_failure_threshold, 3);
         assert!((status.reconnect_timeout_seconds - 1320.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_document_with_no_survey_reports_no_other_servers() {
+        // C3: every wheel before 6.72.2 emits a document without the key, and
+        // an absent survey must read as "none to act on", never as an error.
+        let status = parse_status(&sample_json().to_string()).expect("sample parses");
+        assert!(status.other_servers.is_empty());
+    }
+
+    #[test]
+    fn a_survey_with_one_stale_entry_is_counted_as_one() {
+        let mut document = sample_json();
+        document["other_servers"] = serde_json::json!([
+            {
+                "pids": [6764, 36856],
+                "session_id": 232,
+                "host": "0.0.0.0",
+                // The sample document's port, not MCC's own default one:
+                // the shell source may never spell that, and a test fixture
+                // is source
+                // (tests/contracts/test_config_dir_is_single_sourced.py).
+                "port": 9999,
+                "started_at": 1_760_000_000.0,
+                "last_seen_at": 1_760_000_100.0,
+                "status": "stale",
+                "reason": "superseded",
+                "holds": [],
+            },
+            {"pids": [16884], "status": "live", "reason": "heartbeating"},
+            {"pids": [55192], "status": "serving", "reason": "owns a socket"},
+        ]);
+        let status = parse_status(&document.to_string()).expect("survey parses");
+
+        assert_eq!(status.other_servers.len(), 3);
+        assert_eq!(
+            status
+                .other_servers
+                .iter()
+                .filter(|item| item.is_stale())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_status_word_this_build_has_never_heard_of_is_not_stale() {
+        // The whole rule: `stale` is Python's word and this binary recognises
+        // exactly it. Anything else -- a newer status, a typo, an empty
+        // string -- is left alone.
+        let mut document = sample_json();
+        document["other_servers"] = serde_json::json!([
+            {"status": "quarantined"},
+            {"status": ""},
+            {"status": "STALE"},
+        ]);
+        let status = parse_status(&document.to_string()).expect("survey parses");
+
+        assert_eq!(
+            status
+                .other_servers
+                .iter()
+                .filter(|item| item.is_stale())
+                .count(),
+            0
+        );
     }
 
     #[test]

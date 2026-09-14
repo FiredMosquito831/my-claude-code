@@ -221,6 +221,7 @@ static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 static LOCAL_URL: OnceLock<String> = OnceLock::new();
 static TRAY_STATUS_ITEM: Mutex<Option<MenuItem<Wry>>> = Mutex::new(None);
 static TRAY_UPDATE_ITEM: Mutex<Option<MenuItem<Wry>>> = Mutex::new(None);
+static TRAY_SERVERS_ITEM: Mutex<Option<MenuItem<Wry>>> = Mutex::new(None);
 
 // -- commands the page may call -------------------------------------------
 
@@ -412,6 +413,29 @@ fn set_tray_status(text: &str) {
     }
 }
 
+/// Say how many stale servers the wheel's own survey found, in the tray.
+///
+/// Counting is the whole of this binary's part. The decision, the list of
+/// pids, and the confirmation that names each one live on the Providers page
+/// (7.7.0); clicking this item raises the window onto that page and stops
+/// nothing. There is one confirmation UI, and the Rust side never holds the
+/// stop decision -- which is the rule the 2026-09-10 near-miss produced, when
+/// a plan derived from one socket scan would have stopped two live servers.
+fn announce_stale_servers(count: usize) {
+    if let Ok(guard) = TRAY_SERVERS_ITEM.lock() {
+        if let Some(item) = guard.as_ref() {
+            if count == 0 {
+                let _ = item.set_text("No stale servers");
+                let _ = item.set_enabled(false);
+            } else {
+                let plural = if count == 1 { "" } else { "s" };
+                let _ = item.set_text(format!("Stop {count} stale server{plural}..."));
+                let _ = item.set_enabled(true);
+            }
+        }
+    }
+}
+
 /// Build the tray once, and only when the operator has one enabled.
 ///
 /// `tray_enabled` is the same switch the Python tray reads. Honouring it is
@@ -443,6 +467,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         false,
         None::<&str>,
     )?;
+    // Created disabled, from the start, for the same reason the update item
+    // above is: a Tauri tray menu cannot grow an item after it is built, and a
+    // menu that changes shape under the cursor is worse than a greyed line.
+    let servers = MenuItem::with_id(
+        app,
+        "stale-servers",
+        "No stale servers",
+        false,
+        None::<&str>,
+    )?;
     // The escape hatch for BUG-7. It is in the tray and not in the window
     // because the whole failure mode is that there is no window to click.
     let reset = MenuItem::with_id(
@@ -462,6 +496,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &status,
             &separator,
             &update,
+            &servers,
             &reset,
             &second_separator,
             &quit,
@@ -475,6 +510,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => raise(app),
             "restart-update" => restart_into_staged(app),
+            // Raises the window. It never stops anything: the confirmation
+            // that names every pid is the dashboard's, and there is one of it.
+            "stale-servers" => raise(app),
             "reset-window" => reset_window_position(app),
             "quit" => {
                 QUITTING.store(true, Ordering::SeqCst);
@@ -511,6 +549,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
     if let Ok(mut guard) = TRAY_UPDATE_ITEM.lock() {
         *guard = Some(update);
+    }
+    if let Ok(mut guard) = TRAY_SERVERS_ITEM.lock() {
+        *guard = Some(servers);
     }
     // A staged update found before the tray existed still has to reach it.
     announce_staged_update();
@@ -677,6 +718,13 @@ fn apply_status(window: &WebviewWindow, status: &Status) {
     // what made the close button end the app -- and take the tray and the
     // server with it -- on the two platforms that have a tray at all.
     CLOSE_TO_TRAY.store(status.close_to_tray, Ordering::SeqCst);
+    announce_stale_servers(
+        status
+            .other_servers
+            .iter()
+            .filter(|server| server.is_stale())
+            .count(),
+    );
     let Some(directory) = DATA_DIR.get() else {
         return;
     };
