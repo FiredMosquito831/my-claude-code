@@ -5,6 +5,7 @@ import json
 import threading
 from collections.abc import Callable
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -163,6 +164,23 @@ def _desktop_shell_auto_update(inputs: tuple[bool, bool] | None) -> None:
         logger.info(result.message)
 
 
+def _housekeeping_stage_dir() -> Path | None:
+    """``<config dir>/updates``, resolved on the caller's thread.
+
+    Naming it creates nothing. ``None`` when it cannot be resolved, which the
+    sweep reads as "skip the transcript prune this start" rather than as a
+    reason to resolve it late.
+    """
+
+    try:
+        from my_claude_code.config.paths import config_dir_path
+
+        return config_dir_path() / "updates"
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("The update stage directory could not be resolved.")
+        return None
+
+
 def _housekeeping_inputs() -> tuple[bool, bool] | None:
     """Read the post-readiness thread's config-directory answers, here.
 
@@ -188,12 +206,17 @@ def _housekeeping_inputs() -> tuple[bool, bool] | None:
         return None
 
 
-def _sweep_superseded_environments() -> None:
+def _sweep_superseded_environments(stage_dir: Path | None) -> None:
     """Tidy what earlier updates left behind, once per server start.
 
     Shares the post-readiness thread with the desktop-app update for the same
     reasons: it touches the filesystem, it is nobody's hurry, and it must never
     be on a request path.
+
+    ``stage_dir`` is bound by the caller, like the two answers beside it: the
+    transcript prune is under the *config* directory, and a thread that
+    resolves that for itself publishes whatever the environment said when it
+    ticked to the whole process.
 
     What it cleans is the tail of an old installer habit. ``install.ps1``
     renames the live environment to ``my-claude-code.old-<stamp>`` before
@@ -211,7 +234,7 @@ def _sweep_superseded_environments() -> None:
             sweep_superseded_environments,
         )
 
-        message = sweep_superseded_environments()
+        message = sweep_superseded_environments(stage_dir)
     except Exception:
         logger.debug("Update housekeeping could not be attempted.")
         return
@@ -234,17 +257,19 @@ def start_desktop_shell_auto_update() -> None:
     _SHELL_AUTO_UPDATE_RUN = True
     threading.Thread(
         target=_post_readiness_housekeeping,
-        args=(_housekeeping_inputs(),),
+        args=(_housekeeping_inputs(), _housekeeping_stage_dir()),
         name="mcc-desktop-shell-auto-update",
         daemon=True,
     ).start()
 
 
-def _post_readiness_housekeeping(inputs: tuple[bool, bool] | None) -> None:
+def _post_readiness_housekeeping(
+    inputs: tuple[bool, bool] | None, stage_dir: Path | None
+) -> None:
     """Everything the server does once, after it is answering, off the loop."""
 
     _desktop_shell_auto_update(inputs)
-    _sweep_superseded_environments()
+    _sweep_superseded_environments(stage_dir)
 
 
 def reset_desktop_shell_auto_update_for_tests() -> None:

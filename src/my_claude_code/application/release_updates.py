@@ -503,7 +503,7 @@ def _is_superseded_env_dir(name: str) -> bool:
     return False
 
 
-def sweep_superseded_environments() -> str | None:
+def sweep_superseded_environments(stage_dir: Path | None = None) -> str | None:
     """Move aside-copies out of uv's tools root and keep exactly one.
 
     Runs once per server start, on the post-readiness thread, never on a
@@ -520,6 +520,14 @@ def sweep_superseded_environments() -> str | None:
     Returns one sentence for the log when it did something, and ``None`` when
     there was nothing to do -- a sweep that ran and found nothing should be
     silent, or every start would say so.
+
+    ``stage_dir`` is ``<config dir>/updates``, and the caller passes it. It is
+    a parameter because this runs on the post-readiness daemon thread, and
+    resolving the config directory *there* reads whatever the environment says
+    at the instant the thread ticks and caches that answer process-wide --
+    which is the defect 7.6.1 removed from the other two things that thread
+    does. This was the third of them: the transcript prune is the one line in
+    here that is not about uv's tools root.
     """
 
     tool_dir = _installed_tool_dir()
@@ -578,7 +586,9 @@ def sweep_superseded_environments() -> str | None:
         if abandoned:
             done.append(f"removed {abandoned} abandoned staging environment(s)")
     transcripts = sorted(
-        _stage_dir().glob(f"{INSTALL_LOG_PREFIX}*{INSTALL_LOG_SUFFIX}"),
+        (stage_dir if stage_dir is not None else _stage_dir()).glob(
+            f"{INSTALL_LOG_PREFIX}*{INSTALL_LOG_SUFFIX}"
+        ),
         key=lambda path: path.name,
         reverse=True,
     )
