@@ -207,10 +207,28 @@ def test_only_codex_sets_a_default_model_without_being_asked():
     ]
 
 
-def test_the_opt_in_checkbox_adds_a_default_model_where_one_is_declared():
+def test_the_only_app_with_a_model_key_is_the_one_that_always_writes_it():
+    """Which is why the opt-in checkbox was removed in 7.6.6.
+
+    ``overwritten_scalars`` writes a ``model`` scalar only for a spec whose
+    document declares the key. Exactly one does, and it is the same one that
+    declares ``sets_default_model`` -- so the checkbox's flag had nowhere it
+    could take effect.
+    """
+
     codex = DESKTOP_APPS_BY_ID["codex_desktop"]
     assert overwritten_scalars(codex)["model"] == "mcc/best"
-    assert overwritten_scalars(codex, set_default_model=False)["model"] == "mcc/best"
+
+    declare_model = {
+        spec.id
+        for spec in DESKTOP_APPS
+        if spec.document is not None and ("model",) in spec.document.overwritten_keys
+    }
+    assert declare_model == {"codex_desktop"}
+    for spec in DESKTOP_APPS:
+        if spec.id == "codex_desktop" or spec.document is None:
+            continue
+        assert "model" not in overwritten_scalars(spec), spec.id
 
 
 def test_a_sidecar_is_only_declared_where_the_app_reads_a_file_of_its_own():

@@ -2,7 +2,7 @@
 
     mcc-apps list
     mcc-apps status <app>
-    mcc-apps configure <app> [--preview] [--default-model]
+    mcc-apps configure <app> [--preview]
     mcc-apps undo <app> [--restore]
 
 **Why it calls the server rather than the engine.** Every card's Configure
@@ -178,7 +178,7 @@ def _print_plan(plan: dict[str, Any]) -> None:
         print("`mcc-apps undo <app> --restore` puts those back.")
 
 
-def _configure(app_id: str, *, preview: bool, default_model: bool) -> None:
+def _configure(app_id: str, *, preview: bool) -> None:
     entry = _find(app_id)
     if entry.get("status") != "servable":
         raise AppsCommandError(
@@ -186,7 +186,7 @@ def _configure(app_id: str, *, preview: bool, default_model: bool) -> None:
             f"Run `mcc-apps status {app_id}` for what to do instead."
         )
 
-    payload = {"set_default_model": default_model}
+    payload: dict[str, object] = {}
     plan = _call("POST", f"{DESKTOP_APPS_PATH}/{app_id}/plan", payload)
     _print_plan(plan)
     if preview:
@@ -245,12 +245,6 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="show the diff and write nothing",
     )
-    configure.add_argument(
-        "--default-model",
-        action="store_true",
-        help="also set the app's default model to mcc/best",
-    )
-
     undo = subcommands.add_parser("undo", help="remove MCC's keys")
     undo.add_argument("app")
     undo.add_argument(
@@ -272,11 +266,7 @@ def apps_command(argv: Sequence[str] | None = None) -> None:
             case "status":
                 _print_status(args.app)
             case "configure":
-                _configure(
-                    args.app,
-                    preview=args.preview,
-                    default_model=args.default_model,
-                )
+                _configure(args.app, preview=args.preview)
             case "undo":
                 _undo(args.app, restore=args.restore)
     except AppsCommandError as exc:

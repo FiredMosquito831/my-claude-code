@@ -328,13 +328,16 @@ def _substitute(
 
 
 def overwritten_scalars(
-    spec: DesktopAppSpec, *, set_default_model: bool = False, sidecar_path: str = ""
+    spec: DesktopAppSpec, *, sidecar_path: str = ""
 ) -> dict[str, object]:
     """Return the top-level values Configure replaces, keyed as the spec names them.
 
-    ``set_default_model`` is the opt-in checkbox. It is ignored where the spec
-    already declares ``sets_default_model``, which is Codex alone and by
-    necessity rather than by preference.
+    A ``model`` scalar is written when the spec declares ``sets_default_model``,
+    which is Codex alone and by necessity rather than by preference: not writing
+    a model there leaves a provider Codex's own UI cannot select. There used to
+    be an opt-in checkbox that could also ask for it; it was removed in 7.6.6,
+    because Codex is also the only spec whose document declares a ``model`` key
+    at all, so the box could not change a byte on any row it appeared on.
 
     ``sidecar_path`` is where the file MCC owns outright landed on *this*
     machine, which only the caller can know. The spec names the key it belongs
@@ -355,7 +358,7 @@ def overwritten_scalars(
             continue
         match label:
             case "model":
-                if spec.sets_default_model or set_default_model:
+                if spec.sets_default_model:
                     scalars[label] = DEFAULT_MODEL_ID
             case "model_provider" | "GOOSE_PROVIDER":
                 scalars[label] = DESKTOP_PROVIDER_ID

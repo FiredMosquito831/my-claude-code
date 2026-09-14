@@ -87,14 +87,19 @@ class DesktopUndoPayload(BaseModel):
 
 
 class DesktopConfigurePayload(BaseModel):
-    """The one choice a card offers before Configure runs.
+    """Configure takes no choices.
 
-    ``set_default_model`` is the opt-in checkbox. It is ignored where the spec
-    already declares ``sets_default_model`` -- Codex, where *not* writing a
-    model leaves a provider its own UI cannot select.
+    It carried one field until 7.6.6, ``set_default_model``, behind a checkbox
+    that rendered on every servable card except Codex -- and Codex is the only
+    spec whose document declares a ``model`` key, which it writes
+    unconditionally. The field could not change a byte on any card that offered
+    it.
+
+    The model is kept, rather than the routes losing their body, because
+    pydantic ignores unknown fields by default: an older ``mcc-apps`` or a
+    script still posting ``{"set_default_model": true}`` keeps working and is
+    simply not offered a choice it never had.
     """
-
-    set_default_model: bool = False
 
 
 def _resolve(app_id: str) -> DesktopAppSpec:
@@ -140,8 +145,6 @@ def _documents(
     spec: DesktopAppSpec,
     services: ApiServices,
     settings: Settings,
-    *,
-    set_default_model: bool,
 ) -> tuple[dict[str, Any] | None, dict[str, object], dict[str, Any] | None]:
     """Return the block, the overwritten scalars and the sidecar for one app.
 
@@ -173,11 +176,7 @@ def _documents(
             proxy_root_url=proxy_root_url,
             auth_token=token if writes_literal_credential(spec) else "",
         ),
-        overwritten_scalars(
-            spec,
-            set_default_model=set_default_model,
-            sidecar_path=_sidecar_path(spec),
-        ),
+        overwritten_scalars(spec, sidecar_path=_sidecar_path(spec)),
         sidecar_document(
             spec,
             models,
@@ -381,9 +380,7 @@ async def plan_desktop_app(
     _require_servable(spec)
 
     def run() -> dict[str, Any]:
-        block, scalars, sidecar = _documents(
-            spec, services, settings, set_default_model=payload.set_default_model
-        )
+        block, scalars, sidecar = _documents(spec, services, settings)
         plan = plan_desktop(
             spec,
             env=os.environ,
@@ -414,9 +411,7 @@ async def configure_desktop_app(
     _require_servable(spec)
 
     def run() -> dict[str, Any]:
-        block, scalars, sidecar = _documents(
-            spec, services, settings, set_default_model=payload.set_default_model
-        )
+        block, scalars, sidecar = _documents(spec, services, settings)
         result = apply_desktop(
             spec,
             env=os.environ,

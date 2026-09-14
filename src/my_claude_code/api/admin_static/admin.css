@@ -7549,12 +7549,6 @@ details.turn-pane > summary:focus-visible {
   align-items: center;
 }
 
-.desktop-default-model {
-  display: block;
-  margin-bottom: 0.5rem;
-  font-size: 0.85rem;
-}
-
 .desktop-undo-mode {
   min-width: 14rem;
 }
