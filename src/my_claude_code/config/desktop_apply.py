@@ -51,6 +51,7 @@ to the wrong path.
 
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -1181,18 +1182,62 @@ def _prune_empty_ancestors(
 _MISSING = object()
 
 
-def _json_text(document: object, before_text: str) -> str:
-    """Serialise an object document, keeping the file's trailing-newline habit.
+#: The first line of a pretty-printed JSON document that carries leading
+#: whitespace is at depth one, so its whitespace *is* the document's indent
+#: unit. Anchored to a non-space so a blank line cannot be mistaken for one.
+_FIRST_INDENT = re.compile(r"^([ \t]+)(?=\S)", re.MULTILINE)
 
-    Everything else about an object document is normalised by a round trip
-    through ``json`` -- that is the price of the format, and every app here
-    pays it. The trailing newline need not be: Claude Desktop writes its own
-    ``_meta.json`` without one, so appending one left a Configure/Undo cycle
-    one byte away from where it started. A promise to return a file to what
-    it was is worth keeping exactly.
+
+def _json_shape(before_text: str) -> tuple[str | int | None, tuple[str, str]]:
+    """Return the ``indent`` and ``separators`` this document was written with.
+
+    Object documents are the ones ``edits_the_text`` cannot edit as text --
+    Claude Desktop's ``_meta.json`` is owned as *one element of a list*, which
+    no key-path edit can name -- so they are rebuilt from the object model.
+    Rebuilding them at a fixed two-space indent re-formats a hand-authored file
+    that used tabs, four spaces, or no newlines at all: Undo then returns the
+    file in a shape it never had, which is worse than it found it.
+
+    Four shapes, which is what a hand-authored file actually takes:
+
+    * an indented document answers with its own first-level whitespace, so
+      two-space, four-space and tab documents all come back as themselves;
+    * a single-line document answers ``None``, and its separators are read from
+      whether it spaces its punctuation;
+    * a multi-line document with no indented line at all is the one case that
+      cannot be told, and keeps the two-space default this has always used.
+
+    This does not make every object document byte-exact -- key order is the
+    object model's, and a document with unusual inner whitespace still comes
+    back canonical. It makes the shapes a person actually writes survive.
     """
 
-    text = json.dumps(document, indent=2)
+    if not before_text.strip():
+        # A file that did not exist, or one that was blank, has no bytes of
+        # anybody's to preserve. The canonical document is the better answer
+        # and is what this has always produced.
+        return 2, (",", ": ")
+    indent_match = _FIRST_INDENT.search(before_text)
+    if indent_match is not None:
+        return indent_match.group(1), (",", ": ")
+    if "\n" in before_text.strip():
+        return 2, (",", ": ")
+    spaced = '": ' in before_text or '", "' in before_text
+    return None, (", ", ": ") if spaced else (",", ":")
+
+
+def _json_text(document: object, before_text: str) -> str:
+    """Serialise an object document in the shape the file already had.
+
+    Two habits are kept rather than normalised away. The **indent** is the
+    document's own -- see :func:`_json_shape`. The **trailing newline** is too:
+    Claude Desktop writes its own ``_meta.json`` without one, so appending one
+    left a Configure/Undo cycle one byte away from where it started. A promise
+    to return a file to what it was is worth keeping exactly.
+    """
+
+    indent, separators = _json_shape(before_text)
+    text = json.dumps(document, indent=indent, separators=separators)
     if before_text and not before_text.endswith("\n"):
         return text
     return text + "\n"
