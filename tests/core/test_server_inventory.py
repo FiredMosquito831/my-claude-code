@@ -87,11 +87,16 @@ def _decoy_python() -> ProcessFacts:
 def _observe(
     *,
     processes: list[ProcessFacts] | None = None,
-    listening: frozenset[int] = frozenset(),
+    listening: frozenset[tuple[int, int]] = frozenset(),
     sessions: list[ServerSession] | None = None,
     self_pid: int | None = None,
 ) -> list[ServerObservation]:
-    """Drive the classifier off a fabricated machine and a fabricated log."""
+    """Drive the classifier off a fabricated machine and a fabricated log.
+
+    ``listening`` is ``(port, pid)`` since 7.6.8: a listening socket is a fact
+    about a port as well as about a process, and the two cases this file exists
+    to keep apart -- "lost its listener" and "moved" -- differ only in the port.
+    """
 
     return observe_servers(
         request_log_path=Path("does-not-exist.db"),
@@ -129,6 +134,88 @@ def test_a_heartbeating_server_with_no_socket_is_live_and_never_actionable() -> 
     )
     assert [item.status for item in observations] == [STATUS_LIVE]
     assert not observations[0].is_actionable
+
+
+class TestLostItsListenerVersusMovedPort:
+    """The two answers that used to share one reason string.
+
+    ``serving`` was ``bool(sockets.intersection(chain.pids))`` -- *any*
+    listening socket owned by the chain. A server that reached ``run()``, lost
+    its listener and kept heartbeating therefore landed in ``live``, whose
+    reason reads "not necessarily reachable, but running"; so did a server that
+    had simply moved to another port. Comparing against the *recorded* port
+    separates them.
+
+    Nothing here becomes actionable. ``ACTIONABLE_STATUSES`` is still
+    ``{stale}`` and both of these are ``live``/``serving``; only the reason and
+    the evidence behind it change.
+    """
+
+    SESSION = ServerSession(
+        id=232,
+        pid=63484,
+        started_at=NOW - 90_000,
+        last_seen_at=NOW - 6,
+        host="0.0.0.0",
+        port=8082,
+    )
+
+    def test_a_fresh_heartbeat_and_no_socket_on_the_recorded_port_says_so(
+        self,
+    ) -> None:
+        """Something else is listening, so the table was readable -- and this
+        chain is not on its own port."""
+
+        observations = _observe(
+            processes=_launch(6764, 63484, started_at=NOW - 90_000),
+            listening=frozenset({(443, 999)}),
+            sessions=[self.SESSION],
+        )
+
+        assert observations[0].status == STATUS_LIVE
+        assert not observations[0].is_actionable
+        assert "listener is gone" in observations[0].reason
+        assert "8082" in observations[0].reason
+
+    def test_a_socket_on_another_port_says_it_moved(self) -> None:
+        observations = _observe(
+            processes=_launch(6764, 63484, started_at=NOW - 90_000),
+            listening=frozenset({(9999, 63484)}),
+            sessions=[self.SESSION],
+        )
+
+        assert observations[0].status == STATUS_SERVING
+        assert not observations[0].is_actionable
+        assert "it moved" in observations[0].reason
+        assert "9999" in observations[0].reason
+        assert "8082" in observations[0].reason
+
+    def test_a_socket_on_the_recorded_port_says_that_instead(self) -> None:
+        observations = _observe(
+            processes=_launch(6764, 63484, started_at=NOW - 90_000),
+            listening=frozenset({(8082, 63484)}),
+            sessions=[self.SESSION],
+        )
+
+        assert observations[0].status == STATUS_SERVING
+        assert "recorded port 8082" in observations[0].reason
+        assert "moved" not in observations[0].reason
+
+    def test_an_unreadable_socket_table_makes_no_claim_about_a_listener(
+        self,
+    ) -> None:
+        """An empty enumeration is "we could not look", not "nothing is
+        listening" -- so it must not be turned into "its listener is gone"."""
+
+        observations = _observe(
+            processes=_launch(6764, 63484, started_at=NOW - 90_000),
+            listening=frozenset(),
+            sessions=[self.SESSION],
+        )
+
+        assert observations[0].status == STATUS_LIVE
+        assert "listener is gone" not in observations[0].reason
+        assert "not necessarily reachable" in observations[0].reason
 
 
 def test_a_quiet_server_is_left_alone_while_nothing_else_claims_its_port() -> None:
@@ -169,7 +256,7 @@ def test_a_session_with_no_recorded_port_can_never_be_proven_stale() -> None:
 def test_a_second_instance_on_another_port_is_serving_not_stale() -> None:
     observations = _observe(
         processes=_launch(6764, 63484, started_at=NOW - 90_000),
-        listening=frozenset({63484}),
+        listening=frozenset({(9999, 63484)}),
         sessions=[
             ServerSession(
                 id=232,
@@ -239,7 +326,7 @@ def test_a_superseded_server_is_stale_only_once_something_else_serves_its_port()
         ),
     ]
     observations = _observe(
-        processes=processes, listening=frozenset({35280}), sessions=sessions
+        processes=processes, listening=frozenset({(8082, 35280)}), sessions=sessions
     )
     by_pid = {item.pids[0]: item for item in observations}
     assert by_pid[6764].status == STATUS_STALE
@@ -429,7 +516,7 @@ def test_the_stop_path_signals_only_the_provably_stale_chain(monkeypatch) -> Non
         ),
     ]
     observations = _observe(
-        processes=processes, listening=frozenset({35280}), sessions=sessions
+        processes=processes, listening=frozenset({(8082, 35280)}), sessions=sessions
     )
     by_root = {item.pids[0]: item.status for item in observations}
     assert by_root == {

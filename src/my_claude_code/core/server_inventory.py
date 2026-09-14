@@ -54,7 +54,7 @@ from loguru import logger
 from my_claude_code.core.mcc_processes import (
     ProcessChain,
     ProcessFacts,
-    listening_pids,
+    listening_endpoints,
     mcc_server_chains,
     stop_chain,
 )
@@ -177,20 +177,30 @@ def observe_servers(
     self_pid: int | None = None,
     stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
     processes: list[ProcessFacts] | None = None,
-    listening: frozenset[int] | None = None,
+    listening: frozenset[tuple[int, int]] | None = None,
     sessions: list[ServerSession] | None = None,
     now: float | None = None,
 ) -> list[ServerObservation]:
     """Describe every MCC server launch on this machine except this process's.
 
     Every input can be supplied, which is how the tests drive this against a
-    fabricated process table, a fabricated set of listening pids and a
-    fabricated session list without going near a real machine.
+    fabricated process table, a fabricated set of listening ``(port, pid)``
+    endpoints and a fabricated session list without going near a real machine.
+
+    ``listening`` carries the port as well as the pid since 7.6.8. It used to
+    be pids alone, which could not tell a server that lost its listener from
+    one that moved: both owned no socket on their recorded port and both landed
+    in ``live``, whose reason said "not necessarily reachable, but running" for
+    each of them.
     """
 
     moment = time.time() if now is None else now
     chains = mcc_server_chains(processes)
-    sockets = listening_pids() if listening is None else listening
+    endpoints = listening_endpoints() if listening is None else listening
+    sockets = {pid for _port, pid in endpoints}
+    # An empty enumeration is "we could not look", not "nothing is listening"
+    # (see ``listening_endpoints``), so no sharper claim is made from it.
+    enumerated = bool(endpoints)
     rows = (
         read_server_sessions(request_log_path) if sessions is None else list(sessions)
     )
@@ -211,7 +221,12 @@ def observe_servers(
             continue
         session = _session_for(chain, rows)
         holds = chain.holds()
+        chain_ports = sorted(
+            {port for port, pid in endpoints if pid in set(chain.pids)}
+        )
         serving = bool(sockets.intersection(chain.pids))
+        recorded_port = session.port if session is not None else None
+        on_recorded_port = recorded_port is not None and recorded_port in chain_ports
         started_at = _chain_started_at(chain)
         if session is not None and session.started_at:
             started_at = session.started_at
@@ -220,15 +235,39 @@ def observe_servers(
         reason = "no session row and no listening socket; MCC cannot tell what it is"
         if serving:
             status = STATUS_SERVING
-            reason = "owns a listening socket; this is another running server"
+            where = ", ".join(str(port) for port in chain_ports)
+            if on_recorded_port:
+                reason = (
+                    f"owns a listening socket on its recorded port "
+                    f"{recorded_port}; this is another running server"
+                )
+            elif recorded_port is not None:
+                # Same status, sharper evidence: it is serving, just not where
+                # its session row says. Nothing becomes actionable from this.
+                reason = (
+                    f"owns a listening socket on port {where} but its session "
+                    f"recorded port {recorded_port}; it moved"
+                )
+            else:
+                reason = (
+                    f"owns a listening socket on port {where}; this is another "
+                    "running server"
+                )
         elif session is not None:
             age = max(0.0, moment - session.last_seen_at)
             if age <= stale_after_seconds:
                 status = STATUS_LIVE
-                reason = (
-                    f"heartbeat {age:.0f}s old; a running server, not "
-                    "necessarily reachable, but running"
-                )
+                if enumerated and recorded_port is not None:
+                    reason = (
+                        f"heartbeat {age:.0f}s old but nothing is listening on "
+                        f"its recorded port {recorded_port}; its listener is "
+                        "gone and the process is still running"
+                    )
+                else:
+                    reason = (
+                        f"heartbeat {age:.0f}s old; a running server, not "
+                        "necessarily reachable, but running"
+                    )
             elif session.port is not None and session.port in served_ports:
                 status = STATUS_STALE
                 owner = ", ".join(str(pid) for pid in served_ports[session.port])

@@ -508,14 +508,15 @@ def mcc_server_chains(
 # ------------------------------------------------------------ listening ports
 
 
-def listening_pids(*, timeout: float = 5.0) -> frozenset[int]:
-    """Every pid that owns a listening TCP socket, on any address or port.
+def listening_endpoints(*, timeout: float = 5.0) -> frozenset[tuple[int, int]]:
+    """Every ``(port, pid)`` a listening TCP socket on this machine reports.
 
-    "Owns no socket on its configured port" is not evidence of anything: a
-    second MCC instance on another port is perfectly legitimate, and treating
-    it as abandoned is how a product comes to stop a server its user is
-    actively using. The question that matters is whether the process is
-    listening *at all*, so this asks about every port.
+    The port matters as well as the pid. "Owns no socket at all" and "owns a
+    socket, but not on the port its session row recorded" are different facts
+    about a server: the first is a process that lost its listener and kept
+    heartbeating, the second is one that moved. Reading only the pid could not
+    tell them apart, and the status they shared said "not necessarily
+    reachable, but running" for both.
 
     Returns an empty set when neither tool can be run, and an empty set is
     deliberately indistinguishable from "nothing is listening": a caller that
@@ -535,20 +536,45 @@ def listening_pids(*, timeout: float = 5.0) -> frozenset[int]:
             continue
         if completed.returncode != 0:
             continue
-        found = _listening_pids_from(completed.stdout)
+        found = _listening_endpoints_from(completed.stdout)
         if found:
             return found
     return frozenset()
 
 
-def _listening_pids_from(output: str) -> frozenset[int]:
-    pids: set[int] = set()
+def listening_pids(*, timeout: float = 5.0) -> frozenset[int]:
+    """Every pid that owns a listening TCP socket, on any address or port.
+
+    "Owns no socket on its configured port" is not evidence on its own: a
+    second MCC instance on another port is perfectly legitimate, and treating
+    it as abandoned is how a product comes to stop a server its user is
+    actively using. This is the weaker question, kept because it is the one
+    some callers want; :func:`listening_endpoints` is the one that can also
+    say *which* port.
+    """
+
+    return frozenset(pid for _port, pid in listening_endpoints(timeout=timeout))
+
+
+def _port_of(address: str) -> int | None:
+    """The port out of ``0.0.0.0:8082``, ``[::]:8082`` or ``*:8082``."""
+
+    _, separator, port = address.rpartition(":")
+    if not separator or not port.isdigit():
+        return None
+    return int(port)
+
+
+def _listening_endpoints_from(output: str) -> frozenset[tuple[int, int]]:
+    endpoints: set[tuple[int, int]] = set()
     for line in output.splitlines():
         lowered = line.lower()
         if "listen" not in lowered:
             continue
-        # ``ss -ltnp`` spells it ``pid=1234``; ``netstat -ano`` puts the pid in
-        # the trailing column.
+        fields = line.split()
+        # ``ss -ltnp`` spells the pid ``pid=1234`` and puts the local address
+        # in the fourth column; ``netstat -ano`` puts the pid in the trailing
+        # column and the local address in the second.
         marker = lowered.find("pid=")
         if marker >= 0:
             digits = ""
@@ -556,13 +582,23 @@ def _listening_pids_from(output: str) -> frozenset[int]:
                 if not char.isdigit():
                     break
                 digits += char
-            if digits:
-                pids.add(int(digits))
+            if not digits:
+                continue
+            port = _port_of(fields[3]) if len(fields) > 3 else None
+            if port is not None:
+                endpoints.add((port, int(digits)))
             continue
-        trailing = line.split()
-        if trailing and trailing[-1].isdigit():
-            pids.add(int(trailing[-1]))
-    return frozenset(pids)
+        if len(fields) > 1 and fields[-1].isdigit():
+            port = _port_of(fields[1])
+            if port is not None:
+                endpoints.add((port, int(fields[-1])))
+    return frozenset(endpoints)
+
+
+def _listening_pids_from(output: str) -> frozenset[int]:
+    """The pid half of :func:`_listening_endpoints_from`, for its own tests."""
+
+    return frozenset(pid for _port, pid in _listening_endpoints_from(output))
 
 
 # ------------------------------------------------------------------- liveness
