@@ -192,10 +192,19 @@ jobs:
         # refusal here almost always means the trusted publisher has not been
         # configured on pypi.org yet, so the job says exactly what to do and
         # stays green.
+        #
+        # `--trusted-publishing always` is load-bearing, and the first real run
+        # is why. uv's default is `automatic`, which attempts the OIDC exchange
+        # and, if it yields no token, *ignores the reason* and carries on to
+        # upload with whatever credentials it has -- none. The run then fails
+        # with `Missing credentials for https://upload.pypi.org/legacy/`, which
+        # says nothing about the exchange that actually failed. `always` makes
+        # the token a precondition, so the log names the real cause. It also
+        # means this job can never attempt a credential-less upload.
         run: |
           set -uo pipefail
-          if uv publish; then
+          if uv publish --trusted-publishing always; then
             echo "published via trusted publishing"
           else
-            echo "::warning::PyPI refused the trusted (OIDC) publish. One-time setup on pypi.org: Account settings -> Publishing (or the project's own Publishing tab once it exists) -> add a GitHub publisher with owner FiredMosquito831, repository my-claude-code, workflow filename pypi-release.yml, and the environment field left EMPTY. The next release then publishes on its own. The server release itself is unaffected."
+            echo "::warning::PyPI refused the trusted (OIDC) publish; the error above names the cause. One-time setup on pypi.org: Account settings -> Publishing (or the project's own Publishing tab once it exists) -> add a GitHub publisher with owner FiredMosquito831, repository my-claude-code, workflow filename pypi-release.yml (the filename only, no path), and the environment field left EMPTY. All four must match exactly. The next release then publishes on its own, or re-run this workflow from its tag. The server release itself is unaffected."
           fi
