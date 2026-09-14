@@ -225,6 +225,35 @@ learned fact, a priced request, a `billed/est` ratio — is taken against a
 scratch config seeded with a fake provider, never against the live install.
 Check the footer path in the shot: it must be a scratch `.env`.
 
+**Re-captured in the 7.13.0 pass (2026-09-14).** Four shots, against a scratch
+`HOME` on a second disk with a copy of the request log, `PORT=8299`, Paper
+theme, no credentials of any kind:
+
+- `admin-analytics.png` — the Analytics stat cards, now including the
+  `reasoning_tokens` column (7.9.0) and the p50/p95 TTFT cards (7.10.0), over
+  335,819 stored requests.
+- `admin-limits.png`, `admin-messaging.png`, `admin-websearch.png` — three
+  pages whose content is settings and provider *names*, so a scratch instance
+  renders them exactly as a configured one does.
+
+**The other twenty-five `admin-*.png` were NOT re-captured, and the reason is
+the recipe's own first step.** Every one of them illustrates a *configured*
+MCC: the provider grid says "13 configured", the Models page lists hundreds of
+models, `admin-credential-health.png` needs per-key health, and
+`admin-models-learned.png` needs a learned fact. Step 1 above builds that from
+the operator's own `.env`, key by key. An automated pass that has no
+credentials — and must not read the operator's — produces a provider grid
+reading "0 configured" and a Models page with one row, which is a worse
+illustration than the stale one it would replace. Re-capture those by hand,
+following step 1, the next time you do a docs pass with your own keys in
+front of you.
+
+Two more, for the record: `admin-requests.png` **can** be captured from a
+seeded log, but the request table's Key column renders a truncated real key
+fingerprint (`sk-1...rnp1`), so it is a hand capture against a scratch config
+with faked keys, never an automated one against a copied log. And the request
+log this pass used ends on 2026-09-12, so any shot of it dates itself.
+
 **The one exception: `assets/admin-update-banner.png`.** The update banner only
 renders when a newer release actually exists, which an offline scratch instance
 running the version under development cannot produce. It is not reachable from
