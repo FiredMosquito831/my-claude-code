@@ -124,11 +124,37 @@ def test_a_model_whose_registry_says_ai_sdk_openai_uses_the_responses_path() -> 
     assert resolved.label == "responses (registry)"
 
 
-def test_a_messages_model_is_listed_as_unservable_with_the_reason() -> None:
-    """Listed, never hidden -- the user's binding decision, in one assertion."""
+def test_a_messages_model_resolves_to_the_messages_surface() -> None:
+    """The third door, wired in 7.13.0.
+
+    Until then this same registry entry resolved to UNSERVABLE carrying "the
+    host serves this model on its Messages API, which this provider does not
+    speak". It does now.
+    """
 
     _write_registry(**{"claude-fable-5-1": _npm("@ai-sdk/anthropic")})
     resolved = _resolve("claude-fable-5-1")
+    assert resolved.surface is ResponseSurface.MESSAGES
+    assert resolved.source is ResponseSurfaceSource.REGISTRY
+    assert resolved.detail == "@ai-sdk/anthropic"
+    assert resolved.label == "messages (registry)"
+
+
+def test_a_messages_model_is_still_unservable_where_the_profile_cannot_speak_it():
+    """The listed-never-hidden rule is a property of the resolver, not of Zen.
+
+    A profile that declares only Chat Completions must still *list* such a
+    model with the reason attached, which is the user's binding decision and
+    the thing wiring one more surface must not quietly delete.
+    """
+
+    _write_registry(**{"claude-fable-5-1": _npm("@ai-sdk/anthropic")})
+    resolved = resolve_response_surface(
+        "opencode",
+        "claude-fable-5-1",
+        registry_provider="opencode",
+        declared=(ResponseSurface.CHAT_COMPLETIONS,),
+    )
     assert resolved.surface is ResponseSurface.UNSERVABLE
     assert "Messages API" in resolved.detail
     assert "@ai-sdk/anthropic" in resolved.detail
@@ -275,9 +301,15 @@ def test_these_refusals_are_not_about_the_endpoint(status: int, body: object) ->
 def test_the_alternatives_never_include_the_surface_that_just_failed() -> None:
     assert alternative_surfaces(ResponseSurface.CHAT_COMPLETIONS, DECLARED) == (
         ResponseSurface.RESPONSES,
+        ResponseSurface.MESSAGES,
     )
     assert alternative_surfaces(ResponseSurface.RESPONSES, DECLARED) == (
         ResponseSurface.CHAT_COMPLETIONS,
+        ResponseSurface.MESSAGES,
+    )
+    assert alternative_surfaces(ResponseSurface.MESSAGES, DECLARED) == (
+        ResponseSurface.CHAT_COMPLETIONS,
+        ResponseSurface.RESPONSES,
     )
     assert alternative_surfaces(ResponseSurface.CHAT_COMPLETIONS, ()) == ()
 
@@ -443,15 +475,27 @@ def test_the_models_page_names_the_surface_and_where_it_came_from() -> None:
     assert surface["note"] == "@ai-sdk/openai"
 
 
-def test_the_models_page_shows_unservable_with_the_reason_not_a_blank() -> None:
+def test_the_models_page_names_the_surface_a_model_is_served_on() -> None:
     from my_claude_code.api.model_admin import capability_payload
 
     _write_registry(**{"claude-fable-5-1": _npm("@ai-sdk/anthropic")})
     surface = capability_payload("opencode", "claude-fable-5-1", None)[
         "response_surface"
     ]
+    assert surface["value"] == "messages"
+
+
+def test_the_models_page_still_shows_unservable_with_the_reason_not_a_blank():
+    """``@ai-sdk/google`` is not an endpoint of this gateway at all."""
+
+    from my_claude_code.api.model_admin import capability_payload
+
+    _write_registry(**{"gemini-3.8-flash": _npm("@ai-sdk/google")})
+    surface = capability_payload("opencode", "gemini-3.8-flash", None)[
+        "response_surface"
+    ]
     assert surface["value"] == "unservable"
-    assert "Messages API" in surface["note"]
+    assert "Google" in surface["note"]
 
 
 def test_a_single_surface_provider_gains_no_row_at_all() -> None:

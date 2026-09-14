@@ -91,18 +91,36 @@ def _identity_names(headers: dict[str, str]) -> list[str]:
     return [name for name in headers if name in IDENTITY_HEADERS]
 
 
-def test_the_reference_capture_records_both_surfaces_and_how_it_was_taken() -> None:
+def test_the_reference_capture_records_every_surface_and_how_it_was_taken() -> None:
     """A fixture nobody can date or reproduce is a fixture nobody may trust."""
 
-    assert set(REFERENCE["surfaces"]) == {"responses", "chat_completions"}
+    assert set(REFERENCE["surfaces"]) == {"responses", "chat_completions", "messages"}
     for key in ("_taken_at", "_client", "_how", "_retake_when", "_not_asserted"):
         assert REFERENCE[key], f"the fixture must say {key}"
     assert "1.18.30" in REFERENCE["_client"]
 
 
-def test_the_reference_paths_are_the_two_surfaces_this_release_is_about() -> None:
+def test_the_reference_paths_are_the_surfaces_this_gateway_fronts() -> None:
     assert _reference("responses")["path"].endswith("/responses")
     assert _reference("chat_completions")["path"].endswith("/chat/completions")
+    assert _reference("messages")["path"].endswith("/messages")
+
+
+def test_the_messages_capture_says_why_no_live_model_can_exercise_it() -> None:
+    """The honest limit of this third capture, recorded in the fixture itself.
+
+    It is a real request to the real endpoint, and the real endpoint answered
+    HTTP 401 "Model minimax-m3-free is not supported": the door is there and
+    the model behind it has been withdrawn. A fixture that did not say so
+    would read as if the surface had been exercised end to end.
+    """
+
+    messages = _reference("messages")
+    assert "401" in messages["_answered"]
+    assert "withdrawn" in messages["_answered"]
+    assert "anthropic-version" in messages["constant_header_values"]
+    assert "Authorization" not in messages["constant_header_values"]
+    assert "x-api-key" not in messages["header_names_in_order"]
 
 
 def test_the_responses_transport_posts_to_the_captured_path() -> None:
