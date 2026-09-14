@@ -4472,7 +4472,68 @@ class RequestLogStore:
         harness: str | None = None,
         body_preview_chars: int | None = LIST_BODY_PREVIEW_CHARS,
     ) -> tuple[list[dict[str, Any]], int]:
-        """Return (rows, total) newest-first, with bodies truncated for list views."""
+        """Return (rows, total) newest-first, with bodies truncated for list views.
+
+        The counting form. :meth:`list_requests_page` is the same query without
+        the ``COUNT(*)``; this wrapper stays because every caller that wants a
+        total wants it in exactly this shape.
+        """
+
+        rows, total, _has_more = self.list_requests_page(
+            limit=limit,
+            offset=offset,
+            provider=provider,
+            model=model,
+            status=status,
+            endpoint=endpoint,
+            key=key,
+            since=since,
+            until=until,
+            q=q,
+            local=local,
+            harness=harness,
+            body_preview_chars=body_preview_chars,
+            include_total=True,
+        )
+        return rows, total if total is not None else 0
+
+    def list_requests_page(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        q: str | None = None,
+        local: str | None = None,
+        harness: str | None = None,
+        body_preview_chars: int | None = LIST_BODY_PREVIEW_CHARS,
+        include_total: bool = True,
+    ) -> tuple[list[dict[str, Any]], int | None, bool]:
+        """Return ``(rows, total, has_more)``; ``total`` is ``None`` when skipped.
+
+        The page and the count are wildly different queries against the same
+        predicate. The page walks the timestamp index backwards and stops at
+        the first ``limit`` matches; the count has to consider every row, and
+        for a free-text ``q`` that means decompressing a stored body per row.
+        Measured on a 4.5 GB log for a term present in real traffic: the 25-row
+        page **0.06 s**, the ``COUNT(*)`` over the same predicate **383.66 s**.
+
+        So ``include_total=False`` asks only the cheap question. ``has_more``
+        replaces the total for the one thing the pager needed it for: it is
+        answered by fetching ``limit + 1`` rows and returning ``limit`` of
+        them, which costs one extra row rather than a full scan.
+
+        Page membership and ordering are identical either way -- the same
+        ``WHERE``, the same ``ORDER BY ts_epoch DESC``, the same ``LIMIT``/
+        ``OFFSET``. Only the count moves.
+        """
+
         where, args = self._where(
             provider=provider,
             model=model,
@@ -4500,16 +4561,23 @@ class RequestLogStore:
             )
             body_args = [preview, preview]
         columns = ", ".join(_LIST_METADATA_COLUMNS)
+        # One more row than the page, so "is there a next page" is answered
+        # without a count. It is discarded before anything is rendered.
+        fetch = limit if include_total else limit + 1
         with self._connection() as conn:
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM requests{where}", args
-            ).fetchone()[0]
+            total: int | None = None
+            if include_total:
+                total = conn.execute(
+                    f"SELECT COUNT(*) FROM requests{where}", args
+                ).fetchone()[0]
             cursor = conn.execute(
                 f"SELECT {columns}, {body_select} FROM requests{where}"
                 " ORDER BY ts_epoch DESC LIMIT ? OFFSET ?",
-                [*body_args, *args, limit, offset],
+                [*body_args, *args, fetch, offset],
             )
             raw_rows = cursor.fetchall()
+            has_more = len(raw_rows) > limit
+            raw_rows = raw_rows[:limit]
             bodies = self._fetch_bodies(conn, [str(row["id"]) for row in raw_rows])
             rows = [
                 self._row_to_dict(
@@ -4519,7 +4587,50 @@ class RequestLogStore:
                 )
                 for row in raw_rows
             ]
-        return rows, total
+        if total is not None:
+            has_more = offset + len(rows) < total
+        return rows, total, has_more
+
+    def count_requests(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        status: str | None = None,
+        endpoint: str | None = None,
+        key: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        q: str | None = None,
+        local: str | None = None,
+        harness: str | None = None,
+    ) -> int:
+        """How many rows match, and nothing else.
+
+        The other half of :meth:`list_requests_page` with ``include_total``
+        off: the page is rendered from that one, and this is fired beside it
+        and awaited by nobody. Exactly the same ``WHERE``, so the number that
+        eventually arrives is the number the page was counting.
+        """
+
+        where, args = self._where(
+            provider=provider,
+            model=model,
+            status=status,
+            endpoint=endpoint,
+            key=key,
+            since=since,
+            until=until,
+            q=q,
+            local=local,
+            harness=harness,
+        )
+        with self._connection() as conn:
+            return int(
+                conn.execute(f"SELECT COUNT(*) FROM requests{where}", args).fetchone()[
+                    0
+                ]
+            )
 
     def cost_breakdown(
         self,

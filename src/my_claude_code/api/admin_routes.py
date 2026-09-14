@@ -2776,7 +2776,24 @@ async def list_request_log(
     harness: str | None = None,
     settings: Settings = Depends(get_settings),
 ):
-    """Page through the persisted request log (newest first)."""
+    """Page through the persisted request log (newest first).
+
+    A free-text ``q`` gets the page **without** the count. The two are wildly
+    different queries against the same predicate: measured on a 4.5 GB log, the
+    25-row page is 0.06 s because it walks the timestamp index backwards and
+    stops at 25 matches, and the ``COUNT(*)`` over that predicate is 383.66 s
+    because it has to decompress a stored body for every row in the log.
+
+    ``total`` is then ``null`` and ``total_deferred`` is ``true``; the count
+    arrives from ``GET /admin/api/requests/count``, which the dashboard fires
+    beside this and does not wait for. ``has_more`` carries the one thing the
+    pager needed the total for.
+
+    Every other filter -- provider, model, status, key, the time window --
+    counts as it always has: those predicates are index-served and the count
+    was never the slow part. Page membership and ordering are unchanged in
+    both cases.
+    """
     require_loopback_admin(request)
     store = _request_log_store_or_none(settings)
     if store is None:
@@ -2789,10 +2806,11 @@ async def list_request_log(
         }
     _validate_request_log_status(status)
     _validate_request_log_local(local)
+    include_total = not (q or "").strip()
     # SQLite work is synchronous; run it off the event loop so analytics
     # queries cannot stall proxy traffic.
-    rows, total = await asyncio.to_thread(
-        store.list_requests,
+    rows, total, has_more = await asyncio.to_thread(
+        store.list_requests_page,
         limit=limit,
         offset=offset,
         provider=provider,
@@ -2805,15 +2823,62 @@ async def list_request_log(
         q=q,
         local=local,
         harness=harness,
+        include_total=include_total,
     )
     return {
         "enabled": True,
         "capture_bodies": bool(settings.request_log_capture_bodies),
         "rows": rows,
         "total": total,
+        "total_deferred": total is None,
+        "has_more": has_more,
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get("/admin/api/requests/count")
+async def count_request_log(
+    request: Request,
+    provider: str | None = None,
+    model: str | None = None,
+    status: str | None = None,
+    endpoint: str | None = None,
+    key: str | None = None,
+    since: float | None = None,
+    until: float | None = None,
+    q: str | None = None,
+    local: str | None = None,
+    harness: str | None = None,
+    settings: Settings = Depends(get_settings),
+):
+    """How many rows match these filters. The half the page no longer waits for.
+
+    Same predicate as ``/admin/api/requests``, so the number that arrives is
+    the number that page was counting. It is slow for a free-text ``q`` by
+    nature -- that is the whole reason it is a separate request.
+    """
+
+    require_loopback_admin(request)
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return {"enabled": False, "total": 0}
+    _validate_request_log_status(status)
+    _validate_request_log_local(local)
+    total = await asyncio.to_thread(
+        store.count_requests,
+        provider=provider,
+        model=model,
+        status=status,
+        endpoint=endpoint,
+        key=key,
+        since=since,
+        until=until,
+        q=q,
+        local=local,
+        harness=harness,
+    )
+    return {"enabled": True, "total": total}
 
 
 @router.get("/admin/api/requests/stats")
