@@ -663,6 +663,16 @@ under the project's name, which is the thing trusted publishing exists to
 remove. If OIDC is refused the job warns and ends green; add the publisher and
 re-run it from the tag (`workflow_dispatch`, `tag: vN`).
 
+**If the log says `Missing credentials for https://upload.pypi.org/legacy/`,
+read it as "the OIDC exchange produced no token", not as "a password was
+missing".** uv's default `automatic` mode attempts the exchange and, when it
+yields nothing, ignores the reason and proceeds to upload with no credentials —
+so the message names the symptom and hides the cause. The workflow therefore
+passes `--trusted-publishing always`, which makes the token a precondition and
+prints the real failure. The usual real cause is a publisher whose owner,
+repository, workflow **filename** or environment does not match; all four are
+part of the claim, and the environment must be empty here.
+
 **Two jobs, and no GitHub environment.** The build runs the project's own build
 backend — repository code — and the publish job holds the upload credential;
 keeping them apart means the code that builds never runs with the credential in
