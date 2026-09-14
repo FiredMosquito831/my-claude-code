@@ -159,10 +159,16 @@ def test_the_housekeeping_thread_is_handed_its_answers(monkeypatch):
         reading_threads.append(threading.get_ident())
         return (False, False)
 
+    def _stage_dir():
+        reading_threads.append(threading.get_ident())
+        return None
+
     handed: list[object] = []
+    swept: list[object] = []
     monkeypatch.setattr(asgi, "_housekeeping_inputs", _inputs)
+    monkeypatch.setattr(asgi, "_housekeeping_stage_dir", _stage_dir)
     monkeypatch.setattr(asgi, "_desktop_shell_auto_update", handed.append)
-    monkeypatch.setattr(asgi, "_sweep_superseded_environments", lambda: None)
+    monkeypatch.setattr(asgi, "_sweep_superseded_environments", swept.append)
 
     asgi.start_desktop_shell_auto_update()
     for thread in threading.enumerate():
@@ -170,19 +176,31 @@ def test_the_housekeeping_thread_is_handed_its_answers(monkeypatch):
             thread.join(timeout=5)
     asgi.reset_desktop_shell_auto_update_for_tests()
 
-    assert reading_threads == [threading.get_ident()]
+    # Both answers read on the calling thread, both handed over.
+    assert reading_threads == [threading.get_ident(), threading.get_ident()]
     assert handed == [(False, False)]
+    assert swept == [None]
 
 
-def test_the_housekeeping_thread_body_resolves_nothing(monkeypatch):
+def test_the_housekeeping_thread_body_resolves_nothing(monkeypatch, tmp_path):
     """And its own work leaves the process-wide resolution exactly as it found it.
 
     This is the guard's own question, asked of the thread's body directly:
     ``tests/support/hermetic.py:909-935`` fails a test whose teardown finds
     ``paths._resolution`` pointing inside the real home, and a thread that
     resolves nothing can never put one there.
+
+    The **environment sweep runs for real** here. 7.6.1's version of this test
+    stubbed it out, and that is why it missed the third source: the sweep's
+    transcript prune globs ``<config dir>/updates``, which it resolved itself.
+    A test that cannot fail is not a test.
+
+    Only ``_installed_tool_dir`` is stubbed, and only to ``None`` -- the uv
+    half of the sweep *moves directories* inside uv's real tools root, and no
+    test may be one environment variable away from doing that.
     """
 
+    from my_claude_code.application import release_updates
     from my_claude_code.config import desktop_shell
 
     monkeypatch.setattr(
@@ -192,11 +210,43 @@ def test_the_housekeeping_thread_body_resolves_nothing(monkeypatch):
             skipped="test"
         ),
     )
-    monkeypatch.setattr(asgi, "_sweep_superseded_environments", lambda: None)
+    monkeypatch.setattr(release_updates, "_installed_tool_dir", lambda: None)
+    stage_dir = tmp_path / "updates"
+    stage_dir.mkdir()
 
     paths.reset_config_dir_cache()
-    asgi._post_readiness_housekeeping((True, False))
+    asgi._post_readiness_housekeeping((True, False), stage_dir)
 
     assert paths._resolution is None, (
         "the post-readiness thread resolved the config directory at tick time"
     )
+
+
+def test_the_sweep_prunes_the_stage_directory_it_was_handed(monkeypatch, tmp_path):
+    """And the handed path is the one it actually globs.
+
+    A parameter the caller passes and the callee ignores would satisfy the
+    assertion above while changing nothing, so this pins that the transcripts
+    pruned are the ones in the directory it was given.
+    """
+
+    from my_claude_code.application import release_updates
+
+    monkeypatch.setattr(release_updates, "_installed_tool_dir", lambda: None)
+    stage_dir = tmp_path / "updates"
+    stage_dir.mkdir()
+    kept = release_updates.INSTALL_TRANSCRIPTS_KEPT
+    names = [
+        f"{release_updates.INSTALL_LOG_PREFIX}{index:03d}"
+        f"{release_updates.INSTALL_LOG_SUFFIX}"
+        for index in range(kept + 3)
+    ]
+    for name in names:
+        (stage_dir / name).write_text("transcript", encoding="utf-8")
+
+    message = release_updates.sweep_superseded_environments(stage_dir)
+
+    survivors = sorted(path.name for path in stage_dir.iterdir())
+    assert len(survivors) == kept
+    assert survivors == sorted(sorted(names, reverse=True)[:kept])
+    assert message is not None and "transcript" in message
