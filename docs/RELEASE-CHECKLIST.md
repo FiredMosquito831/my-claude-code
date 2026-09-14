@@ -627,6 +627,55 @@ failure. Prefer OIDC: tokens expire and leak, an identity does neither.
 workflow existed and is deliberately not backfilled.
 
 
+## 9b. The PyPI package (`pypi-release.yml`)
+
+**Nothing to do.** `pypi-release.yml` fires on `release: published`, checks the
+tag against `pyproject.toml`, builds the wheel, smoke-tests it by importing the
+package from a throwaway environment, skips a version already on the index, and
+runs `uv publish`.
+
+**Why it exists.** Every documented way to install MCC runs a script, so the
+package was invisible to anything that looks at PyPI — `pip index`, dependency
+scanners, and readers who check whether a project publishes to the index their
+organisation allows. The wheel published there is the same artifact, built from
+the same tag. The script installers stay the recommended route, because they
+are the ones that provision uv and Python 3.14 for you.
+
+**Wheel only, deliberately.** `uv build` also produces a source distribution,
+and at 7.13.1 that tarball is 19 MB: `history/`, `tests/`, `assets/` and the
+Rust shell's source. Shipping an sdist is a promise that its contents were
+chosen, and they have not been. The wheel is `py3-none-any`, so no platform
+needs the sdist. Curating one (`[tool.hatch.build.targets.sdist]`) is its own
+change — it edits a production file and therefore takes a version.
+
+**How it authenticates.** Trusted publishing (OIDC), PyPI's documented CI
+route, exactly like npm's: the project on pypi.org names this repository and
+this workflow file, the job asks GitHub for a short-lived identity token
+(`id-token: write`), and PyPI accepts the upload from that identity. The
+one-time setup is on pypi.org under **Publishing** — for a project that does
+not exist yet, **Account settings -> Publishing -> pending publisher**: owner
+`FiredMosquito831`, repository `my-claude-code`, workflow filename
+`pypi-release.yml`, environment **empty**.
+
+**There is no token fallback, on purpose.** A PyPI API token would be a
+long-lived credential in this repository's secrets with permission to publish
+under the project's name, which is the thing trusted publishing exists to
+remove. If OIDC is refused the job warns and ends green; add the publisher and
+re-run it from the tag (`workflow_dispatch`, `tag: vN`).
+
+**Two jobs, and no GitHub environment.** The build runs the project's own build
+backend — repository code — and the publish job holds the upload credential;
+keeping them apart means the code that builds never runs with the credential in
+scope. astral's example also wraps the publish job in an environment named
+`pypi`; this workflow deliberately does not, because the environment name is
+part of the OIDC claim PyPI matches and the publisher here is configured with
+an empty one. Change it on PyPI first if that is ever wanted.
+
+**A published version is immutable.** PyPI does not allow re-uploading a
+version, and deleting one does not free the number. That is why the tag/version
+check is a hard failure rather than a warning.
+
+
 ## 10. The winget manifest (`desktop-shell/installer/winget/`)
 
 Only relevant once the manifest has been **accepted** into

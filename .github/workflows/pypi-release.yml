@@ -1,0 +1,201 @@
+# The Python package's release build: build once, publish once, on every release.
+#
+# WHY MCC IS ON PyPI AT ALL
+#
+#   Every documented way to install MCC runs a script: the one-liners, the
+#   desktop installers and the npm package all end at `uv tool install` against
+#   a wheel attached to a GitHub release. That works, and it stays the
+#   recommended path -- it is the one that provisions uv and Python 3.14 for
+#   you. But it means the package is invisible to everything that looks at
+#   PyPI: `pip index`, dependency scanners, "what Python packages exist for X"
+#   tooling, and every reader who checks whether a project publishes to the
+#   index their organisation actually allows. Publishing the same wheel there
+#   costs one workflow and adds a second front door.
+#
+#   The wheel published here is built from the tag, exactly like the one on the
+#   GitHub release, from the same `pyproject.toml`.
+#
+# WHEEL ONLY, DELIBERATELY
+#
+#   `uv build` also produces a source distribution, and at 7.13.1 that tarball
+#   is 19 MB: 11 MB of `history/` (the archived pull-request documents from the
+#   2026-09-05 repository migration), 7 MB of `tests/`, 6 MB of `assets/` and
+#   the Rust desktop shell's source. None of that belongs in a source
+#   distribution of the Python package, and shipping one is a promise that its
+#   contents were chosen. They have not been, so this publishes the wheel and
+#   says so. The wheel is `py3-none-any`, so no platform needs the sdist to
+#   install.
+#
+#   Curating the sdist (a `[tool.hatch.build.targets.sdist]` block) is its own
+#   change, because it edits a production file and therefore takes a version.
+#
+# HOW IT AUTHENTICATES: TRUSTED PUBLISHING (OIDC), WITH NO FALLBACK
+#
+#   PyPI's documented way to publish from CI is a trusted publisher: the
+#   project on pypi.org names this repository and this workflow file, the job
+#   asks GitHub for a short-lived OIDC identity token (`id-token: write`), and
+#   PyPI accepts the upload from that identity alone. No secret is stored
+#   anywhere, nothing expires, nothing can leak. `uv publish` picks the
+#   identity up on its own when the permission is present.
+#
+#   Unlike `npm-release.yml` there is no token fallback here, on purpose: an
+#   API token for PyPI would be a long-lived credential in this repository's
+#   secrets with permission to publish under the project's name, which is
+#   precisely what trusted publishing exists to avoid. If OIDC is refused the
+#   job says what to configure and ends green -- a release is a release of the
+#   server, and a convenience index listing must never turn a good release red.
+#
+#   The one-time setup is on pypi.org, under Publishing (for a project that
+#   does not exist yet, Account settings -> Publishing -> pending publisher):
+#   owner `FiredMosquito831`, repository `my-claude-code`, workflow filename
+#   `pypi-release.yml`, environment **empty**.
+#
+# WHY TWO JOBS
+#
+#   The build runs the project's own build backend, which is arbitrary code
+#   from the repository. The publish job holds a credential that can upload
+#   under the project's name. Keeping them apart means the code that builds
+#   never runs with the credential in scope -- astral's own recommendation for
+#   this workflow, and the reason the artifact hop is worth two extra steps.
+#
+#   Their example also puts the publish job in a GitHub environment named
+#   `pypi`. That is deliberately NOT done here: the environment name is part of
+#   the OIDC claim PyPI matches, and the trusted publisher for this project is
+#   configured with an empty environment. Adding one here would silently stop
+#   matching. If an environment is ever wanted, change it on PyPI first.
+
+name: PyPI publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The existing release tag to publish from, e.g. v7.13.1"
+        required: true
+        type: string
+
+concurrency:
+  # Per tag, and never cancelled: an upload is not idempotent to interrupt, and
+  # the already-published guard below makes a re-run cheap.
+  group: pypi-release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build the wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.11.15"
+          enable-cache: false
+
+      - name: Check the tag against pyproject
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        # The same contract `npm-release.yml` enforces, for the same reason: a
+        # tag that disagrees with the source would publish a version the
+        # project never had, and PyPI versions cannot be reused or deleted into
+        # reuse.
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          pyproject="$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)"
+          if [ "$version" != "$pyproject" ]; then
+            echo "::error::tag '$TAG' is version '$version' but pyproject.toml says '$pyproject'. Refusing to publish."
+            exit 1
+          fi
+          echo "publishing $version"
+
+      - name: Build
+        run: uv build --wheel
+
+      - name: Smoke test the built wheel
+        # Installs the wheel into a throwaway environment with no project
+        # context and imports the package. It catches the class of failure a
+        # build cannot: a file that exists in the tree, is needed at import
+        # time, and never made it into the artifact.
+        run: |
+          set -euo pipefail
+          uv run --isolated --no-project --with dist/*.whl \
+            python -c "import my_claude_code; print('import ok')"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pypi-dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # The OIDC identity token trusted publishing runs on. This is the only
+      # job that has it.
+      id-token: write
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.11.15"
+          enable-cache: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: pypi-dist
+          path: dist/
+
+      - name: Skip if this version is already on the index
+        id: registry
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        # A release can be re-run, and PyPI refuses a version that already
+        # exists -- correctly, since a published version is immutable. Asking
+        # first turns that refusal into a no-op instead of a red job.
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            "https://pypi.org/pypi/my-claude-code/$version/json")"
+          if [ "$code" = "200" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::my-claude-code $version is already on PyPI; nothing to do."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: uv publish (trusted publishing)
+        if: steps.registry.outputs.publish == 'true'
+        # No credentials: `uv publish` uses the OIDC identity granted above. A
+        # refusal here almost always means the trusted publisher has not been
+        # configured on pypi.org yet, so the job says exactly what to do and
+        # stays green.
+        run: |
+          set -uo pipefail
+          if uv publish; then
+            echo "published via trusted publishing"
+          else
+            echo "::warning::PyPI refused the trusted (OIDC) publish. One-time setup on pypi.org: Account settings -> Publishing (or the project's own Publishing tab once it exists) -> add a GitHub publisher with owner FiredMosquito831, repository my-claude-code, workflow filename pypi-release.yml, and the environment field left EMPTY. The next release then publishes on its own. The server release itself is unaffected."
+          fi
