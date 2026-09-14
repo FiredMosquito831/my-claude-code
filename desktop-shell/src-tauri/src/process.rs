@@ -571,12 +571,72 @@ enum StreamOfAChild {
     Err(std::process::ChildStderr),
 }
 
+/// The most one of these transcripts may grow to before its head is dropped.
+///
+/// It is a *within one launch* bound. Across launches the file is truncated by
+/// [`begin_log`], which is the real fix for the 40 MB that accumulated on the
+/// machine this was found on: `append_line` opened the file `.append(true)` and
+/// wrote one line per child stdout/stderr line, forever, one file per install
+/// directory for the life of the install.
+///
+/// This cap is for the launch that never ends. The controller respawns a dead
+/// server every ten seconds with no attempt cap (decision Q4 of 2026-09-10), so
+/// a crash-looping server writes its whole startup transcript six times a
+/// minute for as long as the window is open. A truncate-on-launch alone would
+/// still let that reach the disk's limit.
+pub const LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// How much of the tail survives a roll.
+///
+/// The tail and not the head: the useful part of a crash loop is the most
+/// recent failure, and the first megabyte of it is the same failure fifty
+/// times over. The dropped bytes are announced in the file itself, because a
+/// transcript that silently loses its beginning is worse than one that says so.
+pub const LOG_KEEP_BYTES: u64 = 256 * 1024;
+
+/// Start this launch's transcript: truncate whatever the last launch left.
+///
+/// The file holds *this launch's* transcript. That is what the comment at its
+/// only call site has always said it was ("every line a server child printed"
+/// since this launch), and it is what a reader opening it expects; keeping
+/// history across restarts is what made it unbounded.
+///
+/// Idempotent per path per launch, so the three places that write into it can
+/// each call it without knowing about the others: the path is only resolved
+/// once the status document names a configuration directory, so it legitimately
+/// changes from `%TEMP%` to `<config dir>/logs` mid-launch, and the new one is
+/// truncated exactly once as well.
+pub fn begin_log(path: &Path) {
+    static STARTED: Mutex<Option<Vec<PathBuf>>> = Mutex::new(None);
+    let Ok(mut guard) = STARTED.lock() else {
+        return;
+    };
+    let started = guard.get_or_insert_with(Vec::new);
+    if started.iter().any(|seen| seen == path) {
+        return;
+    }
+    started.push(path.to_path_buf());
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // `create(true).truncate(true)` rather than a remove: the file may be open
+    // in somebody's tail, and emptying it in place is what that reader expects.
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path);
+}
+
 /// Append one line to a log, creating the directory. Never fails a caller:
 /// a log that cannot be written is not a reason to stop starting servers.
+///
+/// Bounded by [`LOG_MAX_BYTES`]; see [`begin_log`] for the other half.
 pub fn append_line(path: &Path, line: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    roll_if_too_large(path);
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -584,6 +644,38 @@ pub fn append_line(path: &Path, line: &str) {
     {
         let _ = writeln!(file, "{line}");
     }
+}
+
+/// Drop the head of a transcript that has passed [`LOG_MAX_BYTES`].
+///
+/// Best-effort in every direction: a file that cannot be read, rewritten or
+/// stat'd is left exactly as it is. Losing the bound is not a reason to lose
+/// the line that was about to be written, and neither is a reason to fail a
+/// server start.
+fn roll_if_too_large(path: &Path) {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    if metadata.len() <= LOG_MAX_BYTES {
+        return;
+    }
+    let Ok(contents) = std::fs::read(path) else {
+        return;
+    };
+    let keep = LOG_KEEP_BYTES as usize;
+    let start = contents.len().saturating_sub(keep);
+    // Forward to the next newline so the surviving tail starts on a whole
+    // line rather than mid-way through one.
+    let start = match contents[start..].iter().position(|byte| *byte == b'\n') {
+        Some(offset) => start + offset + 1,
+        None => start,
+    };
+    let dropped = start;
+    let mut rolled =
+        format!("-- {dropped} earlier bytes dropped: this transcript passed {LOG_MAX_BYTES} --\n")
+            .into_bytes();
+    rolled.extend_from_slice(&contents[start..]);
+    let _ = std::fs::write(path, rolled);
 }
 
 /// How long the installer may run before this window stops waiting on it.
@@ -731,6 +823,129 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    fn scratch_log(name: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or_default();
+        let directory = std::env::temp_dir().join(format!("mcc-shell-log-{name}-{stamp}"));
+        std::fs::create_dir_all(&directory).expect("scratch directory");
+        directory.join("desktop-server-start.log")
+    }
+
+    #[test]
+    fn a_transcript_past_the_cap_keeps_its_tail_and_says_what_it_dropped() {
+        // The within-a-launch bound. The controller respawns a dead server
+        // every ten seconds with no attempt cap, so a crash loop writes its
+        // whole startup transcript six times a minute for as long as the
+        // window is open; truncating only at launch would not bound that.
+        let path = scratch_log("roll");
+        let line = "x".repeat(1024);
+        let mut written = 0u64;
+        while written <= LOG_MAX_BYTES + 64 * 1024 {
+            append_line(&path, &line);
+            written += line.len() as u64 + 1;
+        }
+        append_line(&path, "the newest line");
+
+        let size = std::fs::metadata(&path).expect("stat").len();
+        let text = std::fs::read_to_string(&path).expect("read");
+
+        assert!(size < LOG_MAX_BYTES, "still unbounded: {size} bytes");
+        assert!(
+            size > LOG_KEEP_BYTES / 2,
+            "rolled away too much: {size} bytes"
+        );
+        // The tail, not the head: the useful part of a crash loop is the most
+        // recent failure.
+        assert!(
+            text.ends_with("the newest line\n"),
+            "the newest line was lost"
+        );
+        assert!(
+            text.starts_with("-- ") && text.contains("earlier bytes dropped"),
+            "a transcript that loses its beginning has to say so"
+        );
+        // And the survivor starts on a whole line.
+        let first_body_line = text.lines().nth(1).unwrap_or_default();
+        assert!(
+            first_body_line.is_empty() || first_body_line.len() == line.len(),
+            "the tail starts mid-line: {} bytes",
+            first_body_line.len()
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_transcript_under_the_cap_is_never_rolled() {
+        let path = scratch_log("small");
+        append_line(&path, "first");
+        append_line(&path, "second");
+
+        let text = std::fs::read_to_string(&path).expect("read");
+
+        assert_eq!(text, "first\nsecond\n");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn beginning_a_launch_empties_what_the_last_one_left() {
+        // The 40 MB found on the reporting machine was this: one file per
+        // install directory, appended to for the life of the install.
+        let path = scratch_log("begin");
+        std::fs::write(&path, "a previous launch\n").expect("seed");
+
+        begin_log(&path);
+        append_line(&path, "this launch");
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "this launch\n"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn beginning_the_same_launch_twice_keeps_the_transcript() {
+        // Three call sites reach it and none of them knows about the others,
+        // so it has to be idempotent per path per launch -- otherwise the
+        // second spawn of a launch would erase the first one's failure.
+        let path = scratch_log("idempotent");
+
+        begin_log(&path);
+        append_line(&path, "attempt one failed");
+        begin_log(&path);
+        append_line(&path, "attempt two");
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "attempt one failed\nattempt two\n"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_second_path_in_the_same_launch_is_begun_as_well() {
+        // The path is only known once a status document names a configuration
+        // directory, so it legitimately moves from %TEMP% to <config dir>/logs
+        // mid-launch. The new one is this launch's transcript too.
+        let first = scratch_log("moved-a");
+        let second = scratch_log("moved-b");
+        std::fs::write(&second, "a previous launch\n").expect("seed");
+
+        begin_log(&first);
+        append_line(&first, "before the document arrived");
+        begin_log(&second);
+        append_line(&second, "after it did");
+
+        assert_eq!(
+            std::fs::read_to_string(&second).expect("read"),
+            "after it did\n"
+        );
+        let _ = std::fs::remove_file(&first);
+        let _ = std::fs::remove_file(&second);
+    }
 
     #[test]
     fn the_default_command_is_the_installed_shim() {

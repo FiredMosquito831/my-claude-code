@@ -617,7 +617,10 @@ fn shell_log_dir(config_dir: &str) -> Option<PathBuf> {
     Some(PathBuf::from(trimmed).join("logs"))
 }
 
-/// The server-start transcript: every line a server child printed, appended.
+/// The server-start transcript: every line a server child printed **this
+/// launch**, appended. Emptied at the launch's first write (`begin_log`) and
+/// capped within a launch (`LOG_MAX_BYTES`); it used to be neither, and
+/// reached 40 MB on the machine that reported it.
 fn shell_log_path(config_dir: &str) -> Option<PathBuf> {
     shell_log_dir(config_dir).map(|dir| dir.join(SERVER_START_LOG))
 }
@@ -1431,6 +1434,9 @@ fn apply(
                 life.start_attempts = life.start_attempts.saturating_add(1);
                 set_tray_status("Server: starting");
                 let log = shell_log_path_now(life);
+                // This launch's transcript, not every launch's: the first
+                // write of a launch empties whatever the last one left.
+                process::begin_log(&log);
                 process::append_line(
                     &log,
                     &format!(
@@ -1453,7 +1459,9 @@ fn apply(
                             code: None,
                             last_lines: error.clone(),
                         });
-                        process::append_line(&shell_log_path_now(life), &error);
+                        let log = shell_log_path_now(life);
+                        process::begin_log(&log);
+                        process::append_line(&log, &error);
                         append_output(window, &error);
                     }
                 }
