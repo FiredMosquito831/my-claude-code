@@ -14,6 +14,9 @@ from my_claude_code.application.model_metadata import (
     ModelListingEvidence,
     ModelListingProvenance,
     ProviderModelInfo,
+    ResolvedResponseSurface,
+    ResponseSurface,
+    ResponseSurfaceSource,
 )
 from my_claude_code.config.constants import HTTP_CONNECT_TIMEOUT_DEFAULT
 from my_claude_code.core.anthropic.models import MessagesRequest
@@ -339,6 +342,25 @@ and recorded by ``adapt_reasoning_policy`` -- never the encoder's.
 """
 
 
+#: The one surface this provider speaks, in the vocabulary the rest of the
+#: stack uses (``core/export.py:1115-1118`` renders it as "Wire surface").
+#:
+#: There is no per-model resolution here, and there is nothing to resolve: the
+#: Codex backend serves exactly one endpoint, ``POST <base>/codex/responses``,
+#: for every model. So the *source* is ``DEFAULT`` -- "nothing said anything,
+#: so the family's long-standing surface stands" -- and not ``REGISTRY``,
+#: which would claim a published fact that was never consulted.
+#:
+#: Built through :class:`ResolvedResponseSurface` rather than hand-written as
+#: a string so that it cannot drift out of the vocabulary ``openai_chat``
+#: records on the same field.
+WIRE_SURFACE = ResolvedResponseSurface(
+    ResponseSurface.RESPONSES,
+    ResponseSurfaceSource.DEFAULT,
+    "the Codex backend serves one endpoint",
+).label
+
+
 class ChatGPTOAuthProvider(BaseProvider):
     """ChatGPT/Codex OAuth provider using the Responses API."""
 
@@ -603,9 +625,10 @@ class ChatGPTOAuthProvider(BaseProvider):
                     attempt_body = body
                     while True:
                         # Commit boundary: the body is final once it is handed
-                        # to the sender. Headers are not recorded -- they carry
-                        # the bearer token.
-                        record_wire_request(attempt_body)
+                        # to the sender, and the surface it was sent on is
+                        # recorded beside it. Headers are not recorded -- they
+                        # carry the bearer token.
+                        record_wire_request(attempt_body, surface=WIRE_SURFACE)
                         try:
                             response = await self._rate_limiter.execute_with_retry(
                                 self._send_stream_request,
