@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render the winget manifests for one release of the Windows desktop app.
 
-    uv run --offline python desktop-shell/installer/winget/render.py v6.45.2
+    uv run --offline python desktop-shell/installer/winget/render.py v7.13.1
 
 Writes the three files a multi-file winget manifest needs into
 ``desktop-shell/installer/winget/<version>/``, which is laid out exactly like
@@ -24,7 +24,7 @@ WHY A RENDERER AND NOT THREE CHECKED-IN FILES
       the second one is read from the release's own
       ``SHA256SUMS-desktop-shell.txt``, never typed.
 
-    So this script reads all six and prints the manifests. Rendering v6.45.2 has
+    So this script reads all six and prints the manifests. Rendering the committed version has
     to reproduce the committed files byte for byte;
     ``tests/scripts/test_winget_manifest.py`` asserts exactly that, which is
     what makes the checked-in copies trustworthy to read and to submit.
@@ -76,6 +76,27 @@ PACKAGE_IDENTIFIER = "FiredMosquito831.MyClaudeCode"
 #: fetches. Two installers writing the same binary is how you get two of them.
 INSTALLER_ASSET = "MyClaudeCode-Setup-windows-x86_64.exe"
 
+#: The shell is a Tauri app, so the window is drawn by the **Edge WebView2
+#: runtime** -- a system component, not something we bundle. Without it the
+#: executable does not start: it fails to resolve its imports and Windows kills
+#: it with ``0xC0000135`` (``STATUS_DLL_NOT_FOUND``) before any of our code runs.
+#:
+#: **This line exists because that is exactly what happened to the first
+#: submission.** ``microsoft/winget-pkgs`` PR #430045 was labelled
+#: ``Validation-Executable-Error`` on 2026-09-11: the pipeline installed the
+#: package on a clean validator VM and ran the exe, which returned
+#: ``-1073741515``. The installer *does* carry a WebView2 bootstrapper, but it
+#: runs it only when its EdgeUpdate ``pv`` registry probe says the runtime is
+#: absent, and that probe does not answer usefully inside the validation image.
+#:
+#: Declaring the dependency is the winget-native fix rather than a second
+#: detection heuristic: the client installs ``Microsoft.EdgeWebView2Runtime``
+#: before this package, which is both what the validator needs and what a user
+#: on a fresh Windows install needs. No ``MinimumVersion`` -- any runtime the
+#: community repository ships is newer than the one Tauri requires, and pinning
+#: a floor we have not tested against would be an invented limit.
+WEBVIEW2_DEPENDENCY = "Microsoft.EdgeWebView2Runtime"
+
 DEFAULT_LOCALE = "en-US"
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -87,19 +108,28 @@ _PYPROJECT = _REPO_ROOT / "pyproject.toml"
 #: rebuilds every line from the raw digest, so anything else is not that file.
 _SUMS_LINE = re.compile(r"^([0-9a-f]{64})  (\S.*)$")
 
+#: One line, and it is the line ``winget search`` prints beside the package
+#: name. Kept close to 100 characters: the schema allows 256, but the committed
+#: manifest is read as a diff between versions and a long one wraps badly.
+#: What the app *does for you* on first launch belongs in ``Description``.
 SHORT_DESCRIPTION = (
-    "A desktop window onto the My Claude Code dashboard; it installs and "
-    "starts the server for you."
+    "A desktop window onto My Claude Code, the local LLM proxy and model router "
+    "for AI coding agents."
 )
 
 #: One string per paragraph. The schema documentation asks that no line in a
 #: manifest run past 100 characters, so these are emitted as a *folded* block
 #: scalar: the source wraps, the rendered text does not.
 DESCRIPTION_PARAGRAPHS = (
-    "My Claude Code is a local proxy that connects coding agents -- Claude "
-    "Code, Codex, Gemini CLI and a dozen others -- to OpenAI-compatible AI "
-    "providers, with routing, fallback, rate-limit handling and a web "
-    "dashboard on 127.0.0.1:8082.",
+    "My Claude Code (MCC) is a local multi-provider LLM proxy, model router and "
+    "control plane for AI coding agents. Claude Code, Codex, OpenCode, Gemini "
+    "CLI, Crush, Cline, Goose, Aider and a dozen others point at one address "
+    "and share one control panel: routing tiers with fallback chains, reasoning "
+    "controls, credential rotation and health, a native web-search tool proxy, "
+    "and analytics with cost provenance, in front of 57 model providers. It "
+    "speaks four inbound protocols -- Anthropic Messages, OpenAI Responses, "
+    "OpenAI Chat Completions and the Gemini API -- and serves a dashboard on "
+    "127.0.0.1:8082.",
     "This package installs the desktop app: a small native window that renders "
     "that dashboard and puts an icon in the tray. It carries no Python, no "
     "server and no configuration. On first launch, if the server is not "
@@ -110,14 +140,26 @@ DESCRIPTION_PARAGRAPHS = (
     "the mcc-server command are left alone.",
 )
 
+#: What a user types into ``winget search``. Sixteen is the schema's ceiling;
+#: these are the terms that name this category rather than the ones that
+#: describe software in general, and they are the same vocabulary as the
+#: repository topics and the ``pyproject``/npm keywords so the project is
+#: findable under one set of words everywhere.
 TAGS = (
     "ai",
+    "ai-gateway",
     "claude",
+    "claude-code",
     "coding-agent",
+    "codex",
     "dashboard",
     "developer-tools",
-    "gateway",
+    "gemini-cli",
     "llm",
+    "llm-proxy",
+    "llm-router",
+    "model-routing",
+    "opencode",
     "openai-compatible",
     "proxy",
 )
@@ -303,6 +345,11 @@ def render_installer(
         *_header("installer"),
         f"PackageIdentifier: {PACKAGE_IDENTIFIER}",
         f"PackageVersion: {version}",
+        # Root level, so it holds for every installer node rather than being
+        # repeated per architecture the day a second one exists.
+        "Dependencies:",
+        "  PackageDependencies:",
+        f"    - PackageIdentifier: {WEBVIEW2_DEPENDENCY}",
         "Installers:",
         "  - Architecture: x64",
         # `inno` and not `exe`: winget then supplies Inno's own
@@ -383,7 +430,7 @@ def render(tag: str, sums_path: Path | None, date: str | None) -> dict[str, str]
     """Return ``{filename: contents}`` for one release tag."""
 
     if not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
-        raise SystemExit(f"expected a release tag like v6.45.2, got {tag!r}")
+        raise SystemExit(f"expected a release tag like v7.13.1, got {tag!r}")
     version = tag[1:]
     facts = installer_facts()
     digest = installer_sha256(tag, sums_path)
@@ -402,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Render the winget manifests for one release tag."
     )
-    parser.add_argument("tag", help="the release tag, e.g. v6.45.2")
+    parser.add_argument("tag", help="the release tag, e.g. v7.13.1")
     parser.add_argument(
         "--sums",
         type=Path,

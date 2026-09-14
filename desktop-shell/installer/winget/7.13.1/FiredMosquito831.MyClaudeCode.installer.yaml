@@ -2,20 +2,23 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
 
 PackageIdentifier: FiredMosquito831.MyClaudeCode
-PackageVersion: 6.45.2
+PackageVersion: 7.13.1
+Dependencies:
+  PackageDependencies:
+    - PackageIdentifier: Microsoft.EdgeWebView2Runtime
 Installers:
   - Architecture: x64
     InstallerType: inno
     Scope: user
-    InstallerUrl: https://github.com/FiredMosquito831/my-claude-code/releases/download/v6.45.2/MyClaudeCode-Setup-windows-x86_64.exe
-    InstallerSha256: FB78D8505AE2659BBBEDEDB81E759A38FE65310CEFFF282236B21C9980DBFF8F
+    InstallerUrl: https://github.com/FiredMosquito831/my-claude-code/releases/download/v7.13.1/MyClaudeCode-Setup-windows-x86_64.exe
+    InstallerSha256: 39AF7C031D8A08B117740EE5DF3A2977E4F3A28EE1D09C5F6D1EE13B6EB46771
     ProductCode: '{5FC8D5C3-33F7-4366-AD8D-C844D21BC089}_is1'
     AppsAndFeaturesEntries:
       - DisplayName: My Claude Code (desktop app)
-        DisplayVersion: 6.45.2
+        DisplayVersion: 7.13.1
         Publisher: My Claude Code
         ProductCode: '{5FC8D5C3-33F7-4366-AD8D-C844D21BC089}_is1'
         InstallerType: inno
-    ReleaseDate: 2026-09-04
+    ReleaseDate: 2026-09-14
 ManifestType: installer
 ManifestVersion: 1.12.0
