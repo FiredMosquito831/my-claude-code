@@ -97,6 +97,7 @@ from my_claude_code.providers.stream_recovery import (
 from .chunks import adopt_chat_stream
 from .client_identity import identity_headers_for_body
 from .identity_enforcement import observe_identity_enforcement
+from .messages_transport import MessagesTransport
 from .opencode_identity import identity_wire_record
 from .profiles import OpenAIChatProfile
 from .request_policy import build_openai_chat_request_body
@@ -199,6 +200,7 @@ class OpenAIChatProvider(BaseProvider):
         # Built on first use and only by a profile that declares the surface,
         # so nothing that will never speak Responses opens a client for it.
         self._responses_transport: ResponsesTransport | None = None
+        self._messages_transport: MessagesTransport | None = None
         # What this host has taught MCC about itself: per-model output caps it
         # stated, reasoning fields it refused, and whether it takes streamed
         # usage. Keyed by the bare model id, so a gateway that takes
@@ -302,6 +304,9 @@ class OpenAIChatProvider(BaseProvider):
         transport = getattr(self, "_responses_transport", None)
         if transport is not None:
             await transport.aclose()
+        messages = getattr(self, "_messages_transport", None)
+        if messages is not None:
+            await messages.aclose()
 
     @property
     def _responses(self) -> ResponsesTransport:
@@ -318,6 +323,24 @@ class OpenAIChatProvider(BaseProvider):
                 api_key_provider=self._api_key_provider,
             )
             self._responses_transport = transport
+        return transport
+
+    @property
+    def _messages(self) -> MessagesTransport:
+        """This provider's Messages sender, built on first use."""
+        transport = self._messages_transport
+        if transport is None:
+            transport = MessagesTransport(
+                self._config,
+                base_url=self._base_url,
+                provider_name=self._provider_name,
+                provider_id=self._provider_id,
+                identity=self._profile.client_identity,
+                api_key=self._api_key,
+                rate_limiter=self._rate_limiter,
+                api_key_provider=self._api_key_provider,
+            )
+            self._messages_transport = transport
         return transport
 
     async def list_models_payload(self) -> Any:
@@ -818,6 +841,14 @@ class OpenAIChatProvider(BaseProvider):
     ) -> AsyncIterator[str]:
         """Run this request on one named endpoint."""
 
+        if surface is ResponseSurface.MESSAGES:
+            return self._messages.stream(
+                request,
+                input_tokens=input_tokens,
+                reasoning=reasoning,
+                surface_label=label,
+                request_id=request_id,
+            )
         if surface is ResponseSurface.RESPONSES:
             body, headers = self._responses.build_body(
                 request,
@@ -929,6 +960,9 @@ class OpenAIChatProvider(BaseProvider):
     async def _probe_surface(self, surface: ResponseSurface, model_id: str) -> None:
         """One ~16-token question to one endpoint. Raises what the host said."""
 
+        if surface is ResponseSurface.MESSAGES:
+            await self._messages.probe(model_id)
+            return
         if surface is ResponseSurface.RESPONSES:
             await self._responses.probe(model_id)
             return

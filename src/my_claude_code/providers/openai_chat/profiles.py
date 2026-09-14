@@ -330,9 +330,19 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         # why every request MCC made to them before 6.74.0 came back a bare
         # HTTP 500 (CONFIRMED 2026-09-11: the same model, key and headers, 500
         # on /chat/completions and 200 on /responses minutes apart).
+        # Messages joins the declaration in 7.13.0. Zen publishes
+        # ``@ai-sdk/anthropic`` for twenty of the models in its registry, and
+        # until now every one of them resolved to UNSERVABLE and was listed
+        # with that reason; ``providers/anthropic_messages/`` already spoke the
+        # protocol, so wiring it was a re-point, not a third adapter. No free
+        # model is on that surface today -- see
+        # ``openai_chat/messages_transport.py`` -- so nothing about the
+        # servable roster changes yet; what changes is that it will not need a
+        # release when one returns.
         response_surfaces=(
             ResponseSurface.CHAT_COMPLETIONS,
             ResponseSurface.RESPONSES,
+            ResponseSurface.MESSAGES,
         ),
         surface_registry_provider=OPENCODE_REGISTRY_PROVIDER,
     ),
@@ -355,6 +365,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         response_surfaces=(
             ResponseSurface.CHAT_COMPLETIONS,
             ResponseSurface.RESPONSES,
+            ResponseSurface.MESSAGES,
         ),
         surface_registry_provider=OPENCODE_REGISTRY_PROVIDER,
     ),

@@ -46,6 +46,10 @@ from my_claude_code.providers.stream_recovery import (
 )
 
 from .auth import AnthropicMessagesAuth, BearerTokenAuth
+from .probe import (
+    MESSAGES_PROBE_MAX_OUTPUT_TOKENS,
+    MESSAGES_PROBE_PROMPT,
+)
 from .request import build_anthropic_messages_body
 from .streaming import iter_anthropic_sse_frames
 
@@ -93,6 +97,7 @@ class AnthropicMessagesProvider(BaseProvider):
         rate_limiter: ProviderRateLimiter,
         auth: AnthropicMessagesAuth | None = None,
         extra_headers: dict[str, str] | None = None,
+        header_provider: Callable[[Mapping[str, Any]], Mapping[str, str]] | None = None,
         body_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         provider_id: str = "",
     ) -> None:
@@ -106,6 +111,13 @@ class AnthropicMessagesProvider(BaseProvider):
         # upstreams with a different credential contract inject their own.
         self._auth = auth if auth is not None else BearerTokenAuth(config.api_key)
         self._extra_headers = dict(extra_headers or {})
+        # The per-request half of an upstream's identity, for a gateway whose
+        # headers are derived from the body it is about to send. ``extra_headers``
+        # is the constant half and cannot express that; the OpenCode gateway's
+        # free-tier gate reads a per-conversation session header, so a Messages
+        # request that carried only the constant half would be refused where the
+        # Chat Completions request beside it is not.
+        self._header_provider = header_provider
         # Applied to the serialized body just before it goes upstream, for
         # upstreams whose wire format differs from the canonical one.
         self._body_transform = body_transform
@@ -201,6 +213,38 @@ class AnthropicMessagesProvider(BaseProvider):
     ) -> None:
         build_anthropic_messages_body(request, reasoning=reasoning)
 
+    async def probe(self, model_id: str) -> None:
+        """Ask this endpoint whether it serves one model, as cheaply as possible.
+
+        Returns on success and raises whatever the host answered otherwise, so
+        a caller choosing between two surfaces can tell "the other door works"
+        from "both are shut" without this method having an opinion about
+        either. The counterpart to
+        :meth:`~my_claude_code.providers.openai_chat.responses_transport.ResponsesTransport.probe`,
+        and deliberately the same question: one word, no system prompt, no
+        tools.
+        """
+
+        body: dict[str, Any] = {
+            "model": model_id,
+            "max_tokens": MESSAGES_PROBE_MAX_OUTPUT_TOKENS,
+            "messages": [{"role": "user", "content": MESSAGES_PROBE_PROMPT}],
+        }
+        headers = {"Content-Type": "application/json"}
+        headers.update(self._extra_headers)
+        if self._header_provider is not None:
+            headers.update(self._header_provider(body))
+        headers.update(await self._auth.headers())
+        response = await self._client.post(
+            f"{self._base_url}/messages", headers=headers, json=body
+        )
+        if response.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"{self._provider_name} Messages API error {response.status_code}",
+                request=response.request,
+                response=response,
+            )
+
     async def _send_stream_request(self, body: dict[str, Any]) -> httpx.Response:
         response, request = await self._open_stream(body)
         if response.status_code >= 400 and self._auth_retry is not None:
@@ -225,6 +269,8 @@ class AnthropicMessagesProvider(BaseProvider):
     ) -> tuple[httpx.Response, httpx.Request]:
         headers = {"Content-Type": "application/json"}
         headers.update(self._extra_headers)
+        if self._header_provider is not None:
+            headers.update(self._header_provider(body))
         # Resolved per request: a short-lived credential may refresh between
         # attempts, so the header cannot be captured once at construction.
         headers.update(await self._auth.headers())
@@ -309,12 +355,26 @@ class AnthropicMessagesProvider(BaseProvider):
         *,
         request_id: str | None = None,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        wire_surface: str = "",
     ) -> AsyncIterator[str]:
+        """Stream one request, optionally saying which door it went through.
+
+        ``wire_surface`` is recorded beside the body in the wire capture, so an
+        operator reading a request can see *which* of a multi-surface gateway's
+        endpoints served it. A per-call argument rather than provider state:
+        two concurrent requests through one provider may reach two different
+        doors, and an instance attribute would let one of them relabel the
+        other. Empty -- and therefore absent from the record -- for every
+        provider with only one endpoint, which is every caller but the
+        re-pointed gateway.
+        """
+
         del input_tokens
         return self._stream_response(
             request,
             request_id=request_id,
             reasoning=reasoning,
+            wire_surface=wire_surface,
         )
 
     async def _stream_response(
@@ -323,6 +383,7 @@ class AnthropicMessagesProvider(BaseProvider):
         *,
         request_id: str | None,
         reasoning: ReasoningPolicy,
+        wire_surface: str = "",
     ) -> AsyncIterator[str]:
         tag = self._provider_name
         req_tag = f" request_id={request_id}" if request_id else ""
@@ -374,7 +435,10 @@ class AnthropicMessagesProvider(BaseProvider):
                 try:
                     # Commit boundary: the body is final once it is handed
                     # to the sender.
-                    record_wire_request(body)
+                    record_wire_request(
+                        body,
+                        **({"surface": wire_surface} if wire_surface else {}),
+                    )
                     response = await self._rate_limiter.execute_with_retry(
                         self._send_stream_request,
                         body,
