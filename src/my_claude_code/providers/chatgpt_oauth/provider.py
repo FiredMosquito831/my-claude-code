@@ -334,11 +334,19 @@ the endpoint's long-standing ``medium`` -- so the toggle channel is
 real and its on-value is a default rung.
 
 ``effort_values=frozenset(ReasoningEffort)`` is the whole ladder, and
-since 6.68.1 the encoder honours it: OpenAI's own client (Codex CLI
-0.153.4) spells ``none|minimal|low|medium|high|xhigh|max|ultra|
-persistent``, so every rung MCC has is host vocabulary here. Narrowing
-is the *model's* job -- ``supported_efforts`` from the ladder, clamped
-and recorded by ``adapt_reasoning_policy`` -- never the encoder's.
+since 6.68.1 the encoder honours it: OpenAI's own client spells
+``none|minimal|low|medium|high|xhigh|max|ultra|persistent``, so every
+rung MCC has is host vocabulary here. Re-read 2026-09-14 out of the
+installed ``@openai/codex`` **0.154.0** binary's strings -- the same
+nine words the 0.153.4 note claimed, now confirmed against what is on
+this machine rather than against a version number.
+
+The two words above ``max`` are not MCC rungs and never become them
+(decision Q7): ``max`` is what a client asks for, and which word that
+is on the wire is answered per model in
+``providers/openai_chat/learned_dialect``. Narrowing is the *model's*
+job -- ``supported_efforts`` from the ladder, clamped and recorded by
+``adapt_reasoning_policy`` -- never the encoder's.
 """
 
 

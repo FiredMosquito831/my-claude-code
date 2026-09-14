@@ -53,6 +53,20 @@ from my_claude_code.core.reasoning import ReasoningEffort
 #: Codex's own reasoning vocabulary, in Codex's own order, with the wording
 #: Codex's picker shows. MCC never adds a rung to this list; it only ever
 #: intersects a model's published efforts with it.
+#:
+#: **Re-read 2026-09-14 against the installed binary**, which is
+#: ``@openai/codex`` **0.154.0** -- not the 0.151.0 the note below cited, and
+#: not the 0.153.4 ``chatgpt_oauth/provider.py`` cites either. Its serde enum
+#: spells ``none|minimal|low|medium|high|xhigh|max|ultra|persistent``, read out
+#: of ``codex.exe``'s strings; the binary was never run.
+#:
+#: The two rungs above ``max`` are deliberately **not** added here, and this is
+#: decision Q7 of 2026-09-13 rather than an oversight. This table is
+#: intersected with a model's ``supported_efforts``, which are
+#: :class:`ReasoningEffort` members -- and Q7 keeps that enum as it is, so no
+#: model can ever publish ``ultra`` and the entry would be unreachable. Where
+#: those words *do* matter is on the wire, per model, from what the host itself
+#: named: see ``providers/openai_chat/learned_dialect._ladder_with_super_rungs``.
 CODEX_REASONING_LEVELS: dict[str, str] = {
     "low": "Fast responses with lighter reasoning",
     "medium": "Balances speed and reasoning depth for everyday tasks",
@@ -79,7 +93,8 @@ CODEX_BASE_INSTRUCTIONS = (
 )
 
 #: Keys Codex refuses a catalogue entry without, read out of the 0.151.0
-#: binary's ``ModelInfo`` serde field list (a serde field with no
+#: binary's ``ModelInfo`` serde field list (not re-read on 2026-09-14: the
+#: reasoning enum was what that pass went looking for) (a serde field with no
 #: ``#[serde(default)]`` is a ``missing field`` parse error when absent).
 #: ``context_window`` is deliberately NOT here: it carries
 #: ``#[serde(default, skip_serializing_if = "Option::is_none")]``, so it is

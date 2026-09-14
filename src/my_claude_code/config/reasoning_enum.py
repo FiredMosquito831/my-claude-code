@@ -37,6 +37,8 @@ KNOWN_EFFORT_WORDS = frozenset(
         "high",
         "xhigh",
         "max",
+        "ultra",
+        "persistent",
         "none",
         "off",
         "auto",
@@ -50,6 +52,25 @@ KNOWN_EFFORT_WORDS = frozenset(
 
 OFF_EFFORT_WORDS = frozenset({"none", "off", "disable", "disabled"})
 """Words that spell "do not reason" -- a dialect's OFF rung."""
+
+SUPER_EFFORT_WORDS: tuple[str, ...] = ("ultra", "persistent")
+"""Rungs some hosts publish *above* MCC's own top rung, lowest first.
+
+Read out of the installed Codex CLI **0.154.0** binary on 2026-09-14, whose
+serde enum spells ``none|minimal|low|medium|high|xhigh|max|ultra|persistent``
+-- and read out of the binary rather than out of a changelog, because the
+0.151.0 table this replaced was already a release behind its own source.
+
+MCC's :class:`~my_claude_code.core.reasoning.ReasoningEffort` deliberately does
+**not** gain members for these (decision Q7, 2026-09-13). A rung in that enum
+is something a client may ask for, and no client asks for ``ultra``: what a
+client asks for is ``max``, "the most this model will do". Which word that is
+on the wire is the host's business, and it is answered where every other wire
+translation is -- in the dialect, per model, from what the host itself named.
+
+Order is load-bearing: the last word a host names from this tuple is the one
+``max`` becomes.
+"""
 
 # Quote characters a host may wrap an enum member in: ASCII, plus the curly
 # and CJK forms that copy-pasted API docs carry.
