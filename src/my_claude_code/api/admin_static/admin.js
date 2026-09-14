@@ -11110,6 +11110,13 @@ const reqState = {
   // provider has different counts, so comparing across a filter change would
   // report "changed" for something that only moved because the question did.
   lastPulseFilters: null,
+  // `null` while a deferred count is in flight, which the pager reads as
+  // "counting..." rather than as zero. `hasMore` is what drives Next while it
+  // is: the page fetches one row beyond itself to answer that without a count.
+  countDeferred: false,
+  hasMore: false,
+  pageRows: 0,
+  lastCaptureBodies: null,
 };
 
 function reqWindowSeconds() {
@@ -11163,9 +11170,26 @@ async function loadRequestsView() {
   // Analytics query that scans `request_attempts`, measured at 3.3 s cold on
   // a 4.5 GB log against 0.11 s for the stats it sits beside.
   loadRequestLatencyPanel(loadId, params);
+  // A free-text search is the one filter whose *counting* queries cannot use
+  // an index: the predicate is substring matching over stored bodies, so the
+  // count and the filtered stats both decompress a body per row. Measured on a
+  // 4.5 GB log for a term present in real traffic: the 25-row page 0.06 s, the
+  // COUNT(*) over the same predicate 383.66 s, and stats(q=) still running at
+  // 600 s. Both move off the wait -- exactly as the cost and latency panels
+  // above did -- and land when they land. Every other filter is index-served
+  // and keeps today's behaviour precisely.
+  const deferring = Boolean(params.get("q"));
+  reqState.countDeferred = deferring;
+  reqState.hasMore = false;
+  if (deferring) {
+    loadRequestSearchCount(loadId, params);
+    loadRequestDeferredStats(loadId, params);
+  }
   try {
     [stats, list, lifetime] = await Promise.all([
-      api(`/admin/api/requests/stats?${params}`),
+      deferring
+        ? Promise.resolve(reqPlaceholderStats())
+        : api(`/admin/api/requests/stats?${params}`),
       api(
         `/admin/api/requests?limit=${reqState.limit}&offset=${reqState.offset}&${params}`,
       ),
@@ -11199,7 +11223,9 @@ async function loadRequestsView() {
     byId("reqLastUpdated").textContent = "Logging disabled";
     return;
   }
-  byId("reqBodiesIndicator").textContent = stats.capture_bodies
+  // From the list payload, not the stats one: both carry the flag, and the
+  // list is the payload that is always awaited.
+  byId("reqBodiesIndicator").textContent = list.capture_bodies
     ? "Bodies: captured"
     : "Bodies: hashes only (REQUEST_LOG_CAPTURE_BODIES=false)";
   // Set before anything renders: the chips, the filter datalist and the
@@ -11223,10 +11249,84 @@ async function loadRequestsView() {
   renderRequestFallbackRoutes(stats.fallback_routes || []);
   renderRequestDivertedRoutes(stats.diverted_routes || []);
   renderReqBreakdownTruncatedNote(stats);
-  reqState.total = list.total || 0;
+  reqState.total = list.total_deferred ? null : list.total || 0;
+  reqState.countDeferred = Boolean(list.total_deferred);
+  reqState.hasMore = Boolean(list.has_more);
+  reqState.pageRows = (list.rows || []).length;
+  reqState.lastCaptureBodies = list.capture_bodies;
   renderRequestsTable(list.rows || []);
   renderReqPager();
   byId("reqLastUpdated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+}
+
+/** The shape `renderRequestStatsCards` and friends read, with nothing in it.
+ *
+ * Used for the one paint where a free-text search has deferred its stats: the
+ * page renders its rows immediately and the panels say "counting..." until the
+ * real payload lands. `enabled` is true because the log *is* enabled -- the
+ * numbers are simply not here yet, which is a different thing from off.
+ */
+function reqPlaceholderStats() {
+  return {
+    enabled: true,
+    counting: true,
+    capture_bodies: reqState.lastCaptureBodies !== false,
+    harness_labels: reqState.harnessLabels || {},
+    by_provider: [],
+    by_model: [],
+    by_key: [],
+    by_harness: [],
+    top_errors: [],
+    upstream_statuses: [],
+    fallback_routes: [],
+    diverted_routes: [],
+    series: [],
+  };
+}
+
+/** Fetch the deferred count and, if the page has not moved on, show it. */
+async function loadRequestSearchCount(loadId, params) {
+  try {
+    const result = await api(`/admin/api/requests/count?${params}`);
+    if (loadId !== reqState.loadId) return;
+    reqState.total = Number(result.total || 0);
+    reqState.countDeferred = false;
+    renderReqPager();
+  } catch (_error) {
+    if (loadId !== reqState.loadId) return;
+    reqState.countDeferred = false;
+    reqState.total = null;
+    renderReqPager();
+  }
+}
+
+/** The same for the filtered stats a free-text search forces off the rollup. */
+async function loadRequestDeferredStats(loadId, params) {
+  try {
+    const stats = await api(`/admin/api/requests/stats?${params}`);
+    if (loadId !== reqState.loadId) return;
+    if (stats.enabled === false) return;
+    reqState.harnessLabels =
+      stats.harness_labels && typeof stats.harness_labels === "object"
+        ? stats.harness_labels
+        : {};
+    renderRequestStatsCards(stats);
+    renderRequestRetentionNote(stats);
+    renderRequestCoverage(stats);
+    renderReqSeriesChart(stats.series || []);
+    renderReqModelChart(stats.by_model || []);
+    populateRequestFilterOptions(stats);
+    renderRequestProviderBreakdown(stats.by_provider || []);
+    renderRequestHarnessBreakdown(stats.by_harness || []);
+    renderRequestKeyBreakdown(stats.by_key || []);
+    renderRequestTopErrors(stats.top_errors || []);
+    renderRequestUpstreamStatuses(stats.upstream_statuses || []);
+    renderRequestFallbackRoutes(stats.fallback_routes || []);
+    renderRequestDivertedRoutes(stats.diverted_routes || []);
+    renderReqBreakdownTruncatedNote(stats);
+  } catch (_error) {
+    /* The page already rendered its rows; a failed count is not a failed page. */
+  }
 }
 
 function populateRequestFilterOptions(stats) {
@@ -11553,6 +11653,15 @@ function renderRequestStatsCards(stats) {
       "the answering model's own first token; measured from 7.4.0 on",
     ],
   ];
+  if (stats.counting) {
+    // A free-text search defers these numbers, and a zero here would read as a
+    // measured zero. Same labels, same order, no answer yet.
+    renderStatCards(
+      byId("reqStatsCards"),
+      cards.map(([label, _value, note]) => [label, "counting…", note]),
+    );
+    return;
+  }
   renderStatCards(byId("reqStatsCards"), cards);
 }
 
@@ -12460,7 +12569,24 @@ function buildTurnShapeCell(row) {
 }
 
 function renderReqPager() {
-  const start = reqState.total === 0 ? 0 : reqState.offset + 1;
+  // With the count deferred the total is `null`, and Next is driven by the
+  // has-more signal the page itself carries (one row fetched beyond the page)
+  // rather than by a number that has not arrived. Deriving Next from `total`
+  // while it was null is the trap this shape exists to avoid: every Next
+  // button on the page would have been disabled for the seconds -- or minutes
+  // -- before the count landed.
+  const counting = reqState.total === null || reqState.total === undefined;
+  const start = !counting && reqState.total === 0 ? 0 : reqState.offset + 1;
+  if (counting) {
+    const end = reqState.offset + reqState.pageRows;
+    byId("reqPageInfo").textContent =
+      reqState.pageRows === 0
+        ? "counting…"
+        : `${start}–${end} of counting…`;
+    byId("reqPrevPage").disabled = reqState.offset === 0;
+    byId("reqNextPage").disabled = !reqState.hasMore;
+    return;
+  }
   const end = Math.min(reqState.offset + reqState.limit, reqState.total);
   byId("reqPageInfo").textContent = `${start}–${end} of ${reqState.total}`;
   byId("reqPrevPage").disabled = reqState.offset === 0;
