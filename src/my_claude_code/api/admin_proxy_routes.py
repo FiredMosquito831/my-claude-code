@@ -35,6 +35,7 @@ The release that adds the runtime seam adds the republish with it.
 
 import asyncio
 import threading
+import time
 from dataclasses import replace
 from typing import Any
 
@@ -46,6 +47,7 @@ from my_claude_code.api.admin_routes import require_loopback_admin
 from my_claude_code.api.dependencies import get_services
 from my_claude_code.api.ports import ApiServices
 from my_claude_code.application.proxy_check import (
+    PROXY_CHECK_MAX_CONCURRENCY,
     PROXY_CHECK_TIMEOUT_SECONDS,
     check_endpoints,
     destination_for_provider,
@@ -621,37 +623,123 @@ async def ingest_proxy_feeds(
     return refreshed
 
 
-class ProxyPromotePayload(BaseModel):
-    """Move one candidate into one provider's chain.
+class ProxyCandidateBulkPayload(BaseModel):
+    """What to do with a set of candidates, and where.
 
-    ``provider`` is which chain, and it is also which host the address is
-    measured against: a candidate is tested before it can be added, never
-    after, so the ``TLS intercepted`` refusal applies to an address a feed
-    supplied exactly as it does to one somebody typed.
+    ``action`` is ``add`` -- test each address against ``provider``'s own host
+    and append the ones that pass to that provider's chain -- or ``discard``,
+    which drops the offers and touches no chain at all.
+
+    One destination for the whole set, deliberately: the page used to carry a
+    provider ``<select>`` on **every** row, which with 1,572 addresses on offer
+    after a seven-feed fetch is 1,572 dropdowns and 1,572 presses. Choosing
+    once and applying to a selection is the whole feature.
+
+    ``undo_token`` continues a gesture that is being sent in batches: the first
+    batch mints a token, and every later batch that carries it back extends the
+    same undo point rather than minting one per batch, so Undo means "before I
+    pressed Add", not "before the last ten of them".
     """
 
-    provider: str
-    proxy: str
+    action: str = "add"
+    provider: str = ""
+    proxies: list[str] = Field(default_factory=list)
+    undo_token: str = ""
 
 
-@router.post("/admin/api/proxy-chains/candidates/add")
-async def add_proxy_candidate(
-    payload: ProxyPromotePayload,
+class ProxyUndoPayload(BaseModel):
+    """The token a bulk write handed back, to put the store back as it was."""
+
+    token: str
+
+
+#: The most addresses one request may carry. The page sends a long selection in
+#: batches of ten so it can show progress and stay usable, so this is a bound
+#: on a misbehaving caller rather than on an operator: nothing the page does
+#: comes close to it, and a chain caps at twelve entries anyway.
+PROXY_CANDIDATE_BULK_MAX = 100
+
+#: Outcomes one address can have, in the words the page reports them with. This
+#: is the vocabulary the summary and the per-row state both read from, so a
+#: partial result cannot be described two different ways.
+CANDIDATE_OUTCOMES: tuple[str, ...] = (
+    "added",
+    "benched",
+    "refused",
+    "already",
+    "full",
+    "gone",
+    "discarded",
+)
+
+#: The one undo point, and the document it expects to find when it is used.
+#: Deliberately a single slot rather than a stack: this is the Models page's
+#: one-level undo (6.7.0), and a stack of proxy-store snapshots is a way to
+#: restore a document whose middle has moved on.
+_UNDO_SLOT: dict[str, Any] = {}
+_UNDO_LOCK = threading.Lock()
+
+
+@router.post("/admin/api/proxy-chains/candidates/bulk")
+async def bulk_proxy_candidates(
+    payload: ProxyCandidateBulkPayload,
     request: Request,
     services: ApiServices = Depends(get_services),
 ):
-    """Check one candidate, then append it to a provider's chain if it passes.
+    """Add a set of candidates to one provider's chain, or discard them.
 
-    The order is the point. A stranger's address is measured against the
-    provider's own host -- does it answer, does its tunnel leave that host's
-    certificate verifiable -- *before* it is written into a chain that will
-    carry a credential. An address that fails the certificate half is refused
-    and stays a candidate; an address that merely did not answer is added
-    anyway, benched, because a free proxy that is down now is an ordinary
-    thing the chain already routes around.
+    **The only write path for a candidate.** A single address is this route
+    with one element in ``proxies``; there is no per-row route, because the
+    release that let the Models page keep a second single-row write path
+    shipped a row that silently skipped the counters (6.24.0).
+
+    The order is the point, and it is unchanged from the single add it
+    replaces. A stranger's address is measured against the provider's own host
+    -- does it answer, does its tunnel leave that host's certificate verifiable
+    -- *before* it is written into a chain that will carry a credential. An
+    address that fails the certificate half is refused and stays a candidate;
+    an address that merely did not answer is added anyway, benched, because a
+    free proxy that is down now is an ordinary thing the chain routes around.
+
+    A mixed result is the **normal** outcome of a bulk add, not an error: these
+    are strangers' machines read from public lists. Every address comes back
+    with its own outcome and the page reports the groups, so nothing is
+    reported as a failed request when eleven of twelve worked.
     """
 
     require_loopback_admin(request)
+    action = payload.action.strip().lower()
+    if action not in {"add", "discard"}:
+        raise HTTPException(
+            status_code=422, detail="action must be one of: add, discard"
+        )
+    proxies: list[str] = []
+    for raw in payload.proxies:
+        proxy_id = str(raw).strip()
+        if proxy_id and proxy_id not in proxies:
+            proxies.append(proxy_id)
+    if not proxies:
+        raise HTTPException(
+            status_code=422,
+            detail="Select at least one address first.",
+        )
+    if len(proxies) > PROXY_CANDIDATE_BULK_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"At most {PROXY_CANDIDATE_BULK_MAX} addresses in one request; "
+                f"this one carries {len(proxies)}."
+            ),
+        )
+
+    if action == "discard":
+        before = await asyncio.to_thread(_snapshot)
+        results = await asyncio.to_thread(_commit_discard, proxies)
+        token = await asyncio.to_thread(
+            _remember_undo, payload.undo_token.strip(), before
+        )
+        return await _bulk_payload(services, action, "", results, token)
+
     settings = services.requests.current_settings()
     providers = {
         entry["provider_id"]: entry for entry in _configured_providers(settings)
@@ -660,16 +748,6 @@ async def add_proxy_candidate(
     if provider_id not in providers:
         raise HTTPException(
             status_code=404, detail=f"Not a configured provider: {payload.provider}"
-        )
-    proxy_id = payload.proxy.strip()
-    store = current_proxy_chains()
-    if proxy_id not in store.candidates:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "That address is not on offer any more. Fetch the feeds again "
-                "and pick from the refreshed list."
-            ),
         )
     destination = str(providers[provider_id].get("base_url") or "").strip()
     if not destination.lower().startswith("https://"):
@@ -681,46 +759,180 @@ async def add_proxy_candidate(
                 "Set its base URL first."
             ),
         )
+
+    store = current_proxy_chains()
     chain = store.chain(provider_id) or EMPTY_CHAIN
-    if len(chain.entries) >= PROXY_CHAIN_MAX_ENTRIES:
+    # The same gate the ``PUT`` holds, held here too. A subscription login uses
+    # the operator's personal account rather than a metered key, and moving it
+    # between source addresses is more likely to be flagged there than
+    # anywhere else -- so the acknowledgement is a condition of the chain
+    # having entries at all, by whichever door they arrive.
+    if provider_id in OAUTH_PROVIDER_IDS and not chain.oauth_acknowledged:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"{providers[provider_id]['display_name']} already has "
-                f"{PROXY_CHAIN_MAX_ENTRIES} entries, which is the cap."
+                f"{providers[provider_id]['display_name']} signs in with your "
+                "personal subscription. Acknowledge what changing source "
+                "address means for it on its card before adding addresses to "
+                "its chain."
             ),
         )
+    free = max(0, PROXY_CHAIN_MAX_ENTRIES - len(chain.entries))
+    in_chain = {entry.proxy for entry in chain.entries if entry.proxy}
 
-    outcomes = await check_endpoints(
-        (proxy_id,),
-        {proxy_id: destination},
-        timeout=PROXY_CHECK_TIMEOUT_SECONDS,
-        exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
+    results: dict[str, dict[str, Any]] = {}
+    testable: list[str] = []
+    for proxy_id in proxies:
+        endpoint = store.endpoint(proxy_id)
+        label = (
+            ""
+            if endpoint is None
+            else (endpoint.label or mask_proxy_label(endpoint.url))
+        )
+        if proxy_id in in_chain:
+            results[proxy_id] = _result(proxy_id, label, "already")
+        elif proxy_id not in store.candidates:
+            results[proxy_id] = _result(proxy_id, label, "gone")
+        elif len(testable) >= free:
+            results[proxy_id] = _result(proxy_id, label, "full")
+        else:
+            testable.append(proxy_id)
+
+    outcomes = (
+        await check_endpoints(
+            tuple(testable),
+            dict.fromkeys(testable, destination),
+            timeout=PROXY_CHECK_TIMEOUT_SECONDS,
+            exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
+            concurrency=PROXY_CHECK_MAX_CONCURRENCY,
+        )
+        if testable
+        else {}
     )
-    outcome = outcomes.get(proxy_id)
-    if outcome is not None and outcome.refused:
-        # The verdict is already durable -- ``check_endpoints`` wrote it to the
-        # store and armed the interception ledger before returning -- so the
-        # page's next render shows the refusal without this route sending a
-        # payload it is about to discard on a 422.
+    keep: list[str] = []
+    for proxy_id in testable:
+        outcome = outcomes.get(proxy_id)
+        label = "" if outcome is None else outcome.label
+        if outcome is None:
+            # Nothing measured it: the address left the store between the read
+            # above and the check. Reported, never silently dropped.
+            results[proxy_id] = _result(proxy_id, label, "gone")
+            continue
+        if outcome.refused:
+            # The verdict is already durable -- ``check_endpoints`` wrote it to
+            # the store and armed the interception ledger before returning --
+            # so the refusal survives a reload without this route writing it.
+            results[proxy_id] = _result(
+                proxy_id,
+                label,
+                "refused",
+                detail=(
+                    f"{label} breaks certificate validation: its tunnel "
+                    "presented a certificate this machine does not trust, "
+                    "which means it is reading the traffic rather than "
+                    "relaying it. It was not added, and it stays refused "
+                    "until a later test says otherwise."
+                ),
+            )
+            continue
+        keep.append(proxy_id)
+        results[proxy_id] = _result(
+            proxy_id,
+            label,
+            "added" if outcome.record.ok else "benched",
+            detail=outcome.record.detail,
+            latency_ms=outcome.record.latency_ms,
+        )
+
+    before = await asyncio.to_thread(_snapshot)
+    if keep:
+        missed = await asyncio.to_thread(_commit_promotions, provider_id, keep)
+        for proxy_id in missed:
+            # The store moved under the write -- another tab, or a hand edit.
+            # Say so rather than reporting an add that did not happen.
+            results[proxy_id] = _result(proxy_id, results[proxy_id]["label"], "gone")
+        await _republish(services)
+    token = (
+        await asyncio.to_thread(_remember_undo, payload.undo_token.strip(), before)
+        if keep
+        else payload.undo_token.strip()
+    )
+    ordered = [results[proxy_id] for proxy_id in proxies if proxy_id in results]
+    return await _bulk_payload(services, action, provider_id, ordered, token)
+
+
+@router.post("/admin/api/proxy-chains/candidates/undo")
+async def undo_proxy_candidates(
+    payload: ProxyUndoPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Put the store back as it was before one bulk gesture.
+
+    Refuses rather than overwrites when the document has moved on since. A
+    snapshot restore is a whole-document write, so undoing across somebody
+    else's edit would quietly delete it; the honest answer to that is a
+    sentence, not a silent rollback of two changes.
+    """
+
+    require_loopback_admin(request)
+    restored = await asyncio.to_thread(_commit_undo, payload.token.strip())
+    if restored == "unknown":
         raise HTTPException(
             status_code=422,
             detail=(
-                f"{outcome.label} breaks certificate validation: its tunnel "
-                "presented a certificate this machine does not trust, which "
-                "means it is reading the traffic rather than relaying it. It "
-                "was not added, and it stays refused until a later test says "
-                "otherwise."
+                "There is nothing to undo any more. An undo point lasts until "
+                "the next bulk action or a restart."
             ),
         )
-
-    await asyncio.to_thread(_commit_promotion, provider_id, proxy_id)
+    if restored == "moved":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Something else has changed these chains since, so this was "
+                "not undone -- putting the whole document back would delete "
+                "that change too. Reload the page to see where it stands."
+            ),
+        )
     await _republish(services)
+    return await asyncio.to_thread(_payload, services)
+
+
+def _result(
+    proxy_id: str,
+    label: str,
+    outcome: str,
+    *,
+    detail: str = "",
+    latency_ms: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "proxy": proxy_id,
+        "label": label,
+        "outcome": outcome,
+        "detail": detail,
+        "latency_ms": latency_ms,
+    }
+
+
+async def _bulk_payload(
+    services: ApiServices,
+    action: str,
+    provider_id: str,
+    results: list[dict[str, Any]],
+    token: str,
+) -> dict[str, Any]:
     refreshed = await asyncio.to_thread(_payload, services)
-    if outcome is not None:
-        refreshed["checked"] = {
-            proxy_id: outcome.record.as_document() | {"label": outcome.label}
-        }
+    counts = dict.fromkeys(CANDIDATE_OUTCOMES, 0)
+    for row in results:
+        counts[row["outcome"]] = counts.get(row["outcome"], 0) + 1
+    refreshed["bulk"] = {
+        "action": action,
+        "provider": provider_id,
+        "results": results,
+        "counts": counts,
+        "undo_token": token,
+    }
     return refreshed
 
 
@@ -729,34 +941,119 @@ def _commit_feeds(feed_ids: tuple[str, ...]) -> None:
         save_proxy_chains(load_proxy_chains().with_feeds(feed_ids))
 
 
-def _commit_promotion(provider_id: str, proxy_id: str) -> None:
-    """Append one candidate to a chain, inside the writer lock.
+def _commit_promotions(provider_id: str, proxy_ids: list[str]) -> list[str]:
+    """Append several candidates to one chain, in **one** write.
+
+    Inside the writer lock and on a store re-read from disk, so a batch that
+    lands beside another tab's edit derives from what is actually there. One
+    save for the whole batch rather than one per address: the per-address
+    version read, derived and wrote N times, which is the read-modify-write
+    race 6.7.0 found on the Models page in exactly this shape.
 
     The chain is created if the provider has none, switched off: adding an
     address is not the same act as arming the chain, and a first address that
     silently started routing would be the surprise this whole page exists to
     avoid.
+
+    Returns the ids that were no longer on offer by the time the lock was held.
     """
 
+    missed: list[str] = []
     with _CHAIN_WRITE_LOCK:
         store = load_proxy_chains()
-        if proxy_id not in store.candidates:
-            return
         chain = store.chain(provider_id) or EMPTY_CHAIN
-        if any(entry.proxy == proxy_id for entry in chain.entries):
+        entries = list(chain.entries)
+        present = {entry.proxy for entry in entries if entry.proxy}
+        for proxy_id in proxy_ids:
+            if proxy_id in present:
+                store = store.without_candidate(proxy_id)
+                continue
+            if proxy_id not in store.candidates:
+                missed.append(proxy_id)
+                continue
+            if len(entries) >= PROXY_CHAIN_MAX_ENTRIES:
+                missed.append(proxy_id)
+                continue
+            entries.append(ProxyChainEntry(proxy=proxy_id, paused=False))
+            present.add(proxy_id)
+            # Drop it from the offer list first: ``with_chain`` prunes
+            # endpoints nothing references, and an address that is about to be
+            # referenced by a chain must not pass through a state where it is
+            # referenced by neither table.
             store = store.without_candidate(proxy_id)
-            save_proxy_chains(store)
-            return
-        updated = replace(
-            chain,
-            entries=(*chain.entries, ProxyChainEntry(proxy=proxy_id, paused=False)),
+        save_proxy_chains(
+            store.with_chain(provider_id, replace(chain, entries=tuple(entries)))
         )
-        # Drop it from the offer list first: ``with_chain`` prunes endpoints
-        # nothing references, and an address that is about to be referenced by
-        # a chain must not pass through a state where it is referenced by
-        # neither table.
-        store = store.without_candidate(proxy_id).with_chain(provider_id, updated)
+    return missed
+
+
+def _commit_discard(proxy_ids: list[str]) -> list[dict[str, Any]]:
+    """Drop offers. One write, and no chain is touched.
+
+    Discarding a candidate is not removing a proxy from a chain: it says "do
+    not show me this address again", and an address that is already an entry
+    somewhere keeps routing exactly as it did.
+    """
+
+    results: list[dict[str, Any]] = []
+    with _CHAIN_WRITE_LOCK:
+        store = load_proxy_chains()
+        for proxy_id in proxy_ids:
+            endpoint = store.endpoint(proxy_id)
+            label = (
+                ""
+                if endpoint is None
+                else (endpoint.label or mask_proxy_label(endpoint.url))
+            )
+            if proxy_id not in store.candidates:
+                results.append(_result(proxy_id, label, "gone"))
+                continue
+            store = store.without_candidate(proxy_id)
+            results.append(_result(proxy_id, label, "discarded"))
         save_proxy_chains(store)
+    return results
+
+
+def _snapshot() -> dict[str, Any]:
+    with _CHAIN_WRITE_LOCK:
+        return load_proxy_chains().as_document()
+
+
+def _remember_undo(continuing: str, before: dict[str, Any]) -> str:
+    """Record one undo point and hand back its token.
+
+    A token that is handed back extends the gesture it belongs to: the *first*
+    batch's "before" is kept and only the "after" moves on, so Undo after a
+    selection sent in six batches means before the first of them.
+    """
+
+    with _UNDO_LOCK:
+        if continuing and _UNDO_SLOT.get("token") == continuing:
+            _UNDO_SLOT["after"] = load_proxy_chains().as_document()
+            return continuing
+        token = f"undo_{int(time.time() * 1000):x}"
+        _UNDO_SLOT.clear()
+        _UNDO_SLOT.update(
+            {
+                "token": token,
+                "before": before,
+                "after": load_proxy_chains().as_document(),
+            }
+        )
+        return token
+
+
+def _commit_undo(token: str) -> str:
+    """``"done"``, ``"unknown"`` for a stale token, ``"moved"`` if it changed."""
+
+    with _UNDO_LOCK, _CHAIN_WRITE_LOCK:
+        if not token or _UNDO_SLOT.get("token") != token:
+            return "unknown"
+        if load_proxy_chains().as_document() != _UNDO_SLOT.get("after"):
+            return "moved"
+        save_proxy_chains(ProxyChains.from_document(_UNDO_SLOT["before"]))
+        _UNDO_SLOT.clear()
+        return "done"
 
 
 # ------------------------------------------------------------------- payload

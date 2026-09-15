@@ -73,6 +73,16 @@ PROXY_CHECK_TIMEOUT_SECONDS = 10.0
 #: string, not a page.
 EXIT_IP_MAX_CHARS = 64
 
+#: How many addresses one *operator-initiated* sweep may have in flight. The
+#: background checker keeps the serial default of 1 -- it has all day and it
+#: must not sit in front of a request -- but a person who has just ticked
+#: twelve candidates and pressed Add is waiting at the screen, and twelve
+#: ten-second timeouts in a row is two minutes of a spinner. Four is the bound
+#: because the slow half of a check is a TLS handshake through a stranger's
+#: machine: four of those overlap comfortably and forty would be a small
+#: outbound flood from an admin page.
+PROXY_CHECK_MAX_CONCURRENCY = 4
+
 
 @dataclass(frozen=True, slots=True)
 class ProxyCheckOutcome:
@@ -368,6 +378,7 @@ async def check_endpoints(
     timeout: float = PROXY_CHECK_TIMEOUT_SECONDS,
     exit_ip_url: str = "",
     persist: bool = True,
+    concurrency: int = 1,
 ) -> dict[str, ProxyCheckOutcome]:
     """Check several stored addresses, persist the verdicts, arm the ledgers.
 
@@ -375,24 +386,50 @@ async def check_endpoints(
     store is re-read before the write rather than held across the checks: a
     sweep takes seconds and an operator editing a chain in the meantime must
     not lose the edit to a result about a different address.
+
+    ``concurrency`` is 1 by default, which is the background checker's contract
+    with the request path: one address at a time, yielding between them. A
+    caller with a person waiting on the answer -- the Proxying page's bulk add
+    -- raises it to at most :data:`PROXY_CHECK_MAX_CONCURRENCY`. The result is
+    keyed by proxy id either way, and the verdicts are written in one save at
+    the end either way, so nothing downstream can tell which was used.
     """
 
     table = load_proxy_chains()
+    wanted = [
+        proxy_id
+        for proxy_id in proxy_ids
+        if table.endpoint(proxy_id) is not None and destinations.get(proxy_id, "")
+    ]
     outcomes: dict[str, ProxyCheckOutcome] = {}
-    for proxy_id in proxy_ids:
+    limit = asyncio.Semaphore(
+        max(1, min(int(concurrency), PROXY_CHECK_MAX_CONCURRENCY))
+    )
+
+    async def measure(proxy_id: str) -> None:
         endpoint = table.endpoint(proxy_id)
-        destination = destinations.get(proxy_id, "")
-        if endpoint is None or not destination:
-            continue
+        if endpoint is None:  # pragma: no cover - filtered above
+            return
         label = endpoint.label or mask_proxy_label(endpoint.url)
-        record = await check_proxy(
-            endpoint.url, destination, timeout=timeout, exit_ip_url=exit_ip_url
-        )
+        async with limit:
+            record = await check_proxy(
+                endpoint.url,
+                destinations[proxy_id],
+                timeout=timeout,
+                exit_ip_url=exit_ip_url,
+            )
         apply_outcome(label, record)
         outcomes[proxy_id] = ProxyCheckOutcome(label=label, record=record)
         # One yield per address. A sweep of a full catalogue is a dozen network
         # calls and this is what keeps them from sitting in front of a request.
         await asyncio.sleep(0)
+
+    await asyncio.gather(*(measure(proxy_id) for proxy_id in wanted))
+    # Back into the order asked for: a caller reports these to a person reading
+    # a list, and gather finishes them in whatever order the network allows.
+    outcomes = {
+        proxy_id: outcomes[proxy_id] for proxy_id in wanted if proxy_id in outcomes
+    }
 
     if persist and outcomes:
         fresh = load_proxy_chains()
@@ -404,6 +441,7 @@ async def check_endpoints(
 
 __all__ = [
     "EXIT_IP_MAX_CHARS",
+    "PROXY_CHECK_MAX_CONCURRENCY",
     "PROXY_CHECK_TIMEOUT_SECONDS",
     "ProxyCheckOutcome",
     "apply_outcome",
