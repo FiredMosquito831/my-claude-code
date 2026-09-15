@@ -106,6 +106,8 @@ SECTION_KEYS: dict[str, tuple[str, ...]] = {
         "PROXY_CHECK_ENABLED",
         "PROXY_CHECK_INTERVAL_MINUTES",
         "PROXY_CHECK_EXIT_IP_URL",
+        "PROXY_FEED_REFRESH_ENABLED",
+        "PROXY_FEED_REFRESH_MINUTES",
         "RATE_LIMIT_ROUTES_AROUND_MODEL",
     ),
     "request_log": (

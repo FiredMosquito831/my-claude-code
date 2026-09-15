@@ -35,6 +35,7 @@ The release that adds the runtime seam adds the republish with it.
 
 import asyncio
 import threading
+from dataclasses import replace
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -49,15 +50,24 @@ from my_claude_code.application.proxy_check import (
     check_endpoints,
     destination_for_provider,
 )
+from my_claude_code.application.proxy_ingest import (
+    feed_catalogue_payload,
+    ingest,
+    known_feed_name,
+)
 from my_claude_code.config.admin.manifest import FIELDS
 from my_claude_code.config.admin.status import provider_config_status
-from my_claude_code.config.constants import ROTATION_POLICY_ORDER
+from my_claude_code.config.constants import (
+    PROXY_FEED_MINIMUM_MINUTES,
+    ROTATION_POLICY_ORDER,
+)
 from my_claude_code.config.credentials import mask_proxy_label
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.proxy_chains import (
     DEFAULT_TRIGGER_KINDS,
     DIRECT,
+    EMPTY_CHAIN,
     MAX_SWITCHES_MAX,
     MAX_SWITCHES_MIN,
     OAUTH_PROVIDER_IDS,
@@ -76,6 +86,11 @@ from my_claude_code.config.proxy_chains import (
     load_proxy_chains,
     normalise_policy,
     save_proxy_chains,
+)
+from my_claude_code.config.proxy_feeds import (
+    FEEDS_BY_ID,
+    FEEDS_OBSERVED_ON,
+    known_feed_ids,
 )
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
@@ -446,6 +461,14 @@ def _commit_chain(provider_id: str, payload: ProxyChainPayload, inherited: str) 
             max_switches=clamp_max_switches(payload.max_switches),
             oauth_acknowledged=payload.oauth_acknowledged,
         )
+        # An address the operator typed may be one a feed had already offered:
+        # ``add_endpoint`` files it under the id it already has rather than
+        # duplicating it, so without this it would stay listed as "on offer"
+        # while sitting in a chain. On offer and chosen are different states
+        # and one address cannot be in both.
+        for entry in chain.entries:
+            if entry.proxy:
+                store = store.without_candidate(entry.proxy)
         save_proxy_chains(store.with_chain(provider_id, chain))
 
 
@@ -526,6 +549,216 @@ def _refuse_if_intercepted(store: ProxyChains, proxy_id: str, index: int) -> Non
         )
 
 
+# ------------------------------------------------------------------ feeds
+
+
+class ProxyFeedsPayload(BaseModel):
+    """Which named feeds this install may read. A ``PUT`` replaces the set."""
+
+    feeds: list[str] = Field(default_factory=list)
+
+
+@router.put("/admin/api/proxy-chains/feeds")
+async def put_proxy_feeds(
+    payload: ProxyFeedsPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Record which feeds may be read. Fetches nothing by itself.
+
+    Saving this makes no outbound request: it records consent. The reading
+    happens on the Fetch button below it, or on the timer if the operator also
+    turned that on -- two switches, because "may this install talk to public
+    proxy lists" and "may it do so unattended" are different questions.
+    """
+
+    require_loopback_admin(request)
+    unknown = sorted(
+        {
+            str(name).strip().lower()
+            for name in payload.feeds
+            if str(name).strip().lower() not in FEEDS_BY_ID
+        }
+    )
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Not a feed this install ships: {', '.join(unknown)}. "
+                f"Known feeds: {', '.join(FEEDS_BY_ID)}."
+            ),
+        )
+    await asyncio.to_thread(_commit_feeds, known_feed_ids(payload.feeds))
+    return await asyncio.to_thread(_payload, services)
+
+
+@router.post("/admin/api/proxy-chains/ingest")
+async def ingest_proxy_feeds(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    """Read every enabled feed once, and return what they offered.
+
+    The one outbound call this feature makes on an install where the scheduled
+    refresh is off, and only for the feeds the operator ticked. The result is a
+    **candidate list**: addresses that have been merged, counted and ranked,
+    and that no provider's chain references. Nothing routes through one until
+    the operator moves it, and moving it tests it first.
+    """
+
+    require_loopback_admin(request)
+    store = current_proxy_chains()
+    if not store.feeds:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No feeds are switched on, so there is nothing to read. Tick "
+                "one above first -- MCC contacts none of them until you do."
+            ),
+        )
+    run = await ingest()
+    refreshed = await asyncio.to_thread(_payload, services)
+    refreshed["ingest"] = run.as_document()
+    return refreshed
+
+
+class ProxyPromotePayload(BaseModel):
+    """Move one candidate into one provider's chain.
+
+    ``provider`` is which chain, and it is also which host the address is
+    measured against: a candidate is tested before it can be added, never
+    after, so the ``TLS intercepted`` refusal applies to an address a feed
+    supplied exactly as it does to one somebody typed.
+    """
+
+    provider: str
+    proxy: str
+
+
+@router.post("/admin/api/proxy-chains/candidates/add")
+async def add_proxy_candidate(
+    payload: ProxyPromotePayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Check one candidate, then append it to a provider's chain if it passes.
+
+    The order is the point. A stranger's address is measured against the
+    provider's own host -- does it answer, does its tunnel leave that host's
+    certificate verifiable -- *before* it is written into a chain that will
+    carry a credential. An address that fails the certificate half is refused
+    and stays a candidate; an address that merely did not answer is added
+    anyway, benched, because a free proxy that is down now is an ordinary
+    thing the chain already routes around.
+    """
+
+    require_loopback_admin(request)
+    settings = services.requests.current_settings()
+    providers = {
+        entry["provider_id"]: entry for entry in _configured_providers(settings)
+    }
+    provider_id = payload.provider.strip().lower()
+    if provider_id not in providers:
+        raise HTTPException(
+            status_code=404, detail=f"Not a configured provider: {payload.provider}"
+        )
+    proxy_id = payload.proxy.strip()
+    store = current_proxy_chains()
+    if proxy_id not in store.candidates:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "That address is not on offer any more. Fetch the feeds again "
+                "and pick from the refreshed list."
+            ),
+        )
+    destination = str(providers[provider_id].get("base_url") or "").strip()
+    if not destination.lower().startswith("https://"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{providers[provider_id]['display_name']} has no https base "
+                "URL, so a stranger's address cannot be verified against it. "
+                "Set its base URL first."
+            ),
+        )
+    chain = store.chain(provider_id) or EMPTY_CHAIN
+    if len(chain.entries) >= PROXY_CHAIN_MAX_ENTRIES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{providers[provider_id]['display_name']} already has "
+                f"{PROXY_CHAIN_MAX_ENTRIES} entries, which is the cap."
+            ),
+        )
+
+    outcomes = await check_endpoints(
+        (proxy_id,),
+        {proxy_id: destination},
+        timeout=PROXY_CHECK_TIMEOUT_SECONDS,
+        exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
+    )
+    outcome = outcomes.get(proxy_id)
+    if outcome is not None and outcome.refused:
+        # The verdict is already durable -- ``check_endpoints`` wrote it to the
+        # store and armed the interception ledger before returning -- so the
+        # page's next render shows the refusal without this route sending a
+        # payload it is about to discard on a 422.
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{outcome.label} breaks certificate validation: its tunnel "
+                "presented a certificate this machine does not trust, which "
+                "means it is reading the traffic rather than relaying it. It "
+                "was not added, and it stays refused until a later test says "
+                "otherwise."
+            ),
+        )
+
+    await asyncio.to_thread(_commit_promotion, provider_id, proxy_id)
+    await _republish(services)
+    refreshed = await asyncio.to_thread(_payload, services)
+    if outcome is not None:
+        refreshed["checked"] = {
+            proxy_id: outcome.record.as_document() | {"label": outcome.label}
+        }
+    return refreshed
+
+
+def _commit_feeds(feed_ids: tuple[str, ...]) -> None:
+    with _CHAIN_WRITE_LOCK:
+        save_proxy_chains(load_proxy_chains().with_feeds(feed_ids))
+
+
+def _commit_promotion(provider_id: str, proxy_id: str) -> None:
+    """Append one candidate to a chain, inside the writer lock.
+
+    The chain is created if the provider has none, switched off: adding an
+    address is not the same act as arming the chain, and a first address that
+    silently started routing would be the surprise this whole page exists to
+    avoid.
+    """
+
+    with _CHAIN_WRITE_LOCK:
+        store = load_proxy_chains()
+        if proxy_id not in store.candidates:
+            return
+        chain = store.chain(provider_id) or EMPTY_CHAIN
+        if any(entry.proxy == proxy_id for entry in chain.entries):
+            store = store.without_candidate(proxy_id)
+            save_proxy_chains(store)
+            return
+        updated = replace(
+            chain,
+            entries=(*chain.entries, ProxyChainEntry(proxy=proxy_id, paused=False)),
+        )
+        # Drop it from the offer list first: ``with_chain`` prunes endpoints
+        # nothing references, and an address that is about to be referenced by
+        # a chain must not pass through a state where it is referenced by
+        # neither table.
+        store = store.without_candidate(proxy_id).with_chain(provider_id, updated)
+        save_proxy_chains(store)
+
+
 # ------------------------------------------------------------------- payload
 
 
@@ -558,10 +791,60 @@ def _payload(services: ApiServices) -> dict[str, Any]:
                 "interval_minutes": int(settings.proxy_check_interval_minutes),
                 "exit_ip_configured": bool(settings.proxy_check_exit_ip_url.strip()),
             },
+            # What, if anything, re-reads the public lists without being asked.
+            # Off is the shipped answer to both halves and the page says so,
+            # because "no feeds are selected" and "the timer is off" are
+            # different reasons for an empty candidate list.
+            "refresh": {
+                "enabled": bool(settings.proxy_feed_refresh_enabled),
+                "interval_minutes": int(settings.proxy_feed_refresh_minutes),
+                "minimum_minutes": PROXY_FEED_MINIMUM_MINUTES,
+            },
+            "feeds_observed_on": FEEDS_OBSERVED_ON,
         },
+        "feeds": feed_catalogue_payload(store),
+        "candidates": [
+            _candidate_payload(proxy_id, store) for proxy_id in store.candidates
+        ],
         "providers": [
             _provider_payload(entry, store) for entry in _configured_providers(settings)
         ],
+    }
+
+
+def _candidate_payload(proxy_id: str, store: ProxyChains) -> dict[str, Any]:
+    """One address on offer, and where it came from.
+
+    The URL never leaves the server -- the same rule every other row on this
+    page follows -- so what travels is the masked ``host:port``, the scheme,
+    the feeds that listed it **by name**, and what those feeds said. Naming the
+    feeds is the point of ``source_count``: a number alone says "four agree"
+    where the list says which four, and an operator deciding whether to put a
+    stranger's machine in front of a credential should be able to see that
+    without leaving the page.
+    """
+
+    endpoint = store.endpoint(proxy_id)
+    if endpoint is None:  # pragma: no cover - candidates are pruned with proxies
+        return {"proxy": proxy_id, "label": "", "sources": []}
+    facts = endpoint.feed
+    last_check = endpoint.last_check
+    return {
+        "proxy": proxy_id,
+        "label": endpoint.label or mask_proxy_label(endpoint.url),
+        "scheme": _scheme(endpoint.url),
+        "source_count": endpoint.source_count,
+        "sources": [
+            {"id": feed_id, "name": known_feed_name(feed_id)}
+            for feed_id in endpoint.sources
+        ],
+        "country": facts.country if facts is not None else "",
+        "anonymity": facts.anonymity if facts is not None else "",
+        "https_ok": bool(facts is not None and facts.https_ok),
+        "latency_ms": facts.latency_ms if facts is not None else None,
+        "uptime_pct": facts.uptime_pct if facts is not None else None,
+        "last_check": None if last_check is None else last_check.as_document(),
+        "refused": bool(endpoint.refused),
     }
 
 

@@ -385,6 +385,25 @@ PROXY_CHECK_INTERVAL_MINUTES_MAX = 1440
 # address, and it is an outbound request to a stranger. MCC names no default
 # host for it; the operator types one or the check does not happen.
 PROXY_CHECK_EXIT_IP_URL_DEFAULT = ""
+# Whether the named proxy feeds an operator switched on are re-read on a timer.
+# OFF, and it is the second of two switches: this one only decides whether the
+# reading happens without a button press. Which feeds may be read at all is a
+# separate choice on the Proxying page, and it is empty on a fresh install, so
+# an install where nobody touched either setting contacts no third party.
+PROXY_FEED_REFRESH_ENABLED_DEFAULT = False
+# Minutes between passes over the enabled feeds. 0 is off even when the switch
+# above is on. Sixty is deliberately unhurried: these lists are other people's
+# servers, the addresses on them churn over hours rather than seconds, and
+# nothing in this product uses a candidate until an operator moves it into a
+# chain by hand. The loop's own floor is 30 minutes regardless of this value.
+PROXY_FEED_REFRESH_MINUTES_DEFAULT = 60
+PROXY_FEED_REFRESH_MINUTES_MIN = 0
+PROXY_FEED_REFRESH_MINUTES_MAX = 10080
+# The floor the refresh loop applies whatever the setting above says. These
+# lists are other people's servers and none of them re-tests anything faster
+# than this, so a shorter interval buys no new addresses and only sends more
+# requests to strangers.
+PROXY_FEED_MINIMUM_MINUTES = 30
 # What a 429 on a pooled credential means. True: it benches the (key, model)
 # pair and the executor moves to another model on the SAME provider first,
 # because a gateway that limits one model usually still answers another on the

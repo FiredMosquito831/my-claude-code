@@ -79,6 +79,10 @@ from .constants import (
     PROXY_CHECK_INTERVAL_MINUTES_DEFAULT,
     PROXY_CHECK_INTERVAL_MINUTES_MAX,
     PROXY_CHECK_INTERVAL_MINUTES_MIN,
+    PROXY_FEED_REFRESH_ENABLED_DEFAULT,
+    PROXY_FEED_REFRESH_MINUTES_DEFAULT,
+    PROXY_FEED_REFRESH_MINUTES_MAX,
+    PROXY_FEED_REFRESH_MINUTES_MIN,
     PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT,
     PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
     PROXY_MAX_SWITCHES_PER_REQUEST_MIN,
@@ -989,6 +993,19 @@ class Settings(BaseSettings):
     proxy_check_exit_ip_url: str = Field(
         default=PROXY_CHECK_EXIT_IP_URL_DEFAULT,
         validation_alias="PROXY_CHECK_EXIT_IP_URL",
+    )
+    # Whether the named proxy feeds are re-read on a timer. Off, and it is only
+    # half the consent: which feeds may be read at all is chosen on the
+    # Proxying page and is empty until somebody ticks one.
+    proxy_feed_refresh_enabled: bool = Field(
+        default=PROXY_FEED_REFRESH_ENABLED_DEFAULT,
+        validation_alias="PROXY_FEED_REFRESH_ENABLED",
+    )
+    proxy_feed_refresh_minutes: int = Field(
+        default=PROXY_FEED_REFRESH_MINUTES_DEFAULT,
+        validation_alias="PROXY_FEED_REFRESH_MINUTES",
+        ge=PROXY_FEED_REFRESH_MINUTES_MIN,
+        le=PROXY_FEED_REFRESH_MINUTES_MAX,
     )
     # Backoff between a provider's own retries of a 429 or 5xx.
     provider_retry_backoff_base_seconds: float = Field(

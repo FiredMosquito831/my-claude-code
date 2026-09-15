@@ -8118,3 +8118,125 @@ details.turn-pane > summary:focus-visible {
 .proxy-test-all {
   white-space: nowrap;
 }
+
+/* ------------------------------------------------- feeds and candidates
+   Flex with wrap throughout, never an explicit-column grid: the release
+   that shipped the route rails lost a whole layout to explicit columns
+   plus three new children, because a `hidden` grid child vacates its
+   column and the row re-flows. A row here gains and loses its provider
+   picker depending on whether an address was refused, so it is exactly
+   the shape that was bitten. */
+
+.proxy-feed-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.proxy-feed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.proxy-feed-name {
+  font-weight: 600;
+}
+
+.proxy-feed-badge {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--ok, var(--accent));
+  color: var(--panel);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.proxy-feed-fetch {
+  white-space: nowrap;
+}
+
+.proxy-feed-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.proxy-candidates-title {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 13px;
+}
+
+.proxy-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proxy-candidate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.proxy-candidate-refused {
+  border-color: var(--error);
+}
+
+.proxy-candidate-label {
+  min-width: 150px;
+  font-family: var(--mono, monospace);
+  font-weight: 600;
+}
+
+.proxy-candidate-scheme,
+.proxy-candidate-facts {
+  color: var(--muted);
+}
+
+.proxy-candidate-sources {
+  color: var(--muted);
+}
+
+/* The only visual emphasis on this list, and it is on the one field that is
+   evidence rather than a claim: more than one independent feed saw it. */
+.proxy-candidate-agreed {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.proxy-candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.proxy-candidate-provider {
+  max-width: 180px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--input);
+  color: var(--text);
+  font-size: 12px;
+}

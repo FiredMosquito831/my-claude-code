@@ -659,10 +659,305 @@ function renderProxyCheckerNote() {
   note.textContent = sentences.join(" ");
 }
 
+/* ------------------------------------------------------- feeds and candidates
+   The named public lists this install knows how to read, and what they
+   currently offer.
+
+   Two things this block must keep saying out loud, because they are the whole
+   safety argument and not a disclaimer:
+
+   1. Nothing is fetched until the operator ticks a feed and presses Fetch (or
+      turns on the timer). A fresh install has no feed selected.
+   2. An address that arrives here is a CANDIDATE. It is in no chain, no
+      credential goes through it, and moving it into a chain tests it first --
+      the same TLS-interception refusal a typed address gets.
+
+   source_count is rendered with the feed names behind it rather than as a bare
+   number: "4 feeds" is a score, "ProxyScrape, HProxy, Databay, Geonode" is an
+   answer to "where did this machine's address come from". */
+
+function renderProxyFeeds() {
+  const panel = byId("proxyingFeeds");
+  if (!panel) return;
+  panel.textContent = "";
+  const feeds = (proxyState.data && proxyState.data.feeds) || [];
+  if (!feeds.length) return;
+
+  const row = document.createElement("div");
+  row.className = "proxy-feed-row";
+  feeds.forEach((feed) => row.appendChild(proxyFeedSwitch(feed)));
+  panel.appendChild(row);
+
+  const actions = document.createElement("div");
+  actions.className = "proxy-feed-actions";
+  const enabled = feeds.filter((feed) => feed.enabled);
+
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "secondary-button";
+  save.textContent = "Save feed selection";
+  save.addEventListener("click", () => saveProxyFeeds(save));
+  actions.appendChild(save);
+
+  const fetchNow = document.createElement("button");
+  fetchNow.type = "button";
+  fetchNow.className = "primary-button proxy-feed-fetch";
+  fetchNow.textContent = enabled.length
+    ? `Fetch ${enabled.length} feed${enabled.length === 1 ? "" : "s"} now`
+    : "Fetch now";
+  fetchNow.disabled = !enabled.length;
+  fetchNow.addEventListener("click", () => ingestProxyFeeds(fetchNow));
+  actions.appendChild(fetchNow);
+  panel.appendChild(actions);
+
+  const refresh = proxyVocabulary().refresh || {};
+  const note = document.createElement("p");
+  note.className = "field-description";
+  note.textContent = refresh.enabled
+    ? `Scheduled refresh is on: the feeds you tick above are re-read about ` +
+      `every ${Math.max(
+        Number(refresh.interval_minutes) || 0,
+        Number(refresh.minimum_minutes) || 30,
+      )} minutes. It writes this candidate list and nothing else.`
+    : "Scheduled refresh is off, so these lists are read only when you press " +
+      "Fetch. Turn on PROXY_FEED_REFRESH_ENABLED on Limits & Resilience to " +
+      "have them re-read on a timer.";
+  panel.appendChild(note);
+}
+
+function proxyFeedSwitch(feed) {
+  const label = document.createElement("label");
+  label.className = "proxy-feed";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = Boolean(feed.enabled);
+  box.addEventListener("change", () => {
+    feed.enabled = box.checked;
+    renderProxying();
+  });
+  const name = document.createElement("span");
+  name.className = "proxy-feed-name";
+  name.textContent = feed.name;
+  label.append(box, name);
+  if (feed.tls_strict) {
+    const badge = document.createElement("span");
+    badge.className = "proxy-feed-badge";
+    badge.textContent = "TLS-strict filter";
+    badge.title =
+      "This list's own filter selects for addresses that tunnel HTTPS " +
+      "without breaking the destination's certificate validation -- the one " +
+      "property MCC needs. It is a preference, not a verdict: only the Test " +
+      "button finds out.";
+    label.appendChild(badge);
+  }
+  if (feed.observed) label.title = feed.observed;
+  return label;
+}
+
+async function saveProxyFeeds(button) {
+  const feeds = ((proxyState.data && proxyState.data.feeds) || [])
+    .filter((feed) => feed.enabled)
+    .map((feed) => feed.id);
+  button.disabled = true;
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains/feeds", {
+      method: "PUT",
+      body: JSON.stringify({ feeds }),
+    });
+    renderProxying();
+    announceProxy(
+      feeds.length
+        ? `${feeds.length} feed(s) switched on. Nothing has been fetched yet ` +
+            "-- press Fetch, or turn on the scheduled refresh."
+        : "No feeds are switched on. MCC contacts none of them.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+async function ingestProxyFeeds(button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Fetching...";
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains/ingest", {
+      method: "POST",
+    });
+    renderProxying();
+    const run = proxyState.data.ingest || {};
+    const results = run.feeds || [];
+    const reached = results.filter((item) => item.ok);
+    const failed = results.filter((item) => !item.ok);
+    const parts = [
+      `${reached.length} of ${results.length} feed(s) answered`,
+      `${run.offered || 0} address(es) on offer`,
+      `${run.corroborated || 0} listed by more than one feed`,
+    ];
+    if (failed.length) {
+      parts.push(
+        `no usable answer from ${failed.map((item) => item.name).join(", ")}`,
+      );
+    }
+    announceProxy(
+      `${parts.join(", ")}. These are candidates: none of them is in a chain, ` +
+        "and none carries a credential until you add it to one.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = original;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+function renderProxyCandidates() {
+  const panel = byId("proxyingCandidates");
+  if (!panel) return;
+  panel.textContent = "";
+  const candidates = (proxyState.data && proxyState.data.candidates) || [];
+  if (!candidates.length) {
+    const empty = document.createElement("p");
+    empty.className = "field-description";
+    empty.textContent =
+      "No addresses are on offer. Tick a feed above and press Fetch; what " +
+      "comes back is a list of candidates you choose from, not a chain.";
+    panel.appendChild(empty);
+    return;
+  }
+  const providers = ((proxyState.data && proxyState.data.providers) || []).filter(
+    (provider) => String(provider.base_url || "").toLowerCase().startsWith("https://"),
+  );
+  const table = document.createElement("ol");
+  table.className = "proxy-candidates";
+  candidates.forEach((candidate) => {
+    table.appendChild(proxyCandidateRow(candidate, providers));
+  });
+  panel.appendChild(table);
+}
+
+function proxyCandidateRow(candidate, providers) {
+  const row = document.createElement("li");
+  row.className = candidate.refused
+    ? "proxy-candidate proxy-candidate-refused"
+    : "proxy-candidate";
+
+  const label = document.createElement("span");
+  label.className = "proxy-candidate-label";
+  label.textContent = candidate.label;
+
+  const scheme = document.createElement("span");
+  scheme.className = "proxy-candidate-scheme";
+  scheme.textContent = candidate.scheme || "";
+
+  const facts = document.createElement("span");
+  facts.className = "proxy-candidate-facts";
+  const bits = [];
+  if (candidate.country) bits.push(candidate.country);
+  if (candidate.anonymity) bits.push(candidate.anonymity);
+  if (candidate.https_ok) bits.push("https");
+  if (candidate.latency_ms !== null && candidate.latency_ms !== undefined) {
+    bits.push(`${candidate.latency_ms} ms`);
+  }
+  if (candidate.uptime_pct !== null && candidate.uptime_pct !== undefined) {
+    bits.push(`${candidate.uptime_pct}% up`);
+  }
+  facts.textContent = bits.join(" · ");
+  facts.title =
+    "What the feeds published about this address. None of it was measured " +
+    "by MCC -- the Test that runs when you add it is.";
+
+  // The one signal that is evidence rather than a copied claim, and it names
+  // the feeds rather than only counting them.
+  const sources = document.createElement("span");
+  const names = (candidate.sources || []).map((item) => item.name);
+  sources.className =
+    names.length > 1
+      ? "proxy-candidate-sources proxy-candidate-agreed"
+      : "proxy-candidate-sources";
+  sources.textContent =
+    names.length > 1 ? `${names.length} feeds agree` : names.join("") || "1 feed";
+  sources.title = names.length
+    ? `Listed by: ${names.join(", ")}.`
+    : "No feed recorded for this address.";
+
+  const actions = document.createElement("div");
+  actions.className = "proxy-candidate-actions";
+  if (candidate.refused) {
+    const refused = document.createElement("span");
+    refused.className = "proxy-entry-state proxy-entry-state-intercepted";
+    refused.textContent = "TLS intercepted";
+    refused.title =
+      (candidate.last_check && candidate.last_check.detail) ||
+      "This address breaks certificate validation and cannot be added.";
+    actions.appendChild(refused);
+  } else if (!providers.length) {
+    const none = document.createElement("span");
+    none.className = "field-description";
+    none.textContent = "no provider with an https base URL to test against";
+    actions.appendChild(none);
+  } else {
+    const pick = document.createElement("select");
+    pick.className = "proxy-candidate-provider";
+    pick.setAttribute("aria-label", `Add ${candidate.label} to a provider`);
+    providers.forEach((provider) => {
+      const option = document.createElement("option");
+      option.value = provider.provider_id;
+      option.textContent = provider.display_name;
+      pick.appendChild(option);
+    });
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "secondary-button";
+    add.textContent = "Test and add";
+    add.addEventListener("click", () =>
+      addProxyCandidate(candidate, pick.value, add),
+    );
+    actions.append(pick, add);
+  }
+
+  row.append(label, scheme, facts, sources, actions);
+  return row;
+}
+
+async function addProxyCandidate(candidate, providerId, button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Testing...";
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains/candidates/add", {
+      method: "POST",
+      body: JSON.stringify({ provider: providerId, proxy: candidate.proxy }),
+    });
+    proxyState.drafts.delete(providerId);
+    renderProxying();
+    const checked = (proxyState.data.checked || {})[candidate.proxy];
+    announceProxy(
+      checked && checked.ok
+        ? `${candidate.label} answered in ${checked.latency_ms} ms with the ` +
+            "destination's certificate verified, and is now the last entry " +
+            "of that provider's chain. Its chain is still off until you " +
+            "enable it."
+        : `${candidate.label} was added to that provider's chain, but it did ` +
+            "not answer the test, so it starts out benched and the chain " +
+            "routes around it.",
+    );
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = original;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
 function renderProxying() {
   const list = byId("proxyingList");
   const empty = byId("proxyingEmpty");
   renderProxyCheckerNote();
+  renderProxyFeeds();
+  renderProxyCandidates();
   if (!list) return;
   list.textContent = "";
   const providers = (proxyState.data && proxyState.data.providers) || [];

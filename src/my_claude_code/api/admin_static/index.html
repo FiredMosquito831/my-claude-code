@@ -329,6 +329,48 @@
                  hidden view while this page is open. -->
             <div id="proxyingStatus" class="route-status" role="status"
               aria-live="polite" aria-atomic="true" hidden></div>
+
+            <section class="settings-section" id="proxyingFeedSection"
+              aria-labelledby="proxyingFeedsTitle">
+              <div class="section-heading">
+                <div>
+                  <h3 id="proxyingFeedsTitle">Public proxy lists</h3>
+                  <p>
+                    Seven named lists MCC knows how to read. <strong>None is
+                    switched on</strong> until you tick one here, and ticking
+                    one fetches nothing by itself &mdash; MCC contacts a list
+                    only when you press Fetch, or when you also turn on the
+                    scheduled refresh. Every URL below was fetched by hand and
+                    each parser was written against what it actually returned;
+                    hover a name to see what was seen.
+                  </p>
+                </div>
+              </div>
+              <div class="callout" id="proxyingCandidateMeaning">
+                <p>
+                  <strong>What an address from a list is, and is not.</strong>
+                  It is a <em>candidate</em>: an address somebody else
+                  published, shown here so you can compare and choose. It is in
+                  no chain, nothing routes through it, and no key or token has
+                  gone near it. It becomes part of a chain only when you press
+                  <em>Test and add</em> on its row &mdash; which measures it
+                  against that provider&rsquo;s own host first, and refuses it
+                  outright if its tunnel breaks certificate validation, exactly
+                  as for an address you typed yourself.
+                </p>
+                <p>
+                  MCC does not vouch for any of these lists or the machines on
+                  them. <em>How many feeds agree</em> on an address is the one
+                  signal here that is evidence rather than a claim copied from
+                  one publisher, so it is shown on every row, with the names
+                  behind it.
+                </p>
+              </div>
+              <div id="proxyingFeeds"></div>
+              <h4 class="proxy-candidates-title">Addresses on offer</h4>
+              <div id="proxyingCandidates"></div>
+            </section>
+
             <div id="proxyingList" class="proxy-card-list"></div>
             <p id="proxyingEmpty" class="field-description" hidden>
               No provider on this install is configured yet. Add a key on the

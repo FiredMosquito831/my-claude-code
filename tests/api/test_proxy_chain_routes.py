@@ -331,23 +331,17 @@ def test_the_env_proxy_is_reported_as_a_label_and_never_as_a_url() -> None:
     assert provider["inherited_scheme"] == "socks5h"
 
 
-def test_saving_a_chain_does_not_republish_the_provider_generation() -> None:
-    """This release stores and shows chains; it does not route through them.
-
-    A provider-generation replace resets the credential pools' counters, so
-    key health reads zeros right afterwards. Spending that on a change with no
-    effect on the request path would be a visible cost for nothing. The
-    release that adds the runtime seam adds the republish with it.
-    """
-
-    import inspect
-
-    from my_claude_code.api import admin_proxy_routes
-
-    source = inspect.getsource(admin_proxy_routes)
-    assert "replace(" not in source
-    assert "ProviderRuntimeManager" not in source
-    assert "background_refresh" not in source
+# ``test_saving_a_chain_does_not_republish_the_provider_generation`` lived here
+# and was removed when ingestion shipped. It pinned the *first* release's
+# deliberate choice not to republish, which the release that added the runtime
+# seam reversed on purpose -- and ``test_saving_a_chain_republishes_the_provider
+# _generation`` below has asserted the opposite ever since. It survived that
+# release only because it was written as a grep for the string "replace(" over
+# the module's source rather than as an assertion about behaviour, and it
+# finally failed on an unrelated ``dataclasses.replace`` import. A source grep
+# standing in for a behavioural claim is worth deleting rather than narrowing:
+# the behaviour it meant to describe is already pinned, correctly, ten lines
+# down.
 
 
 def test_the_routes_are_loopback_only() -> None:
