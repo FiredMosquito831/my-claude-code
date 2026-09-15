@@ -23,12 +23,19 @@ WHY A STAGING STEP AND NOT `docs_dir: docs`
 
 WHAT IT REWRITES
 
-    ``../ARCHITECTURE.md`` and ``../CONTRIBUTING.md`` are copied into the
-    staged tree, so those links become same-directory links and the pages
-    exist on the site. Everything else that points above ``docs/`` -- the
-    README, ``.env.example``, the install and uninstall scripts -- is a file
-    you would read on GitHub anyway, so those links become absolute
-    ``blob/main`` URLs rather than dangling.
+    Every relative link, resolved against the directory the page came FROM
+    rather than where it is staged. A link whose target is also a page on the
+    site stays a link between pages; anything else in the repository becomes
+    an absolute ``blob/main`` URL, because those are files you read on GitHub
+    and there is nowhere else for them to point.
+
+    ``ARCHITECTURE.md`` and ``CONTRIBUTING.md`` are copied up into the staged
+    tree so their links become same-directory links and the pages exist. That
+    matters more than it looks: ARCHITECTURE lives at the repository root, so
+    ITS relative links are root-relative (``src/...``, ``pyproject.toml``) and
+    a rewriter that only understood ``../`` left seventeen of them dangling --
+    which ``mkdocs build --strict`` refused, on the pull request, which is
+    what that flag is for.
 
     ``docs/README.md`` becomes ``index.md``: the site's home page is the
     documentation index, not the project README. The README is a map written
@@ -38,34 +45,79 @@ WHAT IT REWRITES
 
 import argparse
 import pathlib
+import posixpath
 import re
 import shutil
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-BLOB = "https://github.com/FiredMosquito831/my-claude-code/blob/main"
+GITHUB = "https://github.com/FiredMosquito831/my-claude-code"
 
 #: Copied up into the staged root so their links keep working as pages.
 PROMOTED = ("ARCHITECTURE.md", "CONTRIBUTING.md")
 
-#: ``](../thing)`` -> the target, for any link that escapes ``docs/``.
-_PARENT_LINK = re.compile(r"\]\(\.\./([A-Za-z0-9._/-]+)\)")
+#: ``](target)`` for an inline Markdown link. Deliberately not a Markdown
+#: parser: the only links that need touching are the relative ones, and their
+#: targets are plain paths.
+_LINK = re.compile(r"\]\((?!https?://|mailto:|#)([^()\s]+)\)")
 
 
-def _rewrite(text: str) -> str:
-    """Point every escaping link at something that exists on the site."""
+def _staged_name(repo_path: str, staged: frozenset[str]) -> str | None:
+    """Where ``repo_path`` ends up in the staged tree, or ``None``.
+
+    Membership in ``staged`` is checked rather than assumed. An earlier
+    revision returned a name for anything under ``docs/`` on the strength of
+    the prefix alone, which quietly claimed that ``docs/research/...`` and a
+    link to the ``adr`` *directory* were pages -- and a link to a page that
+    does not exist is exactly what this function is supposed to catch.
+    """
+
+    if repo_path == "docs/README.md":
+        candidate = "index.md"
+    elif repo_path.startswith("docs/"):
+        candidate = repo_path[len("docs/") :]
+    elif repo_path in PROMOTED or repo_path.startswith("assets/"):
+        # Images are staged flat under `assets/`, and an image must stay an
+        # image: a `blob/main` URL renders GitHub's file page, so a picture
+        # sent there is a broken picture rather than a working link.
+        candidate = repo_path
+    else:
+        return None
+    return candidate if candidate in staged else None
+
+
+def _rewrite(text: str, *, source_dir: str, staged: frozenset[str]) -> str:
+    """Repoint every relative link so it resolves on the site.
+
+    ``source_dir`` is the directory the page came from, relative to the
+    repository root (``docs`` for most pages, ``""`` for a promoted root file)
+    -- a link is relative to where the file WAS, not to where it is staged.
+
+    A link to something that is also a page on the site stays a link between
+    pages. A link to anything else in the repository -- source files,
+    ``pyproject.toml``, the install scripts -- becomes an absolute ``blob/main``
+    URL, because those are files you read on GitHub and there is nowhere else
+    for them to point.
+    """
 
     def replace(match: re.Match[str]) -> str:
         target = match.group(1)
-        if target in PROMOTED:
-            return f"]({target})"
-        if target == "README.md":
-            # The site's own index is docs/README.md; the project README is a
-            # different document and lives on GitHub.
-            return f"]({BLOB}/README.md)"
-        return f"]({BLOB}/{target})"
+        path, _, fragment = target.partition("#")
+        suffix = f"#{fragment}" if fragment else ""
+        if not path:
+            return match.group(0)
+        repo_path = posixpath.normpath(posixpath.join(source_dir, path))
+        name = _staged_name(repo_path, staged)
+        if name is not None:
+            # Every staged page sits at the root of the staged tree except the
+            # decision records, so a bare name is the link between them.
+            return f"]({name}{suffix})"
+        # `blob` for a file, `tree` for a directory: GitHub serves a directory
+        # listing under `tree` and 404s it under `blob`.
+        kind = "tree" if (REPO / repo_path).is_dir() else "blob"
+        return f"]({GITHUB}/{kind}/main/{repo_path}{suffix})"
 
-    return _PARENT_LINK.sub(replace, text)
+    return _LINK.sub(replace, text)
 
 
 def build(out: pathlib.Path) -> int:
@@ -75,31 +127,28 @@ def build(out: pathlib.Path) -> int:
     out.mkdir(parents=True)
 
     written = 0
+    # Markdown staged in the first pass, and the directory it came from. The
+    # rewrite is a second pass because it has to know what was actually
+    # staged, which is not true until the tree is finished.
+    pending: dict[pathlib.Path, str] = {}
+
     for source in sorted(docs.rglob("*")):
         if source.is_dir():
             continue
         relative = source.relative_to(docs)
         target = out / ("index.md" if relative.as_posix() == "README.md" else relative)
         target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
         if source.suffix == ".md":
-            target.write_text(
-                _rewrite(source.read_text(encoding="utf-8")),
-                encoding="utf-8",
-                newline="\n",
-            )
-        else:
-            shutil.copy2(source, target)
+            pending[target] = "docs"
         written += 1
 
     for name in PROMOTED:
         source = REPO / name
         if not source.exists():
             raise SystemExit(f"{name} is missing from the repository root")
-        (out / name).write_text(
-            _rewrite(source.read_text(encoding="utf-8")),
-            encoding="utf-8",
-            newline="\n",
-        )
+        shutil.copy2(source, out / name)
+        pending[out / name] = ""
         written += 1
 
     # The images the staged pages reference, and the brand mark the theme uses
@@ -115,6 +164,18 @@ def build(out: pathlib.Path) -> int:
         assets / "app-icon.png",
     )
     written += 1
+
+    staged = frozenset(
+        path.relative_to(out).as_posix() for path in out.rglob("*") if path.is_file()
+    )
+    for path, source_dir in pending.items():
+        path.write_text(
+            _rewrite(
+                path.read_text(encoding="utf-8"), source_dir=source_dir, staged=staged
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
 
     print(f"staged {written} files into {out}")
     return 0
