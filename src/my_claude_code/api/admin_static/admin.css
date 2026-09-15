@@ -8171,6 +8171,14 @@ details.turn-pane > summary:focus-visible {
   margin-bottom: var(--space-2);
 }
 
+/* Shown only while the ticked feeds differ from the stored selection. The
+   accent is the same one the rest of the dashboard uses for "you have unsaved
+   work here", not a warning colour: nothing is wrong, it just is not saved. */
+.proxy-feed-unsaved {
+  margin-bottom: var(--space-2);
+  color: var(--accent);
+}
+
 .proxy-candidates-title {
   margin: var(--space-4) 0 var(--space-2);
   font-size: 13px;
