@@ -699,10 +699,10 @@ async def add_proxy_candidate(
     )
     outcome = outcomes.get(proxy_id)
     if outcome is not None and outcome.refused:
-        refreshed = await asyncio.to_thread(_payload, services)
-        refreshed["checked"] = {
-            proxy_id: outcome.record.as_document() | {"label": outcome.label}
-        }
+        # The verdict is already durable -- ``check_endpoints`` wrote it to the
+        # store and armed the interception ledger before returning -- so the
+        # page's next render shows the refusal without this route sending a
+        # payload it is about to discard on a 422.
         raise HTTPException(
             status_code=422,
             detail=(
