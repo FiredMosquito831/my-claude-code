@@ -414,3 +414,44 @@ def test_a_check_for_an_address_the_store_lost_is_dropped() -> None:
     store, _ = _store_with_one_chain()
 
     assert store.with_check("px_gone", ProxyCheckRecord(ok=True)) == store
+
+
+def test_a_refetch_keeps_what_was_added_and_what_was_refused() -> None:
+    """The third reading of "persistence", verified rather than implemented.
+
+    An operator who fetches the feeds again must not lose the work of the last
+    pass: an address they added is in a chain and must not come back as
+    something nobody has chosen, and an address the checker refused must come
+    back refused rather than as a fresh unknown row -- that verdict is the one
+    piece of state on this page that is a security control.
+    """
+
+    from my_claude_code.config.proxy_chains import ProxyEndpoint
+
+    offered = [
+        ("px_chosen01", ProxyEndpoint(url="socks5h://203.0.113.7:1080", source="feed")),
+        ("px_bad00002", ProxyEndpoint(url="http://203.0.113.8:8080", source="feed")),
+        ("px_plain003", ProxyEndpoint(url="http://203.0.113.9:8080", source="feed")),
+    ]
+    store = ProxyChains().with_candidates(offered)
+    store = store.with_check(
+        "px_bad00002",
+        ProxyCheckRecord(at="2026-09-16T00:00:00Z", ok=False, tls=TLS_INTERCEPTED),
+    )
+    # One of them is promoted into a chain, the way a bulk add promotes them.
+    store = store.without_candidate("px_chosen01").with_chain(
+        "nvidia_nim",
+        ProxyChain(entries=(ProxyChainEntry(proxy="px_chosen01"),)),
+    )
+
+    # The feeds answer with all three again, as they will.
+    refetched = store.with_candidates(offered)
+
+    # The chosen one stays chosen rather than being re-offered.
+    assert "px_chosen01" not in refetched.candidates
+    chain = refetched.chain("nvidia_nim")
+    assert chain is not None and chain.proxy_ids() == ("px_chosen01",)
+    # And the refusal survives the pass.
+    refused = refetched.endpoint("px_bad00002")
+    assert refused is not None and refused.refused is True
+    assert "px_bad00002" in refetched.candidates

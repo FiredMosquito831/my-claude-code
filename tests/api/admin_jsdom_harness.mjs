@@ -1420,7 +1420,82 @@ const ROUTES = {
         enabled: false,
       },
     ],
-    candidates: [],
+    /* Addresses on offer. This array was `[]`, which is the same shape of hole
+       the missing `feeds` array was: with no candidate in the fixture no test
+       could tick one, so a selection feature would have been untested by
+       construction. Six is enough to prove every axis the page sorts and
+       filters on -- feeds agreeing, scheme, latency, and an address the
+       checker has already refused. */
+    candidates: [
+      {
+        proxy: "px_cand0001", label: "203.0.113.21:8080", scheme: "http",
+        source_count: 4,
+        sources: [
+          { id: "proxyscrape", name: "ProxyScrape" },
+          { id: "hproxy", name: "HProxy" },
+          { id: "databay", name: "Databay (TLS-strict)" },
+          { id: "geonode", name: "Geonode" },
+        ],
+        country: "DE", anonymity: "elite", https_ok: true,
+        latency_ms: 210, uptime_pct: 96, last_check: null, refused: false,
+      },
+      {
+        proxy: "px_cand0002", label: "203.0.113.22:1080", scheme: "socks5h",
+        source_count: 2,
+        sources: [
+          { id: "proxyscrape", name: "ProxyScrape" },
+          { id: "geonode", name: "Geonode" },
+        ],
+        country: "NL", anonymity: "anonymous", https_ok: true,
+        latency_ms: 480, uptime_pct: 81, last_check: null, refused: false,
+      },
+      {
+        // The one the checker will catch terminating TLS when it is added.
+        proxy: "px_cand0003", label: "203.0.113.23:3128", scheme: "http",
+        source_count: 1,
+        sources: [{ id: "proxyscrape", name: "ProxyScrape" }],
+        country: "US", anonymity: "transparent", https_ok: false,
+        latency_ms: 1200, uptime_pct: 40, last_check: null, refused: false,
+      },
+      {
+        // The one that simply will not answer: added, benched, routed around.
+        proxy: "px_cand0004", label: "203.0.113.24:1080", scheme: "socks5h",
+        source_count: 1,
+        sources: [{ id: "hproxy", name: "HProxy" }],
+        country: "", anonymity: "", https_ok: false,
+        latency_ms: null, uptime_pct: null, last_check: null, refused: false,
+      },
+      {
+        proxy: "px_cand0005", label: "203.0.113.25:8080", scheme: "http",
+        source_count: 3,
+        sources: [
+          { id: "proxyscrape", name: "ProxyScrape" },
+          { id: "databay", name: "Databay (TLS-strict)" },
+          { id: "geonode", name: "Geonode" },
+        ],
+        country: "FR", anonymity: "elite", https_ok: true,
+        latency_ms: 95, uptime_pct: 99, last_check: null, refused: false,
+      },
+      {
+        // Already refused by an earlier check, and still listed: an operator
+        // whose offer list got shorter has to be able to see why.
+        proxy: "px_cand0006", label: "203.0.113.26:8080", scheme: "http",
+        source_count: 2,
+        sources: [
+          { id: "proxyscrape", name: "ProxyScrape" },
+          { id: "hproxy", name: "HProxy" },
+        ],
+        country: "SG", anonymity: "elite", https_ok: true,
+        latency_ms: 300, uptime_pct: 70,
+        last_check: {
+          at: new Date(Date.now() - 900000).toISOString(), ok: false,
+          latency_ms: 77, tls: "intercepted",
+          detail: "this proxy breaks certificate validation -- MCC will not route through it",
+          exit_ip: "",
+        },
+        refused: true,
+      },
+    ],
     providers: [
       {
         provider_id: "nvidia_nim",
@@ -1430,6 +1505,10 @@ const ROUTES = {
         oauth: false,
         key_count: 2,
         env_var: "NVIDIA_NIM_PROXY",
+        // A destination to test an address against. Without one no provider is
+        // offered as a destination at all, which is a real state of this page
+        // and the reason the second provider below deliberately has none.
+        base_url: "https://integrate.api.nvidia.com/v1",
         inherited_label: "203.0.113.7:1080",
         inherited_scheme: "socks5h",
         chain: {
@@ -1469,6 +1548,10 @@ const ROUTES = {
         oauth: true,
         key_count: 1,
         env_var: "CHATGPT_OAUTH_PROXY",
+        // No https base URL, so there is nothing to verify a stranger's tunnel
+        // against and this provider is not offered as a destination. The page
+        // has to say why rather than silently dropping it from the picker.
+        base_url: "",
         inherited_label: "",
         inherited_scheme: "",
         chain: null,
@@ -2021,6 +2104,11 @@ const PAUSE_KEY_BY_MODEL = {
 const pausedByKey = new Map();
 const fetchUrls = [];
 const fetchBodies = [];
+/* The server's one undo point for the candidate list, emulated. It is the
+   whole reason a selection can be sent in several batches and still be undone
+   as one gesture: the first batch mints the token and keeps the document as it
+   was, and every batch carrying that token back extends the same point. */
+const PROXY_UNDO = { token: "", before: null, after: null };
 // Pause-route fault injection. Null means the route behaves normally.
 let pauseRefusal = null;
 let pauseHttpFailure = null;
@@ -2123,6 +2211,137 @@ window.fetch = async (url, options = {}) => {
             },
           }),
         ),
+      text: async () => "",
+    };
+  }
+  /* The candidate bulk route, emulated against the same document the page
+     reads back, because that is what makes a bulk add testable at all: the
+     addresses that land have to leave the offer list and appear in the chain,
+     or the "one repaint" claim is untested.
+
+     Three outcomes on purpose, which is the point of the whole feature: one
+     address answers, one breaks certificate validation and is refused, one
+     does not answer and is added benched. A partial result is the normal case
+     here and the page has to read as if it were. */
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/candidates/bulk") {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const asked = sent.proxies || [];
+    if (!PROXY_UNDO.token || PROXY_UNDO.token !== sent.undo_token) {
+      PROXY_UNDO.token = `undo_${Date.now().toString(16)}`;
+      PROXY_UNDO.before = JSON.parse(JSON.stringify(state));
+    }
+    const provider = state.providers.find(
+      (entry) => entry.provider_id === sent.provider,
+    );
+    const results = [];
+    asked.forEach((proxyId) => {
+      const candidate = (state.candidates || []).find(
+        (item) => item.proxy === proxyId,
+      );
+      if (!candidate) {
+        results.push({ proxy: proxyId, label: "", outcome: "gone", detail: "" });
+        return;
+      }
+      if (sent.action === "discard") {
+        state.candidates = state.candidates.filter((item) => item.proxy !== proxyId);
+        results.push({
+          proxy: proxyId, label: candidate.label, outcome: "discarded", detail: "",
+        });
+        return;
+      }
+      const chain = provider && provider.chain;
+      if (!chain || chain.entries.length >= (state.vocabulary.max_entries || 12)) {
+        results.push({
+          proxy: proxyId, label: candidate.label, outcome: "full", detail: "",
+        });
+        return;
+      }
+      if (proxyId === "px_cand0003") {
+        candidate.refused = true;
+        candidate.last_check = {
+          at: new Date().toISOString(), ok: false, latency_ms: 88,
+          tls: "intercepted",
+          detail:
+            "this proxy breaks certificate validation -- MCC will not route through it",
+          exit_ip: "",
+        };
+        results.push({
+          proxy: proxyId,
+          label: candidate.label,
+          outcome: "refused",
+          detail:
+            `${candidate.label} breaks certificate validation: its tunnel ` +
+            "presented a certificate this machine does not trust.",
+        });
+        return;
+      }
+      const answered = proxyId !== "px_cand0004";
+      state.candidates = state.candidates.filter((item) => item.proxy !== proxyId);
+      chain.entries.push({
+        proxy: proxyId, paused: false, direct: false, label: candidate.label,
+        scheme: candidate.scheme, source: "feed",
+        source_count: candidate.source_count, refused: false,
+        last_check: {
+          at: new Date().toISOString(), ok: answered,
+          latency_ms: answered ? 305 : null,
+          tls: answered ? "strict" : "unknown",
+          detail: answered ? "" : "no answer", exit_ip: "",
+        },
+        health: {
+          state: "unknown", checked: false, requests: 0, successes: 0,
+          failures: 0, cooldown_remaining: 0, refused: false, reason: null,
+        },
+      });
+      results.push({
+        proxy: proxyId,
+        label: candidate.label,
+        outcome: answered ? "added" : "benched",
+        detail: answered ? "" : "no answer",
+        latency_ms: answered ? 305 : null,
+      });
+    });
+    const counts = {};
+    results.forEach((row) => {
+      counts[row.outcome] = (counts[row.outcome] || 0) + 1;
+    });
+    PROXY_UNDO.after = JSON.parse(JSON.stringify(state));
+    return {
+      ok: true,
+      status: 200,
+      json: async () =>
+        JSON.parse(
+          JSON.stringify({
+            ...state,
+            bulk: {
+              action: sent.action,
+              provider: sent.provider || "",
+              results,
+              counts,
+              undo_token: PROXY_UNDO.token,
+            },
+          }),
+        ),
+      text: async () => "",
+    };
+  }
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/candidates/undo") {
+    const sent = JSON.parse(options.body);
+    if (!PROXY_UNDO.before || sent.token !== PROXY_UNDO.token) {
+      const error = new Error("There is nothing to undo any more.");
+      error.status = 422;
+      throw error;
+    }
+    const before = PROXY_UNDO.before;
+    const state = ROUTES["/admin/api/proxy-chains"];
+    state.candidates = JSON.parse(JSON.stringify(before.candidates));
+    state.providers = JSON.parse(JSON.stringify(before.providers));
+    PROXY_UNDO.token = "";
+    PROXY_UNDO.before = null;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => JSON.parse(JSON.stringify(state)),
       text: async () => "",
     };
   }
@@ -2529,6 +2748,252 @@ if (withChain) {
       fetchLabel: (fetchButton() || {}).textContent || "",
       unsaved: unsavedNote(),
       saveDisabled: Boolean((saveButton() || {}).disabled),
+    };
+  }
+}
+
+/* The candidate list, driven the way an operator with 1,572 addresses drives
+   it: filter, select all of what is left, choose ONE destination, press once.
+
+   Everything here is a gesture a person makes, not a function call. The point
+   of the block is that a selection feature with no fixture rows is untested by
+   construction -- which is exactly the hole the missing `feeds` array left, and
+   why `candidates: []` was the first thing fixed. */
+{
+  // On the page, the way an operator is: Escape means "drop this selection"
+  // only while the Proxying view is the one being looked at.
+  const proxyLink = navLinks.find((link) => link.dataset.view === "proxying");
+  if (proxyLink) {
+    proxyLink.click();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  const candidatePanel = () => doc.querySelector("#proxyingCandidates");
+  const candidateRows = () =>
+    Array.from(candidatePanel().querySelectorAll(".proxy-candidate[data-proxy]"));
+  const candidateLabels = () =>
+    candidateRows().map((row) =>
+      row.querySelector(".proxy-candidate-label").textContent.trim(),
+    );
+  const candidateBox = (row) => row.querySelector("input.proxy-candidate-select");
+  const barButton = (text) =>
+    Array.from(candidatePanel().querySelectorAll(".proxy-candidate-bar button")).find(
+      (node) => (node.textContent || "").startsWith(text),
+    ) || null;
+  const control = (labelText) =>
+    Array.from(candidatePanel().querySelectorAll(".proxy-candidate-control")).find(
+      (node) => (node.textContent || "").includes(labelText),
+    );
+  const statusText = () =>
+    (doc.querySelector("#proxyingStatus")?.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  const proxySelectedProxies = () =>
+    candidateRows()
+      .filter((row) => candidateBox(row).checked)
+      .map((row) => row.dataset.proxy);
+
+  proxying.candidates = {
+    rows: candidateRows().length,
+    // Sorted by feeds agreeing out of the box: the one field on a row that is
+    // evidence rather than a claim copied from one publisher.
+    order: candidateLabels(),
+    selectAll: Boolean(candidatePanel().querySelector(".proxy-candidate-select-all")),
+    // One destination for the whole selection, and no picker on any row.
+    perRowPickers: candidatePanel().querySelectorAll(
+      ".proxy-candidate[data-proxy] select",
+    ).length,
+    destinations: Array.from(
+      candidatePanel().querySelectorAll(".proxy-candidate-bar select option"),
+    ).map((option) => option.textContent),
+    note: (candidatePanel().querySelector(".proxy-candidate-note")?.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    countLine: (
+      candidatePanel().querySelector(".proxy-candidate-count")?.textContent || ""
+    ).trim(),
+    capacity: (
+      candidatePanel().querySelector(".proxy-candidate-capacity")?.textContent || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim(),
+  };
+
+  // Sort by latency, then filter by scheme: the list under the controls
+  // repaints and the controls themselves are left alone.
+  const sortSelect = control("Sort by").querySelector("select");
+  sortSelect.value = "latency";
+  sortSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+  proxying.candidates.orderByLatency = candidateLabels();
+
+  const schemeSelect = control("Scheme").querySelector("select");
+  schemeSelect.value = "socks5h";
+  schemeSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+  proxying.candidates.socksOnly = candidateLabels();
+
+  // Select all, while a filter is on: it means every address the filter
+  // matches, which is what the operator is looking at.
+  const selectAllBox = () =>
+    candidatePanel().querySelector("input.proxy-candidate-select-all");
+  selectAllBox().checked = true;
+  selectAllBox().dispatchEvent(new window.Event("change", { bubbles: true }));
+  proxying.candidates.selectedWhileFiltered = (
+    candidatePanel().querySelector(".proxy-candidate-count")?.textContent || ""
+  ).trim();
+
+  schemeSelect.value = "";
+  schemeSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+  // Dropping the filter does not drop the selection made under it.
+  proxying.candidates.selectedAfterFilterCleared = (
+    candidatePanel().querySelector(".proxy-candidate-count")?.textContent || ""
+  ).trim();
+
+  // Escape drops it, with no modal open.
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+  );
+  proxying.candidates.afterEscape = (
+    candidatePanel().querySelector(".proxy-candidate-count")?.textContent || ""
+  ).trim();
+
+  /* Shift+click a range, pointer-style. The box is never ticked by hand first:
+     dispatching `click` on a checkbox runs its activation behaviour, which
+     toggles `checked` BEFORE the listeners see it, so a hand-set tick arrives
+     at the handler inverted. That cost a confused half hour. */
+  const rowsNow = candidateRows();
+  candidateBox(rowsNow[0]).dispatchEvent(
+    new window.MouseEvent("click", { bubbles: true }),
+  );
+  candidateBox(rowsNow[2]).dispatchEvent(
+    new window.MouseEvent("click", { bubbles: true, shiftKey: true }),
+  );
+  proxying.candidates.afterShiftClick = candidateRows()
+    .filter((row) => candidateBox(row).checked)
+    .map((row) => row.dataset.proxy);
+
+  // And the same range with the keyboard, which WCAG 2.2 requires rather than
+  // suggests: Escape first, then Shift+ArrowDown from the first row.
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+  );
+  const first = candidateBox(candidateRows()[0]);
+  first.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  first.dispatchEvent(
+    new window.KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      shiftKey: true,
+      bubbles: true,
+    }),
+  );
+  proxying.candidates.afterShiftArrow = candidateRows()
+    .filter((row) => candidateBox(row).checked)
+    .map((row) => row.dataset.proxy);
+
+  // Now the write. Select the three that produce the three outcomes -- one
+  // answers, one breaks certificate validation, one does not answer -- and
+  // press once.
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+  );
+  ["px_cand0001", "px_cand0003", "px_cand0004"].forEach((proxyId) => {
+    const row = candidateRows().find((node) => node.dataset.proxy === proxyId);
+    candidateBox(row).dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true }),
+    );
+  });
+  proxying.candidates.addLabel = (barButton("Test and add") || {}).textContent || "";
+  const urlsBeforeAdd = fetchUrls.length;
+  barButton("Test and add").click();
+  await new Promise((resolve) => setTimeout(resolve, 250));
+
+  proxying.candidates.addCalls = fetchUrls
+    .slice(urlsBeforeAdd)
+    .map((url) => String(url).split("?")[0])
+    .filter((path) => path.startsWith("/admin/api/proxy-chains"));
+  proxying.candidates.addBody =
+    fetchBodies
+      .filter((entry) => entry.path === "/admin/api/proxy-chains/candidates/bulk")
+      .pop() || null;
+  proxying.candidates.summary = statusText();
+  proxying.candidates.outcomes = candidateRows().map((row) => ({
+    proxy: row.dataset.proxy,
+    outcome: (row.querySelector(".proxy-candidate-outcome")?.textContent || "").trim(),
+    // The standing verdict beside it. A row the checker has just refused
+    // carries the badge rather than two near-identical phrases.
+    badge: (
+      row.querySelector(".proxy-entry-state-intercepted")?.textContent || ""
+    ).trim(),
+    refused: row.classList.contains("proxy-candidate-refused"),
+  }));
+  proxying.candidates.chainAfterAdd = proxyEntryLabels(proxyCardFor("nvidia_nim"));
+  proxying.candidates.rowsAfterAdd = candidateRows().length;
+
+  // The panel's Undo, which is the one on the page: a status region that stays
+  // put, not a toast that vanished before the summary could be read.
+  const undo = Array.from(
+    doc.querySelectorAll("#proxyingStatus button"),
+  ).find((node) => (node.textContent || "").startsWith("Undo"));
+  proxying.candidates.undoOffered = Boolean(undo);
+  if (undo) {
+    undo.click();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    proxying.candidates.rowsAfterUndo = candidateRows().length;
+    proxying.candidates.chainAfterUndo = proxyEntryLabels(proxyCardFor("nvidia_nim"));
+    proxying.candidates.undoSentence = statusText();
+  }
+
+  /* What the selection holds after a bulk add is exactly what did NOT land:
+     the addresses that went into the chain left the offer list, and left the
+     selection with it. Read it here, then drop it, so the discard below is
+     unambiguously about the one address it ticks. */
+  proxying.candidates.selectionAfterAdd = proxySelectedProxies();
+  proxying.candidates.stored = window.localStorage.getItem(
+    "mcc.proxying.candidates.v1",
+  );
+  doc.dispatchEvent(
+    new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+  );
+
+  // Discard: the other half of "same for remove", and it touches no chain.
+  const doomed = candidateRows().find(
+    (row) => row.dataset.proxy === "px_cand0002",
+  );
+  candidateBox(doomed).dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  barButton("Discard").click();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  proxying.candidates.afterDiscard = {
+    rows: candidateRows().length,
+    labels: candidateLabels(),
+    sentence: statusText(),
+    chain: proxyEntryLabels(proxyCardFor("nvidia_nim")).length,
+  };
+}
+
+/* The card's own bulk remove: tick two entries, press once, and the draft is
+   shorter without anything having been written. */
+{
+  const card = proxyCardFor("nvidia_nim");
+  const boxes = Array.from(card.querySelectorAll("input.proxy-entry-select"));
+  proxying.entrySelectBoxes = boxes.length;
+  if (boxes.length >= 2) {
+    const before = proxyEntryLabels(proxyCardFor("nvidia_nim")).length;
+    boxes[0].checked = true;
+    boxes[0].dispatchEvent(new window.Event("change", { bubbles: true }));
+    const later = Array.from(
+      proxyCardFor("nvidia_nim").querySelectorAll("input.proxy-entry-select"),
+    );
+    later[1].checked = true;
+    later[1].dispatchEvent(new window.Event("change", { bubbles: true }));
+    const removeMany = Array.from(
+      proxyCardFor("nvidia_nim").querySelectorAll("button"),
+    ).find((node) => (node.textContent || "").startsWith("Remove 2 selected"));
+    proxying.entryBulkRemoveOffered = Boolean(removeMany);
+    if (removeMany) removeMany.click();
+    proxying.entriesAfterBulkRemove = {
+      before,
+      after: proxyEntryLabels(proxyCardFor("nvidia_nim")).length,
+      sentence: (doc.querySelector("#proxyingStatus")?.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim(),
     };
   }
 }

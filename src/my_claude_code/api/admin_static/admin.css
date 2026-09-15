@@ -8248,3 +8248,155 @@ details.turn-pane > summary:focus-visible {
   color: var(--text);
   font-size: 12px;
 }
+
+/* ------------------------------------------- bulk selection on the offers
+   Flex with wrap here too, and for the same reason: the bar gains a progress
+   line and a Stop button while a run is in flight and loses them after, and
+   an explicit-column grid would re-flow the whole row each time (6.21.0). */
+
+.proxy-candidate-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.proxy-candidate-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.proxy-candidate-filter {
+  min-width: 160px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--input);
+  color: var(--text);
+  font-size: 12px;
+}
+
+/* One destination, one press, and the two counts a press needs before it is
+   made. Sticky at the top of the list rather than at the bottom of the window:
+   the list under it can be three hundred rows long. */
+.proxy-candidate-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--panel-strong, var(--panel));
+  margin-bottom: var(--space-2);
+}
+
+.proxy-candidate-count {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.proxy-candidate-destination {
+  color: var(--text);
+}
+
+.proxy-candidate-bulk-button {
+  white-space: nowrap;
+}
+
+.proxy-candidate-capacity,
+.proxy-candidate-progress {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+}
+
+/* Not an error colour: a run in progress is the ordinary state of a bulk add,
+   and every address in it is a ten-second ceiling away from an answer. */
+.proxy-candidate-progress {
+  color: var(--accent);
+}
+
+.proxy-candidate-stop {
+  white-space: nowrap;
+}
+
+.proxy-candidate-head {
+  background: var(--panel-strong, var(--panel));
+  font-weight: 600;
+}
+
+.proxy-candidate-select,
+.proxy-candidate-select-all,
+.proxy-entry-select {
+  flex: none;
+  cursor: pointer;
+}
+
+.proxy-candidate.is-selected {
+  border-color: var(--accent);
+}
+
+.proxy-candidate-button {
+  white-space: nowrap;
+}
+
+.proxy-candidate-notes {
+  margin-top: var(--space-2);
+}
+
+.proxy-candidate-more,
+.proxy-candidate-note {
+  margin: 0 0 var(--space-1);
+}
+
+/* What the last bulk action did to this row. The colours say only three
+   things -- it landed, it did not, or it was refused -- because a partial
+   result with six shades is a legend nobody reads. */
+.proxy-candidate-outcome {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--input);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.proxy-candidate-outcome-added,
+.proxy-candidate-outcome-discarded {
+  color: var(--ok, var(--accent));
+}
+
+.proxy-candidate-outcome-benched,
+.proxy-candidate-outcome-full,
+.proxy-candidate-outcome-already,
+.proxy-candidate-outcome-gone {
+  color: var(--muted);
+}
+
+.proxy-candidate-outcome-refused {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.proxy-entry-bulk-remove {
+  white-space: nowrap;
+}
+
+/* The status panel's extra sentences and its Undo. One panel for the page, and
+   a partial result is several sentences long. */
+.proxy-status-line {
+  margin: var(--space-1) 0 0;
+  font-size: 12px;
+}
+
+.proxy-status-undo {
+  margin-right: var(--space-1);
+}

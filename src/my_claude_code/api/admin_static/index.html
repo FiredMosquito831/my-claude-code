@@ -352,11 +352,14 @@
                   It is a <em>candidate</em>: an address somebody else
                   published, shown here so you can compare and choose. It is in
                   no chain, nothing routes through it, and no key or token has
-                  gone near it. It becomes part of a chain only when you press
-                  <em>Test and add</em> on its row &mdash; which measures it
-                  against that provider&rsquo;s own host first, and refuses it
-                  outright if its tunnel breaks certificate validation, exactly
-                  as for an address you typed yourself.
+                  gone near it. It becomes part of a chain only when you tick
+                  it, choose one provider, and press <em>Test and add</em>
+                  &mdash; which measures every address you ticked against that
+                  provider&rsquo;s own host first, and refuses any whose tunnel
+                  breaks certificate validation, exactly as for an address you
+                  typed yourself. That is a network call per address, so a
+                  press of it reports each one separately: added, added but
+                  benched because it did not answer, or refused.
                 </p>
                 <p>
                   MCC does not vouch for any of these lists or the machines on

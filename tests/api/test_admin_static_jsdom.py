@@ -3778,3 +3778,214 @@ def test_jsdom_a_refused_test_says_what_a_refusal_means(rendered) -> None:
     assert "reading the traffic rather than relaying it" in said
     assert "cannot be saved into a chain" in said
     assert "held out of the ones it is already in" in said
+
+
+# ------------------------------------------- bulk management of the offers
+
+
+def test_jsdom_the_offer_list_has_one_destination_and_not_one_per_row(
+    rendered,
+) -> None:
+    """The whole ask, in one assertion.
+
+    Every row used to carry its own provider ``<select>`` and its own button,
+    which with 1,572 addresses after a seven-feed fetch is 1,572 dropdowns.
+    There is now one picker, in the action bar, for the whole selection.
+    """
+
+    candidates = rendered["proxying"]["candidates"]
+
+    assert candidates["rows"] == 6
+    assert candidates["perRowPickers"] == 0
+    assert candidates["selectAll"] is True
+    # Only a provider with an https base URL to verify a tunnel against.
+    assert candidates["destinations"] == ["NVIDIA NIM"]
+    # And the row-level reason for the one that is not offered survives, once,
+    # where it can be acted on.
+    assert "ChatGPT (OAuth) is not offered" in candidates["note"]
+    assert "no https base URL" in candidates["note"]
+
+
+def test_jsdom_the_bar_says_how_much_of_that_chain_is_already_spoken_for(
+    rendered,
+) -> None:
+    """A chain holds twelve entries, and a bulk add has to say so up front.
+
+    This is the fact that shapes a bulk add more than any other, and the page
+    used to leave it to be discovered by a 422 on the thirteenth press.
+    """
+
+    capacity = rendered["proxying"]["candidates"]["capacity"]
+
+    assert "NVIDIA NIM has 4 of 12 entries" in capacity
+    assert "8 more will fit" in capacity
+
+
+def test_jsdom_the_offers_sort_and_filter_and_select_all_means_the_filtered(
+    rendered,
+) -> None:
+    """Filter-then-apply-to-filtered, the Models page's rule (6.7.0)."""
+
+    candidates = rendered["proxying"]["candidates"]
+
+    # Feeds agreeing first by default: the one field that is evidence rather
+    # than a claim copied from one publisher.
+    assert candidates["order"][0] == "203.0.113.21:8080"
+    assert candidates["orderByLatency"][0] == "203.0.113.25:8080"
+    assert candidates["socksOnly"] == ["203.0.113.22:1080", "203.0.113.24:1080"]
+    # "Select all" under a filter means everything the filter matches.
+    assert candidates["selectedWhileFiltered"] == "2 selected of 2 shown"
+    # And dropping the filter does not drop what was selected under it.
+    assert candidates["selectedAfterFilterCleared"] == "2 selected of 6 shown"
+
+
+def test_jsdom_escape_clears_the_selection_and_ranges_work_without_a_pointer(
+    rendered,
+) -> None:
+    """WCAG 2.2: a range gesture must have a keyboard equivalent.
+
+    6.7.0 records this as a hard requirement rather than a nicety, so the
+    Shift+Arrow walk is tested beside the Shift+click it mirrors.
+    """
+
+    candidates = rendered["proxying"]["candidates"]
+
+    assert candidates["afterEscape"] == "6 shown, none selected"
+    # Three contiguous rows from one Shift+click.
+    assert candidates["afterShiftClick"] == [
+        "px_cand0005",
+        "px_cand0001",
+        "px_cand0006",
+    ]
+    # And the same gesture from the keyboard alone.
+    assert candidates["afterShiftArrow"] == ["px_cand0005", "px_cand0001"]
+
+
+def test_jsdom_one_press_sends_one_batched_request_for_the_whole_selection(
+    rendered,
+) -> None:
+    """One request, one route, one destination -- not one request per address.
+
+    A per-address loop is the read-modify-write race 6.7.0 found on the Models
+    page, and the reason the write here is batched on both sides of the wire.
+    """
+
+    candidates = rendered["proxying"]["candidates"]
+
+    assert candidates["addLabel"] == "Test and add 3 selected"
+    assert candidates["addCalls"] == ["/admin/api/proxy-chains/candidates/bulk"]
+    assert candidates["addBody"]["body"] == {
+        "action": "add",
+        "provider": "nvidia_nim",
+        "proxies": ["px_cand0001", "px_cand0003", "px_cand0004"],
+        "undo_token": "",
+    }
+
+
+def test_jsdom_a_partial_result_reads_as_the_normal_case_it_is(rendered) -> None:
+    """Added, benched and refused in one press, reported as three groups.
+
+    These are strangers' machines read from public lists: a mixed outcome is
+    the ordinary one, and reporting it as a failed request would be a lie
+    about eleven addresses out of twelve.
+    """
+
+    candidates = rendered["proxying"]["candidates"]
+    said = candidates["summary"]
+
+    assert "2 of 3 address(es) went into NVIDIA NIM's chain" in said
+    assert "still off until you enable it" in said
+    assert "1 answered and the destination's certificate verified" in said
+    assert "1 did not answer, so they were added benched" in said
+    assert "not a failure of this press" in said
+    assert "1 break certificate validation and were refused" in said
+    assert "no credential went near them" in said
+    # The per-row half of the same vocabulary: the refused address stays on
+    # offer, marked, and the two that landed have left the list.
+    refused = [row for row in candidates["outcomes"] if row["proxy"] == "px_cand0003"]
+    assert refused and refused[0]["refused"] is True
+    assert refused[0]["badge"] == "TLS intercepted"
+    # Said once, not twice: the standing badge and this press's outcome are the
+    # same finding in the same words, so only the badge is drawn.
+    assert refused[0]["outcome"] == ""
+    assert candidates["rowsAfterAdd"] == 4
+    assert candidates["chainAfterAdd"][-2:] == [
+        "203.0.113.21:8080",
+        "203.0.113.24:1080",
+    ]
+    # What stays selected is exactly what did not land.
+    assert candidates["selectionAfterAdd"] == ["px_cand0003"]
+
+
+def test_jsdom_the_add_is_undone_through_the_panel_that_reported_it(
+    rendered,
+) -> None:
+    """One `role=status` panel with Undo, never a toast that vanishes.
+
+    A summary this long cannot be read in the life of a toast, and the action
+    it offers has to be reachable from where it was read.
+    """
+
+    candidates = rendered["proxying"]["candidates"]
+
+    assert candidates["undoOffered"] is True
+    assert candidates["rowsAfterUndo"] == 6
+    assert candidates["chainAfterUndo"] == [
+        "203.0.113.7:1080",
+        "198.51.100.9:8080",
+        "192.0.2.44:3128",
+        "Direct (no proxy)",
+    ]
+    assert "Put back as it was before that action" in candidates["undoSentence"]
+    # A refusal is a measurement, not a change: undo does not un-measure it.
+    assert "keeps its verdict" in candidates["undoSentence"]
+
+
+def test_jsdom_discarding_offers_touches_no_chain(rendered) -> None:
+    """ "Same for remove" -- and the two removes are different acts.
+
+    Discarding an offer says "stop showing me this". Removing a chain entry
+    takes an address out of the rotation. Conflating them is how an operator
+    loses a working proxy by tidying a list.
+    """
+
+    after = rendered["proxying"]["candidates"]["afterDiscard"]
+
+    assert after["rows"] == 5
+    assert "203.0.113.22:1080" not in after["labels"]
+    assert "1 address(es) are no longer offered" in after["sentence"]
+    assert "No chain was touched" in after["sentence"]
+    assert after["chain"] == 4
+
+
+def test_jsdom_the_selection_and_the_filters_survive_a_reload(rendered) -> None:
+    """Persistence: what was picked, and what the page was sorted by.
+
+    Choosing forty addresses out of 1,572 is work, and an F5 is not a decision
+    to throw it away. Stored the way the dashboard stores its Analytics
+    filters -- best effort, and the page is correct without it.
+    """
+
+    stored = json.loads(rendered["proxying"]["candidates"]["stored"])
+
+    assert "px_cand0003" in stored["selected"]
+    assert stored["view"]["sort"] == "latency"
+
+
+def test_jsdom_chain_entries_are_removed_in_bulk_from_the_card(rendered) -> None:
+    """The symmetric gesture on the other side of the page.
+
+    And the per-row Remove is this action with one element, not a second path
+    through the draft.
+    """
+
+    proxying = rendered["proxying"]
+
+    assert proxying["entrySelectBoxes"] == 4
+    assert proxying["entryBulkRemoveOffered"] is True
+    assert proxying["entriesAfterBulkRemove"]["before"] == 4
+    assert proxying["entriesAfterBulkRemove"]["after"] == 2
+    said = proxying["entriesAfterBulkRemove"]["sentence"]
+    assert "Removed 2 entries from NVIDIA NIM" in said
+    # A draft change, not a write: the chain on disk is untouched until Save.
+    assert "nothing has changed on disk yet" in said

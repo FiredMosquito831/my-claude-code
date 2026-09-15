@@ -542,7 +542,62 @@ const proxyState = {
   // The feed ids the server last confirmed. See `rememberSavedFeeds`.
   savedFeeds: new Set(),
   loading: false,
+  /* ---------------------------------------------- the candidate selection
+     Held in state rather than read back out of the DOM, so it survives every
+     re-render this page performs -- and it performs one after every batch of
+     a bulk add. It is also written to localStorage, so it survives a reload:
+     choosing forty addresses out of 1,572 is work, and an F5 is not a
+     decision to throw that work away. */
+  selected: new Set(),
+  // proxy id -> what the last bulk action did to it. The per-row half of
+  // reporting a partial result; the summary in the status panel is the other.
+  outcomes: new Map(),
+  // What is on screen, and where a bulk add would send it. Persisted with the
+  // selection, the way the dashboard persists its Analytics filters.
+  view: {
+    text: "",
+    scheme: "",
+    minSources: 1,
+    sort: "sources",
+    destination: "",
+  },
+  // The one-level undo point the server minted for the last bulk write.
+  undo: null,
+  // The bulk run in flight: { total, done, stop, action }. A run is batched so
+  // the page can show progress and stay usable, and so a long selection is not
+  // one request that either all works or all does not.
+  run: null,
+  // Which bulk button is waiting for its second press (the inline confirm).
+  confirming: "",
+  // Whether the stored selection and filters have been read back yet. Once.
+  restored: false,
+  // The anchor of a Shift range, and the rows the last Shift+Arrow walk added.
+  anchor: null,
+  arrowRange: [],
 };
+
+/* Where the selection and the filters are kept between visits. Best-effort
+   throughout: a browser with storage switched off gets the same page without
+   the memory, never an exception. */
+const PROXY_CANDIDATE_KEY = "mcc.proxying.candidates.v1";
+
+/* How many addresses go in one request. Small on purpose: each one is a TLS
+   handshake through a stranger's machine with a ten-second ceiling, so a
+   selection sent as a single request would be a progress bar that never moves
+   and a page that cannot be stopped. */
+const PROXY_CANDIDATE_BATCH = 10;
+
+/* How many rows are drawn. A seven-feed fetch offers 1,572 addresses and a
+   list that long is neither readable nor cheap to paint; the filter is the way
+   through it, and Select all still means every address the filter matches, not
+   only the ones drawn. */
+const PROXY_CANDIDATE_RENDER_CAP = 300;
+
+/* Above this, a bulk button asks for a second press. Not 200 like the Models
+   page: a chain holds at most twelve entries, so twenty-five is already a
+   gesture that cannot mean what it says, and a discard of two hundred offers
+   is a bigger loss than hiding two hundred models ever was. */
+const PROXY_CANDIDATE_CONFIRM_AT = 25;
 
 async function loadProxying() {
   if (proxyState.loading) return;
@@ -588,7 +643,18 @@ function proxyFeedsAreDirty() {
   return selected.some((id) => !saved.has(id));
 }
 
-function announceProxy(sentence) {
+/* The page's one live region.
+ *
+ * Every outcome on this page lands here -- a reorder, a save, and now the
+ * summary of a bulk add with its Undo. One `role=status` panel that stays put
+ * rather than a toast that vanishes before a partial result can be read: a
+ * bulk add reports six different things about twelve addresses, and none of
+ * them is readable in three seconds.
+ *
+ * `lines` are extra sentences under the lead; `undo` is a function, and the
+ * button is only offered when there is one.
+ */
+function announceProxy(sentence, options = {}) {
   const target = byId("proxyingStatus");
   if (!target) return;
   target.textContent = "";
@@ -600,6 +666,23 @@ function announceProxy(sentence) {
   const lead = document.createElement("p");
   lead.textContent = sentence;
   target.appendChild(lead);
+  (options.lines || []).forEach((line) => {
+    const item = document.createElement("p");
+    item.className = "proxy-status-line";
+    item.textContent = line;
+    target.appendChild(item);
+  });
+  if (typeof options.undo === "function") {
+    const undo = document.createElement("button");
+    undo.type = "button";
+    undo.className = "secondary-button route-status-button proxy-status-undo";
+    undo.textContent = options.undoLabel || "Undo";
+    undo.addEventListener("click", () => {
+      undo.disabled = true;
+      options.undo();
+    });
+    target.appendChild(undo);
+  }
   const dismiss = document.createElement("button");
   dismiss.type = "button";
   dismiss.className = "secondary-button route-status-button";
@@ -892,11 +975,182 @@ async function ingestProxyFeeds(button) {
   }
 }
 
+/* ------------------------------------------------------ the candidate list
+
+   Three facts shape everything below. A seven-feed fetch offers 1,572
+   addresses. One destination is chosen for the whole selection, not one per
+   row. And adding an address *tests* it against that provider's own host, so
+   adding twelve is twelve network calls with a ten-second ceiling each.
+
+   The selection model is the Models page's, to the letter (6.7.0, and its
+   one-write-path defect fixed in 6.24.0): a select column with Shift+click and
+   the keyboard equivalents WCAG 2.2 requires, filter-then-apply-to-filtered,
+   one `role=status` panel with Undo instead of a vanishing toast, an inline
+   confirm above a threshold, a batched endpoint, and ONE write path with ONE
+   repaint. A single-address action is the bulk action with one element in it,
+   never a second route -- which is the whole content of 6.24.0. */
+
+function proxyCandidates() {
+  return (proxyState.data && proxyState.data.candidates) || [];
+}
+
+/* The providers a candidate can actually be tested against. A chain entry is
+   verified by opening an HTTPS request through the proxy to the provider's own
+   host, so a provider with no https base URL has nothing to verify against and
+   is not offered as a destination -- the same reason the per-row picker used
+   to leave that row with a sentence instead of a dropdown. */
+function proxyCandidateProviders() {
+  return ((proxyState.data && proxyState.data.providers) || []).filter((provider) =>
+    String(provider.base_url || "")
+      .toLowerCase()
+      .startsWith("https://"),
+  );
+}
+
+function proxyIneligibleProviders() {
+  return ((proxyState.data && proxyState.data.providers) || []).filter(
+    (provider) =>
+      !String(provider.base_url || "")
+        .toLowerCase()
+        .startsWith("https://"),
+  );
+}
+
+/* Where the destination picker currently points, defaulting to the first
+   provider that has somewhere to test against. */
+function proxyDestination() {
+  const providers = proxyCandidateProviders();
+  const wanted = providers.find(
+    (provider) => provider.provider_id === proxyState.view.destination,
+  );
+  // A subscription login is never the default destination. Changing source IP
+  // between requests is more likely to be flagged on a personal subscription
+  // than on a pay-as-you-go key, and the card makes the operator acknowledge
+  // that before it will take a chain -- so it must not be what a press lands
+  // on by accident either.
+  return (
+    wanted || providers.find((provider) => !provider.oauth) || providers[0] || null
+  );
+}
+
+/* How much of that provider's chain is already spoken for. This is the fact
+   that shapes a bulk add more than any other and the page used to leave it to
+   be discovered by a 422: a chain holds at most twelve entries, so "add fifty
+   selected" cannot mean what it says. */
+function proxyChainRoom(provider) {
+  const max = Number(proxyVocabulary().max_entries) || 12;
+  const chain = provider && provider.chain;
+  const used = chain ? (chain.entries || []).length : 0;
+  return { used, max, room: Math.max(0, max - used) };
+}
+
+function proxyCandidateSources(candidate) {
+  return Number(
+    candidate.source_count || (candidate.sources || []).length || 1,
+  );
+}
+
+function proxyCandidateMatches(candidate) {
+  const view = proxyState.view;
+  const text = String(view.text || "").trim().toLowerCase();
+  if (text && !String(candidate.label || "").toLowerCase().includes(text)) {
+    return false;
+  }
+  if (view.scheme && candidate.scheme !== view.scheme) return false;
+  if (proxyCandidateSources(candidate) < Number(view.minSources || 1)) return false;
+  return true;
+}
+
+/* What the filter matches, in the order the sort asks for. "Select all" means
+   this list -- every address matching what the operator is looking at, not
+   only the rows that happened to be drawn. */
+function proxyFilteredCandidates() {
+  const sort = proxyState.view.sort;
+  const rows = proxyCandidates().filter(proxyCandidateMatches);
+  const latency = (candidate) =>
+    candidate.latency_ms === null || candidate.latency_ms === undefined
+      ? Number.POSITIVE_INFINITY
+      : Number(candidate.latency_ms);
+  rows.sort((left, right) => {
+    if (sort === "latency") return latency(left) - latency(right);
+    if (sort === "address") {
+      return String(left.label || "").localeCompare(String(right.label || ""));
+    }
+    if (sort === "scheme") {
+      return String(left.scheme || "").localeCompare(String(right.scheme || ""));
+    }
+    // Most feeds agreeing first: the one field on a row that is evidence
+    // rather than a claim copied from one publisher.
+    return proxyCandidateSources(right) - proxyCandidateSources(left);
+  });
+  return rows;
+}
+
+function proxySelectedIds() {
+  // Always in filtered order, so what is sent matches what was read.
+  return proxyFilteredCandidates()
+    .map((candidate) => candidate.proxy)
+    .filter((proxy) => proxyState.selected.has(proxy));
+}
+
+/* An offer that a refetch dropped, or that has just become a chain entry, is
+   not selectable any more -- and a stale id in the set would be silently sent
+   to the server on the next press. */
+function pruneProxyCandidateSelection(candidates) {
+  const live = new Set(candidates.map((candidate) => candidate.proxy));
+  let dropped = false;
+  Array.from(proxyState.selected).forEach((proxy) => {
+    if (live.has(proxy)) return;
+    proxyState.selected.delete(proxy);
+    dropped = true;
+  });
+  // What is left selected after a bulk add is exactly what did not land: the
+  // addresses that went into the chain left the offer list and left the
+  // selection with it. Persist that rather than the set as it was pressed.
+  if (dropped && proxyState.restored) saveProxyCandidateView();
+}
+
+/* ------------------------------------------------------------ persistence
+   The selection and the filters, kept where the dashboard keeps its Analytics
+   filters. Picking forty addresses out of 1,572 is work, and an F5 is not a
+   decision to throw it away. Best-effort in both directions: a browser with
+   storage switched off gets the same page without the memory. */
+function saveProxyCandidateView() {
+  try {
+    localStorage.setItem(
+      PROXY_CANDIDATE_KEY,
+      JSON.stringify({
+        selected: Array.from(proxyState.selected),
+        view: proxyState.view,
+      }),
+    );
+  } catch (_) {
+    /* storage unavailable or full; persistence is best-effort */
+  }
+}
+
+function restoreProxyCandidateView() {
+  if (proxyState.restored) return;
+  proxyState.restored = true;
+  try {
+    const raw = localStorage.getItem(PROXY_CANDIDATE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return;
+    (parsed.selected || []).forEach((proxy) => proxyState.selected.add(String(proxy)));
+    Object.assign(proxyState.view, parsed.view || {});
+  } catch (_) {
+    /* unreadable: the page is correct without it */
+  }
+}
+
 function renderProxyCandidates() {
   const panel = byId("proxyingCandidates");
   if (!panel) return;
+  restoreProxyCandidateView();
   panel.textContent = "";
-  const candidates = (proxyState.data && proxyState.data.candidates) || [];
+  const candidates = proxyCandidates();
+  pruneProxyCandidateSelection(candidates);
   if (!candidates.length) {
     const empty = document.createElement("p");
     empty.className = "field-description";
@@ -906,22 +1160,503 @@ function renderProxyCandidates() {
     panel.appendChild(empty);
     return;
   }
-  const providers = ((proxyState.data && proxyState.data.providers) || []).filter(
-    (provider) => String(provider.base_url || "").toLowerCase().startsWith("https://"),
-  );
-  const table = document.createElement("ol");
-  table.className = "proxy-candidates";
-  candidates.forEach((candidate) => {
-    table.appendChild(proxyCandidateRow(candidate, providers));
-  });
-  panel.appendChild(table);
+  // The controls are built once per full render and then left alone: the
+  // filter repaints the list under them, and rebuilding the text field the
+  // operator is typing into would take the caret with it.
+  panel.appendChild(proxyCandidateControls());
+  const bar = document.createElement("div");
+  bar.className = "proxy-candidate-bar";
+  panel.appendChild(bar);
+  const list = document.createElement("ol");
+  list.className = "proxy-candidates";
+  panel.appendChild(list);
+  const notes = document.createElement("div");
+  notes.className = "proxy-candidate-notes";
+  panel.appendChild(notes);
+  paintProxyCandidateList();
 }
 
-function proxyCandidateRow(candidate, providers) {
+function proxyCandidateControls() {
+  const controls = document.createElement("div");
+  controls.className = "proxy-candidate-controls";
+
+  const search = document.createElement("label");
+  search.className = "proxy-candidate-control";
+  const searchText = document.createElement("span");
+  searchText.textContent = "Address contains";
+  const searchBox = document.createElement("input");
+  searchBox.type = "search";
+  searchBox.className = "proxy-candidate-filter";
+  searchBox.value = proxyState.view.text;
+  searchBox.addEventListener("input", () => {
+    proxyState.view.text = searchBox.value;
+    saveProxyCandidateView();
+    paintProxyCandidateList();
+  });
+  search.append(searchText, searchBox);
+  controls.appendChild(search);
+
+  const schemes = Array.from(
+    new Set(proxyCandidates().map((candidate) => candidate.scheme).filter(Boolean)),
+  ).sort();
+  controls.appendChild(
+    proxyCandidateSelect(
+      "Scheme",
+      [{ value: "", label: "any" }].concat(
+        schemes.map((scheme) => ({ value: scheme, label: scheme })),
+      ),
+      proxyState.view.scheme,
+      (value) => {
+        proxyState.view.scheme = value;
+      },
+    ),
+  );
+
+  controls.appendChild(
+    proxyCandidateSelect(
+      "Feeds agreeing",
+      [
+        { value: "1", label: "any" },
+        { value: "2", label: "2 or more" },
+        { value: "3", label: "3 or more" },
+        { value: "4", label: "4 or more" },
+      ],
+      String(proxyState.view.minSources || 1),
+      (value) => {
+        proxyState.view.minSources = Number(value) || 1;
+      },
+    ),
+  );
+
+  controls.appendChild(
+    proxyCandidateSelect(
+      "Sort by",
+      [
+        { value: "sources", label: "feeds agreeing" },
+        { value: "latency", label: "latency the feed published" },
+        { value: "address", label: "address" },
+        { value: "scheme", label: "scheme" },
+      ],
+      proxyState.view.sort,
+      (value) => {
+        proxyState.view.sort = value;
+      },
+    ),
+  );
+  return controls;
+}
+
+function proxyCandidateSelect(text, options, value, apply) {
+  const label = document.createElement("label");
+  label.className = "proxy-candidate-control";
+  const name = document.createElement("span");
+  name.textContent = text;
+  const select = document.createElement("select");
+  select.className = "proxy-candidate-provider";
+  options.forEach((option) => {
+    const node = document.createElement("option");
+    node.value = option.value;
+    node.textContent = option.label;
+    select.appendChild(node);
+  });
+  select.value = value;
+  select.addEventListener("change", () => {
+    apply(select.value);
+    saveProxyCandidateView();
+    paintProxyCandidateList();
+  });
+  label.append(name, select);
+  return label;
+}
+
+/* The bar, the rows and the notes. Everything that depends on the filter or on
+   the selection is painted here, and the controls above are not touched. */
+function paintProxyCandidateList() {
+  const panel = byId("proxyingCandidates");
+  if (!panel) return;
+  const bar = panel.querySelector(".proxy-candidate-bar");
+  const list = panel.querySelector(".proxy-candidates");
+  const notes = panel.querySelector(".proxy-candidate-notes");
+  if (!bar || !list || !notes) return;
+  const shown = proxyFilteredCandidates();
+  const drawn = shown.slice(0, PROXY_CANDIDATE_RENDER_CAP);
+
+  list.textContent = "";
+  list.appendChild(proxyCandidateHead(shown, drawn));
+  drawn.forEach((candidate) => list.appendChild(proxyCandidateRow(candidate)));
+
+  notes.textContent = "";
+  if (shown.length > drawn.length) {
+    const more = document.createElement("p");
+    more.className = "field-description proxy-candidate-more";
+    more.textContent =
+      `Showing the first ${drawn.length} of ${shown.length} matching ` +
+      "addresses. Narrow the filter to see the rest -- Select all still means " +
+      "every address the filter matches, not only the ones drawn.";
+    notes.appendChild(more);
+  }
+  const ineligible = proxyIneligibleProviders();
+  if (ineligible.length) {
+    const why = document.createElement("p");
+    why.className = "field-description proxy-candidate-note";
+    why.textContent =
+      `${ineligible.map((provider) => provider.display_name).join(", ")} ` +
+      `${ineligible.length === 1 ? "is" : "are"} not offered as a ` +
+      "destination: an address is verified by opening an HTTPS request " +
+      "through it to the provider's own host, and this one has no https base " +
+      "URL to verify against. Set its base URL on the Providers page.";
+    notes.appendChild(why);
+  }
+  paintProxyCandidateBar(bar, shown);
+}
+
+/* The header row: one control that selects everything the filter matches. */
+function proxyCandidateHead(shown, drawn) {
+  const head = document.createElement("li");
+  head.className = "proxy-candidate proxy-candidate-head";
+  const label = document.createElement("label");
+  label.className = "proxy-candidate-control";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.className = "proxy-candidate-select-all";
+  const picked = shown.filter((candidate) =>
+    proxyState.selected.has(candidate.proxy),
+  ).length;
+  box.checked = shown.length > 0 && picked === shown.length;
+  box.indeterminate = picked > 0 && picked < shown.length;
+  box.addEventListener("change", () => {
+    setProxyCandidateSelection(
+      shown.map((candidate) => candidate.proxy),
+      box.checked,
+    );
+  });
+  const text = document.createElement("span");
+  text.textContent =
+    shown.length === proxyCandidates().length
+      ? `Select all ${shown.length} on offer`
+      : `Select all ${shown.length} matching this filter`;
+  label.append(box, text);
+  head.appendChild(label);
+  const counted = document.createElement("span");
+  counted.className = "proxy-candidate-facts";
+  counted.textContent =
+    drawn.length === shown.length
+      ? `${shown.length} shown`
+      : `${drawn.length} of ${shown.length} drawn`;
+  head.appendChild(counted);
+  return head;
+}
+
+/* One destination for the whole selection, one press, and the two facts a
+   press needs before it is made: how many addresses it will touch, and how
+   many of them can actually fit in that chain. */
+function paintProxyCandidateBar(bar, shown) {
+  bar.textContent = "";
+  const selected = proxySelectedIds();
+  const providers = proxyCandidateProviders();
+  const destination = proxyDestination();
+
+  const count = document.createElement("span");
+  count.className = "proxy-candidate-count";
+  count.textContent = selected.length
+    ? `${selected.length} selected of ${shown.length} shown`
+    : `${shown.length} shown, none selected`;
+  bar.appendChild(count);
+
+  if (!providers.length) {
+    const none = document.createElement("span");
+    none.className = "field-description";
+    none.textContent =
+      "No provider on this install has an https base URL to test an address " +
+      "against, so nothing here can be added yet.";
+    bar.appendChild(none);
+    return;
+  }
+
+  const pick = document.createElement("label");
+  pick.className = "proxy-candidate-control proxy-candidate-destination";
+  const pickText = document.createElement("span");
+  pickText.textContent = "Add to";
+  const select = document.createElement("select");
+  select.className = "proxy-candidate-provider";
+  select.setAttribute("aria-label", "Which provider's chain to add the selection to");
+  providers.forEach((provider) => {
+    const option = document.createElement("option");
+    option.value = provider.provider_id;
+    option.textContent = provider.display_name;
+    select.appendChild(option);
+  });
+  if (destination) select.value = destination.provider_id;
+  select.addEventListener("change", () => {
+    proxyState.view.destination = select.value;
+    saveProxyCandidateView();
+    paintProxyCandidateList();
+  });
+  pick.append(pickText, select);
+  bar.appendChild(pick);
+
+  const room = proxyChainRoom(destination);
+  const fits = Math.min(selected.length, room.room);
+  const running = Boolean(proxyState.run);
+
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "primary-button proxy-candidate-bulk-button";
+  const confirming = proxyState.confirming === "add";
+  add.textContent = confirming
+    ? `Test and add ${fits} -- press again to confirm`
+    : `Test and add ${selected.length || 0} selected`;
+  add.disabled = running || !selected.length || room.room === 0;
+  add.addEventListener("click", () =>
+    runProxyCandidateBulk({
+      action: "add",
+      providerId: destination ? destination.provider_id : "",
+      proxies: selected.slice(0, room.room),
+    }),
+  );
+  bar.appendChild(add);
+
+  const discard = document.createElement("button");
+  discard.type = "button";
+  discard.className = "secondary-button proxy-candidate-bulk-button";
+  discard.textContent =
+    proxyState.confirming === "discard"
+      ? `Discard ${selected.length} -- press again to confirm`
+      : `Discard ${selected.length || 0} selected`;
+  discard.disabled = running || !selected.length;
+  discard.addEventListener("click", () =>
+    runProxyCandidateBulk({ action: "discard", proxies: selected }),
+  );
+  bar.appendChild(discard);
+
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "ghost-button proxy-candidate-bulk-button";
+  clear.textContent = "Clear selection";
+  clear.disabled = running || !selected.length;
+  clear.addEventListener("click", () => clearProxyCandidateSelection());
+  bar.appendChild(clear);
+
+  const capacity = document.createElement("p");
+  capacity.className = "field-description proxy-candidate-capacity";
+  const over = selected.length - room.room;
+  capacity.textContent = destination
+    ? `${destination.display_name} has ${room.used} of ${room.max} entries, ` +
+      `so ${room.room} more will fit.` +
+      (over > 0
+        ? ` ${over} of the selected addresses will not be added this press.`
+        : "")
+    : "";
+  bar.appendChild(capacity);
+
+  if (running) {
+    const progress = document.createElement("p");
+    progress.className = "proxy-candidate-progress";
+    // The batch in flight is counted as being tested, not as still to come: a
+    // counter that reads "0 of 7" for the whole of a seven-address batch is a
+    // progress bar that never moves.
+    const first = proxyState.run.done + 1;
+    const last = Math.min(
+      proxyState.run.total,
+      proxyState.run.done + (proxyState.run.inflight || 1),
+    );
+    progress.textContent =
+      `Testing ${first === last ? first : `${first}-${last}`} of ` +
+      `${proxyState.run.total} addresses. ` +
+      "Each one opens an HTTPS request through that machine to the " +
+      "provider's own host; the page stays usable while it runs.";
+    bar.appendChild(progress);
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "secondary-button proxy-candidate-bulk-button proxy-candidate-stop";
+    stop.textContent = "Stop";
+    stop.disabled = proxyState.run.stop;
+    stop.addEventListener("click", () => {
+      if (proxyState.run) proxyState.run.stop = true;
+      paintProxyCandidateList();
+    });
+    bar.appendChild(stop);
+  }
+}
+
+/* ------------------------------------------------------- the selection
+   Held in `proxyState.selected`, never read back out of the DOM: this page
+   re-renders after every batch of a bulk add, and a selection living in the
+   checkboxes would be thrown away by its own progress. */
+function setProxyCandidateSelection(proxies, on) {
+  proxies.forEach((proxy) => {
+    if (on) proxyState.selected.add(proxy);
+    else proxyState.selected.delete(proxy);
+  });
+  saveProxyCandidateView();
+  syncProxyCandidateSelectionUi();
+}
+
+function clearProxyCandidateSelection() {
+  proxyState.selected.clear();
+  proxyState.anchor = null;
+  proxyState.arrowRange = [];
+  saveProxyCandidateView();
+  syncProxyCandidateSelectionUi();
+}
+
+/* Walks the rendered rows only, so its cost tracks what is on screen rather
+   than the 1,572 addresses the payload can hold. */
+function syncProxyCandidateSelectionUi() {
+  const panel = byId("proxyingCandidates");
+  if (!panel) return;
+  panel.querySelectorAll(".proxy-candidate[data-proxy]").forEach((row) => {
+    const on = proxyState.selected.has(row.dataset.proxy);
+    const box = row.querySelector("input.proxy-candidate-select");
+    if (box) box.checked = on;
+    row.classList.toggle("is-selected", on);
+  });
+  const shown = proxyFilteredCandidates();
+  const all = panel.querySelector("input.proxy-candidate-select-all");
+  if (all) {
+    const picked = shown.filter((candidate) =>
+      proxyState.selected.has(candidate.proxy),
+    ).length;
+    all.checked = shown.length > 0 && picked === shown.length;
+    all.indeterminate = picked > 0 && picked < shown.length;
+  }
+  const bar = panel.querySelector(".proxy-candidate-bar");
+  if (bar) paintProxyCandidateBar(bar, shown);
+}
+
+/* Escape belongs to whichever modal is open; only when none is does it mean
+   "drop this selection". The same three modals the Models page and the route
+   rails check, because they are the dashboard's only modal surfaces. */
+function proxyModalIsOpen() {
+  return ["webSearchDetailModal", "exportModal", "reqDetailModal"]
+    .map(byId)
+    .some((modal) => modal && !modal.hidden);
+}
+
+/* Escape anywhere on the Proxying page, not only on a checkbox: a selection is
+   dropped from wherever the operator's focus happens to be. */
+function initProxyingSelection() {
+  document.addEventListener("keydown", (event) => {
+    const view = byId("view-proxying");
+    if (!view || view.hidden) return;
+    if (event.key !== "Escape") return;
+    if (proxyModalIsOpen()) return;
+    if (!proxyState.selected.size) return;
+    clearProxyCandidateSelection();
+    announceProxy("Selection cleared.");
+  });
+}
+
+initProxyingSelection();
+
+/* The rendered ids, in the order they are drawn. A row the filter left out is
+   not part of a visual range, so a range is read from what can be seen. */
+function proxyRenderedIds() {
+  const panel = byId("proxyingCandidates");
+  if (!panel) return [];
+  return Array.from(panel.querySelectorAll(".proxy-candidate[data-proxy]")).map(
+    (row) => row.dataset.proxy,
+  );
+}
+
+function proxyRangeIds(fromProxy, toProxy) {
+  const ids = proxyRenderedIds();
+  const start = ids.indexOf(fromProxy);
+  const end = ids.indexOf(toProxy);
+  if (start < 0 || end < 0) return [toProxy];
+  return ids.slice(Math.min(start, end), Math.max(start, end) + 1);
+}
+
+function onProxyCandidateClick(proxy, box, event) {
+  const on = box.checked;
+  if (event.shiftKey && proxyState.anchor) {
+    setProxyCandidateSelection(proxyRangeIds(proxyState.anchor, proxy), on);
+  } else {
+    setProxyCandidateSelection([proxy], on);
+    proxyState.anchor = proxy;
+  }
+  proxyState.arrowRange = [];
+}
+
+/* Range selection must not be pointer-only: WCAG 2.2 asks for a keyboard
+   alternative to any author-controlled drag or range gesture, so the same
+   range is reachable with Shift+Space and Shift+Arrow. 6.7.0 records this as a
+   requirement rather than a nicety, and it is copied here unchanged. */
+function onProxyCandidateKeydown(proxy, box, event) {
+  if (event.key === " " && event.shiftKey) {
+    event.preventDefault();
+    const on = !box.checked;
+    setProxyCandidateSelection(proxyRangeIds(proxyState.anchor || proxy, proxy), on);
+    proxyState.arrowRange = [];
+    return;
+  }
+  if (event.key === "Escape") {
+    if (proxyModalIsOpen()) return;
+    event.preventDefault();
+    clearProxyCandidateSelection();
+    announceProxy("Selection cleared.");
+    return;
+  }
+  if (!event.shiftKey) return;
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const ids = proxyRenderedIds();
+  const here = ids.indexOf(proxy);
+  const next = ids[here + (event.key === "ArrowDown" ? 1 : -1)];
+  if (!next) return;
+  if (!proxyState.anchor) proxyState.anchor = proxy;
+  const wanted = proxyRangeIds(proxyState.anchor, next);
+  // Walking back towards the anchor shrinks the range rather than leaving the
+  // rows behind the cursor selected.
+  setProxyCandidateSelection(
+    proxyState.arrowRange.filter((id) => !wanted.includes(id)),
+    false,
+  );
+  setProxyCandidateSelection(wanted, true);
+  proxyState.arrowRange = wanted;
+  const panel = byId("proxyingCandidates");
+  const nextRow =
+    panel &&
+    Array.from(panel.querySelectorAll(".proxy-candidate[data-proxy]")).find(
+      (row) => row.dataset.proxy === next,
+    );
+  const nextBox = nextRow && nextRow.querySelector("input.proxy-candidate-select");
+  if (nextBox) nextBox.focus();
+}
+
+/* What the last bulk action did to this address, in the words the summary uses
+   for the same group. One vocabulary, so a row and the panel above it cannot
+   describe the same outcome differently. */
+const PROXY_OUTCOME_WORDS = {
+  added: "added, verified",
+  benched: "added, benched -- no answer",
+  refused: "refused -- TLS intercepted",
+  already: "already in that chain",
+  full: "not added -- chain full",
+  gone: "no longer on offer",
+  discarded: "discarded",
+};
+
+function proxyCandidateRow(candidate) {
   const row = document.createElement("li");
   row.className = candidate.refused
     ? "proxy-candidate proxy-candidate-refused"
     : "proxy-candidate";
+  row.dataset.proxy = candidate.proxy;
+  if (proxyState.selected.has(candidate.proxy)) row.classList.add("is-selected");
+
+  const select = document.createElement("input");
+  select.type = "checkbox";
+  select.className = "proxy-candidate-select";
+  select.checked = proxyState.selected.has(candidate.proxy);
+  select.setAttribute("aria-label", `Select ${candidate.label}`);
+  select.addEventListener("click", (event) =>
+    onProxyCandidateClick(candidate.proxy, select, event),
+  );
+  select.addEventListener("keydown", (event) =>
+    onProxyCandidateKeydown(candidate.proxy, select, event),
+  );
+  row.appendChild(select);
 
   const label = document.createElement("span");
   label.className = "proxy-candidate-label";
@@ -964,6 +1699,23 @@ function proxyCandidateRow(candidate, providers) {
 
   const actions = document.createElement("div");
   actions.className = "proxy-candidate-actions";
+
+  // What the last bulk action did to this row, kept on the row rather than
+  // only in the summary: a partial result is read address by address, and a
+  // panel that has been dismissed still leaves that question open.
+  const outcome = proxyState.outcomes.get(candidate.proxy);
+  // Except when the standing badge below already says it in the same words: a
+  // refusal is both what this press found and what the row is from now on, and
+  // printing it twice side by side reads as two different findings.
+  const duplicated = candidate.refused && outcome && outcome.outcome === "refused";
+  if (outcome && !duplicated && PROXY_OUTCOME_WORDS[outcome.outcome]) {
+    const state = document.createElement("span");
+    state.className = `proxy-candidate-outcome proxy-candidate-outcome-${outcome.outcome}`;
+    state.textContent = PROXY_OUTCOME_WORDS[outcome.outcome];
+    if (outcome.detail) state.title = outcome.detail;
+    actions.appendChild(state);
+  }
+
   if (candidate.refused) {
     const refused = document.createElement("span");
     refused.className = "proxy-entry-state proxy-entry-state-intercepted";
@@ -972,60 +1724,256 @@ function proxyCandidateRow(candidate, providers) {
       (candidate.last_check && candidate.last_check.detail) ||
       "This address breaks certificate validation and cannot be added.";
     actions.appendChild(refused);
-  } else if (!providers.length) {
-    const none = document.createElement("span");
-    none.className = "field-description";
-    none.textContent = "no provider with an https base URL to test against";
-    actions.appendChild(none);
   } else {
-    const pick = document.createElement("select");
-    pick.className = "proxy-candidate-provider";
-    pick.setAttribute("aria-label", `Add ${candidate.label} to a provider`);
-    providers.forEach((provider) => {
-      const option = document.createElement("option");
-      option.value = provider.provider_id;
-      option.textContent = provider.display_name;
-      pick.appendChild(option);
-    });
-    const add = document.createElement("button");
-    add.type = "button";
-    add.className = "secondary-button";
-    add.textContent = "Test and add";
-    add.addEventListener("click", () =>
-      addProxyCandidate(candidate, pick.value, add),
-    );
-    actions.append(pick, add);
+    const destination = proxyDestination();
+    if (destination) {
+      // The one-element form of the bulk action, never a second write path:
+      // the row's press and the bar's press reach the same function, the same
+      // route and the same repaint.
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "ghost-button proxy-candidate-button";
+      // The destination is named once, in the bar, not thirty-nine times down
+      // the right-hand edge: the provider name is long, and repeating it on
+      // every row is the visual noise the per-row picker was.
+      add.textContent = "Add";
+      add.title = `Test and add ${candidate.label} to ${destination.display_name}`;
+      add.setAttribute(
+        "aria-label",
+        `Test and add ${candidate.label} to ${destination.display_name}`,
+      );
+      add.disabled = Boolean(proxyState.run);
+      add.addEventListener("click", () =>
+        runProxyCandidateBulk({
+          action: "add",
+          providerId: destination.provider_id,
+          proxies: [candidate.proxy],
+        }),
+      );
+      actions.appendChild(add);
+    }
   }
+
+  const discard = document.createElement("button");
+  discard.type = "button";
+  discard.className = "ghost-button proxy-candidate-button";
+  discard.textContent = "Discard";
+  discard.title =
+    "Stops this address being offered. It is not in any chain, so nothing " +
+    "stops routing; a later fetch may offer it again.";
+  discard.disabled = Boolean(proxyState.run);
+  discard.addEventListener("click", () =>
+    runProxyCandidateBulk({ action: "discard", proxies: [candidate.proxy] }),
+  );
+  actions.appendChild(discard);
 
   row.append(label, scheme, facts, sources, actions);
   return row;
 }
 
-async function addProxyCandidate(candidate, providerId, button) {
-  const original = button.textContent;
-  button.disabled = true;
-  button.textContent = "Testing...";
-  try {
-    proxyState.data = await api("/admin/api/proxy-chains/candidates/add", {
-      method: "POST",
-      body: JSON.stringify({ provider: providerId, proxy: candidate.proxy }),
-    });
-    proxyState.drafts.delete(providerId);
-    renderProxying();
-    const checked = (proxyState.data.checked || {})[candidate.proxy];
+/* --------------------------------------------------------- the write path
+
+   The **one** write path for a candidate, for one address and for four
+   hundred. 6.24.0 exists because the Models page kept a second, single-row
+   path beside its bulk one and the two drifted apart until the single-row one
+   silently skipped the counters; a single-item action here is this function
+   with one element in `proxies`.
+
+   Sent in batches, because each address is a TLS handshake through a
+   stranger's machine with a ten-second ceiling: one request for a long
+   selection is a progress bar that cannot move and a gesture that cannot be
+   stopped. Every batch carries the undo token the first one minted, so Undo
+   means "before I pressed Add", not "before the last ten of them". */
+async function runProxyCandidateBulk(request) {
+  const action = request.action;
+  const proxies = request.proxies || [];
+  if (proxyState.run) return;
+  if (!proxies.length) {
     announceProxy(
-      checked && checked.ok
-        ? `${candidate.label} answered in ${checked.latency_ms} ms with the ` +
-            "destination's certificate verified, and is now the last entry " +
-            "of that provider's chain. Its chain is still off until you " +
-            "enable it."
-        : `${candidate.label} was added to that provider's chain, but it did ` +
-            "not answer the test, so it starts out benched and the chain " +
-            "routes around it.",
+      action === "add"
+        ? "Select at least one address first, then choose where it goes."
+        : "Select at least one address first.",
+    );
+    return;
+  }
+  if (action === "add" && !request.providerId) {
+    announceProxy(
+      "No provider on this install has an https base URL to test an address " +
+        "against, so there is nowhere to add these yet.",
+    );
+    return;
+  }
+  // No modal: this is reversible through the panel's own Undo, and a dialog on
+  // every press is the friction being removed. One inline confirm for a
+  // gesture large enough to be a slip.
+  if (
+    proxies.length >= PROXY_CANDIDATE_CONFIRM_AT &&
+    proxyState.confirming !== action
+  ) {
+    proxyState.confirming = action;
+    paintProxyCandidateList();
+    window.setTimeout(() => {
+      if (proxyState.confirming !== action) return;
+      proxyState.confirming = "";
+      paintProxyCandidateList();
+    }, 5000);
+    return;
+  }
+  proxyState.confirming = "";
+  proxyState.outcomes = new Map();
+  proxyState.run = { action, total: proxies.length, done: 0, stop: false };
+  paintProxyCandidateList();
+
+  let token = "";
+  let stopped = false;
+  try {
+    for (let index = 0; index < proxies.length; index += PROXY_CANDIDATE_BATCH) {
+      if (proxyState.run.stop) {
+        stopped = true;
+        break;
+      }
+      const batch = proxies.slice(index, index + PROXY_CANDIDATE_BATCH);
+      proxyState.run.inflight = batch.length;
+      paintProxyCandidateList();
+      const payload = await api("/admin/api/proxy-chains/candidates/bulk", {
+        method: "POST",
+        body: JSON.stringify({
+          action,
+          provider: request.providerId || "",
+          proxies: batch,
+          undo_token: token,
+        }),
+      });
+      const bulk = payload.bulk || {};
+      token = bulk.undo_token || token;
+      (bulk.results || []).forEach((row) =>
+        proxyState.outcomes.set(row.proxy, row),
+      );
+      proxyState.run.done = Math.min(proxies.length, index + batch.length);
+      applyProxyCandidateBulk(payload, request.providerId);
+    }
+  } catch (error) {
+    proxyState.run = null;
+    renderProxying();
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+    return;
+  }
+  proxyState.run = null;
+  renderProxying();
+  announceProxyBulk(action, request.providerId, token, stopped);
+}
+
+/* The one repaint. The route answers with the whole refreshed page state, so
+   the page is repainted from the server's word rather than from a guess about
+   what the write did -- and the card that gained entries drops its draft, or
+   it would keep showing a chain from before the addresses landed in it. */
+function applyProxyCandidateBulk(payload, providerId) {
+  proxyState.data = payload;
+  if (providerId) proxyState.drafts.delete(providerId);
+  rememberSavedFeeds();
+  renderProxying();
+}
+
+/* What a bulk action did, as a summary a person can act on. A partial result
+   is the NORMAL outcome here -- these are strangers' machines read from public
+   lists -- so it is reported as a set of groups, never as one opaque "done"
+   and never as an error because three of twelve did not answer. */
+function announceProxyBulk(action, providerId, token, stopped) {
+  const rows = Array.from(proxyState.outcomes.values());
+  const counts = {};
+  rows.forEach((row) => {
+    counts[row.outcome] = (counts[row.outcome] || 0) + 1;
+  });
+  const provider = ((proxyState.data && proxyState.data.providers) || []).find(
+    (entry) => entry.provider_id === providerId,
+  );
+  const where = provider ? provider.display_name : "that provider";
+  const lines = [];
+  let lead = "";
+
+  if (action === "discard") {
+    lead =
+      `${counts.discarded || 0} address(es) are no longer offered.` +
+      (counts.gone ? ` ${counts.gone} had already gone.` : "") +
+      " No chain was touched: a discarded address that is already an entry " +
+      "somewhere keeps routing exactly as it did.";
+  } else {
+    const landed = (counts.added || 0) + (counts.benched || 0);
+    lead =
+      `${landed} of ${rows.length} address(es) went into ${where}'s chain. ` +
+      "That chain is still off until you enable it.";
+    if (counts.added) {
+      lines.push(
+        `${counts.added} answered and the destination's certificate verified ` +
+          "through the tunnel.",
+      );
+    }
+    if (counts.benched) {
+      lines.push(
+        `${counts.benched} did not answer, so they were added benched and ` +
+          "the chain routes around them until they do. A free address that " +
+          "is down right now is an ordinary thing, not a failure of this " +
+          "press.",
+      );
+    }
+    if (counts.refused) {
+      lines.push(
+        `${counts.refused} break certificate validation and were refused: ` +
+          "their tunnels presented certificates this machine does not trust, " +
+          "which means they are reading the traffic rather than relaying it. " +
+          "They stay on offer, marked, and no credential went near them.",
+      );
+    }
+    if (counts.already) {
+      lines.push(`${counts.already} were already entries of that chain.`);
+    }
+    if (counts.full) {
+      lines.push(
+        `${counts.full} did not fit: a chain holds at most ` +
+          `${proxyVocabulary().max_entries || 12} entries.`,
+      );
+    }
+    if (counts.gone) {
+      lines.push(
+        `${counts.gone} were no longer on offer -- a later fetch had already ` +
+          "dropped them.",
+      );
+    }
+  }
+  if (stopped) {
+    lines.push(
+      "Stopped before the rest of the selection. What had already been tested " +
+        "is reported above and is on disk; the rest is untouched and still " +
+        "selected.",
+    );
+  }
+  announceProxy(lead, {
+    lines,
+    undoLabel: action === "discard" ? "Undo the discard" : "Undo the add",
+    undo: token ? () => undoProxyCandidateBulk(token) : undefined,
+  });
+}
+
+/* One level of undo, through the token the write handed back. The store is put
+   back as it was, or the page says why it was not -- a snapshot restore across
+   somebody else's edit would quietly delete that edit. */
+async function undoProxyCandidateBulk(token) {
+  try {
+    const payload = await api("/admin/api/proxy-chains/candidates/undo", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    });
+    proxyState.data = payload;
+    proxyState.drafts.clear();
+    proxyState.outcomes = new Map();
+    rememberSavedFeeds();
+    renderProxying();
+    announceProxy(
+      "Put back as it was before that action. Any address that was refused " +
+        "keeps its verdict: that was a measurement, not a change this undoes.",
     );
   } catch (error) {
-    button.disabled = false;
-    button.textContent = original;
     announceProxy(error.message);
     showMessage(error.message, "error");
   }
@@ -1480,17 +2428,30 @@ function proxyEntryRow(provider, draft, entry, index) {
     }),
   );
   actions.appendChild(
-    proxyEntryButton("Remove", true, () => {
-      draft.entries.splice(index, 1);
-      renderProxying();
-      announceProxy(
-        `Removed ${label.textContent} from ${provider.display_name}. ` +
-          "Press Save to keep it.",
-      );
-    }),
+    // The one-element form of the card's bulk remove, not a second path: the
+    // row's press and "Remove N selected" reach the same function and leave
+    // the draft in the same state.
+    proxyEntryButton("Remove", true, () =>
+      proxyRemoveEntries(provider, draft, [entry]),
+    ),
   );
 
-  row.append(handle, position, label, scheme, state, check, actions);
+  // The select column, symmetric with the candidate list above: an operator
+  // who can add twelve addresses in one press can take twelve out in one.
+  const select = document.createElement("input");
+  select.type = "checkbox";
+  select.className = "proxy-entry-select";
+  select.checked = Boolean(entry.selected);
+  select.setAttribute(
+    "aria-label",
+    `Select ${entry.direct ? "Direct" : entry.label || entry.proxy}`,
+  );
+  select.addEventListener("change", () => {
+    entry.selected = select.checked;
+    renderProxying();
+  });
+
+  row.append(select, handle, position, label, scheme, state, check, actions);
   return row;
 }
 
@@ -1834,6 +2795,20 @@ function proxyCardFoot(provider, draft) {
     actions.appendChild(testAll);
   }
 
+  // The symmetric bulk action on the card. Offered only when something is
+  // ticked, so a card nobody is editing carries no control it does not need.
+  const ticked = draft.entries.filter((entry) => entry.selected);
+  if (ticked.length) {
+    const removeMany = document.createElement("button");
+    removeMany.type = "button";
+    removeMany.className = "secondary-button proxy-entry-bulk-remove";
+    removeMany.textContent = `Remove ${ticked.length} selected`;
+    removeMany.addEventListener("click", () =>
+      proxyRemoveEntries(provider, draft, ticked),
+    );
+    actions.appendChild(removeMany);
+  }
+
   const save = document.createElement("button");
   save.type = "button";
   save.className = "primary-button";
@@ -1854,6 +2829,30 @@ function proxyCardFoot(provider, draft) {
 
   foot.append(boundLabel, scopeLabel, actions);
   return foot;
+}
+
+/* Take entries out of a chain being edited -- one, or every ticked one.
+ *
+ * A draft change, not a write: the chain on disk is unchanged until Save, and
+ * the announcement says so. Undo for this one is the card's own Save button
+ * not being pressed, which is why it does not go through the status panel's
+ * Undo -- there is nothing on disk to put back.
+ */
+function proxyRemoveEntries(provider, draft, entries) {
+  const doomed = new Set(entries);
+  if (!doomed.size) return;
+  const names = entries.map((entry) =>
+    entry.direct ? "Direct (no proxy)" : entry.label || entry.proxy,
+  );
+  draft.entries = draft.entries.filter((entry) => !doomed.has(entry));
+  renderProxying();
+  announceProxy(
+    `Removed ${
+      names.length === 1 ? names[0] : `${names.length} entries`
+    } from ${provider.display_name}. ` +
+      `${draft.entries.length} entr${draft.entries.length === 1 ? "y" : "ies"} ` +
+      "left. Press Save to keep it -- nothing has changed on disk yet.",
+  );
 }
 
 async function saveProxyChain(provider, draft, button, remove = false) {
