@@ -7994,6 +7994,26 @@ details.turn-pane > summary:focus-visible {
   color: var(--muted);
 }
 
+/* Live health, measured by the pools themselves. "not checked yet" keeps the
+   muted colour above: an address nothing has used is not a warning, it is an
+   absence of evidence, and colouring it would claim a measurement. */
+.proxy-entry-state-healthy {
+  color: var(--ok);
+}
+
+.proxy-entry-state-cooldown,
+.proxy-entry-state-failing {
+  color: var(--warn);
+}
+
+.proxy-entry-state-unreachable {
+  color: var(--error);
+}
+
+.proxy-entry-state-unknown {
+  color: var(--muted);
+}
+
 .proxy-entry-actions {
   display: flex;
   flex-wrap: wrap;

@@ -1834,6 +1834,27 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_MAX_SWITCHES_PER_REQUEST",
+        "Proxy switches per request",
+        "credential_health",
+        "number",
+        settings_attr="proxy_max_switches_per_request",
+        default="2",
+        restart_required=True,
+        advanced=True,
+        minimum=1,
+        maximum=5,
+        description=(
+            "The most times one request may move to the next address in a "
+            "provider's proxy chain before the failure is handed to the model "
+            "fallback chain as it is today. 2 tries at most three addresses. "
+            "Every switch spends wall-clock inside a single attempt and the "
+            "deadlines do not move to make room. Each chain carries its own "
+            "number on the Proxying page; the smaller of the two applies. "
+            "Nothing at all happens on a provider with no chain."
+        ),
+    ),
+    ConfigFieldSpec(
         "RATE_LIMIT_ROUTES_AROUND_MODEL",
         "Route around a rate-limited model",
         "credential_health",

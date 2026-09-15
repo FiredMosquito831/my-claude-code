@@ -852,6 +852,48 @@ function proxyEntryList(provider, draft) {
   return list;
 }
 
+/* What one entry's row says about that address, from the health the server
+ * measured. A draft entry the operator just typed has no health at all and is
+ * not pretended to have any. */
+function proxyEntryHealth(entry) {
+  const health = entry.health || {};
+  const waiting = Math.round(Number(health.cooldown_remaining) || 0);
+  const wait = waiting >= 60 ? `${Math.round(waiting / 60)}m` : `${waiting}s`;
+  if (health.state === "unreachable") {
+    return {
+      state: "unreachable",
+      text: `unreachable ${wait}`,
+      title: health.reason || "This address would not carry a request.",
+    };
+  }
+  if (health.state === "cooldown") {
+    return {
+      state: "cooldown",
+      text: `cooldown ${wait}`,
+      title: health.reason || "Benched after a failure you selected.",
+    };
+  }
+  if (health.state === "healthy") {
+    return {
+      state: "healthy",
+      text: "healthy",
+      title: `${health.successes} of ${health.requests} requests answered.`,
+    };
+  }
+  if (health.state === "failing") {
+    return {
+      state: "failing",
+      text: "failing",
+      title: health.reason || `${health.failures} failures, nothing answered.`,
+    };
+  }
+  return {
+    state: "unknown",
+    text: "not checked yet",
+    title: "No request has gone through this address yet.",
+  };
+}
+
 function proxyEntryRow(provider, draft, entry, index) {
   const row = document.createElement("li");
   row.className = entry.paused ? "proxy-entry proxy-entry-paused" : "proxy-entry";
@@ -897,12 +939,15 @@ function proxyEntryRow(provider, draft, entry, index) {
   scheme.textContent = entry.direct ? "this machine" : entry.scheme || "";
 
   const state = document.createElement("span");
-  state.className = "proxy-entry-state";
-  // Live per-proxy health is the next release's half of this feature. Saying
-  // "not checked yet" is the honest reading of a store that has never had a
-  // checker run against it; a green dot here would be a measurement nobody
-  // took.
-  state.textContent = entry.paused ? "paused" : "not checked yet";
+  // Live health, measured by the running pools themselves rather than by a
+  // checker -- a request that went through this address is a better answer
+  // than a probe, and it is the only one available until the checker ships.
+  // "not checked yet" stays the wording for an address nothing has used, and
+  // it means exactly that: no measurement, not a bad one.
+  const health = proxyEntryHealth(entry);
+  state.className = `proxy-entry-state proxy-entry-state-${health.state}`;
+  state.textContent = entry.paused ? "paused" : health.text;
+  if (health.title) state.title = health.title;
 
   const actions = document.createElement("div");
   actions.className = "proxy-entry-actions";
@@ -1235,9 +1280,13 @@ async function saveProxyChain(provider, draft, button, remove = false) {
     renderProxying();
     announceProxy(
       remove
-        ? `${provider.display_name} follows its stored proxy again.`
-        : `Saved ${provider.display_name}. Stored only -- this release does ` +
-            "not route through the chain yet.",
+        ? `${provider.display_name} follows its stored proxy again. Its ` +
+            "providers were rebuilt, so key health starts from zero."
+        : `Saved ${provider.display_name}. Requests through it use this ` +
+            "chain from now on. Its providers were rebuilt to pick the " +
+            "change up, so key health on the Providers page starts from " +
+            "zero -- the old numbers were not wrong, the pools they were " +
+            "measured on are gone.",
     );
   } catch (error) {
     button.disabled = false;

@@ -74,6 +74,9 @@ from .constants import (
     PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
+    PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT,
+    PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
+    PROXY_MAX_SWITCHES_PER_REQUEST_MIN,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
     RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
     REASONING_ANSWER_FLOOR_MAX,
@@ -952,6 +955,15 @@ class Settings(BaseSettings):
         default=CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT,
         validation_alias="CREDENTIAL_MODEL_BENCH_ESCALATION",
         ge=0,
+    )
+    # The install-wide ceiling on how far one request may walk a provider's
+    # proxy chain. Each chain also carries its own number on its card; the
+    # smaller of the two is what a request actually spends.
+    proxy_max_switches_per_request: int = Field(
+        default=PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT,
+        validation_alias="PROXY_MAX_SWITCHES_PER_REQUEST",
+        ge=PROXY_MAX_SWITCHES_PER_REQUEST_MIN,
+        le=PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
     )
     # Backoff between a provider's own retries of a 429 or 5xx.
     provider_retry_backoff_base_seconds: float = Field(

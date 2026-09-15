@@ -1413,9 +1413,12 @@ const ROUTES = {
           on: ["quota", "rate_limit", "timeout"],
           oauth_acknowledged: false,
           entries: [
-            { proxy: "px_aaaa1111", paused: false, direct: false, label: "203.0.113.7:1080", scheme: "socks5h", source: "manual", source_count: 1 },
-            { proxy: "px_bbbb2222", paused: false, direct: false, label: "198.51.100.9:8080", scheme: "http", source: "manual", source_count: 1 },
-            { proxy: "", paused: false, direct: true, label: "", scheme: "", source: "", source_count: 0 },
+            { proxy: "px_aaaa1111", paused: false, direct: false, label: "203.0.113.7:1080", scheme: "socks5h", source: "manual", source_count: 1,
+              health: { state: "healthy", checked: true, requests: 9, successes: 8, failures: 1, cooldown_remaining: 0, reason: null } },
+            { proxy: "px_bbbb2222", paused: false, direct: false, label: "198.51.100.9:8080", scheme: "http", source: "manual", source_count: 1,
+              health: { state: "unreachable", checked: true, requests: 3, successes: 0, failures: 3, cooldown_remaining: 300, reason: "ConnectTimeout -- benched 300s" } },
+            { proxy: "", paused: false, direct: true, label: "", scheme: "", source: "", source_count: 0,
+              health: { state: "unknown", checked: false, requests: 0, successes: 0, failures: 0, cooldown_remaining: 0, reason: null } },
           ],
         },
       },
@@ -2223,6 +2226,16 @@ if (withChain) {
   )
     .replace(/\s+/g, " ")
     .trim();
+
+  // Live per-entry health, measured by the running pools. Read before the
+  // pause below, which overwrites the first row's state word with "paused".
+  proxying.entryStates = Array.from(
+    withChain.querySelectorAll(".proxy-entry-state"),
+  ).map((node) => ({
+    text: node.textContent.trim(),
+    className: node.className,
+    title: node.getAttribute("title") || "",
+  }));
 
   const reset = proxyButton(proxyCardFor("nvidia_nim"), "Recommended set");
   if (reset) reset.click();

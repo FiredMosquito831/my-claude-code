@@ -42,6 +42,7 @@ from my_claude_code.core.credential_attribution import install_attribution
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import failure_kind_name, find_execution_failure
 from my_claude_code.core.image_geometry import image_dimensions
+from my_claude_code.core.proxy_attribution import install_proxy_attribution
 from my_claude_code.core.reasoning import (
     ReasoningAdaptation,
     ReasoningAdaptationKind,
@@ -64,6 +65,7 @@ from my_claude_code.core.upstream_ladder import (
     DEFAULT_LADDER_BODY_MAX_CHARS,
     install_ladder_trace,
     ladder_payload,
+    ladder_proxy_label,
     ladder_root_cause,
 )
 from my_claude_code.core.waiting_clock import install_waiting_clock
@@ -203,6 +205,11 @@ class RequestCapture:
         # The rotating provider writes the credential it picks into this slot
         # from deep in the call stack; it is read back at finalize time.
         self._credential = install_attribution()
+        # And the proxy pool writes the egress address it picks into its own
+        # slot, for the same reason and through the same mechanism. Installed
+        # unconditionally beside the credential slot so a request that reaches
+        # a chain is attributed whether or not the log is enabled.
+        self._proxy = install_proxy_attribution()
         # Stream-recovery counters arrive the same way: a provider's runner
         # increments this collector from inside its holdback and retry
         # machinery, however many context copies the streaming response runs
@@ -364,6 +371,12 @@ class RequestCapture:
                 key_index=key_index,
                 key_label=key_label,
                 ladder_tries=None if ladder is None else len(ladder["tries"]),
+                # Denormalised out of the ladder exactly as ``ladder_tries``
+                # is, and for the same reason: so the analytics breakdown can
+                # group by egress address without scanning JSON. None is "not
+                # measured", which is every attempt on a provider with no
+                # chain.
+                proxy_label=None if ladder is None else ladder_proxy_label(ladder),
             )
         )
 

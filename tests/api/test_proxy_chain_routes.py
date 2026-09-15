@@ -360,3 +360,89 @@ def test_the_routes_are_loopback_only() -> None:
         ).status_code
         == 403
     )
+
+
+def test_saving_a_chain_republishes_the_provider_generation(monkeypatch) -> None:
+    """A chain that is stored but not published is a chain that does nothing.
+
+    A proxy is read once, in a provider's constructor, and baked into a
+    long-lived client; a chain is read in the same place. So the write has to
+    rebuild the generation, or a saved chain would sit inert until the next
+    restart -- which is exactly what the release that shipped this page did on
+    purpose, because there was no runtime to tell.
+    """
+
+    from my_claude_code.runtime.application import ApplicationRuntime
+
+    seen: list[str] = []
+
+    async def _reload(self, reason: str, *, refresh_provider_id: str | None = None):
+        seen.append(reason)
+        return {}
+
+    monkeypatch.setattr(ApplicationRuntime, "reload_providers", _reload)
+
+    client = _client()
+    response = client.put(
+        "/admin/api/proxy-chains",
+        json={
+            "provider": "nvidia_nim",
+            "enabled": True,
+            "policy": "round_robin",
+            "scope": "provider",
+            "max_switches": 2,
+            "on": ["quota", "rate_limit"],
+            "entries": [{"url": SECOND_URL}, {"direct": True}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert seen == ["proxy_chains"]
+
+    # And removing one, which is just as much a change to what routes.
+    client.put(
+        "/admin/api/proxy-chains", json={"provider": "nvidia_nim", "remove": True}
+    )
+    assert seen == ["proxy_chains", "proxy_chains"]
+
+
+def test_every_entry_reports_the_health_the_pools_measured(monkeypatch) -> None:
+    """Live per-entry health, out of the ledger the running pools write to.
+
+    A registry rather than a walk of the live provider tree: the answer
+    outlives the generation replace a chain edit performs, and nothing on the
+    request path has to be reachable from an admin request. An address no
+    request has gone through says so, which is what the card renders as "not
+    checked yet".
+    """
+
+    from my_claude_code.core.proxy_rotation import PROXY_HEALTH, reset_proxy_health
+
+    reset_proxy_health()
+    client = _client()
+    client.put(
+        "/admin/api/proxy-chains",
+        json={
+            "provider": "nvidia_nim",
+            "enabled": True,
+            "policy": "failover",
+            "scope": "provider",
+            "max_switches": 2,
+            "on": ["quota"],
+            "entries": [{"url": SECOND_URL}, {"direct": True}],
+        },
+    )
+
+    try:
+        PROXY_HEALTH.note_acquired("nvidia_nim", "198.51.100.9:8080")
+        PROXY_HEALTH.note_success("nvidia_nim", "198.51.100.9:8080")
+
+        entries = _provider(client.get("/admin/api/proxy-chains").json())["chain"][
+            "entries"
+        ]
+        assert entries[0]["health"]["state"] == "healthy"
+        assert entries[0]["health"]["checked"] is True
+        assert entries[1]["health"]["state"] == "unknown"
+        assert entries[1]["health"]["checked"] is False
+    finally:
+        reset_proxy_health()

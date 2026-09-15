@@ -275,9 +275,11 @@
                skips it and `containerId` stays null. -->
           <section id="view-proxying" class="admin-view" data-view="proxying" hidden>
             <p class="view-intro">
-              One chain per provider you have configured. MCC stores the order,
-              the rotation policy and the failures that move it along; nothing
-              else on this page changes what a request does today.
+              One chain per provider you have configured: the order MCC goes
+              out through, the rotation policy that picks between the entries,
+              and the failures that move a request to the next one. A provider
+              with no chain here keeps using its stored proxy exactly as
+              before.
             </p>
             <div class="callout" id="proxyingHonesty">
               <p>
@@ -297,10 +299,24 @@
               </p>
             </div>
             <p class="field-description" id="proxyingAlwaysAdvances">
-              A failure of the proxy <em>itself</em> &mdash; connection refused,
-              connect timeout, or the proxy answering 407, 502 or 503 &mdash;
+              A failure of the proxy <em>itself</em> &mdash; connection
+              refused, connect timeout, or the proxy answering 407 &mdash;
               always moves to the next entry on every chain. That one is not
-              configurable: the thing that failed is the proxy.
+              configurable: the thing that failed is the proxy. A 502 or a 503
+              is deliberately <em>not</em> in that set: a proxy and a provider
+              send byte-identical ones, and reading every one of them as the
+              proxy's fault would overrule your own choices above on the
+              commonest upstream fault there is. Select <em>upstream</em> or
+              <em>unavailable</em> if you want those to move the chain too.
+            </p>
+            <p class="field-description" id="proxyingSwitchBound">
+              A request moves at most as many times as
+              <strong>Proxy switches per request</strong> on Limits &amp;
+              Resilience allows, or as many as the card below asks for,
+              whichever is smaller. When the chain runs out, the request
+              follows your model fallback chain exactly as it does now. Every
+              switch spends real time inside one request and the deadlines do
+              not move to make room.
             </p>
             <!-- One live region for this page: what a reorder, a pause or a
                  save just did. Same shape as the Model Config rails' own

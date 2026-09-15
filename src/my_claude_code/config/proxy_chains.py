@@ -68,6 +68,9 @@ from loguru import logger
 
 from my_claude_code.config.atomic_json import write_json_document_atomically
 from my_claude_code.config.constants import (
+    PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT,
+    PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
+    PROXY_MAX_SWITCHES_PER_REQUEST_MIN,
     ROTATION_POLICY_ALIASES,
     ROTATION_POLICY_ORDER,
 )
@@ -99,9 +102,11 @@ PROXY_CHAIN_MAX_ENTRIES = 12
 #: How many times one request may move to the next entry. The user's own range.
 #: Every switch spends wall-clock inside a single attempt and the executor's
 #: deadlines do not move, so 5 is a real ceiling rather than a formality.
-MAX_SWITCHES_MIN = 1
-MAX_SWITCHES_MAX = 5
-MAX_SWITCHES_DEFAULT = 2
+#: Mirrored from ``config.constants`` so the card's number and the install-wide
+#: ``PROXY_MAX_SWITCHES_PER_REQUEST`` ceiling cannot drift apart.
+MAX_SWITCHES_MIN = PROXY_MAX_SWITCHES_PER_REQUEST_MIN
+MAX_SWITCHES_MAX = PROXY_MAX_SWITCHES_PER_REQUEST_MAX
+MAX_SWITCHES_DEFAULT = PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT
 
 #: Declaration order of ``core.failures.FailureKind``. Mirrored rather than
 #: imported -- ``config`` is a leaf package -- and pinned both ways against
@@ -148,6 +153,15 @@ DEFAULT_SCOPE = "provider"
 SCOPES: tuple[str, ...] = ("provider", "credential")
 
 SOURCE_MANUAL = "manual"
+
+#: Providers whose credential is a person's *subscription* rather than a
+#: revocable per-project key. Changing source address between requests is more
+#: likely to be read as account sharing here than on a pay-as-you-go key, so
+#: their chain stays inert -- in the page *and* in the runtime -- until the
+#: operator says they understand that. Declared here rather than in the admin
+#: route because the runtime has to honour the same rule and may not import an
+#: API module to learn it.
+OAUTH_PROVIDER_IDS: frozenset[str] = frozenset({"anthropic_oauth", "chatgpt_oauth"})
 
 
 def is_valid_proxy_url(url: str) -> bool:
@@ -623,6 +637,7 @@ __all__ = [
     "MAX_SWITCHES_DEFAULT",
     "MAX_SWITCHES_MAX",
     "MAX_SWITCHES_MIN",
+    "OAUTH_PROVIDER_IDS",
     "PROXIES_KEY",
     "PROXY_CHAIN_MAX_ENTRIES",
     "PROXY_URL_SCHEMES",

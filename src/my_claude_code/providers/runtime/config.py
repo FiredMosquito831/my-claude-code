@@ -5,17 +5,89 @@ import os
 from loguru import logger
 
 from my_claude_code.application.errors import ApplicationUnavailableError
-from my_claude_code.config.credentials import parse_credential_keys
+from my_claude_code.config.credentials import mask_proxy_label, parse_credential_keys
 from my_claude_code.config.env_files import env_file_override
 from my_claude_code.config.provider_catalog import ProviderDescriptor
 from my_claude_code.config.provider_registry import get_provider_registry
+from my_claude_code.config.proxy_chains import (
+    OAUTH_PROVIDER_IDS,
+    current_proxy_chains,
+)
 from my_claude_code.config.settings import Settings, parse_lockout_tiers
-from my_claude_code.providers.base import ProviderConfig
+from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
+from my_claude_code.providers.base import ProviderConfig, ProxyChainPlan, ProxyLeg
 
 CREDENTIAL_ROTATION_POLICIES = frozenset(
     {"single", "round_robin", "least_used", "failover", "on_error"}
 )
 DEFAULT_CREDENTIAL_ROTATION = "single"
+
+
+def resolve_proxy_chain(
+    provider_id: str, static_proxy: str, settings: Settings
+) -> tuple[str, ProxyChainPlan | None]:
+    """Turn the stored chain for one provider into what the runtime uses.
+
+    Returns ``(proxy, plan)``. The whole upgrade story is in the first branch:
+    a provider absent from the store -- or one whose chain is switched off, or
+    empty once its paused rungs are dropped -- keeps its ``<PROVIDER>_PROXY``
+    untouched and gets no plan at all, which is byte-for-byte the behaviour of
+    every release before this one. The ``.env`` key is never rewritten; a chain
+    with entries simply stops it being consulted.
+
+    One rung collapses to a static proxy rather than a pool: there is nothing
+    to move between, and a one-entry pool would build a second client, a second
+    limiter and a second recovery ladder to do nothing with them.
+
+    The switch bound is the per-provider number under the operator's global
+    ceiling. Two numbers, and the smaller wins: ``PROXY_MAX_SWITCHES_PER_REQUEST``
+    on Limits & Resilience is the most any chain on this install may spend
+    inside one attempt, and the card's own value is the choice within it.
+    """
+
+    chain = current_proxy_chains().chain(provider_id)
+    if chain is None or not chain.enabled or not chain.entries:
+        return static_proxy, None
+    if provider_id in OAUTH_PROVIDER_IDS and not chain.oauth_acknowledged:
+        # A subscription login whose operator has not said they understand what
+        # changing source address means for it. The rail is inert on the page
+        # and the chain is inert here, or the acknowledgement would be theatre.
+        return static_proxy, None
+
+    store = current_proxy_chains()
+    legs: list[ProxyLeg] = []
+    for entry in chain.entries:
+        if entry.paused:
+            # Kept in the store and in the page, skipped at selection -- the
+            # same semantics a paused route entry has. Building no leaf for it
+            # is also one fewer client.
+            continue
+        if entry.is_direct:
+            legs.append(ProxyLeg(url="", label=DIRECT_PROXY_LABEL))
+            continue
+        endpoint = store.endpoint(entry.proxy)
+        if endpoint is None:
+            continue
+        legs.append(
+            ProxyLeg(
+                url=endpoint.url,
+                label=endpoint.label or mask_proxy_label(endpoint.url),
+            )
+        )
+
+    if not legs:
+        return static_proxy, None
+    if len(legs) == 1:
+        return legs[0].url, None
+    return "", ProxyChainPlan(
+        legs=tuple(legs),
+        policy=chain.policy,
+        on=frozenset(chain.on),
+        scope=chain.scope,
+        max_switches=min(
+            chain.max_switches, int(settings.proxy_max_switches_per_request)
+        ),
+    )
 
 
 def string_setting(settings: Settings, attr_name: str | None, default: str = "") -> str:
@@ -104,8 +176,13 @@ def build_provider_config(
             f"{descriptor.provider_id.upper()}_BASE_URL is not set. "
             f"Configure the base URL for provider {descriptor.provider_id!r}."
         )
-    proxy = string_setting(settings, descriptor.proxy_attr)
+    proxy, proxy_chain = resolve_proxy_chain(
+        descriptor.provider_id,
+        string_setting(settings, descriptor.proxy_attr),
+        settings,
+    )
     return ProviderConfig(
+        proxy_chain=proxy_chain,
         api_key=api_keys[0] if api_keys else credential,
         base_url=resolved_base_url,
         rate_limit=settings.provider_rate_limit,
@@ -148,7 +225,11 @@ def _build_dynamic_provider_config(
     rotation = entry.credential_rotation
     if rotation not in CREDENTIAL_ROTATION_POLICIES:
         rotation = DEFAULT_CREDENTIAL_ROTATION
+    proxy, proxy_chain = resolve_proxy_chain(
+        descriptor.provider_id, entry.proxy or "", settings
+    )
     return ProviderConfig(
+        proxy_chain=proxy_chain,
         api_key=entry.api_keys[0] if entry.api_keys else "",
         base_url=entry.base_url,
         rate_limit=settings.provider_rate_limit,
@@ -157,7 +238,7 @@ def _build_dynamic_provider_config(
         http_read_timeout=settings.http_read_timeout,
         http_write_timeout=settings.http_write_timeout,
         http_connect_timeout=settings.http_connect_timeout,
-        proxy=entry.proxy or "",
+        proxy=proxy,
         log_raw_sse_events=settings.log_raw_sse_events,
         log_api_error_tracebacks=settings.log_api_error_tracebacks,
         api_keys=entry.api_keys,

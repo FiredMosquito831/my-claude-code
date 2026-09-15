@@ -15,6 +15,7 @@ from my_claude_code.config.provider_catalog import (
 )
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.openai_chat import (
@@ -26,6 +27,7 @@ from my_claude_code.providers.openai_chat import (
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .config import build_provider_config
+from .proxy_rotating import ProxyRotatingProvider, ProxyRotationState
 from .rotating import RotatingProvider
 
 ProviderFactory = Callable[
@@ -263,7 +265,60 @@ def _create_single_provider(
     config: ProviderConfig,
     settings: Settings,
 ) -> BaseProvider:
-    """Create one provider instance bound to a single credential."""
+    """Create one provider instance bound to a single credential.
+
+    The proxy seam. With no chain -- which is every provider on a fresh
+    install, and every provider whose operator never opens the Proxying page --
+    this returns exactly what it has always returned, from
+    :func:`_create_leaf_provider` below. With a chain of two or more rungs it
+    returns one object that still satisfies ``BaseProvider``, built as a
+    fan-out over ``dataclasses.replace(config, proxy=...)``: the same line that
+    already fans this provider out per credential, one dimension over.
+
+    Deliberately *below* the credential pool. Everything above keeps receiving
+    one provider, and on chain exhaustion receives the same exception object it
+    receives today.
+    """
+
+    plan = config.proxy_chain
+    if plan is None or len(plan.legs) < 2:
+        # One rung is a static proxy by another name; zero is no chain at all.
+        # Either way nothing rotates and nothing new is constructed.
+        return _create_leaf_provider(descriptor, config, settings)
+
+    legs = plan.legs
+    labels = tuple(leg.label or DIRECT_PROXY_LABEL for leg in legs)
+    providers = [
+        _create_leaf_provider(
+            descriptor,
+            dataclasses.replace(config, proxy=leg.url, proxy_chain=None),
+            settings,
+        )
+        for leg in legs
+    ]
+    state = ProxyRotationState(
+        len(providers),
+        plan.policy,
+        labels=labels,
+        provider_id=descriptor.provider_id,
+        scope=plan.scope,
+    )
+    return ProxyRotatingProvider(
+        config,
+        providers,
+        state,
+        labels=labels,
+        plan=plan,
+        provider_id=descriptor.provider_id,
+    )
+
+
+def _create_leaf_provider(
+    descriptor: ProviderDescriptor,
+    config: ProviderConfig,
+    settings: Settings,
+) -> BaseProvider:
+    """Create one provider instance bound to one credential and one address."""
     # ``is None`` rather than ``or``: 0 is a meaningful value for the limit
     # -- it is the shipped default and it means "pace nothing" -- and ``or``
     # read it as unset and substituted 40, which is how the proactive window

@@ -1384,6 +1384,18 @@ _ATTEMPT_ADDED_COLUMNS = (
         "first_reasoning_ms",
         "ALTER TABLE request_attempts ADD COLUMN first_reasoning_ms REAL",
     ),
+    # Which egress address this attempt actually went out through, denormalised
+    # out of the ladder's last ``upstream`` row exactly as ``ladder_tries`` is,
+    # so the analytics breakdown can group by address without scanning JSON.
+    #
+    # A label -- ``host:port`` with any ``user:pass`` removed -- never the URL.
+    # A proxy password in the request log would be a worse leak than the thing
+    # a proxy chain is trying to avoid.
+    #
+    # NULL means "not measured", which is every attempt on a provider with no
+    # chain and every row that predates the column. The literal ``"direct"`` is
+    # a chain rung the operator chose, and the two are different facts.
+    ("proxy_label", "ALTER TABLE request_attempts ADD COLUMN proxy_label TEXT"),
 )
 
 # Written in this order by ``_record_to_row``. The INSERT's column list, its
@@ -1507,6 +1519,7 @@ _ATTEMPT_INSERT_COLUMNS = (
     "ts_epoch",
     "ttft_ms",
     "first_reasoning_ms",
+    "proxy_label",
 )
 
 #: Key under which the attempt export hands the parsed ``request_attempts.params``
@@ -1771,6 +1784,12 @@ class RouteAttempt:
     # as either instant or catastrophic.
     ttft_ms: float | None = None
     first_reasoning_ms: float | None = None
+    # The egress address this attempt last went out through: ``host:port``
+    # with any ``user:pass`` removed, or the literal ``"direct"`` for a chain
+    # rung that deliberately uses none. None is "not measured" -- which is
+    # every attempt on a provider with no proxy chain -- and is deliberately
+    # distinct from "direct".
+    proxy_label: str | None = None
 
 
 # ---------------------------------------------------- recovery observability --
@@ -3974,6 +3993,7 @@ class RequestLogStore:
                 # a slow request's time went.
                 attempt.ttft_ms,
                 attempt.first_reasoning_ms,
+                attempt.proxy_label,
             )
             for record in batch
             for attempt in record.attempts
@@ -4005,7 +4025,8 @@ class RequestLogStore:
             "SELECT attempt, provider, model_ref, outcome, error_kind,"
             " error_message, duration_ms, params, wire_body, reasoning_emitted,"
             " key_index, key_label, ladder_tries, tokens_in, tokens_out,"
-            " cost_usd, cost_source, ts_epoch, ttft_ms, first_reasoning_ms"
+            " cost_usd, cost_source, ts_epoch, ttft_ms, first_reasoning_ms,"
+            " proxy_label"
             " FROM request_attempts"
             " WHERE request_id = ? ORDER BY attempt",
             (request_id,),
@@ -4038,6 +4059,10 @@ class RequestLogStore:
                 "key_index": row["key_index"],
                 "key_label": row["key_label"],
                 "ladder_tries": row["ladder_tries"],
+                # The egress address this attempt last used. NULL is "not
+                # measured" -- no chain, or a row written before the column --
+                # and the literal "direct" is a rung the operator chose.
+                "proxy_label": row["proxy_label"],
                 # A copy of the parent request's instant, so the attempt can be
                 # found by time without asking the parent. NULL on every
                 # attempt written before the column existed, which is "not
@@ -5007,7 +5032,7 @@ class RequestLogStore:
             "SELECT request_id, attempt, provider, model_ref, outcome,"
             " error_kind, error_message, duration_ms, params, reasoning_emitted,"
             " key_index, key_label, ladder_tries, tokens_in, tokens_out,"
-            " cost_usd, cost_source, ttft_ms, first_reasoning_ms"
+            " cost_usd, cost_source, ttft_ms, first_reasoning_ms, proxy_label"
             " FROM request_attempts"
             f" WHERE request_id IN ({markers})",
             request_ids,
@@ -5032,6 +5057,7 @@ class RequestLogStore:
                 "cost_source": row["cost_source"],
                 "ttft_ms": row["ttft_ms"],
                 "first_reasoning_ms": row["first_reasoning_ms"],
+                "proxy_label": row["proxy_label"],
                 ATTEMPT_PARAMS_KEY: _loads_or_none(row["params"]),
             }
             for row in rows
