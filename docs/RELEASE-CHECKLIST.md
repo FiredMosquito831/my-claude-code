@@ -689,9 +689,14 @@ check is a hard failure rather than a warning.
 ## 10. The winget manifest (`desktop-shell/installer/winget/`)
 
 Only relevant once the manifest has been **accepted** into
-`microsoft/winget-pkgs`. Until then this section is preparation, and
-`desktop-shell/installer/winget/SUBMIT.md` is the runbook for the first
-submission — which has deliberately not been made.
+`microsoft/winget-pkgs`. The first submission **has** been made —
+[PR #430045](https://github.com/microsoft/winget-pkgs/pull/430045), opened
+2026-09-05, updated to 7.13.1 on 2026-09-15, still open — and
+`desktop-shell/installer/winget/SUBMIT.md` is both its history and the runbook.
+Read its §0 before touching the manifests: the submission has been rejected
+twice, once for declaring a schema version the repository does not accept, and
+once because the app could not start on a clean validator VM without the Edge
+WebView2 runtime. Both are fixed; the dependency is pinned by a test.
 
 Each release that ships a `MyClaudeCode-Setup-windows-x86_64.exe` needs its own
 version folder in the community repository, and the repository side of that is
