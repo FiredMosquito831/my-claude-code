@@ -44,6 +44,11 @@ from pydantic import BaseModel, Field
 from my_claude_code.api.admin_routes import require_loopback_admin
 from my_claude_code.api.dependencies import get_services
 from my_claude_code.api.ports import ApiServices
+from my_claude_code.application.proxy_check import (
+    PROXY_CHECK_TIMEOUT_SECONDS,
+    check_endpoints,
+    destination_for_provider,
+)
 from my_claude_code.config.admin.manifest import FIELDS
 from my_claude_code.config.admin.status import provider_config_status
 from my_claude_code.config.constants import ROTATION_POLICY_ORDER
@@ -60,6 +65,7 @@ from my_claude_code.config.proxy_chains import (
     PROXY_URL_SCHEMES,
     REFUSED_TRIGGER_KINDS,
     SCOPES,
+    TLS_INTERCEPTED,
     TRIGGER_KIND_ORDER,
     ProxyChain,
     ProxyChainEntry,
@@ -73,7 +79,7 @@ from my_claude_code.config.proxy_chains import (
 )
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
-from my_claude_code.core.proxy_rotation import PROXY_HEALTH
+from my_claude_code.core.proxy_rotation import PROXY_HEALTH, PROXY_INTERCEPTION
 
 router = APIRouter()
 
@@ -243,6 +249,107 @@ async def put_proxy_chain(
     return await asyncio.to_thread(_payload, services)
 
 
+class ProxyCheckPayload(BaseModel):
+    """Which of one provider's addresses to measure.
+
+    ``proxy`` names one stored endpoint; omitting it tests every entry of that
+    provider's chain. There is no by-URL form: a check is a network call made
+    with the operator's own stored credentials in mind, and accepting a URL on
+    this route would make it a general-purpose outbound fetch with an admin
+    session behind it.
+    """
+
+    provider: str
+    proxy: str = ""
+
+
+@router.post("/admin/api/proxy-chains/check")
+async def check_proxy_chain(
+    payload: ProxyCheckPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Measure one address, or a whole chain, and return the refreshed state.
+
+    Three questions per address: does it answer, does its tunnel keep
+    certificate validation intact, and how long did that take. The destination
+    is this provider's own base-URL host, so the check tests the thing the
+    chain will actually do and contacts nobody the operator has not already
+    chosen.
+
+    A press of this button is the only outbound request this feature makes on
+    an install where the background checker is off, which is every install
+    until somebody turns it on.
+    """
+
+    require_loopback_admin(request)
+    settings = services.requests.current_settings()
+    providers = {
+        entry["provider_id"]: entry for entry in _configured_providers(settings)
+    }
+    provider_id = payload.provider.strip().lower()
+    if provider_id not in providers:
+        raise HTTPException(
+            status_code=404, detail=f"Not a configured provider: {payload.provider}"
+        )
+    destination = str(providers[provider_id].get("base_url") or "").strip()
+    if not destination.lower().startswith("https://"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{providers[provider_id]['display_name']} has no https base "
+                "URL to test against, so there is no certificate to verify "
+                "through the tunnel. Set its base URL first."
+            ),
+        )
+
+    store = current_proxy_chains()
+    chain = store.chain(provider_id)
+    wanted = _ids_to_check(store, chain, payload.proxy.strip())
+    if not wanted:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Nothing to test. A chain entry has to be saved before it can "
+                "be measured, and Direct has no proxy to measure."
+            ),
+        )
+
+    outcomes = await check_endpoints(
+        wanted,
+        dict.fromkeys(wanted, destination),
+        timeout=PROXY_CHECK_TIMEOUT_SECONDS,
+        exit_ip_url=settings.proxy_check_exit_ip_url.strip(),
+    )
+    refreshed = await asyncio.to_thread(_payload, services)
+    refreshed["checked"] = {
+        proxy_id: outcome.record.as_document() | {"label": outcome.label}
+        for proxy_id, outcome in outcomes.items()
+    }
+    return refreshed
+
+
+def _ids_to_check(
+    store: ProxyChains, chain: ProxyChain | None, requested: str
+) -> tuple[str, ...]:
+    """The endpoint ids one press should measure, in chain order.
+
+    Direct is silently absent rather than refused: it is a legal rung with no
+    address to dial, and "test all" on a chain that contains it means the rest.
+    """
+
+    if chain is None:
+        return ()
+    ids = tuple(
+        entry.proxy
+        for entry in chain.entries
+        if entry.proxy and store.endpoint(entry.proxy) is not None
+    )
+    if not requested:
+        return ids
+    return tuple(proxy_id for proxy_id in ids if proxy_id == requested)
+
+
 async def _republish(services: ApiServices) -> None:
     """Rebuild the provider generation so the new chain is what routes.
 
@@ -381,8 +488,42 @@ def _resolve_entries(
                     "has. Reload the page and set it again."
                 ),
             )
+        _refuse_if_intercepted(store, proxy_id, index)
         entries.append(ProxyChainEntry(proxy=proxy_id, paused=entry.paused))
     return store, tuple(entries)
+
+
+def _refuse_if_intercepted(store: ProxyChains, proxy_id: str, index: int) -> None:
+    """Refuse an address the checker found terminating TLS.
+
+    The security control, enforced at the one moment it matters: the write that
+    would put this address in front of a credential. Two sources agree before
+    this raises -- the durable verdict in the store and the live ledger the
+    running pools read -- so neither a restart nor a hand-edited document can
+    get an intercepting address into a chain through this route.
+
+    There is no override. An operator who believes the verdict is wrong presses
+    Test again; a passing check clears both, which is the only way out and is a
+    measurement rather than a confirmation dialog.
+    """
+
+    endpoint = store.endpoint(proxy_id)
+    label = (
+        "" if endpoint is None else (endpoint.label or mask_proxy_label(endpoint.url))
+    )
+    if (endpoint is not None and endpoint.refused) or PROXY_INTERCEPTION.is_refused(
+        label
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Entry {index + 1} ({label}) breaks certificate validation: "
+                "its tunnel presented a certificate this machine does not "
+                "trust, which means it is reading the traffic rather than "
+                "relaying it. MCC will not route a credential through it. "
+                "Press Test on that row again if you believe this has changed."
+            ),
+        )
 
 
 # ------------------------------------------------------------------- payload
@@ -406,6 +547,16 @@ def _payload(services: ApiServices) -> dict[str, Any]:
                 "min": MAX_SWITCHES_MIN,
                 "max": MAX_SWITCHES_MAX,
                 "default": 2,
+            },
+            "tls_intercepted": TLS_INTERCEPTED,
+            # What the page says about the checker, so it can tell the operator
+            # whether anything is measuring these addresses without them
+            # pressing a button. Off is the shipped answer and the page says so
+            # rather than leaving a stale "not checked yet" unexplained.
+            "checker": {
+                "enabled": bool(settings.proxy_check_enabled),
+                "interval_minutes": int(settings.proxy_check_interval_minutes),
+                "exit_ip_configured": bool(settings.proxy_check_exit_ip_url.strip()),
             },
         },
         "providers": [
@@ -454,9 +605,8 @@ def _configured_providers(settings: Settings) -> list[dict[str, Any]]:
     is skipped.
     """
 
-    registry_proxies = {
-        entry.provider_id: entry.proxy or ""
-        for entry in get_provider_registry().list_custom()
+    custom_entries = {
+        entry.provider_id: entry for entry in get_provider_registry().list_custom()
     }
     configured: list[dict[str, Any]] = []
     for status in provider_config_status(_value_state(settings)):
@@ -466,16 +616,20 @@ def _configured_providers(settings: Settings) -> list[dict[str, Any]]:
         descriptor = PROVIDER_CATALOG.get(provider_id)
         custom = bool(status.get("custom"))
         if custom:
-            inherited = registry_proxies.get(provider_id, "")
+            entry = custom_entries.get(provider_id)
+            inherited = (entry.proxy or "") if entry is not None else ""
+            base_url = entry.base_url if entry is not None else ""
             env_var = None
         elif descriptor is not None and descriptor.proxy_attr:
             inherited = str(getattr(settings, descriptor.proxy_attr, "") or "")
+            base_url = destination_for_provider(provider_id, settings)
             env_var = descriptor.proxy_attr.upper()
         else:
             # A provider with no proxy attribute at all has nothing to inherit
             # and nothing to override; it still gets a card, because a chain is
             # the first egress control it has ever had.
             inherited, env_var = "", None
+            base_url = destination_for_provider(provider_id, settings)
         configured.append(
             {
                 "provider_id": provider_id,
@@ -486,6 +640,7 @@ def _configured_providers(settings: Settings) -> list[dict[str, Any]]:
                 "key_count": int(status.get("key_count") or 0),
                 "env_var": env_var,
                 "inherited_proxy": inherited,
+                "base_url": base_url,
             }
         )
     return configured
@@ -528,6 +683,7 @@ def _entry_payload(
     endpoint = store.endpoint(entry.proxy) if entry.proxy else None
     url = endpoint.url if endpoint is not None else ""
     label = (endpoint.label if endpoint is not None else "") or mask_proxy_label(url)
+    last_check = endpoint.last_check if endpoint is not None else None
     return {
         "proxy": entry.proxy,
         "paused": entry.paused,
@@ -536,6 +692,11 @@ def _entry_payload(
         "scheme": _scheme(url),
         "source": endpoint.source if endpoint is not None else "",
         "source_count": endpoint.source_count if endpoint is not None else 0,
+        # What the checker last measured about this address, out of the store
+        # rather than out of a ledger: it is a durable verdict that survives a
+        # restart, and the refusal it can carry has to survive one too.
+        "last_check": None if last_check is None else last_check.as_document(),
+        "refused": bool(endpoint is not None and endpoint.refused),
         # What the running pools have actually measured about this address, out
         # of the process-wide ledger the pools write to. A registry rather than
         # a walk of the live provider tree: the answer outlives the generation

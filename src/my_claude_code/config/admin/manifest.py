@@ -1855,6 +1855,63 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "PROXY_CHECK_ENABLED",
+        "Check proxies in the background",
+        "credential_health",
+        "boolean",
+        settings_attr="proxy_check_enabled",
+        default="false",
+        restart_required=True,
+        advanced=True,
+        description=(
+            "Re-measure every address in a proxy chain on a timer: does it "
+            "answer, does its tunnel keep certificate validation intact, and "
+            "how long does it take. A proxy that breaks certificate "
+            "validation is refused and stops being used; a dead one is "
+            "benched and the chain routes around it without you doing "
+            "anything. Off by default, and while it is off MCC makes no "
+            "outbound request you did not ask for -- the Test button on the "
+            "Proxying page always works and is one request per press."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_CHECK_INTERVAL_MINUTES",
+        "Minutes between proxy checks",
+        "credential_health",
+        "number",
+        settings_attr="proxy_check_interval_minutes",
+        default="30",
+        restart_required=True,
+        advanced=True,
+        minimum=0,
+        maximum=1440,
+        description=(
+            "How often the background checker sweeps the addresses in your "
+            "chains. One HEAD request per address per sweep, to that "
+            "provider's own host. 0 switches the loop off even when the "
+            "check above is enabled."
+        ),
+    ),
+    ConfigFieldSpec(
+        "PROXY_CHECK_EXIT_IP_URL",
+        "Exit-IP check URL",
+        "credential_health",
+        "text",
+        settings_attr="proxy_check_exit_ip_url",
+        default="",
+        restart_required=False,
+        advanced=True,
+        affects_providers=False,
+        description=(
+            "Optional, and empty by default. A URL of your choosing that "
+            "answers with the address it saw, fetched through each proxy so "
+            "you can see that the source address really changed. MCC ships no "
+            "default here: this is the one part of the check that contacts "
+            "somebody you did not already choose to talk to, so it happens "
+            "only if you name them. It never decides whether a proxy passes."
+        ),
+    ),
+    ConfigFieldSpec(
         "RATE_LIMIT_ROUTES_AROUND_MODEL",
         "Route around a rate-limited model",
         "credential_health",

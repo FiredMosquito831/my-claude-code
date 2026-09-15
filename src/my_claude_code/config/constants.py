@@ -367,6 +367,24 @@ CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT = 2
 PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT = 2
 PROXY_MAX_SWITCHES_PER_REQUEST_MIN = 1
 PROXY_MAX_SWITCHES_PER_REQUEST_MAX = 5
+# Whether the background proxy checker runs. OFF, and it stays off until an
+# operator turns it on: a user who never opens the Proxying page must make no
+# outbound request they did not ask for. The Test button on that page is always
+# available and is one request the operator pressed a button for.
+PROXY_CHECK_ENABLED_DEFAULT = False
+# Minutes between background sweeps of the addresses in a chain. 0 is off even
+# when the switch above is on. Thirty is a compromise: a free address that died
+# is found inside half an hour, and a twelve-entry catalogue costs twelve
+# HEAD requests in that time, which is less than one coding session sends to
+# one provider.
+PROXY_CHECK_INTERVAL_MINUTES_DEFAULT = 30
+PROXY_CHECK_INTERVAL_MINUTES_MIN = 0
+PROXY_CHECK_INTERVAL_MINUTES_MAX = 1440
+# The URL the checker asks "what address did this request come from". EMPTY,
+# and deliberately shipped empty: it proves a proxy really changed the source
+# address, and it is an outbound request to a stranger. MCC names no default
+# host for it; the operator types one or the check does not happen.
+PROXY_CHECK_EXIT_IP_URL_DEFAULT = ""
 # What a 429 on a pooled credential means. True: it benches the (key, model)
 # pair and the executor moves to another model on the SAME provider first,
 # because a gateway that limits one model usually still answers another on the

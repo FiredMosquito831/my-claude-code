@@ -1393,6 +1393,10 @@ const ROUTES = {
       scopes: ["provider", "credential"],
       max_entries: 12,
       switch_bound: { min: 1, max: 5, default: 2 },
+      tls_intercepted: "intercepted",
+      // The shipped answer: nothing is measuring these addresses until an
+      // operator says so, and no exit-IP URL is named.
+      checker: { enabled: false, interval_minutes: 30, exit_ip_configured: false },
     },
     providers: [
       {
@@ -1414,11 +1418,23 @@ const ROUTES = {
           oauth_acknowledged: false,
           entries: [
             { proxy: "px_aaaa1111", paused: false, direct: false, label: "203.0.113.7:1080", scheme: "socks5h", source: "manual", source_count: 1,
-              health: { state: "healthy", checked: true, requests: 9, successes: 8, failures: 1, cooldown_remaining: 0, reason: null } },
+              refused: false,
+              last_check: { at: new Date(Date.now() - 120000).toISOString(), ok: true, latency_ms: 412, tls: "strict", detail: "", exit_ip: "" },
+              health: { state: "healthy", checked: true, requests: 9, successes: 8, failures: 1, cooldown_remaining: 0, refused: false, reason: null } },
             { proxy: "px_bbbb2222", paused: false, direct: false, label: "198.51.100.9:8080", scheme: "http", source: "manual", source_count: 1,
-              health: { state: "unreachable", checked: true, requests: 3, successes: 0, failures: 3, cooldown_remaining: 300, reason: "ConnectTimeout -- benched 300s" } },
+              refused: false,
+              last_check: { at: new Date(Date.now() - 600000).toISOString(), ok: false, latency_ms: null, tls: "unknown", detail: "198.51.100.9:8080 refused the connection", exit_ip: "" },
+              health: { state: "unreachable", checked: true, requests: 3, successes: 0, failures: 3, cooldown_remaining: 300, refused: false, reason: "ConnectTimeout -- benched 300s" } },
+            // The address the checker caught terminating TLS. Still on the
+            // card, struck through and refused: an operator whose chain got
+            // shorter has to be able to see why.
+            { proxy: "px_cccc3333", paused: false, direct: false, label: "192.0.2.44:3128", scheme: "http", source: "manual", source_count: 1,
+              refused: true,
+              last_check: { at: new Date(Date.now() - 300000).toISOString(), ok: false, latency_ms: 88, tls: "intercepted", detail: "this proxy breaks certificate validation -- MCC will not route through it", exit_ip: "" },
+              health: { state: "intercepted", checked: true, requests: 0, successes: 0, failures: 1, cooldown_remaining: 0, refused: true, reason: "this proxy breaks certificate validation -- MCC will not route through it" } },
             { proxy: "", paused: false, direct: true, label: "", scheme: "", source: "", source_count: 0,
-              health: { state: "unknown", checked: false, requests: 0, successes: 0, failures: 0, cooldown_remaining: 0, reason: null } },
+              refused: false, last_check: null,
+              health: { state: "unknown", checked: false, requests: 0, successes: 0, failures: 0, cooldown_remaining: 0, refused: false, reason: null } },
           ],
         },
       },
@@ -2032,6 +2048,54 @@ window.fetch = async (url, options = {}) => {
   ) {
     body = customCreateResult;
   }
+  // The checker's route, emulated against the same document the page reads
+  // back: a check writes `last_check` on the store, so the card that was
+  // tested has to re-render from a payload that carries the new verdict rather
+  // than from the one it was holding.
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/check") {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const provider = state.providers.find(
+      (entry) => entry.provider_id === sent.provider,
+    );
+    const checked = {};
+    const entries = ((provider && provider.chain && provider.chain.entries) || [])
+      .filter((entry) => entry.proxy && (!sent.proxy || entry.proxy === sent.proxy));
+    entries.forEach((entry) => {
+      // Two outcomes, both real: the first address relays honestly and the
+      // one already marked intercepted still does what it did.
+      const intercepted = entry.proxy === "px_cccc3333";
+      const record = intercepted
+        ? {
+            at: new Date().toISOString(),
+            ok: false,
+            latency_ms: 91,
+            tls: "intercepted",
+            detail:
+              "this proxy breaks certificate validation -- MCC will not route through it",
+            exit_ip: "",
+          }
+        : {
+            at: new Date().toISOString(),
+            ok: true,
+            latency_ms: 377,
+            tls: "strict",
+            detail: "",
+            exit_ip: "",
+          };
+      entry.last_check = record;
+      entry.refused = intercepted;
+      entry.health = { ...entry.health, refused: intercepted };
+      if (intercepted) entry.health.state = "intercepted";
+      checked[entry.proxy] = { ...record, label: entry.label };
+    });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ...state, checked }),
+      text: async () => "",
+    };
+  }
   if (String(url).split("?")[0] === "/admin/api/harness-tiers") {
     // A real enough server: the write lands in the same document the next GET
     // (and the card's own re-render) reads back, so "Override then Revert"
@@ -2210,6 +2274,25 @@ if (withChain) {
     .replace(/\s+/g, " ")
     .trim();
 
+  // The checker's own surfaces, read before anything on the card is clicked.
+  proxying.checkerNote = (doc.querySelector("#proxyingChecker")?.textContent || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  proxying.checkReadouts = Array.from(
+    withChain.querySelectorAll(".proxy-entry-check"),
+  ).map((node) => ({
+    text: node.textContent.trim(),
+    title: node.getAttribute("title") || "",
+  }));
+  proxying.refusedRows = Array.from(
+    withChain.querySelectorAll(".proxy-entry-refused .proxy-entry-label"),
+  ).map((node) => node.textContent.trim());
+  // Only a saved address can be tested, so the Direct rung has no button.
+  proxying.testButtons = Array.from(withChain.querySelectorAll(".proxy-entry")).map(
+    (row) => Boolean(proxyButton(row, "Test")),
+  );
+  proxying.testAll = (proxyButton(withChain, "Test all (3)") || {}).textContent || "";
+
   // A refused chip must not toggle when clicked, not merely look refused.
   const refused = Array.from(withChain.querySelectorAll(".proxy-chip")).find(
     (chip) => chip.disabled,
@@ -2253,6 +2336,47 @@ if (withChain) {
   proxying.saved =
     fetchBodies.filter((entry) => entry.path === "/admin/api/proxy-chains").pop() ||
     null;
+
+  // Drive the Test button on one row, and then on the row the checker has
+  // already refused. Two outcomes, and the second is the one that matters:
+  // the announcement has to say what a refusal means rather than reporting a
+  // failed request.
+  const rows = Array.from(proxyCardFor("nvidia_nim").querySelectorAll(".proxy-entry"));
+  const testable = rows.find((row) => proxyButton(row, "Test"));
+  if (testable) {
+    proxyButton(testable, "Test").click();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    proxying.checkPost =
+      fetchBodies
+        .filter((entry) => entry.path === "/admin/api/proxy-chains/check")
+        .pop() || null;
+    proxying.readoutsAfterTest = Array.from(
+      proxyCardFor("nvidia_nim").querySelectorAll(".proxy-entry-check"),
+    ).map((node) => node.textContent.trim());
+    proxying.announcementAfterTest = (
+      doc.querySelector("#proxyingStatus")?.textContent || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  const refusedRow = Array.from(
+    proxyCardFor("nvidia_nim").querySelectorAll(".proxy-entry"),
+  ).find((row) => (row.textContent || "").includes("192.0.2.44:3128"));
+  if (refusedRow && proxyButton(refusedRow, "Test")) {
+    proxyButton(refusedRow, "Test").click();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    proxying.announcementAfterRefusedTest = (
+      doc.querySelector("#proxyingStatus")?.textContent || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    proxying.refusedRowsAfterTest = Array.from(
+      proxyCardFor("nvidia_nim").querySelectorAll(
+        ".proxy-entry-refused .proxy-entry-label",
+      ),
+    ).map((node) => node.textContent.trim());
+  }
 }
 
 // The subscription-login card: its rail is inert until the acknowledgement.

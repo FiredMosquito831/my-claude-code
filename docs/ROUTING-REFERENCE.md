@@ -290,7 +290,7 @@ Two separate rules.
 | **Reachability** | the address would not carry the request at all | escalating `60s → 5m → 1h`, clamped at the last | the **address**, across every provider on this install — a dead proxy is dead for everybody, and discovering that once per provider is three connect timeouts instead of one |
 | **Trigger** | the provider answered with a failure you selected | the provider's own published `Retry-After` if it sent one, else `300s` | the **address and the provider**, across all its keys, because the allowance is metered by address. Switch *Quota is metered per* to **address and key** on a provider that meters per (address, account) |
 
-Both are live on the card: each entry says `healthy`, `failing`, `cooldown 4m`, `unreachable 5m`, or **not checked yet** — which means exactly that, an address no request has gone through, not a bad measurement.
+Both are live on the card: each entry says `healthy`, `failing`, `cooldown 4m`, `unreachable 5m`, or **not checked yet** — which means exactly that, an address no request has gone through, not a bad measurement. A third state, **TLS intercepted**, is not a bench at all: see *Testing an address* below.
 
 #### The bound, and why it is real
 
@@ -299,6 +299,20 @@ Both are live on the card: each entry says `healthy`, `failing`, `cooldown 4m`, 
 #### Rotation policies
 
 The same four names and the same meanings credential rotation uses: `single`, `round_robin`, `least_used`, `failover` (`on_error` is an accepted alias). `failover` is the default and the conservative one: it pins to the first healthy entry and changes nothing until something breaks. **`round_robin` is the one that multiplies a per-address allowance** — with four working addresses a per-IP limit applies four times over, from the first request rather than only after an error.
+
+#### Testing an address before you rely on it
+
+Every saved entry has a **Test** button, and each card has **Test all**. One press does three things, in order:
+
+1. **A TCP connect** to the proxy itself. A free address that has stopped listening is the commonest thing in any list of them, and one socket finds out.
+2. **An HTTPS request through the proxy to that provider's own host**, with the ordinary strict certificate verification every other client here uses. Not a third-party IP-echo service: the destination has to be the thing the chain will actually talk to, and it is a host you already chose to talk to.
+3. **The latency of step 2** — a real handshake through the tunnel, not a ping.
+
+**Step 2 is a security control.** If the certificate that comes back does not verify, the tunnel is not being relayed, it is being *read*: something between you and the provider terminated the TLS and is looking at the plaintext. That address is marked **TLS intercepted** and **refused** — it cannot be saved into a chain, and one already in a chain is held out of selection immediately rather than waiting for you to edit anything. There is no override; the way out is a later Test that passes, which is a measurement rather than a confirmation dialog. In one published study of 640,000 open proxies, 16,923 of them were manipulating traffic, and this is the one check that tells them apart from the honest ones — up to the handshake they are indistinguishable, so a TCP check alone would call them healthy.
+
+**Nothing is measured until you ask.** Set **Check proxies in the background** on **Limits & Resilience** to have MCC re-measure every address in a chain on a timer (**Minutes between proxy checks**, default `30`, floor `5`, `0` for off). It ships off: an install that never opens this page makes no outbound request it was not asked to. An address the checker finds dead walks the reachability ladder above with no action from you, so the chain routes around it.
+
+**The exit-IP check is yours to enable.** **Exit-IP check URL** is empty by default and MCC names no default host for it. Set a URL that answers with the address it saw and the checker fetches it through each proxy, so the row can show the address the far end reported — proof that the source address really changed. It is the one leg of the check that contacts somebody you did not already choose to talk to, which is why it happens only if you name them, and it never decides whether an address passes.
 
 #### Telling whether it worked
 

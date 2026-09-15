@@ -619,9 +619,50 @@ function proxyDraft(provider) {
   return draft;
 }
 
+/* What is measuring these addresses, if anything.
+ *
+ * The page says it out loud because the shipped answer is "nothing": the
+ * background checker is off until an operator turns it on, and a row reading
+ * "not tested" beside no explanation would look like a page that forgot to
+ * load rather than an install that has not been asked to make the call. */
+function renderProxyCheckerNote() {
+  const note = byId("proxyingChecker");
+  if (!note) return;
+  const checker = proxyVocabulary().checker || {};
+  const sentences = [];
+  if (checker.enabled && Number(checker.interval_minutes) > 0) {
+    sentences.push(
+      `Background checking is on: every address in a chain is re-measured ` +
+        `about every ${checker.interval_minutes} minutes.`,
+    );
+  } else {
+    sentences.push(
+      "Background checking is off, so nothing here is measured until you " +
+        "press Test. Turn on Check proxies in the background on Limits & " +
+        "Resilience to have MCC watch them for you.",
+    );
+  }
+  sentences.push(
+    "A test opens one HTTPS request through the proxy to that provider's own " +
+      "host, with ordinary strict certificate verification. If the " +
+      "certificate does not verify, the tunnel is being read rather than " +
+      "relayed: that address is marked TLS intercepted and refused outright.",
+  );
+  sentences.push(
+    checker.exit_ip_configured
+      ? "Your exit-IP URL is also fetched through each proxy, so the address " +
+          "it reports is shown on the row."
+      : "No exit-IP URL is set, so MCC contacts nobody but the provider. Set " +
+          "Exit-IP check URL on Limits & Resilience if you want proof that " +
+          "the source address really changed.",
+  );
+  note.textContent = sentences.join(" ");
+}
+
 function renderProxying() {
   const list = byId("proxyingList");
   const empty = byId("proxyingEmpty");
+  renderProxyCheckerNote();
   if (!list) return;
   list.textContent = "";
   const providers = (proxyState.data && proxyState.data.providers) || [];
@@ -859,6 +900,18 @@ function proxyEntryHealth(entry) {
   const health = entry.health || {};
   const waiting = Math.round(Number(health.cooldown_remaining) || 0);
   const wait = waiting >= 60 ? `${Math.round(waiting / 60)}m` : `${waiting}s`;
+  // Ahead of every other state, and it is not a bench: the checker measured
+  // this address terminating TLS, so it is refused until a later check says
+  // the destination's certificate verifies again.
+  if (entry.refused || health.state === "intercepted") {
+    return {
+      state: "intercepted",
+      text: "TLS intercepted",
+      title:
+        health.reason ||
+        "This proxy breaks certificate validation -- MCC will not route through it.",
+    };
+  }
   if (health.state === "unreachable") {
     return {
       state: "unreachable",
@@ -894,9 +947,72 @@ function proxyEntryHealth(entry) {
   };
 }
 
+/* How long ago the checker last looked at this address, in words.
+ *
+ * Coarse on purpose: the operator's question is "is this measurement current",
+ * not "was it 412 or 413 seconds ago", and a second-precise clock on a page
+ * that does not tick would be wrong the moment it rendered. */
+function proxyCheckedAgo(at) {
+  const when = Date.parse(String(at || ""));
+  if (!Number.isFinite(when)) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - when) / 1000));
+  if (seconds < 90) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
+}
+
+/* The checker's own line on a row: latency, what the tunnel did to certificate
+ * validation, and when that was measured. Separate from the health span beside
+ * it because they answer different questions -- health is what the *pools*
+ * observed carrying real traffic, this is what a deliberate test found. An
+ * address with neither says so rather than borrowing the other's wording. */
+function proxyCheckReadout(entry) {
+  if (entry.direct) {
+    return { text: "no proxy to test", title: "" };
+  }
+  const check = entry.last_check;
+  if (!check) {
+    return {
+      text: "not tested",
+      title: "Press Test to measure this address against this provider's host.",
+    };
+  }
+  const ago = proxyCheckedAgo(check.at);
+  if (check.tls === "intercepted") {
+    return {
+      text: `TLS intercepted${ago ? ` · ${ago}` : ""}`,
+      title:
+        check.detail ||
+        "The tunnel presented a certificate this machine does not trust.",
+    };
+  }
+  if (!check.ok) {
+    return {
+      text: `no answer${ago ? ` · ${ago}` : ""}`,
+      title: check.detail || "This address did not answer the last check.",
+    };
+  }
+  const latency =
+    check.latency_ms === null || check.latency_ms === undefined
+      ? ""
+      : `${check.latency_ms} ms · `;
+  const exit = check.exit_ip ? ` · exit ${check.exit_ip}` : "";
+  return {
+    text: `${latency}TLS strict${exit}${ago ? ` · ${ago}` : ""}`,
+    title:
+      "The destination's certificate verified through this tunnel." +
+      (check.exit_ip ? ` Your exit-IP URL saw ${check.exit_ip}.` : ""),
+  };
+}
+
 function proxyEntryRow(provider, draft, entry, index) {
   const row = document.createElement("li");
-  row.className = entry.paused ? "proxy-entry proxy-entry-paused" : "proxy-entry";
+  const classes = ["proxy-entry"];
+  if (entry.paused) classes.push("proxy-entry-paused");
+  if (entry.refused) classes.push("proxy-entry-refused");
+  row.className = classes.join(" ");
   row.dataset.index = String(index);
 
   // A real <button>, so the keyboard entry point to the reorder is the same
@@ -949,8 +1065,25 @@ function proxyEntryRow(provider, draft, entry, index) {
   state.textContent = entry.paused ? "paused" : health.text;
   if (health.title) state.title = health.title;
 
+  const readout = proxyCheckReadout(entry);
+  const check = document.createElement("span");
+  check.className = "proxy-entry-check";
+  check.textContent = readout.text;
+  if (readout.title) check.title = readout.title;
+
   const actions = document.createElement("div");
   actions.className = "proxy-entry-actions";
+  // Only a saved address can be tested: the check dials the store's URL, and
+  // the page has never held one. An entry typed a moment ago has to be saved
+  // before there is anything to measure, and the button says so by not being
+  // there rather than by failing when pressed.
+  if (!entry.direct && entry.proxy) {
+    actions.appendChild(
+      proxyEntryButton("Test", true, (button) =>
+        testProxyEntry(provider, entry, button),
+      ),
+    );
+  }
   actions.appendChild(
     proxyEntryButton("Move up", index > 0, () => {
       proxyMoveEntry(provider, draft, index, index - 1);
@@ -983,7 +1116,7 @@ function proxyEntryRow(provider, draft, entry, index) {
     }),
   );
 
-  row.append(handle, position, label, scheme, state, actions);
+  row.append(handle, position, label, scheme, state, check, actions);
   return row;
 }
 
@@ -1067,13 +1200,96 @@ function endProxyDrag() {
   );
 }
 
+/* Measure one address, or every saved address on one card.
+ *
+ * The response is the whole refreshed page state, so the drafts of the card
+ * that was tested are dropped and re-seeded from the server: a check writes
+ * `last_check` on the store, and a card still holding a pre-check draft would
+ * keep showing "not tested" beside a row that had just been measured.
+ *
+ * Nothing else's draft is touched. The other cards may be halfway through an
+ * arrangement somebody is still thinking about. */
+async function runProxyCheck(provider, proxyId, button, announcement) {
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = "Testing...";
+  try {
+    proxyState.data = await api("/admin/api/proxy-chains/check", {
+      method: "POST",
+      body: JSON.stringify({ provider: provider.provider_id, proxy: proxyId || "" }),
+    });
+    proxyState.drafts.delete(provider.provider_id);
+    renderProxying();
+    announceProxy(announcement(proxyState.data.checked || {}));
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = label;
+    announceProxy(error.message);
+    showMessage(error.message, "error");
+  }
+}
+
+function testProxyEntry(provider, entry, button) {
+  const name = entry.label || entry.proxy;
+  return runProxyCheck(provider, entry.proxy, button, (checked) => {
+    const result = checked[entry.proxy];
+    if (!result) return `${name} was not measured.`;
+    if (result.tls === "intercepted") {
+      return (
+        `${name} breaks certificate validation and is refused: its tunnel ` +
+        "presented a certificate this machine does not trust, so something " +
+        "is reading the traffic rather than relaying it. It cannot be saved " +
+        "into a chain and it is held out of the ones it is already in."
+      );
+    }
+    if (!result.ok) {
+      return `${name} did not answer: ${result.detail || "no reason given"}.`;
+    }
+    return (
+      `${name} answered in ${result.latency_ms} ms and the destination's ` +
+      "certificate verified through its tunnel." +
+      (result.exit_ip ? ` Your exit-IP URL saw ${result.exit_ip}.` : "")
+    );
+  });
+}
+
+function testProxyChain(provider, button) {
+  return runProxyCheck(provider, "", button, (checked) => {
+    const results = Object.values(checked);
+    if (!results.length) {
+      return `Nothing to test on ${provider.display_name}: save an address first.`;
+    }
+    const refused = results.filter((item) => item.tls === "intercepted");
+    const dead = results.filter((item) => !item.ok && item.tls !== "intercepted");
+    const ok = results.filter((item) => item.ok);
+    const parts = [`${ok.length} verified the destination's certificate`];
+    if (dead.length) parts.push(`${dead.length} did not answer`);
+    if (refused.length) {
+      const one = refused.length === 1;
+      parts.push(
+        `${refused.length} ${one ? "breaks" : "break"} certificate validation ` +
+          `and ${one ? "is" : "are"} refused ` +
+          `(${refused.map((item) => item.label).join(", ")})`,
+      );
+    }
+    return (
+      `Tested ${results.length} address(es) for ${provider.display_name}: ` +
+      `${parts.join(", ")}.`
+    );
+  });
+}
+
 function proxyEntryButton(text, enabled, action) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "ghost-button proxy-entry-button";
   button.textContent = text;
   button.disabled = !enabled;
-  if (enabled) button.addEventListener("click", action);
+  // The handler is given the button rather than the event: the only thing any
+  // of these actions has ever wanted from the click is the element to disable
+  // while it waits, and passing the event would hand it a target that is not
+  // reliably the button once an icon lands inside one.
+  if (enabled) button.addEventListener("click", () => action(button));
   return button;
 }
 
@@ -1228,6 +1444,22 @@ function proxyCardFoot(provider, draft) {
 
   const actions = document.createElement("div");
   actions.className = "proxy-card-actions";
+
+  // Only offered once there is something saved to measure. The check dials the
+  // stored URL against this provider's own host, so a card whose chain has
+  // never been saved has no address and no destination to aim at.
+  const savedEntries = ((provider.chain && provider.chain.entries) || []).filter(
+    (entry) => entry.proxy && !entry.direct,
+  );
+  if (savedEntries.length) {
+    const testAll = document.createElement("button");
+    testAll.type = "button";
+    testAll.className = "secondary-button proxy-test-all";
+    testAll.textContent = `Test all (${savedEntries.length})`;
+    testAll.addEventListener("click", () => testProxyChain(provider, testAll));
+    actions.appendChild(testAll);
+  }
+
   const save = document.createElement("button");
   save.type = "button";
   save.className = "primary-button";

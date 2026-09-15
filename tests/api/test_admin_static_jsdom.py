@@ -3519,14 +3519,16 @@ def test_jsdom_move_down_reorders_the_chain_and_announces_it(rendered) -> None:
     assert proxying["order"] == [
         "203.0.113.7:1080",
         "198.51.100.9:8080",
+        "192.0.2.44:3128",
         "Direct (no proxy)",
     ]
     assert proxying["orderAfterMoveDown"] == [
         "198.51.100.9:8080",
         "203.0.113.7:1080",
+        "192.0.2.44:3128",
         "Direct (no proxy)",
     ]
-    assert "is now entry 2 of 3" in proxying["announcementAfterMove"]
+    assert "is now entry 2 of 4" in proxying["announcementAfterMove"]
     assert "Press Save to keep it" in proxying["announcementAfterMove"]
 
 
@@ -3551,8 +3553,8 @@ def test_jsdom_a_paused_entry_stays_in_the_chain(rendered) -> None:
 
     assert proxying["pausedRows"] == 1
     entries = proxying["saved"]["body"]["entries"]
-    assert len(entries) == 3
-    assert [entry["paused"] for entry in entries] == [True, False, False]
+    assert len(entries) == 4
+    assert [entry["paused"] for entry in entries] == [True, False, False, False]
 
 
 def test_jsdom_each_entry_shows_the_health_the_pools_measured(rendered) -> None:
@@ -3570,14 +3572,17 @@ def test_jsdom_each_entry_shows_the_health_the_pools_measured(rendered) -> None:
     assert [state["text"] for state in states] == [
         "healthy",
         "unreachable 5m",
+        "TLS intercepted",
         "not checked yet",
     ]
     assert "proxy-entry-state-healthy" in states[0]["className"]
     assert "proxy-entry-state-unreachable" in states[1]["className"]
-    assert "proxy-entry-state-unknown" in states[2]["className"]
+    assert "proxy-entry-state-intercepted" in states[2]["className"]
+    assert "proxy-entry-state-unknown" in states[3]["className"]
     assert "8 of 9 requests answered" in states[0]["title"]
     assert "ConnectTimeout" in states[1]["title"]
-    assert "No request has gone through this address yet" in states[2]["title"]
+    assert "certificate validation" in states[2]["title"]
+    assert "No request has gone through this address yet" in states[3]["title"]
 
 
 def test_jsdom_saving_sends_ids_and_never_a_proxy_url(rendered) -> None:
@@ -3593,9 +3598,9 @@ def test_jsdom_saving_sends_ids_and_never_a_proxy_url(rendered) -> None:
     assert body["policy"] == "failover"
     assert body["scope"] == "provider"
     assert body["max_switches"] == 2
-    assert [entry["url"] for entry in body["entries"]] == ["", "", ""]
+    assert [entry["url"] for entry in body["entries"]] == ["", "", "", ""]
     assert body["entries"][0]["proxy"].startswith("px_")
-    assert body["entries"][2]["direct"] is True
+    assert body["entries"][3]["direct"] is True
 
 
 def test_jsdom_the_subscription_card_says_what_it_risks_and_starts_unticked(
@@ -3609,3 +3614,106 @@ def test_jsdom_the_subscription_card_says_what_it_risks_and_starts_unticked(
     assert oauth["acknowledged"] is False
     assert "personal subscription" in oauth["note"]
     assert "more likely to be flagged" in oauth["note"]
+
+
+def test_jsdom_the_page_says_the_checker_is_off_and_what_a_test_does(
+    rendered,
+) -> None:
+    """Three facts, and the first is the one an operator cannot guess.
+
+    "Not tested" beside no explanation reads like a page that failed to load.
+    The note says the loop is off, what pressing Test actually opens, and that
+    no exit-IP URL is set -- so nobody has to wonder who MCC is contacting.
+    """
+
+    note = rendered["proxying"]["checkerNote"]
+
+    assert "Background checking is off" in note
+    assert "until you press Test" in note
+    assert "strict certificate verification" in note
+    assert "TLS intercepted and refused" in note
+    assert "No exit-IP URL is set, so MCC contacts nobody but the provider" in note
+
+
+def test_jsdom_each_row_reads_back_what_the_checker_measured(rendered) -> None:
+    """Latency, the TLS verdict and how long ago -- and "not tested" when nothing was.
+
+    A separate line from the health beside it, because they answer different
+    questions: health is what the running pools saw carrying real traffic,
+    this is what a deliberate test found.
+    """
+
+    readouts = rendered["proxying"]["checkReadouts"]
+
+    assert len(readouts) == 4
+    assert readouts[0]["text"].startswith("412 ms")
+    assert "TLS strict" in readouts[0]["text"]
+    assert "2m ago" in readouts[0]["text"]
+    assert readouts[1]["text"].startswith("no answer")
+    assert readouts[2]["text"].startswith("TLS intercepted")
+    # Direct has no address to dial, and says so rather than borrowing a
+    # verdict it could not have.
+    assert readouts[3]["text"] == "no proxy to test"
+
+
+def test_jsdom_an_intercepting_address_is_struck_through_and_kept_on_the_card(
+    rendered,
+) -> None:
+    """Refused, not hidden.
+
+    An operator whose chain just got shorter has to be able to see which
+    address left it and why, so the row stays, drawn as the refusal it is.
+    """
+
+    proxying = rendered["proxying"]
+
+    assert proxying["refusedRows"] == ["192.0.2.44:3128"]
+    assert proxying["refusedRowsAfterTest"] == ["192.0.2.44:3128"]
+
+
+def test_jsdom_only_a_saved_address_offers_a_test_button(rendered) -> None:
+    """The check dials the stored URL, which the page has never been told.
+
+    So the three saved addresses can be tested and the Direct rung cannot, and
+    the button says so by not being there rather than by failing when pressed.
+    """
+
+    assert rendered["proxying"]["testButtons"] == [True, True, True, False]
+    assert rendered["proxying"]["testAll"] == "Test all (3)"
+
+
+def test_jsdom_pressing_test_posts_one_proxy_id_and_re_reads_the_verdict(
+    rendered,
+) -> None:
+    """One address per press, named by id, and the row updates from the answer.
+
+    The response is the whole refreshed payload, so the card drops its draft:
+    a check writes the store, and a card still holding a pre-check draft would
+    keep showing the old latency beside a row that had just been measured.
+    """
+
+    proxying = rendered["proxying"]
+
+    assert proxying["checkPost"]["body"] == {
+        "provider": "nvidia_nim",
+        "proxy": "px_aaaa1111",
+    }
+    assert proxying["readoutsAfterTest"][0] == "377 ms · TLS strict · just now"
+    assert "answered in 377 ms" in proxying["announcementAfterTest"]
+    assert "certificate verified" in proxying["announcementAfterTest"]
+
+
+def test_jsdom_a_refused_test_says_what_a_refusal_means(rendered) -> None:
+    """Not "the request failed": an interception is a finding, not an outage.
+
+    The sentence has to carry both halves of the consequence -- it cannot be
+    saved into a chain, and it is already out of the ones it is in -- because
+    that is the whole of what the control does.
+    """
+
+    said = rendered["proxying"]["announcementAfterRefusedTest"]
+
+    assert "192.0.2.44:3128 breaks certificate validation and is refused" in said
+    assert "reading the traffic rather than relaying it" in said
+    assert "cannot be saved into a chain" in said
+    assert "held out of the ones it is already in" in said

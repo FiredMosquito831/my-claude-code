@@ -19,6 +19,10 @@ from my_claude_code.api.request_pricing import backfill_pricer
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
 from my_claude_code.application.ports import StopResult
+from my_claude_code.application.proxy_check import (
+    arm_refusals_from_store,
+    check_targets,
+)
 from my_claude_code.config.admin.manifest import update_affects_providers
 from my_claude_code.config.admin.persistence import (
     PreparedAdminUpdate,
@@ -34,6 +38,7 @@ from my_claude_code.config.env_files import (
 from my_claude_code.config.model_refs import parse_provider_type
 from my_claude_code.config.paths import messaging_state_dir_path
 from my_claude_code.config.provider_registry import get_provider_registry
+from my_claude_code.config.proxy_chains import current_proxy_chains
 from my_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
@@ -78,6 +83,7 @@ from my_claude_code.providers.runtime.reasoning_probe import (
 
 from .discovery_timer import ProviderDiscoveryTimer, resolve_refresh_interval
 from .provider_manager import ProviderRuntimeManager
+from .proxy_check_timer import ProxyCheckTimer
 
 RestartCallback = Callable[[], Awaitable[None] | None]
 
@@ -225,6 +231,15 @@ class ApplicationRuntime:
             self.provider_manager.refresh_model_list_cache_periodic,
             lambda: self.settings.model_discovery_refresh_seconds,
         )
+        # The optional proxy checker. Off unless the operator asked for it, and
+        # entirely out of band: it writes the store and the two ledgers, and it
+        # constructs no provider and republishes no generation.
+        self._proxy_check_timer = ProxyCheckTimer(
+            self._proxy_check_targets,
+            lambda: self.settings.proxy_check_interval_minutes,
+            lambda: self.settings.proxy_check_enabled,
+            lambda: self.settings.proxy_check_exit_ip_url,
+        )
 
     @property
     def settings(self) -> Settings:
@@ -271,6 +286,14 @@ class ApplicationRuntime:
             self.provider_manager.start_model_list_refresh()
             state.mark("rediscovery")
             self._discovery_timer.start()
+            # Before the first request, and cheap: one file read that re-arms
+            # the refusals a previous run measured. The interception ledger is
+            # process-lifetime state and the store is durable, so without this
+            # a restart would quietly re-admit every address already found
+            # terminating TLS.
+            state.mark("proxy-refusals")
+            await asyncio.to_thread(arm_refusals_from_store)
+            self._proxy_check_timer.start()
             state.mark("messaging")
             await self._start_messaging_if_configured()
             # One read of the models.dev cache, on a worker thread, and that is
@@ -750,6 +773,17 @@ class ApplicationRuntime:
             "fields": list(fields),
         }
 
+    def _proxy_check_targets(self) -> dict[str, str]:
+        """Which addresses the background checker should measure, and against what.
+
+        Read from the store on every tick rather than captured once: a chain
+        edited while the server runs takes effect at the next sweep, and an
+        address removed from the last chain that named it stops being asked
+        about at all.
+        """
+
+        return check_targets(self.settings, current_proxy_chains())
+
     def _register_cost_backfill_pricer(self) -> None:
         """Hand the request log the real pricing ladder, or nothing.
 
@@ -958,6 +992,7 @@ class ApplicationRuntime:
         # Cancelled before the provider manager closes, so a sweep in flight
         # is abandoned rather than racing the shutdown that asked for it.
         await self._discovery_timer.close()
+        await self._proxy_check_timer.close()
         await best_effort(
             "learned_facts.flush",
             self._learned_facts.close(),

@@ -74,6 +74,11 @@ from .constants import (
     PROVIDER_RETRY_BACKOFF_BASE_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_JITTER_SECONDS_DEFAULT,
     PROVIDER_RETRY_BACKOFF_MAX_SECONDS_DEFAULT,
+    PROXY_CHECK_ENABLED_DEFAULT,
+    PROXY_CHECK_EXIT_IP_URL_DEFAULT,
+    PROXY_CHECK_INTERVAL_MINUTES_DEFAULT,
+    PROXY_CHECK_INTERVAL_MINUTES_MAX,
+    PROXY_CHECK_INTERVAL_MINUTES_MIN,
     PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT,
     PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
     PROXY_MAX_SWITCHES_PER_REQUEST_MIN,
@@ -964,6 +969,26 @@ class Settings(BaseSettings):
         validation_alias="PROXY_MAX_SWITCHES_PER_REQUEST",
         ge=PROXY_MAX_SWITCHES_PER_REQUEST_MIN,
         le=PROXY_MAX_SWITCHES_PER_REQUEST_MAX,
+    )
+    # Whether a background loop re-measures the addresses in every chain. Off,
+    # and it stays off unless the operator asks for it: an install that never
+    # opens the Proxying page makes no outbound request it was not asked to.
+    proxy_check_enabled: bool = Field(
+        default=PROXY_CHECK_ENABLED_DEFAULT,
+        validation_alias="PROXY_CHECK_ENABLED",
+    )
+    proxy_check_interval_minutes: int = Field(
+        default=PROXY_CHECK_INTERVAL_MINUTES_DEFAULT,
+        validation_alias="PROXY_CHECK_INTERVAL_MINUTES",
+        ge=PROXY_CHECK_INTERVAL_MINUTES_MIN,
+        le=PROXY_CHECK_INTERVAL_MINUTES_MAX,
+    )
+    # The operator's own "what is my address" URL, asked through each proxy.
+    # Empty ships no default host on purpose: this is the one leg of the check
+    # that contacts somebody the operator did not already choose to talk to.
+    proxy_check_exit_ip_url: str = Field(
+        default=PROXY_CHECK_EXIT_IP_URL_DEFAULT,
+        validation_alias="PROXY_CHECK_EXIT_IP_URL",
     )
     # Backoff between a provider's own retries of a 429 or 5xx.
     provider_retry_backoff_base_seconds: float = Field(

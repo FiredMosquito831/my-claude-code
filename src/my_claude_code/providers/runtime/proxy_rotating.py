@@ -82,6 +82,7 @@ import httpx
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.credential_rotation import RotationEngine
 from my_claude_code.core.failures import (
+    ExecutionFailure,
     FailureKind,
     failure_kind,
     find_execution_failure,
@@ -89,6 +90,7 @@ from my_claude_code.core.failures import (
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL, record_proxy
 from my_claude_code.core.proxy_rotation import (
     PROXY_HEALTH,
+    PROXY_INTERCEPTION,
     PROXY_REACHABILITY,
     PROXY_REFUSED_TRIGGER_KINDS,
     PROXY_TUNING,
@@ -190,13 +192,43 @@ class ProxyRotationState:
         return DIRECT_PROXY_LABEL
 
     def _unreachable(self) -> frozenset[int]:
-        """Rungs the global reachability ledger is holding out right now."""
+        """Rungs no request may go out through right now.
+
+        Two reasons, and they are not the same reason. An address on the
+        reachability ladder failed and will be tried again when its tier
+        expires. An address in :data:`PROXY_INTERCEPTION` was measured
+        terminating TLS, and is refused until a later check says otherwise --
+        an address already in a chain when the checker finds that out is held
+        out of selection here rather than waiting for somebody to edit the
+        chain, because the whole point of finding it is not to route through it.
+        """
 
         return frozenset(
             index
             for index in range(len(self._labels))
             if self._labels[index] != DIRECT_PROXY_LABEL
-            and PROXY_REACHABILITY.remaining(self._labels[index]) > 0
+            and (
+                PROXY_REACHABILITY.remaining(self._labels[index]) > 0
+                or PROXY_INTERCEPTION.is_refused(self._labels[index])
+            )
+        )
+
+    def refused(self) -> frozenset[int]:
+        """Rungs the checker measured terminating TLS.
+
+        Kept apart from :meth:`_unreachable` because the two are relaxed
+        differently: a bench is a preference and this is a prohibition. Every
+        branch of :meth:`acquire` subtracts this set, including the one that
+        relaxes the blocklist when nothing is free, because "everything else is
+        benched" is not a reason to carry a credential through a tunnel
+        somebody is reading.
+        """
+
+        return frozenset(
+            index
+            for index in range(len(self._labels))
+            if self._labels[index] != DIRECT_PROXY_LABEL
+            and PROXY_INTERCEPTION.is_refused(self._labels[index])
         )
 
     def scope_key(self, credential: str | None) -> str:
@@ -218,13 +250,15 @@ class ProxyRotationState:
         """
 
         count = len(self._labels)
+        refused = self.refused()
+        spent = attempted | refused
         async with self._lock:
-            avoid = attempted | self._unreachable()
+            avoid = spent | self._unreachable()
             selected = self._engine.choose(avoid, scope_key)
             if selected is None:
-                selected = self._engine.choose(attempted, None)
-            if selected is None or selected in attempted:
-                remaining = [index for index in range(count) if index not in attempted]
+                selected = self._engine.choose(spent, None)
+            if selected is None or selected in spent:
+                remaining = [index for index in range(count) if index not in spent]
                 selected = remaining[0] if remaining else None
             if selected is None:
                 return -1
@@ -309,11 +343,11 @@ class ProxyRotationState:
         return True
 
     def selectable_indexes(self, scope_key: str) -> tuple[int, ...]:
-        unreachable = self._unreachable()
+        held_out = self._unreachable() | self.refused()
         return tuple(
             index
             for index in self._engine.selectable_indexes(scope_key)
-            if index not in unreachable
+            if index not in held_out
         )
 
     def get_metrics(self) -> list[dict[str, Any]]:
@@ -502,3 +536,24 @@ class ProxyRotatingProvider(BaseProvider):
 
         if last_error is not None:
             raise last_error
+
+        # Nothing was tried and nothing failed: every rung of this chain is an
+        # address the checker measured terminating TLS. There is no earlier
+        # error to re-raise and no rung to fall back to, so the honest answer
+        # is a classified UNAVAILABLE -- which the credential pool reads
+        # exactly as it reads a dead socket, and which the executor hands to
+        # the model fallback chain. Synthesised here and nowhere else: the
+        # exhaustion path above still re-raises the last error verbatim.
+        refused = self._state.refused()
+        if refused:
+            raise ExecutionFailure(
+                kind=FailureKind.UNAVAILABLE,
+                status_code=502,
+                message=(
+                    "Every proxy in this provider's chain breaks certificate "
+                    "validation and has been refused: "
+                    + ", ".join(sorted(self._labels[index] for index in refused))
+                    + ". Test them on the Proxying page."
+                ),
+                retryable=False,
+            )
