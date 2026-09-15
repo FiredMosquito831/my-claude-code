@@ -1,21 +1,21 @@
 <div align="center">
 
-<img src="assets/logo-lockup.png" alt="My Claude Code" width="420">
+<img src="https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/assets/logo-lockup.png" alt="My Claude Code — a local LLM proxy and model router for AI coding agents" width="420">
 
 # My Claude Code
 
-**A local router for every coding agent you use.** Claude Code, Codex, OpenCode, Gemini CLI, Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command Code, Droid, Pi, Kilo, Roo Code, Antigravity and the desktop apps (Claude Desktop, Codex desktop, LM Studio, Warp, VS Code's Copilot endpoint) all point at one address and share one control panel: routing tiers with fallback chains, reasoning controls, credential rotation and health, a vision adapter, learned provider quirks, cost with provenance, and a full request log — in front of 57 model providers. Claude Code is one first-class client here, not the frame around everything else.
+**A local multi-provider LLM proxy, model router and control plane for AI coding agents.** Claude Code, Codex, OpenCode, Gemini CLI, Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command Code, Droid, Pi, Kilo, Roo Code, Antigravity and the desktop apps (Claude Desktop, Codex desktop, LM Studio, Warp, VS Code's Copilot endpoint) all point at one address and share one control panel: routing tiers with fallback chains, reasoning controls, credential rotation and health, a vision adapter, a native web-search tool proxy, learned provider quirks, cost with provenance, and a full request log — in front of 57 model providers. Claude Code is one first-class client here, not the frame around everything else.
 
+[![Latest release](https://img.shields.io/github/v/release/FiredMosquito831/my-claude-code?style=for-the-badge&label=release&color=2ea44f)](https://github.com/FiredMosquito831/my-claude-code/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/FiredMosquito831/my-claude-code/tests.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/FiredMosquito831/my-claude-code/actions/workflows/tests.yml)
 [![License: AGPL v3 or commercial](https://img.shields.io/badge/License-AGPL%20v3%20or%20commercial-blue.svg?style=for-the-badge)](LICENSE)
-[![Python 3.14](https://img.shields.io/badge/python-3.14-3776ab.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=for-the-badge)](https://github.com/astral-sh/uv)
-[![Tested with Pytest](https://img.shields.io/badge/testing-Pytest-00c0ff.svg?style=for-the-badge)](https://github.com/FiredMosquito831/my-claude-code/actions/workflows/tests.yml)
-[![Type checking: Ty](https://img.shields.io/badge/type%20checking-ty-ffcc00.svg?style=for-the-badge)](https://pypi.org/project/ty/)
-[![Code style: Ruff](https://img.shields.io/badge/code%20formatting-ruff-f5a623.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
+[![Windows, macOS, Linux](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-4c566a.svg?style=for-the-badge)](#install)
+[![PyPI](https://img.shields.io/pypi/v/my-claude-code?style=for-the-badge&logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/my-claude-code/)
+[![npm](https://img.shields.io/npm/v/@firedmosquito831/my-claude-code?style=for-the-badge&logo=npm&label=npm)](https://www.npmjs.com/package/@firedmosquito831/my-claude-code)
 
-[Install](#install) · [Capabilities](#capabilities) · [Usage Guide](docs/USAGE.md) · [All docs](docs/README.md)
+[Install](#install) · [What is MCC?](#what-is-my-claude-code) · [Capabilities](#capabilities) · [Usage Guide](docs/USAGE.md) · [All docs](docs/README.md)
 
-<img src="assets/pic.png" alt="My Claude Code in action" width="760">
+<img src="https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/assets/pic.png" alt="Claude Code running through the My Claude Code local proxy, with the routing dashboard alongside" width="760">
 
 <em>Claude Code running through the My Claude Code proxy. Every other agent below uses the same server.</em>
 
@@ -23,13 +23,13 @@
 
 ---
 
-**Contents** — [Install](#install) · [Capabilities](#capabilities) · [How it works](#how-it-works) · [Coding agents](#coding-agents) · [Model Providers](#model-providers) · [Dashboard](#dashboard) · [Configuration reference](#configuration-reference) · [Development](#development) · [Project links](#project-links) · [License](#license) · [Project history](#project-history)
+**Contents** — [Install](#install) · [What is MCC?](#what-is-my-claude-code) · [Capabilities](#capabilities) · [How it works](#how-it-works) · [Coding agents](#coding-agents) · [Model Providers](#model-providers) · [Dashboard](#dashboard) · [Configuration reference](#configuration-reference) · [Development](#development) · [Project links](#project-links) · [License](#license) · [Project history](#project-history)
 
 ---
 
 ## Install
 
-**Pick one.** All four routes end at the same server, the same dashboard and the same configuration directory, and every one of them installs `mcc-server` plus the 16 `mcc-*` agent launchers on your `PATH`.
+**Pick one.** Every route ends at the same server, the same dashboard and the same configuration directory, and installs `mcc-server` plus the 16 `mcc-*` agent launchers on your `PATH`.
 
 | Route | Command or download |
 | --- | --- |
@@ -42,8 +42,11 @@
 | **Linux / macOS / WSL server** | `curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh" \| sh` |
 | **npm** (any platform, server + app) | `npm install -g @firedmosquito831/my-claude-code` |
 | **npx** (run without installing) | `npx @firedmosquito831/my-claude-code` |
+| **PyPI** (you already manage Python 3.14) | `uv tool install my-claude-code` — or `pip install my-claude-code` |
 
 `npm install -g` and `npx … install` read the machine before they install anything: they always install the server through the same digest-verified script as the one-liners, and where there is a desktop session — Windows and macOS always, Linux with `DISPLAY` or `WAYLAND_DISPLAY` — they also install the **native desktop application** for that platform (the `setup.exe` silently and per-user, the `.dmg` into `~/Applications`, the `.deb` — whose one `sudo dpkg -i` line they print rather than run — or the tarball's per-user installer), each verified against `SHA256SUMS-desktop-shell.txt` from the same release before it is run. Over SSH, in CI, on a headless box or in WSL without a display they install the server alone and print the one line saying why; `--server-only`, `--desktop-only`, `--no-desktop`, `--yes-sudo` and `MCC_NPM_INSTALL=server|desktop|both|none` override the guess, and `npx … --version` still installs nothing.
+
+**The PyPI route is the one that assumes something.** `uv tool install my-claude-code` and `pip install my-claude-code` fetch the same wheel as everything else, but they are the only routes that do not provision anything for you: MCC requires **Python 3.14**, and pip will refuse rather than half-install on anything older. Take this route if you already manage Python environments and would rather MCC lived in yours; take a one-liner otherwise, since those install uv and a managed 3.14 before they install the server.
 
 Those download links always resolve to the newest release. Each desktop download's SHA-256 is in `SHA256SUMS-desktop-shell.txt` on the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest) page. The desktop app installs the server for you on first launch if it is not there yet; the server one-liners are the right choice on a headless box, a VPS, over SSH, or inside WSL, where there is no tray to draw into.
 
@@ -87,6 +90,25 @@ curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/ma
 - **A pre-6.40.0 install lives in the legacy `~/.fcc` home.** The first start of 6.65.0 or later migrates it to `~/.mcc` for you — one atomic rename, nothing copied or merged — provided nothing is holding the directory open. Stop the server and quit the tray first; `mcc-migrate` runs the same move by hand, and it refuses while it can see a live server.
 
 Longer versions of all of these, per platform: [Usage Guide → Install](docs/USAGE.md#2-install).
+
+## What is My Claude Code?
+
+**MCC is a local LLM gateway, proxy and model router for AI coding agents.** Instead of configuring providers, API keys, models, fallbacks, reasoning effort and spend tracking separately inside every coding tool you use, you point those tools at one address on your own machine and manage the routing layer once.
+
+It runs entirely on your machine. It has no telemetry, phones home to nothing, and its only outbound traffic goes to the providers you configure. Your keys stay in one `.env` you own.
+
+People use it as:
+
+- a **Claude Code proxy and router**, sending Anthropic Messages traffic to cloud, subscription or local models;
+- an **OpenCode, Crush, Cline, Goose, Aider or Kimi Code router**, sharing one set of models, credentials and fallback chains between them;
+- a **Codex proxy**, over the OpenAI Responses API;
+- a **Gemini CLI proxy**, over the Gemini API;
+- a **local model gateway**, putting Ollama, LM Studio or llama.cpp behind the same address as everything else;
+- a **multi-provider router** with fallback chains, credential rotation, health tracking, and per-request cost with provenance;
+- a **web-search tool proxy**, fulfilling an agent's `web_search` tool at the router across 14 search providers;
+- an **observability layer**, because every request through it is logged, priced and searchable afterwards.
+
+MCC is an independent open-source project, not affiliated with Anthropic, OpenAI, Google or OpenCode. It is dual-licensed: AGPL-3.0-or-later, or a [commercial licence](COMMERCIAL-LICENSE.md). MCC itself is free; the models behind it may be free, paid, subscription-based or entirely local — that is your choice and your account.
 
 ## Capabilities
 
@@ -176,7 +198,7 @@ Longer versions of all of these, per platform: [Usage Guide → Install](docs/US
 ## How it works
 
 <div align="center">
-  <img src="assets/how-it-works.svg" alt="How My Claude Code routes a request" width="820">
+  <img src="https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/assets/how-it-works.svg" alt="Request flow: a coding agent speaks one of four protocols to My Claude Code, which resolves the tier, picks a credential, walks the fallback chain and translates the reply back" width="820">
 </div>
 
 Your agent talks to MCC in whichever protocol it already speaks — `POST /v1/messages` for Claude Code, Pi, OpenCode, Crush, Kimi Code, Qwen Code, Droid and Kilo; `POST /v1/responses` for Codex; `POST /v1/chat/completions` for Cline, Goose, Aider and every OpenAI-shaped SDK; `POST /v1beta/models/{model}:generateContent` for Gemini CLI and Antigravity. All four doors reach the same router, which resolves the requested tier to a real model, applies your reasoning and output-budget settings, adapts images, picks a healthy credential, and walks the fallback chain when a provider fails. The reply is translated back into the protocol the agent asked in, and the whole exchange is priced and logged once on its way out. [Architecture](ARCHITECTURE.md) has the full picture.
@@ -283,7 +305,7 @@ Notes worth knowing: Mistral Codestral uses a separate key from Mistral La Plate
 The Admin UI at `http://127.0.0.1:8082/admin` is local-only and is where everything is configured. It opens on a **Get Started** checklist and gets out of the way once dismissed.
 
 <div align="center">
-  <img src="assets/admin-version.png" alt="Admin dashboard providers view with the version panel" width="820">
+  <img src="https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/assets/admin-version.png" alt="The My Claude Code dashboard: the Providers page with the version and update panel" width="820">
 </div>
 
 | Page | What it is for |
@@ -330,8 +352,9 @@ The web search system's research notes are under [research/](research/), and the
 
 ## Project links
 
-- [Report bugs or request features](https://github.com/FiredMosquito831/my-claude-code/issues)
+- [Report bugs or request features](https://github.com/FiredMosquito831/my-claude-code/issues) · [Report a vulnerability privately](https://github.com/FiredMosquito831/my-claude-code/security/advisories/new) ([policy](SECURITY.md))
 - [All documentation](docs/README.md) · [Usage Guide](docs/USAGE.md) · [Architecture](ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md)
+- Packages: [PyPI](https://pypi.org/project/my-claude-code/) · [npm](https://www.npmjs.com/package/@firedmosquito831/my-claude-code) · [releases](https://github.com/FiredMosquito831/my-claude-code/releases/latest)
 
 ## License
 
