@@ -76,7 +76,10 @@ def main() -> None:
     icon_path = REPO / "src/my_claude_code/assets/app-icon.png"
     icon = Image.open(icon_path).convert("RGBA")
     side = 104
-    icon = icon.resize((side, side), Image.LANCZOS)
+    # `Image.Resampling.LANCZOS`, not the `Image.LANCZOS` alias: the alias is a
+    # deprecated re-export that still works at runtime but is absent from
+    # Pillow's type stubs, so `ty` rejects it.
+    icon = icon.resize((side, side), Image.Resampling.LANCZOS)
     card.paste(icon, (88, 92), icon)
 
     x = 88 + side + 30
