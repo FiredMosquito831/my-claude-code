@@ -3603,6 +3603,67 @@ def test_jsdom_saving_sends_ids_and_never_a_proxy_url(rendered) -> None:
     assert body["entries"][3]["direct"] is True
 
 
+def test_jsdom_a_tick_alone_never_claims_the_server_knows_about_it(
+    rendered,
+) -> None:
+    """The regression this file did not have a test for.
+
+    Ticking a feed changes only the page's copy; the ingest route reads the
+    store. Before this, the button counted ticks and relabelled itself
+    "Fetch 7 feeds now" while the server had been told about none -- and the
+    server answered, correctly, that no feeds were switched on. The label now
+    says what the press will DO, and an unsaved selection says so.
+    """
+
+    before = rendered["proxying"]["feeds"]
+    after = rendered["proxying"]["feedsAfterTick"]
+
+    # Nothing is ticked on arrival, and the store agrees.
+    assert before["anyTicked"] is False
+    assert before["fetchDisabled"] is True
+    assert before["saveDisabled"] is True
+    assert before["unsaved"] == ""
+
+    # One tick: the press is now a save AND a read, and the label says so
+    # rather than implying the server already knows.
+    assert after["fetchLabel"] == "Save and fetch 1 feed"
+    assert after["fetchDisabled"] is False
+    assert after["saveDisabled"] is False
+    assert "not saved yet" in after["unsaved"]
+
+
+def test_jsdom_pressing_fetch_saves_the_selection_before_it_reads_anything(
+    rendered,
+) -> None:
+    """The save has to be first, and has to carry the tick.
+
+    Order is the claim. An ingest that runs before the save asks the store
+    about a selection it has never been told, which is precisely the 422 an
+    operator hit with all seven boxes ticked on screen.
+    """
+
+    paths = rendered["proxying"]["feedFetchCalls"]
+    save = rendered["proxying"]["feedSaveBody"]
+
+    assert paths == [
+        "/admin/api/proxy-chains/feeds",
+        "/admin/api/proxy-chains/ingest",
+    ], paths
+    assert save is not None, "the press never saved the selection"
+    assert save["method"] == "PUT"
+    assert save["body"]["feeds"], "the save carried no feed ids"
+
+
+def test_jsdom_a_saved_selection_stops_advertising_a_save(rendered) -> None:
+    """Once the store agrees, the button is a plain read again."""
+
+    after = rendered["proxying"]["feedsAfterFetch"]
+
+    assert after["fetchLabel"] == "Fetch 1 feed now"
+    assert after["unsaved"] == ""
+    assert after["saveDisabled"] is True
+
+
 def test_jsdom_the_subscription_card_says_what_it_risks_and_starts_unticked(
     rendered,
 ) -> None:

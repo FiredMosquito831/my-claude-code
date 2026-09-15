@@ -1398,6 +1398,29 @@ const ROUTES = {
       // operator says so, and no exit-IP URL is named.
       checker: { enabled: false, interval_minutes: 30, exit_ip_configured: false },
     },
+    /* The shipped state: every feed known, none switched on. This array was
+       missing from the fixture entirely, which is why nothing caught the page
+       counting its own ticks -- the feed panel rendered empty in every test,
+       so no test could press Fetch. Two is enough to prove the pair. */
+    feeds: [
+      {
+        id: "proxyscrape",
+        name: "ProxyScrape",
+        homepage: "https://github.com/ProxyScrape/free-proxy-list",
+        observed: "JSON with per-address metadata.",
+        tls_strict: false,
+        enabled: false,
+      },
+      {
+        id: "databay",
+        name: "Databay (TLS-strict)",
+        homepage: "https://github.com/databay-labs/free-proxy-list",
+        observed: "JSON, and the only feed whose own filter selects for a verifiable tunnel.",
+        tls_strict: true,
+        enabled: false,
+      },
+    ],
+    candidates: [],
     providers: [
       {
         provider_id: "nvidia_nim",
@@ -2032,13 +2055,18 @@ window.fetch = async (url, options = {}) => {
   // filter went out, and whether the page reset to offset 0.
   fetchUrls.push(String(url));
   if (options && options.body) {
+    // The method is recorded because order and verb are the claim in the feed
+    // flow: a save (PUT) has to precede the read (POST), or the read asks
+    // about a selection the store was never told.
+    const method = String((options && options.method) || "GET").toUpperCase();
     try {
       fetchBodies.push({
         path: String(url).split("?")[0],
+        method,
         body: JSON.parse(options.body),
       });
     } catch {
-      fetchBodies.push({ path: String(url).split("?")[0], body: null });
+      fetchBodies.push({ path: String(url).split("?")[0], method, body: null });
     }
   }
   let body = routeFor(url);
@@ -2047,6 +2075,56 @@ window.fetch = async (url, options = {}) => {
     (options.method || "GET").toUpperCase() === "POST"
   ) {
     body = customCreateResult;
+  }
+  /* The feed routes, emulated against the same document the page reads back,
+     because that is the whole point of the pair: the save writes `enabled` on
+     the store and the ingest REFUSES when nothing is enabled -- which is
+     exactly what the real route does, and exactly what the page used to walk
+     into by counting its own ticks. */
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/feeds") {
+    const sent = JSON.parse(options.body);
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const wanted = new Set(sent.feeds || []);
+    state.feeds = (state.feeds || []).map((feed) => ({
+      ...feed,
+      enabled: wanted.has(feed.id),
+    }));
+    return {
+      ok: true,
+      status: 200,
+      json: async () => JSON.parse(JSON.stringify(state)),
+      text: async () => "",
+    };
+  }
+  if (String(url).split("?")[0] === "/admin/api/proxy-chains/ingest") {
+    const state = ROUTES["/admin/api/proxy-chains"];
+    const on = (state.feeds || []).filter((feed) => feed.enabled);
+    if (!on.length) {
+      // The real 422. A page that presses this with nothing saved deserves to
+      // see the same refusal the server gives.
+      const error = new Error(
+        "No feeds are switched on, so there is nothing to read. Tick one " +
+          "above first -- MCC contacts none of them until you do.",
+      );
+      error.status = 422;
+      throw error;
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () =>
+        JSON.parse(
+          JSON.stringify({
+            ...state,
+            ingest: {
+              feeds: on.map((feed) => ({ id: feed.id, name: feed.name, ok: true })),
+              offered: 12,
+              corroborated: 3,
+            },
+          }),
+        ),
+      text: async () => "",
+    };
   }
   // The checker's route, emulated against the same document the page reads
   // back: a check writes `last_check` on the store, so the card that was
@@ -2376,6 +2454,82 @@ if (withChain) {
         ".proxy-entry-refused .proxy-entry-label",
       ),
     ).map((node) => node.textContent.trim());
+  }
+}
+
+/* The feed switches, driven the way an operator drives them.
+
+   This block exists because its absence shipped a defect: ticking a box
+   changes only this page's copy of the feed list, while the ingest route reads
+   the store. With no test pressing Fetch after a tick, nothing caught that the
+   button offered to "Fetch 7 feeds now" from a server that had been told about
+   none -- and the server, correctly, answered that no feeds were switched on.
+   So: read the labels before, tick one, read them again, press Fetch, and
+   record every request it made and in what order. */
+{
+  const feedPanel = doc.querySelector("#proxyingFeeds");
+  const feedBoxes = Array.from(
+    feedPanel?.querySelectorAll(".proxy-feed input[type=checkbox]") || [],
+  );
+  const fetchButton = () =>
+    Array.from(feedPanel?.querySelectorAll("button") || []).find((node) =>
+      (node.textContent || "").toLowerCase().includes("fetch"),
+    );
+  const saveButton = () =>
+    Array.from(feedPanel?.querySelectorAll("button") || []).find((node) =>
+      (node.textContent || "").includes("Save feed selection"),
+    );
+  const unsavedNote = () =>
+    (feedPanel?.querySelector(".proxy-feed-unsaved")?.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  proxying.feeds = {
+    count: feedBoxes.length,
+    anyTicked: feedBoxes.some((box) => box.checked),
+    fetchLabel: (fetchButton() || {}).textContent || "",
+    fetchDisabled: Boolean((fetchButton() || {}).disabled),
+    saveDisabled: Boolean((saveButton() || {}).disabled),
+    unsaved: unsavedNote(),
+  };
+
+  if (feedBoxes.length) {
+    feedBoxes[0].checked = true;
+    feedBoxes[0].dispatchEvent(new window.Event("change", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    proxying.feedsAfterTick = {
+      fetchLabel: (fetchButton() || {}).textContent || "",
+      fetchDisabled: Boolean((fetchButton() || {}).disabled),
+      saveDisabled: Boolean((saveButton() || {}).disabled),
+      unsaved: unsavedNote(),
+    };
+
+    const bodiesBefore = fetchBodies.length;
+    // Order comes from `fetchUrls`, not `fetchBodies`: the ingest POST carries
+    // no body, so a body-only recorder cannot see it at all -- and "did the
+    // save happen before the read" is precisely a question about order.
+    const urlsBefore = fetchUrls.length;
+    const press = fetchButton();
+    if (press) {
+      press.click();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    proxying.feedFetchCalls = fetchUrls
+      .slice(urlsBefore)
+      .map((url) => String(url).split("?")[0])
+      .filter((path) => path.startsWith("/admin/api/proxy-chains"));
+    // The save's body, which has to carry the tick that was never stored.
+    proxying.feedSaveBody =
+      fetchBodies
+        .slice(bodiesBefore)
+        .filter((entry) => entry.path === "/admin/api/proxy-chains/feeds")
+        .pop() || null;
+    proxying.feedsAfterFetch = {
+      fetchLabel: (fetchButton() || {}).textContent || "",
+      unsaved: unsavedNote(),
+      saveDisabled: Boolean((saveButton() || {}).disabled),
+    };
   }
 }
 

@@ -539,6 +539,8 @@ const proxyState = {
   // provider's static <PROVIDER>_PROXY. Cleared on every reload so a saved
   // card cannot keep showing a draft the server rejected.
   drafts: new Map(),
+  // The feed ids the server last confirmed. See `rememberSavedFeeds`.
+  savedFeeds: new Set(),
   loading: false,
 };
 
@@ -548,10 +550,42 @@ async function loadProxying() {
   try {
     proxyState.data = await api("/admin/api/proxy-chains");
     proxyState.drafts.clear();
+    rememberSavedFeeds();
   } finally {
     proxyState.loading = false;
   }
   renderProxying();
+}
+
+/* The feed ids the SERVER last told us are switched on.
+
+   Ticking a box mutates the feed object in `proxyState.data`, which is what
+   relabels the Fetch button -- but the store is only written by the save
+   route. Without a record of what was actually saved, the page counts ticks
+   and the server counts the store, and the two disagree the moment you tick
+   without saving: the button offers to fetch seven feeds and the server
+   answers "no feeds are switched on". That is what this set exists to
+   prevent. */
+function rememberSavedFeeds() {
+  proxyState.savedFeeds = new Set(
+    ((proxyState.data && proxyState.data.feeds) || [])
+      .filter((feed) => feed.enabled)
+      .map((feed) => feed.id),
+  );
+}
+
+function selectedFeedIds() {
+  return ((proxyState.data && proxyState.data.feeds) || [])
+    .filter((feed) => feed.enabled)
+    .map((feed) => feed.id);
+}
+
+/* Whether the ticks on screen differ from what the store holds. */
+function proxyFeedsAreDirty() {
+  const saved = proxyState.savedFeeds || new Set();
+  const selected = selectedFeedIds();
+  if (selected.length !== saved.size) return true;
+  return selected.some((id) => !saved.has(id));
 }
 
 function announceProxy(sentence) {
@@ -692,23 +726,43 @@ function renderProxyFeeds() {
   actions.className = "proxy-feed-actions";
   const enabled = feeds.filter((feed) => feed.enabled);
 
+  const dirty = proxyFeedsAreDirty();
+
   const save = document.createElement("button");
   save.type = "button";
   save.className = "secondary-button";
   save.textContent = "Save feed selection";
+  save.disabled = !dirty;
   save.addEventListener("click", () => saveProxyFeeds(save));
   actions.appendChild(save);
 
   const fetchNow = document.createElement("button");
   fetchNow.type = "button";
   fetchNow.className = "primary-button proxy-feed-fetch";
-  fetchNow.textContent = enabled.length
-    ? `Fetch ${enabled.length} feed${enabled.length === 1 ? "" : "s"} now`
-    : "Fetch now";
+  /* The label says what the press will DO, including the save it now performs
+     when the ticks differ from the store. It used to count ticked boxes while
+     the route counted the store, so it could offer to fetch seven feeds from
+     a server that had been told about none. */
+  fetchNow.textContent = !enabled.length
+    ? "Fetch now"
+    : dirty
+      ? `Save and fetch ${enabled.length} feed${enabled.length === 1 ? "" : "s"}`
+      : `Fetch ${enabled.length} feed${enabled.length === 1 ? "" : "s"} now`;
   fetchNow.disabled = !enabled.length;
   fetchNow.addEventListener("click", () => ingestProxyFeeds(fetchNow));
   actions.appendChild(fetchNow);
   panel.appendChild(actions);
+
+  if (dirty) {
+    const unsaved = document.createElement("p");
+    unsaved.className = "field-description proxy-feed-unsaved";
+    unsaved.textContent = enabled.length
+      ? "This selection is not saved yet. Fetch saves it first; Save feed " +
+        "selection stores it without reading anything."
+      : "This selection is not saved yet. Saving it with nothing ticked " +
+        "switches every feed off.";
+    panel.appendChild(unsaved);
+  }
 
   const refresh = proxyVocabulary().refresh || {};
   const note = document.createElement("p");
@@ -755,15 +809,14 @@ function proxyFeedSwitch(feed) {
 }
 
 async function saveProxyFeeds(button) {
-  const feeds = ((proxyState.data && proxyState.data.feeds) || [])
-    .filter((feed) => feed.enabled)
-    .map((feed) => feed.id);
+  const feeds = selectedFeedIds();
   button.disabled = true;
   try {
     proxyState.data = await api("/admin/api/proxy-chains/feeds", {
       method: "PUT",
       body: JSON.stringify({ feeds }),
     });
+    rememberSavedFeeds();
     renderProxying();
     announceProxy(
       feeds.length
@@ -781,11 +834,37 @@ async function saveProxyFeeds(button) {
 async function ingestProxyFeeds(button) {
   const original = button.textContent;
   button.disabled = true;
-  button.textContent = "Fetching...";
   try {
+    /* Save the selection first when it differs from the store.
+       Ticking a box changes only this page's copy; the ingest route reads the
+       store. Fetching without saving therefore asked the server to read feeds
+       it had never been told about, and it correctly answered that none were
+       switched on -- while this button said "Fetch 7 feeds now". Pressing
+       Fetch is an unambiguous statement that the boxes on screen are the
+       selection, so persist them rather than refuse, and say so. */
+    if (proxyFeedsAreDirty()) {
+      button.textContent = "Saving selection...";
+      proxyState.data = await api("/admin/api/proxy-chains/feeds", {
+        method: "PUT",
+        body: JSON.stringify({ feeds: selectedFeedIds() }),
+      });
+      rememberSavedFeeds();
+    }
+    if (!selectedFeedIds().length) {
+      // Nothing to read, and the server would say so. Answer here instead of
+      // spending a request on a question this page can already answer.
+      renderProxying();
+      announceProxy(
+        "No feeds are switched on, so there is nothing to read. Tick one " +
+          "above first -- MCC contacts none of them until you do.",
+      );
+      return;
+    }
+    button.textContent = "Fetching...";
     proxyState.data = await api("/admin/api/proxy-chains/ingest", {
       method: "POST",
     });
+    rememberSavedFeeds();
     renderProxying();
     const run = proxyState.data.ingest || {};
     const results = run.feeds || [];
