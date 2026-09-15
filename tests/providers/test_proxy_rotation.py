@@ -26,6 +26,7 @@ from my_claude_code.core.proxy_attribution import (
     DIRECT_PROXY_LABEL,
     current_proxy,
     install_proxy_attribution,
+    record_proxy,
 )
 from my_claude_code.core.proxy_rotation import (
     PROXY_REACHABILITY_TIERS,
@@ -56,11 +57,19 @@ from tests.providers.test_credential_rotation import (
 
 @pytest.fixture(autouse=True)
 def _clean_ledgers():
-    """Both ledgers are process-wide on purpose; tests must not inherit them."""
+    """Process-wide state must not leak between tests, or out of this module.
+
+    Both ledgers are deliberately process-wide -- a dead address is dead for
+    every provider -- and the attribution slot is a context variable a worker
+    keeps for its whole life. Left set, it would attach this module's last
+    address to ladder rows recorded by whatever ran next in the same worker.
+    """
 
     reset_proxy_health()
+    record_proxy(None)
     yield
     reset_proxy_health()
+    record_proxy(None)
 
 
 def _plan(
@@ -625,7 +634,17 @@ async def test_a_try_records_the_address_it_went_through() -> None:
 
 
 def test_direct_is_a_value_and_never_a_null() -> None:
-    """NULL already means "not measured"; a rung the operator chose is not."""
+    """NULL already means "not measured"; a rung the operator chose is not.
+
+    The slot is installed fresh rather than read as it is found: a context
+    variable set by whatever ran before this in the same worker is the other
+    test's measurement, not this one's, and asserting on it would make the
+    verdict depend on how the suite happened to be sharded.
+    """
 
     assert DIRECT_PROXY_LABEL == "direct"
+    slot = install_proxy_attribution()
     assert current_proxy() is None
+    record_proxy(DIRECT_PROXY_LABEL)
+    assert slot.label == DIRECT_PROXY_LABEL
+    assert current_proxy() == DIRECT_PROXY_LABEL
