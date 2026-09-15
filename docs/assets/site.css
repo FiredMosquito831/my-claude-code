@@ -1,22 +1,368 @@
-/* The dashboard's own Velvet accent (admin.css --accent), so the docs site and
-   the product it documents are recognisably the same thing. Material's
-   "primary: custom" / "accent: custom" defer to these variables. */
+/* The documentation site's own styling.
+ *
+ * EVERY COLOUR IN THIS FILE IS A QUOTATION. Each one is either a token from
+ * the dashboard's `src/my_claude_code/api/admin_static/admin.css` or a value
+ * `docs/BRAND.md` states, and the comment beside it says which. Nothing here
+ * is a new palette decision: BRAND.md §7 says the palette is fixed and §"Measured
+ * mark color" says explicitly not to derive a new accent from the mark.
+ *
+ * The two rules that govern the rest: BRAND.md §8, subtle motion only and
+ * `prefers-reduced-motion` honoured; BRAND.md §9, 4.5:1 text contrast -- and
+ * this site ships BOTH schemes, so every pair below was checked against the
+ * light background and the dark one, not one of them.
+ */
+
+/* --------------------------------------------------------------------------
+ * Tokens
+ *
+ * Material's `primary: custom` / `accent: custom` defer to its own variables,
+ * so the brand values are written into those; the `--mcc-*` names below are
+ * for the rules further down that Material has no variable for.
+ * ------------------------------------------------------------------------ */
+
 :root {
+  /* The dashboard's Velvet accent (admin.css) and the mark's own measured
+     reds (BRAND.md §"Measured mark color": darkest #9f1131, average #b22242,
+     Velvet accent #e6435e), so the docs site and the product it documents are
+     recognisably the same thing. */
   --md-primary-fg-color: #b22242;
   --md-primary-fg-color--light: #e6435e;
   --md-primary-fg-color--dark: #9f1131;
   --md-accent-fg-color: #e6435e;
+
+  /* Status hues, quoted from admin.css: --info, --warn, --error, --ok. They
+     are used for the admonition tints below and nowhere else, so an admonition
+     on this site means what the same colour means in the dashboard. */
+  --mcc-info: #3b82f6;
+  --mcc-warn: #f59e0b;
+  --mcc-error: #ef4444;
+  --mcc-ok: #10b981;
+
+  /* Light scheme. admin.css is a dark stylesheet and its --muted (#9ca3af)
+     reaches only 2.5:1 on white, so captions in the light scheme take
+     admin.css's --neutral (#6b7280) instead, which is 4.83:1 -- the palette
+     already contained the value this needed. */
+  --mcc-caption: #6b7280;
+  --mcc-frame: rgba(0, 0, 0, 0.12);
+  --mcc-zebra: rgba(0, 0, 0, 0.03);
+  --mcc-surface: rgba(0, 0, 0, 0.02);
+  /* admin.css --shadow-sm, unchanged. */
+  --mcc-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+
+  /* admin.css --radius-md, the radius the dashboard's own cards use. */
+  --mcc-radius: 10px;
+  /* admin.css --transition-normal. */
+  --mcc-transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 [data-md-color-scheme="slate"] {
   --md-hue: 222;
   --md-default-bg-color: #0a1220; /* --bg, Velvet */
-  --md-typeset-a-color: #e6435e;
+  --md-typeset-a-color: #e6435e; /* 4.8:1 on #0a1220 */
+
+  /* admin.css --muted: 7.5:1 on #0a1220. */
+  --mcc-caption: #9ca3af;
+  /* admin.css --line-strong and --line. */
+  --mcc-frame: rgba(255, 255, 255, 0.12);
+  --mcc-zebra: rgba(255, 255, 255, 0.04);
+  --mcc-surface: rgba(255, 255, 255, 0.02);
+  /* admin.css --shadow, which is tuned for a dark ground. */
+  --mcc-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
 }
 
-/* Several pages are wide reference tables. Let them scroll rather than
-   overflow the content column. */
+/* --------------------------------------------------------------------------
+ * Screenshots
+ *
+ * These pages are now mostly pictures, and a picture pasted flat onto the page
+ * reads as an accident. A frame says it is a screenshot of something else.
+ * ------------------------------------------------------------------------ */
+
+.md-typeset img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--mcc-radius);
+  border: 1px solid var(--mcc-frame);
+  box-shadow: var(--mcc-shadow);
+}
+
+/* The header logo and the social icons live outside `.md-typeset`, but the
+   `.grid.cards` lists and any inline badge do not: a shield badge with a frame
+   and a shadow around it looks broken. */
+.md-typeset .md-button img,
+.md-typeset img.no-frame {
+  border: 0;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+/* The lightbox is what makes a 1500 px screenshot in a 720 px column readable,
+   so the image has to look clickable before it is clicked. */
+.md-typeset a.glightbox {
+  display: inline-block;
+  cursor: zoom-in;
+}
+
+.md-typeset a.glightbox img {
+  transition:
+    border-color var(--mcc-transition),
+    box-shadow var(--mcc-transition);
+}
+
+.md-typeset a.glightbox:hover img,
+.md-typeset a.glightbox:focus-visible img {
+  border-color: var(--md-accent-fg-color);
+}
+
+.md-typeset a.glightbox:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color); /* BRAND.md §9 */
+  outline-offset: 3px;
+}
+
+/* --------------------------------------------------------------------------
+ * Captions
+ *
+ * The house pattern is an <em> directly under the image -- inside the centred
+ * div the committed Markdown uses, or as the paragraph after a Markdown image.
+ * ------------------------------------------------------------------------ */
+
+.md-typeset div[align="center"] em,
+.md-typeset figure figcaption,
+.md-typeset em.caption {
+  display: block;
+  margin-top: 0.4rem;
+  text-align: center;
+  font-size: 0.75rem;
+  font-style: normal;
+  line-height: 1.5;
+  color: var(--mcc-caption);
+}
+
+/* A paragraph holding nothing but an image and the sentence under it: the
+   Markdown form of the same pattern. `em.caption` above does the styling; this
+   only closes the gap the paragraph's own line-height would leave.
+
+   The image is matched through `a.glightbox` as well as directly, because the
+   lightbox plugin wraps every content image in an anchor -- a selector written
+   against the bare `img` silently stops matching the moment the plugin is
+   enabled, which is exactly what happened the first time this was written. */
+.md-typeset p > img + em.caption,
+.md-typeset p > a.glightbox + em.caption {
+  margin-top: 0.4rem;
+}
+
+/* --------------------------------------------------------------------------
+ * Tables
+ *
+ * Several pages are reference tables forty rows long and a dozen columns wide.
+ * The horizontal scroll is what keeps them inside the content column; the
+ * zebra and the pinned header are what make a row readable once it is there.
+ * ------------------------------------------------------------------------ */
+
 .md-typeset table:not([class]) {
   display: block;
   overflow-x: auto;
+}
+
+/* NO STICKY HEADER, deliberately, and it was built before it was rejected.
+ *
+ * `position: sticky` resolves against the nearest scrolling ancestor. These
+ * tables already have one -- `overflow-x: auto` makes the table its own scroll
+ * box -- so a sticky `th` pins to the top of the TABLE, not to the top of the
+ * window, and the top of the table scrolls off the screen like everything else
+ * on the page. Capping the table at `max-height: 80vh` to give it a vertical
+ * scroll of its own does make the header stay put inside that box, and the
+ * screenshot of it showed the cost: a second scrollbar nested inside the page's,
+ * a header pinned underneath the site's own fixed header, and rows that stop
+ * moving when the page is still scrolling. The zebra below is what actually
+ * makes a forty-row reference table readable; it is kept, and the cap is not.
+ */
+
+.md-typeset table:not([class]) th {
+  /* Opaque rather than Material's translucent default, so a striped row never
+     shows through the header while the table scrolls sideways. */
+  background-color: var(--md-default-bg-color);
+  box-shadow: inset 0 -1px 0 var(--mcc-frame);
+}
+
+.md-typeset table:not([class]) tbody tr:nth-child(even) {
+  background-color: var(--mcc-zebra);
+}
+
+/* Material's default row hover is a colour change; keep it, but let the zebra
+   win underneath so the striping does not flicker. */
+.md-typeset table:not([class]) tbody tr:hover {
+  background-color: var(--mcc-surface);
+}
+
+/* --------------------------------------------------------------------------
+ * Code
+ *
+ * BRAND.md §6: Fira Code for code and tabular data, system fallback if it is
+ * unavailable, and NEVER block render on a font download. So this is the
+ * dashboard's own --font-mono stack with Fira Code in front of it -- a reader
+ * who has Fira Code installed gets it, a reader who does not gets their own
+ * system mono immediately, and nobody waits on a request to Google.
+ * ------------------------------------------------------------------------ */
+
+:root {
+  --md-code-font-family:
+    "Fira Code", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+.md-typeset code,
+.md-typeset pre > code,
+.md-typeset kbd {
+  font-family: var(--md-code-font-family);
+  font-variant-ligatures: none;
+}
+
+/* --------------------------------------------------------------------------
+ * Admonitions
+ *
+ * Retinted to the dashboard's status colours so a warning on this site is the
+ * same amber as a warning in the product. Only the rail, the icon and an 8%
+ * title wash are tinted -- exactly the three things admin.css tints -- and the
+ * title text keeps the default foreground colour, because coloured text on a
+ * coloured wash is where this pattern usually loses its contrast.
+ * ------------------------------------------------------------------------ */
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: var(--mcc-radius);
+  box-shadow: none;
+  border: 1px solid var(--mcc-frame);
+  border-left-width: 4px;
+}
+
+.md-typeset .note,
+.md-typeset .info,
+.md-typeset details.note {
+  border-left-color: var(--mcc-info);
+}
+.md-typeset .note > .admonition-title,
+.md-typeset .info > .admonition-title,
+.md-typeset details.note > summary {
+  background-color: rgba(59, 130, 246, 0.08); /* admin.css --reasoning-bg kin */
+}
+.md-typeset .note > .admonition-title::before,
+.md-typeset .info > .admonition-title::before,
+.md-typeset details.note > summary::before {
+  background-color: var(--mcc-info);
+}
+
+.md-typeset .warning,
+.md-typeset .caution,
+.md-typeset details.warning {
+  border-left-color: var(--mcc-warn);
+}
+.md-typeset .warning > .admonition-title,
+.md-typeset .caution > .admonition-title,
+.md-typeset details.warning > summary {
+  background-color: rgba(245, 158, 11, 0.08); /* admin.css --warn-bg */
+}
+.md-typeset .warning > .admonition-title::before,
+.md-typeset .caution > .admonition-title::before,
+.md-typeset details.warning > summary::before {
+  background-color: var(--mcc-warn);
+}
+
+.md-typeset .danger,
+.md-typeset .failure,
+.md-typeset details.danger {
+  border-left-color: var(--mcc-error);
+}
+.md-typeset .danger > .admonition-title,
+.md-typeset .failure > .admonition-title,
+.md-typeset details.danger > summary {
+  background-color: rgba(239, 68, 68, 0.08); /* admin.css --error-bg */
+}
+.md-typeset .danger > .admonition-title::before,
+.md-typeset .failure > .admonition-title::before,
+.md-typeset details.danger > summary::before {
+  background-color: var(--mcc-error);
+}
+
+.md-typeset .tip,
+.md-typeset .success,
+.md-typeset details.tip {
+  border-left-color: var(--mcc-ok);
+}
+.md-typeset .tip > .admonition-title,
+.md-typeset .success > .admonition-title,
+.md-typeset details.tip > summary {
+  background-color: rgba(16, 185, 129, 0.08); /* admin.css --ok-bg */
+}
+.md-typeset .tip > .admonition-title::before,
+.md-typeset .success > .admonition-title::before,
+.md-typeset details.tip > summary::before {
+  background-color: var(--mcc-ok);
+}
+
+/* --------------------------------------------------------------------------
+ * The home page: hero and grid cards
+ * ------------------------------------------------------------------------ */
+
+/* The category line under the title, set once and not repeated: it is the same
+   sentence GitHub, PyPI and npm carry. */
+.md-typeset h1 + p > strong:only-child {
+  display: block;
+  font-size: 1.15rem;
+  line-height: 1.5;
+  font-weight: 600;
+  color: var(--md-default-fg-color);
+}
+
+.md-typeset .grid.cards > ul > li {
+  border: 1px solid var(--mcc-frame);
+  border-radius: var(--mcc-radius);
+  background-color: var(--mcc-surface);
+  transition:
+    border-color var(--mcc-transition),
+    transform var(--mcc-transition),
+    box-shadow var(--mcc-transition);
+}
+
+.md-typeset .grid.cards > ul > li:hover,
+.md-typeset .grid.cards > ul > li:focus-within {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: var(--mcc-shadow);
+  transform: translateY(-2px);
+}
+
+/* The card's own title -- the bold run on its first line -- takes the accent,
+   which is the only place on the page the accent is used as text. #b22242 is
+   6.5:1 on white and #e6435e is 4.8:1 on #0a1220. */
+.md-typeset .grid.cards > ul > li > p:first-child > strong,
+.md-typeset .grid.cards > ul > li > p:first-child > em {
+  color: var(--md-primary-fg-color);
+  font-size: 1.05em;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid.cards > ul > li > p:first-child > strong,
+[data-md-color-scheme="slate"] .md-typeset .grid.cards > ul > li > p:first-child > em {
+  color: var(--md-accent-fg-color);
+}
+
+/* The plain `.grid` (no `.cards`) the home page uses for its screenshot strip:
+   a two-column grid of image-and-caption pairs that collapses to one column on
+   a phone, which Material's own breakpoint already does. */
+.md-typeset .grid > p > img {
+  width: 100%;
+}
+
+/* --------------------------------------------------------------------------
+ * BRAND.md §8 -- no non-essential motion for a reader who asked for none.
+ * ------------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .md-typeset a.glightbox img,
+  .md-typeset .grid.cards > ul > li {
+    transition: none;
+  }
+
+  .md-typeset .grid.cards > ul > li:hover,
+  .md-typeset .grid.cards > ul > li:focus-within {
+    transform: none;
+  }
 }

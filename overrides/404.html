@@ -1,0 +1,50 @@
+{#-
+  The page GitHub Pages serves for an unknown path.
+
+  It cannot be written in Markdown. MkDocs stages `404.md` to `404/index.html`
+  like any other page, and GitHub Pages only serves `/404.html`; the file that
+  lands there comes from the theme's `static_templates`, so the only way to
+  change it is to override the template. Material's own is one `<h1>` reading
+  "404 - Not found" and nothing else.
+
+  Every link here is built from `config.site_url` rather than `base_url`. A 404
+  is served at whatever depth the bad URL had -- `/CLIENTS/nope/` as readily as
+  `/nope` -- and `base_url` on a static template is `.`, so a relative link
+  from this page resolves against a directory that does not exist. Reading the
+  host from `site_url` also keeps it out of this file: `mkdocs.yml`, the
+  staging script and the workflow are the three places that know the host, and
+  `tests/contracts/test_docs_site_contract.py` pins those three to each other.
+
+  Half of this site's traffic arrives from a search engine on a deep link, and
+  a deep link is what goes stale when a page is renamed. So this offers the
+  destinations that are never wrong instead of an apology.
+-#}
+{% extends "main.html" %}
+{% block content %}
+  {% set home = config.site_url | default("/", true) %}
+  <h1>Not found</h1>
+  <p>
+    There is no page at that address. It may have been renamed, or the link
+    that sent you here may be older than the page it names.
+  </p>
+  <p>Three addresses that are not stale:</p>
+  <ul>
+    <li>
+      <a href="{{ home }}"><strong>Home</strong></a> — what My Claude Code is,
+      and how to install it.
+    </li>
+    <li>
+      <a href="{{ home }}USAGE/"><strong>Usage Guide</strong></a> — the manual:
+      install, first run, providers, routing, web search, analytics, updating,
+      troubleshooting.
+    </li>
+    <li>
+      <a href="{{ home }}documentation/"><strong>All documentation</strong></a>
+      — one row per topic page.
+    </li>
+  </ul>
+  <p>
+    If a link on this site sent you here, that is worth reporting:
+    <a href="{{ config.repo_url }}/issues">open an issue</a>.
+  </p>
+{% endblock %}
