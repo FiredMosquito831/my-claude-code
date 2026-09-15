@@ -32,3 +32,7 @@ JOURNAL.md
 # Crash dumps written by Git Bash / MSYS when a shell faults. One of these
 # (bash.exe.stackdump) was committed by accident and lived in the repo root.
 *.stackdump
+
+# Staged documentation and the rendered site (scripts/build_docs_site.py,
+# mkdocs). Both are build output for the docs workflow.
+/build/
