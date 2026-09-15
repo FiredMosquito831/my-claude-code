@@ -38,6 +38,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
+from my_claude_code.core.proxy_attribution import current_proxy
 from my_claude_code.core.wire_capture import redact_wire_value
 
 # Per-try bound on the stored upstream body. Small on purpose: a ladder is
@@ -106,6 +107,18 @@ class LadderTry:
     #: Redacted, capped raw upstream body.
     body: str | None = None
     body_truncated: bool = False
+    #: The egress address this try went out through: ``host:port`` with any
+    #: ``user:pass`` already removed, or the literal
+    #: :data:`~my_claude_code.core.proxy_attribution.DIRECT_PROXY_LABEL` for a
+    #: chain rung that deliberately uses none. ``None`` is "not measured" --
+    #: which is every try on a provider with no chain, and it renders as an
+    #: absent term rather than as a claim about the route.
+    #:
+    #: Appended last, defaulted, and every construction in ``src/`` and
+    #: ``tests/`` is by keyword, so nothing that already builds one has to
+    #: change. It costs no migration at all: the ladder is stored inside the
+    #: attempt's existing ``params.ladder`` JSON.
+    proxy: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,11 +292,19 @@ def record_upstream_try(
     upstream_ms: float | None = None,
     source: TrySource = "upstream",
     body: Any = None,
+    proxy: str | None = None,
 ) -> None:
     """Record one upstream try, if this request is being tracked.
 
     A no-op outside a tracked request, so providers exercised directly (unit
     tests, token counting, model discovery) need no special handling.
+
+    ``proxy`` defaults to whatever the proxy pool last dispatched through, read
+    from the same per-request slot the credential pool uses for its own choice.
+    The retry frame that records most of these rows sits *below* the pool and
+    has never been told which address it is on, and widening every provider
+    signature to tell it would be a much larger change than the one the feature
+    needs.
     """
     slot = _LADDER.get()
     if slot is None:
@@ -291,6 +312,7 @@ def record_upstream_try(
     text, truncated = redact_try_body(body, slot.body_limit)
     slot.record_try(
         LadderTry(
+            proxy=proxy if proxy is not None else current_proxy(),
             key_index=key_index,
             key_label=key_label,
             status=status,
@@ -408,6 +430,7 @@ def ladder_payload(ladder: AttemptLadder) -> dict[str, Any]:
                 ("retry_after", entry.retry_after),
                 ("waited_ms", _rounded(entry.waited_ms)),
                 ("upstream_ms", _rounded(entry.upstream_ms)),
+                ("proxy", entry.proxy),
                 ("body", entry.body),
             )
             if value is not None
@@ -471,6 +494,30 @@ def ladder_payload(ladder: AttemptLadder) -> dict[str, Any]:
         },
         "credentials": credentials,
     }
+
+
+def ladder_proxy_label(payload: Mapping[str, Any]) -> str | None:
+    """The address the *last* real try of this attempt went out through.
+
+    Denormalised onto ``request_attempts.proxy_label`` exactly as
+    ``ladder_tries`` is, so the analytics breakdown can group by address
+    without scanning JSON. The last upstream row rather than the first: after a
+    switch, the address that answered is the one the attempt's verdict belongs
+    to, and the whole sequence is still in the ladder for anyone who wants it.
+
+    ``None`` means "not measured", never "direct" -- Direct is a rung an
+    operator chose and is stored as the literal ``"direct"``.
+    """
+
+    for row in reversed(list(payload.get("tries") or [])):
+        if not isinstance(row, Mapping):
+            continue
+        if row.get("source") != "upstream":
+            continue
+        label = row.get("proxy")
+        if label:
+            return str(label)
+    return None
 
 
 def _seconds(milliseconds: float) -> str:

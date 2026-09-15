@@ -38,6 +38,7 @@ import threading
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from my_claude_code.api.admin_routes import require_loopback_admin
@@ -54,6 +55,7 @@ from my_claude_code.config.proxy_chains import (
     DIRECT,
     MAX_SWITCHES_MAX,
     MAX_SWITCHES_MIN,
+    OAUTH_PROVIDER_IDS,
     PROXY_CHAIN_MAX_ENTRIES,
     PROXY_URL_SCHEMES,
     REFUSED_TRIGGER_KINDS,
@@ -70,6 +72,8 @@ from my_claude_code.config.proxy_chains import (
     save_proxy_chains,
 )
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
+from my_claude_code.core.proxy_rotation import PROXY_HEALTH
 
 router = APIRouter()
 
@@ -78,12 +82,6 @@ router = APIRouter()
 # would silently drop the first -- the race ``apply_admin_config_with`` closes
 # for the env-var settings, which this file cannot use.
 _CHAIN_WRITE_LOCK = threading.Lock()
-
-#: Providers whose credential is a person's *subscription* rather than a
-#: revocable per-project key. Changing source address between requests is more
-#: likely to be read as account sharing here than on a pay-as-you-go key, so
-#: their rail stays inert until the operator says they understand that.
-OAUTH_PROVIDER_IDS: frozenset[str] = frozenset({"anthropic_oauth", "chatgpt_oauth"})
 
 #: What each policy actually does to a per-address allowance. This is the point
 #: of the feature for an operator whose quota is metered by IP, and it is the
@@ -210,6 +208,7 @@ async def put_proxy_chain(
 
     if payload.remove:
         await asyncio.to_thread(_commit, provider_id, None)
+        await _republish(services)
         return await asyncio.to_thread(_payload, services)
 
     _reject_bad_policy(payload)
@@ -240,7 +239,33 @@ async def put_proxy_chain(
     await asyncio.to_thread(
         _commit_chain, provider_id, payload, providers[provider_id]["inherited_proxy"]
     )
+    await _republish(services)
     return await asyncio.to_thread(_payload, services)
+
+
+async def _republish(services: ApiServices) -> None:
+    """Rebuild the provider generation so the new chain is what routes.
+
+    A proxy is read once, in a provider's constructor, and baked into a
+    long-lived client; a chain is read in the same place. So a chain edit that
+    did not republish would be stored, shown, and ignored until the next
+    restart -- which is exactly what the release that shipped the page did on
+    purpose, because there was no runtime to tell.
+
+    The known cost, stated on the page's save confirmation rather than hidden:
+    a generation replace resets the credential pools' counters, so key health
+    reads zeros immediately after a chain is saved. The numbers were never
+    wrong; the pools they were measured on no longer exist.
+    """
+
+    # Never fail the write for it. The chain is already on disk, and a
+    # republish that could not run leaves the operator with a saved chain that
+    # starts routing at the next restart -- worse than a 500 that suggests
+    # nothing was saved at all.
+    try:
+        await services.admin.reload_providers("proxy_chains")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("PROXY CHAINS: saved, but could not republish: {}", exc)
 
 
 def _reject_bad_policy(payload: ProxyChainPayload) -> None:
@@ -475,11 +500,17 @@ def _provider_payload(entry: dict[str, Any], store: ProxyChains) -> dict[str, An
     # already masked everywhere else on the dashboard.
     payload["inherited_label"] = mask_proxy_label(inherited)
     payload["inherited_scheme"] = _scheme(inherited)
-    payload["chain"] = _chain_payload(chain, store) if chain is not None else None
+    payload["chain"] = (
+        _chain_payload(chain, store, str(entry["provider_id"]))
+        if chain is not None
+        else None
+    )
     return payload
 
 
-def _chain_payload(chain: ProxyChain, store: ProxyChains) -> dict[str, Any]:
+def _chain_payload(
+    chain: ProxyChain, store: ProxyChains, provider_id: str
+) -> dict[str, Any]:
     return {
         "enabled": chain.enabled,
         "policy": chain.policy,
@@ -487,22 +518,34 @@ def _chain_payload(chain: ProxyChain, store: ProxyChains) -> dict[str, Any]:
         "max_switches": chain.max_switches,
         "on": list(chain.on),
         "oauth_acknowledged": chain.oauth_acknowledged,
-        "entries": [_entry_payload(item, store) for item in chain.entries],
+        "entries": [_entry_payload(item, store, provider_id) for item in chain.entries],
     }
 
 
-def _entry_payload(entry: ProxyChainEntry, store: ProxyChains) -> dict[str, Any]:
+def _entry_payload(
+    entry: ProxyChainEntry, store: ProxyChains, provider_id: str
+) -> dict[str, Any]:
     endpoint = store.endpoint(entry.proxy) if entry.proxy else None
     url = endpoint.url if endpoint is not None else ""
+    label = (endpoint.label if endpoint is not None else "") or mask_proxy_label(url)
     return {
         "proxy": entry.proxy,
         "paused": entry.paused,
         "direct": entry.is_direct,
-        "label": (endpoint.label if endpoint is not None else "")
-        or mask_proxy_label(url),
+        "label": label,
         "scheme": _scheme(url),
         "source": endpoint.source if endpoint is not None else "",
         "source_count": endpoint.source_count if endpoint is not None else 0,
+        # What the running pools have actually measured about this address, out
+        # of the process-wide ledger the pools write to. A registry rather than
+        # a walk of the live provider tree: the answer outlives the generation
+        # replace a chain edit performs, and nothing on the request path has to
+        # be reachable from an admin request. ``state: "unknown"`` is the
+        # honest reading of an address no request has gone through yet, and it
+        # is what the card renders as "not checked yet".
+        "health": PROXY_HEALTH.snapshot(
+            provider_id, DIRECT_PROXY_LABEL if entry.is_direct else label
+        ),
     }
 
 

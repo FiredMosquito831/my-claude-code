@@ -39,6 +39,47 @@ from my_claude_code.providers.model_listing import model_infos_from_ids
 
 
 @dataclass(frozen=True, slots=True)
+class ProxyLeg:
+    """One rung of a resolved proxy chain, as the runtime sees it.
+
+    ``url`` is the address a leaf provider is built against; ``""`` is the
+    Direct rung, which is a real, deliberate choice and not an absence.
+    ``label`` is ``host:port`` with any ``user:pass`` already removed -- it is
+    the *only* form of the address that may reach a log line or the request
+    log, and it is masked here rather than at every reader.
+
+    Deliberately not ``config.proxy_chains.ProxyChainEntry``: that type names an
+    endpoint by id and belongs to the store, which nothing on the request path
+    imports. By the time a chain is a ``ProxyLeg`` the ids are resolved, the
+    paused rungs are gone, and the runtime needs no second lookup.
+    """
+
+    url: str = ""
+    label: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyChainPlan:
+    """A provider's whole egress plan: the rungs, and the rules for moving.
+
+    One field on :class:`ProviderConfig` rather than five, because these five
+    values are only ever read together, by one constructor, and a provider with
+    no chain carries ``None`` instead of five defaults that mean nothing.
+    """
+
+    legs: tuple[ProxyLeg, ...] = ()
+    #: One of the four credential-rotation policy names. The same vocabulary,
+    #: not a second one that happens to overlap.
+    policy: str = "failover"
+    #: Canonical ``FailureKind`` values that move the chain along.
+    on: frozenset[str] = frozenset()
+    #: ``provider`` or ``credential`` -- how wide a triggering bench reaches.
+    scope: str = "provider"
+    #: How many times one request may move to the next rung.
+    max_switches: int = 2
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderConfig:
     """Resolved immutable configuration for one provider instance.
 
@@ -88,6 +129,13 @@ class ProviderConfig:
     # Whether a 429 is answered by routing to another model instead of by
     # retrying this one and then spending the rest of the key pool on it.
     routes_around_model: bool = RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT
+    # This provider's egress chain, already resolved: ids looked up, paused
+    # rungs dropped, passwords masked into labels. ``None`` -- the default and
+    # by far the common case -- means "no chain": ``proxy`` above is the single
+    # static address, exactly as it has always been. A plan is present only
+    # when there are two or more rungs to move between; one rung is simply
+    # ``proxy``, and zero is no chain at all.
+    proxy_chain: ProxyChainPlan | None = None
 
 
 class BaseProvider(ABC):

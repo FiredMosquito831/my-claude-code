@@ -263,6 +263,55 @@ before the chain is used at all, and how fast requests are allowed to leave.
   <p><em>Provider retries &amp; throughput: the transport ceiling that sits underneath every deadline above it.</em></p>
 </div>
 
+<a id="proxy-chains"></a>
+
+### Proxy Chains: More Than One Way Out
+
+Every provider has had a `<PROVIDER>_PROXY` setting for a long time. It is one string, read once in the provider's constructor and baked into a long-lived client: if it dies, every request to that provider dies with it, and if the provider meters a free tier **per source address** there is nothing to switch to. **Admin UI → Proxying** is the resource that expresses the other shape — an ordered list of addresses for one provider, a rotation policy, and the failures that move a request to the next one.
+
+**A provider with no chain behaves exactly as it always has.** Its `<PROVIDER>_PROXY` is used as the single static address, the `.env` is never rewritten, and nothing about the request path changes — which is every provider on every install until somebody opens the page. When you do add a chain, the first entry can be seeded from that stored address, and the key keeps its value: the chain simply becomes what gets used while it has entries.
+
+#### Where the chain sits
+
+Inside the credential pool, not above it. A provider with two keys and a three-entry chain is one credential pool over two proxy pools over six clients, and everything above the proxy pool — credential rotation, the (key, model) bench, the route-around, the retry ladder, the deadlines — is untouched. When a chain is exhausted, **the same error escapes that would have escaped with no chain at all**, and the request follows your model fallback chain exactly as it does today. The only behaviour that changes direction is the intended one: with a chain configured, fewer 402s and 429s reach the credential pool.
+
+#### What moves a request to the next address
+
+Two separate rules.
+
+**The failures you select**, from the chips on the card. `quota`, `rate_limit` and `timeout` are on by default. `authentication` and `permission` are refused outright and cannot be armed, in the store, in the API and in the runtime: a new address does not fix a rejected key, and rotating on a 401 burns the whole chain in one request and benches every address it touched. Everything else is selectable and off, with a line on the chip saying why a new address is unlikely to help.
+
+**A failure of the proxy itself** — connection refused, connect timeout, or the proxy answering `407` — always moves to the next entry, whatever you selected. The thing that failed *is* the address; making that configurable would let you build a chain that cannot route around a dead entry. A `502` or `503` is deliberately *not* in that set, because a proxy and an origin send byte-identical ones; select `upstream` or `unavailable` if you want those to move the chain too.
+
+#### The two benches
+
+| Bench | What earns it | How long | How wide |
+| --- | --- | --- | --- |
+| **Reachability** | the address would not carry the request at all | escalating `60s → 5m → 1h`, clamped at the last | the **address**, across every provider on this install — a dead proxy is dead for everybody, and discovering that once per provider is three connect timeouts instead of one |
+| **Trigger** | the provider answered with a failure you selected | the provider's own published `Retry-After` if it sent one, else `300s` | the **address and the provider**, across all its keys, because the allowance is metered by address. Switch *Quota is metered per* to **address and key** on a provider that meters per (address, account) |
+
+Both are live on the card: each entry says `healthy`, `failing`, `cooldown 4m`, `unreachable 5m`, or **not checked yet** — which means exactly that, an address no request has gone through, not a bad measurement.
+
+#### The bound, and why it is real
+
+`PROXY_MAX_SWITCHES_PER_REQUEST` on **Limits & Resilience** (default `2`, range `1`–`5`) is the most any chain on this install may move inside one request; each card carries its own number, and the smaller of the two applies. `2` means at most three addresses are tried. Every switch spends wall-clock inside a single attempt and **the deadlines above it do not move to make room** — three dead addresses is three connect timeouts — which is what the reachability bench and this bound exist to contain together.
+
+#### Rotation policies
+
+The same four names and the same meanings credential rotation uses: `single`, `round_robin`, `least_used`, `failover` (`on_error` is an accepted alias). `failover` is the default and the conservative one: it pins to the first healthy entry and changes nothing until something breaks. **`round_robin` is the one that multiplies a per-address allowance** — with four working addresses a per-IP limit applies four times over, from the first request rather than only after an error.
+
+#### Telling whether it worked
+
+Two places, both in the request log. Every rung of the ladder in an attempt's modal names the address that try went out through, and each attempt row carries a `proxy_label` column you can group by. The value is `host:port` with any `user:pass` stripped — never the URL — and the literal `direct` is a rung you chose, distinct from an empty cell, which means "not measured".
+
+#### Two more things worth knowing
+
+**Direct is a legal entry.** "Try my addresses, then fall back to my own IP" has to be expressible, and it is the recommended last rung.
+
+**Saving a chain rebuilds that provider.** The address is read when a provider is constructed, so the save has to republish the provider generation for the chain to route — which resets the credential pools' counters, so key health on the Providers page reads zeros immediately afterwards. The old numbers were not wrong; the pools they were measured on no longer exist.
+
+**Subscription logins are behind an acknowledgement.** `anthropic_oauth` and `chatgpt_oauth` carry a personal subscription rather than a revocable key, and changing source address between requests is the behaviour most likely to be read as account sharing. Their chain stays inert — in the page *and* in the runtime — until you say you understand that.
+
 <a id="saving-settings"></a>
 
 ### Saving Settings: Blank Means Unset

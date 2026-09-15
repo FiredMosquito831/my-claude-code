@@ -1,0 +1,333 @@
+"""Health machinery for a provider's proxy chain.
+
+The credential engine in :mod:`my_claude_code.core.credential_rotation` is
+instantiated here a second time, with its own tuning, for a second resource:
+the *connection*. That file's own docstring already makes the argument --
+``UNAVAILABLE`` rotates a credential because "another key means another
+connection" -- and a proxy chain is that sentence with the connection named.
+
+``core/credential_rotation.py`` is imported and never edited. Its two presets
+live beside each other in that file and a third would have matched its
+convention, but the release that added this feature had to be able to say that
+the credential engine's diff was empty, and a one-constant change there would
+have cost a re-justification of every invariant test in the pool. The engine is
+the shared thing; the tuning is not.
+
+Two benches, deliberately mirroring the credential engine's own split between a
+whole-key lockout and a (key, model) bench:
+
+**Reachability** -- the proxy itself failed. A refused CONNECT, a connect
+timeout, a ``407`` from the proxy, an ``httpx.ProxyError``. Escalating
+:data:`PROXY_REACHABILITY_TIERS` (60s, 5m, 1h), and scoped to the **endpoint**
+across every provider in the process, because a dead proxy is dead for
+everybody. That is what :data:`PROXY_REACHABILITY` is: one table, not one per
+pool.
+
+**Trigger** -- the *upstream* answered with a failure class the operator armed.
+The provider's own published ``Retry-After`` if there was one, else
+:data:`PROXY_COOLDOWN_SECONDS_DEFAULT`, held in the engine's own
+``model_benches`` map under a composite scope key, and therefore scoped exactly
+as the operator asked: per address and provider under the default ``provider``
+scope, per address, provider and credential under ``credential``.
+``model_bench_escalation`` is ``0`` -- never escalate -- because two credentials
+exhausting the same address is not evidence the address is broken.
+
+:data:`PROXY_HEALTH` is the read side of both: the page draws live per-entry
+health out of it rather than reaching into the running provider tree, which
+means an admin request never has to find a pool and a pool never has to be
+findable.
+"""
+
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from my_claude_code.core.credential_rotation import RotationTuning
+from my_claude_code.core.failures import FailureKind
+
+#: How long an address is benched for a triggering failure when the provider
+#: published no wait of its own. Five minutes: long enough that a per-address
+#: allowance has a chance of rolling over, short enough that a chain of two
+#: recovers inside one working session.
+PROXY_COOLDOWN_SECONDS_DEFAULT = 300.0
+
+#: Cap on a published ``Retry-After`` for an address. An hour, not a day: the
+#: credential pool's day-long cap exists because a *key* the host refused until
+#: midnight really is refused until midnight, while an address is one of
+#: several and the cheap move is to try it again.
+PROXY_COOLDOWN_MAX_SECONDS = 3600.0
+
+#: The reachability ladder: 60s, then 5m, then 1h, clamped at the last entry.
+#: A free address that has just started refusing is usually back inside a
+#: minute; one that has refused three times running is not coming back today.
+PROXY_REACHABILITY_TIERS: tuple[float, ...] = (60.0, 300.0, 3600.0)
+
+#: The proxy pool's tuning. Every field that differs from the engine's defaults
+#: is named here and nowhere else.
+PROXY_TUNING = RotationTuning(
+    rate_limit_mode="fixed",
+    rate_limit_seconds=PROXY_COOLDOWN_SECONDS_DEFAULT,
+    rate_limit_max_seconds=PROXY_COOLDOWN_MAX_SECONDS,
+    lockout_tiers=PROXY_REACHABILITY_TIERS,
+    # 0 = never escalate. Two credentials exhausting one address says the
+    # address is metered, which is the thing the operator configured, not that
+    # the address is broken.
+    model_bench_escalation=0,
+    # A chain whose policy is ``single`` and whose first entry is benched has
+    # nothing left to offer, and must say so rather than dispatching into a
+    # bench. The credential pool answers the opposite way because a single-key
+    # provider has to keep serving its one key; a one-entry chain never
+    # reaches this engine at all.
+    single_ignores_blocklist=False,
+    single_key_forces_slot_zero=False,
+)
+
+#: The two failure classes a chain may never move on, enforced here as well as
+#: at the API and in the store. Three places for one rule, which is one more
+#: than the API and the store between them, and deliberate: this is the only
+#: one on the request path. Rotating on a 401/403 burns the entire chain inside
+#: a single request *and* earns a bench on every address it touched, and a new
+#: address fixes neither -- the credential is the problem. A hand-edited store
+#: or a caller past the route cannot arm it, because the thing that would act
+#: on it will not.
+PROXY_REFUSED_TRIGGER_KINDS: frozenset[str] = frozenset(
+    {FailureKind.AUTHENTICATION.value, FailureKind.PERMISSION.value}
+)
+
+#: Hard bound on both ledgers below. They are process-lifetime tables keyed by
+#: strings an operator supplies, so they are capped and pruned oldest-first
+#: rather than trusted to stay small.
+MAX_TRACKED_ENDPOINTS = 512
+
+
+@dataclass(slots=True)
+class ReachabilityRecord:
+    """What is known about one address's willingness to carry traffic."""
+
+    #: Consecutive reachability failures; the index into the ladder.
+    failures: int = 0
+    #: Deadline on the ledger's clock. ``0.0`` means selectable.
+    until: float = 0.0
+    reason: str = ""
+    last_seen_at: float = 0.0
+
+
+class ReachabilityLedger:
+    """Process-wide bench for addresses that would not carry a request.
+
+    Global on purpose, and it is the one part of this feature that is not
+    scoped per provider: an address that refuses a CONNECT refuses it for every
+    provider that would have used it, and discovering that once per provider is
+    three connect timeouts instead of one.
+    """
+
+    def __init__(
+        self,
+        tiers: tuple[float, ...] = PROXY_REACHABILITY_TIERS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._tiers = tiers or PROXY_REACHABILITY_TIERS
+        self._clock = clock
+        self._records: dict[str, ReachabilityRecord] = {}
+
+    def note_failure(self, endpoint: str, reason: str = "") -> float:
+        """Bench ``endpoint`` one tier deeper; return the seconds it now waits."""
+
+        if not endpoint:
+            return 0.0
+        now = self._clock()
+        record = self._records.get(endpoint)
+        if record is None:
+            record = ReachabilityRecord()
+            self._records[endpoint] = record
+            self._prune(now)
+        record.failures += 1
+        record.reason = reason
+        record.last_seen_at = now
+        window = self._tiers[min(record.failures, len(self._tiers)) - 1]
+        record.until = now + window
+        return window
+
+    def note_success(self, endpoint: str) -> None:
+        """Forget an address's bench: it just carried a request."""
+
+        record = self._records.get(endpoint)
+        if record is None:
+            return
+        record.failures = 0
+        record.until = 0.0
+        record.reason = ""
+        record.last_seen_at = self._clock()
+
+    def remaining(self, endpoint: str) -> float:
+        """Seconds before ``endpoint`` may be tried again; 0 while it may."""
+
+        record = self._records.get(endpoint)
+        if record is None:
+            return 0.0
+        return max(0.0, record.until - self._clock())
+
+    def reason(self, endpoint: str) -> str:
+        record = self._records.get(endpoint)
+        return "" if record is None or self.remaining(endpoint) <= 0 else record.reason
+
+    def clear(self) -> None:
+        """Forget everything. Tests, and the admin reset."""
+
+        self._records.clear()
+
+    def _prune(self, now: float) -> None:
+        overflow = len(self._records) - MAX_TRACKED_ENDPOINTS
+        if overflow <= 0:
+            return
+        for endpoint, _ in sorted(
+            self._records.items(), key=lambda item: item[1].last_seen_at
+        )[:overflow]:
+            del self._records[endpoint]
+
+
+#: The one reachability table this process has.
+PROXY_REACHABILITY = ReachabilityLedger()
+
+
+@dataclass(slots=True)
+class ProxyHealthRecord:
+    """One address's record for one provider, as the page reads it."""
+
+    requests: int = 0
+    successes: int = 0
+    failures: int = 0
+    #: Deadline of the *trigger* bench, on the ledger's clock. The reachability
+    #: bench is global and read from :data:`PROXY_REACHABILITY` instead, so a
+    #: card can say which of the two is holding an entry out.
+    benched_until: float = 0.0
+    last_error: str | None = None
+    last_used_at: float = 0.0
+    paused: bool = False
+
+
+class ProxyHealthLedger:
+    """What every proxy pool in this process has actually measured.
+
+    Written by the pools, read by ``/admin/api/proxy-chains``. A registry
+    rather than a walk of the live provider tree: the page asks one question
+    about one address, the answer outlives the generation replace that a chain
+    edit performs, and nothing on the request path has to be reachable from an
+    admin request.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._records: dict[tuple[str, str], ProxyHealthRecord] = {}
+
+    def record(self, provider_id: str, endpoint: str) -> ProxyHealthRecord:
+        key = (provider_id, endpoint)
+        record = self._records.get(key)
+        if record is None:
+            record = ProxyHealthRecord()
+            self._records[key] = record
+            self._prune()
+        return record
+
+    def note_acquired(self, provider_id: str, endpoint: str) -> None:
+        record = self.record(provider_id, endpoint)
+        record.requests += 1
+        record.last_used_at = self._clock()
+
+    def note_success(self, provider_id: str, endpoint: str) -> None:
+        record = self.record(provider_id, endpoint)
+        record.successes += 1
+        record.benched_until = 0.0
+        record.last_error = None
+
+    def note_failure(
+        self,
+        provider_id: str,
+        endpoint: str,
+        *,
+        benched_for: float = 0.0,
+        reason: str | None = None,
+    ) -> None:
+        record = self.record(provider_id, endpoint)
+        record.failures += 1
+        record.last_error = reason
+        if benched_for > 0:
+            record.benched_until = self._clock() + benched_for
+
+    def snapshot(self, provider_id: str, endpoint: str) -> dict[str, object]:
+        """One entry's live health, in the shape the card renders.
+
+        ``state`` is the single word the row shows. ``checked`` is False only
+        when nothing has ever gone through this address for this provider,
+        which is the honest reading of a store the checker has not run against
+        -- the page says "not checked yet" and means it.
+        """
+
+        record = self._records.get((provider_id, endpoint))
+        unreachable = PROXY_REACHABILITY.remaining(endpoint) if endpoint else 0.0
+        benched = (
+            0.0 if record is None else max(0.0, record.benched_until - self._clock())
+        )
+        if unreachable > 0:
+            state = "unreachable"
+        elif benched > 0:
+            state = "cooldown"
+        elif record is None or not record.requests:
+            state = "unknown"
+        elif record.successes:
+            state = "healthy"
+        else:
+            state = "failing"
+        return {
+            "state": state,
+            "checked": record is not None and bool(record.requests),
+            "requests": 0 if record is None else record.requests,
+            "successes": 0 if record is None else record.successes,
+            "failures": 0 if record is None else record.failures,
+            "cooldown_remaining": round(max(unreachable, benched), 1),
+            "reason": (
+                PROXY_REACHABILITY.reason(endpoint)
+                if unreachable > 0
+                else (None if record is None else record.last_error)
+            ),
+        }
+
+    def clear(self) -> None:
+        self._records.clear()
+
+    def _prune(self) -> None:
+        overflow = len(self._records) - MAX_TRACKED_ENDPOINTS
+        if overflow <= 0:
+            return
+        for key, _ in sorted(
+            self._records.items(), key=lambda item: item[1].last_used_at
+        )[:overflow]:
+            del self._records[key]
+
+
+#: The one health table this process has.
+PROXY_HEALTH = ProxyHealthLedger()
+
+
+def reset_proxy_health() -> None:
+    """Forget every measurement. Used by tests and by a chain edit's republish."""
+
+    PROXY_REACHABILITY.clear()
+    PROXY_HEALTH.clear()
+
+
+__all__ = [
+    "MAX_TRACKED_ENDPOINTS",
+    "PROXY_COOLDOWN_MAX_SECONDS",
+    "PROXY_COOLDOWN_SECONDS_DEFAULT",
+    "PROXY_HEALTH",
+    "PROXY_REACHABILITY",
+    "PROXY_REACHABILITY_TIERS",
+    "PROXY_REFUSED_TRIGGER_KINDS",
+    "PROXY_TUNING",
+    "ProxyHealthLedger",
+    "ProxyHealthRecord",
+    "ReachabilityLedger",
+    "ReachabilityRecord",
+    "reset_proxy_health",
+]

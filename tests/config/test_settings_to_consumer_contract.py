@@ -558,3 +558,64 @@ def test_report_is_the_default_and_stops_nothing() -> None:
 def test_stop_is_what_turns_the_sweep_on() -> None:
     _, stopped = _run_survey("stop")
     assert len(stopped) == 1
+
+
+def test_the_proxy_switch_bound_reaches_the_pool_that_spends_it(
+    tmp_path, monkeypatch
+) -> None:
+    """A ceiling that stopped at the manifest would be worse than a literal.
+
+    The dashboard would offer to bound how far one request walks a proxy chain,
+    saving it would restart the server, and every chain would keep spending
+    whatever its own card said. This is the hop that was missing in the release
+    that shipped the page: a ``Settings`` field with no consumer, which is why
+    the setting could not ship until there was a runtime to read it.
+    """
+
+    from my_claude_code.config.proxy_chains import (
+        ProxyChain,
+        ProxyChainEntry,
+        ProxyChains,
+        ProxyEndpoint,
+        reset_proxy_chains_cache,
+        save_proxy_chains,
+    )
+    from my_claude_code.providers.runtime.proxy_rotating import ProxyRotatingProvider
+
+    path = tmp_path / "proxy_chains.json"
+    monkeypatch.setattr(
+        "my_claude_code.config.proxy_chains.proxy_chains_path", lambda: path
+    )
+    reset_proxy_chains_cache()
+    save_proxy_chains(
+        ProxyChains(
+            proxies={
+                "px_a": ProxyEndpoint(url="http://198.51.100.9:8080"),
+                "px_b": ProxyEndpoint(url="http://198.51.100.10:8080"),
+            },
+            chains={
+                "nvidia_nim": ProxyChain(
+                    enabled=True,
+                    entries=(
+                        ProxyChainEntry(proxy="px_a"),
+                        ProxyChainEntry(proxy="px_b"),
+                        ProxyChainEntry(proxy=""),
+                    ),
+                    # The card asks for the maximum the range allows.
+                    max_switches=5,
+                )
+            },
+        ),
+        path,
+    )
+    try:
+        provider = create_provider(
+            "nvidia_nim",
+            Settings.model_validate(
+                {"nvidia_nim_api_key": "k1", "PROXY_MAX_SWITCHES_PER_REQUEST": 1}
+            ),
+        )
+        assert isinstance(provider, ProxyRotatingProvider)
+        assert provider._max_switches == 1
+    finally:
+        reset_proxy_chains_cache()

@@ -357,6 +357,16 @@ CREDENTIAL_LOCKOUT_TIERS_DEFAULT = "300,3600,86400"
 # and 6.18.0 removed every NIM model from the route for 60s as a result.
 # 1 restores that behaviour (never scope); 0 never escalates to the whole key.
 CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT = 2
+# The most times one request may move to the next address in a provider's
+# proxy chain. The ceiling for the whole install; each chain carries its own
+# number inside it, and the smaller of the two applies. Every switch spends
+# wall-clock inside a single attempt -- three dead addresses is three connect
+# timeouts -- and the executor's deadlines do not move to make room, which is
+# why 5 is a real bound rather than a formality. 2 means at most three
+# addresses are tried per request.
+PROXY_MAX_SWITCHES_PER_REQUEST_DEFAULT = 2
+PROXY_MAX_SWITCHES_PER_REQUEST_MIN = 1
+PROXY_MAX_SWITCHES_PER_REQUEST_MAX = 5
 # What a 429 on a pooled credential means. True: it benches the (key, model)
 # pair and the executor moves to another model on the SAME provider first,
 # because a gateway that limits one model usually still answers another on the

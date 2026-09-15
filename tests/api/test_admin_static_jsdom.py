@@ -3555,6 +3555,31 @@ def test_jsdom_a_paused_entry_stays_in_the_chain(rendered) -> None:
     assert [entry["paused"] for entry in entries] == [True, False, False]
 
 
+def test_jsdom_each_entry_shows_the_health_the_pools_measured(rendered) -> None:
+    """Live per-entry health, and "not checked yet" only where it is true.
+
+    The release that shipped this page had no runtime and said "not checked
+    yet" on every row, which was honest then and would be a lie now that a
+    request goes through these addresses. An address nothing has used still
+    says it: no measurement is a different fact from a bad one, and colouring
+    it would claim one that was never taken.
+    """
+
+    states = rendered["proxying"]["entryStates"]
+
+    assert [state["text"] for state in states] == [
+        "healthy",
+        "unreachable 5m",
+        "not checked yet",
+    ]
+    assert "proxy-entry-state-healthy" in states[0]["className"]
+    assert "proxy-entry-state-unreachable" in states[1]["className"]
+    assert "proxy-entry-state-unknown" in states[2]["className"]
+    assert "8 of 9 requests answered" in states[0]["title"]
+    assert "ConnectTimeout" in states[1]["title"]
+    assert "No request has gone through this address yet" in states[2]["title"]
+
+
 def test_jsdom_saving_sends_ids_and_never_a_proxy_url(rendered) -> None:
     """The page holds no URL for an entry it did not just type.
 
