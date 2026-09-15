@@ -4,6 +4,34 @@ Editor integrations and any OpenAI-, Anthropic- or Gemini-shaped client. Moved o
 
 For terminal use, start `mcc-server`, then run `mcc-claude`, `mcc-codex`, or `mcc-pi`. (The legacy `fcc-*` names were retired in 7.0.0: each prints the `mcc-*` name that replaced it and exits 1.) Use the guides below for editor integrations.
 
+<div align="center">
+  <img src="../assets/admin-launchers.png" alt="A list of one-line shell commands, each beside the coding agent it starts and a Copy button" width="860">
+  <p><em>Configure Claude Code → No setup needed: every launcher command, and what each one does to that shell session only.</em></p>
+</div>
+
+The **Coding agents** page is the same list with the detail behind it: whether the
+CLI is installed on this machine, which protocol MCC answers it on, the catalogue
+file MCC generates for it and when that file was last written.
+
+<div align="center">
+  <img src="../assets/admin-coding-agents.png" alt="A grid of agent cards, each showing whether the CLI is installed and the commands that launch it through the proxy" width="860">
+  <p><em>Coding agents: sixteen CLIs, each marked Installed or not, with its launcher commands.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/admin-coding-agent-card.png" alt="Three agent cards side by side listing protocol, request counts, the generated catalogue file path, when it was written and the model count" width="860">
+  <p><em>One card in full: the protocol MCC answers on, the catalogue file it generates, and how many models that file carries.</em></p>
+</div>
+
+Applications MCC does not launch — the desktop apps — get a card each. It writes
+only its own keys into the one file each app reads at startup, and copies the
+original beside it first.
+
+<div align="center">
+  <img src="../assets/admin-desktop-apps.png" alt="Desktop app cards naming the config file each one reads, the keys MCC owns, and a What will this write? button beside Configure" width="860">
+  <p><em>Desktop apps: the file each application reads, the keys MCC replaces, and a dry run before anything is written.</em></p>
+</div>
+
 <details>
 <summary><strong>Claude Code in VS Code</strong></summary>
 

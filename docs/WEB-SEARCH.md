@@ -194,6 +194,11 @@ Search failures come back to the client as a proper `web_search_tool_result_erro
 
 Every logical search and each provider attempt are recorded by a non-blocking background writer in `~/.mcc/logs/websearch.db`. Route records include a correlation ID, primary and terminal providers, the attempted chain, fallback use, final status, end-to-end latency, results, and known cost. Attempt records additionally retain the complete normalized tool input and provider output: full query and domain parameters, provider answer/rich summary, every result's title/URL/snippet/full content/publication date, result count and cost. A redacted snapshot preserves the effective provider, route/fallback policy, base URL, proxy endpoint without credentials, timeout, rotation policy, credential count, capabilities, and advanced options used for that attempt. Legacy scraper outcomes use the same detail shape.
 
+<div align="center">
+  <img src="../assets/admin-websearch-analytics.png" alt="A daily search-volume bar chart above tables of terminal route outcomes, provider attempt performance, per-key health and the top route errors" width="860">
+  <p><em>Web search analytics: the chart and the first table count logical searches; the tables below them count provider attempts, which is why the numbers differ.</em></p>
+</div>
+
 The Admin UI keeps the two levels explicit: top cards and the main trend chart report logical searches, route success/fallback rate, average attempts, and end-to-end latency, while provider/key tables and recent rows report individual attempts. Each recent row has an accessible **View** dialog with effective configuration, tool input, a readable answer/result summary, and the complete normalized output JSON. Filtering searches captured input/output as well as query previews, and JSON export includes the captured detail payloads. Existing pre-4.12 attempt history remains visible, but logical-route metrics begin with 4.12:
 
 ```bash

@@ -692,6 +692,23 @@ provider execution, then converts Anthropic SSE back to Responses SSE.
 
 ## Model Routing
 
+What the resolver decides is configured on one page and read back on another —
+the tier rails below are the `MODEL_*` and `MODEL_*_FALLBACKS` settings this
+section describes, rendered in the order the router walks them:
+
+<div align="center">
+  <img src="assets/readme-model-config.png" alt="Six tier rails side by side, each with a primary model and numbered fallback rows carrying drag handles and Pause buttons" width="860">
+  <p><em>Model Config: one rail per tier, in walk order. A struck-through row is paused and is never tried.</em></p>
+</div>
+
+And the ladder a single request actually walked, with a reason recorded beside
+every model it skipped:
+
+<div align="center">
+  <img src="assets/admin-request-attempts.png" alt="Per-attempt rows for one request naming each model, the key used, first-token and generating times, and why it was not tried" width="860">
+  <p><em>The same chain from the request log: one model sat out a rate-limit cooldown, one was paused, one answered, the rest were never reached.</em></p>
+</div>
+
 [application/routing.py](src/my_claude_code/application/routing.py) resolves incoming client model names.
 It supports three forms:
 

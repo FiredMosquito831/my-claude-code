@@ -68,6 +68,24 @@ Web search provider keys share the same rotation engine — see [Web Search → 
 
 Every tier can carry an ordered list of stand-ins. If the model a request routes to cannot serve it, MCC tries the next entry in that tier's chain, then the next, until one answers.
 
+<div align="center">
+  <img src="../assets/admin-model-config.png" alt="Model Config with one rail per tier, each listing its primary model and numbered fallbacks with drag handles and Pause buttons" width="860">
+  <p><em>Model Config: one rail per tier. The struck-through rows with an amber Paused badge keep their place in the chain and are never tried.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/readme-model-config.png" alt="Six tier rails side by side, each with a primary model and up to ten numbered fallback rows" width="860">
+  <p><em>The same rails with the chains expanded — a ten-deep Fable route beside a three-deep Mythos one.</em></p>
+</div>
+
+What the chains actually did is on Analytics. The **Failover** panel counts the
+pairs that fired: which primary was replaced, by which stand-in, how often.
+
+<div align="center">
+  <img src="../assets/admin-analytics-failover.png" alt="An upstream status-code table beside a Failover list of model pairs with arrows and counts, above a Vision adapter diversion list" width="860">
+  <p><em>Failover, on Analytics: every primary → stand-in pair that actually fired, with its count, beside the upstream statuses that caused them.</em></p>
+</div>
+
 | Setting | Chain used |
 | --- | --- |
 | `MODEL_FALLBACKS` | after `MODEL`, for any tier with no override of its own |
@@ -76,6 +94,14 @@ Every tier can carry an ordered list of stand-ins. If the model a request routes
 | `MODEL_OPUS_FALLBACKS` | after `MODEL_OPUS` |
 | `MODEL_SONNET_FALLBACKS` | after `MODEL_SONNET` |
 | `MODEL_HAIKU_FALLBACKS` | after `MODEL_HAIKU` |
+
+A single request shows the same thing from the other end: the ladder it walked,
+with a reason beside every model it did not try.
+
+<div align="center">
+  <img src="../assets/admin-request-attempts.png" alt="Per-attempt rows for one request, each naming the model, the key, first-token and generating times, and why it was not tried" width="860">
+  <p><em>One request's ladder: the first model sat out a rate-limit cooldown, the second answered, and the rest were never reached. The block below shows the request's shape with no prompt text in it.</em></p>
+</div>
 
 **Pausing one entry.** Each row on a route rail has a **Pause** button. A paused model keeps its place in the chain and stays fully on screen, but the router never tries it: no attempt is spent, no deadline is consumed, and the request log still lists it as *not tried* with the reason `paused`. Unlike everything else on that page a pause is written the moment you click it, with no Apply, and the status panel offers an Undo. Pausing is per route — the same model paused on Opus keeps serving Sonnet — and it is stored in `MODEL_PAUSED`, `MODEL_MYTHOS_PAUSED`, `MODEL_FABLE_PAUSED`, `MODEL_OPUS_PAUSED`, `MODEL_SONNET_PAUSED`, `MODEL_HAIKU_PAUSED` and `MODEL_VISION_PAUSED`. **Pausing is not hiding:** the Models page's visibility lists change what appears in `/v1/models` and never change routing, and these change routing and never change listings. A route whose every model is paused fails with an error naming the key rather than quietly falling through to another route.
 
@@ -229,6 +255,14 @@ The trade is real and the page states it rather than hiding it: a floor of 180 s
 
 What it deliberately does *not* model: time already spent on the request, a primary retried under `FALLBACK_RETRY_FIRST`, benched models shortening the chain, or the reasoning deadline taking over once a model starts thinking. It is the worst case for the first model on a route, not a fixed slot — time an attempt does not use flows to the models behind it.
 
+The card below it is the one that decides how hard a single model is retried
+before the chain is used at all, and how fast requests are allowed to leave.
+
+<div align="center">
+  <img src="../assets/admin-limits-retries.png" alt="Provider retries and throughput fields: retries before the chain, mid-stream recovery attempts, rate limit, rate window and max concurrency" width="860">
+  <p><em>Provider retries &amp; throughput: the transport ceiling that sits underneath every deadline above it.</em></p>
+</div>
+
 <a id="saving-settings"></a>
 
 ### Saving Settings: Blank Means Unset
@@ -257,6 +291,11 @@ No migration ran: defaults already materialised in an existing `.env` are left a
 ### Token Optimizer
 
 A dedicated dashboard page — **Admin UI → Token Optimizer** — reports what MCC kept off the wire, what is keeping it off, and what could keep more off. Every number on it is measured from your own request log. **Nothing on the page is enabled for you.**
+
+<div align="center">
+  <img src="../assets/admin-token-optimizer.png" alt="A ledger of tokens never sent and requests answered locally, above a table of local rules with fire counts, tokens avoided and a fourteen-day sparkline each" width="860">
+  <p><em>Token Optimizer: 85.3M prompt tokens no provider ever received, and the per-rule counts behind that number.</em></p>
+</div>
 
 | Panel | What it shows |
 | --- | --- |

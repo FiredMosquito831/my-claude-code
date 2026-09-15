@@ -23,6 +23,16 @@ version-gated note.
 
 ---
 
+Every key in this reference is also editable from the dashboard, on **Configure
+Claude Code → All Claude Code settings**: the same names, grouped, each with the
+values it accepts and the file it will be written to named at the top. Edits
+collect and are written only when you apply them, and the file is copied first.
+
+<div align="center">
+  <img src="../assets/admin-claude-settings.png" alt="A searchable settings editor listing Claude Code keys with descriptions and value pickers, above the path of the file being edited" width="860">
+  <p><em>All Claude Code settings: 504 keys, grouped, with the target settings.json named above them.</em></p>
+</div>
+
 ## 1. Where configuration lives
 
 Claude Code merges four scopes. Each has its own file, and the same key can

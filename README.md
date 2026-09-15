@@ -323,6 +323,28 @@ The Admin UI at `http://127.0.0.1:8082/admin` is local-only and is where everyth
 | **Messaging** | Discord/Telegram bot and voice settings. |
 | **Guide** / **Docs** | The task-oriented guide, and these documents rendered in the app. |
 
+Four of those pages, on a real install:
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/assets/readme-analytics-overview.png" alt="Rows of stat cards counting stored requests, success rate, fallback share and token totals, above an all-time strip and a per-model table" width="820">
+  <p><em><b>Analytics</b> — 361,468 stored requests, 99.2% success, 91.1% served by a fallback. The all-time strip below the cards is never pruned, so it keeps counting after the stored rows roll over.</em></p>
+</div>
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/assets/readme-analytics-cost.png" alt="A requests-over-time chart and a tokens-by-model chart above a Cost panel with reported and estimated totals kept as separate figures" width="820">
+  <p><em><b>Analytics → Cost</b> — reported and estimated are two numbers, never one, and every total carries the "303,572 of 361,484 priced" denominator that stops a partial figure reading as a complete one.</em></p>
+</div>
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/assets/readme-model-config.png" alt="Six tier rails side by side, each with a primary model and up to ten numbered fallback rows with drag handles and Pause buttons" width="820">
+  <p><em><b>Model Config</b> — one rail per tier with its real fallback chain. A struck-through row with an amber Paused badge keeps its place and is never tried.</em></p>
+</div>
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/assets/readme-models.png" alt="A model tree with filter chips and one provider expanded, each model row carrying chips naming where its entry came from" width="820">
+  <p><em><b>Models</b> — 1,180 models across 13 providers. Each row names its source, and hiding one changes what is listed, never what is routed.</em></p>
+</div>
+
 ## Configuration reference
 
 Every setting lives in [.env.example](.env.example) with inline comments and cost notes, and the [Usage Guide](docs/USAGE.md) explains each one in context. The dashboard writes the same file, so the two never disagree. The ten most people ever need:
