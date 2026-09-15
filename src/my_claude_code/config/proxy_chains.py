@@ -154,6 +154,18 @@ SCOPES: tuple[str, ...] = ("provider", "credential")
 
 SOURCE_MANUAL = "manual"
 
+#: What the checker learned about the destination's certificate through this
+#: address's tunnel. ``strict`` is an ordinary verified handshake. ``unknown``
+#: is an address nothing has checked, or one that failed before TLS began.
+TLS_STRICT = "strict"
+TLS_UNKNOWN = "unknown"
+#: The one value that refuses an address. The tunnel terminated TLS and
+#: presented a certificate this machine's trust store rejects, which means
+#: something between here and the provider is reading the plaintext. It is not
+#: a reliability problem to be routed around; it is the class of proxy the
+#: whole check exists to catch, and MCC will not carry a credential through it.
+TLS_INTERCEPTED = "intercepted"
+
 #: Providers whose credential is a person's *subscription* rather than a
 #: revocable per-project key. Changing source address between requests is more
 #: likely to be read as account sharing here than on a pay-as-you-go key, so
@@ -234,6 +246,68 @@ def clamp_max_switches(value: object) -> int:
 
 
 @dataclass(frozen=True, slots=True)
+class ProxyCheckRecord:
+    """What the checker last learned about one address.
+
+    Written by the Test button and by the background checker, never by the
+    request path: a measurement taken out of band, stored beside the address it
+    describes so it survives a restart and a provider-generation replace.
+
+    ``tls`` is the half of this record that is a security control rather than a
+    convenience. :data:`TLS_INTERCEPTED` is durable and it is a refusal: an
+    address carrying it cannot be put into a chain, and one already in a chain
+    is held out of selection.
+    """
+
+    at: str = ""
+    ok: bool = False
+    latency_ms: int | None = None
+    tls: str = TLS_UNKNOWN
+    detail: str = ""
+    #: What the operator's own exit-IP URL answered, when they named one. Never
+    #: fetched by default and never from a URL MCC chose: it is an outbound
+    #: request to a stranger, so it is the operator's call.
+    exit_ip: str = ""
+
+    @property
+    def intercepted(self) -> bool:
+        return self.tls == TLS_INTERCEPTED
+
+    def as_document(self) -> dict[str, Any]:
+        return {
+            "at": self.at,
+            "ok": self.ok,
+            "latency_ms": self.latency_ms,
+            "tls": self.tls,
+            "detail": self.detail,
+            "exit_ip": self.exit_ip,
+        }
+
+    @classmethod
+    def from_document(cls, raw: object) -> Self | None:
+        if not isinstance(raw, Mapping):
+            return None
+        raw_latency = raw.get("latency_ms")
+        try:
+            latency = (
+                int(raw_latency) if isinstance(raw_latency, int | float | str) else None
+            )
+        except ValueError:
+            latency = None
+        tls = str(raw.get("tls") or TLS_UNKNOWN).strip().lower()
+        return cls(
+            at=str(raw.get("at") or "").strip(),
+            ok=bool(raw.get("ok")),
+            latency_ms=latency,
+            tls=tls
+            if tls in {TLS_STRICT, TLS_INTERCEPTED, TLS_UNKNOWN}
+            else TLS_UNKNOWN,
+            detail=str(raw.get("detail") or "").strip(),
+            exit_ip=str(raw.get("exit_ip") or "").strip(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ProxyEndpoint:
     """One address in the catalogue.
 
@@ -248,15 +322,28 @@ class ProxyEndpoint:
     added_at: str = ""
     source: str = SOURCE_MANUAL
     source_count: int = 1
+    #: The checker's last verdict, or ``None`` for an address nothing has
+    #: checked. ``None`` and "checked and failed" are different states and the
+    #: page says which it is looking at.
+    last_check: ProxyCheckRecord | None = None
+
+    @property
+    def refused(self) -> bool:
+        """Whether this address may not carry traffic at all."""
+
+        return self.last_check is not None and self.last_check.intercepted
 
     def as_document(self) -> dict[str, Any]:
-        return {
+        document: dict[str, Any] = {
             "url": self.url,
             "label": self.label,
             "added_at": self.added_at,
             "source": self.source,
             "source_count": self.source_count,
         }
+        if self.last_check is not None:
+            document["last_check"] = self.last_check.as_document()
+        return document
 
     @classmethod
     def from_document(cls, raw: object, where: str) -> Self | None:
@@ -282,6 +369,7 @@ class ProxyEndpoint:
             added_at=str(raw.get("added_at") or "").strip(),
             source=str(raw.get("source") or SOURCE_MANUAL).strip() or SOURCE_MANUAL,
             source_count=source_count,
+            last_check=ProxyCheckRecord.from_document(raw.get("last_check")),
         )
 
 
@@ -425,6 +513,29 @@ class ProxyChains:
             added_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         )
         return replace(self, proxies=proxies), proxy_id
+
+    def with_check(self, proxy_id: str, record: ProxyCheckRecord) -> ProxyChains:
+        """Return a copy carrying one address's latest check.
+
+        A no-op for an id the catalogue no longer holds: the checker runs out
+        of band and may finish after the operator removed the address it was
+        measuring, and inventing an endpoint from a stale result would put a
+        row back on a page somebody just cleared.
+        """
+
+        endpoint = self.proxies.get(proxy_id)
+        if endpoint is None:
+            return self
+        proxies = dict(self.proxies)
+        proxies[proxy_id] = replace(endpoint, last_check=record)
+        return replace(self, proxies=proxies)
+
+    def refused_ids(self) -> tuple[str, ...]:
+        """Every address the checker found terminating TLS, in store order."""
+
+        return tuple(
+            proxy_id for proxy_id, endpoint in self.proxies.items() if endpoint.refused
+        )
 
     def with_chain(self, provider_id: str, chain: ProxyChain | None) -> ProxyChains:
         """Return a copy with one provider's chain replaced, or removed.
@@ -645,11 +756,15 @@ __all__ = [
     "SCOPES",
     "SELECTABLE_TRIGGER_KINDS",
     "SOURCE_MANUAL",
+    "TLS_INTERCEPTED",
+    "TLS_STRICT",
+    "TLS_UNKNOWN",
     "TRIGGER_KIND_ORDER",
     "VERSION_KEY",
     "ProxyChain",
     "ProxyChainEntry",
     "ProxyChains",
+    "ProxyCheckRecord",
     "ProxyEndpoint",
     "clamp_max_switches",
     "current_proxy_chains",

@@ -17,10 +17,14 @@ from my_claude_code.config.proxy_chains import (
     MAX_SWITCHES_DEFAULT,
     PROXY_CHAIN_MAX_ENTRIES,
     REFUSED_TRIGGER_KINDS,
+    TLS_INTERCEPTED,
+    TLS_STRICT,
+    TLS_UNKNOWN,
     TRIGGER_KIND_ORDER,
     ProxyChain,
     ProxyChainEntry,
     ProxyChains,
+    ProxyCheckRecord,
     clamp_max_switches,
     current_proxy_chains,
     is_valid_proxy_url,
@@ -309,3 +313,104 @@ def test_the_cache_follows_the_file_rather_than_the_process(tmp_path: Path) -> N
 
     assert current_proxy_chains(path).chain("opencode") is not None
     reset_proxy_chains_cache()
+
+
+# ------------------------------------------------- the checker's own verdict
+
+
+def test_a_check_verdict_round_trips_through_the_document(tmp_path: Path) -> None:
+    """The verdict is durable, because the refusal it can carry has to be.
+
+    The two ledgers the runtime reads are process-lifetime state. If the
+    document did not keep the verdict, a restart would quietly re-admit every
+    address a previous check found terminating TLS.
+    """
+
+    store, proxy_id = _store_with_one_chain()
+    store = store.with_check(
+        proxy_id,
+        ProxyCheckRecord(
+            at="2026-09-15T12:00:00Z",
+            ok=True,
+            latency_ms=412,
+            tls=TLS_STRICT,
+            exit_ip="203.0.113.7",
+        ),
+    )
+    path = tmp_path / "proxy_chains.json"
+    save_proxy_chains(store, path)
+
+    endpoint = load_proxy_chains(path).endpoint(proxy_id)
+
+    assert endpoint is not None
+    assert endpoint.last_check is not None
+    assert endpoint.last_check.tls == TLS_STRICT
+    assert endpoint.last_check.latency_ms == 412
+    assert endpoint.last_check.exit_ip == "203.0.113.7"
+    assert endpoint.refused is False
+
+
+def test_an_intercepted_verdict_marks_the_endpoint_refused(tmp_path: Path) -> None:
+    """One field, read by three surfaces, and all three must agree.
+
+    The store says it, the API refuses a write naming it, and the pool holds
+    it out of selection. This is the field the other two read.
+    """
+
+    store, proxy_id = _store_with_one_chain()
+    store = store.with_check(
+        proxy_id,
+        ProxyCheckRecord(at="2026-09-15T12:00:00Z", ok=False, tls=TLS_INTERCEPTED),
+    )
+    path = tmp_path / "proxy_chains.json"
+    save_proxy_chains(store, path)
+
+    reloaded = load_proxy_chains(path)
+
+    endpoint = reloaded.endpoint(proxy_id)
+    assert endpoint is not None
+    assert endpoint.refused is True
+    assert reloaded.refused_ids() == (proxy_id,)
+
+
+def test_an_endpoint_with_no_check_says_so_rather_than_guessing() -> None:
+    """``None`` is not "failed". Nothing has looked, and the page says that."""
+
+    store, proxy_id = _store_with_one_chain()
+
+    endpoint = store.endpoint(proxy_id)
+    assert endpoint is not None
+    assert endpoint.last_check is None
+    assert endpoint.refused is False
+    # And the document carries no key at all rather than a default-shaped one
+    # that would read as a measurement.
+    assert "last_check" not in endpoint.as_document()
+
+
+def test_a_nonsense_tls_value_in_the_document_reads_as_unknown() -> None:
+    """A hand-edited file must not be able to invent a verdict.
+
+    Unknown is the safe direction: it means "nothing was measured", which
+    neither refuses a working address nor admits a refused one -- the refusal
+    is only ever written by a check.
+    """
+
+    record = ProxyCheckRecord.from_document(
+        {"tls": "definitely-fine", "ok": True, "latency_ms": "not a number"}
+    )
+
+    assert record is not None
+    assert record.tls == TLS_UNKNOWN
+    assert record.latency_ms is None
+
+
+def test_a_check_for_an_address_the_store_lost_is_dropped() -> None:
+    """The checker is out of band and may finish after a removal.
+
+    Inventing an endpoint from a stale result would put a row back on a page
+    somebody had just cleared.
+    """
+
+    store, _ = _store_with_one_chain()
+
+    assert store.with_check("px_gone", ProxyCheckRecord(ok=True)) == store

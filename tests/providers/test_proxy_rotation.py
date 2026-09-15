@@ -29,6 +29,8 @@ from my_claude_code.core.proxy_attribution import (
     record_proxy,
 )
 from my_claude_code.core.proxy_rotation import (
+    PROXY_INTERCEPTION,
+    PROXY_REACHABILITY,
     PROXY_REACHABILITY_TIERS,
     PROXY_REFUSED_TRIGGER_KINDS,
     PROXY_TUNING,
@@ -41,7 +43,10 @@ from my_claude_code.core.upstream_ladder import (
     record_upstream_try,
 )
 from my_claude_code.providers.base import ProviderConfig, ProxyChainPlan, ProxyLeg
-from my_claude_code.providers.credential_rotation import credential_failure_class
+from my_claude_code.providers.credential_rotation import (
+    credential_failure_class,
+    error_justifies_rotation,
+)
 from my_claude_code.providers.runtime import proxy_rotating
 from my_claude_code.providers.runtime.factory import create_provider
 from my_claude_code.providers.runtime.proxy_rotating import (
@@ -648,3 +653,100 @@ def test_direct_is_a_value_and_never_a_null() -> None:
     record_proxy(DIRECT_PROXY_LABEL)
     assert slot.label == DIRECT_PROXY_LABEL
     assert current_proxy() == DIRECT_PROXY_LABEL
+
+
+# ------------------------------------------- the checker's refusal, honoured
+
+
+@pytest.mark.asyncio
+async def test_an_intercepted_address_is_never_selected() -> None:
+    """The verdict reaches the request path, not only the page.
+
+    The checker runs out of band and writes one process-wide table; this is
+    the assertion that the pool reads it. An address already in a chain when
+    the checker finds it terminating TLS is held out of selection immediately
+    -- waiting for somebody to edit the chain would mean routing a credential
+    through it in the meantime, which is the whole thing this prevents.
+    """
+
+    PROXY_INTERCEPTION.mark("a:1", "breaks certificate validation")
+    first = _FakeProvider(chunks=("never",))
+    second = _FakeProvider(chunks=("hello",))
+    pool = _pool([first, second], ("a:1", "b:2"), policy="failover")
+
+    assert await _drain(pool) == ["hello"]
+    assert first.calls == 0
+    health = pool.proxy_health()
+    assert health[0]["state"] == "intercepted"
+    assert health[0]["refused"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_survives_a_fully_benched_chain() -> None:
+    """The one hole a preference would have left open.
+
+    ``acquire`` relaxes the reachability blocklist when nothing is free, which
+    is right for a bench: an empty stream is worse than a slow one. It is
+    exactly wrong for an interception, so the refused set is subtracted from
+    every branch -- "everything else is benched" is not a reason to carry a
+    key through a tunnel somebody is reading.
+    """
+
+    PROXY_INTERCEPTION.mark("a:1", "breaks certificate validation")
+    PROXY_REACHABILITY.note_failure("b:2", "ConnectError")
+    first = _FakeProvider(chunks=("never",))
+    second = _FakeProvider(chunks=("hello",))
+    pool = _pool([first, second], ("a:1", "b:2"))
+
+    # The benched address is used anyway, because it is the only one left.
+    assert await _drain(pool) == ["hello"]
+    assert first.calls == 0
+    assert second.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_wholly_refused_chain_raises_a_classified_unavailable() -> None:
+    """No rung to try and no earlier error to re-raise.
+
+    The exhaustion path re-raises the last error verbatim, and that rule is
+    untouched -- but here nothing was tried, so there is no last error. A
+    synthesised ``UNAVAILABLE`` is the honest answer: the credential pool reads
+    it exactly as it reads a dead socket, and the executor hands it to the
+    model fallback chain.
+    """
+
+    PROXY_INTERCEPTION.mark("a:1", "breaks certificate validation")
+    PROXY_INTERCEPTION.mark("b:2", "breaks certificate validation")
+    first = _FakeProvider(chunks=("never",))
+    second = _FakeProvider(chunks=("never",))
+    pool = _pool([first, second], ("a:1", "b:2"))
+
+    with pytest.raises(ExecutionFailure) as caught:
+        await _drain(pool)
+
+    assert caught.value.kind is FailureKind.UNAVAILABLE
+    assert "a:1" in caught.value.message and "b:2" in caught.value.message
+    assert first.calls == 0 and second.calls == 0
+    # Read by the pool above exactly as a dead socket is: it rotates to
+    # another credential without charging this one's health, which is the
+    # existing meaning of UNAVAILABLE and the property that makes synthesising
+    # one here legal at all.
+    assert error_justifies_rotation(caught.value) is True
+    assert credential_failure_class(caught.value) is None
+
+
+@pytest.mark.asyncio
+async def test_direct_is_never_refused_by_an_interception_verdict() -> None:
+    """A refusal is about an address, and Direct is not one.
+
+    Marking "direct" refused would be marking this machine refused, which no
+    check can conclude: there is no tunnel in front of it to intercept.
+    """
+
+    PROXY_INTERCEPTION.mark(DIRECT_PROXY_LABEL, "nonsense")
+    first = _FakeProvider(chunks=("hello",))
+    second = _FakeProvider(chunks=("never",))
+    pool = _pool([first, second], (DIRECT_PROXY_LABEL, "b:2"))
+
+    assert await _drain(pool) == ["hello"]
+    assert first.calls == 1

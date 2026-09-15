@@ -1279,7 +1279,7 @@ wheels = [
 
 [[package]]
 name = "my-claude-code"
-version = "7.15.0"
+version = "7.15.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -1319,6 +1319,7 @@ voice-local = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "cryptography" },
     { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1362,6 +1363,7 @@ provides-extras = ["voice", "voice-local"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "cryptography", specifier = ">=45.0.0" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },

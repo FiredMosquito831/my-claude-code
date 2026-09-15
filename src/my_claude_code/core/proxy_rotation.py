@@ -32,6 +32,14 @@ scope, per address, provider and credential under ``credential``.
 ``model_bench_escalation`` is ``0`` -- never escalate -- because two credentials
 exhausting the same address is not evidence the address is broken.
 
+Beside the two benches sits a third table that is not a bench at all.
+:data:`PROXY_INTERCEPTION` holds the addresses the checker found terminating
+TLS: a tunnel that presents a certificate this machine's trust store rejects is
+reading the plaintext, and there is no tier after which that becomes acceptable.
+Those addresses are refused rather than timed out -- held out of every chain in
+the process until a later check says the destination's certificate verifies
+again.
+
 :data:`PROXY_HEALTH` is the read side of both: the page draws live per-entry
 health out of it rather than reaching into the running provider tree, which
 means an admin request never has to find a pool and a pool never has to be
@@ -190,6 +198,52 @@ class ReachabilityLedger:
 PROXY_REACHABILITY = ReachabilityLedger()
 
 
+class InterceptionLedger:
+    """Addresses the checker found terminating TLS, and therefore refused.
+
+    A different thing from a bench, which is why it is a different table. A
+    benched address is one that failed and will be tried again when its tier
+    expires; a refused one is an address whose tunnel presented a certificate
+    this machine's trust store rejects, which means something between here and
+    the provider is reading the plaintext. There is no tier after which that
+    becomes acceptable. It is held out of every chain in the process until a
+    later check says the certificate verifies again -- which is the only way
+    out, and it is a measurement rather than a timer.
+
+    Keyed by the same ``host:port`` label the other two tables use, so one
+    address refused while checking one provider is refused for all of them: a
+    machine that reads one tunnel reads them all.
+    """
+
+    def __init__(self) -> None:
+        self._refused: dict[str, str] = {}
+
+    def mark(self, endpoint: str, detail: str = "") -> None:
+        if endpoint:
+            self._refused[endpoint] = detail
+
+    def clear_endpoint(self, endpoint: str) -> None:
+        """A later check verified this address's tunnel; take the refusal off."""
+
+        self._refused.pop(endpoint, None)
+
+    def is_refused(self, endpoint: str) -> bool:
+        return bool(endpoint) and endpoint in self._refused
+
+    def detail(self, endpoint: str) -> str:
+        return self._refused.get(endpoint, "")
+
+    def labels(self) -> frozenset[str]:
+        return frozenset(self._refused)
+
+    def clear(self) -> None:
+        self._refused.clear()
+
+
+#: The one interception table this process has.
+PROXY_INTERCEPTION = InterceptionLedger()
+
+
 @dataclass(slots=True)
 class ProxyHealthRecord:
     """One address's record for one provider, as the page reads it."""
@@ -268,7 +322,12 @@ class ProxyHealthLedger:
         benched = (
             0.0 if record is None else max(0.0, record.benched_until - self._clock())
         )
-        if unreachable > 0:
+        if PROXY_INTERCEPTION.is_refused(endpoint):
+            # Ahead of every other state on purpose. An intercepted address may
+            # also be benched, unchecked or perfectly fast, and none of that is
+            # the thing the operator needs to read on its row.
+            state = "intercepted"
+        elif unreachable > 0:
             state = "unreachable"
         elif benched > 0:
             state = "cooldown"
@@ -285,8 +344,12 @@ class ProxyHealthLedger:
             "successes": 0 if record is None else record.successes,
             "failures": 0 if record is None else record.failures,
             "cooldown_remaining": round(max(unreachable, benched), 1),
+            "refused": PROXY_INTERCEPTION.is_refused(endpoint),
             "reason": (
-                PROXY_REACHABILITY.reason(endpoint)
+                PROXY_INTERCEPTION.detail(endpoint)
+                or "This address breaks certificate validation."
+                if PROXY_INTERCEPTION.is_refused(endpoint)
+                else PROXY_REACHABILITY.reason(endpoint)
                 if unreachable > 0
                 else (None if record is None else record.last_error)
             ),
@@ -314,6 +377,7 @@ def reset_proxy_health() -> None:
 
     PROXY_REACHABILITY.clear()
     PROXY_HEALTH.clear()
+    PROXY_INTERCEPTION.clear()
 
 
 __all__ = [
@@ -321,10 +385,12 @@ __all__ = [
     "PROXY_COOLDOWN_MAX_SECONDS",
     "PROXY_COOLDOWN_SECONDS_DEFAULT",
     "PROXY_HEALTH",
+    "PROXY_INTERCEPTION",
     "PROXY_REACHABILITY",
     "PROXY_REACHABILITY_TIERS",
     "PROXY_REFUSED_TRIGGER_KINDS",
     "PROXY_TUNING",
+    "InterceptionLedger",
     "ProxyHealthLedger",
     "ProxyHealthRecord",
     "ReachabilityLedger",

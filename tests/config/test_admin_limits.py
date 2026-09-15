@@ -103,6 +103,9 @@ SECTION_KEYS: dict[str, tuple[str, ...]] = {
         "CREDENTIAL_LOCKOUT_TIERS",
         "CREDENTIAL_MODEL_BENCH_ESCALATION",
         "PROXY_MAX_SWITCHES_PER_REQUEST",
+        "PROXY_CHECK_ENABLED",
+        "PROXY_CHECK_INTERVAL_MINUTES",
+        "PROXY_CHECK_EXIT_IP_URL",
         "RATE_LIMIT_ROUTES_AROUND_MODEL",
     ),
     "request_log": (

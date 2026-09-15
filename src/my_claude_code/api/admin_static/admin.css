@@ -7994,6 +7994,30 @@ details.turn-pane > summary:focus-visible {
   color: var(--muted);
 }
 
+/* The checker's own line: latency, what the tunnel did to certificate
+   validation, and when that was measured. Allowed to wrap onto its own line on
+   a narrow card rather than squeezing the label, which is the identity of the
+   row and must stay readable. */
+.proxy-entry-check {
+  flex: 1 1 200px;
+  min-width: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* An address the checker found terminating TLS. Refused rather than benched:
+   it stays on the card so the operator can see why their chain is shorter than
+   they think, and it is drawn as the error it is. */
+.proxy-entry-refused {
+  border-color: var(--error);
+  background: color-mix(in srgb, var(--error) 8%, var(--panel));
+}
+
+.proxy-entry-refused .proxy-entry-label {
+  text-decoration: line-through;
+}
+
 /* Live health, measured by the pools themselves. "not checked yet" keeps the
    muted colour above: an address nothing has used is not a warning, it is an
    absence of evidence, and colouring it would claim a measurement. */
@@ -8008,6 +8032,16 @@ details.turn-pane > summary:focus-visible {
 
 .proxy-entry-state-unreachable {
   color: var(--error);
+}
+
+/* The one state that is a refusal rather than a measurement of reliability,
+   so it is the one drawn as a badge instead of a word. */
+.proxy-entry-state-intercepted {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--error);
+  color: var(--panel);
+  font-weight: 600;
 }
 
 .proxy-entry-state-unknown {
@@ -8076,4 +8110,11 @@ details.turn-pane > summary:focus-visible {
   flex-wrap: wrap;
   gap: var(--space-2);
   margin-left: auto;
+}
+
+/* Beside Save rather than beside Add proxy: it measures what is saved, and a
+   button that quietly ignored the rows somebody just typed would be worse
+   placed next to the box they typed them in. */
+.proxy-test-all {
+  white-space: nowrap;
 }
