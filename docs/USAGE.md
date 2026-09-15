@@ -371,7 +371,14 @@ Add `--dry-run` (`-DryRun`) to print what it would do without changing anything.
 mcc-server
 ```
 
-Keep this process running. Once healthy, the Admin UI opens in your browser automatically (disable with `MCC_OPEN_BROWSER=0`). The address is always printed in the startup log — by default:
+Keep this process running. Once healthy, the Admin UI opens in your browser automatically (disable with `MCC_OPEN_BROWSER=0`). What you land on is a checklist of the three things that have to be true before a request can be routed, each ticked as you do it:
+
+<div align="center">
+  <img src="../assets/admin-get-started.png" alt="A Get Started checklist with a progress bar reading two of three essential steps done, two steps marked Done and one marked To do with its instructions expanded" width="860">
+  <p><em>Get Started: connect a provider, set a fallback model, point your agent here. The step still to do expands into what to press.</em></p>
+</div>
+
+The address is always printed in the startup log — by default:
 
 ```text
 http://127.0.0.1:8082/admin
@@ -1395,6 +1402,11 @@ MCC never launches these applications, and never sets an environment variable
 on your behalf. The card tells you what to export and what to restart; you do
 both.
 
+<div align="center">
+  <img src="../assets/admin-desktop-apps.png" alt="Desktop app cards each naming the config file it reads, the keys MCC owns and replaces, the base URL to be written, and a What will this write? button beside Configure" width="860">
+  <p><em>One card per application: the file, the keys MCC claims, the URL it will write — and a dry run before it writes anything.</em></p>
+</div>
+
 ### What each card can say
 
 | Badge | What it means |
@@ -1640,6 +1652,16 @@ It is **not** `mcc-desktop` — that command is MCC's own tray application.
 ---
 
 ## 7. Tutorial: connect another CLI
+
+<div align="center">
+  <img src="../assets/admin-coding-agents.png" alt="A grid of coding agent cards, each badged Installed or not and listing the commands that start it through the proxy" width="860">
+  <p><em>Coding agents: every CLI MCC can launch, whether it is on this machine, and the exact command for each.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/admin-coding-agent-card.png" alt="Three agent cards showing protocol, seven-day request count, generated catalogue file path, when it was last written and the model count" width="860">
+  <p><em>Behind each card: the protocol MCC answers it on, the catalogue file MCC generates for it, and how many models that file carries.</em></p>
+</div>
 
 > **A coding agent is not a provider.**
 > The CLIs in this section sit **downstream** of MCC: they send requests to it.
@@ -2404,7 +2426,16 @@ substitution.
 Open the **Providers** tab. Every provider is one card in a single searchable grid — there are 56 of them, so start by typing in **Search providers**. It matches the provider's name, its id and its environment variable, so `groq`, `GROQ_API_KEY` and `alibaba` all find what you would expect. **Only configured** hides everything you have not set up yet.
 
 <div align="center">
-  <img src="../assets/admin-requests.png" alt="Provider configuration in the Admin UI" width="860">
+  <img src="../assets/admin-providers.png" alt="A searchable grid of provider cards, each badged Configured or Missing key and naming the environment variable that holds its key" width="860">
+  <p><em>The provider grid: 57 providers, 14 configured. A card that needs a key names the variable instead of a key count.</em></p>
+</div>
+
+Providers you add yourself get their own card above the grid, with the key pool,
+the rotation policy and what MCC learned about that host's reasoning dialect.
+
+<div align="center">
+  <img src="../assets/admin-custom-provider.png" alt="Two custom provider cards with base URLs, key pools showing masked fingerprints marked Healthy, and the reasoning dialect each host was measured to accept" width="860">
+  <p><em>Custom providers: three keys on round-robin and two on failover, each with its own health, and the effort words each host was learned to accept.</em></p>
 </div>
 
 ### The workflow
@@ -3060,6 +3091,11 @@ You do not have to work out which of your models are affected: a tier that needs
 
 The adapter is a route like any other, so it gets its own **Add fallback** chain. One unreachable vision model would otherwise lose every image on the machine.
 
+<div align="center">
+  <img src="../assets/admin-vision-adapter-mode.png" alt="A vision adapter route rail with eight numbered fallback models, above a Vision Adapter Mode selector and the tool-returned image and resize controls" width="860">
+  <p><em>The vision adapter: its own eight-deep chain, the route-or-describe selector beneath it, and the line saying no tier currently needs it.</em></p>
+</div>
+
 #### Outbound image size
 
 Since 6.53.0 every outbound picture is resized before it is sent, on the deep copy the router already takes — your client's own request is never mutated, and every dialect converter is handed pre-shrunk data.
@@ -3121,7 +3157,18 @@ Pick `describe` when the picture is *context*. Pick `route` when the picture *is
 A provider with three hundred models is not manageable one tick at a time. On a real catalogue of 1,021 models across 10 providers, hiding the 317 published by one gateway used to be 325 clicks and 634 requests — about 1.07 GB of traffic and five to nine minutes of clicking. The same job is now two interactions and one request: 41 KB, 7 ms.
 
 <div align="center">
-  <img src="../assets/admin-models-bulk.png" alt="Models page with rows selected and the bulk action bar open" width="860">
+  <img src="../assets/admin-models-bulk.png" alt="A model tree with five rows ticked and a bulk action bar pinned across the bottom reading five selected across one provider" width="860">
+  <p><em>Five rows ticked, and the action bar that appears with them. It names how many providers the selection spans, because a glob can only be written for one.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/admin-models.png" alt="Collapsed provider rows each carrying model, hidden, configured and billed-over-estimated chips, with one provider expanded into its model list" width="860">
+  <p><em>Each provider header carries its counts while still collapsed — which is what lets Hide all act on 317 rows you never expanded.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/admin-models-visibility.png" alt="Show-only and hide pattern boxes above a note counting the glob and exact patterns in use, and a list of configured routes that are currently hidden" width="860">
+  <p><em>What the bulk buttons actually write: one glob for a whole provider, exact refs for a hand-picked set — and a standing reminder that hidden routes still serve.</em></p>
 </div>
 
 **1. Open Admin UI → Models.** Each provider is a collapsed disclosure with a sticky header carrying its visible / hidden / configured counts. The header buttons — **Show all**, **Hide all**, **Invert** — work while the provider is still collapsed; you never have to expand 317 rows to act on them.
@@ -3193,6 +3240,11 @@ MODEL_DISCOVERY_REFRESH_SECONDS=3600   # 0 turns the background sweep off
 MODEL_PROBE_NEW_MODELS=false           # probe models the sweep has just discovered
 ```
 
+<div align="center">
+  <img src="../assets/admin-catalogue-refresh.png" alt="A Providers and models header reading when the catalogues were last refreshed and when the next sweep is due, above filter chips and one collapsed row per provider" width="860">
+  <p><em>The refresh readout and the facet chips, above one row per provider — 1,180 models across 13 providers, 20 of them named by a route.</em></p>
+</div>
+
 Every usable provider's `/models` is refetched in the background once an hour, so a gateway that added a model this morning is listed this afternoon without a restart. The line under **Providers and models** reads *"Catalogues: last refreshed 12 min ago, next in 48 min."*, and says *"Automatic model catalogue refresh is off (`MODEL_DISCOVERY_REFRESH_SECONDS=0`)"* when you turn it off — a catalogue whose age is unanswerable is how "this gateway added a model today" became a support question. The server log prints `catalogue changed: +N -M` only when the list actually moved.
 
 > This is **not** Claude Code's model discovery. `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` is a variable MCC *writes* for Claude Code and never reads; it decides whether Claude Code's own picker lists this catalog. The setting above decides how often MCC re-reads its providers.
@@ -3228,6 +3280,16 @@ Two independent facts decide what actually goes on the wire: what the **model** 
 Every OpenAI-compatible host declares the standard `reasoning_effort` field unless it was probed speaking something else; a host that refuses it answers with a 400, is retried once without it, and is not asked again for that model. Since 6.33.0 that is true of **every** provider, whichever protocol it speaks: an Anthropic Messages host that refuses a `thinking` object and a Responses host that refuses a `reasoning` block are learned from the same way, by the same matcher. Your own model-parameter override is applied **after** every postprocessor, so setting `reasoning_effort` explicitly — or to null — on a model always wins over the default dialect.
 
 The Models page shows the two side by side: what the model can do, with the resolution tier each field came from, and what the host parses, labelled **default OpenAI dialect**, **declared by this provider**, or **learned from the host's own rejection** — never a vote.
+
+<div align="center">
+  <img src="../assets/readme-models.png" alt="A model tree with one provider expanded, each model row carrying chips naming where its entry came from and what the host was measured doing with reasoning" width="860">
+  <p><em>A provider opened: each model names its source, and one row carries what the host actually did with reasoning over the last seven days.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/admin-model-config-reasoning.png" alt="Reasoning policy and per-tier reasoning selectors, above a Web Tools card with the web_search and web_fetch switches" width="860">
+  <p><em>Model Config → Reasoning: one client policy and a per-tier override, resolved once at the boundary.</em></p>
+</div>
 
 Since 6.35.0 the tier is shown for **every** resolved field, not only the output ceiling: the context window, vision support, tool support and all four price rates each walk the same ten rungs and each name the one that answered. Where the routed deployment's own `/models` payload supplied the value the badge reads *provider /models or models.dev* with no tier, because the enrichment step that merged them keeps no record of which won; where the ladder supplied it, the rung is exact — down to *cross-provider, bare model*, which is a vote across strangers who merely share a name and is badged **approximate** accordingly. The Models page and every generated agent catalogue read that from the same resolver, so they cannot disagree about a number or about where it came from.
 
@@ -3385,13 +3447,30 @@ Two separate local SQLite stores under `~/.mcc/logs/`, both written by a backgro
 ### Model requests
 
 <div align="center">
-  <img src="../assets/admin-analytics.png" alt="Model request analytics" width="860">
+  <img src="../assets/admin-analytics.png" alt="Rows of stat cards over one filter bar, counting stored requests, success and error rate, fallback share, token totals and latency percentiles" width="860">
+  <p><em>Analytics: the filter bar, then the stat cards it narrows — 361,468 stored requests here, 91.1% of them served by a fallback.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/readme-analytics-overview.png" alt="Stat cards above an all-time totals strip and a table of models with request, input, output and error counts" width="860">
+  <p><em>The all-time strip below the cards is never pruned, which is why its counts stay above the stored-row counts.</em></p>
 </div>
 
 Summary cards cover volume, success and error rate, latency percentiles, time-to-first-token and token usage. Below: requests over time, tokens by model, and per-provider and per-key tables. Counts, sums and averages are exact; the p50 and p95 latency cards are interpolated from a 64-bucket log-spaced histogram (measured at or under 2.3% error on a 244k-request log), which is what lets an all-time view load in a fraction of a second. A time range that does not start and end on a whole UTC hour is widened outward to one.
 
 <div align="center">
-  <img src="../assets/admin-key-performance.png" alt="Per-key performance breakdown" width="860">
+  <img src="../assets/admin-key-performance.png" alt="A per-key table of masked fingerprints with request counts and cache rates, beside a list of the most frequent upstream error messages" width="860">
+  <p><em>Key performance beside Top errors: which credential did the work, and the provider's own words for what went wrong.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/admin-analytics-latency.png" alt="A per-model latency table with attempt counts, share, measured time-to-first-token, p50 TTFT, average first-reasoning and generating times" width="860">
+  <p><em>Model latency: answered and failed counted separately for the same model, because a model that fails fast is not a fast model.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/admin-analytics-harness.png" alt="Provider performance and Requests by harness tables side by side, each with request counts, error rates, token totals and average latency" width="860">
+  <p><em>The same traffic split two ways: by the provider that served it, and by the client that asked.</em></p>
 </div>
 
 #### Reading the token columns
@@ -3491,6 +3570,11 @@ Three things to know before you read the numbers:
 
 The request detail view shows the outbound body per attempt: sampling and reasoning parameters are stored whole however large the body is, and only the message and tool structure degrades to counts and names under `REQUEST_LOG_WIRE_BODY_MAX_CHARS`. On the Models page, *reasoning requested* and *reasoning returned* are independent measurements — what left, and whether thinking text came back.
 
+<div align="center">
+  <img src="../assets/admin-analytics-storage.png" alt="A Request log storage card of nine settings controlling whether requests are recorded, how many are kept, whether prompts and replies are stored, and how much of each body" width="860">
+  <p><em>Request log storage, at the bottom of Analytics: what the log keeps is what every table above it can ever show.</em></p>
+</div>
+
 `REQUEST_LOG_MAX_ROWS` caps **stored rows**. Once the table is full, one row is deleted for every row that arrives, so everything computed from those rows is a rolling window:
 
 | Section | Covers | Affected by retention |
@@ -3560,7 +3644,18 @@ Uptime is only recorded from v4.44.0 onwards, so earlier periods report nothing 
 The detail dialog answers the question "what did MCC actually put on the wire, and which key sent it?" — as opposed to what your configuration says it should have. Every field below is a measurement, not a restatement of settings.
 
 <div align="center">
-  <img src="../assets/admin-request-detail.png" alt="Request detail dialog showing the per-attempt wire pane" width="860">
+  <img src="../assets/admin-request-detail.png" alt="A route ladder listing every model on the chain with one marked answered, above a field list of the request's measured times, tokens and reasoning decisions" width="860">
+  <p><em>One request: the ladder it walked, then every measurement taken of it — including the effort clamp the provider forced.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/admin-request-attempts.png" alt="Per-attempt rows naming each model, its key, first-token and generating times, and the reason it was not tried, above a request-shape block headed no prompt text" width="860">
+  <p><em>The per-try rows, and the shape block beneath them. The heading says it: the request body is summarised structurally, with no prompt text in it.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/admin-requests.png" alt="A request table with columns for time, endpoint, harness, provider, key, model, status, turn shape, tokens, cost, time-to-first-token and duration" width="860">
+  <p><em>The table these open from: one row per request, the key that served it masked to a fingerprint, and a fallback badge where the primary did not answer.</em></p>
 </div>
 
 **1. Open Analytics and find the request.** Filter or search (search reaches the reasoning text and tool arguments too), then press **View** on the row. Since 6.13.0 every filter applies itself — the selects the moment you change one, the text boxes a short pause after you stop typing, and **Clear filters** puts everything back including the default below. **Apply** is still there for when you would rather press it.
@@ -3667,6 +3762,11 @@ The page has four panels:
 - **Candidates** — recurring request shapes that no rule covers yet, ranked by the tokens they really cost. Press **Scan the log** to produce them. The scan is on demand only: it never runs on a schedule or when the page loads, it reads nothing until you ask, and it changes nothing about how any request is answered. Ask it for more rows than it will scan and it refuses outright instead of quietly sampling and presenting the sample as the whole picture.
 - **Cache effectiveness** — prompt-cache hit rate per provider. This is the biggest lever on the page and the optimizer does not control it. A dash means the provider never reported the figure, which is not the same as reporting zero.
 
+<div align="center">
+  <img src="../assets/admin-token-optimizer.png" alt="A ledger showing tokens never sent and requests answered locally, above a local-rules table with per-rule fire counts, tokens avoided and a fourteen-day sparkline" width="860">
+  <p><em>Token Optimizer: every number measured from this install's own request log, and the banner saying none of it is switched on for you.</em></p>
+</div>
+
 Three local rules ship today, each with its own kill switch:
 
 - **Title generation** (`ENABLE_TITLE_GENERATION_SKIP`) — Claude Code's request for a short conversation title.
@@ -3707,6 +3807,16 @@ Since 6.54.0 every request is priced once, at the moment it is written to the lo
 **An unpriced request shows a dash, never `$0.00`.** Those are different facts. `$0.00` is a claim that the request was free, and only a source that actually publishes a zero — a `:free` model's own catalogue entry, for instance — may make it. Every cost total on the Analytics page therefore carries an **"N of M priced"** denominator beside it, so a partial total can never be read as a complete one.
 
 **Reported and estimated amounts are shown side by side and are never added together.** A single merged figure would launder a guess into a fact, and afterwards nobody could tell which half was which. The Cost panel shows the two as two numbers, per provider, per model, per harness and per day.
+
+<div align="center">
+  <img src="../assets/admin-analytics-cost.png" alt="A Cost panel with reported and estimated totals as separate cards beside a priced-of-total denominator, above per-provider and per-model cost tables" width="860">
+  <p><em>The Cost panel: $0.6359 reported and $4,118.03 estimated, kept apart, with 303,572 of 361,484 requests priced.</em></p>
+</div>
+
+<div align="center">
+  <img src="../assets/readme-analytics-cost.png" alt="A requests-over-time bar chart and a tokens-by-model chart above the Cost panel and its per-provider and per-model tables" width="860">
+  <p><em>The same panel under the charts: an em dash in the Reported column means that host published nothing, which is not the same as zero.</em></p>
+</div>
 
 Details worth knowing:
 

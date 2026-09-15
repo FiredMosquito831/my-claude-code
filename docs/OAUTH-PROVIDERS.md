@@ -2,6 +2,24 @@
 
 Sign-in-based providers: an Anthropic Claude subscription, ChatGPT, and Kimi For Coding. Moved out of the README in 6.57.0; nothing here changed.
 
+An OAuth provider sits in the same grid as a key-based one and carries the same
+badges — the difference is that its credential is a sign-in rather than a string
+you paste.
+
+<div align="center">
+  <img src="../assets/admin-providers.png" alt="A provider grid where two cards are OAuth sign-ins and the rest name the environment variable that holds their key" width="860">
+  <p><em>Providers: the two OAuth cards sit beside the key-based ones, each marked Configured or Missing key.</em></p>
+</div>
+
+Whichever credential a request ends up using, the request log records which key
+answered and what it cost — a per-key table that works the same for an OAuth
+credential as for a key in a rotation pool.
+
+<div align="center">
+  <img src="../assets/admin-key-performance.png" alt="A table of masked key fingerprints with request counts, error rates, cache hit rates and average latency" width="860">
+  <p><em>Key performance, on Analytics: one row per credential, and the errors each one actually returned.</em></p>
+</div>
+
 ### Anthropic Claude subscription (OAuth, Caution) — not permitted by Anthropic
 
 > **Read [docs/ANTHROPIC-SUBSCRIPTION.md](./ANTHROPIC-SUBSCRIPTION.md) before enabling this.** It is the disclaimer, and this section is only the summary.

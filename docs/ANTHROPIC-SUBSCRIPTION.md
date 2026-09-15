@@ -61,6 +61,14 @@ is describing how they wish it worked.
 MCC cannot make this permitted. It can refuse to make it *worse*, and it does
 one specific thing.
 
+The attribution it reads is the same one the dashboard reports back to you, per
+harness, so you can see exactly which client the subscription credential served:
+
+<div align="center">
+  <img src="../assets/admin-analytics-harness.png" alt="A provider performance table beside a Requests by harness table listing Claude Agent SDK, Claude Code, Codex CLI and others with request counts and error rates" width="860">
+  <p><em>Requests by harness, on Analytics: the attribution marker resolved into a client name, counted per client.</em></p>
+</div>
+
 Claude Code stamps an attribution line at the head of the system prompt, inside
 the request body:
 
