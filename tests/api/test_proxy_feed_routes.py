@@ -250,6 +250,33 @@ def test_an_intercepting_candidate_is_refused_and_stays_a_candidate(
     assert store.candidates == (CANDIDATE_ID,)
 
 
+def test_typing_an_address_a_feed_also_offered_stops_it_being_on_offer() -> None:
+    """On offer and chosen are different states; one address is not both.
+
+    The catalogue files an address by id, so typing one a feed had already
+    listed reuses that row rather than duplicating it -- and without this the
+    same machine would sit in a chain and still be advertised as something
+    nobody had picked.
+    """
+
+    _offer_one()
+    client = _client()
+    payload = client.put(
+        "/admin/api/proxy-chains",
+        json={
+            "provider": "nvidia_nim",
+            "enabled": False,
+            "entries": [{"url": CANDIDATE_URL}],
+        },
+    ).json()
+
+    assert payload["candidates"] == []
+    store = load_proxy_chains()
+    assert store.candidates == ()
+    chain = store.chain("nvidia_nim")
+    assert chain is not None and chain.proxy_ids() == (CANDIDATE_ID,)
+
+
 def test_a_candidate_that_is_no_longer_on_offer_is_refused() -> None:
     response = _client().post(
         "/admin/api/proxy-chains/candidates/add",

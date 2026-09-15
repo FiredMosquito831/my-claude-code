@@ -461,6 +461,14 @@ def _commit_chain(provider_id: str, payload: ProxyChainPayload, inherited: str) 
             max_switches=clamp_max_switches(payload.max_switches),
             oauth_acknowledged=payload.oauth_acknowledged,
         )
+        # An address the operator typed may be one a feed had already offered:
+        # ``add_endpoint`` files it under the id it already has rather than
+        # duplicating it, so without this it would stay listed as "on offer"
+        # while sitting in a chain. On offer and chosen are different states
+        # and one address cannot be in both.
+        for entry in chain.entries:
+            if entry.proxy:
+                store = store.without_candidate(entry.proxy)
         save_proxy_chains(store.with_chain(provider_id, chain))
 
 
