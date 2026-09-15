@@ -57,6 +57,7 @@ MODEL_OVERRIDES_FILENAME = "model_overrides.json"
 OTHER_SERVERS_FILENAME = "other-servers.json"
 LEARNED_FACTS_FILENAME = "learned_facts.json"
 HARNESS_TIERS_FILENAME = "harness_tiers.json"
+PROXY_CHAINS_FILENAME = "proxy_chains.json"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
 WSL_WINDOWS_USERS_DIR = "/mnt/c/Users"
 MACOS_MANAGED_SETTINGS_PATH = (
@@ -554,6 +555,17 @@ def harness_tiers_path() -> Path:
     """Return the per-coding-agent tier override file."""
 
     return config_dir_path() / HARNESS_TIERS_FILENAME
+
+
+def proxy_chains_path() -> Path:
+    """Return the per-provider proxy chain store.
+
+    Beside the other structured stores rather than in the request log's
+    directory: a chain is configuration the operator typed, and it must
+    survive the *Clear* button that empties the log.
+    """
+
+    return config_dir_path() / PROXY_CHAINS_FILENAME
 
 
 def legacy_env_paths() -> tuple[Path, ...]:

@@ -3430,3 +3430,157 @@ def test_jsdom_the_request_export_button_still_opens_the_request_scope(
     assert requests["groupByHidden"] is False
     assert "Upstream retry ladder" in requests["fields"]
     assert "Attempt tokens" not in requests["fields"]
+
+
+# --------------------------------------------------------------- proxying
+# The Proxying page is backed by a JSON store rather than settings keys, so
+# none of the settings-page machinery covers it. These drive the three
+# gestures that change a chain without saving, and the one that saves.
+
+
+def test_jsdom_the_proxying_page_renders_one_card_per_configured_provider(
+    rendered,
+) -> None:
+    proxying = rendered["proxying"]
+
+    assert proxying["present"] is True
+    assert proxying["cards"] == 2
+
+
+def test_jsdom_the_honest_paragraph_is_on_the_page_once(rendered) -> None:
+    """Said once, above the cards -- not repeated per card or in a modal."""
+
+    honesty = rendered["proxying"]["honesty"]
+
+    assert "strict certificate verification" in honesty
+    assert "it cannot read or change your API keys" in honesty
+    # The metadata half, which is the part that is easy to leave out.
+    assert "which provider you are contacting" in honesty
+    assert "the choice is yours" in honesty
+
+
+def test_jsdom_the_policy_help_says_what_failover_actually_costs(rendered) -> None:
+    """The practical difference is the whole point of the feature here.
+
+    Four proxies under `failover` still use one address until it fails; only
+    `round_robin` multiplies a per-address allowance. A page that shows four
+    policy names and not that sentence has not explained the feature.
+    """
+
+    assert "until it fails" in rendered["proxying"]["policyHelp"]
+
+
+def test_jsdom_the_chain_says_it_replaces_the_env_var_without_rewriting_it(
+    rendered,
+) -> None:
+    inherited = rendered["proxying"]["inherited"]
+
+    assert "NVIDIA_NIM_PROXY" in inherited
+    assert "never rewritten" in inherited
+
+
+def test_jsdom_exactly_two_chips_are_refused_and_three_are_on(rendered) -> None:
+    chips = rendered["proxying"]["chips"]
+
+    assert [chip["id"] for chip in chips if chip["disabled"]] == [
+        "authentication",
+        "permission",
+    ]
+    assert [chip["id"] for chip in chips if chip["on"]] == [
+        "quota",
+        "rate_limit",
+        "timeout",
+    ]
+    assert len(chips) == 11
+
+
+def test_jsdom_a_refused_chip_does_not_toggle_when_it_is_clicked(rendered) -> None:
+    """Inert, not merely styled as inert.
+
+    A chip that looks refused and arms anyway is the worst of both: the page
+    says the choice is unavailable and the store gets it.
+    """
+
+    assert (
+        rendered["proxying"]["chipsAfterRefusedClick"] == rendered["proxying"]["chips"]
+    )
+
+
+def test_jsdom_move_down_reorders_the_chain_and_announces_it(rendered) -> None:
+    """The keyboard and button path to the reorder, which jsdom can drive.
+
+    The pointer drag over the same list cannot be driven here -- jsdom has no
+    layout, so `elementFromPoint` has nothing to answer with -- and it is
+    exercised in a real browser instead.
+    """
+
+    proxying = rendered["proxying"]
+
+    assert proxying["order"] == [
+        "203.0.113.7:1080",
+        "198.51.100.9:8080",
+        "Direct (no proxy)",
+    ]
+    assert proxying["orderAfterMoveDown"] == [
+        "198.51.100.9:8080",
+        "203.0.113.7:1080",
+        "Direct (no proxy)",
+    ]
+    assert "is now entry 2 of 3" in proxying["announcementAfterMove"]
+    assert "Press Save to keep it" in proxying["announcementAfterMove"]
+
+
+def test_jsdom_the_recommended_set_restores_the_three_defaults(rendered) -> None:
+    assert [
+        chip["id"] for chip in rendered["proxying"]["chipsAfterReset"] if chip["on"]
+    ] == [
+        "quota",
+        "rate_limit",
+        "timeout",
+    ]
+
+
+def test_jsdom_a_paused_entry_stays_in_the_chain(rendered) -> None:
+    """Pause is not delete: the entry keeps its place and its position number.
+
+    The same semantics a paused route entry has, which is why the operator
+    does not lose an order they spent time on to debug one address.
+    """
+
+    proxying = rendered["proxying"]
+
+    assert proxying["pausedRows"] == 1
+    entries = proxying["saved"]["body"]["entries"]
+    assert len(entries) == 3
+    assert [entry["paused"] for entry in entries] == [True, False, False]
+
+
+def test_jsdom_saving_sends_ids_and_never_a_proxy_url(rendered) -> None:
+    """The page holds no URL for an entry it did not just type.
+
+    Referencing an untouched entry by id is what makes a password on the
+    client impossible rather than merely avoided.
+    """
+
+    body = rendered["proxying"]["saved"]["body"]
+
+    assert body["provider"] == "nvidia_nim"
+    assert body["policy"] == "failover"
+    assert body["scope"] == "provider"
+    assert body["max_switches"] == 2
+    assert [entry["url"] for entry in body["entries"]] == ["", "", ""]
+    assert body["entries"][0]["proxy"].startswith("px_")
+    assert body["entries"][2]["direct"] is True
+
+
+def test_jsdom_the_subscription_card_says_what_it_risks_and_starts_unticked(
+    rendered,
+) -> None:
+    """Said on the OAuth cards only, and exactly once there."""
+
+    oauth = rendered["proxying"]["oauth"]
+
+    assert oauth is not None
+    assert oauth["acknowledged"] is False
+    assert "personal subscription" in oauth["note"]
+    assert "more likely to be flagged" in oauth["note"]

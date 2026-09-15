@@ -218,6 +218,25 @@ MODEL_TIER_NAMES: tuple[str, ...] = (
     "vision",
 )
 
+# Mirrors providers.runtime.config.CREDENTIAL_ROTATION_POLICIES. `config` is a
+# leaf package and may not import `providers` either, so the names are repeated
+# here and tests/contracts/test_import_boundaries.py pins the two equal in both
+# directions, exactly as it does for FAILURE_KIND_NAMES.
+#
+# The proxy chain store needs them because a chain rotates on the *same* four
+# policies a credential pool does -- `single`, `round_robin`, `least_used`,
+# `failover` -- and inventing a fifth name, or a second spelling of these four,
+# would make two rotation controls on the same dashboard mean different things.
+# `on_error` is the credential engine's own accepted alias of `failover`;
+# it is normalised away on the way in rather than offered as a fifth choice.
+ROTATION_POLICY_ORDER: tuple[str, ...] = (
+    "single",
+    "round_robin",
+    "least_used",
+    "failover",
+)
+ROTATION_POLICY_ALIASES: dict[str, str] = {"on_error": "failover"}
+
 # Mirrors core.failures.FailureKind. `config` is a leaf package by declared
 # policy -- it imports nothing, not even core -- so the names are repeated
 # here rather than imported. A list that mirrors another file drifts, so

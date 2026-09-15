@@ -269,6 +269,52 @@
             ></div>
           </section>
 
+          <!-- Proxying: the ordered list of addresses each provider may go out
+               through. Filled from /admin/api/proxy-chains when the view is
+               opened; it owns no manifest settings section, so renderSections()
+               skips it and `containerId` stays null. -->
+          <section id="view-proxying" class="admin-view" data-view="proxying" hidden>
+            <p class="view-intro">
+              One chain per provider you have configured. MCC stores the order,
+              the rotation policy and the failures that move it along; nothing
+              else on this page changes what a request does today.
+            </p>
+            <div class="callout" id="proxyingHonesty">
+              <p>
+                <strong>What routing through a proxy means.</strong>
+                MCC talks to providers over HTTPS with strict certificate
+                verification, so a proxy relays an encrypted tunnel: it cannot
+                read or change your API keys, your prompts or the replies. It
+                does see which provider you are contacting, when, and how much
+                data moves &mdash; and a public proxy is someone else's machine,
+                of unknown reliability.
+              </p>
+              <p>
+                Routing requests through several addresses changes how a
+                provider's per-IP limits apply to you. Some providers' terms
+                address that. This is your traffic and your account; the choice
+                is yours.
+              </p>
+            </div>
+            <p class="field-description" id="proxyingAlwaysAdvances">
+              A failure of the proxy <em>itself</em> &mdash; connection refused,
+              connect timeout, or the proxy answering 407, 502 or 503 &mdash;
+              always moves to the next entry on every chain. That one is not
+              configurable: the thing that failed is the proxy.
+            </p>
+            <!-- One live region for this page: what a reorder, a pause or a
+                 save just did. Same shape as the Model Config rails' own
+                 region, and separate from it because that one lives inside a
+                 hidden view while this page is open. -->
+            <div id="proxyingStatus" class="route-status" role="status"
+              aria-live="polite" aria-atomic="true" hidden></div>
+            <div id="proxyingList" class="proxy-card-list"></div>
+            <p id="proxyingEmpty" class="field-description" hidden>
+              No provider on this install is configured yet. Add a key on the
+              Providers page and its card appears here.
+            </p>
+          </section>
+
           <section id="view-claude" class="admin-view" data-view="claude" hidden>
             <div class="observability-heading">
               <div>
