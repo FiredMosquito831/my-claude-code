@@ -91,17 +91,46 @@ jobs:
         # project dependency: nothing MCC ships imports it.
         run: uvx --with mkdocs-material mkdocs build --strict
 
-      - name: Prove the SEO surfaces exist
-        # The three things this site is for. A theme change that silently drops
-        # the canonical link or the sitemap would otherwise go unnoticed.
+      - name: Prove the SEO surfaces exist and name the right host
+        # The three things this site is for.
+        #
+        # These assertions check VALUES, not presence, and that distinction was
+        # paid for: when the site moved to its own domain, `site_url` was left
+        # on the github.io URL. Every canonical and all seventeen sitemap
+        # entries pointed at the old host -- and the earlier version of this
+        # step, which only checked that a canonical tag existed, passed. A
+        # canonical can be present and wrong, and a wrong one is worse than a
+        # missing one: it is an instruction telling search engines the real
+        # page is somewhere else.
         run: |
           set -euo pipefail
+          host="myclaudecode.danubelabs.net"
+
           test -f build/site/sitemap.xml
-          grep -q '<link rel="canonical"' build/site/index.html
-          grep -q '<meta name="description"' build/site/index.html
-          pages="$(grep -c '<loc>' build/site/sitemap.xml)"
-          echo "sitemap lists $pages pages"
-          test "$pages" -ge 10
+          grep -q "<meta name=\"description\"" build/site/index.html
+
+          grep -q "<link rel=\"canonical\" href=\"https://$host/\"" build/site/index.html
+          echo "home canonical names $host"
+
+          # Every page, not just the home page: a per-page canonical is
+          # generated per page and one stale template would miss only some.
+          wrong="$(grep -rl '<link rel="canonical"' build/site --include='*.html' \
+            | xargs grep -L "canonical\" href=\"https://$host/" || true)"
+          if [ -n "$wrong" ]; then
+            echo "::error::these pages have a canonical that is not on $host:"
+            echo "$wrong"
+            exit 1
+          fi
+
+          locs="$(grep -c '<loc>' build/site/sitemap.xml)"
+          on_host="$(grep -c "<loc>https://$host/" build/site/sitemap.xml)"
+          echo "sitemap lists $locs pages, $on_host of them on $host"
+          test "$locs" -ge 10
+          test "$locs" -eq "$on_host"
+
+          test -f build/site/CNAME
+          grep -qx "$host" build/site/CNAME
+          grep -q "Sitemap: https://$host/sitemap.xml" build/site/robots.txt
 
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         if: github.event_name != 'pull_request'

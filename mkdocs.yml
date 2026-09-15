@@ -25,10 +25,17 @@ site_description: >-
   web-search tool proxy, and analytics with cost provenance.
 site_author: FiredMosquito831
 
-# The canonical origin every generated <link rel="canonical"> and the sitemap
-# are written against. It moves once, here, when the project moves to its own
-# domain; nothing else in this file knows the host.
-site_url: https://firedmosquito831.github.io/my-claude-code/
+# The canonical origin every generated <link rel="canonical"> and every
+# <loc> in the sitemap is written against. Nothing else in this file knows the
+# host, which is the point: moving domain is this line.
+#
+# It is also the only absolute URL MkDocs emits into a page -- every link
+# Material generates is relative (`..`, `../CLIENTS/`, `../assets/...`) and
+# therefore moved to this domain for free. So a stale value here does not break
+# a single link a human clicks; it only mis-states, to a search engine, where
+# the real page lives. That is worse than it sounds: a canonical is an
+# instruction, not a hint.
+site_url: https://myclaudecode.danubelabs.net/
 
 repo_url: https://github.com/FiredMosquito831/my-claude-code
 repo_name: FiredMosquito831/my-claude-code

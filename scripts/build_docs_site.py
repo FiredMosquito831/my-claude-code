@@ -53,6 +53,12 @@ import sys
 REPO = pathlib.Path(__file__).resolve().parents[1]
 GITHUB = "https://github.com/FiredMosquito831/my-claude-code"
 
+#: The published host. Written into `CNAME` and `robots.txt`; `mkdocs.yml`'s
+#: `site_url` carries the same host for the canonical links and the sitemap,
+#: and `tests/contracts/test_docs_site_contract.py` pins the two together so
+#: they cannot drift into disagreeing about where the site is.
+SITE_HOST = "myclaudecode.danubelabs.net"
+
 #: Copied up into the staged root so their links keep working as pages.
 PROMOTED = ("ARCHITECTURE.md", "CONTRIBUTING.md")
 
@@ -164,6 +170,22 @@ def build(out: pathlib.Path) -> int:
         assets / "app-icon.png",
     )
     written += 1
+
+    # The custom domain, as a file in the published site as well as a setting on
+    # the repository. With an Actions deploy the setting alone usually holds,
+    # but a redeploy that loses it takes the domain down, and a file cannot be
+    # lost that way. MkDocs copies anything it does not recognise straight
+    # through to the built site.
+    (out / "CNAME").write_text(f"{SITE_HOST}\n", encoding="utf-8", newline="\n")
+
+    # MkDocs writes a sitemap but no robots.txt, so the sitemap is something a
+    # crawler has to be told about rather than find.
+    (out / "robots.txt").write_text(
+        f"User-agent: *\nAllow: /\n\nSitemap: https://{SITE_HOST}/sitemap.xml\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    written += 2
 
     staged = frozenset(
         path.relative_to(out).as_posix() for path in out.rglob("*") if path.is_file()
