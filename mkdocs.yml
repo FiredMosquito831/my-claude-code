@@ -1,0 +1,130 @@
+# The documentation site, built from a staged copy of `docs/`.
+#
+#   uv run --offline python scripts/build_docs_site.py --out build/docs-src
+#   uvx --with mkdocs-material mkdocs build --strict
+#
+# `docs_dir` is the STAGED directory, never `docs/` itself: the committed
+# Markdown keeps the relative links that GitHub and the in-dashboard Docs page
+# both resolve, and `scripts/build_docs_site.py` rewrites the handful that
+# escape `docs/` on a copy. See that file's docstring for why.
+#
+# WHAT THIS SITE IS FOR
+#
+#   The README is the map and the dashboard's Docs page is the offline manual
+#   for the version someone installed. This is the third reader: a search
+#   engine, and a person who found the project through one. That is the whole
+#   reason it exists, and it is why `site_url`, `site_description` and a
+#   sitemap matter more here than the theme does -- on GitHub none of those
+#   three are ours to set.
+
+site_name: My Claude Code
+site_description: >-
+  My Claude Code (MCC) is a local multi-provider LLM proxy, model router and
+  control plane for Claude Code, Codex, OpenCode, Gemini CLI and other AI
+  coding agents — 57 providers, fallback routing, credential health, a native
+  web-search tool proxy, and analytics with cost provenance.
+site_author: FiredMosquito831
+
+# The canonical origin every generated <link rel="canonical"> and the sitemap
+# are written against. It moves once, here, when the project moves to its own
+# domain; nothing else in this file knows the host.
+site_url: https://firedmosquito831.github.io/my-claude-code/
+
+repo_url: https://github.com/FiredMosquito831/my-claude-code
+repo_name: FiredMosquito831/my-claude-code
+edit_uri: edit/main/docs/
+
+copyright: >-
+  AGPL-3.0-or-later, or a commercial licence. An independent open-source
+  project, not affiliated with Anthropic, OpenAI, Google or OpenCode.
+
+docs_dir: build/docs-src
+site_dir: build/site
+
+theme:
+  name: material
+  logo: assets/app-icon.png
+  favicon: assets/app-icon.png
+  # Dark by default, matching the dashboard the docs describe, with a light
+  # scheme reachable for anyone who wants it.
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - navigation.sections
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+
+extra_css:
+  - assets/site.css
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      # These pages are long -- USAGE alone is 345 KB -- so the table of
+      # contents has to reach the sub-sections people actually link to.
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+
+# Spelled out rather than inferred, so the order is the reading order rather
+# than the alphabet, and so a new page in `docs/` is a deliberate addition
+# here instead of appearing unannounced at the bottom of the menu.
+nav:
+  - Documentation: index.md
+  - Usage Guide: USAGE.md
+  - Connect a client:
+      - Clients: CLIENTS.md
+      - Claude Code config: CLAUDE-CODE-CONFIG.md
+      - Messaging: MESSAGING.md
+  - Providers and routing:
+      - Routing reference: ROUTING-REFERENCE.md
+      - OAuth providers: OAUTH-PROVIDERS.md
+      - Anthropic subscription: ANTHROPIC-SUBSCRIPTION.md
+      - Web search: WEB-SEARCH.md
+  - Project:
+      - Architecture: ARCHITECTURE.md
+      - Contributing: CONTRIBUTING.md
+      - Brand: BRAND.md
+      - Release checklist: RELEASE-CHECKLIST.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/FiredMosquito831/my-claude-code
+      name: My Claude Code on GitHub
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/my-claude-code/
+      name: my-claude-code on PyPI
+    - icon: fontawesome/brands/npm
+      link: https://www.npmjs.com/package/@firedmosquito831/my-claude-code
+      name: My Claude Code on npm

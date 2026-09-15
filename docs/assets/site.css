@@ -1,0 +1,22 @@
+/* The dashboard's own Velvet accent (admin.css --accent), so the docs site and
+   the product it documents are recognisably the same thing. Material's
+   "primary: custom" / "accent: custom" defer to these variables. */
+:root {
+  --md-primary-fg-color: #b22242;
+  --md-primary-fg-color--light: #e6435e;
+  --md-primary-fg-color--dark: #9f1131;
+  --md-accent-fg-color: #e6435e;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 222;
+  --md-default-bg-color: #0a1220; /* --bg, Velvet */
+  --md-typeset-a-color: #e6435e;
+}
+
+/* Several pages are wide reference tables. Let them scroll rather than
+   overflow the content column. */
+.md-typeset table:not([class]) {
+  display: block;
+  overflow-x: auto;
+}

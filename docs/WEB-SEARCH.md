@@ -59,7 +59,7 @@ TAVILY_API_KEY_ROTATION=round_robin
 WEBSEARCH_PROXY=""
 ```
 
-You can also configure everything from **Admin UI → Web Search**. The route summary shows the complete configured chain and the last observed terminal route; the effective card is highlighted, providers can be selected directly, and each card exposes testing, key health, rotation, and advanced options. Deep per-provider pricing, my-tier details, and a capability matrix live in [research/web-search-providers.md](research/web-search-providers.md) and [research/web-search-advanced.md](research/web-search-advanced.md).
+You can also configure everything from **Admin UI → Web Search**. The route summary shows the complete configured chain and the last observed terminal route; the effective card is highlighted, providers can be selected directly, and each card exposes testing, key health, rotation, and advanced options. Deep per-provider pricing, my-tier details, and a capability matrix live in [research/web-search-providers.md](../research/web-search-providers.md) and [research/web-search-advanced.md](../research/web-search-advanced.md).
 
 ### Multi-key rotation (web search keys)
 

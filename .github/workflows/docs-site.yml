@@ -1,0 +1,126 @@
+# The documentation site: build on every pull request, deploy from `main`.
+#
+# WHY THE SITE EXISTS
+#
+#   On GitHub the project cannot set a `<title>`, a meta description, a
+#   canonical URL, a sitemap or robots directives -- GitHub owns all of them.
+#   Those are most of what a search engine reads, which is why a project whose
+#   documentation is genuinely good can still be invisible. This publishes the
+#   same pages somewhere those things are ours.
+#
+# WHY IT BUILDS ON PULL REQUESTS TOO
+#
+#   A docs site that only builds on `main` is a site whose first proof is a
+#   broken deploy. `--strict` turns a bad link or a page missing from the nav
+#   into a failed job, so the pull request is where that surfaces. The PR job
+#   deploys nothing; it only proves the build.
+#
+# THE DOMAIN
+#
+#   `site_url` in `mkdocs.yml` is the single place the host is written. When
+#   the project moves to its own domain, that line changes and a CNAME file is
+#   added here -- GitHub then 301-redirects the github.io URL to the new host
+#   on its own, so nothing that links to the old one is lost.
+
+name: Docs site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "ARCHITECTURE.md"
+      - "CONTRIBUTING.md"
+      - "assets/**"
+      - "mkdocs.yml"
+      - "scripts/build_docs_site.py"
+      - ".github/workflows/docs-site.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "ARCHITECTURE.md"
+      - "CONTRIBUTING.md"
+      - "assets/**"
+      - "mkdocs.yml"
+      - "scripts/build_docs_site.py"
+      - ".github/workflows/docs-site.yml"
+  workflow_dispatch:
+
+concurrency:
+  # One deploy at a time, and a superseded build is worth cancelling: the site
+  # is regenerated whole every run, so only the newest one matters.
+  group: docs-site-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.11.15"
+          enable-cache: true
+
+      - name: Stage the documentation
+        # Rewrites the links that escape `docs/` on a copy, so the committed
+        # Markdown keeps the relative links GitHub and the dashboard resolve.
+        run: uv run --no-project python scripts/build_docs_site.py --out build/docs-src
+
+      - name: Build
+        # `--strict` fails on a broken internal link or a page absent from the
+        # nav. mkdocs-material is a build-time tool and deliberately not a
+        # project dependency: nothing MCC ships imports it.
+        run: uvx --with mkdocs-material mkdocs build --strict
+
+      - name: Prove the SEO surfaces exist
+        # The three things this site is for. A theme change that silently drops
+        # the canonical link or the sitemap would otherwise go unnoticed.
+        run: |
+          set -euo pipefail
+          test -f build/site/sitemap.xml
+          grep -q '<link rel="canonical"' build/site/index.html
+          grep -q '<meta name="description"' build/site/index.html
+          pages="$(grep -c '<loc>' build/site/sitemap.xml)"
+          echo "sitemap lists $pages pages"
+          test "$pages" -ge 10
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.event_name != 'pull_request'
+        with:
+          path: build/site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Only this job can write the Pages deployment, and it builds nothing.
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
