@@ -470,3 +470,42 @@ async def test_a_dead_address_walks_the_reachability_ladder(
     assert record.intercepted is False
     assert PROXY_REACHABILITY.remaining(label) > 0
     assert PROXY_INTERCEPTION.is_refused(label) is False
+
+
+async def test_a_refusal_survives_the_proxy_simply_going_offline(
+    origin: _Origin, mitm_proxy: _ConnectProxy
+) -> None:
+    """The regression: a dead check must not retire an interception verdict.
+
+    ``apply_outcome`` used to clear the refusal for any record that was not
+    itself an interception, and "did not answer" is such a record. So an
+    address caught terminating TLS, later merely offline, lost its verdict and
+    could be added to a chain again -- benched, but admitted.
+
+    That is backwards. Failing to connect is not evidence that a machine
+    stopped reading the traffic; it is no evidence at all. The refusal is the
+    one control standing between a credential and a hostile proxy, and an
+    absence must not lift it. Only a check that succeeds can.
+    """
+
+    url = f"http://127.0.0.1:{mitm_proxy.port}"
+    label = mask_proxy_label(url)
+    destination = f"https://{HOSTNAME}:{origin.port}/"
+
+    # Caught in the act.
+    apply_outcome(label, await check_proxy(url, destination, timeout=10.0))
+    assert PROXY_INTERCEPTION.is_refused(label) is True
+
+    # The same address, now simply not listening.
+    mitm_proxy.close()
+    dead = await check_proxy(url, destination, timeout=2.0)
+    apply_outcome(label, dead)
+
+    assert dead.ok is False
+    assert dead.intercepted is False, "a closed port is not an interception"
+    assert PROXY_INTERCEPTION.is_refused(label) is True, (
+        "the interception verdict was lifted by a failure to connect"
+    )
+    # And it is benched as unreachable as well, which is the other half: the
+    # two ledgers answer different questions and both still apply.
+    assert PROXY_REACHABILITY.remaining(label) > 0

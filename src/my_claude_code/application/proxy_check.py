@@ -327,12 +327,22 @@ def apply_outcome(label: str, record: ProxyCheckRecord) -> None:
     three are written together:
 
     * An intercepted address is **refused** -- held out of every chain in the
-      process until a later check says the certificate verifies again.
+      process until a later check *succeeds* and shows the certificate
+      verifying again.
     * A dead address walks the ordinary reachability ladder, which is the whole
       of "a dead free proxy should stop being tried": the operator does
       nothing and the chain routes around it.
     * A working address clears both, because a measurement that just succeeded
       is better evidence than a bench taken before it.
+
+    **A refusal is lifted only by success.** This used to clear the refusal on
+    any record that was not itself an interception -- including "did not
+    answer". A proxy caught terminating TLS, later merely offline, therefore
+    lost its verdict and could be added to a chain again. That is backwards:
+    failing to connect is not evidence that a machine stopped reading the
+    traffic, it is no evidence at all, and the one control standing between a
+    credential and a hostile proxy must not be cleared by an absence. An
+    address that cannot be reached keeps whatever verdict it had earned.
     """
 
     if not label:
@@ -340,8 +350,10 @@ def apply_outcome(label: str, record: ProxyCheckRecord) -> None:
     if record.intercepted:
         PROXY_INTERCEPTION.mark(label, record.detail)
         return
-    PROXY_INTERCEPTION.clear_endpoint(label)
     if record.ok:
+        # Success is the only evidence that retires a refusal: the tunnel was
+        # opened and the destination's certificate verified through it.
+        PROXY_INTERCEPTION.clear_endpoint(label)
         PROXY_REACHABILITY.note_success(label)
     else:
         PROXY_REACHABILITY.note_failure(label, record.detail or "check failed")
