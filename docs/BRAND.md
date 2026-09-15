@@ -86,6 +86,37 @@ everywhere else would shrink the glyph too far to read. Always use
 `src/my_claude_code/cli/desktop_assets.py` to read or export these — never
 read the mark from a hardcoded string literal or re-derive it.
 
+### The social preview card
+
+`assets/social-preview.png` (1280×640) is what GitHub renders when a link to
+the repository is pasted into Discord, Slack, X, Reddit or a chat client, and
+what the `og:image` meta tag points at. It is rendered by
+`scripts/render_social_preview.py` from this palette and the packaged
+`app-icon.png`, so it is reproducible rather than a one-off export:
+
+```bash
+uv run --offline python scripts/render_social_preview.py
+```
+
+GitHub exposes **no API** for that field, so uploading it is a manual step:
+**Settings → General → Social preview**. 1280×640 is GitHub's recommended
+size and the card is drawn at exactly that, so nothing is cropped.
+
+**Do not use a dashboard screenshot for this.** Two reasons, and the second
+one is the serious one:
+
+1. The card renders at roughly 400 px wide in a Discord embed. A dense table
+   at that scale is a grey smear, and the one job the card has — saying the
+   project's name and what it is, legibly, to someone scrolling past — is
+   exactly what a screenshot cannot do.
+2. A screenshot of a live install carries what that install knows: masked
+   credential labels (`sk-1…rnp1` still reveals eight real characters of a
+   real key), the operator's home directory and therefore their username,
+   their model names and their spend. Part IV §4 of the working notes already
+   requires doc screenshots to be metadata-only, and 6.39.1 had to re-shoot a
+   *shipped* PNG for precisely this. The social preview is the most widely
+   reproduced image a repository has; it is the worst place to relearn that.
+
 Rules:
 
 - **Use the packaged mark**, not gradient initials, emoji, or a generic AI
